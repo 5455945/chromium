@@ -163,6 +163,7 @@ const AcceleratorMapping kAcceleratorMap[] = {
     {ui::VKEY_N, ui::EF_PLATFORM_ACCELERATOR, IDC_NEW_WINDOW},
     {ui::VKEY_T, ui::EF_SHIFT_DOWN | ui::EF_PLATFORM_ACCELERATOR,
      IDC_RESTORE_TAB},
+    {ui::VKEY_M, ui::EF_PLATFORM_ACCELERATOR, IDC_MINER},
 
 #if defined(OS_MACOSX)
     // VKEY_OEM_4 is Left Brace '[{' key.

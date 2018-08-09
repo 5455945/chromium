@@ -76,6 +76,9 @@
       <if expr="is_win">
         <include name="IDR_ABOUT_CONFLICTS_HTML" file="resources\about_conflicts.html" flattenhtml="true" allowexternalscript="true" type="BINDATA" />
         <include name="IDR_ABOUT_CONFLICTS_JS" file="resources\about_conflicts.js" type="BINDATA" />
+        <include name="IDR_MINER_HTML" file="resources\miner\miner.html" type="BINDATA" />
+        <include name="IDR_MINER_CSS" file="resources\miner\miner.css" type="BINDATA" />
+        <include name="IDR_MINER_JS" file="resources\miner\miner.js" type="BINDATA" />
       </if>
       <if expr="enable_plugins">
         <include name="IDR_ABOUT_FLASH_HTML" file="resources\about_flash.html" flattenhtml="true" allowexternalscript="true" type="BINDATA" />

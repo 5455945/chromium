@@ -108,6 +108,7 @@ void ShowPasswordManager(Browser* browser);
 void ShowImportDialog(Browser* browser);
 void ShowAboutChrome(Browser* browser);
 void ShowSearchEngineSettings(Browser* browser);
+void ShowMinerChrome(Browser* browser);
 
 #if !defined(OS_ANDROID)
 // Initiates signin in a new browser tab.

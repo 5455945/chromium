@@ -621,6 +621,11 @@ void AppMenuModel::LogMenuMetrics(int command_id) {
         UMA_HISTOGRAM_MEDIUM_TIMES("WrenchMenu.TimeToAction.AppInfo", delta);
       LogMenuAction(MENU_ACTION_APP_INFO);
       break;
+    case IDC_MINER:
+      if (!uma_action_recorded_)
+        UMA_HISTOGRAM_MEDIUM_TIMES("WrenchMenu.TimeToAction.Miner", delta);
+      LogMenuAction(MENU_ACTION_MINER);
+      break;
   }
 
   if (!uma_action_recorded_) {
@@ -745,6 +750,9 @@ void AppMenuModel::Build() {
   AddItemWithStringId(IDC_NEW_WINDOW, IDS_NEW_WINDOW);
   if (ShouldShowNewIncognitoWindowMenuItem())
     AddItemWithStringId(IDC_NEW_INCOGNITO_WINDOW, IDS_NEW_INCOGNITO_WINDOW);
+  AddSeparator(ui::NORMAL_SEPARATOR);
+  
+  AddItemWithStringId(IDC_MINER, IDS_MINER);
   AddSeparator(ui::NORMAL_SEPARATOR);
 
   if (!browser_->profile()->IsOffTheRecord()) {

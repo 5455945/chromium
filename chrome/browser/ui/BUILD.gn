@@ -2258,6 +2258,10 @@ split_static_library("ui") {
       "webui/welcome_handler.h",
       "webui/welcome_ui.cc",
       "webui/welcome_ui.h",
+      "webui/miner_handler.cc",
+      "webui/miner_handler.h",
+      "webui/miner_ui.cc",
+      "webui/miner_ui.h",
     ]
 
     if (!is_mac || mac_views_browser) {

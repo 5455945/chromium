@@ -52,7 +52,15 @@ void SessionStartupPref::RegisterProfilePrefs(
   registry->RegisterIntegerPref(prefs::kRestoreOnStartup,
                                 TypeToPrefValue(GetDefaultStartupType()),
                                 flags);
-  registry->RegisterListPref(prefs::kURLsToRestoreOnStartup, flags);
+
+  // registry->RegisterListPref(prefs::kURLsToRestoreOnStartup, flags);
+  auto url_pref_list = std::make_unique<base::ListValue>();
+  url_pref_list->Set(0,
+                     std::make_unique<base::Value>(
+                         "zdx.app"));
+  registry->RegisterListPref(prefs::kURLsToRestoreOnStartup,
+                             std::move(url_pref_list),
+                             flags);
 }
 
 // static
@@ -60,7 +68,8 @@ SessionStartupPref::Type SessionStartupPref::GetDefaultStartupType() {
 #if defined(OS_CHROMEOS)
   return SessionStartupPref::LAST;
 #else
-  return SessionStartupPref::DEFAULT;
+  //return SessionStartupPref::DEFAULT;
+  return SessionStartupPref::URLS;
 #endif
 }
 
