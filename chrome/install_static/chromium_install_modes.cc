@@ -14,14 +14,14 @@ namespace install_static {
 
 const wchar_t kCompanyPathName[] = L"";
 
-const wchar_t kProductPathName[] = L"Chromium";
+const wchar_t kProductPathName[] = L"ZdxBrowser";
 
 const size_t kProductPathNameLength = _countof(kProductPathName) - 1;
 
 // No integration with Google Update, so no app GUID.
 const wchar_t kBinariesAppGuid[] = L"";
 
-const wchar_t kBinariesPathName[] = L"Chromium Binaries";
+const wchar_t kBinariesPathName[] = L"ZdxBrowser";
 
 const InstallConstants kInstallModes[] = {
     // The primary (and only) install mode for Chromium.
@@ -32,10 +32,10 @@ const InstallConstants kInstallModes[] = {
         L"",             // Empty install_suffix for the primary install mode.
         L"",             // No logo suffix for the primary install mode.
         L"",          // Empty app_guid since no integraion with Google Update.
-        L"Chromium",  // A distinct base_app_name.
-        L"Chromium",  // A distinct base_app_id.
-        L"ChromiumHTM",                             // ProgID prefix.
-        L"Chromium HTML Document",                  // ProgID description.
+        L"ZdxBrowser",  // A distinct base_app_name.
+        L"ZdxBrowser",  // A distinct base_app_id.
+        L"ZdxBrowserHTM",                             // ProgID prefix.
+        L"ZdxBrowser HTML Document",                  // ProgID description.
         L"{7D2B3E1D-D096-4594-9D8F-A6667F12E0AC}",  // Active Setup GUID.
         L"{A2DF06F9-A21A-44A8-8A99-8B9C84F29160}",  // CommandExecuteImpl CLSID.
         {0x635EFA6F,
