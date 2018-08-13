@@ -44,10 +44,10 @@ void AvatarButtonManager::Update(AvatarButtonStyle style) {
        // Desktop guest shows the avatar button.
        browser_view->IsIncognito())) {
     if (!avatar_button_) {
-      avatar_button_ = new AvatarButton(this, style, profile, this);
-      avatar_button_->set_id(VIEW_ID_AVATAR_BUTTON);
-      frame_view_->AddChildView(avatar_button_);
-      frame->GetRootView()->Layout();
+      //avatar_button_ = new AvatarButton(this, style, profile, this);
+      //avatar_button_->set_id(VIEW_ID_AVATAR_BUTTON);
+      //frame_view_->AddChildView(avatar_button_);
+      //frame->GetRootView()->Layout();
     }
   } else if (avatar_button_) {
     delete avatar_button_;
