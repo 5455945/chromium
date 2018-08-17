@@ -53,9 +53,9 @@ void RegisterBrowserPrefs(PrefRegistrySimple* registry) {
 void RegisterBrowserUserPrefs(user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterBooleanPref(
       prefs::kHomePageIsNewTabPage,
-      true,
+      false,
       GetHomeButtonAndHomePageIsNewTabPageFlags());
-  registry->RegisterBooleanPref(prefs::kShowHomeButton, false,
+  registry->RegisterBooleanPref(prefs::kShowHomeButton, true,
                                 GetHomeButtonAndHomePageIsNewTabPageFlags());
 
   registry->RegisterIntegerPref(prefs::kModuleConflictBubbleShown, 0);
