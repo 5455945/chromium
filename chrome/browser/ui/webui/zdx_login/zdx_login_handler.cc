@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ui/webui/miner_handler.h"
+#include "chrome/browser/ui/webui/zdx_login/zdx_login_handler.h"
 
 #include "base/values.h"
 #include "base/metrics/histogram_macros.h"
@@ -19,14 +19,14 @@
 #include "components/signin/core/browser/signin_metrics.h"
 #include "ui/base/page_transition_types.h"
 
-MinerHandler::MinerHandler(content::WebUI* web_ui)
+ZdxLoginHandler::ZdxLoginHandler(content::WebUI* web_ui)
     : profile_(Profile::FromWebUI(web_ui)),
       login_ui_service_(LoginUIServiceFactory::GetForProfile(profile_)),
       result_(MinerResult::DEFAULT) {
   login_ui_service_->AddObserver(this);
 }
 
-MinerHandler::~MinerHandler() {
+ZdxLoginHandler::~ZdxLoginHandler() {
   login_ui_service_->RemoveObserver(this);
 
   // We log that an impression occurred at destruct-time. This can't be done at
@@ -41,7 +41,7 @@ MinerHandler::~MinerHandler() {
 }
 
 // Override from LoginUIService::Observer.
-void MinerHandler::OnSyncConfirmationUIClosed(
+void ZdxLoginHandler::OnSyncConfirmationUIClosed(
     LoginUIService::SyncConfirmationUIClosedResult result) {
   if (result != LoginUIService::ABORT_SIGNIN) {
     result_ = MinerResult::SIGNED_IN;
@@ -50,7 +50,7 @@ void MinerHandler::OnSyncConfirmationUIClosed(
 }
 
 // Handles backend events necessary when user clicks "Sign in."
-void MinerHandler::HandleActivateSignIn(const base::ListValue* args) {
+void ZdxLoginHandler::HandleActivateSignIn(const base::ListValue* args) {
   result_ = MinerResult::ATTEMPTED;
   base::RecordAction(base::UserMetricsAction("MinerPage_SignInClicked"));
 
@@ -69,7 +69,7 @@ void MinerHandler::HandleActivateSignIn(const base::ListValue* args) {
 }
 
 // Handles backend events necessary when user clicks "No thanks."
-void MinerHandler::HandleUserDecline(const base::ListValue* args) {
+void ZdxLoginHandler::HandleUserDecline(const base::ListValue* args) {
   // Set the appropriate decline result, based on whether or not the user
   // attempted to sign in.
   result_ = (result_ == MinerResult::ATTEMPTED)
@@ -79,29 +79,29 @@ void MinerHandler::HandleUserDecline(const base::ListValue* args) {
 }
 
 // Override from WebUIMessageHandler.
-void MinerHandler::RegisterMessages() {
+void ZdxLoginHandler::RegisterMessages() {
   web_ui()->RegisterMessageCallback(
       "handleActivateSignIn",
-      base::BindRepeating(&MinerHandler::HandleActivateSignIn,
+      base::BindRepeating(&ZdxLoginHandler::HandleActivateSignIn,
                           base::Unretained(this)));
   web_ui()->RegisterMessageCallback(
       "handleUserDecline",
-      base::BindRepeating(&MinerHandler::HandleUserDecline,
+      base::BindRepeating(&ZdxLoginHandler::HandleUserDecline,
                           base::Unretained(this)));
 
   web_ui()->RegisterMessageCallback(
       "addNumbers",
-      base::Bind(&MinerHandler::AddNumbers, base::Unretained(this)));
+      base::Bind(&ZdxLoginHandler::AddNumbers, base::Unretained(this)));
 }
 
-void MinerHandler::GoToNewTabPage() {
+void ZdxLoginHandler::GoToNewTabPage() {
   NavigateParams params(GetBrowser(), GURL(chrome::kChromeUINewTabURL),
                         ui::PageTransition::PAGE_TRANSITION_LINK);
   params.source_contents = web_ui()->GetWebContents();
   Navigate(&params);
 }
 
-Browser* MinerHandler::GetBrowser() {
+Browser* ZdxLoginHandler::GetBrowser() {
   DCHECK(web_ui());
   content::WebContents* contents = web_ui()->GetWebContents();
   DCHECK(contents);
@@ -110,7 +110,7 @@ Browser* MinerHandler::GetBrowser() {
   return browser;
 }
 
-void MinerHandler::AddNumbers(const base::ListValue* args) {
+void ZdxLoginHandler::AddNumbers(const base::ListValue* args) {
   int term1, term2;
   if (!args->GetInteger(0, &term1) || !args->GetInteger(1, &term2)) {
     return;

@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>登录</title>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+	<meta http-equiv="Content-Security-Policy" content="script-src 'unsafe-inline' 'unsafe-eval' 'self'; font-src *;">
+	<script type="text/javascript" src="jquery-3.3.1.min.js"></script>
+	<link rel="stylesheet" type="text/css" href="bootstrap-3.3.7.min.css">
+    <style type="text/css">
+    	html,body{
+    		height: 100%;
+    		width: 100%;
+    		overflow: hidden;
+    	}
+        .panel-default{
+            height: 100%;
+        }
+    	.panel-heading{
+            -webkit-app-region:drag;
+            padding: 8px !important;
+            background: #fff !important;
+            height: 30px;
+        }
+        .panel-body{
+            height: calc(100% - 30px);
+        }
+        .input-group{
+        	padding-bottom:10px;
+        }
+        .logo{
+        	margin-bottom:5px;
+        	height: 45px;
+        	width: 45px;
+        }
+        .title{
+        	display: inline-block;
+        	height: 45px;
+        	width: calc(100% - 80px);
+        	text-align: center;
+        	font-size: x-large;
+        }
+        .close{
+            -webkit-app-region:no-drag;
+        }
+        .close:hover{
+        	
+        	cursor: pointer;
+        }
+        #registerDiv, #resetDiv{
+            display: none;
+        }
+        .button:hover{
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+	<div class="panel panel-default">
+    	<div class="panel-heading">
+    		<button type="button" class="close"  onclick="window.close();">&times;</button>
+    	</div>
+    	<div class="panel-body">
+    		<div class="col-xs-12">
+    			<!-- <img src="../../../favicon.ico" class='logo'> -->
+    			<span class='title'>紫丁香浏览器</span>
+    		</div>
+            <div id="loginDiv" class='content'>
+                <form onsubmit="login();return false;">
+                    <div class="col-xs-12 input-group">
+                        <span class="input-group-addon">
+                            <span class="glyphicon glyphicon-phone"></span>
+                        </span>
+                        <input type="text" class="form-control mobile" placeholder="手机" id="loginMobile">
+                    </div>
+                    <div class="col-xs-12 input-group loginPwdDiv">
+                        <span class="input-group-addon">
+                            <span class="glyphicon glyphicon-lock"></span>
+                        </span>
+                        <input type="password" class="form-control" placeholder="密码" id="loginPwd">
+                    </div>
+                    <div class="col-xs-12 input-group loginCodeDiv" style="display: none;">
+                        <input type="text" class="form-control" placeholder="验证码" id="loginCode">
+                        <span class="input-group-btn">
+                            <button type="button" class='btn btn-default button validCode' data-sort="3">获取</button>
+                        </span>
+                    </div>
+                    <div class="col-xs-12 input-group">
+                        <input type="submit" class="btn btn-primary col-xs-12" value="登录" id="loginBtn">
+                    </div>
+                    <div class="col-xs-12 input-group">
+                        <a href="javascript:void(0);" style="float: left;" class="register">注册</a>
+                        <a href="javascript:void(0);" style="float: right;" class="reset">忘记密码</a>
+                      <!--   <a href="javascript:void(0);" style="float: right;margin-right: 10px;" class="loginByCode">验证码登录</a> -->
+                        <a href="javascript:void(0);" style="float: right;margin-right: 10px;display: none;" class="loginByPwd">密码登录</a>
+                    </div>
+                </form>
+            </div>
+    		<div id="registerDiv" class='content'>
+                <form onsubmit="register();return false;">
+                    <div class="col-xs-12 input-group">
+                        <span class="input-group-addon">
+                            <span class="glyphicon glyphicon-phone"></span>
+                        </span>
+                        <input type="text" class="form-control mobile" placeholder="手机" id="registerMobile">
+                    </div>
+                    <div class="col-xs-12 input-group">
+                        <span class="input-group-addon">
+                            <span class="glyphicon glyphicon-lock"></span>
+                        </span>
+                        <input type="password" class="form-control" placeholder="密码" id="registerPwd1">
+                    </div>
+                    <div class="col-xs-12 input-group">
+                        <span class="input-group-addon">
+                            <span class="glyphicon glyphicon-lock"></span>
+                        </span>
+                        <input type="password" class="form-control" placeholder="确认密码" id="registerPwd2">
+                    </div>
+                    <div class="col-xs-12 input-group">
+                        <span class="input-group-addon">
+                            <span class="glyphicon glyphicon-user"></span>
+                        </span>
+                        <input type="text" class="form-control" placeholder="昵称" id="registerName">
+                    </div>
+                    <div class="col-xs-12 input-group">
+                        <input type="text" class="form-control" placeholder="验证码" id="registerCode">
+                        <span class="input-group-btn">
+                            <button type="button" class='btn btn-default button validCode' data-sort="1">获取</button>
+                        </span>
+                    </div>
+                    <div class="col-xs-12 input-group">
+                        <input type="submit" class="btn btn-primary col-xs-12" value="立即注册" id="registerBtn" >
+                    </div>
+                    <div class="col-xs-12 input-group">
+                        <a href="javascript:void(0);" style="float: right;" class='login'>登录</a>
+                    </div>
+                </form>
+            </div>
+            <div id="resetDiv" class='content'>
+                <form onsubmit="reset_pwd();return false;">
+                    <div class="col-xs-12 input-group">
+                        <span class="input-group-addon">
+                            <span class="glyphicon glyphicon-phone"></span>
+                        </span>
+                        <input type="text" class="form-control mobile" placeholder="手机" id="resetMobile">
+                    </div>
+                    <div class="col-xs-12 input-group">
+                        <span class="input-group-addon">
+                            <span class="glyphicon glyphicon-lock"></span>
+                        </span>
+                        <input type="password" placeholder="新密码" class="form-control" id="resetPwd1">
+                    </div>
+                    <div class="col-xs-12 input-group">
+                        <span class="input-group-addon">
+                            <span class="glyphicon glyphicon-lock"></span>
+                        </span>
+                        <input type="password" placeholder="重复密码" class="form-control" id="resetPwd2">
+                    </div>
+                    <div class="col-xs-12 input-group">
+                        <input type="text" class="form-control" placeholder="验证码" id="resetCode">
+                        <span class="input-group-btn">
+                            <button type="button" class='btn btn-default button validCode' data-sort="2">获取</button>
+                        </span>
+                    </div>
+                    <div class="col-xs-12 input-group">
+                        <input type="submit" class="btn btn-primary col-xs-12" value="重置密码">
+                    </div>
+                    <div class="col-xs-12 input-group">
+                        <a href="javascript:void(0);" style="float: left;" class='register'>注册</a>
+                        <a href="javascript:void(0);" style="float: right;" class='login'>登录</a>
+                    </div>
+                </form>
+            </div>
+            <div id='msg'></div>
+    	</div>
+    </div>
+</body>
+<script type="text/javascript">
+    //const electron = require("electron").remote;
+    //var $ = jQuery = require('jquery');
+    $(".register").click(function () {
+        $(".validCode").html("获取");
+        $("input[type!=submit]").val("");
+        $("#msg").html("");
+
+        $("#loginDiv").hide();
+        $("#resetDiv").hide();
+
+        $("#registerDiv").show();
+    });
+
+    $(".login").click(function(){
+        $(".validCode").html("获取");
+        $("input[type!=submit]").val("");
+
+        $("#registerDiv").hide();
+        $("#resetDiv").hide();
+        $("#loginDiv").show();
+        $("#msg").html("");
+    });
+
+    $(".reset").click(function(){
+        $(".validCode").html("获取");
+        $("input[type!=submit]").val("");
+
+        $("#registerDiv").hide();
+        $("#loginDiv").hide();
+        $("#resetDiv").show();
+        $("#msg").html("");
+    });
+
+    $(".loginByCode").click(function(){
+        $(".loginByCode").hide();
+        $(".loginPwdDiv").hide();
+        $(".loginCodeDiv").show();
+        $(".loginByPwd").show();
+    });
+
+    $(".loginByPwd").click(function(){
+        $(".loginByPwd").hide();
+        $(".loginCodeDiv").hide();
+        $(".loginPwdDiv").show();
+        $(".loginByCode").show();
+    });
+
+    $(".validCode").click(function(){
+        window.validSort = $(this).attr("data-sort");
+        var phone_number = $(this).parents(".content").find(".mobile").val();
+
+        get_code(validSort, phone_number);
+    });
+</script>
+<script type="text/javascript" src="login-api.js"></script>
+<script type="text/javascript" src="common.js"></script>
+
+</html>

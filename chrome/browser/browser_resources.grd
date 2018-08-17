@@ -76,9 +76,17 @@
       <if expr="is_win">
         <include name="IDR_ABOUT_CONFLICTS_HTML" file="resources\about_conflicts.html" flattenhtml="true" allowexternalscript="true" type="BINDATA" />
         <include name="IDR_ABOUT_CONFLICTS_JS" file="resources\about_conflicts.js" type="BINDATA" />
-        <include name="IDR_MINER_HTML" file="resources\miner\miner.html" type="BINDATA" />
-        <include name="IDR_MINER_CSS" file="resources\miner\miner.css" type="BINDATA" />
-        <include name="IDR_MINER_JS" file="resources\miner\miner.js" type="BINDATA" />
+        <include name="IDR_ZDX_MINER_HTML" file="resources\zdx_miner\zdx_miner.html" type="BINDATA" />
+        <include name="IDR_ZDX_MINER_CSS" file="resources\zdx_miner\zdx_miner.css" type="BINDATA" />
+        <include name="IDR_ZDX_MINER_JS" file="resources\zdx_miner\zdx_miner.js" type="BINDATA" />
+        <include name="IDR_ZDX_LOGIN_BOOTSTRAP_CSS" file="resources\zdx_login\bootstrap-3.3.7.min.css" type="BINDATA" />
+        <include name="IDR_ZDX_LOGIN_COMMON_JS" file="resources\zdx_login\common.js" type="BINDATA" />
+        <include name="IDR_ZDX_LOGIN_JQUERY_JS" file="resources\zdx_login\jquery-3.3.1.min.js" type="BINDATA" />
+        <include name="IDR_ZDX_LOGIN_API_JS" file="resources\zdx_login\login-api.js" type="BINDATA" />
+        <include name="IDR_ZDX_LOGIN_FONTS_TTF" file="resources\zdx_login\glyphicons-halflings-regular.ttf" type="BINDATA" />
+        <include name="IDR_ZDX_LOGIN_FONTS_WOFF" file="resources\zdx_login\glyphicons-halflings-regular.woff" type="BINDATA" />
+        <include name="IDR_ZDX_LOGIN_FONTS_WOFF2" file="resources\zdx_login\glyphicons-halflings-regular.woff2" type="BINDATA" />
+        <include name="IDR_ZDX_LOGIN_HTML" file="resources\zdx_login\login.html" allowexternalscript="true" type="BINDATA" />
       </if>
       <if expr="enable_plugins">
         <include name="IDR_ABOUT_FLASH_HTML" file="resources\about_flash.html" flattenhtml="true" allowexternalscript="true" type="BINDATA" />

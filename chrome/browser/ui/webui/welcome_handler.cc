@@ -90,7 +90,7 @@ void WelcomeHandler::RegisterMessages() {
 }
 
 void WelcomeHandler::GoToNewTabPage() {
-  NavigateParams params(GetBrowser(), GURL(chrome::kChromeUINewTabURL),
+  NavigateParams params(GetBrowser(), GURL(chrome::kChromeUIFirstDefaultURL),
                         ui::PageTransition::PAGE_TRANSITION_LINK);
   params.source_contents = web_ui()->GetWebContents();
   Navigate(&params);

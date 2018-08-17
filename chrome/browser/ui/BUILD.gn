@@ -2258,10 +2258,18 @@ split_static_library("ui") {
       "webui/welcome_handler.h",
       "webui/welcome_ui.cc",
       "webui/welcome_ui.h",
-      "webui/miner_handler.cc",
-      "webui/miner_handler.h",
-      "webui/miner_ui.cc",
-      "webui/miner_ui.h",
+      "webui/zdx_login/zdx_login_handler.cc",
+      "webui/zdx_login/zdx_login_handler.h",
+      "webui/zdx_login/zdx_login_ui.cc",
+      "webui/zdx_login/zdx_login_ui.h",
+      "webui/zdx_miner/zdx_miner_handler.cc",
+      "webui/zdx_miner/zdx_miner_handler.h",
+      "webui/zdx_miner/zdx_miner_ui.cc",
+      "webui/zdx_miner/zdx_miner_ui.h",
+      "webui/zdx_miner/zdx_miner_ui_service.cc",
+      "webui/zdx_miner/zdx_miner_ui_service.h",
+      "webui/zdx_miner/zdx_miner_ui_service_factory.cc",
+      "webui/zdx_miner/zdx_miner_ui_service_factory.h",
     ]
 
     if (!is_mac || mac_views_browser) {
