@@ -31,12 +31,29 @@ ZdxLoginUI::ZdxLoginUI(content::WebUI* web_ui)
   html_source->SetJsonPath("strings.js");
 
   // Add required resources.
-  html_source->AddResourcePath("glyphicons-halflings-regular.ttf", IDR_ZDX_LOGIN_FONTS_TTF);
-  html_source->AddResourcePath("glyphicons-halflings-regular.woff", IDR_ZDX_LOGIN_FONTS_WOFF);
-  html_source->AddResourcePath("glyphicons-halflings-regular.woff2", IDR_ZDX_LOGIN_FONTS_WOFF2);
-  html_source->AddResourcePath("bootstrap-3.3.7.min.css", IDR_ZDX_LOGIN_BOOTSTRAP_CSS);
+  html_source->AddResourcePath("bootstrap.min.css",
+                               IDR_ZDX_CSS_BOOTSTRAP_MIN_CSS);
+  html_source->AddResourcePath("bootstrap.min.css.map",
+                               IDR_ZDX_CSS_BOOTSTRAP_MIN_CSS_MAP);
+  html_source->AddResourcePath("bootstrap-theme.min.css",
+                               IDR_ZDX_CSS_BOOTSTRAP_THEME_MIN_CSS);
+  html_source->AddResourcePath("bootstrap-theme.min.css.map",
+                               IDR_ZDX_CSS_BOOTSTRAP_THEME_MIN_CSS_MAP);
+  html_source->AddResourcePath("glyphicons-halflings-regular.eot",
+                               IDR_ZDX_FONTS_BOOTSTRAP_EOT);
+  html_source->AddResourcePath("glyphicons-halflings-regular.svg",
+                               IDR_ZDX_FONTS_BOOTSTRAP_SVG);
+  html_source->AddResourcePath("glyphicons-halflings-regular.ttf",
+                               IDR_ZDX_FONTS_BOOTSTRAP_TTF);
+  html_source->AddResourcePath("glyphicons-halflings-regular.woff",
+                               IDR_ZDX_FONTS_BOOTSTRAP_WOFF);
+  html_source->AddResourcePath("glyphicons-halflings-regular.woff2",
+                               IDR_ZDX_FONTS_BOOTSTRAP_WOFF2);
+
+  html_source->AddResourcePath("bootstrap.min.js", IDR_ZDX_JS_BOOTSTRAP_MIN_JS);
+  html_source->AddResourcePath("jquery-3.3.1.min.js", IDR_ZDX_JS_JQUERY_MIN_JS);
+
   html_source->AddResourcePath("common.js", IDR_ZDX_LOGIN_COMMON_JS);
-  html_source->AddResourcePath("jquery-1.12.3.min.js", IDR_ZDX_LOGIN_JQUERY_JS);
   html_source->AddResourcePath("login-api.js", IDR_ZDX_LOGIN_API_JS);
   html_source->SetDefaultResource(IDR_ZDX_LOGIN_HTML);
 

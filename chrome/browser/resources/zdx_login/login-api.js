@@ -1,4 +1,4 @@
-
+	
 function show_msg( msg, rt){
 	$("#msg").html(msg);
 console.log(msg);
