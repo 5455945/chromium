@@ -13,7 +13,8 @@
 namespace version_info {
 
 std::string GetProductNameAndVersionForUserAgent() {
-  return "Chrome/" + GetVersionNumber();
+  //return "Chrome/" + GetVersionNumber();
+    return "Chrome/68.0.3440.105 " + GetProductName() + "/" + GetVersionNumber();
 }
 
 std::string GetProductName() {
