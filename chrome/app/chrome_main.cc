@@ -331,18 +331,21 @@ int ChromeMain(int argc, const char** argv) {
             std::string appdata = m_lpszDefaultDir;
             std::string filename =
                 appdata + "\\ZdxBrowser\\User Data\\Default\\UUID";
-            std::ofstream out(filename,
+            std::ifstream fin(filename, std::ios::in);
+            if (fin.good()) {
+              fin.close();
+            } else {
+              std::ofstream out(filename,
                               std::ios::in | std::ios::out | std::ios::trunc);
-            if (out.is_open()) {
-              std::string str = uuid;
-              str += ";";
-              str += device_name;
-              out << str;
-              out.close();
-              //bRet = true;
+              if (out.is_open()) {
+                std::string str = uuid;
+                str += ";";
+                str += device_name;
+                out << str;
+                out.close();
+              }
             }
           }
-          //i++;
           ::OutputDebugStringA("get_system_uuid");
           if (uuid.length() > 0) {
             ::OutputDebugStringA(uuid.c_str());

@@ -53,14 +53,14 @@ void SessionStartupPref::RegisterProfilePrefs(
                                 TypeToPrefValue(GetDefaultStartupType()),
                                 flags);
 
-  // registry->RegisterListPref(prefs::kURLsToRestoreOnStartup, flags);
-  auto url_pref_list = std::make_unique<base::ListValue>();
-  url_pref_list->Set(0,
-                     std::make_unique<base::Value>(
-                         "zdx.app"));
-  registry->RegisterListPref(prefs::kURLsToRestoreOnStartup,
-                             std::move(url_pref_list),
-                             flags);
+  registry->RegisterListPref(prefs::kURLsToRestoreOnStartup, flags);
+  //auto url_pref_list = std::make_unique<base::ListValue>();
+  //url_pref_list->Set(0,
+  //                   std::make_unique<base::Value>(
+  //                       "zdx.app"));
+  //registry->RegisterListPref(prefs::kURLsToRestoreOnStartup,
+  //                           std::move(url_pref_list),
+  //                           flags);
 }
 
 // static
