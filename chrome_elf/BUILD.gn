@@ -332,7 +332,7 @@ test("chrome_elf_import_unittests") {
   # As a workaround, explicitly include a data dep on just chrome.exe, and
   # add //chrome to deps above to make sure it's been built.
   data = [
-    "$root_out_dir/chrome.exe",
+    "$root_out_dir/zdx.exe",
   ]
   data_deps = [
     ":chrome_elf",
