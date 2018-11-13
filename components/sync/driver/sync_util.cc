@@ -58,7 +58,8 @@ std::string FormatUserAgentForSync(const std::string& system,
   std::string user_agent;
   user_agent = "Chrome ";
   user_agent += system;
-  user_agent += version_info::GetVersionNumber();
+  //user_agent += version_info::GetVersionNumber();
+  user_agent += version_info::GetOriginalVersionNumber();
   user_agent += " (" + version_info::GetLastChange() + ")";
   if (!version_info::IsOfficialBuild()) {
     user_agent += "-devel";
