@@ -93730,6 +93730,18 @@ uploading your change for review.
   </summary>
 </histogram>
 
+<histogram name="Search.ContextualSearch.Tap.SyncEnabled.ResultsSeen"
+    enum="Boolean" expires_after="M76">
+  <owner>donnd@chromium.org</owner>
+  <owner>twellington@chromium.org</owner>
+  <summary>
+    Records whether the user opened the panel when it was shown for sync-enabled
+    users only (this is an approximation for the population that logs to UKM).
+    Recorded for all gestures for users with sync enabled when the UX is hidden.
+    Implemented for Android.
+  </summary>
+</histogram>
+
 <histogram name="Search.ContextualSearch.UnifiedConsent.PreviouslyUndecided"
     enum="Boolean" expires_after="2019-01-30">
   <owner>donnd@chromium.org</owner>
