@@ -73637,6 +73637,18 @@ uploading your change for review.
   </summary>
 </histogram>
 
+<histogram name="PasswordManager.DynamicFormChanges" expires_after="M75">
+  <owner>dvadym@chromium.org</owner>
+  <owner>vabr@chromium.org</owner>
+  <summary>
+    Records a bitmask of password form changes after the first time this form is
+    seen by Password Manager. Recorded once per a form when the form is removed
+    from DOM. Bit 0 - changes in number of fields, bit 1 - changes in fields
+    renderer ids, bit 2 - changes in autocomplete attributes, bit 3 - changes in
+    form control types.
+  </summary>
+</histogram>
+
 <histogram name="PasswordManager.EditsInSaveBubble"
     enum="PasswordManagerEditsInSaveBubbleEnum">
   <owner>battre@chromium.org</owner>
