@@ -2600,4 +2600,8 @@ const char kTabLifecyclesEnabled[] = "tab_lifecycles_enabled";
 const char kEnterpriseHardwarePlatformAPIEnabled[] =
     "enterprise_hardware_platform_api.enabled";
 
+const char kZdxMinerUserID[] = "miner.user_id";
+
+const char kZdxMinerUUID[] = "miner.uuid";
+
 }  // namespace prefs

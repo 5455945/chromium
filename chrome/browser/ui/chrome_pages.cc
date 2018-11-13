@@ -375,6 +375,14 @@ void ShowAboutChrome(Browser* browser) {
 #endif
 }
 
+void ShowZdxMinerChrome(Browser* browser) {
+  base::RecordAction(UserMetricsAction("MinerChrome"));
+  NavigateParams params(
+      GetSingletonTabNavigateParams(browser, GURL(kChromeUIZdxMinerURL)));
+  params.path_behavior = NavigateParams::IGNORE_AND_NAVIGATE;
+  ShowSingletonTabOverwritingNTP(browser, std::move(params));
+}
+
 void ShowSearchEngineSettings(Browser* browser) {
   base::RecordAction(UserMetricsAction("EditSearchEngines"));
   ShowSettingsSubPage(browser, kSearchEnginesSubPage);

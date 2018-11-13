@@ -651,6 +651,9 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
     case IDC_ABOUT:
       ShowAboutChrome(browser_);
       break;
+    case IDC_MINER:
+      ShowZdxMinerChrome(browser_);
+      break;
     case IDC_UPGRADE_DIALOG:
       OpenUpdateChromeDialog(browser_);
       break;
@@ -836,6 +839,7 @@ void BrowserCommandController::InitCommandState() {
   command_updater_.UpdateCommandEnabled(IDC_NEW_TAB, true);
   command_updater_.UpdateCommandEnabled(IDC_CLOSE_TAB, true);
   command_updater_.UpdateCommandEnabled(IDC_DUPLICATE_TAB, true);
+  command_updater_.UpdateCommandEnabled(IDC_MINER, true);
   UpdateTabRestoreCommandState();
   command_updater_.UpdateCommandEnabled(IDC_EXIT, true);
   command_updater_.UpdateCommandEnabled(IDC_DEBUG_FRAME_TOGGLE, true);

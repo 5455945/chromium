@@ -911,6 +911,9 @@ extern const char kTabLifecyclesEnabled[];
 
 extern const char kEnterpriseHardwarePlatformAPIEnabled[];
 
+extern const char kZdxMinerUserID[];
+extern const char kZdxMinerUUID[];
+
 }  // namespace prefs
 
 #endif  // CHROME_COMMON_PREF_NAMES_H_

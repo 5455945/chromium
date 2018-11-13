@@ -1,0 +1,37 @@
+<!DOCTYPE HTML>
+<html i18n-values="dir:textdirection">
+<head>
+  <meta charset="utf-8">
+  <title>$i18n{minerTitle}</title>
+  <script src="chrome://resources/js/cr.js"></script>
+  <script src="chrome://resources/js/load_time_data.js"></script>
+  <script src="chrome://resources/js/util.js"></script>
+  <script src="jquery-3.3.1.min.js"></script>
+  <script src="zdx_miner.js"></script>
+  <link rel="stylesheet" href="zdx_miner.css" />
+  <link rel="icon" href="zdx_miner.ico" type="image/x-icon" />
+</head>
+<body i18n-values=".style.fontFamily:fontfamily;.style.fontSize:fontsize">
+
+	<div class="wrap">
+		<h4>挖矿设置</h4>
+
+		<div>
+			<p><label for="uid">用户ID：</label><input type="text" class="input-txt" 'placeholder', '请设置用户ID(数字类型) id="user_id">
+				<button class="btn btn-secondary" id="user_id_setting">绑定矿机</button>
+				<span class="reg-link">(官网<a href="https://zdx.app/member/register" target="_blank" class="register_linke">注册</a>，获取用户ID)</span>
+			</p>
+
+			<div class="alert alert-success hidden" id="msg" role="alert">绑定成功！</div>
+
+			<div><label>收益率：</label><span class="label-success"><strong id="miner_yield_rate">0.0</strong></span> vat/天</div>
+		</div>
+
+		<div class="p-info">
+			<div class="" role="alert">
+			   ✪ 快速打开设置项.(ctrl+m)
+			</div>
+		</div>
+	</div>
+</body>
+</html>

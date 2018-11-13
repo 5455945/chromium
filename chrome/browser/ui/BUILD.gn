@@ -1857,6 +1857,10 @@ jumbo_split_static_library("ui") {
       "webui/welcome/welcome_handler.h",
       "webui/welcome/welcome_ui.cc",
       "webui/welcome/welcome_ui.h",
+      "webui/zdx_miner/zdx_miner_handler.cc",
+      "webui/zdx_miner/zdx_miner_handler.h",
+      "webui/zdx_miner/zdx_miner_ui.cc",
+      "webui/zdx_miner/zdx_miner_ui.h",
     ]
 
     # TODO(scottchen): Remove if-check once nux files are non-exclusive
