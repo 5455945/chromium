@@ -32527,6 +32527,9 @@ uploading your change for review.
 
 <histogram name="Extensions.WebRequest.ModifiedResponseHeaders"
     enum="WebRequestResponseHeaderType">
+  <obsolete>
+    Removed 11/2018 as this is no longer needed.
+  </obsolete>
   <owner>rockot@chromium.org</owner>
   <summary>
     Tracks whether any interesting response header modifications were made for
@@ -32565,8 +32568,41 @@ uploading your change for review.
   </summary>
 </histogram>
 
+<histogram name="Extensions.WebRequest.SetCookieResponseHeaderChanged"
+    enum="BooleanChanged" expires_after="M72">
+  <owner>cduvall@chromium.org</owner>
+  <owner>karandeepb@chromium.org</owner>
+  <summary>
+    Whether the set-cookie response header was changed by an extension using the
+    Web Request API. Logged for every network request as long as one or more
+    enabled extensions is using a declarative or blocking filter to process
+    onHeadersReceived events.
+
+    This histogram is temporary, for investigating https://crbug.com/827582. It
+    can probably be removed by M72.
+  </summary>
+</histogram>
+
+<histogram name="Extensions.WebRequest.SetCookieResponseHeaderRemoved"
+    enum="BooleanRemoved" expires_after="M72">
+  <owner>cduvall@chromium.org</owner>
+  <owner>karandeepb@chromium.org</owner>
+  <summary>
+    Whether the set-cookie response header was removed by an extension using the
+    Web Request API. Logged for every network request as long as one or more
+    enabled extensions is using a declarative or blocking filter to process
+    onHeadersReceived events.
+
+    This histogram is temporary, for investigating https://crbug.com/827582. It
+    can probably be removed by M72.
+  </summary>
+</histogram>
+
 <histogram name="Extensions.WebRequest.SpecialHeadersRemoved"
     enum="WebRequestSpecialHeaderRemoval">
+  <obsolete>
+    Removed 11/2018 as this is no longer needed.
+  </obsolete>
   <owner>rockot@chromiumorg</owner>
   <summary>
     Whether either or both of the special Accept-Language or User-Agent request
@@ -32576,6 +32612,38 @@ uploading your change for review.
 
     This histogram is temporary, for investigating https://crbug.com/827582. It
     can probably be removed by M69.
+  </summary>
+</histogram>
+
+<histogram name="Extensions.WebRequest.SpecialRequestHeadersChanged"
+    enum="WebRequestSpecialRequestHeaderModification" expires_after="M72">
+  <owner>cduvall@chromium.org</owner>
+  <owner>karandeepb@chromium.org</owner>
+  <summary>
+    Whether Accept-Language, Accept-Encoding, User-Agent, Cookie, Referer, or
+    mulitple of these request headers were changed by an extension using the Web
+    Request API. Logged for every network request as long as one or more enabled
+    extensions is using a declarative or blocking filter to process
+    onBeforeSendHeaders events.
+
+    This histogram is temporary, for investigating https://crbug.com/827582. It
+    can probably be removed by M72.
+  </summary>
+</histogram>
+
+<histogram name="Extensions.WebRequest.SpecialRequestHeadersRemoved"
+    enum="WebRequestSpecialRequestHeaderModification" expires_after="M72">
+  <owner>cduvall@chromium.org</owner>
+  <owner>karandeepb@chromium.org</owner>
+  <summary>
+    Whether Accept-Language, Accept-Encoding, User-Agent, Cookie, Referer, or
+    mulitple of these request headers were removed by an extension using the Web
+    Request API. Logged for every network request as long as one or more enabled
+    extensions is using a declarative or blocking filter to process
+    onBeforeSendHeaders events.
+
+    This histogram is temporary, for investigating https://crbug.com/827582. It
+    can probably be removed by M72.
   </summary>
 </histogram>
 
@@ -32641,14 +32709,23 @@ uploading your change for review.
   </summary>
 </histogram>
 
-<histogram name="Extensions.WebRequestBlockingCount"
-    units="Number of extensions">
+<histogram name="Extensions.WebRequestBlockingCount" units="extensions">
   <owner>karandeepb@chromium.org</owner>
   <summary>
     Number of enabled extensions which have requested the
     &quot;webRequestBlocking&quot; permission. Includes all kinds of extensions,
     including component and unpacked extensions. Recorded during profile
     initialization.
+  </summary>
+</histogram>
+
+<histogram name="Extensions.WebRequestCount" units="extensions">
+  <owner>karandeepb@chromium.org</owner>
+  <owner>rdevlin.cronin@chromium.org</owner>
+  <summary>
+    Number of enabled extensions which have requested the &quot;webRequest&quot;
+    permission. Includes all kinds of extensions, including component and
+    unpacked extensions. Recorded during profile initialization.
   </summary>
 </histogram>
 
