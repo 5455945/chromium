@@ -32647,6 +32647,30 @@ uploading your change for review.
   </summary>
 </histogram>
 
+<histogram name="Extensions.WebRequest.TotalBlockingRequestTime" units="ms"
+    expires_after="2019-05-13">
+  <owner>karandeepb@chromium.org</owner>
+  <owner>rdevlin.cronin@chromium.org</owner>
+  <summary>
+    The total time a network request took when at least one Web Request listener
+    was registered at the start of the request, and a listener was blocked on
+    the request. Measures from onBeforeRequest to onCompleted/onErrorOccurred,
+    and does not include canceled or redirected requests.
+  </summary>
+</histogram>
+
+<histogram name="Extensions.WebRequest.TotalRequestTime" units="ms"
+    expires_after="2019-05-13">
+  <owner>karandeepb@chromium.org</owner>
+  <owner>rdevlin.cronin@chromium.org</owner>
+  <summary>
+    The total time a network request took when at least one Web Request listener
+    was registered at the start of the request. Measures from onBeforeRequest to
+    onCompleted/onErrorOccurred, and does not include canceled or redirected
+    requests.
+  </summary>
+</histogram>
+
 <histogram
     name="Extensions.WebRequest.WS_CookiesAreModifiedOnBeforeSendHeaders"
     units="boolean">
