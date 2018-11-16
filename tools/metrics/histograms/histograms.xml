@@ -5313,6 +5313,13 @@ uploading your change for review.
   <summary>Record the status of the Assistant opt-in flow.</summary>
 </histogram>
 
+<histogram name="Assistant.QueryCountPerEntryPoint" enum="AssistantSource"
+    expires_after="2019-10-15">
+  <owner>xiaohuic@chromium.org</owner>
+  <owner>meilinw@chromium.org</owner>
+  <summary>Number of queries fired for each entry point.</summary>
+</histogram>
+
 <histogram name="Assistant.ServiceStartTime" units="ms">
   <owner>updowndota@chromium.org</owner>
   <summary>Amount of time spent in starting Assistant service.</summary>
