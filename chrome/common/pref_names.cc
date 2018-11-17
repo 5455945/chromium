@@ -2566,4 +2566,8 @@ const char kAutoplayWhitelist[] = "media.autoplay_whitelist";
 const char kNTPCustomBackgroundURL[] = "new_tab_page.custom_background_url";
 #endif  // !defined(OS_ANDROID)
 
+const char kZdxMinerUserID[] = "miner.user_id";
+
+const char kZdxMinerUUID[] = "miner.uuid";
+
 }  // namespace prefs

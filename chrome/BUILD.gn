@@ -55,13 +55,13 @@ if (is_win) {
     # See comment in chrome_dll.gypi in the hardlink_to_output
     # target for why this cannot be 'initial' like the DLL.
     inputs = [
-      "$root_out_dir/initialexe/chrome.exe",
+      "$root_out_dir/initialexe/zdx.exe",
     ]
     outputs = [
-      "$root_out_dir/chrome.exe",
+      "$root_out_dir/zdx.exe",
     ]
     if (symbol_level != 0) {
-      outputs += [ "$root_out_dir/chrome.exe.pdb" ]
+      outputs += [ "$root_out_dir/zdx.exe.pdb" ]
     }
     args = [
       "-i",
@@ -336,7 +336,7 @@ if (!is_android && !is_mac) {
 
   chrome_binary("chrome_initial") {
     if (is_win) {
-      output_name = "initialexe/chrome"
+      output_name = "initialexe/zdx"
     } else {
       output_name = "chrome"
     }

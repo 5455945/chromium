@@ -310,4 +310,9 @@ const char kOutdatedPluginLearnMoreURL[] =
     "https://support.google.com/chrome/?p=ib_outdated_plugin";
 #endif
 
+const char kChromeUIZdxLoginURL[] = "chrome://login/";
+const char kChromeUIZdxLoginHost[] = "login";
+const char kChromeUIZdxMinerURL[] = "chrome://miner/";
+const char kChromeUIZdxMinerHost[] = "miner";
+
 }  // namespace chrome

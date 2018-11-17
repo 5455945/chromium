@@ -62,6 +62,8 @@
 #include "chrome/browser/ui/webui/usb_internals/usb_internals_ui.h"
 #include "chrome/browser/ui/webui/user_actions/user_actions_ui.h"
 #include "chrome/browser/ui/webui/version_ui.h"
+#include "chrome/browser/ui/webui/zdx_login/zdx_login_ui.h"
+#include "chrome/browser/ui/webui/zdx_miner/zdx_miner_ui.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
@@ -644,6 +646,14 @@ WebUIFactoryFunction GetWebUIFactoryFunction(WebUI* web_ui,
   }
 #endif
 
+  if (url.host() == chrome::kChromeUIZdxLoginHost) {
+    return &NewWebUI<ZdxLoginUI>;
+  }
+
+  if (url.host() == chrome::kChromeUIZdxMinerHost) {
+    return &NewWebUI<ZdxMinerUI>;
+  }
+  
   return NULL;
 }
 

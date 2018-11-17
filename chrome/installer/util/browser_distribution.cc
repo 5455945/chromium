@@ -28,7 +28,7 @@ BrowserDistribution* g_browser_distribution = NULL;
 
 BrowserDistribution::BrowserDistribution()
     : app_reg_data_(std::make_unique<NonUpdatingAppRegistrationData>(
-          L"Software\\Chromium")) {}
+          L"Software\\ZdxBrowser")) {}
 
 BrowserDistribution::BrowserDistribution(
     std::unique_ptr<AppRegistrationData> app_reg_data)
@@ -108,7 +108,7 @@ base::string16 BrowserDistribution::GetStartMenuShortcutSubfolder(
 }
 
 base::string16 BrowserDistribution::GetPublisherName() {
-  return L"Chromium";
+  return L"ZdxBrowser";
 }
 
 base::string16 BrowserDistribution::GetAppDescription() {
@@ -122,7 +122,7 @@ base::string16 BrowserDistribution::GetLongAppDescription() {
 }
 
 std::string BrowserDistribution::GetSafeBrowsingName() {
-  return "chromium";
+  return "ZdxBrowser";
 }
 
 base::string16 BrowserDistribution::GetDistributionData(HKEY root_key) {

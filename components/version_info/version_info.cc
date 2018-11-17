@@ -13,7 +13,8 @@
 namespace version_info {
 
 std::string GetProductNameAndVersionForUserAgent() {
-  return "Chrome/" + GetVersionNumber();
+  //return "Chrome/" + GetVersionNumber();
+    return "Chrome/" + GetOriginalVersionNumber() + " " + GetProductName() + "/" + GetVersionNumber();
 }
 
 std::string GetProductName() {
@@ -22,6 +23,11 @@ std::string GetProductName() {
 
 std::string GetVersionNumber() {
   return PRODUCT_VERSION;
+}
+
+std::string GetOriginalVersionNumber() {
+    // 每次更新原始版本时，手动修改原始版本
+    return "68.0.3440.105";
 }
 
 const base::Version& GetVersion() {

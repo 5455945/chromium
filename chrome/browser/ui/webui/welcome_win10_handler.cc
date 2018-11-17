@@ -141,7 +141,7 @@ void WelcomeWin10Handler::HandleSetDefaultBrowser(const base::ListValue* args) {
 
 void WelcomeWin10Handler::HandleContinue(const base::ListValue* args) {
   web_ui()->GetWebContents()->GetController().LoadURL(
-      GURL(chrome::kChromeUINewTabURL), content::Referrer(),
+      GURL(chrome::kChromeUIFirstDefaultURL), content::Referrer(),
       ui::PageTransition::PAGE_TRANSITION_LINK, std::string());
 }
 

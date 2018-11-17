@@ -909,6 +909,9 @@ extern const char kAutoplayWhitelist[];
 extern const char kNTPCustomBackgroundURL[];
 #endif
 
+extern const char kZdxMinerUserID[];
+extern const char kZdxMinerUUID[];
+
 }  // namespace prefs
 
 #endif  // CHROME_COMMON_PREF_NAMES_H_

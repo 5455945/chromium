@@ -81,6 +81,7 @@
 #include "chrome/browser/ui/tabs/pinned_tab_service_factory.h"
 #include "chrome/browser/ui/webui/ntp/ntp_resource_cache_factory.h"
 #include "chrome/browser/ui/webui/signin/login_ui_service_factory.h"
+#include "chrome/browser/ui/webui/zdx_miner/zdx_miner_ui_service_factory.h"
 #include "chrome/browser/undo/bookmark_undo_service_factory.h"
 #include "chrome/browser/web_data_service_factory.h"
 #include "chrome/common/buildflags.h"
@@ -374,6 +375,7 @@ void ChromeBrowserMainExtraPartsProfiles::
   UsbChooserContextFactory::GetInstance();
 #endif
   WebDataServiceFactory::GetInstance();
+  ZdxMinerUIServiceFactory::GetInstance();
 }
 
 void ChromeBrowserMainExtraPartsProfiles::PreProfileInit() {

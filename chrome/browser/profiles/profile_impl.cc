@@ -371,7 +371,9 @@ void ProfileImpl::RegisterProfilePrefs(
 #else
   uint32_t home_page_flags = user_prefs::PrefRegistrySyncable::SYNCABLE_PREF;
 #endif
-  registry->RegisterStringPref(prefs::kHomePage, std::string(),
+  //registry->RegisterStringPref(prefs::kHomePage, std::string(),
+  //                             home_page_flags);
+  registry->RegisterStringPref(prefs::kHomePage, std::string("https://zdx.app"),
                                home_page_flags);
   registry->RegisterStringPref(prefs::kNewTabPageLocationOverride,
                                std::string());

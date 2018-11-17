@@ -206,6 +206,22 @@ are declared in build/common.gypi.
       change nontranslateable parts of the messages into placeholders (using the
       <ph> element).  You can also use the 'grit add' tool to help you identify
       nontranslateable parts and create placeholders for them. -->
+      <message name="IDS_ZDX_MINER_TITLE" desc="A happy message saying miner mining!">
+          Mining setting
+      </message>
+      <message name="IDS_ZDX_MINER_TEXT1" desc="A happy message saying miner TEXT1!">
+          mining text1
+      </message>
+      <message name="IDS_ZDX_MINER_TEXT2" desc="A happy message saying miner TEXT2!">
+          mining text2
+      </message>
+      <message name="IDS_ZDX_MINER_TEXT3" desc="A happy message saying miner TEXT3!">
+          mining text3
+      </message>
+      <message name="IDS_ZDX_MINER_TEXT" desc="Message welcoming the user to the miner page">
+          miner to this fancy Miner page <ph name="MINER_NAME">$1<ex>Miner User</ex></ph>!
+      </message>
+      
       <if expr="is_win">
         <message name="IDS_BACKGROUND_APP_INSTALLED_BALLOON_TITLE" desc="The title of the balloon that is displayed when a background app is installed">
           New background app added
@@ -864,6 +880,9 @@ are declared in build/common.gypi.
           <message name="IDS_ZOOM_MINUS2" desc="The text label of the Make Text Smaller menu item in the merged menu">
             &#8722;
           </message>
+          <message name="IDS_MINER" desc="In Title Case: The text label of a menu item for enable miner">
+            &amp;miner
+          </message>
           <message name="IDS_COPY_URL" desc="The text label of the Copy URL menu item for the Hosted App app menu">
             Copy &amp;URL
           </message>
@@ -922,6 +941,9 @@ are declared in build/common.gypi.
           </message>
           <message name="IDS_ZOOM_MENU2" desc="In Title Case: The text label of the Zoom menu in the merged menu">
             Zoom
+          </message>
+          <message name="IDS_MINER" desc="In Title Case: The text label of a menu item for enable miner">
+            &amp;miner
           </message>
           <message name="IDS_ZOOM_PLUS" desc="In Title Case: The text label of the Make Text Larger menu item">
             &amp;Larger

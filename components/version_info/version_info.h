@@ -25,6 +25,8 @@ std::string GetProductName();
 // Returns the version number, e.g. "6.0.490.1".
 std::string GetVersionNumber();
 
+std::string GetOriginalVersionNumber();
+
 // Returns the result of GetVersionNumber() as a base::Version.
 const base::Version& GetVersion();
 
