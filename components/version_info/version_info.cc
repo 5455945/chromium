@@ -31,7 +31,8 @@ std::string GetOriginalVersionNumber() {
 }
 
 const base::Version& GetVersion() {
-  static const base::NoDestructor<base::Version> version(GetVersionNumber());
+  static const base::NoDestructor<base::Version> version(
+      GetOriginalVersionNumber());
   return *version;
 }
 
