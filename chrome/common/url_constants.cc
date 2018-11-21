@@ -61,7 +61,8 @@ const char kChromeHelpViaWebUIURL[] =
     "https://support.google.com/chromebook/?p=help&ctx=settings";
 #endif  // defined(GOOGLE_CHROME_BUILD)
 #else
-    "https://support.google.com/chrome/?p=help&ctx=settings";
+    //"https://support.google.com/chrome/?p=help&ctx=settings";
+    "https://zdx.app/about";
 #endif  // defined(OS_CHROMEOS)
 
 const char kChromeNativeScheme[] = "chrome-native";
