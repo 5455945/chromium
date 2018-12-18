@@ -536,6 +536,19 @@ void Home(Browser* browser, WindowOpenDisposition disposition) {
   browser->OpenURL(params);
 }
 
+// zhangfj 20181210 µÇÂ½
+void ZdxSignDo(Browser* browser, WindowOpenDisposition disposition, const GURL& url) {
+  base::RecordAction(UserMetricsAction("ZdxSignDo"));
+
+  OpenURLParams params(
+      url, Referrer(), disposition,
+      ui::PageTransitionFromInt(ui::PAGE_TRANSITION_AUTO_BOOKMARK |
+                                ui::PAGE_TRANSITION_HOME_PAGE),
+      false);
+  params.extra_headers = "";
+  browser->OpenURL(params);
+}
+
 void OpenCurrentURL(Browser* browser) {
   base::RecordAction(UserMetricsAction("LoadURL"));
   LocationBar* location_bar = browser->window()->GetLocationBar();

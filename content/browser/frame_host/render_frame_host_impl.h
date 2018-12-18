@@ -1315,6 +1315,11 @@ class CONTENT_EXPORT RenderFrameHostImpl
   URLLoaderFactoryBundleInfo::OriginMap
   CreateInitiatorSpecificURLLoaderFactories();
 
+  // zhangfj 20181211 子进程传递过来的数据
+  void OnSendDataRoutedRenderToMain(
+      int data_type,
+      const std::string& json);
+
   // For now, RenderFrameHosts indirectly keep RenderViewHosts alive via a
   // refcount that calls Shutdown when it reaches zero.  This allows each
   // RenderFrameHostManager to just care about RenderFrameHosts, while ensuring

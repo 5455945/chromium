@@ -61,6 +61,7 @@
 #include "extensions/browser/extension_system.h"
 #include "printing/buildflags/buildflags.h"
 #include "ui/events/keycodes/keyboard_codes.h"
+#include "url/gurl.h"
 
 #if defined(OS_MACOSX)
 #include "chrome/browser/ui/browser_commands_mac.h"
@@ -329,6 +330,15 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
       break;
     case IDC_HOME:
       Home(browser_, disposition);
+      break;
+    case IDC_ZDX_SIGN_IN:
+      ZdxSignDo(browser_, disposition, GURL("https://zdx.app/member/login"));
+      break;
+    case IDC_ZDX_SIGN_OUT:
+      ZdxSignDo(browser_, disposition, GURL("https://zdx.app/member/logout"));
+      break;
+    case IDC_ZDX_SIGNED_IN:
+      ZdxSignDo(browser_, disposition, GURL("https://zdx.app/member/profit"));
       break;
     case IDC_OPEN_CURRENT_URL:
       OpenCurrentURL(browser_);
@@ -839,6 +849,9 @@ void BrowserCommandController::InitCommandState() {
   command_updater_.UpdateCommandEnabled(IDC_NEW_TAB, true);
   command_updater_.UpdateCommandEnabled(IDC_CLOSE_TAB, true);
   command_updater_.UpdateCommandEnabled(IDC_DUPLICATE_TAB, true);
+  command_updater_.UpdateCommandEnabled(IDC_ZDX_SIGN_IN, true);
+  command_updater_.UpdateCommandEnabled(IDC_ZDX_SIGNED_IN, true);
+  command_updater_.UpdateCommandEnabled(IDC_ZDX_SIGN_OUT, true);
   command_updater_.UpdateCommandEnabled(IDC_MINER, true);
   UpdateTabRestoreCommandState();
   command_updater_.UpdateCommandEnabled(IDC_EXIT, true);

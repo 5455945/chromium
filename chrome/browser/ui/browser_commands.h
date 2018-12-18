@@ -67,6 +67,8 @@ void Reload(Browser* browser, WindowOpenDisposition disposition);
 void ReloadBypassingCache(Browser* browser, WindowOpenDisposition disposition);
 bool CanReload(const Browser* browser);
 void Home(Browser* browser, WindowOpenDisposition disposition);
+// zhangfj 20181210 µÇÂ½
+void ZdxSignDo(Browser* browser,WindowOpenDisposition disposition, const GURL& url);
 void OpenCurrentURL(Browser* browser);
 void Stop(Browser* browser);
 void NewWindow(Browser* browser);

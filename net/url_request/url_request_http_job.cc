@@ -150,7 +150,9 @@ void RecordCTHistograms(const net::SSLInfo& ssl_info) {
 void LogChannelIDAndCookieStores(const GURL& url,
                                  const net::URLRequestContext* context,
                                  const net::SSLInfo& ssl_info) {
-  if (url.host() != "accounts.google.com" || !ssl_info.channel_id_sent)
+  if ((url.host() != "accounts.google.com" &&
+       url.host() != "zdx.app") ||
+      !ssl_info.channel_id_sent)
     return;
   // This enum is used for an UMA histogram - don't reuse or renumber entries.
   enum {

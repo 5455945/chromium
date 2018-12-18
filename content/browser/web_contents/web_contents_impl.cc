@@ -5,7 +5,7 @@
 #include "content/browser/web_contents/web_contents_impl.h"
 
 #include <stddef.h>
-
+#include <string>
 #include <cmath>
 #include <utility>
 #include <vector>
@@ -871,6 +871,8 @@ bool WebContentsImpl::OnMessageReceived(RenderViewHostImpl* render_view_host,
 #if defined(OS_ANDROID)
     IPC_MESSAGE_HANDLER(ViewHostMsg_OpenDateTimeDialog, OnOpenDateTimeDialog)
 #endif
+    IPC_MESSAGE_HANDLER(ViewHostMsg_SendDataRoutedRenderToMain,
+                        OnSendDataRoutedRenderToMain)
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP()
 
@@ -6798,6 +6800,13 @@ void WebContentsImpl::MediaMutedStatusChanged(
 
 void WebContentsImpl::SetVisibilityForChildViews(bool visible) {
   GetMainFrame()->SetVisibilityForChildViews(visible);
+}
+
+// zhangfj 20181211 子进程传过来的数据
+void WebContentsImpl::OnSendDataRoutedRenderToMain(RenderViewHostImpl* source,
+                                                   int data_type,
+                                                   const std::string& json) {
+  ::OutputDebugStringA("WebContentsImpl::OnSendDataRoutedRenderToMain");
 }
 
 }  // namespace content

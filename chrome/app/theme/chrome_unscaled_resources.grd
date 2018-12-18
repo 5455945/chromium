@@ -99,6 +99,8 @@
         <include name="IDR_PROFILE_AVATAR_2X_24" file="default_200_percent/common/profile_avatar_note.png" type="BINDATA" />
         <include name="IDR_PROFILE_AVATAR_2X_25" file="default_200_percent/common/profile_avatar_sun_cloud.png" type="BINDATA" />
         <include name="IDR_PROFILE_AVATAR_2X_26" file="default_200_percent/common/profile_avatar_placeholder.png" type="BINDATA" />
+        <include name="IDR_PROFILE_AVATAR_2X_27" file="default_200_percent/common/profile_avatar_zdx_signin.png" type="BINDATA" />
+        <include name="IDR_PROFILE_AVATAR_2X_28" file="default_200_percent/common/profile_avatar_zdx_signout.png" type="BINDATA" />
       </if>
       <if expr="is_linux and enable_app_list">
         <!-- App Launcher icons for desktop icon. -->

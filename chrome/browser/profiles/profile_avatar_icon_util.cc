@@ -253,13 +253,13 @@ const char kGAIAPictureFileName[] = "Google Profile Picture.png";
 const char kHighResAvatarFolderName[] = "Avatars";
 
 // The size of the function-static kDefaultAvatarIconResources array below.
-const size_t kDefaultAvatarIconsCount = 27;
+const size_t kDefaultAvatarIconsCount = 29;
 
 // The first 8 icons are generic.
 const size_t kGenericAvatarIconsCount = 8;
 
 // The avatar used as a placeholder (grey silhouette).
-const size_t kPlaceholderAvatarIndex = 26;
+const size_t kPlaceholderAvatarIndex = 28;
 
 gfx::Image GetSizedAvatarIcon(const gfx::Image& image,
                               bool is_rectangle,
@@ -444,6 +444,12 @@ const IconResourceInfo* GetDefaultAvatarIconResourceInfo(size_t index) {
       {IDR_PROFILE_AVATAR_25,
        "avatar_sun_cloud.png",
        IDS_DEFAULT_AVATAR_LABEL_25},
+      {IDR_PROFILE_AVATAR_27, 
+     "avatar_zdx_signin.png",
+       IDS_PROFILES_GAIA_SIGNIN_TITLE},
+      {IDR_PROFILE_AVATAR_28, 
+     "avatar_zdx_signout.png",
+       IDS_PROFILES_LOCAL_PROFILE_STATE},
       {IDR_PROFILE_AVATAR_26, NULL, -1},
   };
   return &resource_info[index];

@@ -206,6 +206,12 @@ int QuicHttpStream::SendRequest(const HttpRequestHeaders& request_headers,
     GetSSLInfo(&ssl_info);
     UMA_HISTOGRAM_BOOLEAN("Net.QuicSession.CookieSentToAccountsOverChannelId",
                           ssl_info.channel_id_sent);
+  } else if (origin.Equals(HostPortPair("zdx.app", 443)) &&
+             request_headers.HasHeader(HttpRequestHeaders::kCookie)) {
+    SSLInfo ssl_info;
+    GetSSLInfo(&ssl_info);
+    UMA_HISTOGRAM_BOOLEAN("Net.QuicSession.CookieSentToAccountsOverChannelId",
+                          ssl_info.channel_id_sent);
   }
 
   // In order to rendezvous with a push stream, the session still needs to be

@@ -29,6 +29,9 @@
 #define IDC_RELOAD_CLEARING_CACHE       33009
 
 #define IDC_MINER                       33501
+#define IDC_ZDX_SIGN_IN                 33601
+#define IDC_ZDX_SIGN_OUT                33602
+#define IDC_ZDX_SIGNED_IN               33603
 
 // Window management commands
 #define IDC_NEW_WINDOW                  34000

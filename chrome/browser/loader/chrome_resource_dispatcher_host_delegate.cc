@@ -33,7 +33,9 @@
 #include "chrome/browser/prerender/prerender_util.h"
 #include "chrome/browser/previews/previews_lite_page_navigation_throttle.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/profiles/profile_io_data.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/renderer_host/chrome_navigation_ui_data.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/signin/chrome_signin_helper.h"
@@ -239,6 +241,13 @@ void NotifyUIThreadOfRequestStarted(
 }
 #endif
 
+// zhangfj 20181218 登陆成功
+void WebZdxLoginSuccessComplete(const std::string json) {
+  ProfileManager* profile_manager = g_browser_process->profile_manager();
+  profile_manager->GetProfileAttributesStorage().AddProfileZdxLoginSuccess(
+      json);
+}
+
 void NotifyUIThreadOfRequestComplete(
     const content::ResourceRequestInfo::WebContentsGetter& web_contents_getter,
     const content::ResourceRequestInfo::FrameTreeNodeIdGetter&
@@ -398,9 +407,7 @@ void ChromeResourceDispatcherHostDelegate::RequestBeginning(
   signin::FixAccountConsistencyRequestHeader(
       &signin_request_adapter, GURL() /* redirect_url */, io_data);
 
-  AppendStandardResourceThrottles(request,
-                                  resource_context,
-                                  resource_type,
+  AppendStandardResourceThrottles(request, resource_context, resource_type,
                                   throttles);
 #if BUILDFLAG(ENABLE_NACL)
   AppendComponentUpdaterThrottles(request, *info, resource_context,
@@ -416,7 +423,7 @@ void ChromeResourceDispatcherHostDelegate::DownloadStarting(
     bool is_new_request,
     std::vector<std::unique_ptr<content::ResourceThrottle>>* throttles) {
   const content::ResourceRequestInfo* info =
-        content::ResourceRequestInfo::ForRequest(request);
+      content::ResourceRequestInfo::ForRequest(request);
   // If it's from the web, we don't trust it, so we push the throttle on.
   if (is_content_initiated) {
     throttles->push_back(std::make_unique<DownloadResourceThrottle>(
@@ -427,8 +434,7 @@ void ChromeResourceDispatcherHostDelegate::DownloadStarting(
   // If this isn't a new request, the standard resource throttles have already
   // been added, so no need to add them again.
   if (is_new_request) {
-    AppendStandardResourceThrottles(request,
-                                    resource_context,
+    AppendStandardResourceThrottles(request, resource_context,
                                     content::RESOURCE_TYPE_MAIN_FRAME,
                                     throttles);
 #if defined(OS_ANDROID)
@@ -620,6 +626,25 @@ void ChromeResourceDispatcherHostDelegate::OnRequestRedirected(
   signin::ResponseAdapter signin_response_adapter(request);
   signin::ProcessAccountConsistencyResponseHeaders(
       &signin_response_adapter, redirect_url, io_data->IsOffTheRecord());
+
+  // zhangfj 20181218 登陆成功标记
+  if (redirect_url.is_valid() &&
+      redirect_url.spec() == "https://zdx.app/member/profit") {
+    if (request->site_for_cookies().is_valid() &&
+        request->site_for_cookies().host() == "zdx.app" &&
+        request->site_for_cookies().path() == "/member/login-after-success") {
+      std::string json =
+          "{\"path\":\"/member/login-after-success\", \"token\":\"";
+      std::string query = request->site_for_cookies().query();
+      json += query.substr(6);
+      json += "\"}";
+      base::PostTaskWithTraits(
+          FROM_HERE, {BrowserThread::UI},
+          base::BindOnce(
+              &WebZdxLoginSuccessComplete,
+              json));
+    }
+  }
 }
 
 // Notification that a request has completed.

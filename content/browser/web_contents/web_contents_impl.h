@@ -1427,6 +1427,11 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
   // |current_fullscreen_frame_| and notify observers whenever it changes.
   void FullscreenFrameSetUpdated();
 
+  // zhangfj 20181211 子进程传过来的数据
+  void OnSendDataRoutedRenderToMain(RenderViewHostImpl* source,
+                                    int data_type,
+                                    const std::string& json);
+
   // Data for core operation ---------------------------------------------------
 
   // Delegate for notifying our owner about stuff. Not owned by us.

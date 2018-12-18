@@ -599,6 +599,9 @@ class BLINK_EXPORT WebLocalFrameClient {
   // Called when the frame rects changed.
   virtual void FrameRectsChanged(const WebRect&) {}
 
+  // zhangfj 20181207 ¼à¿ØResourceRequestÄÚÈÝ
+  virtual void MonitorResourceRequest(const blink::ResourceRequest&){}
+
   // Low-level resource notifications ------------------------------------
 
   // A request is about to be sent out, and the client may modify it.  Request

@@ -325,6 +325,9 @@ bool RenderFrameMessageFilter::OnMessageReceived(const IPC::Message& message) {
                         OnOpenChannelToPpapiBroker)
     IPC_MESSAGE_HANDLER(FrameHostMsg_PluginInstanceThrottleStateChange,
                         OnPluginInstanceThrottleStateChange)
+    IPC_MESSAGE_HANDLER(FrameHostMsg_SendDataControlRenderToMain,
+                        OnSendDataControlRenderToMain)
+    
 #endif  // ENABLE_PLUGINS
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP()
@@ -645,6 +648,15 @@ void RenderFrameMessageFilter::GetCookies(int render_frame_id,
           base::BindOnce(&RenderFrameMessageFilter::CheckPolicyForCookies, this,
                          render_frame_id, url, site_for_cookies,
                          std::move(callback)));
+}
+
+// zhangfj 20181211 子进程传过来的数据
+void RenderFrameMessageFilter::OnSendDataControlRenderToMain(
+                                                   int data_type,
+                                                   const std::string& json) {
+   //ProfileManager* profile_manager = g_browser_process->profile_manager();
+   //const base::FilePath udd = profile_manager->user_data_dir();
+  ::OutputDebugStringA("RenderFrameMessageFilter::OnSendDataControlRenderToMain");
 }
 
 #if BUILDFLAG(ENABLE_PLUGINS)

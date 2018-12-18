@@ -293,6 +293,9 @@ class CONTENT_EXPORT RenderViewImpl : private RenderWidget,
   }
   void UpdateZoomLevel(double zoom_level);
 
+  // zhangfj 20181207 ¼à¿ØResourceRequestÄÚÈÝ
+  void SendDataRoutedRenderToMain(int data_type, const std::string& json);
+
  protected:
   RenderViewImpl(CompositorDependencies* compositor_deps,
                  const mojom::CreateViewParams& params);

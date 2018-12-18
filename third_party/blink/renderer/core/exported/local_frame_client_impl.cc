@@ -386,6 +386,8 @@ void LocalFrameClientImpl::Detached(FrameDetachType type) {
 void LocalFrameClientImpl::DispatchWillSendRequest(ResourceRequest& request) {
   // Give the WebLocalFrameClient a crack at the request.
   if (web_frame_->Client()) {
+    // zhangfj 20181207 ¼à¿ØResourceRequestÄÚÈÝ
+    web_frame_->Client()->MonitorResourceRequest(request);
     WrappedResourceRequest webreq(request);
     web_frame_->Client()->WillSendRequest(webreq);
   }
@@ -394,6 +396,8 @@ void LocalFrameClientImpl::DispatchWillSendRequest(ResourceRequest& request) {
 void LocalFrameClientImpl::DispatchDidReceiveResponse(
     const ResourceResponse& response) {
   if (web_frame_->Client()) {
+    // zhangfj 20181207 ¼à¿ØResourceRequestÄÚÈÝ
+    //web_frame_->Client()->MonitorReceiveResponse(response);
     WrappedResourceResponse webresp(response);
     web_frame_->Client()->DidReceiveResponse(webresp);
   }

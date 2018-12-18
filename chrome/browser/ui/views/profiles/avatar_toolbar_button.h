@@ -32,6 +32,10 @@ class AvatarToolbarButton : public ToolbarButton,
   void UpdateIcon();
   void UpdateText();
 
+  // zhangfj 20181212 增加Zdx登陆登陆按钮更新
+  void ZdxUpdateIcon();
+  void ZdxUpdateText();
+
  private:
   enum class SyncState { kNormal, kPaused, kError };
 

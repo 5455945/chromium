@@ -152,6 +152,17 @@ class ProfileInfoCache : public ProfileInfoInterface,
   bool GetProfileAttributesWithPath(const base::FilePath& path,
                                     ProfileAttributesEntry** entry) override;
 
+    // zhangfj 20181213 zdxµÇÂ½ÐÅÏ¢
+  void AddProfileZdxLogin(const base::FilePath& profile_path,
+                  const base::string16& name,
+                  const std::string& json) override;
+  void AddProfileZdxLoginSuccess(const std::string& json) override;
+  void AddProfileZdxLogout(const base::FilePath& profile_path,
+                     const base::string16& name,
+                     const std::string& json) override;
+  void GetZdxInfoCache(const base::FilePath& profile_path,
+                       base::DictionaryValue& zdx_sign_info) override;
+
  private:
   FRIEND_TEST_ALL_PREFIXES(ProfileAttributesStorageTest,
                            DownloadHighResAvatarTest);

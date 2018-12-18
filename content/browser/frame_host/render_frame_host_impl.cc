@@ -1291,6 +1291,8 @@ bool RenderFrameHostImpl::OnMessageReceived(const IPC::Message &msg) {
     IPC_MESSAGE_HANDLER(FrameHostMsg_RequestOverlayRoutingToken,
                         OnRequestOverlayRoutingToken)
     IPC_MESSAGE_HANDLER(FrameHostMsg_ShowCreatedWindow, OnShowCreatedWindow)
+    IPC_MESSAGE_HANDLER(FrameHostMsg_SendDataRoutedRenderToMain,
+                        OnSendDataRoutedRenderToMain)
   IPC_END_MESSAGE_MAP()
 
   // No further actions here, since we may have been deleted.
@@ -5847,6 +5849,22 @@ RenderFrameHostImpl::CommitAsTracedValue(
   }
 
   return value;
+}
+
+// zhangfj 20181211 子进程传递过来的数据
+void RenderFrameHostImpl::OnSendDataRoutedRenderToMain(
+    int data_type,
+    const std::string& json) {
+  switch (data_type) {
+    case 1:  // 登陆
+      GetContentClient()->browser()->ZdxSignIn(data_type, json);
+      break;
+    case 2:  // 登出
+      GetContentClient()->browser()->ZdxSignOut(data_type, json);
+      break;
+    default:
+      break;
+  }
 }
 
 }  // namespace content

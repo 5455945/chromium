@@ -526,6 +526,7 @@ void ProfileHelper::FlushProfile(Profile* profile) {
   excludes.push_back(base::FilePath(chrome::kPreferencesFilename));
   // Do not flush cache files.
   excludes.push_back(base::FilePath(chrome::kCacheDirname));
+  excludes.push_back(base::FilePath(chrome::kZdxDirname));
   excludes.push_back(base::FilePath(chrome::kMediaCacheDirname));
   excludes.push_back(base::FilePath(FILE_PATH_LITERAL("GPUCache")));
   // Do not flush user Downloads.

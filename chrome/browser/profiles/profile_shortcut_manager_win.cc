@@ -103,7 +103,8 @@ const int kProfileAvatarIconResources2x[] = {
     IDR_PROFILE_AVATAR_2X_20, IDR_PROFILE_AVATAR_2X_21,
     IDR_PROFILE_AVATAR_2X_22, IDR_PROFILE_AVATAR_2X_23,
     IDR_PROFILE_AVATAR_2X_24, IDR_PROFILE_AVATAR_2X_25,
-    IDR_PROFILE_AVATAR_2X_26,
+    IDR_PROFILE_AVATAR_2X_26, IDR_PROFILE_AVATAR_2X_27,
+    IDR_PROFILE_AVATAR_2X_28,
 };
 
 // Badges |app_icon_bitmap| with |avatar_bitmap| at the bottom right corner and

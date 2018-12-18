@@ -705,6 +705,8 @@ class CONTENT_EXPORT RenderFrameImpl
   void ShowContextMenu(const blink::WebContextMenuData& data) override;
   void SaveImageFromDataURL(const blink::WebString& data_url) override;
   void FrameRectsChanged(const blink::WebRect& frame_rect) override;
+  // zhangfj 20181207 ¼à¿ØResourceRequestÄÚÈÝ
+  void MonitorResourceRequest(const blink::ResourceRequest& request) override;
   void WillSendRequest(blink::WebURLRequest& request) override;
   void DidReceiveResponse(const blink::WebURLResponse& response) override;
   void DidLoadResourceFromMemoryCache(

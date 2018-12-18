@@ -349,5 +349,17 @@ IPC_MESSAGE_ROUTED0(ViewHostMsg_DidCommitAndDrawCompositorFrame)
 // Adding a new message? Stick to the sort order above: first platform
 // independent ViewMsg, then ifdefs for platform specific ViewMsg, then platform
 // independent ViewHostMsg, then ifdefs for platform specific ViewHostMsg.
+IPC_MESSAGE_ROUTED2(ViewHostMsg_SendDataRoutedRenderToMain,
+                    int /* date_type */,
+                    std::string /* json data */)
+IPC_MESSAGE_ROUTED2(ViewMsg_SendDataRoutedMainToRender,
+                    int /* date_type */,
+                    std::string /* json data */)
+IPC_MESSAGE_CONTROL2(ViewHostMsg_SendDataControlRenderToMain,
+                    int /* date_type */,
+                    std::string /* json data */)
+IPC_MESSAGE_CONTROL2(ViewMsg_SendDataControlMainToRender,
+                    int /* date_type */,
+                    std::string /* json data */)
 
 #endif  // CONTENT_COMMON_VIEW_MESSAGES_H_

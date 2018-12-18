@@ -824,4 +824,15 @@ bool ContentBrowserClient::CanIgnoreCertificateErrorIfNeeded() {
   return false;
 }
 
+// zhangfj 20181211 µÇÂ½
+bool ContentBrowserClient::ZdxSignIn(int data_type,
+                                           const std::string& json) {
+  return true;
+}
+
+// zhangfj 20181211 µÇ³ö
+bool ContentBrowserClient::ZdxSignOut(int data_type,
+                                            const std::string& json) {
+  return true;
+}
 }  // namespace content

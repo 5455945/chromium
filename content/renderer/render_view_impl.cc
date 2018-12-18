@@ -1893,6 +1893,16 @@ void RenderViewImpl::UpdateZoomLevel(double zoom_level) {
   SetZoomLevel(zoom_level);
 }
 
+// zhangfj 20181207 ¼à¿ØResourceRequestÄÚÈÝ
+void RenderViewImpl::SendDataRoutedRenderToMain(int data_type,
+                            const std::string& json) {
+  if (!main_render_frame_)
+    return;
+
+  main_render_frame_->Send(new FrameHostMsg_SendDataRoutedRenderToMain(
+      main_render_frame_->GetRoutingID(), data_type, json));
+}
+
 void RenderViewImpl::OnUpdateWebPreferences(const WebPreferences& prefs) {
   webkit_preferences_ = prefs;
   ApplyWebPreferencesInternal(webkit_preferences_, webview());

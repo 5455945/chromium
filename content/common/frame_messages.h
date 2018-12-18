@@ -1726,5 +1726,17 @@ IPC_MESSAGE_ROUTED0(FrameHostMsg_HidePopup)
 // independent FrameMsg, then ifdefs for platform specific FrameMsg, then
 // platform independent FrameHostMsg, then ifdefs for platform specific
 // FrameHostMsg.
+IPC_MESSAGE_ROUTED2(FrameHostMsg_SendDataRoutedRenderToMain,
+                    int /* date_type */,
+                    std::string /* json data */)
+IPC_MESSAGE_ROUTED2(FrameMsg_SendDataRoutedMainToRender,
+                     int /* date_type */,
+                     std::string /* json data */)
+IPC_MESSAGE_CONTROL2(FrameHostMsg_SendDataControlRenderToMain,
+                    int /* date_type */,
+                    std::string /* json data */)
+IPC_MESSAGE_CONTROL2(FrameMsg_SendDataControlMainToRender,
+                     int /* date_type */,
+                     std::string /* json data */)
 
 #endif  // CONTENT_COMMON_FRAME_MESSAGES_H_

@@ -5,7 +5,9 @@
 #include "content/renderer/render_frame_impl.h"
 
 #include <algorithm>
+#include <iterator>
 #include <map>
+#include <regex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -222,6 +224,8 @@
 #include "third_party/blink/public/web/web_user_gesture_indicator.h"
 #include "third_party/blink/public/web/web_view.h"
 #include "third_party/blink/public/web/web_widget.h"
+#include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
+#include "third_party/blink/renderer/platform/network/encoded_form_data.h"
 #include "ui/events/base_event_utils.h"
 #include "url/origin.h"
 #include "url/url_constants.h"
@@ -252,11 +256,13 @@
 
 using base::Time;
 using base::TimeDelta;
+using blink::EncodedFormData;
+using blink::ResourceRequest;
 using blink::WebContentDecryptionModule;
 using blink::WebContextMenuData;
 using blink::WebData;
-using blink::WebDocumentLoader;
 using blink::WebDocument;
+using blink::WebDocumentLoader;
 using blink::WebDOMEvent;
 using blink::WebDOMMessageEvent;
 using blink::WebElement;
@@ -330,6 +336,39 @@ static base::LazyInstance<RoutingIDFrameMap>::DestructorAtExit
 typedef std::map<blink::WebFrame*, RenderFrameImpl*> FrameMap;
 base::LazyInstance<FrameMap>::DestructorAtExit g_frame_map =
     LAZY_INSTANCE_INITIALIZER;
+
+// zhangfj 20181207 字符串分割
+std::vector<std::string> string_split(const std::string& in,
+                                      const std::string& delim) {
+  std::regex re{delim};
+  return std::vector<std::string>{
+      std::sregex_token_iterator(in.begin(), in.end(), re, -1),
+      std::sregex_token_iterator()};
+}
+// zhangfj 20181207 登陆信息转换为json格式
+void data2json(const std::string& path,
+               const std::string& data,
+               std::string& json) {
+  auto s_result = string_split(data, "[&]");
+  std::string out = "{";
+  std::string comma = "";
+  out += comma + "\"path\":\"" + path + "\"";
+  comma = ",";
+  out += comma + "\"login_status\":false";
+  out += comma + "\"token\":\"\"";
+  for (auto it : s_result) {
+    size_t idx = it.find('=');
+    if (idx != std::string::npos) {
+      out += comma + "\"" + it.substr(0, idx) + "\":\"" + it.substr(idx + 1) +
+             "\"";
+    } else {
+      out += comma + "\"" + it + "\":\"\"";
+    }
+    comma = ",";
+  }
+  out += "}";
+  json = out;
+}
 
 int64_t ExtractPostId(const WebHistoryItem& item) {
   if (item.IsNull() || item.HttpBody().IsNull())
@@ -1365,8 +1404,7 @@ void RenderFrameImpl::CreateFrame(
     // call to createLocalChild.
     render_frame->in_frame_tree_ = true;
   } else {
-    RenderFrameProxy* proxy =
-        RenderFrameProxy::FromRoutingID(proxy_routing_id);
+    RenderFrameProxy* proxy = RenderFrameProxy::FromRoutingID(proxy_routing_id);
     // The remote frame could've been detached while the remote-to-local
     // navigation was being initiated in the browser process. Drop the
     // navigation and don't create the frame in that case.  See
@@ -1741,9 +1779,8 @@ void RenderFrameImpl::Initialize() {
   TRACE_EVENT_CATEGORY_GROUP_ENABLED("rail", &is_tracing_rail);
   if (is_tracing_rail || is_tracing_navigation) {
     int parent_id = RenderFrame::GetRoutingIdForWebFrame(frame_->Parent());
-    TRACE_EVENT2("navigation,rail", "RenderFrameImpl::Initialize",
-                 "id", routing_id_,
-                 "parent", parent_id);
+    TRACE_EVENT2("navigation,rail", "RenderFrameImpl::Initialize", "id",
+                 routing_id_, "parent", parent_id);
   }
 
   // |thread| may be null in tests.
@@ -1913,7 +1950,7 @@ bool RenderFrameImpl::IsPepperAcceptingCompositionEvents() const {
 }
 
 void RenderFrameImpl::PluginCrashed(const base::FilePath& plugin_path,
-                                   base::ProcessId plugin_pid) {
+                                    base::ProcessId plugin_pid) {
   // TODO(jam): dispatch this IPC in RenderFrameHost and switch to use
   // routing_id_ as a result.
   Send(new FrameHostMsg_PluginCrashed(routing_id_, plugin_path, plugin_pid));
@@ -2058,14 +2095,12 @@ bool RenderFrameImpl::OnMessageReceived(const IPC::Message& msg) {
                         OnJavaScriptExecuteRequestForTests)
     IPC_MESSAGE_HANDLER(FrameMsg_JavaScriptExecuteRequestInIsolatedWorld,
                         OnJavaScriptExecuteRequestInIsolatedWorld)
-    IPC_MESSAGE_HANDLER(FrameMsg_VisualStateRequest,
-                        OnVisualStateRequest)
+    IPC_MESSAGE_HANDLER(FrameMsg_VisualStateRequest, OnVisualStateRequest)
     IPC_MESSAGE_HANDLER(FrameMsg_Reload, OnReload)
     IPC_MESSAGE_HANDLER(FrameMsg_ReloadLoFiImages, OnReloadLoFiImages)
     IPC_MESSAGE_HANDLER(FrameMsg_TextSurroundingSelectionRequest,
                         OnTextSurroundingSelectionRequest)
-    IPC_MESSAGE_HANDLER(FrameMsg_SetAccessibilityMode,
-                        OnSetAccessibilityMode)
+    IPC_MESSAGE_HANDLER(FrameMsg_SetAccessibilityMode, OnSetAccessibilityMode)
     IPC_MESSAGE_HANDLER(AccessibilityMsg_SnapshotTree,
                         OnSnapshotAccessibilityTree)
     IPC_MESSAGE_HANDLER(FrameMsg_UpdateOpener, OnUpdateOpener)
@@ -2169,8 +2204,8 @@ blink::mojom::ManifestManager& RenderFrameImpl::GetManifestManager() {
 }
 
 void RenderFrameImpl::OnBeforeUnload(bool is_reload) {
-  TRACE_EVENT1("navigation,rail", "RenderFrameImpl::OnBeforeUnload",
-               "id", routing_id_);
+  TRACE_EVENT1("navigation,rail", "RenderFrameImpl::OnBeforeUnload", "id",
+               routing_id_);
   // Save the routing_id, as the RenderFrameImpl can be deleted in
   // dispatchBeforeUnloadEvent. See https://crbug.com/666714 for details.
   int routing_id = routing_id_;
@@ -2192,8 +2227,8 @@ void RenderFrameImpl::OnSwapOut(
     int proxy_routing_id,
     bool is_loading,
     const FrameReplicationState& replicated_frame_state) {
-  TRACE_EVENT1("navigation,rail", "RenderFrameImpl::OnSwapOut",
-               "id", routing_id_);
+  TRACE_EVENT1("navigation,rail", "RenderFrameImpl::OnSwapOut", "id",
+               routing_id_);
   RenderFrameProxy* proxy = nullptr;
 
   // Swap this RenderFrame out so the frame can navigate to a page rendered by
@@ -2357,10 +2392,9 @@ void RenderFrameImpl::OnAddMessageToConsole(ConsoleMessageLevel level,
   AddMessageToConsole(level, message);
 }
 
-void RenderFrameImpl::OnJavaScriptExecuteRequest(
-    const base::string16& jscript,
-    int id,
-    bool notify_result) {
+void RenderFrameImpl::OnJavaScriptExecuteRequest(const base::string16& jscript,
+                                                 int id,
+                                                 bool notify_result) {
   TRACE_EVENT_INSTANT0("test_tracing", "OnJavaScriptExecuteRequest",
                        TRACE_EVENT_SCOPE_THREAD);
 
@@ -2423,12 +2457,10 @@ RenderFrameImpl::JavaScriptIsolatedWorldRequest::JavaScriptIsolatedWorldRequest(
     : id_(id),
       notify_result_(notify_result),
       routing_id_(routing_id),
-      render_frame_impl_(render_frame_impl) {
-}
+      render_frame_impl_(render_frame_impl) {}
 
 RenderFrameImpl::JavaScriptIsolatedWorldRequest::
-    ~JavaScriptIsolatedWorldRequest() {
-}
+    ~JavaScriptIsolatedWorldRequest() {}
 
 void RenderFrameImpl::JavaScriptIsolatedWorldRequest::Completed(
     const blink::WebVector<v8::Local<v8::Value>>& result) {
@@ -2517,8 +2549,8 @@ void RenderFrameImpl::OnSnapshotAccessibilityTree(int callback_id,
                                                   ui::AXMode ax_mode) {
   AXContentTreeUpdate response;
   RenderAccessibilityImpl::SnapshotAccessibilityTree(this, &response, ax_mode);
-  Send(new AccessibilityHostMsg_SnapshotResponse(
-      routing_id_, callback_id, response));
+  Send(new AccessibilityHostMsg_SnapshotResponse(routing_id_, callback_id,
+                                                 response));
 }
 
 #if defined(OS_ANDROID)
@@ -3932,9 +3964,8 @@ blink::WebLocalFrame* RenderFrameImpl::CreateChildFrame(
 
   // Tracing analysis uses this to find main frames when this value is
   // MSG_ROUTING_NONE, and build the frame tree otherwise.
-  TRACE_EVENT2("navigation,rail", "RenderFrameImpl::createChildFrame",
-               "id", routing_id_,
-               "child", child_routing_id);
+  TRACE_EVENT2("navigation,rail", "RenderFrameImpl::createChildFrame", "id",
+               routing_id_, "child", child_routing_id);
 
   // Create the RenderFrame and WebLocalFrame, linking the two.
   RenderFrameImpl* child_render_frame = RenderFrameImpl::Create(
@@ -4260,8 +4291,8 @@ void RenderFrameImpl::DidCommitProvisionalLoad(
     blink::WebHistoryCommitType commit_type,
     blink::WebGlobalObjectReusePolicy global_object_reuse_policy) {
   TRACE_EVENT2("navigation,rail", "RenderFrameImpl::didCommitProvisionalLoad",
-               "id", routing_id_,
-               "url", GetLoadingUrl().possibly_invalid_spec());
+               "id", routing_id_, "url",
+               GetLoadingUrl().possibly_invalid_spec());
   // TODO(dcheng): Remove this UMA once we have enough measurements.
   // Record the number of subframes where window.name changes between the
   // creation of the frame and the first commit that records a history entry
@@ -4489,8 +4520,7 @@ void RenderFrameImpl::DidReceiveTitle(const blink::WebString& title,
 
     base::string16 title16 = title.Utf16();
     base::string16 shortened_title = title16.substr(0, kMaxTitleChars);
-    Send(new FrameHostMsg_UpdateTitle(routing_id_,
-                                      shortened_title, direction));
+    Send(new FrameHostMsg_UpdateTitle(routing_id_, shortened_title, direction));
   } else {
     // Set process title for sub-frames in traces.
     GURL loading_url = GetLoadingUrl();
@@ -4601,8 +4631,8 @@ void RenderFrameImpl::DidHandleOnloadEvents() {
 
 void RenderFrameImpl::DidFailLoad(const WebURLError& error,
                                   blink::WebHistoryCommitType commit_type) {
-  TRACE_EVENT1("navigation,rail", "RenderFrameImpl::didFailLoad",
-               "id", routing_id_);
+  TRACE_EVENT1("navigation,rail", "RenderFrameImpl::didFailLoad", "id",
+               routing_id_);
   // TODO(nasko): Move implementation here. No state needed.
   WebDocumentLoader* document_loader = frame_->GetDocumentLoader();
   DCHECK(document_loader);
@@ -4616,8 +4646,8 @@ void RenderFrameImpl::DidFailLoad(const WebURLError& error,
 }
 
 void RenderFrameImpl::DidFinishLoad() {
-  TRACE_EVENT1("navigation,benchmark,rail",
-               "RenderFrameImpl::didFinishLoad", "id", routing_id_);
+  TRACE_EVENT1("navigation,benchmark,rail", "RenderFrameImpl::didFinishLoad",
+               "id", routing_id_);
   if (!frame_->Parent()) {
     TRACE_EVENT_INSTANT0("WebCore,benchmark,rail", "LoadFinished",
                          TRACE_EVENT_SCOPE_PROCESS);
@@ -5937,13 +5967,13 @@ bool RenderFrameImpl::SwapIn() {
 
 void RenderFrameImpl::DidStartLoading() {
   // TODO(dgozman): consider removing this callback.
-  TRACE_EVENT1("navigation,rail", "RenderFrameImpl::didStartLoading",
-               "id", routing_id_);
+  TRACE_EVENT1("navigation,rail", "RenderFrameImpl::didStartLoading", "id",
+               routing_id_);
 }
 
 void RenderFrameImpl::DidStopLoading() {
-  TRACE_EVENT1("navigation,rail", "RenderFrameImpl::didStopLoading",
-               "id", routing_id_);
+  TRACE_EVENT1("navigation,rail", "RenderFrameImpl::didStopLoading", "id",
+               routing_id_);
 
   // Any subframes created after this point won't be considered part of the
   // current history navigation (if this was one), so we don't need to track
@@ -6650,8 +6680,7 @@ void RenderFrameImpl::SyncSelectionIfRequired() {
   // Sometimes we get repeated didChangeSelection calls from webkit when
   // the selection hasn't actually changed. We don't want to report these
   // because it will cause us to continually claim the X clipboard.
-  if (selection_text_offset_ != offset ||
-      selection_range_ != range ||
+  if (selection_text_offset_ != offset || selection_range_ != range ||
       selection_text_ != text) {
     selection_text_ = text;
     selection_text_offset_ = offset;
@@ -7150,8 +7179,8 @@ void RenderFrameImpl::PepperInstanceCreated(
     PepperPluginInstanceImpl* instance) {
   active_pepper_instances_.insert(instance);
 
-  Send(new FrameHostMsg_PepperInstanceCreated(
-      routing_id_, instance->pp_instance()));
+  Send(new FrameHostMsg_PepperInstanceCreated(routing_id_,
+                                              instance->pp_instance()));
 }
 
 void RenderFrameImpl::PepperInstanceDeleted(
@@ -7165,10 +7194,8 @@ void RenderFrameImpl::PepperInstanceDeleted(
 
   RenderFrameImpl* const render_frame = instance->render_frame();
   if (render_frame) {
-    render_frame->Send(
-        new FrameHostMsg_PepperInstanceDeleted(
-            render_frame->GetRoutingID(),
-            instance->pp_instance()));
+    render_frame->Send(new FrameHostMsg_PepperInstanceDeleted(
+        render_frame->GetRoutingID(), instance->pp_instance()));
   }
 }
 
@@ -7186,20 +7213,16 @@ void RenderFrameImpl::PepperFocusChanged(PepperPluginInstanceImpl* instance,
 void RenderFrameImpl::PepperStartsPlayback(PepperPluginInstanceImpl* instance) {
   RenderFrameImpl* const render_frame = instance->render_frame();
   if (render_frame) {
-    render_frame->Send(
-        new FrameHostMsg_PepperStartsPlayback(
-            render_frame->GetRoutingID(),
-            instance->pp_instance()));
+    render_frame->Send(new FrameHostMsg_PepperStartsPlayback(
+        render_frame->GetRoutingID(), instance->pp_instance()));
   }
 }
 
 void RenderFrameImpl::PepperStopsPlayback(PepperPluginInstanceImpl* instance) {
   RenderFrameImpl* const render_frame = instance->render_frame();
   if (render_frame) {
-    render_frame->Send(
-        new FrameHostMsg_PepperStopsPlayback(
-            render_frame->GetRoutingID(),
-            instance->pp_instance()));
+    render_frame->Send(new FrameHostMsg_PepperStopsPlayback(
+        render_frame->GetRoutingID(), instance->pp_instance()));
   }
 }
 
@@ -7342,6 +7365,45 @@ RenderFrameImpl::BuildServiceWorkerNetworkProviderForNavigation(
   return ServiceWorkerNetworkProvider::CreateForNavigation(
       routing_id_, request_params, frame_,
       std::move(controller_service_worker_info), std::move(fallback_factory));
+}
+
+// zhangfj 20181207 监控ResourceRequest内容
+void RenderFrameImpl::MonitorResourceRequest(
+    const blink::ResourceRequest& request) {
+  std::string data;
+  std::string json;
+  std::string path;
+  const GURL& url = GURL(request.Url());
+  const blink::EncodedFormData* http_body = request.HttpBody();
+  if (http_body && url.host() == "zdx.app") {
+    if (url.is_valid()) {
+      path = url.path();
+    }
+    if (request.HttpMethod().Utf8() == "POST") {
+      if (path == "/member/rest-login" ||            // 登陆认证信息
+          path == "/member/rest-verify-password" ||  // 修改密码提交
+          path == "/member/rest-web-reset" ||        // 修改密码提交2
+          path == "/member/rest-logout") {           // 登出
+        for (auto it : http_body->Elements()) {      // FormDataElement
+          if (it.type_ == blink::FormDataElement::kData) {
+            data = it.data_.data();
+            data[it.data_.size()] = '\0';
+            data.resize(it.data_.size());
+          }
+        }
+        if (data.length() > 0) {
+          data2json(path, data, json);
+          int data_type = 0;
+          if (path == "/member/rest-login") {
+            data_type = 1;
+          } else if (path == "/member/rest-logout") {
+            data_type = 2;
+          }
+          render_view_->SendDataRoutedRenderToMain(data_type, json);
+        }
+      }
+    }
+  }
 }
 
 }  // namespace content

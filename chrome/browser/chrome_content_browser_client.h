@@ -508,6 +508,10 @@ class ChromeContentBrowserClient : public content::ContentBrowserClient {
       const url::Origin& origin,
       const GURL& url) override;
   bool CanIgnoreCertificateErrorIfNeeded() override;
+  // zhangfj 20181211 µÇÂ½
+  bool ZdxSignIn(int data_type, const std::string& json) override;
+  // zhangfj 20181211 µÇ³ö
+  bool ZdxSignOut(int data_type, const std::string& json) override;
 
  protected:
   static bool HandleWebUI(GURL* url, content::BrowserContext* browser_context);

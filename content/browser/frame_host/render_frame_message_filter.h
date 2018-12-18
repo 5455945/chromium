@@ -142,6 +142,9 @@ class CONTENT_EXPORT RenderFrameMessageFilter
                   const GURL& url,
                   const GURL& site_for_cookies,
                   GetCookiesCallback callback) override;
+  // zhangfj 20181211 子进程传过来的数据
+  void OnSendDataControlRenderToMain(int data_type,
+                                    const std::string& json);
 
 #if BUILDFLAG(ENABLE_PLUGINS)
   void OnGetPluginInfo(int render_frame_id,

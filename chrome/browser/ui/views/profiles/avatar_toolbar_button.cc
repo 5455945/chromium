@@ -4,6 +4,8 @@
 
 #include "chrome/browser/ui/views/profiles/avatar_toolbar_button.h"
 
+#include "base/path_service.h"
+#include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/app/vector_icons/vector_icons.h"
@@ -21,15 +23,19 @@
 #include "chrome/browser/signin/signin_ui_util.h"
 #include "chrome/browser/sync/sync_ui_util.h"
 #include "chrome/browser/themes/theme_properties.h"
+#include "chrome/browser/ui/browser_command_controller.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/view_ids.h"
+#include "chrome/common/chrome_paths.h"
 #include "chrome/grit/generated_resources.h"
+#include "chrome/common/chrome_constants.h"
 #include "services/identity/public/cpp/identity_manager.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/material_design/material_design_controller.h"
 #include "ui/base/models/menu_model.h"
 #include "ui/base/theme_provider.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/paint_vector_icon.h"
@@ -106,39 +112,72 @@ AvatarToolbarButton::AvatarToolbarButton(Browser* browser)
 AvatarToolbarButton::~AvatarToolbarButton() {}
 
 void AvatarToolbarButton::UpdateIcon() {
+  // zhangfj 20181212 禁用默认avatar图标更新
   SetImage(views::Button::STATE_NORMAL, GetAvatarIcon());
+  UpdateText();
 }
 
 void AvatarToolbarButton::UpdateText() {
-  base::Optional<SkColor> color;
-  base::string16 text;
-  switch (GetSyncState()) {
-    case SyncState::kError:
-      color = gfx::kGoogleRed600;
-      text = l10n_util::GetStringUTF16(IDS_AVATAR_BUTTON_SYNC_ERROR);
-      break;
-    case SyncState::kPaused:
-      color = gfx::kGoogleBlue600;
-      text = l10n_util::GetStringUTF16(IDS_AVATAR_BUTTON_SYNC_PAUSED);
-      break;
-    case SyncState::kNormal:
-      break;
-  }
-  SetHighlightColor(color);
-  SetText(text);
+  // zhangfj 20181212 禁用默认文字更新
+  // base::Optional<SkColor> color;
+  // base::string16 text;
+  // switch (GetSyncState()) {
+  //  case SyncState::kError:
+  //    color = gfx::kGoogleRed600;
+  //    text = l10n_util::GetStringUTF16(IDS_AVATAR_BUTTON_SYNC_ERROR);
+  //    break;
+  //  case SyncState::kPaused:
+  //    color = gfx::kGoogleBlue600;
+  //    text = l10n_util::GetStringUTF16(IDS_AVATAR_BUTTON_SYNC_PAUSED);
+  //    break;
+  //  case SyncState::kNormal:
+  //    break;
+  //}
+  // SetHighlightColor(color);
+  // SetText(text);
 
+  // SetTooltipText(GetAvatarTooltipText());
+  ZdxUpdateText();
+}
+// zhangfj 20181212 Zdx登陆按钮更新图标
+void AvatarToolbarButton::ZdxUpdateIcon() {
+  // user_data_dir_.Append(kAccountsFolder).Append(kAvatarImagesFolder)
+}
+// zhangfj 20181212 Zdx登陆按钮更新文字
+void AvatarToolbarButton::ZdxUpdateText() {
   SetTooltipText(GetAvatarTooltipText());
 }
 
 void AvatarToolbarButton::NotifyClick(const ui::Event& event) {
-  Button::NotifyClick(event);
-  // TODO(bsep): Other toolbar buttons have ToolbarView as a listener and let it
-  // call ExecuteCommandWithDisposition on their behalf. Unfortunately, it's not
-  // possible to plumb IsKeyEvent through, so this has to be a special case.
-  browser_->window()->ShowAvatarBubbleFromAvatarButton(
-      BrowserWindow::AVATAR_BUBBLE_MODE_DEFAULT, signin::ManageAccountsParams(),
-      signin_metrics::AccessPoint::ACCESS_POINT_AVATAR_BUBBLE_SIGN_IN,
-      event.IsKeyEvent());
+  // zhangfj 20181210 修改登陆按钮使用方式
+  // Button::NotifyClick(event);
+  //// TODO(bsep): Other toolbar buttons have ToolbarView as a listener and let
+  /// it / call ExecuteCommandWithDisposition on their behalf. Unfortunately,
+  /// it's not / possible to plumb IsKeyEvent through, so this has to be a
+  /// special case.
+  // browser_->window()->ShowAvatarBubbleFromAvatarButton(
+  //    BrowserWindow::AVATAR_BUBBLE_MODE_DEFAULT,
+  //    signin::ManageAccountsParams(),
+  //    signin_metrics::AccessPoint::ACCESS_POINT_AVATAR_BUBBLE_SIGN_IN,
+  //    event.IsKeyEvent());
+  ProfileManager* profile_manager = g_browser_process->profile_manager();
+  base::FilePath zdx_dir;
+  base::PathService::Get(chrome::DIR_USER_DATA, &zdx_dir);
+  DCHECK(!zdx_dir.empty());
+  zdx_dir = zdx_dir.AppendASCII(chrome::kInitialProfile);
+  DCHECK(!zdx_dir.empty());
+  base::DictionaryValue zdx_sign_info;
+  profile_manager->GetProfileAttributesStorage().GetZdxInfoCache(
+      zdx_dir, zdx_sign_info);
+  bool zdx_login_status;
+  zdx_sign_info.GetBoolean("zdx_login_status", &zdx_login_status);
+  if (zdx_login_status) {
+    browser_->command_controller()->ExecuteCommandWithDisposition(
+        IDC_ZDX_SIGNED_IN, WindowOpenDisposition::SINGLETON_TAB);
+  } else {
+    browser_->command_controller()->ExecuteCommandWithDisposition(
+        IDC_ZDX_SIGN_IN, WindowOpenDisposition::SINGLETON_TAB);
+  }
 }
 
 void AvatarToolbarButton::OnAvatarErrorChanged() {
@@ -224,30 +263,57 @@ bool AvatarToolbarButton::ShouldShowGenericIcon() const {
 }
 
 base::string16 AvatarToolbarButton::GetAvatarTooltipText() const {
-  if (IsIncognito())
-    return l10n_util::GetStringUTF16(IDS_AVATAR_BUTTON_INCOGNITO_TOOLTIP);
+  //if (IsIncognito())
+  //  return l10n_util::GetStringUTF16(IDS_AVATAR_BUTTON_INCOGNITO_TOOLTIP);
 
-  if (profile_->IsGuestSession())
-    return l10n_util::GetStringUTF16(IDS_GUEST_PROFILE_NAME);
+  //if (profile_->IsGuestSession())
+  //  return l10n_util::GetStringUTF16(IDS_GUEST_PROFILE_NAME);
 
-  if (ShouldShowGenericIcon())
-    return l10n_util::GetStringUTF16(IDS_GENERIC_USER_AVATAR_LABEL);
+  //if (ShouldShowGenericIcon())
+  //  return l10n_util::GetStringUTF16(IDS_GENERIC_USER_AVATAR_LABEL);
 
-  const base::string16 profile_name =
-      profiles::GetAvatarNameForProfile(profile_->GetPath());
-  switch (GetSyncState()) {
-    case SyncState::kNormal:
-      return profile_name;
-    case SyncState::kPaused:
-      return l10n_util::GetStringFUTF16(IDS_AVATAR_BUTTON_SYNC_PAUSED_TOOLTIP,
-                                        profile_name);
-    case SyncState::kError:
-      return l10n_util::GetStringFUTF16(IDS_AVATAR_BUTTON_SYNC_ERROR_TOOLTIP,
-                                        profile_name);
+  //const base::string16 profile_name =
+  //    profiles::GetAvatarNameForProfile(profile_->GetPath());
+  //switch (GetSyncState()) {
+  //  case SyncState::kNormal:
+  //    return profile_name;
+  //  case SyncState::kPaused:
+  //    return l10n_util::GetStringFUTF16(IDS_AVATAR_BUTTON_SYNC_PAUSED_TOOLTIP,
+  //                                      profile_name);
+  //  case SyncState::kError:
+  //    return l10n_util::GetStringFUTF16(IDS_AVATAR_BUTTON_SYNC_ERROR_TOOLTIP,
+  //                                      profile_name);
+  //}
+
+  //NOTREACHED();
+  //return base::string16();
+  ProfileManager* profile_manager = g_browser_process->profile_manager();
+  base::FilePath zdx_dir;
+  base::PathService::Get(chrome::DIR_USER_DATA, &zdx_dir);
+  DCHECK(!zdx_dir.empty());
+  zdx_dir = zdx_dir.AppendASCII(chrome::kInitialProfile);
+  DCHECK(!zdx_dir.empty());
+  base::DictionaryValue zdx_sign_info;
+  profile_manager->GetProfileAttributesStorage().GetZdxInfoCache(zdx_dir,
+                                                                 zdx_sign_info);
+  bool zdx_login_status;
+  base::string16 zdx_login_name;
+  zdx_sign_info.GetBoolean("zdx_login_status", &zdx_login_status);
+  if (zdx_login_status) {
+    std::string zdx_login_phone_number;
+    std::string zdx_login_email;
+    zdx_sign_info.GetString("zdx_login_phone_number", &zdx_login_phone_number);
+    zdx_sign_info.GetString("zdx_login_email", &zdx_login_email);
+    if (zdx_login_phone_number.length() > 0) {
+      zdx_login_name = base::ASCIIToUTF16(zdx_login_phone_number);
+    } else if (zdx_login_email.length() > 0) {
+      zdx_login_name = base::ASCIIToUTF16(zdx_login_email);
+    }
+  } else {
+    zdx_login_name =
+        l10n_util::GetStringUTF16(IDS_PROFILES_LOCAL_PROFILE_STATE);
   }
-
-  NOTREACHED();
-  return base::string16();
+  return zdx_login_name;
 }
 
 gfx::ImageSkia AvatarToolbarButton::GetAvatarIcon() const {
@@ -257,21 +323,22 @@ gfx::ImageSkia AvatarToolbarButton::GetAvatarIcon() const {
   const SkColor icon_color =
       GetThemeProvider()->GetColor(ThemeProperties::COLOR_TOOLBAR_BUTTON_ICON);
 
-  if (IsIncognito())
-    return gfx::CreateVectorIcon(kIncognitoIcon, icon_size, icon_color);
+  // if (IsIncognito())
+  //  return gfx::CreateVectorIcon(kIncognitoIcon, icon_size, icon_color);
 
-  if (profile_->IsGuestSession())
-    return gfx::CreateVectorIcon(kUserMenuGuestIcon, icon_size, icon_color);
+  // if (profile_->IsGuestSession())
+  //  return gfx::CreateVectorIcon(kUserMenuGuestIcon, icon_size, icon_color);
 
-  gfx::Image avatar_icon;
-  if (!ShouldShowGenericIcon())
-    avatar_icon = GetIconImageFromProfile();
+  // gfx::Image avatar_icon;
+  // if (!ShouldShowGenericIcon())
+  //  avatar_icon = GetIconImageFromProfile();
 
-  if (!avatar_icon.IsEmpty()) {
-    return profiles::GetSizedAvatarIcon(avatar_icon, true, icon_size, icon_size,
-                                        profiles::SHAPE_CIRCLE)
-        .AsImageSkia();
-  }
+  // if (!avatar_icon.IsEmpty()) {
+  //  return profiles::GetSizedAvatarIcon(avatar_icon, true, icon_size,
+  //  icon_size,
+  //                                      profiles::SHAPE_CIRCLE)
+  //      .AsImageSkia();
+  //}
 
   return gfx::CreateVectorIcon(kUserAccountAvatarIcon, icon_size, icon_color);
 }

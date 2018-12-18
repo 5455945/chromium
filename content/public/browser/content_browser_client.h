@@ -1364,6 +1364,11 @@ class CONTENT_EXPORT ContentBrowserClient {
   // perform additional checks, such as requiring --user-data-dir flag too to
   // make sure that insecure contents will not persist accidentally.
   virtual bool CanIgnoreCertificateErrorIfNeeded();
+
+  // zhangfj 20181211 µÇÂ½
+  virtual bool ZdxSignIn(int data_type, const std::string& json);
+  // zhangfj 20181211 µÇ³ö
+  virtual bool ZdxSignOut(int data_type, const std::string& json);
 };
 
 }  // namespace content
