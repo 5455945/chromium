@@ -5,14 +5,15 @@
 #include "chrome/browser/profiles/profile_info_cache.h"
 
 #include <algorithm>
+#include <fstream>
 #include <memory>
 #include <utility>
 
 #include "base/bind.h"
 #include "base/files/file_util.h"
 #include "base/i18n/case_conversion.h"
-#include "base/json/json_string_value_serializer.h"
 #include "base/json/json_reader.h"
+#include "base/json/json_string_value_serializer.h"
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/path_service.h"
@@ -948,7 +949,7 @@ void ProfileInfoCache::AddProfileZdxLogin(const base::FilePath& profile_path,
     zdx_file.close();
   }
 
-  //for (auto& observer : observer_list_)
+  // for (auto& observer : observer_list_)
   //  observer.OnProfileAdded(profile_path);
 }
 
@@ -978,7 +979,7 @@ void ProfileInfoCache::AddProfileZdxLoginSuccess(const std::string& json) {
   std::ifstream fin(ascii_path, std::ios::in);
   if (fin.is_open()) {
     json_file = std::string((std::istreambuf_iterator<char>(fin)),
-                       std::istreambuf_iterator<char>());
+                            std::istreambuf_iterator<char>());
     fin.close();
   }
   if (json_file.length() == 0) {
