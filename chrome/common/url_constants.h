@@ -308,6 +308,9 @@ extern const char kOutdatedPluginLearnMoreURL[];
 // Please do not append entries here. See the comments at the top of the file.
 extern const char kChromeUIZdxMinerURL[];
 extern const char kChromeUIZdxMinerHost[];
+extern const char kZdxWebSiteUrlLogin[];
+extern const char kZdxWebSiteUrlProfit[];
+extern const char kZdxWebSiteUrlLogout[];
 
 }  // namespace chrome
 

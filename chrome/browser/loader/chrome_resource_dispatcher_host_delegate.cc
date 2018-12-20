@@ -629,7 +629,7 @@ void ChromeResourceDispatcherHostDelegate::OnRequestRedirected(
 
   // zhangfj 20181218 登陆成功标记
   if (redirect_url.is_valid() &&
-      redirect_url.spec() == "https://zdx.app/member/profit") {
+      redirect_url.spec() == chrome::kZdxWebSiteUrlProfit) {
     if (request->site_for_cookies().is_valid() &&
         request->site_for_cookies().host() == "zdx.app" &&
         request->site_for_cookies().path() == "/member/login-after-success") {

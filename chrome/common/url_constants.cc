@@ -350,5 +350,8 @@ const char kOutdatedPluginLearnMoreURL[] =
 
 const char kChromeUIZdxMinerURL[] = "chrome://miner/";
 const char kChromeUIZdxMinerHost[] = "miner";
+const char kZdxWebSiteUrlLogin[] = "https://zdx.app/member/login";
+const char kZdxWebSiteUrlProfit[] = "https://zdx.app/member/profit";
+const char kZdxWebSiteUrlLogout[] = "https://zdx.app/member/logout";
 
 }  // namespace chrome

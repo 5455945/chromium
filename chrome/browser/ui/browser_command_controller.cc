@@ -44,6 +44,7 @@
 #include "chrome/common/content_restriction.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/profiling.h"
+#include "chrome/common/url_constants.h"
 #include "components/bookmarks/common/bookmark_pref_names.h"
 #include "components/dom_distiller/core/dom_distiller_switches.h"
 #include "components/feature_engagement/buildflags.h"
@@ -332,13 +333,13 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
       Home(browser_, disposition);
       break;
     case IDC_ZDX_SIGN_IN:
-      ZdxSignDo(browser_, disposition, GURL("https://zdx.app/member/login"));
+      ZdxSignDo(browser_, disposition, GURL(chrome::kZdxWebSiteUrlLogin));
       break;
     case IDC_ZDX_SIGN_OUT:
-      ZdxSignDo(browser_, disposition, GURL("https://zdx.app/member/logout"));
+      ZdxSignDo(browser_, disposition, GURL(chrome::kZdxWebSiteUrlLogout));
       break;
     case IDC_ZDX_SIGNED_IN:
-      ZdxSignDo(browser_, disposition, GURL("https://zdx.app/member/profit"));
+      ZdxSignDo(browser_, disposition, GURL(chrome::kZdxWebSiteUrlProfit));
       break;
     case IDC_OPEN_CURRENT_URL:
       OpenCurrentURL(browser_);

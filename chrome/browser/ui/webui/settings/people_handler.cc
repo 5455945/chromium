@@ -13,11 +13,15 @@
 #include "base/i18n/time_formatting.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/path_service.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/values.h"
 #include "build/build_config.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_attributes_storage.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_metrics.h"
 #include "chrome/browser/profiles/profile_window.h"
 #include "chrome/browser/signin/chrome_signin_helper.h"
@@ -34,6 +38,8 @@
 #include "chrome/browser/ui/singleton_tabs.h"
 #include "chrome/browser/ui/webui/signin/login_ui_service.h"
 #include "chrome/browser/ui/webui/signin/login_ui_service_factory.h"
+#include "chrome/common/chrome_constants.h"
+#include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/generated_resources.h"
@@ -85,6 +91,46 @@ using l10n_util::GetStringFUTF16;
 using l10n_util::GetStringUTF16;
 
 namespace {
+
+// zhangfj 20181220 同步信息检查
+bool ZdxSyncCheck(Browser* browser) {
+  if (browser == nullptr) {
+    return false;
+  }
+  base::FilePath zdx_dir;
+  base::PathService::Get(chrome::DIR_USER_DATA, &zdx_dir);
+  if (zdx_dir.empty()) {
+    return false;
+  }
+  zdx_dir = zdx_dir.AppendASCII(chrome::kInitialProfile);
+  if (zdx_dir.empty()) {
+    return false;
+  }
+  base::DictionaryValue zdx_sign_info;
+  ProfileManager* profile_manager = g_browser_process->profile_manager();
+  profile_manager->GetProfileAttributesStorage().GetZdxInfoCache(zdx_dir,
+                                                                 zdx_sign_info);
+  bool zdx_login_status = false;
+  zdx_sign_info.GetBoolean("zdx_login_status", &zdx_login_status);
+
+  if (!zdx_login_status) {
+    //DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    std::string url;
+    if (zdx_login_status) {
+      url = chrome::kZdxWebSiteUrlProfit;
+    } else {
+      url = chrome::kZdxWebSiteUrlLogin;
+    }
+    content::OpenURLParams params(
+        GURL(url), content::Referrer(), WindowOpenDisposition::SINGLETON_TAB,
+        ui::PageTransitionFromInt(ui::PAGE_TRANSITION_AUTO_BOOKMARK |
+                                  ui::PAGE_TRANSITION_HOME_PAGE),
+        false);
+    params.extra_headers = "";
+    browser->OpenURL(params);
+  }
+  return zdx_login_status;
+}
 
 // A structure which contains all the configuration information for sync.
 struct SyncConfigInfo {
@@ -361,6 +407,10 @@ void PeopleHandler::DisplayGaiaLoginInNewTabOrWindow(
     force_new_tab = true;
   }
 
+  // zhangfj 20181220 同步信息检查
+  if (!ZdxSyncCheck(browser)) {
+    return;
+  }
   ProfileSyncService* service = GetSyncService();
   if (service && service->HasUnrecoverableError()) {
     // When the user has an unrecoverable error, they first have to sign out and
@@ -880,9 +930,9 @@ void PeopleHandler::CloseSyncSetup() {
           // Sign out the user on desktop Chrome if they click cancel during
           // initial setup.
           if (sync_service->IsFirstSetupInProgress()) {
-            SigninManagerFactory::GetForProfile(profile_)
-                ->SignOut(signin_metrics::ABORT_SIGNIN,
-                          signin_metrics::SignoutDelete::IGNORE_METRIC);
+            SigninManagerFactory::GetForProfile(profile_)->SignOut(
+                signin_metrics::ABORT_SIGNIN,
+                signin_metrics::SignoutDelete::IGNORE_METRIC);
           }
 #endif
         }

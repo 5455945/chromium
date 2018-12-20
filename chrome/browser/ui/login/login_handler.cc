@@ -9,17 +9,25 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
+#include "base/files/file_path.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/path_service.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/lock.h"
 #include "base/task/post_task.h"
 #include "build/build_config.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
 #include "chrome/browser/prerender/prerender_contents.h"
+#include "chrome/browser/profiles/profile_attributes_storage.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/tab_contents/tab_util.h"
 #include "chrome/browser/ui/login/login_interstitial_delegate.h"
+#include "chrome/common/chrome_constants.h"
+#include "chrome/common/chrome_paths.h"
+#include "chrome/common/url_constants.h"
 #include "components/password_manager/core/browser/browser_save_password_progress_logger.h"
 #include "components/password_manager/core/browser/log_manager.h"
 #include "components/password_manager/core/browser/password_manager.h"
@@ -36,6 +44,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/common/origin_util.h"
+#include "content/public/common/referrer.h"
 #include "extensions/buildflags/buildflags.h"
 #include "net/base/auth.h"
 #include "net/base/host_port_pair.h"
@@ -80,6 +89,57 @@ enum AuthPromptType {
 void RecordHttpAuthPromptType(AuthPromptType prompt_type) {
   UMA_HISTOGRAM_ENUMERATION("Net.HttpAuthPromptType", prompt_type,
                             AUTH_PROMPT_TYPE_ENUM_COUNT);
+}
+
+// zhangfj 20181220 登陆代理认证
+bool ZdxProxyLoginAuth(const GURL& url,
+                       LoginHandler* handler,
+                       bool& zdx_login_status) {
+  std::string host = url.host();
+  if (host.length() == 0 || handler == nullptr) {
+    return false;
+  }
+  if (!(host == "accounts.google.com" || host == "www.googleapis.com")) {
+    return false;
+  }
+
+  base::FilePath zdx_dir;
+  base::PathService::Get(chrome::DIR_USER_DATA, &zdx_dir);
+  if (zdx_dir.empty()) {
+    return false;
+  }
+  zdx_dir = zdx_dir.AppendASCII(chrome::kInitialProfile);
+  if (zdx_dir.empty()) {
+    return false;
+  }
+  base::DictionaryValue zdx_sign_info;
+  ProfileManager* profile_manager = g_browser_process->profile_manager();
+  profile_manager->GetProfileAttributesStorage().GetZdxInfoCache(zdx_dir,
+                                                                 zdx_sign_info);
+  base::string16 zdx_login_username;
+  base::string16 zdx_login_password;
+  zdx_sign_info.GetBoolean("zdx_login_status", &zdx_login_status);
+  if (zdx_login_status) {
+    std::string zdx_login_phone_number;
+    std::string zdx_login_email;
+    std::string zdx_login_passwd;
+    zdx_sign_info.GetString("zdx_login_phone_number", &zdx_login_phone_number);
+    zdx_sign_info.GetString("zdx_login_email", &zdx_login_email);
+    zdx_sign_info.GetString("zdx_login_passwd", &zdx_login_passwd);
+    if (zdx_login_phone_number.length() > 0) {
+      zdx_login_username = base::ASCIIToUTF16(zdx_login_phone_number);
+    } else if (zdx_login_email.length() > 0) {
+      zdx_login_username = base::ASCIIToUTF16(zdx_login_email);
+    }
+    zdx_login_password = base::ASCIIToUTF16(zdx_login_passwd);
+
+    if (zdx_login_username.length() > 0) {
+      handler->SetAuth(zdx_login_username, zdx_login_password);
+      return true;
+    }
+  }
+
+  return false;
 }
 
 }  // namespace
@@ -128,8 +188,8 @@ LoginHandler::LoginHandler(
 }
 
 void LoginHandler::OnRequestCancelled() {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO)) <<
-      "Why is OnRequestCancelled called from the UI thread?";
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO))
+      << "Why is OnRequestCancelled called from the UI thread?";
 
   // Callback is no longer valid.
   auth_required_callback_.Reset();
@@ -376,8 +436,7 @@ void LoginHandler::NotifyAuthSupplied(const base::string16& username,
 
   content::NotificationService* service =
       content::NotificationService::current();
-  NavigationController* controller =
-      &requesting_contents->GetController();
+  NavigationController* controller = &requesting_contents->GetController();
   AuthSuppliedLoginNotificationDetails details(this, username, password);
 
   service->Notify(
@@ -573,9 +632,8 @@ void LoginHandler::ShowLoginPrompt(const GURL& request_url,
     // manager, but still needs to be able to show login prompts.
     const auto* guest =
         guest_view::GuestViewBase::FromWebContents(parent_contents);
-    if (guest &&
-        extensions::GetViewType(guest->owner_web_contents()) !=
-            extensions::VIEW_TYPE_EXTENSION_BACKGROUND_PAGE) {
+    if (guest && extensions::GetViewType(guest->owner_web_contents()) !=
+                     extensions::VIEW_TYPE_EXTENSION_BACKGROUND_PAGE) {
       handler->BuildViewWithoutPasswordManager(authority, explanation);
       return;
     }
@@ -663,6 +721,30 @@ void LoginHandler::MaybeSetUpLoginPrompt(
 
   if (credentials) {
     handler->SetAuth(credentials->username(), credentials->password());
+    return;
+  }
+
+  // zhangfj 20181220 如果是google认证需要的域名，设置用户信息后返回
+  // 这个需要在credentials后面，避免用户已经启用了自己设置的代理插件
+  bool zdx_login_status = false;
+  if (ZdxProxyLoginAuth(request_url, handler, zdx_login_status)) {
+    return;
+  } else {
+    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    WebContents* parent_contents = handler->GetWebContentsForLogin();
+    std::string url;
+    if (zdx_login_status) {
+      url = chrome::kZdxWebSiteUrlProfit;
+    } else {
+      url = chrome::kZdxWebSiteUrlLogin;
+    }
+    content::OpenURLParams params(
+        GURL(url), content::Referrer(), WindowOpenDisposition::SINGLETON_TAB,
+        ui::PageTransitionFromInt(ui::PAGE_TRANSITION_AUTO_BOOKMARK |
+                                  ui::PAGE_TRANSITION_HOME_PAGE),
+        false);
+    params.extra_headers = "";
+    parent_contents->OpenURL(params);
     return;
   }
 
