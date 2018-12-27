@@ -153,6 +153,10 @@ class PLATFORM_EXPORT FetchContext
   virtual void DispatchDidReceiveData(unsigned long identifier,
                                       const char* data,
                                       int data_length);
+  virtual void DispatchDidReceiveDataZdx(unsigned long identifier,
+                                      const char* data,
+                                      int data_length,
+                                      const KURL& url);
   virtual void DispatchDidReceiveEncodedData(unsigned long identifier,
                                              int encoded_data_length);
   virtual void DispatchDidDownloadToBlob(unsigned long identifier,

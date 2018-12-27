@@ -86,7 +86,10 @@ void FetchContext::DispatchDidReceiveResponse(
     Resource*,
     ResourceResponseType) {}
 
-void FetchContext::DispatchDidReceiveData(unsigned long, const char*, int) {}
+void FetchContext::DispatchDidReceiveData(unsigned long,
+                                          const char*,
+                                          int) {}
+void FetchContext::DispatchDidReceiveDataZdx(unsigned long, const char*, int, const KURL&) {}
 
 void FetchContext::DispatchDidReceiveEncodedData(unsigned long, int) {}
 

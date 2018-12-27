@@ -670,6 +670,18 @@ void FrameFetchContext::DispatchDidReceiveData(unsigned long identifier,
                         MasterDocumentLoader(), data, data_length);
 }
 
+// zhangfj 20181226 jsonÊý¾Ý¼à¿Ø
+void FrameFetchContext::DispatchDidReceiveDataZdx(unsigned long identifier,
+                                               const char* data,
+                                               int data_length,
+                                               const KURL& url) {
+  if (IsDetached())
+    return;
+  
+  GetLocalFrameClient()->DispatchDidReceiveDataZdx(identifier, data,
+                                                   data_length, url);
+}
+
 void FrameFetchContext::DispatchDidReceiveEncodedData(unsigned long identifier,
                                                       int encoded_data_length) {
   if (IsDetached())

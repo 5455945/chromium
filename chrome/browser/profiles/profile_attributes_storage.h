@@ -69,6 +69,14 @@ class ProfileAttributesStorage
   // zhangfj 20181214 获取登陆信息
   virtual void GetZdxInfoCache(const base::FilePath& profile_path,
                        base::DictionaryValue& zdx_sign_info) = 0;
+  // zhangfj 20181226 zdx登陆返回数据
+  virtual void AddProfileZdxLoginData(const base::FilePath& profile_path,
+                                  const base::string16& name,
+                                  const std::string& json) = 0;
+  // zhangfj 20181226 zdx登出返回数据
+  virtual void AddProfileZdxLogoutData(const base::FilePath& profile_path,
+                                  const base::string16& name,
+                                  const std::string& json) = 0;
 
   // Removes the profile matching given |account_id| from this storage.
   // Calculates profile path and calls RemoveProfile() on it.

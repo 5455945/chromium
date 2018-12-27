@@ -89,6 +89,11 @@ class LocalFrameClientImpl final : public LocalFrameClient {
   void Detached(FrameDetachType) override;
   void DispatchWillSendRequest(ResourceRequest&) override;
   void DispatchDidReceiveResponse(const ResourceResponse&) override;
+  // zhangfj 20181226 监控页面数据通道
+  void DispatchDidReceiveDataZdx(unsigned long,
+                              const char*,
+                              int,
+                              const KURL&) override;
   void DispatchDidLoadResourceFromMemoryCache(const ResourceRequest&,
                                               const ResourceResponse&) override;
   void DispatchDidHandleOnloadEvents() override;

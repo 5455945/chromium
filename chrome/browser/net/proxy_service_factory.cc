@@ -57,8 +57,26 @@ var FindProxyForURL = function(init, profiles) {
 }("+auto switch", {
     "+auto switch": function(url, host, scheme) {
         "use strict";
+        
+        if (/(?:^|\.)googleapis\.com$/.test(host)) return "+proxy";
+        if (/(?:^|\.)gstatic\.com$/.test(host)) return "+proxy";
+        if (/(?:^|\.)googleusercontent\.com$/.test(host)) return "+proxy";
+        if (/^www\.chromestatus\.com$/.test(host)) return "+proxy";
+        if (/^ssl\.google-analytics\.com$/.test(host)) return "+proxy";
+        
         if (/^accounts\.google\.com$/.test(host)) return "+proxy";
-        if (/^www\.googleapis\.com$/.test(host)) return "+proxy";
+        if (/^apis\.google\.com$/.test(host)) return "+proxy";
+        if (/^notifications\.google\.com$/.test(host)) return "+proxy";
+        if (/^ogs\.google\.com$/.test(host)) return "+proxy";
+        if (/^play\.google\.com$/.test(host)) return "+proxy";
+        
+        if (/^chrome\.google\.com$/.test(host)) return "+proxy";
+        if (/^domains\.google\.com$/.test(host)) return "+proxy";
+        if (/^gsuite\.google\.com$/.test(host)) return "+proxy";
+        if (/^plus\.google\.com$/.test(host)) return "+proxy";
+        
+        if (/^clients.*\.google\.com$/.test(host)) return "+proxy";
+        
         return "DIRECT";
     },
     "+proxy": function(url, host, scheme) {

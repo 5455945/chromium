@@ -225,6 +225,7 @@
 #include "third_party/blink/public/web/web_view.h"
 #include "third_party/blink/public/web/web_widget.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
+#include "third_party/blink/renderer/platform/loader/fetch/resource_response.h"
 #include "third_party/blink/renderer/platform/network/encoded_form_data.h"
 #include "ui/events/base_event_utils.h"
 #include "url/origin.h"
@@ -7401,6 +7402,47 @@ void RenderFrameImpl::MonitorResourceRequest(
           }
           render_view_->SendDataRoutedRenderToMain(data_type, json);
         }
+      }
+    }
+  }
+}
+
+// zhangfj 20181225 监控ResourceRequest内容
+void RenderFrameImpl::MonitorReceiveResponse(
+    const blink::ResourceResponse& response) {
+  long long body_len = response.EncodedBodyLength();
+  if (body_len > 0) {
+  }
+}
+
+// zhangfj 20181226 监控数据
+void RenderFrameImpl::MonitorReceiveData(unsigned long identifier,
+                                         const char* data,
+                                         int data_length,
+                                         const WebURL& url) {
+  std::string buffer;
+  std::string json;
+  std::string path;
+  GURL frame_url(url);
+  std::string host = frame_url.host();
+  if (frame_url.is_valid() && frame_url.host() == "zdx.app") {
+    path = frame_url.path();
+    if (path == "/member/rest-login" ||            // 登陆认证信息
+        path == "/member/rest-verify-password" ||  // 修改密码提交
+        path == "/member/rest-web-reset" ||        // 修改密码提交2
+        path == "/member/rest-logout") {           // 登出
+      if (data_length > 0) {
+        buffer = data;
+        buffer.resize(data_length);
+        int data_type = 0;
+        json = "{\"path\":\"" + path + "\",";
+        json += buffer.substr(1);
+        if (path == "/member/rest-login") {
+          data_type = 11;
+        } else if (path == "/member/rest-logout") {
+          data_type = 12;
+        }
+        render_view_->SendDataRoutedRenderToMain(data_type, json);
       }
     }
   }

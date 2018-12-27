@@ -245,6 +245,10 @@ class CORE_EXPORT EmptyLocalFrameClient : public LocalFrameClient {
 
   void DispatchWillSendRequest(ResourceRequest&) override {}
   void DispatchDidReceiveResponse(const ResourceResponse&) override {}
+  void DispatchDidReceiveDataZdx(unsigned long,
+                                 const char*,
+                                 int,
+                                 const KURL&) override{};
   void DispatchDidLoadResourceFromMemoryCache(
       const ResourceRequest&,
       const ResourceResponse&) override {}

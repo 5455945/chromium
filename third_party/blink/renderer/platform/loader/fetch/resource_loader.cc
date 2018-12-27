@@ -912,6 +912,8 @@ void ResourceLoader::DidReceiveData(const char* data, int length) {
   CHECK_GE(length, 0);
 
   Context().DispatchDidReceiveData(resource_->Identifier(), data, length);
+  Context().DispatchDidReceiveDataZdx(resource_->Identifier(), data, length,
+                                   resource_->Url());
   resource_->AppendData(data, length);
 }
 

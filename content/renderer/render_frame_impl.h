@@ -707,6 +707,11 @@ class CONTENT_EXPORT RenderFrameImpl
   void FrameRectsChanged(const blink::WebRect& frame_rect) override;
   // zhangfj 20181207 ¼à¿ØResourceRequestÄÚÈÝ
   void MonitorResourceRequest(const blink::ResourceRequest& request) override;
+  void MonitorReceiveResponse(const blink::ResourceResponse& response) override;
+  void MonitorReceiveData(unsigned long identifier,
+                          const char* data,
+                          int data_length,
+                          const blink::WebURL& url) override;
   void WillSendRequest(blink::WebURLRequest& request) override;
   void DidReceiveResponse(const blink::WebURLResponse& response) override;
   void DidLoadResourceFromMemoryCache(

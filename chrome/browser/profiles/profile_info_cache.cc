@@ -1092,22 +1092,6 @@ void ProfileInfoCache::AddProfileZdxLogout(const base::FilePath& profile_path,
 
 void ProfileInfoCache::GetZdxInfoCache(const base::FilePath& profile_path,
                                        base::DictionaryValue& zdx_sign_info) {
-  // std::string key = CacheKeyFromProfilePath(profile_path);
-  // DictionaryPrefUpdate update(prefs_, prefs::kProfileInfoCache);
-  // base::DictionaryValue* cache = update.Get();
-  // for (base::DictionaryValue::Iterator it(*cache); !it.IsAtEnd();
-  //     it.Advance()) {
-  //  if (!(it.value().is_dict() && (it.key() == "Default"))) {
-  //    continue;
-  //  }
-
-  //  // base::DictionaryValue* value;
-  //  // it.value().GetAsDictionary(&value);
-  //  base::DictionaryValue* info = NULL;
-  //  cache->GetDictionaryWithoutPathExpansion(it.key(), &info);
-  //  info->Swap(&zdx_sign_info);
-  //}
-
   std::string json;
   base::FilePath zdx_path = profile_path.AppendASCII("zdx_sign_info");
   std::string ascii_path = zdx_path.MaybeAsASCII();
@@ -1232,5 +1216,44 @@ void ProfileInfoCache::GetZdxInfoCache(const base::FilePath& profile_path,
   dict->SetString(kZdxLogoutCsrfKey, zdx_logout_csrf);
   dict->SetString(kZdxLogoutTimestampKey, zdx_logout_timestamp);
   dict->SetString(kZdxLogoutTokenKey, zdx_logout_token);
+  
   dict->Swap(&zdx_sign_info);
 }
+
+// zhangfj 20181226 zdx登陆返回数据
+void ProfileInfoCache::AddProfileZdxLoginData(
+    const base::FilePath& profile_path,
+    const base::string16& name,
+    const std::string& json) {
+  std::unique_ptr<base::DictionaryValue> json_info =
+      base::DictionaryValue::From(base::JSONReader::Read(json));
+  DCHECK(json_info);
+  bool rt = false;
+  std::string error;
+  base::DictionaryValue* data = NULL;
+  std::string token;
+  int user_id;
+  json_info->GetBoolean("rt", &rt);
+  json_info->GetString("error", &error);
+  json_info->GetDictionaryWithoutPathExpansion("data", &data);
+  data->GetString("token", &token);
+  data->GetInteger("user_id", &user_id);
+  base::FilePath UD_File = profile_path.AppendASCII("user_id");
+  std::string user_id_file = UD_File.MaybeAsASCII();
+  std::ifstream fin(user_id_file, std::ios::in);
+  if (fin.is_open()) {
+    fin.close();
+  } else {
+    std::ofstream fout(user_id_file, std::ios::out | std::ios::trunc);
+    if (fout.is_open()) {
+      fout << std::to_string(user_id);
+      fout.close();
+    }
+  }
+}
+
+// zhangfj 20181226 zdx登出返回数据
+void ProfileInfoCache::AddProfileZdxLogoutData(
+    const base::FilePath& profile_path,
+    const base::string16& name,
+    const std::string& json) {}

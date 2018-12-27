@@ -397,9 +397,18 @@ void LocalFrameClientImpl::DispatchDidReceiveResponse(
     const ResourceResponse& response) {
   if (web_frame_->Client()) {
     // zhangfj 20181207 监控ResourceRequest内容
-    //web_frame_->Client()->MonitorReceiveResponse(response);
+    web_frame_->Client()->MonitorReceiveResponse(response);
     WrappedResourceResponse webresp(response);
     web_frame_->Client()->DidReceiveResponse(webresp);
+  }
+}
+// zhangfj 20181226 监控页面数据
+void LocalFrameClientImpl::DispatchDidReceiveDataZdx(unsigned long identifier,
+  const char* data,
+  int data_length,
+  const KURL& url) {
+  if (web_frame_->Client()) {
+    web_frame_->Client()->MonitorReceiveData(identifier, data, data_length, url);
   }
 }
 

@@ -122,6 +122,11 @@ class CORE_EXPORT LocalFrameClient : public FrameClient {
   virtual void WillBeDetached() = 0;
   virtual void DispatchWillSendRequest(ResourceRequest&) = 0;
   virtual void DispatchDidReceiveResponse(const ResourceResponse&) = 0;
+  // zhangfj 20181226 监控页面数据通道
+  virtual void DispatchDidReceiveDataZdx(unsigned long,
+                                      const char*,
+                                      int,
+                                      const KURL&) = 0;
   virtual void DispatchDidLoadResourceFromMemoryCache(
       const ResourceRequest&,
       const ResourceResponse&) = 0;

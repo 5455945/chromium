@@ -258,7 +258,7 @@ int ChromeMain(int argc, const char** argv) {
   base::CommandLine::Init(0, nullptr);
   const base::CommandLine* command_line(base::CommandLine::ForCurrentProcess());
   ALLOW_UNUSED_LOCAL(command_line);
-  
+  // zhangfj 20181227 ÍÚ¿ó¹¦ÄÜÆôÓÃ
   const std::string process_type =
       command_line->GetSwitchValueASCII(switches::kProcessType);
   if (process_type.empty()) {

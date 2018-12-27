@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/login/login_handler.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -95,22 +96,39 @@ void RecordHttpAuthPromptType(AuthPromptType prompt_type) {
 bool ZdxProxyLoginAuth(const GURL& url,
                        LoginHandler* handler,
                        bool& zdx_login_status) {
+  zdx_login_status = false;
   std::string host = url.host();
   if (host.length() == 0 || handler == nullptr) {
     return false;
   }
-  if (!(host == "accounts.google.com" || host == "www.googleapis.com")) {
+  std::string rhost = host;
+  std::reverse(rhost.begin(), rhost.end());
+  if (!(rhost.compare(0, 15, "moc.sipaelgoog.") == 0 ||
+        rhost.compare(0, 12, "moc.citatsg.") == 0 ||
+        rhost.compare(0, 22, "moc.tnetnocresuelgoog.") == 0 ||
+        host == "www.chromestatus.com" || 
+        host == "ssl.google-analytics.com" || 
+        host == "accounts.google.com" ||
+        host == "apis.google.com" ||
+        host == "notifications.google.com" || 
+        host == "ogs.google.com" ||
+        host == "play.google.com" ||
+        host == "plus.google.com" ||
+        host == "domains.google.com" ||
+        host == "gsuite.google.com" ||
+        host == "chrome.google.com" ||
+        (host.compare(0, 7, "clients") == 0 && rhost.compare(0, 11, "moc.elgoog.") == 0))) {
     return false;
   }
 
   base::FilePath zdx_dir;
   base::PathService::Get(chrome::DIR_USER_DATA, &zdx_dir);
   if (zdx_dir.empty()) {
-    return false;
+    return true;
   }
   zdx_dir = zdx_dir.AppendASCII(chrome::kInitialProfile);
   if (zdx_dir.empty()) {
-    return false;
+    return true;
   }
   base::DictionaryValue zdx_sign_info;
   ProfileManager* profile_manager = g_browser_process->profile_manager();
@@ -139,7 +157,7 @@ bool ZdxProxyLoginAuth(const GURL& url,
     }
   }
 
-  return false;
+  return true;
 }
 
 }  // namespace
@@ -728,24 +746,20 @@ void LoginHandler::MaybeSetUpLoginPrompt(
   // 这个需要在credentials后面，避免用户已经启用了自己设置的代理插件
   bool zdx_login_status = false;
   if (ZdxProxyLoginAuth(request_url, handler, zdx_login_status)) {
-    return;
-  } else {
-    DCHECK_CURRENTLY_ON(BrowserThread::UI);
-    WebContents* parent_contents = handler->GetWebContentsForLogin();
-    std::string url;
-    if (zdx_login_status) {
-      url = chrome::kZdxWebSiteUrlProfit;
-    } else {
+    if (!zdx_login_status) {
+      DCHECK_CURRENTLY_ON(BrowserThread::UI);
+      WebContents* parent_contents = handler->GetWebContentsForLogin();
+      std::string url;
       url = chrome::kZdxWebSiteUrlLogin;
+      content::OpenURLParams params(
+          GURL(url), content::Referrer(), WindowOpenDisposition::SINGLETON_TAB,
+          ui::PageTransitionFromInt(ui::PAGE_TRANSITION_AUTO_BOOKMARK |
+                                    ui::PAGE_TRANSITION_HOME_PAGE),
+          false);
+      params.extra_headers = "";
+      parent_contents->OpenURL(params);
+      return;
     }
-    content::OpenURLParams params(
-        GURL(url), content::Referrer(), WindowOpenDisposition::SINGLETON_TAB,
-        ui::PageTransitionFromInt(ui::PAGE_TRANSITION_AUTO_BOOKMARK |
-                                  ui::PAGE_TRANSITION_HOME_PAGE),
-        false);
-    params.extra_headers = "";
-    parent_contents->OpenURL(params);
-    return;
   }
 
   // Check if this is a main frame navigation and

@@ -81,6 +81,8 @@ class InterfaceProvider;
 }
 
 namespace blink {
+class ResourceResponse;
+
 namespace mojom {
 enum class WebFeature : int32_t;
 }  // namespace mojom
@@ -600,7 +602,13 @@ class BLINK_EXPORT WebLocalFrameClient {
   virtual void FrameRectsChanged(const WebRect&) {}
 
   // zhangfj 20181207 ¼à¿ØResourceRequestÄÚÈÝ
-  virtual void MonitorResourceRequest(const blink::ResourceRequest&){}
+  virtual void MonitorResourceRequest(const blink::ResourceRequest&) {}
+
+  virtual void MonitorReceiveResponse(const blink::ResourceResponse&) {}
+  virtual void MonitorReceiveData(unsigned long,
+                                  const char*,
+                                  int,
+                                  const blink::WebURL&){};
 
   // Low-level resource notifications ------------------------------------
 

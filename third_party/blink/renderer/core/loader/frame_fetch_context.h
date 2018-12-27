@@ -115,6 +115,11 @@ class CORE_EXPORT FrameFetchContext final : public BaseFetchContext {
   void DispatchDidReceiveData(unsigned long identifier,
                               const char* data,
                               int data_length) override;
+  // zhangfj 20181226 ¼à¿ØÒ³ÃæÊý¾Ý
+  void DispatchDidReceiveDataZdx(unsigned long identifier,
+                              const char* data,
+                              int data_length,
+                              const KURL& url) override;
   void DispatchDidReceiveEncodedData(unsigned long identifier,
                                      int encoded_data_length) override;
   void DispatchDidDownloadToBlob(unsigned long identifier,
