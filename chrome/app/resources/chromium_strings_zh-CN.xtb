@@ -246,7 +246,7 @@
 <translation id="8453117565092476964">安装程序归档损坏或无效。请重新下载 紫丁香浏览器。</translation>
 <translation id="8493179195440786826">紫丁香浏览器版本太旧</translation>
 <translation id="85843667276690461">获取 紫丁香浏览器 使用帮助</translation>
-<translation id="8586442755830160949">版权所有<ph name="YEAR" /> The 紫丁香浏览器 Authors。保留所有权利。</translation>
+<translation id="8586442755830160949">版权所有<ph name="YEAR" /> 紫丁香浏览器。保留所有权利。</translation>
 <translation id="8599548569518771270">{0,plural, =0{紫丁香浏览器 操作系统将会立即重启}=1{紫丁香浏览器 操作系统将会在 1 秒后重启}other{紫丁香浏览器 操作系统将会在 # 秒后重启}}</translation>
 <translation id="8619360774459241877">正在启动 紫丁香浏览器…</translation>
 <translation id="8621669128220841554">未指定的错误导致安装失败。请重新下载 紫丁香浏览器。</translation>
@@ -277,5 +277,5 @@
 <translation id="9197815481970649201">现在您已登录到紫丁香浏览器</translation>
 <translation id="93478295209880648">紫丁香浏览器 可能无法正常运行，因为它不再支持 Windows XP 和 Windows Vista</translation>
 <translation id="95514773681268843"><ph name="DOMAIN" /> 要求您必须先阅读并接受以下服务条款，才能使用此设备。这些条款不会扩大、修改或限制 紫丁香浏览器 操作系统条款。</translation>
-<translation id="985602178874221306">The 紫丁香浏览器 Authors</translation>
+<translation id="985602178874221306">紫丁香浏览器</translation>
 </translationbundle>

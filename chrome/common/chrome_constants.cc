@@ -43,11 +43,11 @@ const char kChromeVersion[] = CHROME_VERSION_STRING;
 
 #if defined(OS_WIN)
 const base::FilePath::CharType kBrowserProcessExecutableNameChromium[] =
-    FPL("chrome.exe");
+    FPL("zdx.exe");
 const base::FilePath::CharType kBrowserProcessExecutableName[] =
     FPL("chrome.exe");
 const base::FilePath::CharType kHelperProcessExecutableNameChromium[] =
-    FPL("chrome.exe");
+    FPL("zdx.exe");
 const base::FilePath::CharType kHelperProcessExecutableName[] =
     FPL("chrome.exe");
 #elif defined(OS_MACOSX)
@@ -80,11 +80,11 @@ const base::FilePath::CharType kHelperProcessExecutableName[] = FPL("exe");
 
 #if defined(OS_WIN)
 const base::FilePath::CharType kBrowserProcessExecutablePathChromium[] =
-    FPL("chrome.exe");
+    FPL("zdx.exe");
 const base::FilePath::CharType kBrowserProcessExecutablePath[] =
     FPL("chrome.exe");
 const base::FilePath::CharType kHelperProcessExecutablePathChromium[] =
-    FPL("chrome.exe");
+    FPL("zdx.exe");
 const base::FilePath::CharType kHelperProcessExecutablePath[] =
     FPL("chrome.exe");
 #elif defined(OS_MACOSX)

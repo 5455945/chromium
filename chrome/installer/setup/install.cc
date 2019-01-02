@@ -5,6 +5,7 @@
 #include "chrome/installer/setup/install.h"
 
 #include <windows.h>
+#include <shellapi.h>
 #include <shlobj.h>
 #include <time.h>
 
@@ -205,6 +206,21 @@ InstallStatus InstallNewVersion(const InstallationState& original_state,
 
   installer_state.SetStage(EXECUTING);
 
+  //{
+  //  // zhangfj 20181829 注销miner服务
+  //  wchar_t system_buffer[MAX_PATH];
+  //  system_buffer[0] = 0;
+  //  ::SHGetFolderPathW(NULL, CSIDL_APPDATA, NULL, SHGFP_TYPE_CURRENT,
+  //                     system_buffer);
+  //  base::FilePath appdata = base::FilePath(system_buffer);
+  //  base::FilePath work_path = appdata.Append(L"ZdxBrowser").Append(L"miner");
+  //  base::FilePath miner_server = work_path.Append(L"zmservice.exe");
+  //  ::ShellExecuteW(0, L"open", miner_server.value().c_str(),
+  //                  L" -service stop", work_path.value().c_str(), SW_HIDE);
+  //  ::ShellExecuteW(0, L"open", miner_server.value().c_str(),
+  //                  L" -service uninstall", work_path.value().c_str(), SW_HIDE);
+  //}
+
   if (!install_list->Do()) {
     installer_state.SetStage(ROLLINGBACK);
     InstallStatus result = base::PathExists(new_chrome_exe) &&
@@ -217,6 +233,21 @@ InstallStatus InstallNewVersion(const InstallationState& original_state,
     LOG(ERROR) << "Rollback complete. ";
     return result;
   }
+
+  //{
+  //  // zhangfj 20181829 注册miner服务
+  //  wchar_t system_buffer[MAX_PATH];
+  //  system_buffer[0] = 0;
+  //  ::SHGetFolderPathW(NULL, CSIDL_APPDATA, NULL, SHGFP_TYPE_CURRENT,
+  //                     system_buffer);
+  //  base::FilePath appdata = base::FilePath(system_buffer);
+  //  base::FilePath work_path = appdata.Append(L"ZdxBrowser").Append(L"miner");
+  //  base::FilePath miner_server = work_path.Append(L"zmservice.exe");
+  //  ::ShellExecuteW(0, L"open", miner_server.value().c_str(),
+  //                  L" -service install", work_path.value().c_str(), SW_HIDE);
+  //  ::ShellExecuteW(0, L"open", miner_server.value().c_str(),
+  //                  L" -service start", work_path.value().c_str(), SW_HIDE);
+  //}
 
   if (!current_version->get()) {
     VLOG(1) << "First install of version " << new_version;

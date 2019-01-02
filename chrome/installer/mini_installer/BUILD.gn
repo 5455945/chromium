@@ -232,7 +232,7 @@ template("generate_mini_installer") {
   }
 
   executable(target_name) {
-    output_name = "mini_installer"
+    output_name = "zdx_installer"
     sources = [
       "mini_installer_exe_main.cc",
       packed_files_rc_file,
@@ -303,7 +303,7 @@ if (!(is_component_build && is_debug && target_cpu == "x86") &&
     testonly = true
     inputs = [
       "$root_out_dir/alternate_version_generator.exe",
-      "$root_out_dir/mini_installer.exe",
+      "$root_out_dir/zdx_installer.exe",
     ]
     outputs = [
       "$root_out_dir/$target_name.exe",

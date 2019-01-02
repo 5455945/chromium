@@ -209,8 +209,9 @@ If you update this file, be sure also to update google_chrome_strings.grd. -->
           Get help with using Chromium OS
         </message>
       </if>
+      <!-- 安装包显示的内容 The Chromium Authors,会带 The Authors -->
       <message name="IDS_ABOUT_VERSION_COMPANY_NAME" desc="Company name on the about pages">
-        The Chromium Authors
+        Chromium
       </message>
       <message name="IDS_ABOUT_VERSION_COPYRIGHT" desc="Copyright information on the about pages">
         Copyright <ph name="YEAR">{0,date,y}<ex>2016</ex></ph> The Chromium Authors. All rights reserved.
