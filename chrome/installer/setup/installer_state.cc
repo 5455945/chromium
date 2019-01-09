@@ -88,7 +88,7 @@ void InstallerState::Initialize(const base::CommandLine& command_line,
   target_path_ = GetChromeInstallPath(system_install());
   state_key_ = install_static::GetClientStateKeyPath();
 
-  VLOG(1) << (is_uninstall ? "Uninstall Chrome" : "Install Chrome");
+  VLOG(1) << (is_uninstall ? "Uninstall Zdx" : "Install Zdx");
 
   if (is_uninstall) {
     operation_ = UNINSTALL;

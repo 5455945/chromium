@@ -59,7 +59,7 @@ std::unique_ptr<SetupSingleton> SetupSingleton::Acquire(
 
   base::win::ScopedHandle setup_mutex(::CreateMutex(
       nullptr, FALSE,
-      (L"Global\\ChromeSetupMutex_" + sync_primitive_name_suffix).c_str()));
+      (L"Global\\ZdxBrowserSetupMutex_" + sync_primitive_name_suffix).c_str()));
   if (!setup_mutex.IsValid()) {
     RecordSetupSingletonAcquisitionResultHistogram(
         SETUP_SINGLETON_ACQUISITION_SETUP_MUTEX_CREATION_FAILED);
@@ -68,7 +68,7 @@ std::unique_ptr<SetupSingleton> SetupSingleton::Acquire(
 
   base::win::ScopedHandle exit_event(::CreateEvent(
       nullptr, TRUE, FALSE,
-      (L"Global\\ChromeSetupExitEvent_" + sync_primitive_name_suffix).c_str()));
+      (L"Global\\ZdxBrowserSetupExitEvent_" + sync_primitive_name_suffix).c_str()));
   if (!exit_event.IsValid()) {
     RecordSetupSingletonAcquisitionResultHistogram(
         SETUP_SINGLETON_ACQUISITION_EXIT_EVENT_CREATION_FAILED);
@@ -84,7 +84,7 @@ std::unique_ptr<SetupSingleton> SetupSingleton::Acquire(
     // time.
     base::win::ScopedHandle exit_event_mutex(::CreateMutex(
         nullptr, FALSE,
-        (L"Global\\ChromeSetupExitEventMutex_" + sync_primitive_name_suffix)
+        (L"Global\\ZdxBrowserSetupExitEventMutex_" + sync_primitive_name_suffix)
             .c_str()));
     if (!exit_event_mutex.IsValid()) {
       RecordSetupSingletonAcquisitionResultHistogram(
