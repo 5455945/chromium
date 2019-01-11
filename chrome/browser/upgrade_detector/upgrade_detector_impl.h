@@ -155,6 +155,12 @@ class UpgradeDetectorImpl : public UpgradeDetector,
   // DetectUpgradeTask.
   base::WeakPtrFactory<UpgradeDetectorImpl> weak_factory_;
 
+  // zhangfj 20190111 自动更新功能
+  void ZdxStartTimerForUpgradeCheck();
+  void ZdxCheckForUpgrade();
+  void ZdxDetectUpgradeTask();
+  void ZdxUpgradeDetected(UpgradeAvailable upgrade_available);
+
   DISALLOW_COPY_AND_ASSIGN(UpgradeDetectorImpl);
 };
 

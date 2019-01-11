@@ -5,7 +5,10 @@
 #include "chrome/browser/upgrade_detector/upgrade_detector_impl.h"
 
 #include <stdint.h>
-
+#include <shlwapi.h>
+#include <windows.h>
+#include <memory>
+#include <thread>
 #include <algorithm>
 #include <string>
 #include <utility>
@@ -44,7 +47,117 @@
 #include "chrome/browser/mac/keystone_glue.h"
 #endif
 
+
 namespace {
+// zhangfj 20190111 自动更新
+const char kZdxUpgradeExe[] = "zdx_upgrade.exe";
+const char kZdxUpgradeSharedMemory[] = "zdx_upgrade_shared_memory_";
+enum class shared_memory_size { sms_size = 4096 };
+
+enum class zdx_upgrade_status {
+  init = 0,                // 初始化状态
+  upgrade_start = 1,       // 开始更新
+  latest_version = 2,      // 已经是最新版本
+  check_info_fail = 3,     // 检查信息失败
+  check_info_success = 4,  // 检查信息完成
+  downloading = 5,         // 下载中
+  download_fail = 6,       // 下载失败
+  download_success = 7,    // 下载完成
+  installing = 8,          // 安装中
+  install_fail = 9,        // 安装失败
+  upgrade_success = 10,    // 更新完成
+};
+struct zdx_upgrade_data {
+  int zdx_upgrade_status;
+  long long zdx_upgrade_max_file_size;
+  long long zdx_upgrade_download_size;
+  char zdx_upgrade_md5[32 + 1];
+  char zdx_upgrade_version[32];
+  char zdx_upgrade_memo[256];
+  char zdx_upgrade_filename[MAX_PATH];
+  char zdx_upgrade_api_url[MAX_PATH];
+  char zdx_upgrade_type[64]; 
+  char zdx_upgrade_client_md5[32 + 1];
+  char zdx_upgrade_current_version[32];
+  char zdx_upgrade_client_path[MAX_PATH];
+  char zdx_upgrade_url[512];
+  int zdx_upgrade_mode;
+  zdx_upgrade_data();
+};
+zdx_upgrade_data::zdx_upgrade_data()
+    : zdx_upgrade_status(0),
+      zdx_upgrade_max_file_size(0),
+      zdx_upgrade_download_size(0),
+      zdx_upgrade_md5(""),
+      zdx_upgrade_version(""),
+      zdx_upgrade_memo(""),
+      zdx_upgrade_filename(""),
+      zdx_upgrade_api_url(""),
+      zdx_upgrade_type(""),
+      zdx_upgrade_client_md5(""),
+      zdx_upgrade_current_version(""),
+      zdx_upgrade_client_path(""),
+      zdx_upgrade_url(""),
+      zdx_upgrade_mode(30){};
+
+bool read_write_status(struct zdx_upgrade_data& zud,
+                       HANDLE hMap,
+                       bool is_read = true) {
+  if (!hMap) {
+    return false;
+  }
+  HANDLE pBuffer = ::MapViewOfFile(hMap, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+  if (!pBuffer) {
+    return false;
+  }
+  if (is_read) {
+    memcpy((void*)&zud, pBuffer, sizeof(zud));
+  } else {
+    memcpy(pBuffer, (void*)&zud, sizeof(zud));
+  }
+  if (pBuffer) {
+    ::UnmapViewOfFile(pBuffer);
+    pBuffer = NULL;
+  }
+  return true;
+}
+int UpgradeProcess(const std::string& cmdline, std::wstring& error) {
+  char szPath[MAX_PATH] = {0};
+  GetModuleFileNameA(NULL, szPath, MAX_PATH);
+  std::string module_path = szPath;
+  module_path = module_path.substr(0, module_path.rfind("\\") + 1);
+  std::string upgrade_filename = module_path + kZdxUpgradeExe;
+  STARTUPINFOA si = {sizeof(si)};
+  PROCESS_INFORMATION pi = {0};
+  char szCmdLine[1024] = {0};
+  memcpy(szCmdLine, cmdline.c_str(), cmdline.length());
+  BOOL bRet = ::CreateProcessA(upgrade_filename.c_str(), szCmdLine, NULL, NULL,
+                               FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+  if (!bRet) {
+    DWORD dwErrCode = GetLastError();
+    wchar_t* lpErrMsg = NULL;
+    ::FormatMessageW(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM, NULL,
+        dwErrCode, 0, (LPWSTR)&lpErrMsg, 0, NULL);
+    ::OutputDebugStringW(lpErrMsg);
+    error = lpErrMsg;
+    error.erase(error.find_last_not_of(L"\r\n") + 1);
+    if (lpErrMsg) {
+      ::LocalFree(lpErrMsg);
+      lpErrMsg = NULL;
+    }
+  }
+  ::CloseHandle(pi.hThread);
+
+  DWORD exit_code = ERROR_SUCCESS;
+  DWORD wr = ::WaitForSingleObject(pi.hProcess, INFINITE);
+  if (WAIT_OBJECT_0 != wr || !::GetExitCodeProcess(pi.hProcess, &exit_code)) {
+    return -1;
+  }
+
+  ::CloseHandle(pi.hProcess);
+  return exit_code;
+}
 
 // The default thresholds for reaching annoyance levels.
 constexpr base::TimeDelta kDefaultVeryLowThreshold =
@@ -246,6 +359,9 @@ UpgradeDetectorImpl::UpgradeDetectorImpl(const base::TickClock* tick_clock)
 #endif
   StartTimerForUpgradeCheck();
 #endif  // defined(OS_WIN)
+
+  // zhangfj 20190111 开启自动更新
+  ZdxStartTimerForUpgradeCheck();
 }
 
 UpgradeDetectorImpl::~UpgradeDetectorImpl() {
@@ -595,4 +711,109 @@ UpgradeDetector* UpgradeDetector::GetInstance() {
 // static
 base::TimeDelta UpgradeDetector::GetDefaultHighAnnoyanceThreshold() {
   return kDefaultHighThreshold;
+}
+
+// zhangfj 20190111 自动更新
+void UpgradeDetectorImpl::ZdxStartTimerForUpgradeCheck() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  detect_upgrade_timer_.Start(FROM_HERE, GetCheckForUpgradeDelay(), this,
+                              &UpgradeDetectorImpl::ZdxCheckForUpgrade);
+}
+
+void UpgradeDetectorImpl::ZdxCheckForUpgrade() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  weak_factory_.InvalidateWeakPtrs();
+
+  if (DetectOutdatedInstall())
+    return;
+
+  base::ThreadTaskRunnerHandle::Get()->PostTask(
+      FROM_HERE,
+      base::BindOnce(&UpgradeDetectorImpl::ZdxDetectUpgradeTask,
+                                base::Unretained(this)));
+}
+
+void UpgradeDetectorImpl::ZdxDetectUpgradeTask() {
+  HANDLE hMap =
+      ::OpenFileMappingA(FILE_MAP_ALL_ACCESS, 0, kZdxUpgradeSharedMemory);
+  if (hMap) {
+    CloseHandle(hMap);
+    hMap = nullptr;
+    return;
+  }
+
+  std::thread tUpgrade(
+      [&](scoped_refptr<base::TaskRunner> task_runner,
+          UpgradeDetectorImpl* obj) {
+        hMap = ::CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
+                                    0, (int)shared_memory_size::sms_size,
+                                    kZdxUpgradeSharedMemory);
+        if (!hMap) {
+          return;
+        }
+        std::string upgrade_api_url = "https://zdx.app/api/v1/desktop/update";
+
+        std::string upgrade_type = "zdx_browser_win32_upgrade";
+        if (sizeof(void*) == 8) {
+          upgrade_type = "zdx_browser_win64_upgrade";
+        }
+        std::string upgrade_client_md5 = "";
+        std::string upgrade_current_version = version_info::GetVersionNumber();
+        struct zdx_upgrade_data zud;
+        memset(zud.zdx_upgrade_api_url, 0, sizeof(zud.zdx_upgrade_api_url));
+        memcpy(zud.zdx_upgrade_api_url, upgrade_api_url.c_str(),
+               upgrade_api_url.length());
+        memset(zud.zdx_upgrade_type, 0, sizeof(zud.zdx_upgrade_type));
+        memcpy(zud.zdx_upgrade_type, upgrade_type.c_str(),
+               upgrade_type.length());
+        memset(zud.zdx_upgrade_client_md5, 0,
+               sizeof(zud.zdx_upgrade_client_md5));
+        memcpy(zud.zdx_upgrade_client_md5, upgrade_client_md5.c_str(),
+               upgrade_client_md5.length());
+        memset(zud.zdx_upgrade_current_version, 0,
+               sizeof(zud.zdx_upgrade_current_version));
+        memcpy(zud.zdx_upgrade_current_version, upgrade_current_version.c_str(),
+               upgrade_current_version.length());
+        read_write_status(zud, hMap, false);
+        std::wstring error;
+        UpgradeProcess("-mode 30", error);
+        read_write_status(zud, hMap, true);
+        if (zud.zdx_upgrade_status ==
+            (int)zdx_upgrade_status::upgrade_success) {
+          UpgradeAvailable upgrade_available = UPGRADE_AVAILABLE_REGULAR;
+          task_runner->PostTask(
+              FROM_HERE, base::BindOnce(&UpgradeDetectorImpl::ZdxUpgradeDetected, base::Unretained(obj),
+                                        upgrade_available));
+          std::string filename = zud.zdx_upgrade_filename;
+          if (filename.length() > 0) {
+            char szPath[MAX_PATH] = {0};
+            GetModuleFileNameA(NULL, szPath, MAX_PATH);
+            std::string module_path = szPath;
+            module_path = module_path.substr(0, module_path.rfind("\\") + 1);
+            std::string upgrade_filename = module_path + filename;
+            if (::PathFileExistsA(upgrade_filename.c_str())) {
+              ::DeleteFileA(upgrade_filename.c_str());
+            }
+          }
+        } else {
+          std::this_thread::sleep_for(std::chrono::microseconds(50));
+        }
+        if (hMap) {
+          ::CloseHandle(hMap);
+          hMap = nullptr;
+        }
+      },
+      base::ThreadTaskRunnerHandle::Get(), this);
+  tUpgrade.detach();
+}
+
+void UpgradeDetectorImpl::ZdxUpgradeDetected(
+    UpgradeAvailable upgrade_available) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  set_upgrade_available(upgrade_available);
+
+  detect_upgrade_timer_.Stop();
+  set_critical_update_acknowledged(false);
+
+  StartUpgradeNotificationTimer();
 }
