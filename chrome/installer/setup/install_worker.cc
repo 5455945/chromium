@@ -328,6 +328,29 @@ void AddChromeWorkItems(const InstallationState& original_state,
 //      temp_path.value(), WorkItem::NEW_NAME_IF_IN_USE, new_chrome_exe.value());
 //}
 
+// zhangfj 20181229 解压zdx_upgrade.exe到安装目录
+void AddZdxUpgradeWorkItems(const InstallationState& original_state,
+                       const InstallerState& installer_state,
+                       const base::FilePath& setup_path,
+                       const base::FilePath& archive_path,
+                       const base::FilePath& src_path,
+                       const base::FilePath& temp_path,
+                       const base::Version* current_version,
+                       const base::Version& new_version,
+                       WorkItemList* install_list) {
+  // 解压miner内容到安装目录
+  const base::FilePath& target_path = installer_state.target_path();
+  base::FilePath new_zdx_upgrade_exe(
+      target_path.Append(L"new_zdx_upgrade.exe"));
+
+  install_list->AddDeleteTreeWorkItem(new_zdx_upgrade_exe, temp_path);
+
+  install_list->AddCopyTreeWorkItem(
+      src_path.Append(L"zdx_upgrade.exe").value(),
+      target_path.Append(L"zdx_upgrade.exe").value(), temp_path.value(),
+      WorkItem::NEW_NAME_IF_IN_USE, new_zdx_upgrade_exe.value());
+}
+
 // Adds an ACE from a trustee SID, access mask and flags to an existing DACL.
 // If the exact ACE already exists then the DACL is not modified and true is
 // returned.
@@ -832,6 +855,12 @@ void AddInstallWorkItems(const InstallationState& original_state,
   //AddMinerWorkItems(original_state, installer_state, setup_path, archive_path,
   //                  src_path, temp_path, current_version, new_version,
   //                  install_list);
+
+  // zhangfj 20190111 添加当前路径下的zdx_upgrade.exe到安装包里
+  AddZdxUpgradeWorkItems(original_state, installer_state, setup_path,
+                    archive_path,
+                    src_path, temp_path, current_version, new_version,
+                    install_list);
 
   // Copy installer in install directory
   AddInstallerCopyTasks(installer_state, setup_path, archive_path, temp_path,

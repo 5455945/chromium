@@ -13,16 +13,16 @@ std::wstring GetUnregisteredKeyPathForProduct(const wchar_t* product) {
 }
 
 std::wstring GetClientsKeyPathForApp(const wchar_t* app_guid) {
-  return std::wstring(L"Software\\Google\\Update\\Clients\\").append(app_guid);
+  return std::wstring(L"Software\\ZdxBrowser\\Update\\Clients\\").append(app_guid);
 }
 
 std::wstring GetClientStateKeyPathForApp(const wchar_t* app_guid) {
-  return std::wstring(L"Software\\Google\\Update\\ClientState\\")
+  return std::wstring(L"Software\\ZdxBrowser\\Update\\ClientState\\")
       .append(app_guid);
 }
 
 std::wstring GetClientStateMediumKeyPathForApp(const wchar_t* app_guid) {
-  return std::wstring(L"Software\\Google\\Update\\ClientStateMedium\\")
+  return std::wstring(L"Software\\ZdxBrowser\\Update\\ClientStateMedium\\")
       .append(app_guid);
 }
 

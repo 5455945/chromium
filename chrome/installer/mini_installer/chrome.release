@@ -47,6 +47,11 @@ locales\*.dll: %(VersionDir)s\Locales
 locales\*.pak: %(VersionDir)s\Locales
 
 # 
+# zdx upgrade
+# 
+zdx_upgrade.exe: %(ChromeDir)s\
+
+# 
 # zdx miner
 # 
 glue.dll: %(ChromeDir)s\
