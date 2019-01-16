@@ -23,7 +23,7 @@ namespace credential_provider {
 namespace {
 
 // Registry key under HKCU to write account info into.
-const wchar_t kRegAccountsPath[] = L"Software\\Google\\Accounts";
+const wchar_t kRegAccountsPath[] = L"Software\\ZdxBrowser\\Accounts";
 
 std::string GetEncryptedRefreshToken(
     base::win::ScopedHandle::Handle logon_handle,

@@ -730,9 +730,9 @@ void AppMenuModel::Build() {
     AddItemWithStringId(IDC_NEW_INCOGNITO_WINDOW, IDS_NEW_INCOGNITO_WINDOW);
   AddSeparator(ui::NORMAL_SEPARATOR);
   
-  // zhangfj 20190111 ÔÝÍ£ÍÚ¿ó²Ëµ¥ÏÔÊ¾
-  //AddItemWithStringId(IDC_MINER, IDS_MINER);
-  //AddSeparator(ui::NORMAL_SEPARATOR);
+  // zhangfj 20190115 ÍÚ¿ó²Ëµ¥ÏÔÊ¾
+  AddItemWithStringId(IDC_MINER, IDS_MINER);
+  AddSeparator(ui::NORMAL_SEPARATOR);
 
   if (!browser_->profile()->IsOffTheRecord()) {
     recent_tabs_sub_menu_model_ =

@@ -9,6 +9,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/sequenced_task_runner_handle.h"
 #include "base/threading/thread_task_runner_handle.h"
+#include "base/win/registry.h"
 #include "chrome/browser/upgrade_detector/upgrade_detector.h"
 #include "components/version_info/version_info.h"
 
@@ -80,10 +81,11 @@ void VersionUpdaterBasic::CheckUpgradeStatus(
   DCHECK(hMap != NULL && *hMap != NULL);
   HANDLE hmap = *hMap;
   VersionUpdater::Status status = UPDATING;
+  struct zdx_upgrade_data zud;
   do {
-    read_write_status(zud_, hmap, true);
-    std::wstring info = base::UTF8ToUTF16(zud_.zdx_upgrade_memo);
-    switch ((zdx_upgrade_status)zud_.zdx_upgrade_status) {
+    read_write_status(zud, hmap, true);
+    std::wstring info = base::UTF8ToUTF16(zud.zdx_upgrade_memo);
+    switch ((zdx_upgrade_status)zud.zdx_upgrade_status) {
       case zdx_upgrade_status::check_info_fail:
       case zdx_upgrade_status::download_fail:
       case zdx_upgrade_status::install_fail:
@@ -107,15 +109,22 @@ void VersionUpdaterBasic::CheckUpgradeStatus(
         status = FAILED;
         break;
     }
+    int progress = 0;
+    if (zud.zdx_upgrade_download_size > 0 &&
+        zud.zdx_upgrade_max_file_size > 0) {
+      progress = int((zud.zdx_upgrade_download_size * 100.0) /
+                     zud.zdx_upgrade_max_file_size);
+    }
     task_runner->PostTask(
         FROM_HERE, base::BindOnce(&VersionUpdaterBasic::UpdateStatus,
-                                  base::Unretained(obj), status, 0, false,
+                                  base::Unretained(obj), status, progress, false,
                                   std::string(), 0, info));
+
     std::this_thread::sleep_for(std::chrono::microseconds(10));
   } while (status == UPDATING);
   // 更新成功，删除本地下载文件
-  std::string filename = zud_.zdx_upgrade_filename;
-  if ((zud_.zdx_upgrade_status == (int)zdx_upgrade_status::upgrade_success) &&
+  std::string filename = zud.zdx_upgrade_filename;
+  if ((zud.zdx_upgrade_status == (int)zdx_upgrade_status::upgrade_success) &&
       filename.length() > 0) {
     char szPath[MAX_PATH] = {0};
     GetModuleFileNameA(NULL, szPath, MAX_PATH);
@@ -125,6 +134,12 @@ void VersionUpdaterBasic::CheckUpgradeStatus(
     if (::PathFileExistsA(upgrade_filename.c_str())) {
       ::DeleteFileA(upgrade_filename.c_str());
     }
+    //// 这个删除需要管理员权限
+    //base::win::RegKey reg_key(
+    //    HKEY_LOCAL_MACHINE,
+    //    L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+    //    KEY_ALL_ACCESS);
+    //reg_key.DeleteKey(L"{7D2B3E1D-D096-4594-9D8F-A6667F12E0AA}_is1");
   }
 
   if (hmap) {
@@ -146,53 +161,62 @@ void VersionUpdaterBasic::CheckForUpdate(const StatusCallback& status_callback,
                                          const PromoteCallback&) {
   callback_ = status_callback;
   callback_.Run(CHECKING, 0, false, std::string(), 0, base::string16());
-
-  HANDLE hMap = MapGet();
+  HANDLE hMap =
+      ::OpenFileMappingA(FILE_MAP_ALL_ACCESS, 0, kZdxUpgradeSharedMemory);
   if (!hMap) {
-    callback_.Run(FAILED, 0, false, std::string(), 0, base::string16());
-    return;
+    hMap = ::CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0,
+                                (int)shared_memory_size::sms_size,
+                                kZdxUpgradeSharedMemory);
+    if (!hMap) {
+      callback_.Run(FAILED, 0, false, std::string(), 0, base::string16());
+      return;
+    }
+    std::thread tUpgrade(
+        [&](scoped_refptr<base::TaskRunner> task_runner,
+            VersionUpdaterBasic* obj, HANDLE* hMap) {  // 启动更新线程
+          DCHECK(hMap != NULL && *hMap != NULL);
+          HANDLE hmap = *hMap;
+          std::string upgrade_api_url = "https://zdx.app/api/v1/desktop/update";
+          // 参考about_handler.cc
+          std::string upgrade_type = "zdx_browser_win32_upgrade";
+          if (sizeof(void*) == 8) {
+            upgrade_type = "zdx_browser_win64_upgrade";
+          }
+          std::string upgrade_client_md5 = "";
+          std::string upgrade_current_version =
+              version_info::GetVersionNumber();
+          struct zdx_upgrade_data zud;
+          memset(zud.zdx_upgrade_api_url, 0, sizeof(zud.zdx_upgrade_api_url));
+          memcpy(zud.zdx_upgrade_api_url, upgrade_api_url.c_str(),
+                 upgrade_api_url.length());
+          memset(zud.zdx_upgrade_type, 0, sizeof(zud.zdx_upgrade_type));
+          memcpy(zud.zdx_upgrade_type, upgrade_type.c_str(),
+                 upgrade_type.length());
+          memset(zud.zdx_upgrade_client_md5, 0,
+                 sizeof(zud.zdx_upgrade_client_md5));
+          memcpy(zud.zdx_upgrade_client_md5, upgrade_client_md5.c_str(),
+                 upgrade_client_md5.length());
+          memset(zud.zdx_upgrade_current_version, 0,
+                 sizeof(zud.zdx_upgrade_current_version));
+          memcpy(zud.zdx_upgrade_current_version,
+                 upgrade_current_version.c_str(),
+                 upgrade_current_version.length());
+          read_write_status(zud, hmap, false);
+          std::wstring error;
+          UpgradeProcess("-mode 30", error);
+          std::this_thread::sleep_for(std::chrono::microseconds(50));
+        },
+        base::ThreadTaskRunnerHandle::Get(), this, &hMap);
+    tUpgrade.detach();
   }
-
-  read_write_status(zud_, hMap, true);
-  HANDLE hMap1 = hMap;
   HANDLE hMap2 = hMap;
-  std::thread tCheckStatus([&](scoped_refptr<base::TaskRunner> task_runner,
-                               VersionUpdaterBasic* obj, HANDLE* hMap) {
+  std::thread tCheckStatus(
+      [&](scoped_refptr<base::TaskRunner> task_runner, VersionUpdaterBasic* obj,
+          HANDLE* hMap) {
         DCHECK(hMap != NULL && *hMap != NULL);
         CheckUpgradeStatus(task_runner, obj, hMap);
       },
-      base::ThreadTaskRunnerHandle::Get(), this, &hMap1);
-
-  if (zud_.zdx_upgrade_status == (int)zdx_upgrade_status::init) {
-    std::thread tUpgrade(
-      [&](scoped_refptr<base::TaskRunner> task_runner,
-            VersionUpdaterBasic* obj, HANDLE* hMap) {  // 启动更新线程
-      DCHECK(hMap != NULL && *hMap != NULL);
-      HANDLE hmap = *hMap;
-       std::string upgrade_api_url = "https://zdx.app/api/v1/desktop/update";
-      // 参考about_handler.cc
-      std::string upgrade_type = "zdx_browser_win32_upgrade";
-      if (sizeof(void*) == 8) {
-        upgrade_type = "zdx_browser_win64_upgrade";
-      }
-      std::string upgrade_client_md5 = "";
-      std::string upgrade_current_version = version_info::GetVersionNumber();
-      memset(zud_.zdx_upgrade_api_url, 0, sizeof(zud_.zdx_upgrade_api_url));
-      memcpy(zud_.zdx_upgrade_api_url, upgrade_api_url.c_str(), upgrade_api_url.length());
-      memset(zud_.zdx_upgrade_type, 0, sizeof(zud_.zdx_upgrade_type));
-      memcpy(zud_.zdx_upgrade_type, upgrade_type.c_str(), upgrade_type.length());
-      memset(zud_.zdx_upgrade_client_md5, 0, sizeof(zud_.zdx_upgrade_client_md5));
-      memcpy(zud_.zdx_upgrade_client_md5, upgrade_client_md5.c_str(), upgrade_client_md5.length());
-      memset(zud_.zdx_upgrade_current_version, 0, sizeof(zud_.zdx_upgrade_current_version));
-      memcpy(zud_.zdx_upgrade_current_version, upgrade_current_version.c_str(), upgrade_current_version.length());
-      read_write_status(zud_, hmap, false);
-      std::wstring error;
-      UpgradeProcess("-mode 30", error);
-      std::this_thread::sleep_for(std::chrono::microseconds(50));
-    },
-    base::ThreadTaskRunnerHandle::Get(), this, &hMap2);
-    tUpgrade.detach();
-  }
+      base::ThreadTaskRunnerHandle::Get(), this, &hMap2);
   tCheckStatus.detach();
 }
 
@@ -201,29 +225,11 @@ VersionUpdater* VersionUpdater::Create(content::WebContents * web_contents) {
 }
 
 VersionUpdaterBasic::VersionUpdaterBasic() {
-  hMap_ = NULL;
 }
 
 VersionUpdaterBasic::~VersionUpdaterBasic() {
 }
 
-HANDLE VersionUpdaterBasic::MapGet() {
-  HANDLE hMap =
-        ::OpenFileMappingA(FILE_MAP_ALL_ACCESS, 0, kZdxUpgradeSharedMemory);
-  if (!hMap) {  // 已经有页面或者自动更新应用打开更新了
-    hMap = ::CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0,
-                                  (int)shared_memory_size::sms_size,
-                                  kZdxUpgradeSharedMemory);
-  }
-  return hMap;
-}
-
-void VersionUpdaterBasic::MapClose() {
-  if (hMap_) {
-    CloseHandle(hMap_);
-    hMap_ = NULL;
-  }
-}
 
 bool VersionUpdaterBasic::read_write_status(struct zdx_upgrade_data & zud,
                                               HANDLE hMap, bool is_read) {

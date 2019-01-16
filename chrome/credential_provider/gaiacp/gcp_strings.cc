@@ -34,10 +34,10 @@ const wchar_t kDesktopFullName[] = L"WinSta0\\Winlogon";
 
 // Google Update related registry paths.
 const wchar_t kRegUpdaterClientStateAppPath[] =
-    L"SOFTWARE\\Google\\Update\\ClientState\\"
+    L"SOFTWARE\\ZdxBrowser\\Update\\ClientState\\"
     L"{32987697-A14E-4B89-84D6-630D5431E831}";
 const wchar_t kRegUpdaterClientsAppPath[] =
-    L"SOFTWARE\\Google\\Update\\Clients\\"
+    L"SOFTWARE\\ZdxBrowser\\Update\\Clients\\"
     L"{32987697-A14E-4B89-84D6-630D5431E831}";
 
 }  // namespace credential_provider

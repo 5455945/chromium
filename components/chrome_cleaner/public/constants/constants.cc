@@ -28,7 +28,7 @@ const char kQuarantineSwitch[] = "quarantine";
 
 // Registry paths and subkeys.
 const wchar_t kSoftwareRemovalToolRegistryKey[] =
-    L"Software\\Google\\Software Removal Tool";
+    L"Software\\ZdxBrowser\\Software Removal Tool";
 const wchar_t kCleanerSubKey[] = L"Cleaner";
 const wchar_t kScanTimesSubKey[] = L"ScanTimes";
 

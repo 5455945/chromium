@@ -18,7 +18,7 @@ namespace {
 // we record whether the user has consented to crash dump collection.
 // the user's consent to collect crash dumps is recorded.
 const wchar_t kOmahaClientStateKeyFormat[] =
-    L"Software\\Google\\Update\\%ls\\%ls";
+    L"Software\\ZdxBrowser\\Update\\%ls\\%ls";
 const wchar_t kOmahaClientState[] = L"ClientState";
 const wchar_t kOmahaClientStateMedium[] = L"ClientStateMedium";
 const wchar_t kOmahaUsagestatsValue[] = L"usagestats";

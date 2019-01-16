@@ -12,13 +12,13 @@
 namespace gcapi_internals {
 
 const wchar_t kChromeRegClientsKey[] =
-    L"Software\\Google\\Update\\Clients\\"
+    L"Software\\ZdxBrowser\\Update\\Clients\\"
     L"{8A69D345-D564-463c-AFF1-A69D9E530F96}";
 const wchar_t kChromeRegClientStateKey[] =
-    L"Software\\Google\\Update\\ClientState\\"
+    L"Software\\ZdxBrowser\\Update\\ClientState\\"
     L"{8A69D345-D564-463c-AFF1-A69D9E530F96}";
 const wchar_t kChromeRegClientStateMediumKey[] =
-    L"Software\\Google\\Update\\ClientStateMedium\\"
+    L"Software\\ZdxBrowser\\Update\\ClientStateMedium\\"
     L"{8A69D345-D564-463c-AFF1-A69D9E530F96}";
 
 // Mirror the strategy used by GoogleUpdateSettings::GetBrand.

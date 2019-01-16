@@ -56,23 +56,23 @@ using base::win::ScopedHandle;
 
 namespace {
 
-const wchar_t kGCAPITempKey[] = L"Software\\Google\\GCAPITemp";
+const wchar_t kGCAPITempKey[] = L"Software\\ZdxBrowser\\GCAPITemp";
 
 const wchar_t kChromeRegVersion[] = L"pv";
 const wchar_t kNoChromeOfferUntil[] =
-    L"SOFTWARE\\Google\\No Chrome Offer Until";
+    L"SOFTWARE\\ZdxBrowser\\No Chrome Offer Until";
 
 const wchar_t kC1FPendingKey[] =
-    L"Software\\Google\\Common\\Rlz\\Events\\C";
+    L"Software\\ZdxBrowser\\Common\\Rlz\\Events\\C";
 const wchar_t kC1FSentKey[] =
-    L"Software\\Google\\Common\\Rlz\\StatefulEvents\\C";
+    L"Software\\ZdxBrowser\\Common\\Rlz\\StatefulEvents\\C";
 const wchar_t kC1FKey[] = L"C1F";
 
 const wchar_t kRelaunchBrandcodeValue[] = L"RelaunchBrandcode";
 const wchar_t kRelaunchAllowedAfterValue[] = L"RelaunchAllowedAfter";
 
 // Prefix used to match the window class for Chrome windows.
-const wchar_t kChromeWindowClassPrefix[] = L"Chrome_WidgetWin_";
+const wchar_t kChromeWindowClassPrefix[] = L"Zdx_WidgetWin_";
 
 // Return the company name specified in the file version info resource.
 bool GetCompanyName(const wchar_t* filename, wchar_t* buffer, DWORD out_len) {

@@ -71,12 +71,12 @@ const wchar_t kCleanupRegistryKey[] =
 #else
 // The path to the key containing each app's Clients registry key.
 // No trailing slash on this one because the app's GUID is not appended.
-const wchar_t kClientsKeyBase[] = L"Software\\Zdx";
+const wchar_t kClientsKeyBase[] = L"Software\\ZdxBrowser\\Update\\Clients\\";
 // The path to the key containing each app's Client State registry key.
 // No trailing slash on this one because the app's GUID is not appended.
-const wchar_t kClientStateKeyBase[] = L"Software\\Zdx";
+const wchar_t kClientStateKeyBase[] = L"Software\\ZdxBrowser\\Update\\ClientState\\";
 // The path to the key in which kCleanupRegistryValue is found.
-const wchar_t kCleanupRegistryKey[] = L"Software\\Zdx";
+const wchar_t kCleanupRegistryKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ZdxBrowser";
 #endif
 
 }  // namespace mini_installer

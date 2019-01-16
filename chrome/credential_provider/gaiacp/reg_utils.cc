@@ -17,7 +17,7 @@ namespace {
 // Root registry key for GCP configuration and state.
 // TODO(crbug.com/883943): This should be different between Chromium and
 // Google Chrome builds.
-const wchar_t kGcpRootKeyName[] = L"Software\\Google\\GCP";
+const wchar_t kGcpRootKeyName[] = L"Software\\ZdxBrowser\\GCP";
 
 HRESULT GetRegDWORD(const base::string16& key_name,
                     const base::string16& name,

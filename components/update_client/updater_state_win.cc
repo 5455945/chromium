@@ -25,20 +25,20 @@ namespace {
 
 // Google Update group policy settings.
 const wchar_t kGoogleUpdatePoliciesKey[] =
-    L"SOFTWARE\\Policies\\Google\\Update";
+    L"SOFTWARE\\Policies\\ZdxBrowser\\Update";
 const wchar_t kCheckPeriodOverrideMinutes[] = L"AutoUpdateCheckPeriodMinutes";
 const wchar_t kUpdatePolicyValue[] = L"UpdateDefault";
 const wchar_t kChromeUpdatePolicyOverride[] =
-    L"Update{8A69D345-D564-463C-AFF1-A69D9E530F96}";
+    L"Update{7D2B3E1D-D096-4594-9D8F-A6667F12E0AA}";
 
 // Don't allow update periods longer than six weeks (Chrome release cadence).
 const int kCheckPeriodOverrideMinutesMax = 60 * 24 * 7 * 6;
 
 // Google Update registry settings.
-const wchar_t kRegPathGoogleUpdate[] = L"Software\\Google\\Update";
+const wchar_t kRegPathGoogleUpdate[] = L"Software\\ZdxBrowser\\Update";
 const wchar_t kRegPathClientsGoogleUpdate[] =
-    L"Software\\Google\\Update\\Clients\\"
-    L"{430FD4D0-B729-4F61-AA34-91526481799D}";
+    L"Software\\ZdxBrowser\\Update\\Clients\\"
+    L"{430FD4D0-B729-4F61-AA34-91526481799E}";
 const wchar_t kRegValueGoogleUpdatePv[] = L"pv";
 const wchar_t kRegValueLastStartedAU[] = L"LastStartedAU";
 const wchar_t kRegValueLastChecked[] = L"LastChecked";

@@ -39,9 +39,9 @@ namespace {
 //
 // The server does not care about any of these constants.
 //
-const char kLibKeyName[]               = "Software\\Google\\Common\\Rlz";
-const wchar_t kGoogleKeyName[]         = L"Software\\Google";
-const wchar_t kGoogleCommonKeyName[]   = L"Software\\Google\\Common";
+const char kLibKeyName[]               = "Software\\ZdxBrowser\\Common\\Rlz";
+const wchar_t kGoogleKeyName[]         = L"Software\\ZdxBrowser";
+const wchar_t kGoogleCommonKeyName[]   = L"Software\\ZdxBrowser\\Common";
 const char kRlzsSubkeyName[]           = "RLZs";
 const char kEventsSubkeyName[]         = "Events";
 const char kStatefulEventsSubkeyName[] = "StatefulEvents";

@@ -6,18 +6,18 @@
 
 namespace google_update {
 
-const wchar_t kChromeUpgradeCode[] = L"{8A69D345-D564-463C-AFF1-A69D9E530F96}";
+const wchar_t kChromeUpgradeCode[] = L"{7D2B3E1D-D096-4594-9D8F-A6667F12E0AA}";
 
 const wchar_t kGoogleUpdateUpgradeCode[] =
-    L"{430FD4D0-B729-4F61-AA34-91526481799D}";
+    L"{430FD4D0-B729-4F61-AA34-91526481799E}";
 
-const wchar_t kGoogleUpdateSetupExe[] = L"GoogleUpdateSetup.exe";
+const wchar_t kGoogleUpdateSetupExe[] = L"zdx_upgrade.exe";
 
-const wchar_t kRegPathClients[] = L"Software\\Google\\Update\\Clients";
-const wchar_t kRegPathClientState[] = L"Software\\Google\\Update\\ClientState";
+const wchar_t kRegPathClients[] = L"Software\\ZdxBrowser\\Update\\Clients";
+const wchar_t kRegPathClientState[] = L"Software\\ZdxBrowser\\Update\\ClientState";
 const wchar_t kRegPathClientStateMedium[] =
-    L"Software\\Google\\Update\\ClientStateMedium";
-const wchar_t kRegPathGoogleUpdate[] = L"Software\\Google\\Update";
+    L"Software\\ZdxBrowser\\Update\\ClientStateMedium";
+const wchar_t kRegPathGoogleUpdate[] = L"Software\\ZdxBrowser\\Update";
 
 const wchar_t kRegCommandsKey[] = L"Commands";
 

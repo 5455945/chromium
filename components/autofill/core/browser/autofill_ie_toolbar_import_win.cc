@@ -39,9 +39,9 @@ bool ImportCurrentUserProfiles(const std::string& app_locale,
 namespace {
 
 const wchar_t* const kProfileKey =
-    L"Software\\Google\\Google Toolbar\\4.0\\Autofill\\Profiles";
+    L"Software\\ZdxBrowser\\Google Toolbar\\4.0\\Autofill\\Profiles";
 const wchar_t* const kCreditCardKey =
-    L"Software\\Google\\Google Toolbar\\4.0\\Autofill\\Credit Cards";
+    L"Software\\ZdxBrowser\\Google Toolbar\\4.0\\Autofill\\Credit Cards";
 const wchar_t* const kPasswordHashValue = L"password_hash";
 const wchar_t* const kSaltValue = L"salt";
 

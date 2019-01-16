@@ -133,9 +133,9 @@ const wchar_t kChromePoliciesWhitelistKeyPath[] =
     L"software\\policies\\google\\chrome\\ExtensionInstallWhitelist";
 
 const wchar_t kChromiumPoliciesForcelistKeyPath[] =
-    L"software\\policies\\chromium\\ExtensionInstallForcelist";
+    L"software\\policies\\ZdxBrowser\\ExtensionInstallForcelist";
 const wchar_t kChromiumPoliciesWhitelistKeyPath[] =
-    L"software\\policies\\chromium\\ExtensionInstallWhitelist";
+    L"software\\policies\\ZdxBrowser\\ExtensionInstallWhitelist";
 
 base::string16 RegistryValueTypeToString(DWORD value_type) {
   switch (value_type) {

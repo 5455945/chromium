@@ -13,7 +13,7 @@ namespace cloud_print {
 namespace {
 
 // Google Update related constants.
-const wchar_t kClientStateKey[] = L"SOFTWARE\\Google\\Update\\ClientState\\";
+const wchar_t kClientStateKey[] = L"SOFTWARE\\ZdxBrowser\\Update\\ClientState\\";
 const wchar_t* kUsageKey = L"dr";
 
 }  // namespace

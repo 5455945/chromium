@@ -71,16 +71,10 @@ class VersionUpdaterBasic : public VersionUpdater {
                     const std::string& version,
                     int64_t size,
                     const base::string16& message);
-  HANDLE MapGet();
-  void MapClose();
   bool read_write_status(struct zdx_upgrade_data& zud,
                          HANDLE hMap,
                          bool is_read = true);
    StatusCallback callback_;
-
-   struct zdx_upgrade_data zud_;
-
-   HANDLE hMap_;
 
   DISALLOW_COPY_AND_ASSIGN(VersionUpdaterBasic);
 };

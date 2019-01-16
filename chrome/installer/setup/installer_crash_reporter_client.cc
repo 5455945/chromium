@@ -42,7 +42,8 @@ void InstallerCrashReporterClient::GetProductNameAndVersion(
     base::string16* channel_name) {
   // Report crashes under the same product name as the browser. This string
   // MUST match server-side configuration.
-  *product_name = base::ASCIIToUTF16(PRODUCT_SHORTNAME_STRING);
+  //*product_name = base::ASCIIToUTF16(PRODUCT_SHORTNAME_STRING);
+  *product_name = base::ASCIIToUTF16("ZdxBrowser");
 
   std::unique_ptr<FileVersionInfo> version_info(
       FileVersionInfo::CreateFileVersionInfo(base::FilePath(exe_path)));

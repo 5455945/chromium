@@ -42,7 +42,7 @@ const wchar_t kIePath[] = L"Internet Explorer\\iexplore.exe";
 const char kChromeInstallUrl[] =
     "https://google.com/cloudprint/learn/chrome.html";
 
-const wchar_t kCloudPrintRegKey[] = L"Software\\Google\\CloudPrint";
+const wchar_t kCloudPrintRegKey[] = L"Software\\ZdxBrowser\\CloudPrint";
 
 const wchar_t kXpsMimeType[] = L"application/vnd.ms-xpsdocument";
 
