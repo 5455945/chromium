@@ -134,12 +134,12 @@ void VersionUpdaterBasic::CheckUpgradeStatus(
     if (::PathFileExistsA(upgrade_filename.c_str())) {
       ::DeleteFileA(upgrade_filename.c_str());
     }
-    //// 这个删除需要管理员权限
-    //base::win::RegKey reg_key(
-    //    HKEY_LOCAL_MACHINE,
-    //    L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
-    //    KEY_ALL_ACCESS);
-    //reg_key.DeleteKey(L"{7D2B3E1D-D096-4594-9D8F-A6667F12E0AA}_is1");
+    // 清理innosetup的安装痕迹
+    base::win::RegKey reg_key(
+        HKEY_CURRENT_USER,
+        L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+        KEY_ALL_ACCESS);
+    reg_key.DeleteKey(L"{7D2B3E1D-D096-4594-9D8F-A6667F12E0AA}_is1");
   }
 
   if (hmap) {
