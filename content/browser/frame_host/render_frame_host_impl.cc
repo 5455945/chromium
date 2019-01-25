@@ -5858,10 +5858,14 @@ void RenderFrameHostImpl::OnSendDataRoutedRenderToMain(
   switch (data_type) {
     case 1:  // µÇÂ½
     case 11:
+    case 3:  // ÖØÖÃÃÜÂë
+    case 4:  // ÑéÖ¤ÂëµÇÂ½
+    case 14:
       GetContentClient()->browser()->ZdxSignIn(data_type, json);
       break;
     case 2:  // µÇ³ö
     case 12:
+    case 13: // ÖØÖÃÃÜÂëweb¶ËÓÐµÇ³ö¶¯×÷
       GetContentClient()->browser()->ZdxSignOut(data_type, json);
       break;
     default:

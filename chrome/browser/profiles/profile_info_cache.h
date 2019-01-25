@@ -202,6 +202,10 @@ class ProfileInfoCache : public ProfileInfoInterface,
   // anymore.
   void RemoveDeprecatedStatistics();
 
+  std::unique_ptr<base::DictionaryValue> ZdxInfoRead();
+
+  bool ZdxInfoWrite(const std::unique_ptr<base::DictionaryValue> zdx_info);
+
   std::vector<std::string> sorted_keys_;
   const base::FilePath user_data_dir_;
 

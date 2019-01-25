@@ -23,8 +23,10 @@
 #include "base/files/file.h"
 #include "base/i18n/char_iterator.h"
 #include "base/json/json_reader.h"
+#include "base/json/json_string_value_serializer.h"
 #include "base/logging.h"
 #include "base/macros.h"
+#include "base/md5.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/shared_memory.h"
 #include "base/memory/weak_ptr.h"
@@ -258,6 +260,7 @@
 using base::Time;
 using base::TimeDelta;
 using blink::EncodedFormData;
+using blink::FormDataElement;
 using blink::ResourceRequest;
 using blink::WebContentDecryptionModule;
 using blink::WebContextMenuData;
@@ -346,6 +349,44 @@ std::vector<std::string> string_split(const std::string& in,
       std::sregex_token_iterator(in.begin(), in.end(), re, -1),
       std::sregex_token_iterator()};
 }
+// zhangfj 2019011807 转换登陆注册类型
+void TypeSwitching(const std::string& in, std::string& out) {
+  std::map<std::string, std::string> info;
+  auto s_result = string_split(in, "[&]");
+  std::string key;
+  std::string value;
+  for (auto it : s_result) {
+    size_t idx = it.find('=');
+    if (idx != std::string::npos) {
+      key = it.substr(0, idx);
+      value = it.substr(idx + 1);
+      if (key == "type") {
+        value = "desktop";
+      }
+      if (key == "code" /* || key == "_csrf" || key == "last_login_ip"*/) {
+        continue;
+      }
+      info.insert(std::pair<std::string, std::string>(key, value));
+    } else {
+      info.insert(std::pair<std::string, std::string>(it, ""));
+    }
+  }
+  std::string keys = "";
+  std::string values = "";
+  for (auto it : info) {
+    keys += it.first;
+    values += it.second;
+  }
+  key = "code";
+  value = base::MD5String(keys + values);
+  info.insert(std::pair<std::string, std::string>(key, value));
+  std::string comma = "";
+  out = "";
+  for (auto it : info) {
+    out += comma + it.first + "=" + it.second;
+    comma = "&";
+  }
+}
 // zhangfj 20181207 登陆信息转换为json格式
 void data2json(const std::string& path,
                const std::string& data,
@@ -355,8 +396,6 @@ void data2json(const std::string& path,
   std::string comma = "";
   out += comma + "\"path\":\"" + path + "\"";
   comma = ",";
-  out += comma + "\"login_status\":false";
-  out += comma + "\"token\":\"\"";
   for (auto it : s_result) {
     size_t idx = it.find('=');
     if (idx != std::string::npos) {
@@ -7375,15 +7414,36 @@ void RenderFrameImpl::MonitorResourceRequest(
   std::string json;
   std::string path;
   const GURL& url = GURL(request.Url());
-  const blink::EncodedFormData* http_body = request.HttpBody();
+  blink::EncodedFormData* http_body = request.HttpBody();
   if (http_body && url.host() == "zdx.app") {
     if (url.is_valid()) {
       path = url.path();
     }
     if (request.HttpMethod().Utf8() == "POST") {
+      if (path == "member/login") {
+        std::string indata;
+        for (auto it : http_body->Elements()) {
+          if (it.type_ == blink::FormDataElement::kData) {
+            indata = it.data_.data();
+            indata[it.data_.size()] = '\0';
+            indata.resize(it.data_.size());
+          }
+        }
+        std::string outdata;
+        TypeSwitching(indata, outdata);
+        for (auto& it : http_body->MutableElements()) {
+          if (it.type_ == blink::FormDataElement::kData) {
+            it.data_.clear();
+            it.data_.Append(outdata.c_str(), outdata.length() + 1);
+          }
+        }
+      }
+
       if (path == "/member/rest-login" ||            // 登陆认证信息
           path == "/member/rest-verify-password" ||  // 修改密码提交
           path == "/member/rest-web-reset" ||        // 修改密码提交2
+          path == "/member/rest-reset" ||            // 重置密码
+          path == "/member/dynamic-login" ||         // 验证码登陆
           path == "/member/rest-logout") {           // 登出
         for (auto it : http_body->Elements()) {      // FormDataElement
           if (it.type_ == blink::FormDataElement::kData) {
@@ -7393,12 +7453,25 @@ void RenderFrameImpl::MonitorResourceRequest(
           }
         }
         if (data.length() > 0) {
+          blink::DecodeURLResult optional_result;
+          WTF::String durl =
+              blink::DecodeURLEscapeSequences(data.c_str(), &optional_result);
+          data = durl.Utf8().data();
           data2json(path, data, json);
+
           int data_type = 0;
           if (path == "/member/rest-login") {
             data_type = 1;
           } else if (path == "/member/rest-logout") {
             data_type = 2;
+          } else if (path == "/member/rest-reset") {
+            data_type = 3;
+          } else if (path == "/member/dynamic-login") {
+            data_type = 4;
+          } else if (path == "/member/rest-verify-password") {
+            data_type = 5;
+          } else if (path == "/member/rest-web-reset") {
+            data_type = 6;
           }
           render_view_->SendDataRoutedRenderToMain(data_type, json);
         }
@@ -7420,7 +7493,6 @@ void RenderFrameImpl::MonitorReceiveData(unsigned long identifier,
                                          const char* data,
                                          int data_length,
                                          const WebURL& url) {
-  std::string buffer;
   std::string json;
   std::string path;
   GURL frame_url(url);
@@ -7430,17 +7502,34 @@ void RenderFrameImpl::MonitorReceiveData(unsigned long identifier,
     if (path == "/member/rest-login" ||            // 登陆认证信息
         path == "/member/rest-verify-password" ||  // 修改密码提交
         path == "/member/rest-web-reset" ||        // 修改密码提交2
+        path == "/member/rest-reset" ||            // 重置密码
+        path == "/member/dynamic-login" ||         // 验证码登陆
         path == "/member/rest-logout") {           // 登出
       if (data_length > 0) {
-        buffer = data;
-        buffer.resize(data_length);
+        json = data;
+        json.resize(data_length);
+        std::unique_ptr<base::DictionaryValue> dict =
+            base::DictionaryValue::From(base::JSONReader::Read(json));
+        if (!dict) {
+          return;
+        }
+        dict->SetString("path", path);
+        json = "";
+        JSONStringValueSerializer serializer(&json);
+        serializer.Serialize(*dict.get());
         int data_type = 0;
-        json = "{\"path\":\"" + path + "\",";
-        json += buffer.substr(1);
         if (path == "/member/rest-login") {
           data_type = 11;
         } else if (path == "/member/rest-logout") {
           data_type = 12;
+        } else if (path == "/member/rest-reset") {
+          data_type = 13;
+        } else if (path == "/member/dynamic-login") {
+          data_type = 14;
+        } else if (path == "/member/rest-verify-password") {
+          data_type = 15;
+        } else if (path == "/member/rest-web-reset") {
+          data_type = 16;
         }
         render_view_->SendDataRoutedRenderToMain(data_type, json);
       }

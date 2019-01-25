@@ -4921,15 +4921,22 @@ bool ChromeContentBrowserClient::ZdxSignIn(int data_type,
   DCHECK(!zdx_dir.empty());
   zdx_dir = zdx_dir.AppendASCII(chrome::kInitialProfile);
   DCHECK(!zdx_dir.empty());
-  if (data_type == 1) {
-    profile_manager->GetProfileAttributesStorage().AddProfileZdxLogin(
-      zdx_dir, L"zdx_sign_info", json);
+  switch (data_type) {
+    case 1:
+    case 4:
+    case 6:
+      profile_manager->GetProfileAttributesStorage().AddProfileZdxLogin(
+          zdx_dir, L"zdx_sign_info", json);
+      break;
+    case 11:
+    case 14:
+    case 16:
+      profile_manager->GetProfileAttributesStorage().AddProfileZdxLoginData(
+          zdx_dir, L"zdx_sign_info", json);
+      break;
+    default:
+      break;
   }
-  else if (data_type == 11) {
-    profile_manager->GetProfileAttributesStorage().AddProfileZdxLoginData(
-      zdx_dir, L"zdx_sign_info", json);
-  }
-
   return true;
 }
 // zhangfj 20181211 µÇ³ö
@@ -4941,14 +4948,19 @@ bool ChromeContentBrowserClient::ZdxSignOut(int data_type,
   DCHECK(!zdx_dir.empty());
   zdx_dir = zdx_dir.AppendASCII(chrome::kInitialProfile);
   DCHECK(!zdx_dir.empty());
-  if (data_type == 2) {
-    profile_manager->GetProfileAttributesStorage().AddProfileZdxLogout(
-      zdx_dir, L"zdx_sign_info", json);
+  switch (data_type) {
+    case 2:
+    case 3:
+      profile_manager->GetProfileAttributesStorage().AddProfileZdxLogout(
+          zdx_dir, L"zdx_sign_info", json);
+      break;
+    case 12:
+    case 13:
+      profile_manager->GetProfileAttributesStorage().AddProfileZdxLogoutData(
+          zdx_dir, L"zdx_sign_info", json);
+      break;
+    default:
+      break;
   }
-  else if (data_type == 12) {
-    profile_manager->GetProfileAttributesStorage().AddProfileZdxLogoutData(
-      zdx_dir, L"zdx_sign_info", json);
-  }
-
   return true;
 }

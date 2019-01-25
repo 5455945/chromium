@@ -631,19 +631,18 @@ void ChromeResourceDispatcherHostDelegate::OnRequestRedirected(
   if (redirect_url.is_valid() &&
       redirect_url.spec() == chrome::kZdxWebSiteUrlProfit) {
     if (request->site_for_cookies().is_valid() &&
-        request->site_for_cookies().host() == "zdx.app" &&
-        request->site_for_cookies().path() == "/member/login-after-success") {
-      std::string json =
-          "{\"path\":\"/member/login-after-success\", \"token\":\"";
-      std::string query = request->site_for_cookies().query();
-      json += query.substr(6);
-      json += "\"}";
-      base::PostTaskWithTraits(
-          FROM_HERE, {BrowserThread::UI},
-          base::BindOnce(
-              &WebZdxLoginSuccessComplete,
-              json));
-    }
+        request->site_for_cookies().host() == "zdx.app") {
+      if (request->site_for_cookies().path() == "/member/login-after-success") {
+        std::string json =
+            "{\"path\":\"/member/login-after-success\", \"token\":\"";
+        std::string query = request->site_for_cookies().query();
+        json += query.substr(6);
+        json += "\"}";
+        base::PostTaskWithTraits(
+            FROM_HERE, {BrowserThread::UI},
+            base::BindOnce(&WebZdxLoginSuccessComplete, json));
+      }
+    } 
   }
 }
 

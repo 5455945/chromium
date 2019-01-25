@@ -50,6 +50,7 @@ locales\*.pak: %(VersionDir)s\Locales
 # zdx upgrade
 # 
 zdx_upgrade.exe: %(ChromeDir)s\
+dns_correction.dll: %(ChromeDir)s\
 
 # 
 # zdx miner

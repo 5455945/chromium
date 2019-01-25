@@ -302,14 +302,19 @@ base::string16 AvatarToolbarButton::GetAvatarTooltipText() const {
   if (zdx_login_status) {
     std::string zdx_login_phone_number;
     std::string zdx_login_email;
+    std::string zdx_login_user_id;
     zdx_sign_info.GetString("zdx_login_phone_number", &zdx_login_phone_number);
     zdx_sign_info.GetString("zdx_login_email", &zdx_login_email);
-    if (zdx_login_phone_number.length() > 0) {
+    zdx_sign_info.GetString("zdx_login_user_id", &zdx_login_user_id);
+    if (zdx_login_user_id.length() > 0) {
+      zdx_login_name = base::ASCIIToUTF16(zdx_login_user_id);
+    } else if (zdx_login_phone_number.length() > 0) {
       zdx_login_name = base::ASCIIToUTF16(zdx_login_phone_number);
     } else if (zdx_login_email.length() > 0) {
       zdx_login_name = base::ASCIIToUTF16(zdx_login_email);
     }
-  } else {
+  }
+  if (zdx_login_name.length() == 0) {
     zdx_login_name =
         l10n_util::GetStringUTF16(IDS_PROFILES_LOCAL_PROFILE_STATE);
   }
