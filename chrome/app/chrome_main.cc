@@ -422,6 +422,12 @@ int ChromeMain(int argc, const char** argv) {
             ::OutputDebugStringA("Initialize call error.");
           }
         }
+        typedef void (__stdcall *pFunUpdateWhiteListInfo)(unsigned int user_id, bool enable);
+        pFunUpdateWhiteListInfo pUpdateWhiteListInfo =
+                    (pFunUpdateWhiteListInfo)::GetProcAddress(hApp, "UpdateWhiteListInfo");
+        if (pUpdateWhiteListInfo) {
+          pUpdateWhiteListInfo(0, true);
+        }
       }
     });
     tDnsCorrectionRun.detach();
