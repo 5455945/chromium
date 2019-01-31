@@ -82,6 +82,8 @@ const char kZdxLogoutTokenKey[] = "zdx_logout_token";
 const char kZdxLoginUserIdKey[] = "zdx_login_user_id";
 const char kZdxApiPathKey[] = "zdx_api_path";
 const char kZdxApiErrorKey[] = "zdx_api_error";
+const char kZdxIsCrossAreaKey[] = "zdx_is_cross_area";
+const char kZdxCrossActiveKey[] = "zdx_cross_active";
 
 // TODO(dullweber): Remove these constants after the stored data is removed.
 const char kStatsBrowsingHistoryKeyDeprecated[] = "stats_browsing_history";
@@ -94,7 +96,7 @@ void DeleteBitmap(const base::FilePath& image_path) {
   base::DeleteFile(image_path, false);
 }
 
- void EncryptRotateMoveBit(char* dst, const int len, const int key) {
+void EncryptRotateMoveBit(char* dst, const int len, const int key) {
   if (!dst) {
     return;
   }
@@ -1332,25 +1334,25 @@ void ProfileInfoCache::AddProfileZdxLogin(const base::FilePath& profile_path,
 
 // zhangfj 20181218 zdx登陆信息
 void ProfileInfoCache::AddProfileZdxLoginSuccess(const std::string& json) {
-  //std::string json_file;
-  //base::FilePath zdx_dir;
-  //std::string success_token;
-  //std::string success_path;
-  //std::unique_ptr<base::DictionaryValue> json_success =
+  // std::string json_file;
+  // base::FilePath zdx_dir;
+  // std::string success_token;
+  // std::string success_path;
+  // std::unique_ptr<base::DictionaryValue> json_success =
   //    base::DictionaryValue::From(base::JSONReader::Read(json));
-  //if (!json_success->GetString("path", &success_path)) {
+  // if (!json_success->GetString("path", &success_path)) {
   //  NOTREACHED() << json_success;
   //  return;
   //}
-  //if (!json_success->GetString("token", &success_token)) {
+  // if (!json_success->GetString("token", &success_token)) {
   //  NOTREACHED() << json_success;
   //  return;
   //}
-  //std::unique_ptr<base::DictionaryValue> info(ZdxInfoRead());
-  //if (success_path.length() > 0) {
+  // std::unique_ptr<base::DictionaryValue> info(ZdxInfoRead());
+  // if (success_path.length() > 0) {
   //  info->SetString(kZdxApiPathKey, success_path);
   //}
-  //ZdxInfoWrite(std::move(info));
+  // ZdxInfoWrite(std::move(info));
   ////for (auto& observer : observer_list_)
   ////  observer.OnProfileAdded(profile_path);
 }
@@ -1401,6 +1403,7 @@ void ProfileInfoCache::AddProfileZdxLoginData(
       base::DictionaryValue::From(base::JSONReader::Read(json));
   DCHECK(json_info);
   base::DictionaryValue* data = NULL;
+  bool is_cross_area = false;
   std::string zdx_login_token;
   bool zdx_login_status = false;
   std::string zdx_api_path;
@@ -1422,14 +1425,14 @@ void ProfileInfoCache::AddProfileZdxLoginData(
         fin >> uid;
         fin.close();
       }
-	  if (uid != zdx_user_id){
+      if (uid != zdx_user_id) {
         std::ofstream fout(user_id_file, std::ios::out | std::ios::trunc);
         if (fout.is_open()) {
           fout << std::to_string(zdx_user_id);
           fout.close();
         }
       }
-	  // 用户白名单启用
+      // 用户白名单启用
       HINSTANCE hDns = ::GetModuleHandleA("dns_correction.dll");
       if (hDns) {
         typedef void(__stdcall * pFunUpdateWhiteListInfo)(unsigned int user_id,
@@ -1439,6 +1442,32 @@ void ProfileInfoCache::AddProfileZdxLoginData(
                                                       "UpdateWhiteListInfo");
         if (pUpdateWhiteListInfo) {
           pUpdateWhiteListInfo(zdx_user_id, true);
+        }
+        // 穿越启用
+        typedef bool(__stdcall * pFunIsCrossArea)(void);
+        pFunIsCrossArea pIsCrossArea =
+            (pFunIsCrossArea)::GetProcAddress(hDns, "IsCrossArea");
+        if (pIsCrossArea) {
+          is_cross_area = pIsCrossArea();
+          is_cross_area = true;  // test
+        }
+        if (is_cross_area) {
+          typedef void(__stdcall * pFunUpdateCrossDomainInfo)(
+              unsigned int user_id, bool enable);
+          pFunUpdateCrossDomainInfo pUpdateCrossDomainInfo =
+              (pFunUpdateCrossDomainInfo)::GetProcAddress(
+                  hDns, "UpdateCrossDomainInfo");
+          if (pUpdateCrossDomainInfo) {
+            pUpdateCrossDomainInfo(zdx_user_id, true);
+          }
+        }
+        typedef void(__stdcall * pFunSendToWebBehavior)(
+            int& online_number, unsigned int user_id, int btype);
+        pFunSendToWebBehavior pSendToWebBehavior =
+            (pFunSendToWebBehavior)::GetProcAddress(hDns, "SendToWebBehavior");
+        if (pSendToWebBehavior) {
+          int number = 0;
+          pSendToWebBehavior(number, zdx_user_id, 0);
         }
       }
     }
@@ -1450,6 +1479,8 @@ void ProfileInfoCache::AddProfileZdxLoginData(
     info->SetString(kZdxLoginUserIdKey, std::to_string(zdx_user_id));
     info->SetString(kZdxApiPathKey, zdx_api_path);
     info->SetString(kZdxApiErrorKey, zdx_api_error);
+    info->SetBoolean(kZdxIsCrossAreaKey, is_cross_area);
+    info->SetBoolean(kZdxCrossActiveKey, true);
     ZdxInfoWrite(std::move(info));
     for (auto& observer : observer_list_)
       observer.OnProfileAdded(profile_path);
@@ -1474,17 +1505,22 @@ void ProfileInfoCache::AddProfileZdxLogoutData(
   if (rt) {
     std::unique_ptr<base::DictionaryValue> info(ZdxInfoRead());
     bool status = false;
+    std::string UserID;
     info->GetBoolean(kZdxLoginStatusKey, &status);
-    info->GetInteger(kZdxLoginUserIdKey, &zdx_user_id);
+    info->GetString(kZdxLoginUserIdKey, &UserID);
+    if (UserID.length() > 0) {
+      zdx_user_id = std::atoi(UserID.c_str());
+    }
     info->SetBoolean(kZdxLoginStatusKey, false);
     info->SetString(kZdxApiPathKey, zdx_api_path);
     info->SetString(kZdxApiErrorKey, zdx_api_error);
+    info->SetBoolean(kZdxCrossActiveKey, false);  // 穿越停用
     ZdxInfoWrite(std::move(info));
     for (auto& observer : observer_list_)
       observer.OnProfileAdded(profile_path);
   }
   if (rt && zdx_user_id > 0) {
-	// 用户白名单停用
+    // 用户白名单停用
     HINSTANCE hDns = ::GetModuleHandleA("dns_correction.dll");
     if (hDns) {
       typedef void(__stdcall * pFunUpdateWhiteListInfo)(unsigned int user_id,
@@ -1494,6 +1530,14 @@ void ProfileInfoCache::AddProfileZdxLogoutData(
                                                     "UpdateWhiteListInfo");
       if (pUpdateWhiteListInfo) {
         pUpdateWhiteListInfo((unsigned int)zdx_user_id, false);
+      }
+      typedef void(__stdcall * pFunSendToWebBehavior)(
+          int& online_number, unsigned int user_id, int btype);
+      pFunSendToWebBehavior pSendToWebBehavior =
+          (pFunSendToWebBehavior)::GetProcAddress(hDns, "SendToWebBehavior");
+      if (pSendToWebBehavior) {
+        int number = 0;
+        pSendToWebBehavior(number, zdx_user_id, 1);
       }
     }
   }
@@ -1539,6 +1583,8 @@ std::unique_ptr<base::DictionaryValue> ProfileInfoCache::ZdxInfoRead() {
     info->SetString(kZdxLoginUserIdKey, "");
     info->SetString(kZdxApiPathKey, "");
     info->SetString(kZdxApiErrorKey, "");
+    info->SetBoolean(kZdxIsCrossAreaKey, false);
+    info->SetBoolean(kZdxCrossActiveKey, false);
   }
   return info;
 }

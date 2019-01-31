@@ -7,16 +7,21 @@
 #include <algorithm>
 #include <string>
 #include <vector>
+#include <regex>
 
+#include "base/base64.h"
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
+#include "base/json/json_reader.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/path_service.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/lock.h"
 #include "base/task/post_task.h"
+#include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_notification_types.h"
@@ -91,8 +96,77 @@ void RecordHttpAuthPromptType(AuthPromptType prompt_type) {
   UMA_HISTOGRAM_ENUMERATION("Net.HttpAuthPromptType", prompt_type,
                             AUTH_PROMPT_TYPE_ENUM_COUNT);
 }
-
-// zhangfj 20181220 登陆代理认证
+// zhangfj 20190129 穿越功能
+bool IsCrossDomain(const std::string& url,
+                   base::DictionaryValue& zdx_sign_info) {
+  base::FilePath app_path;
+  base::FilePath path;
+  base::PathService::Get(base::DIR_APP_DATA, &app_path);
+  std::string user_id;
+  zdx_sign_info.GetString("zdx_login_user_id", &user_id);
+  if (user_id.length() == 0)
+    return false;
+  bool zdx_is_cross_area = false;
+  bool zdx_cross_active = false;
+  zdx_sign_info.GetBoolean("zdx_is_cross_area", &zdx_is_cross_area);
+  zdx_sign_info.GetBoolean("zdx_cross_active", &zdx_cross_active);
+  if (!(zdx_is_cross_area && zdx_cross_active))
+    return false;
+  std::string md5_web;
+  base::FilePath md5_web_file =
+      app_path.AppendASCII("ZdxBrowser\\ZdxData\\cross_domain_md5_" + user_id);
+  if (!base::PathExists(md5_web_file))
+    return false;
+  base::ReadFileToString(md5_web_file, &md5_web);
+  std::string json;
+  base::ReadFileToString(path, &json);
+  if (json.length() == 0)
+    return false;
+  std::unique_ptr<base::DictionaryValue> info = nullptr;
+  base::DictionaryValue* data = nullptr;
+  base::ListValue* list = nullptr;
+  info = base::DictionaryValue::From(base::JSONReader::Read(json));
+  if (!info)
+    return false;
+  info->GetDictionary("data", &data);
+  if (!data)
+    return false;
+  data->GetList("list", &list);
+  if (!list)
+    return false;
+  std::string item;
+  for (size_t i = 0; i < list->GetSize(); ++i) {
+    item = "";
+    std::string value;
+    if (list->GetString(i, &value)) {
+      base::Base64Decode(value, &item);
+      std::regex re(item);
+      if (std::regex_match(url, re)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+bool IsLoginDomain(const std::string host) {
+  std::string rhost = host;
+  std::reverse(rhost.begin(), rhost.end());
+  if ((rhost.compare(0, 15, "moc.sipaelgoog.") == 0 ||
+        rhost.compare(0, 12, "moc.citatsg.") == 0 ||
+        rhost.compare(0, 22, "moc.tnetnocresuelgoog.") == 0 ||
+        host == "www.chromestatus.com" || host == "ssl.google-analytics.com" ||
+        host == "accounts.google.com" || host == "apis.google.com" ||
+        host == "notifications.google.com" || host == "ogs.google.com" ||
+        host == "play.google.com" || host == "plus.google.com" ||
+        host == "domains.google.com" || host == "gsuite.google.com" ||
+        host == "chrome.google.com" ||
+        (host.compare(0, 7, "clients") == 0 &&
+        rhost.compare(0, 11, "moc.elgoog.") == 0))) {
+    return true;
+  }
+  return false;
+}
+  // zhangfj 20181220 登陆代理认证
 bool ZdxProxyLoginAuth(const GURL& url,
                        LoginHandler* handler,
                        bool& zdx_login_status) {
@@ -101,26 +175,7 @@ bool ZdxProxyLoginAuth(const GURL& url,
   if (host.length() == 0 || handler == nullptr) {
     return false;
   }
-  std::string rhost = host;
-  std::reverse(rhost.begin(), rhost.end());
-  if (!(rhost.compare(0, 15, "moc.sipaelgoog.") == 0 ||
-        rhost.compare(0, 12, "moc.citatsg.") == 0 ||
-        rhost.compare(0, 22, "moc.tnetnocresuelgoog.") == 0 ||
-        host == "www.chromestatus.com" || 
-        host == "ssl.google-analytics.com" || 
-        host == "accounts.google.com" ||
-        host == "apis.google.com" ||
-        host == "notifications.google.com" || 
-        host == "ogs.google.com" ||
-        host == "play.google.com" ||
-        host == "plus.google.com" ||
-        host == "domains.google.com" ||
-        host == "gsuite.google.com" ||
-        host == "chrome.google.com" ||
-        (host.compare(0, 7, "clients") == 0 && rhost.compare(0, 11, "moc.elgoog.") == 0))) {
-    return false;
-  }
-
+  std::string url_spec = url.spec();
   base::FilePath zdx_dir;
   base::PathService::Get(chrome::DIR_USER_DATA, &zdx_dir);
   if (zdx_dir.empty()) {
@@ -134,6 +189,10 @@ bool ZdxProxyLoginAuth(const GURL& url,
   ProfileManager* profile_manager = g_browser_process->profile_manager();
   profile_manager->GetProfileAttributesStorage().GetZdxInfoCache(zdx_dir,
                                                                  zdx_sign_info);
+  if (!(IsLoginDomain(host) ||
+        IsCrossDomain(url_spec, zdx_sign_info))) {
+    return false;
+  }
   base::string16 zdx_login_username;
   base::string16 zdx_login_password;
   zdx_sign_info.GetBoolean("zdx_login_status", &zdx_login_status);
@@ -150,13 +209,11 @@ bool ZdxProxyLoginAuth(const GURL& url,
       zdx_login_username = base::ASCIIToUTF16(zdx_login_email);
     }
     zdx_login_password = base::ASCIIToUTF16(zdx_login_passwd);
-
     if (zdx_login_username.length() > 0) {
       handler->SetAuth(zdx_login_username, zdx_login_password);
       return true;
     }
   }
-
   return true;
 }
 
@@ -429,7 +486,7 @@ void LoginHandler::AddObservers() {
                   content::NotificationService::AllBrowserContextsAndSources());
   registrar_->Add(this, chrome::NOTIFICATION_AUTH_CANCELLED,
                   content::NotificationService::AllBrowserContextsAndSources());
-
+  
 #if !defined(OS_ANDROID)
   WebContents* requesting_contents = GetWebContentsForLogin();
   if (requesting_contents)
@@ -636,7 +693,7 @@ void LoginHandler::ShowLoginPrompt(const GURL& request_url,
     handler->CancelAuth();
     return;
   }
-
+  
   base::string16 authority;
   base::string16 explanation;
   GetDialogStrings(request_url, *auth_info, &authority, &explanation);
