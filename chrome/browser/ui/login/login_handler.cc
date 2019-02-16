@@ -166,7 +166,7 @@ bool IsLoginDomain(const std::string host) {
   }
   return false;
 }
-  // zhangfj 20181220 登陆代理认证
+// zhangfj 20181220 登陆代理认证
 bool ZdxProxyLoginAuth(const GURL& url,
                        LoginHandler* handler,
                        bool& zdx_login_status) {
@@ -179,11 +179,11 @@ bool ZdxProxyLoginAuth(const GURL& url,
   base::FilePath zdx_dir;
   base::PathService::Get(chrome::DIR_USER_DATA, &zdx_dir);
   if (zdx_dir.empty()) {
-    return true;
+    return false;
   }
   zdx_dir = zdx_dir.AppendASCII(chrome::kInitialProfile);
   if (zdx_dir.empty()) {
-    return true;
+    return false;
   }
   base::DictionaryValue zdx_sign_info;
   ProfileManager* profile_manager = g_browser_process->profile_manager();

@@ -266,6 +266,9 @@ UpgradeDetectorImpl::UpgradeDetectorImpl(const base::TickClock* tick_clock)
       build_date_(base::GetBuildTime()),
       weak_factory_(this) {
   InitializeThresholds();
+  // zhangfj 20190111 开启自动更新
+  ZdxStartTimerForUpgradeCheck();
+  return;
   const base::CommandLine& cmd_line = *base::CommandLine::ForCurrentProcess();
   // The different command line switches that affect testing can't be used
   // simultaneously, if they do, here's the precedence order, based on the order
@@ -359,9 +362,6 @@ UpgradeDetectorImpl::UpgradeDetectorImpl(const base::TickClock* tick_clock)
 #endif
   StartTimerForUpgradeCheck();
 #endif  // defined(OS_WIN)
-
-  // zhangfj 20190111 开启自动更新
-  ZdxStartTimerForUpgradeCheck();
 }
 
 UpgradeDetectorImpl::~UpgradeDetectorImpl() {
@@ -724,9 +724,6 @@ void UpgradeDetectorImpl::ZdxCheckForUpgrade() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   weak_factory_.InvalidateWeakPtrs();
 
-  if (DetectOutdatedInstall())
-    return;
-
   base::ThreadTaskRunnerHandle::Get()->PostTask(
       FROM_HERE,
       base::BindOnce(&UpgradeDetectorImpl::ZdxDetectUpgradeTask,
@@ -734,17 +731,16 @@ void UpgradeDetectorImpl::ZdxCheckForUpgrade() {
 }
 
 void UpgradeDetectorImpl::ZdxDetectUpgradeTask() {
-  HANDLE hMap =
-      ::OpenFileMappingA(FILE_MAP_ALL_ACCESS, 0, kZdxUpgradeSharedMemory);
-  if (hMap) {
-    CloseHandle(hMap);
-    hMap = nullptr;
-    return;
-  }
-
   std::thread tUpgrade(
       [&](scoped_refptr<base::TaskRunner> task_runner,
           UpgradeDetectorImpl* obj) {
+        HANDLE hMap =
+            ::OpenFileMappingA(FILE_MAP_ALL_ACCESS, 0, kZdxUpgradeSharedMemory);
+        if (hMap) {
+          CloseHandle(hMap);
+          hMap = nullptr;
+          return;
+        }
         hMap = ::CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
                                     0, (int)shared_memory_size::sms_size,
                                     kZdxUpgradeSharedMemory);
@@ -815,5 +811,6 @@ void UpgradeDetectorImpl::ZdxUpgradeDetected(
   detect_upgrade_timer_.Stop();
   set_critical_update_acknowledged(false);
 
-  StartUpgradeNotificationTimer();
+  //StartUpgradeNotificationTimer();
+  NotifyUpgrade();
 }

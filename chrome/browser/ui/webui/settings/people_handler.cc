@@ -114,13 +114,7 @@ bool ZdxSyncCheck(Browser* browser) {
   zdx_sign_info.GetBoolean("zdx_login_status", &zdx_login_status);
 
   if (!zdx_login_status) {
-    //DCHECK_CURRENTLY_ON(BrowserThread::UI);
-    std::string url;
-    if (zdx_login_status) {
-      url = chrome::kZdxWebSiteUrlProfit;
-    } else {
-      url = chrome::kZdxWebSiteUrlLogin;
-    }
+    std::string url = chrome::kZdxWebSiteUrlLogin;
     content::OpenURLParams params(
         GURL(url), content::Referrer(), WindowOpenDisposition::SINGLETON_TAB,
         ui::PageTransitionFromInt(ui::PAGE_TRANSITION_AUTO_BOOKMARK |

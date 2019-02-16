@@ -497,7 +497,8 @@ void ContentVerifier::VerifyFailed(const ExtensionId& extension_id,
     return;
   }
 
-  delegate_->VerifyFailed(extension_id, reason);
+  //// zhangfj 20190214 停用本地加载hash等的检查
+  //delegate_->VerifyFailed(extension_id, reason);
 }
 
 void ContentVerifier::OnExtensionLoaded(

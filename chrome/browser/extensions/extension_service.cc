@@ -14,9 +14,11 @@
 #include "base/command_line.h"
 #include "base/debug/alias.h"
 #include "base/debug/dump_without_crashing.h"
+#include "base/files/file_util.h"
 #include "base/location.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/path_service.h"
 #include "base/single_thread_task_runner.h"
 #include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
@@ -85,6 +87,7 @@
 #include "extensions/browser/external_install_info.h"
 #include "extensions/browser/install_flag.h"
 #include "extensions/browser/management_policy.h"
+#include "extensions/browser/path_util.h"
 #include "extensions/browser/runtime_data.h"
 #include "extensions/browser/uninstall_reason.h"
 #include "extensions/browser/update_observer.h"
@@ -115,6 +118,7 @@
 #include "storage/browser/fileapi/file_system_backend.h"
 #include "storage/browser/fileapi/file_system_context.h"
 #endif
+#include "windows.h"
 
 using content::BrowserContext;
 using content::BrowserThread;
@@ -134,7 +138,79 @@ const char* const kMigratedExtensionIds[] = {
     "boadgeojelhgndaghljhdicfkmllpafd",  // Google Cast
     "dliochdbjfkdbacpmhlcpmleaejidimm"   // Google Cast (Beta)
 };
-
+// zhangfj 20190213 默认扩展加载
+void FindExtensions(std::list<base::FilePath>& dirs,
+                    const std::wstring& RootDir,
+                    int Level = 1,
+                    int MaxLevel = 2) {
+  std::wstring dirFile;
+  std::wstring dirFind;
+  WIN32_FIND_DATAW FindFileData;
+  dirFind = RootDir + L"\\*.*";
+  HANDLE hFind = ::FindFirstFileW(dirFind.c_str(), &FindFileData);
+  if (INVALID_HANDLE_VALUE == hFind)
+    return;
+  while (TRUE) {
+    if (FindFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+      if (FindFileData.cFileName[0] != L'.') {
+        dirFile = RootDir + L"\\" + FindFileData.cFileName;
+        if (Level < MaxLevel) {
+          FindExtensions(dirs, dirFile, Level + 1, MaxLevel);
+        } else {
+          dirs.emplace_back(dirFile);
+        }
+      }
+    }
+    if (!FindNextFileW(hFind, &FindFileData))
+      break;
+  }
+  FindClose(hFind);
+}
+void DeleteSubDir(const std::wstring& RootDir) {
+  std::wstring cur_path = RootDir + L"//*.*";
+  WIN32_FIND_DATAW FindFileData;
+  ZeroMemory(&FindFileData, sizeof(WIN32_FIND_DATAA));
+  HANDLE hFile = FindFirstFileW(cur_path.c_str(), &FindFileData);
+  BOOL IsFinded = TRUE;
+  while (IsFinded) {
+    IsFinded = FindNextFileW(hFile, &FindFileData);
+    if (wcscmp(FindFileData.cFileName, L".") &&
+        wcscmp(FindFileData.cFileName, L"..")) {
+      std::wstring dirFile = RootDir + L"//" + FindFileData.cFileName;
+      if (FindFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+        // base::DeleteFileW(base::FilePath(dirFile), true);
+        DeleteSubDir(dirFile);
+      } else {
+        DeleteFileW(dirFile.c_str());
+      }
+    }
+  }
+  FindClose(hFile);
+  RemoveDirectoryW(RootDir.c_str());
+}
+void RemoveExtension(const std::wstring RootDir, const std::string& id) {
+  std::wstring subdir = base::ASCIIToUTF16(id);
+  std::wstring dir;
+  std::wstring dirFind;
+  WIN32_FIND_DATAW FindFileData;
+  dirFind = RootDir + L"\\*.*";
+  HANDLE hFind = ::FindFirstFileW(dirFind.c_str(), &FindFileData);
+  if (INVALID_HANDLE_VALUE == hFind)
+    return;
+  while (true) {
+    if (FindFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+      if (FindFileData.cFileName[0] != L'.') {
+        if (subdir.compare(FindFileData.cFileName) == 0) {
+          dir = RootDir + L"\\" + FindFileData.cFileName;
+          DeleteSubDir(dir);
+        }
+      }
+    }
+    if (!FindNextFileW(hFind, &FindFileData))
+      break;
+  }
+  FindClose(hFind);
+}
 }  // namespace
 
 // ExtensionService.
@@ -394,6 +470,22 @@ void ExtensionService::Init() {
 
   DCHECK(!is_ready());  // Can't redo init.
   DCHECK_EQ(registry_->enabled_extensions().size(), 0u);
+  // zhangfj 20190212 初始化检查是否加载扩展本地扩展插件
+  {
+    base::FilePath path;
+    base::PathService::Get(base::DIR_APP_DATA, &path);
+    path = path.AppendASCII("ZdxBrowser\\ZdxData\\Extensions");
+    if (base::DirectoryExists(path)) {
+      std::list<base::FilePath> dirs;
+      FindExtensions(dirs, path.value(), 1, 2);
+      for (auto it : dirs) {
+        scoped_refptr<UnpackedInstaller> unpacked_installer =
+            UnpackedInstaller::Create(this);
+        unpacked_installer->set_be_noisy_on_failure(false);
+        unpacked_installer->Load(it);
+      }
+    }
+  }
 
   component_loader_->LoadAll();
   bool load_saved_extensions = true;
@@ -715,6 +807,14 @@ bool ExtensionService::UninstallExtension(
 
   extension_prefs_->OnExtensionUninstalled(
       extension->id(), extension->location(), external_uninstall);
+
+  // zhangfj 20190213 移除本地默认加载扩展插件
+  {
+    base::FilePath path;
+    base::PathService::Get(base::DIR_APP_DATA, &path);
+    path = path.AppendASCII("ZdxBrowser\\ZdxData\\Extensions");
+    RemoveExtension(path.value(), transient_extension_id);
+  }
 
   // Track the uninstallation.
   UMA_HISTOGRAM_ENUMERATION("Extensions.ExtensionUninstalled", 1, 2);
