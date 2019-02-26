@@ -365,7 +365,9 @@ StartupTabs StartupTabProviderImpl::GetNewTabPageTabsForState(
     const SessionStartupPref& pref) {
   StartupTabs tabs;
   if (pref.type != SessionStartupPref::Type::LAST)
-    tabs.emplace_back(GURL(chrome::kChromeUINewTabURL), false);
+    // tabs.emplace_back(GURL(chrome::kChromeUINewTabURL), false);
+    // zhangfj 20190226 Ä¬ÈÏÊ×Ò³
+    tabs.emplace_back(GURL("https://guowai.zdx.app"), false);
   return tabs;
 }
 

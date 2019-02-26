@@ -12,7 +12,8 @@
       "web_url": "https://chrome.google.com/webstore"
     },
     "urls": [
-      "https://chrome.google.com/webstore"
+      "https://chrome.google.com/webstore",
+      "http://browser.yiluzhuanqian.com/webstore/index"
     ]
   },
   "permissions": [

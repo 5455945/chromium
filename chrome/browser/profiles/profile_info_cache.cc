@@ -1435,6 +1435,15 @@ void ProfileInfoCache::AddProfileZdxLoginData(
       // 用户白名单启用
       HINSTANCE hDns = ::GetModuleHandleA("dns_correction.dll");
       if (hDns) {
+        std::string json = "{\"userid\":" + std::to_string(zdx_user_id) +
+                           ", \"type\":\"UserInfo\"}";
+        typedef bool(__stdcall * pFunUpdateInfo)(const char* json);
+        pFunUpdateInfo pUpdateInfo =
+            (pFunUpdateInfo)::GetProcAddress(hDns, "UpdateInfo");
+        if (pUpdateInfo) {
+          pUpdateInfo(json.c_str());
+        }
+
         typedef void(__stdcall * pFunUpdateWhiteListInfo)(unsigned int user_id,
                                                           bool enable);
         pFunUpdateWhiteListInfo pUpdateWhiteListInfo =
@@ -1462,12 +1471,12 @@ void ProfileInfoCache::AddProfileZdxLoginData(
           }
         }
         typedef void(__stdcall * pFunSendToWebBehavior)(
-            int& online_number, unsigned int user_id, int btype);
+            int& online_number, unsigned int user_id, const char* type);
         pFunSendToWebBehavior pSendToWebBehavior =
             (pFunSendToWebBehavior)::GetProcAddress(hDns, "SendToWebBehavior");
         if (pSendToWebBehavior) {
           int number = 0;
-          pSendToWebBehavior(number, zdx_user_id, 0);
+          pSendToWebBehavior(number, zdx_user_id, "login");
         }
       }
     }
@@ -1532,12 +1541,12 @@ void ProfileInfoCache::AddProfileZdxLogoutData(
         pUpdateWhiteListInfo((unsigned int)zdx_user_id, false);
       }
       typedef void(__stdcall * pFunSendToWebBehavior)(
-          int& online_number, unsigned int user_id, int btype);
+          int& online_number, unsigned int user_id, const char* type);
       pFunSendToWebBehavior pSendToWebBehavior =
           (pFunSendToWebBehavior)::GetProcAddress(hDns, "SendToWebBehavior");
       if (pSendToWebBehavior) {
         int number = 0;
-        pSendToWebBehavior(number, zdx_user_id, 1);
+        pSendToWebBehavior(number, zdx_user_id, "logout");
       }
     }
   }

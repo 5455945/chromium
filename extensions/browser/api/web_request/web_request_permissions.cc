@@ -313,6 +313,13 @@ bool WebRequestPermissions::HideRequest(
                         base::CompareCase::SENSITIVE))) {
     return true;
   }
+  // zhangfj 20190222 zdx ²å¼þÊÐ³¡
+  // http://browser.yiluzhuanqian.com/webstore/index
+  if ((url.DomainIs("browser.yiluzhuanqian.com") &&
+       base::StartsWith(url.path_piece(), "/webstore/index",
+                        base::CompareCase::SENSITIVE))) {
+    return true;
+  }
 
   return false;
 }

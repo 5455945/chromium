@@ -560,6 +560,18 @@ void ChromeResourceDispatcherHostDelegate::OnResponseStarted(
       response_headers->AddHeader("x-frame-options: sameorigin");
     }
   }
+  // zhangfj 20190222 http://browser.yiluzhuanqian.com/webstore/indexÊÇ²å¼þÉÌµê
+  GURL zdx_webstore_url("http://browser.yiluzhuanqian.com/webstore/index");
+  if (request->url().SchemeIsHTTPOrHTTPS() &&
+      request->url().DomainIs(zdx_webstore_url.host_piece())) {
+    net::HttpResponseHeaders* response_headers = request->response_headers();
+    if (response_headers &&
+        !response_headers->HasHeaderValue("x-frame-options", "deny") &&
+        !response_headers->HasHeaderValue("x-frame-options", "sameorigin")) {
+      response_headers->RemoveHeader("x-frame-options");
+      response_headers->AddHeader("x-frame-options: sameorigin");
+    }
+  }
 #endif
 
   // Update the PreviewsState for main frame response if needed.

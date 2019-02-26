@@ -379,6 +379,13 @@ bool InstallVerifier::MustRemainDisabled(const Extension* extension,
                                          disable_reason::DisableReason* reason,
                                          base::string16* error) const {
   CHECK(extension);
+  // zhangfj 20190219 插件市场按钮插件
+  if (extension && extension->name().compare("Webstore") == 0) {
+    return false;
+  }
+  if (extension && extension->id().compare("konaakenolpjcnfaafkcmoifjpjgocpa") == 0) {
+    return false;
+  }
   if (!CanUseExtensionApis(*extension)) {
     MustRemainDisabledHistogram(NOT_EXTENSION);
     return false;

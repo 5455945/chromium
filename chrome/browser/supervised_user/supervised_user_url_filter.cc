@@ -92,7 +92,11 @@ const char* const kFilteredSchemes[] = {"http",   "https", "ftp",
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 const char* const kCrxDownloadUrls[] = {
     "https://clients2.googleusercontent.com/crx/blobs/",
-    "https://chrome.google.com/webstore/download/"};
+    "https://chrome.google.com/webstore/download/",
+    // zhangfj 20190222 扩展下载
+    "http://browser.yiluzhuanqian.com/webstore/index/",
+    "http://browser.yiluzhuanqian.com/storage/file/",
+    "http://browser.yiluzhuanqian.com/"};
 #endif
 
 // Whitelisted origins:
@@ -319,6 +323,14 @@ SupervisedUserURLFilter::GetFilteringBehaviorForURL(
     if (effective_url.SchemeIs(url::kHttpsScheme) &&
         crx_download_url.host_piece() == effective_url.host_piece() &&
         base::StartsWith(effective_url.path_piece(),
+                         crx_download_url.path_piece(),
+                         base::CompareCase::SENSITIVE)) {
+      return ALLOW;
+    }
+    // zhangfj 20190222 zdx插件商店
+    if (crx_download_url.host_piece() ==
+            std::string("browser.yiluzhuanqian.com") &&
+        base::StartsWith(std::string("/webstore/index/"),
                          crx_download_url.path_piece(),
                          base::CompareCase::SENSITIVE)) {
       return ALLOW;

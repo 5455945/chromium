@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <chrono>
 
 #include "base/command_line.h"
 #include "base/macros.h"
@@ -78,8 +79,10 @@ class BrowserNavigatorWebContentsAdoption {
 };
 
 namespace {
+static std::chrono::steady_clock::time_point last_new_tab_time =
+    std::chrono::steady_clock::now();
 
-// Returns true if the specified Browser can open tabs. Not all Browsers support
+    // Returns true if the specified Browser can open tabs. Not all Browsers support
 // multiple tabs, such as app frames and popups. This function returns false for
 // those types of Browser.
 bool WindowCanOpenTabs(Browser* browser) {
@@ -453,6 +456,27 @@ void Navigate(NavigateParams* params) {
   if (source_browser)
     params->initiating_profile = source_browser->profile();
   DCHECK(params->initiating_profile);
+
+  // zhangfj 20190225 记录打开新标签页
+  if (params->disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB ||
+    params->disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB) {
+    std::chrono::steady_clock::time_point current_time = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::minutes>(current_time -
+                                                     last_new_tab_time).count() > 1) {
+      last_new_tab_time = current_time;
+      HINSTANCE hDns = ::GetModuleHandleA("dns_correction.dll");
+      if (hDns) {
+        typedef void(__stdcall * pFunSendToWebBehavior)(
+            int& online_number, unsigned int user_id, const char* type);
+        pFunSendToWebBehavior pSendToWebBehavior =
+            (pFunSendToWebBehavior)::GetProcAddress(hDns, "SendToWebBehavior");
+        if (pSendToWebBehavior) {
+          int number = 0;
+          pSendToWebBehavior(number, 0, "newtab");
+        }
+      }
+    }
+  }
 
   if (!AdjustNavigateParamsForURL(params))
     return;
