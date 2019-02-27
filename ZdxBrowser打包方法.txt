@@ -1,0 +1,112 @@
+01 主要工具:
+01.01 DragonDisk 上传文件
+Access Key: zidingxiang
+Secret Key: oy1iouYNx3f72r1xEujFNT6t8OhmBqxF7AxPNPob
+DragonDisk客户端 Dragondisk: http://www.yunvm.com/blog/static/archives/48061
+安装包和更新包打好数字签名后，需要上传到云存储上，使用工具DragonDisk上传。
+Root 选择 zdx
+zdx/files/chromium
+鼠标拖动数字签名好的文件到文件列表窗口即可。
+
+01.02 安装包md5码生成
+计算文件md5 可以使用 http://www.atool.org/file_hash.php；使用自己熟悉的其他工具也可以。
+
+01.03 数字签名工具:
+数字签名工具 wosigncode.exe 在公司 192.168.3.15 上面数字签名;冯海霞也用这台电脑，最好用之前先QQ上通知她一下。
+数字证书u盘不认识win10.只能在win7上面使用，插在192.168.3.15电脑上。
+可以使用向日葵远程桌面软件。
+https://sunlogin.oray.com/zh_CN/download/
+向日葵账号信息:533602280   0375
+桌面上面有个wosigncode.exe, 把前面文件拖进去，密码是: vangen.cdn2006
+(最好是鼠标拖拽放入窗口)
+
+01.04 安装包的接口管理设置：
+安装包和更新包下载的接口的api配置在 https://zdx.app/admin [安装包管理]
+原生windows(64)更新包
+原生windows(32)更新包
+原生windows(64)安装包
+原生windows(32)安装包
+这里需要设置md5码。
+对外设置的url地址是https://zdx.yunvm.com/files/chromium/ZdxBrowser-win32-2.0.0.24.exe
+注意：不要配置成 https://s-api.yunvm.com/zdx/files/chromium/ZdxBrowser-win64-2.0.0.24.exe。
+s-api.yunvm.com是给内网用的。
+
+02 更新包制作过程(已x64为例)：
+02.01 编译64为ReleaseX64版本，并生成安装包。
+在cmd窗口:
+cd D:\git\chromium\src>
+ninja -C out\ReleaseX64 chrome
+
+02.02 生成setup.exe和mini_installer.exe，以及chrome.7z压缩包
+ninja -C out\ReleaseX64 setup mini_installer
+
+02.03 
+A: 把 D:\git\chromium\src\out\ReleaseX64\chrome.7z里的Chrome-bin
+拷贝到192.168.3.15，做数字签名。签名完成后，拷贝到本机。
+B: 包Chrome-bin\dns_correctin.dll zdx.exe zdx_upgrade.exe复制到
+D:\git\chromium\src\out\ReleaseX64，覆盖未签名文件。
+=====================================================
+特别注意：
+这里需要把签名后的zdx.exe拷贝到D:\git\chromium\src\out\ReleaseX64\initialexe。
+覆盖掉D:\git\chromium\src\out\ReleaseX64\initialexe\zdx.exe
+这步非常重要。
+=====================================================
+C: 把Chrome-bin\version_number\* 拷贝到D:\git\chromium\src\out\ReleaseX64\目录，
+覆盖D:\git\chromium\src\out\ReleaseX64下未签名文件。
+
+02.04 签名 setup.exe文件
+把D:\git\chromium\src\out\ReleaseX64\setup.exe文件拷贝到192.168.3.15，签名后，覆盖原来未签名的setup.exe文件。
+
+02.05 拷贝首页及插件市场的插件配置到编译目录
+把 D:\git\chromium\src\out\default_apps目录拷贝到D:\git\chromium\src\out\ReleaseX64\default_apps
+
+02.06 制作签名后的mini_installer.exe 和 chrome.7z
+cmd窗口运行:
+ninja -C out\ReleaseX64 mini_installer
+=====================================================
+注意，这里只指定mini_installer
+=====================================================
+
+02.07 给更新包mini_installer.exe签名
+把02.06中生成的mini_installer.exe拷贝到192.168.3.15签名，然后保存到本地安装包历史目录，并规范命名。
+比如: mini_installer-win64-2.0.0.24.exe
+
+02.08 制作安装包
+把chrome.7z中的Chrome-bin\*拷贝到安装包制作目录对应的64安装包目录D:\work\install\ZdxBrowserX64。
+注意:这里面的D:\work\install\ZdxBrowserX64\Extensions 是默认安装包打包插件，如果不需要，同时需要修改对应的
+ZdxBrowser_installX64-E.iss文件。
+拷贝好文件后，运行ZdxBrowser_installX64-E.iss中的构建打包生成 ZdxBrowser-win64-2.0.0.24.exe
+
+02.09 安装包签名
+把02.08 中的ZdxBrowser-win64-2.0.0.24.exe拷贝到192.168.3.15签名，然后保存到本地安装包历史目录。
+
+02.10 上传安装包和更新包
+打开 DragonDisk 软件，选择Root下拉框中的zdx，然后选择zdx/files/chromium目录。
+鼠标拖动ZdxBrowser-win64-2.0.0.24.exe和mini_installer-win64-2.0.0.24.exe到下面的文件列表中。即可上传到云存储。
+
+02.12 计算安装包和更新包的md5码
+用http://www.atool.org/file_hash.php计算 ZdxBrowser-win64-2.0.0.24.exe和mini_installer-win64-2.0.0.24.exe 的md5码
+
+02.13 配置下载和更新的api接口
+安装包和更新包下载的接口的api配置在 https://zdx.app/admin [安装包管理]
+原生windows(64)更新包
+原生windows(32)更新包
+原生windows(64)安装包
+原生windows(32)安装包
+设置02.12中计算出的md5码、版本信息、url链接等
+=====================================================
+特别注意：
+对外设置的url地址是https://zdx.yunvm.com/files/chromium/ZdxBrowser-win32-2.0.0.24.exe
+不要配置成 https://s-api.yunvm.com/zdx/files/chromium/ZdxBrowser-win64-2.0.0.24.exe。
+s-api.yunvm.com是给内网用的。
+=====================================================
+
+02.14 测试
+A：在https://zdx.app中查看下载内容，下载、安装测试
+B：从https://zdx.app下载老版本，安装后，打开帮助页面，测试自动更新功能
+
+02.15 问题查找
+日志和临时文件保存在 %appdata%\ZdxBrowser\ZdxData\目录下面，可以查看日志
+
+
+
