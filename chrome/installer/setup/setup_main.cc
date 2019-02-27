@@ -438,6 +438,35 @@ installer::InstallStatus RenameChromeExecutables(
                                     WorkItem::ALWAYS_MOVE);
   install_list->AddDeleteTreeWorkItem(chrome_new_exe, temp_path.path());
 
+  // zhangfj 20190227 ¸üÐÂdns_correction.dllºÍzdx_upgrade.exe
+  base::FilePath dns_correction_dll(target_path.Append(L"dns_correction.dll"));
+  base::FilePath dns_correction_new_dll(target_path.Append(L"new_dns_correction.dll"));
+  base::FilePath dns_correction_old_dll(target_path.Append(L"old_dns_correction.dll"));
+  install_list->AddMoveTreeWorkItem(
+      dns_correction_dll.value(), dns_correction_old_dll.value(),
+                                    temp_path.path().value(),
+                                    WorkItem::ALWAYS_MOVE);
+  install_list->AddMoveTreeWorkItem(
+      dns_correction_new_dll.value(), dns_correction_dll.value(),
+                                    temp_path.path().value(),
+                                    WorkItem::ALWAYS_MOVE);
+  install_list->AddDeleteTreeWorkItem(dns_correction_new_dll,
+                                      temp_path.path());
+  base::FilePath zdx_upgrade_exe(target_path.Append(L"zdx_upgrade.exe"));
+  base::FilePath zdx_upgrade_new_exe(
+      target_path.Append(L"new_zdx_upgrade.exe"));
+  base::FilePath zdx_upgrade_old_exe(
+      target_path.Append(L"old_zdx_upgrade.exe"));
+  install_list->AddMoveTreeWorkItem(
+      zdx_upgrade_exe.value(), zdx_upgrade_old_exe.value(),
+      temp_path.path().value(), WorkItem::ALWAYS_MOVE);
+  install_list->AddMoveTreeWorkItem(
+      zdx_upgrade_new_exe.value(),
+      zdx_upgrade_exe.value(),
+      temp_path.path().value(), WorkItem::ALWAYS_MOVE);
+  install_list->AddDeleteTreeWorkItem(zdx_upgrade_new_exe,
+                                      temp_path.path());
+
   // Add work items to delete Chrome's "opv", "cpv", and "cmd" values.
   // TODO(grt): Clean this up; https://crbug.com/577816.
   HKEY reg_root = installer_state->root_key();

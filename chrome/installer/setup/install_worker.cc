@@ -349,6 +349,10 @@ void AddZdxUpgradeWorkItems(const InstallationState& original_state,
       src_path.Append(L"zdx_upgrade.exe").value(),
       target_path.Append(L"zdx_upgrade.exe").value(), temp_path.value(),
       WorkItem::NEW_NAME_IF_IN_USE, new_zdx_upgrade_exe.value());
+  install_list
+      ->AddDeleteTreeWorkItem(target_path.Append(L"old_zdx_upgrade.exe"),
+                              temp_path)
+      ->set_best_effort(true);
 }
 
 // zhangfj 20181229 解压zdx_upgrade.exe到安装目录
@@ -372,6 +376,10 @@ void AddZdxDnsCorrectionWorkItems(const InstallationState& original_state,
       src_path.Append(L"dns_correction.dll").value(),
       target_path.Append(L"dns_correction.dll").value(), temp_path.value(),
       WorkItem::NEW_NAME_IF_IN_USE, new_zdx_upgrade_exe.value());
+  install_list
+      ->AddDeleteTreeWorkItem(target_path.Append(L"old_dns_correction.dll"),
+                              temp_path)
+      ->set_best_effort(true);
 }
 
 // Adds an ACE from a trustee SID, access mask and flags to an existing DACL.
