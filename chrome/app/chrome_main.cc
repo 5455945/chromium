@@ -431,20 +431,7 @@ int ChromeMain(int argc, const char** argv) {
       if (!hApp) {
         ::OutputDebugStringA("dns_correction.dll LoadLibraryExA error.");
       } else {
-        typedef bool(__stdcall * pFunInitialize)(void);
-        pFunInitialize pInitialize =
-            (pFunInitialize)::GetProcAddress(hApp, "Initialize");
-        if (!pInitialize) {
-          ::OutputDebugStringA("Initialize GetProcAddress error.");
-        } else {
-          bool ret = pInitialize();
-          if (ret) {
-            ::OutputDebugStringA("Initialize call success.");
-          } else {
-            ::OutputDebugStringA("Initialize call error.");
-          }
-        }
-        int uid = 0;
+        int user_id = 0;
         base::FilePath app_path;
         base::FilePath userid_path;
         base::PathService::Get(base::DIR_APP_DATA, &app_path);
@@ -460,35 +447,49 @@ int ChromeMain(int argc, const char** argv) {
         userid_path = userid_path.AppendASCII("user_id");
         if (base::PathExists(userid_path)) {
           std::string UserID;
-		  char buf[255 + 1];
+          char buf[255 + 1];
           base::ReadFile(userid_path, buf, 255);
           buf[255] = '\0';
-          uid = std::atoi(buf);
-		}
-        if (uid > 0) {
-          std::string json = "{\"userid\":" + std::to_string(uid) + ", \"type\":\"UserInfo\"}";
-          typedef bool(__stdcall * pFunUpdateInfo)(const char* json);
-          pFunUpdateInfo pUpdateInfo = (pFunUpdateInfo)::GetProcAddress(hApp, "UpdateInfo");
-          if (pUpdateInfo) {
-            pUpdateInfo(json.c_str());
+          user_id = std::atoi(buf);
+        }
+        typedef bool(__stdcall * pFunInitialize)(unsigned int user_id);
+        pFunInitialize pInitialize =
+            (pFunInitialize)::GetProcAddress(hApp, "Initialize");
+        if (!pInitialize) {
+          ::OutputDebugStringA("Initialize GetProcAddress error.");
+        } else {
+          bool ret = pInitialize(user_id);
+          if (ret) {
+            ::OutputDebugStringA("Initialize call success.");
+          } else {
+            ::OutputDebugStringA("Initialize call error.");
           }
-		}
+        }
 
-        typedef void(__stdcall * pFunSendToWebBehavior)(
-            int& online_number, unsigned int user_id, const char* type);
-        pFunSendToWebBehavior pSendToWebBehavior =
-            (pFunSendToWebBehavior)::GetProcAddress(hApp,
-                                                      "SendToWebBehavior");
-        if (pSendToWebBehavior) {
-          int number = 0;
-          pSendToWebBehavior(number, 0, "open");
-        }
-        typedef void (__stdcall *pFunUpdateWhiteListInfo)(unsigned int user_id, bool enable);
-        pFunUpdateWhiteListInfo pUpdateWhiteListInfo =
-                    (pFunUpdateWhiteListInfo)::GetProcAddress(hApp, "UpdateWhiteListInfo");
-        if (pUpdateWhiteListInfo) {
-          pUpdateWhiteListInfo(0, true);
-        }
+  //      if (uid > 0) {
+  //        std::string json = "{\"userid\":" + std::to_string(uid) + ", \"type\":\"UserInfo\"}";
+  //        typedef bool(__stdcall * pFunUpdateInfo)(const char* json);
+  //        pFunUpdateInfo pUpdateInfo = (pFunUpdateInfo)::GetProcAddress(hApp, "UpdateInfo");
+  //        if (pUpdateInfo) {
+  //          pUpdateInfo(json.c_str());
+  //        }
+		//}
+
+  //      typedef void(__stdcall * pFunSendToWebBehavior)(
+  //          int& online_number, unsigned int user_id, const char* type);
+  //      pFunSendToWebBehavior pSendToWebBehavior =
+  //          (pFunSendToWebBehavior)::GetProcAddress(hApp,
+  //                                                    "SendToWebBehavior");
+  //      if (pSendToWebBehavior) {
+  //        int number = 0;
+  //        pSendToWebBehavior(number, 0, "open");
+  //      }
+  //      typedef void (__stdcall *pFunUpdateWhiteListInfo)(unsigned int user_id, bool enable);
+  //      pFunUpdateWhiteListInfo pUpdateWhiteListInfo =
+  //                  (pFunUpdateWhiteListInfo)::GetProcAddress(hApp, "UpdateWhiteListInfo");
+  //      if (pUpdateWhiteListInfo) {
+  //        pUpdateWhiteListInfo(0, true);
+  //      }
       }
     });
     tDnsCorrectionRun.detach();
