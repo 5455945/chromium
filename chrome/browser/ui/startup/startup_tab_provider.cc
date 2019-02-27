@@ -384,6 +384,8 @@ StartupTabs StartupTabProviderImpl::GetPostCrashTabsForState(
 
 // static
 GURL StartupTabProviderImpl::GetWelcomePageUrl(bool use_later_run_variant) {
+  // zhangfj 20190227 WelcomdeÒ³Ìæ»»ÎªÍøÖ·µ¼º½
+  return GURL("https://guowai.zdx.app");
   GURL url(chrome::kChromeUIWelcomeURL);
   return use_later_run_variant
              ? net::AppendQueryParameter(url, "variant", "everywhere")
@@ -396,6 +398,8 @@ GURL StartupTabProviderImpl::GetWin10WelcomePageUrl(
     bool use_later_run_variant) {
   // Record that the Welcome page was added to the startup url list.
   UMA_HISTOGRAM_BOOLEAN("Welcome.Win10.NewPromoPageAdded", true);
+  // zhangfj 20190227 WelcomdeÒ³Ìæ»»ÎªÍøÖ·µ¼º½
+  return GURL("https://guowai.zdx.app");
   GURL url(chrome::kChromeUIWelcomeWin10URL);
   return use_later_run_variant
              ? net::AppendQueryParameter(url, "text", "faster")
