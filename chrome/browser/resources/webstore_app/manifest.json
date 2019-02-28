@@ -13,7 +13,8 @@
     },
     "urls": [
       "https://chrome.google.com/webstore",
-      "http://browser.yiluzhuanqian.com/webstore/index"
+      "http://browser.yiluzhuanqian.com/webstore/index",
+	  "https://zdx.app/webstore/index"
     ]
   },
   "permissions": [
