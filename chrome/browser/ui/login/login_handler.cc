@@ -5,9 +5,10 @@
 #include "chrome/browser/ui/login/login_handler.h"
 
 #include <algorithm>
+#include <fstream>
+#include <regex>
 #include <string>
 #include <vector>
-#include <regex>
 
 #include "base/base64.h"
 #include "base/bind.h"
@@ -106,20 +107,27 @@ bool IsCrossDomain(const std::string& url,
   zdx_sign_info.GetString("zdx_login_user_id", &user_id);
   if (user_id.length() == 0)
     return false;
-  bool zdx_is_cross_area = false;
+  int zdx_cross_type = 1;
   bool zdx_cross_active = false;
-  zdx_sign_info.GetBoolean("zdx_is_cross_area", &zdx_is_cross_area);
+  zdx_sign_info.GetInteger("zdx_cross_type", &zdx_cross_type);
   zdx_sign_info.GetBoolean("zdx_cross_active", &zdx_cross_active);
-  if (!(zdx_is_cross_area && zdx_cross_active))
+  if (!zdx_cross_active)
     return false;
-  std::string md5_web;
-  base::FilePath md5_web_file =
-      app_path.AppendASCII("ZdxBrowser\\ZdxData\\cross_domain_md5_" + user_id);
-  if (!base::PathExists(md5_web_file))
-    return false;
-  base::ReadFileToString(md5_web_file, &md5_web);
+  std::string cross_domain_pac;
   std::string json;
-  base::ReadFileToString(path, &json);
+  base::FilePath cross_domain_pac_file =
+      app_path.AppendASCII("ZdxBrowser\\ZdxData\\cross_domain_" + user_id +
+                           "_" + std::to_string(zdx_cross_type));
+  if (GetFileAttributes(cross_domain_pac_file.value().c_str()) == INVALID_FILE_ATTRIBUTES) {
+    return false;
+  }
+  std::string ascii_path = cross_domain_pac_file.MaybeAsASCII();
+  std::ifstream fin(ascii_path, std::ios::in);
+  if (fin.is_open()) {
+    json = std::string((std::istreambuf_iterator<char>(fin)),
+                            std::istreambuf_iterator<char>());
+    fin.close();
+  }
   if (json.length() == 0)
     return false;
   std::unique_ptr<base::DictionaryValue> info = nullptr;
@@ -152,15 +160,15 @@ bool IsLoginDomain(const std::string host) {
   std::string rhost = host;
   std::reverse(rhost.begin(), rhost.end());
   if ((rhost.compare(0, 15, "moc.sipaelgoog.") == 0 ||
-        rhost.compare(0, 12, "moc.citatsg.") == 0 ||
-        rhost.compare(0, 22, "moc.tnetnocresuelgoog.") == 0 ||
-        host == "www.chromestatus.com" || host == "ssl.google-analytics.com" ||
-        host == "accounts.google.com" || host == "apis.google.com" ||
-        host == "notifications.google.com" || host == "ogs.google.com" ||
-        host == "play.google.com" || host == "plus.google.com" ||
-        host == "domains.google.com" || host == "gsuite.google.com" ||
-        host == "chrome.google.com" ||
-        (host.compare(0, 7, "clients") == 0 &&
+       rhost.compare(0, 12, "moc.citatsg.") == 0 ||
+       rhost.compare(0, 22, "moc.tnetnocresuelgoog.") == 0 ||
+       host == "www.chromestatus.com" || host == "ssl.google-analytics.com" ||
+       host == "accounts.google.com" || host == "apis.google.com" ||
+       host == "notifications.google.com" || host == "ogs.google.com" ||
+       host == "play.google.com" || host == "plus.google.com" ||
+       host == "domains.google.com" || host == "gsuite.google.com" ||
+       host == "chrome.google.com" ||
+       (host.compare(0, 7, "clients") == 0 &&
         rhost.compare(0, 11, "moc.elgoog.") == 0))) {
     return true;
   }
@@ -189,8 +197,7 @@ bool ZdxProxyLoginAuth(const GURL& url,
   ProfileManager* profile_manager = g_browser_process->profile_manager();
   profile_manager->GetProfileAttributesStorage().GetZdxInfoCache(zdx_dir,
                                                                  zdx_sign_info);
-  if (!(IsLoginDomain(host) ||
-        IsCrossDomain(url_spec, zdx_sign_info))) {
+  if (!(IsLoginDomain(host) || IsCrossDomain(url_spec, zdx_sign_info))) {
     return false;
   }
   base::string16 zdx_login_username;
@@ -486,7 +493,7 @@ void LoginHandler::AddObservers() {
                   content::NotificationService::AllBrowserContextsAndSources());
   registrar_->Add(this, chrome::NOTIFICATION_AUTH_CANCELLED,
                   content::NotificationService::AllBrowserContextsAndSources());
-  
+
 #if !defined(OS_ANDROID)
   WebContents* requesting_contents = GetWebContentsForLogin();
   if (requesting_contents)
@@ -693,7 +700,7 @@ void LoginHandler::ShowLoginPrompt(const GURL& request_url,
     handler->CancelAuth();
     return;
   }
-  
+
   base::string16 authority;
   base::string16 explanation;
   GetDialogStrings(request_url, *auth_info, &authority, &explanation);

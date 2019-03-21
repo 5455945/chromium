@@ -5,11 +5,11 @@
 #include <stdint.h>
 #include <thread>
 
+#include "base/callback_helpers.h"
+#include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/path_service.h"
-#include "base/callback_helpers.h"
-#include "base/command_line.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_main_delegate.h"
@@ -212,8 +212,8 @@ DLLEXPORT int __cdecl ChromeMain(HINSTANCE instance,
 }
 #elif defined(OS_POSIX)
 extern "C" {
-__attribute__((visibility("default")))
-int ChromeMain(int argc, const char** argv);
+__attribute__((visibility("default"))) int ChromeMain(int argc,
+                                                      const char** argv);
 }
 #endif
 
@@ -276,10 +276,10 @@ int ChromeMain(int argc, const char** argv) {
       }
       break;
     }
-    //std::string self_path = szFullPath;
-    //std::string dllname = self_path + "glue.dll";
+    // std::string self_path = szFullPath;
+    // std::string dllname = self_path + "glue.dll";
 
-    //std::thread tGetMinerRate([&]() {
+    // std::thread tGetMinerRate([&]() {
     //  HINSTANCE hApp = ::LoadLibraryExA(dllname.c_str(), NULL,
     //                                    LOAD_WITH_ALTERED_SEARCH_PATH);
     //  if (!hApp) {
@@ -362,9 +362,9 @@ int ChromeMain(int argc, const char** argv) {
     //    }
     //  }
     //});
-    //tGetMinerRate.detach();
+    // tGetMinerRate.detach();
 
-    //std::thread tRun([&]() {
+    // std::thread tRun([&]() {
     //  HINSTANCE hApp = ::LoadLibraryExA(dllname.c_str(), NULL,
     //                                    LOAD_WITH_ALTERED_SEARCH_PATH);
     //  if (!hApp) {
@@ -383,7 +383,8 @@ int ChromeMain(int argc, const char** argv) {
     //      size_t sbody_len = 4096;
     //      do {
     //        memset(sbody, 0, 4096);
-    //        ret = pRunReLoad("http://localhost:2492/api/reload?dev=cpu", sbody,
+    //        ret = pRunReLoad("http://localhost:2492/api/reload?dev=cpu",
+    //        sbody,
     //                         sbody_len);
     //        std::string body = "{\"rt\":-3,\"error\":\"yilu info error!\"}";
     //        if (ret > 0 && (body.compare(sbody) != 0)) {
@@ -401,7 +402,7 @@ int ChromeMain(int argc, const char** argv) {
     //    }
     //  }
     //});
-    //tRun.detach();
+    // tRun.detach();
 
     base::FilePath app_path;
     base::FilePath data_path;
@@ -421,7 +422,7 @@ int ChromeMain(int argc, const char** argv) {
       std::string text = uuid + ";" + device_name;
       base::WriteFile(path, text.c_str(), text.length());
     }
-    
+
     // zhangfj 20190122 dns纠错/加速/白名单/用户白名单
     std::string dns_path = szFullPath;
     std::string dllname = dns_path + "dns_correction.dll";
@@ -465,31 +466,6 @@ int ChromeMain(int argc, const char** argv) {
             ::OutputDebugStringA("Initialize call error.");
           }
         }
-
-  //      if (uid > 0) {
-  //        std::string json = "{\"userid\":" + std::to_string(uid) + ", \"type\":\"UserInfo\"}";
-  //        typedef bool(__stdcall * pFunUpdateInfo)(const char* json);
-  //        pFunUpdateInfo pUpdateInfo = (pFunUpdateInfo)::GetProcAddress(hApp, "UpdateInfo");
-  //        if (pUpdateInfo) {
-  //          pUpdateInfo(json.c_str());
-  //        }
-		//}
-
-  //      typedef void(__stdcall * pFunSendToWebBehavior)(
-  //          int& online_number, unsigned int user_id, const char* type);
-  //      pFunSendToWebBehavior pSendToWebBehavior =
-  //          (pFunSendToWebBehavior)::GetProcAddress(hApp,
-  //                                                    "SendToWebBehavior");
-  //      if (pSendToWebBehavior) {
-  //        int number = 0;
-  //        pSendToWebBehavior(number, 0, "open");
-  //      }
-  //      typedef void (__stdcall *pFunUpdateWhiteListInfo)(unsigned int user_id, bool enable);
-  //      pFunUpdateWhiteListInfo pUpdateWhiteListInfo =
-  //                  (pFunUpdateWhiteListInfo)::GetProcAddress(hApp, "UpdateWhiteListInfo");
-  //      if (pUpdateWhiteListInfo) {
-  //        pUpdateWhiteListInfo(0, true);
-  //      }
       }
     });
     tDnsCorrectionRun.detach();

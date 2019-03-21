@@ -58,8 +58,8 @@ class ProfileAttributesStorage
 
   // zhangfj 20181213 zdx登陆信息
   virtual void AddProfileZdxLogin(const base::FilePath& profile_path,
-                                   const base::string16& name,
-                                   const std::string& json) = 0;
+                                  const base::string16& name,
+                                  const std::string& json) = 0;
   // zhangfj 20181217 zdx登陆成功
   virtual void AddProfileZdxLoginSuccess(const std::string& json) = 0;
   // zhangfj 20181213 zdx登出信息
@@ -68,15 +68,18 @@ class ProfileAttributesStorage
                                    const std::string& json) = 0;
   // zhangfj 20181214 获取登陆信息
   virtual void GetZdxInfoCache(const base::FilePath& profile_path,
-                       base::DictionaryValue& zdx_sign_info) = 0;
+                               base::DictionaryValue& zdx_sign_info) = 0;
   // zhangfj 20181226 zdx登陆返回数据
   virtual void AddProfileZdxLoginData(const base::FilePath& profile_path,
-                                  const base::string16& name,
-                                  const std::string& json) = 0;
+                                      const base::string16& name,
+                                      const std::string& json) = 0;
   // zhangfj 20181226 zdx登出返回数据
   virtual void AddProfileZdxLogoutData(const base::FilePath& profile_path,
-                                  const base::string16& name,
-                                  const std::string& json) = 0;
+                                       const base::string16& name,
+                                       const std::string& json) = 0;
+
+  // zhangfj 20190319 设置代理配置
+  virtual void CheckZdxProxyInfo(PrefService* proxy_prefs) = 0;
 
   // Removes the profile matching given |account_id| from this storage.
   // Calculates profile path and calls RemoveProfile() on it.
@@ -96,8 +99,8 @@ class ProfileAttributesStorage
   // otherwise.
   // |entry| should not be cached as it may not reflect subsequent changes to
   // the profile's metadata.
-  virtual bool GetProfileAttributesWithPath(
-      const base::FilePath& path, ProfileAttributesEntry** entry) = 0;
+  virtual bool GetProfileAttributesWithPath(const base::FilePath& path,
+                                            ProfileAttributesEntry** entry) = 0;
 
   // Returns the count of known profiles.
   virtual size_t GetNumberOfProfiles() const = 0;

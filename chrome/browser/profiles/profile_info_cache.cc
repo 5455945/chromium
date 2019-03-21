@@ -10,13 +10,17 @@
 #include <memory>
 #include <utility>
 
+#include <regex>
+#include "base/base64.h"
 #include "base/bind.h"
+#include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/i18n/case_conversion.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
+#include "base/md5.h"
 #include "base/macros.h"
 #include "base/path_service.h"
 #include "base/stl_util.h"
@@ -27,6 +31,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile_avatar_icon_util.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profiles_state.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/common/chrome_constants.h"
@@ -37,7 +42,11 @@
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "components/proxy_config/proxy_config_dictionary.h"
+#include "components/proxy_config/proxy_config_pref_names.h"
 #include "components/signin/core/browser/profile_management_switches.h"
+#include "net/proxy_resolution/proxy_config_service.h"
+#include "net/proxy_resolution/proxy_resolution_service.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/image/image.h"
@@ -82,7 +91,7 @@ const char kZdxLogoutTokenKey[] = "zdx_logout_token";
 const char kZdxLoginUserIdKey[] = "zdx_login_user_id";
 const char kZdxApiPathKey[] = "zdx_api_path";
 const char kZdxApiErrorKey[] = "zdx_api_error";
-const char kZdxIsCrossAreaKey[] = "zdx_is_cross_area";
+const char kZdxCrossTypeKey[] = "zdx_cross_type";
 const char kZdxCrossActiveKey[] = "zdx_cross_active";
 
 // TODO(dullweber): Remove these constants after the stored data is removed.
@@ -104,6 +113,211 @@ void EncryptRotateMoveBit(char* dst, const int len, const int key) {
   for (int i = 0; i < len; i++) {
     *p++ ^= key;
   }
+}
+
+// zhangfj 20190128 穿越功能
+std::vector<std::string> string_split(const std::string& in,
+                                      const std::string& delim) {
+  std::regex re{delim};
+  return std::vector<std::string>{
+      std::sregex_token_iterator(in.begin(), in.end(), re, -1),
+      std::sregex_token_iterator()};
+}
+void GetCrossDomain(std::string& cross_domain) {
+  base::FilePath app_path;
+  base::FilePath path;
+  std::string user_id;
+  base::FilePath zdx_dir;
+  base::PathService::Get(chrome::DIR_USER_DATA, &zdx_dir);
+  if (zdx_dir.empty()) {
+    return;
+  }
+  zdx_dir = zdx_dir.AppendASCII(chrome::kInitialProfile);
+  if (zdx_dir.empty()) {
+    return;
+  }
+  base::DictionaryValue zdx_sign_info;
+  ProfileManager* profile_manager = g_browser_process->profile_manager();
+  profile_manager->GetProfileAttributesStorage().GetZdxInfoCache(zdx_dir,
+                                                                 zdx_sign_info);
+  zdx_sign_info.GetString("zdx_login_user_id", &user_id);
+  if (user_id.length() == 0)
+    return;
+  int zdx_cross_type = 1;
+  bool zdx_cross_active = false;
+  bool zdx_login_status = false;
+  zdx_sign_info.GetBoolean("zdx_login_status", &zdx_login_status);
+  if (!zdx_login_status)
+    return;
+  zdx_sign_info.GetInteger("zdx_cross_type", &zdx_cross_type);
+  zdx_sign_info.GetBoolean("zdx_cross_active", &zdx_cross_active);
+  if (!zdx_cross_active)
+    return;
+  base::PathService::Get(base::DIR_APP_DATA, &app_path);
+  std::string md5_web;
+  std::string md5_pac;
+  base::FilePath md5_web_file =
+      app_path.AppendASCII("ZdxBrowser\\ZdxData\\cross_domain_md5_" + user_id +
+                           "_" + std::to_string(zdx_cross_type));
+  std::string ascii_md5_web = md5_web_file.MaybeAsASCII();
+  std::ifstream fin1(ascii_md5_web, std::ios::in);
+  if (fin1.is_open()) {
+    md5_web = std::string((std::istreambuf_iterator<char>(fin1)),
+                          std::istreambuf_iterator<char>());
+    fin1.close();
+  }
+  base::FilePath md5_pac_file =
+      app_path.AppendASCII("ZdxBrowser\\ZdxData\\cross_domain_pac_" + user_id +
+                           "_" + std::to_string(zdx_cross_type));
+  std::string ascii_md5_pac = md5_pac_file.MaybeAsASCII();
+  std::ifstream fin2(ascii_md5_pac, std::ios::in);
+  if (fin2.is_open()) {
+    md5_pac = std::string((std::istreambuf_iterator<char>(fin2)),
+                          std::istreambuf_iterator<char>());
+    fin2.close();
+  }
+  path = app_path.AppendASCII("ZdxBrowser\\ZdxData\\cross_domain_" + user_id +
+                              "_" + std::to_string(zdx_cross_type));
+  std::string json;
+  std::string ascii_path = path.MaybeAsASCII();
+  std::ifstream fin3(ascii_path, std::ios::in);
+  if (fin3.is_open()) {
+    json = std::string((std::istreambuf_iterator<char>(fin3)),
+                       std::istreambuf_iterator<char>());
+    fin3.close();
+  }
+  std::unique_ptr<base::DictionaryValue> info = nullptr;
+  base::DictionaryValue* data = nullptr;
+  base::ListValue* list = nullptr;
+  info = base::DictionaryValue::From(base::JSONReader::Read(json));
+  if (!info)
+    return;
+  info->GetDictionary("data", &data);
+  if (!data)
+    return;
+  data->GetList("list", &list);
+  if (!list)
+    return;
+  std::string item;
+  std::string reg_item;
+  for (size_t i = 0; i < list->GetSize(); ++i) {
+    reg_item = "";
+    std::string value;
+    if (list->GetString(i, &value)) {
+      base::Base64Decode(value, &item);
+      for (size_t j = 0; j < item.length(); ++j) {
+        if (item[j] == '/') {
+          reg_item += '\\';
+        }
+        reg_item += item[j];
+      }
+      if (reg_item.length() > 0) {
+        reg_item = "	if (/" + reg_item + "/.test(url)) return \"+proxy\";\n";
+        cross_domain += reg_item;
+      }
+    }
+  }
+  if (cross_domain.length() > 0 && md5_web.length() > 0 && md5_web != md5_pac) {
+    //base::WriteFile(md5_pac_file, md5_web.c_str(), md5_web.length());
+    std::ofstream fout(ascii_md5_pac, std::ios::out | std::ios::trunc);
+    if (fout.is_open()) {
+      fout << md5_web;
+      fout.close();
+    }
+  }
+}
+void GetLoginDomain(std::string& login_doamin) {
+  login_doamin = R"(
+        if (/(?:^|\.)googleapis\.com$/.test(host)) return "+proxy";
+        if (/(?:^|\.)gstatic\.com$/.test(host)) return "+proxy";
+        if (/(?:^|\.)googleusercontent\.com$/.test(host)) return "+proxy";
+        if (/^www\.chromestatus\.com$/.test(host)) return "+proxy";
+        if (/^ssl\.google-analytics\.com$/.test(host)) return "+proxy";
+        if (/^accounts\.google\.com$/.test(host)) return "+proxy";
+        if (/^apis\.google\.com$/.test(host)) return "+proxy";
+        if (/^notifications\.google\.com$/.test(host)) return "+proxy";
+        if (/^ogs\.google\.com$/.test(host)) return "+proxy";
+        if (/^play\.google\.com$/.test(host)) return "+proxy";
+        if (/^chrome\.google\.com$/.test(host)) return "+proxy";
+        if (/^domains\.google\.com$/.test(host)) return "+proxy";
+        if (/^gsuite\.google\.com$/.test(host)) return "+proxy";
+        if (/^plus\.google\.com$/.test(host)) return "+proxy";
+        if (/^clients.*\.google\.com$/.test(host)) return "+proxy";
+)";
+}
+void GetOldPacScript(PrefService* profile_prefs, std::string& old_pac_script) {
+  if (!profile_prefs) {
+    return;
+  }
+  const PrefService::Preference* pref =
+      profile_prefs->FindPreference(proxy_config::prefs::kProxy);
+  if (!pref) {
+    return;
+  }
+  const base::DictionaryValue* dv =
+      profile_prefs->GetDictionary(proxy_config::prefs::kProxy);
+  if (nullptr == dv) {
+    return;
+  }
+  std::string mode_name;
+  if (dv->GetString("mode", &mode_name)) {
+    if (mode_name == "pac_script") {
+      std::string str;
+      dv->GetString("pac_url", &str);
+      if (str.length() > 46 &&
+          str.substr(0, 46).compare(
+              "data:application/x-ns-proxy-autoconfig;base64,") == 0) {
+        str = str.substr(46);
+        base::Base64Decode(str, &old_pac_script);
+      }
+    }
+  }
+}
+
+void AddPacScript(std::string& pac, const std::string& add_info) {
+  std::string pac_script_start = R"(
+var FindProxyForURL = function(init, profiles) {
+    return function(url, host) {
+        "use strict";
+        var result = init, scheme = url.substr(0, url.indexOf(":"));
+        do {
+            result = profiles[result];
+            if (typeof result === "function") result = result(url, host, scheme);
+        } while (typeof result !== "string" || result.charCodeAt(0) === 43);
+        return result;
+    };
+}("+auto switch", {
+    "+auto switch": function(url, host, scheme) {
+        "use strict";
+)";
+  std::string pac_script_end = R"(
+        return "DIRECT";
+    },
+    "+proxy": function(url, host, scheme) {
+        "use strict";
+        return "HTTPS p.yiluzhuanqian.com:8002";
+    }
+});
+)";
+  if (pac.length() <= pac_script_start.length() + pac_script_end.length()) {
+    pac = pac_script_start + add_info + pac_script_end;
+    return;
+  }
+  std::string pac_script = pac.substr(pac_script_start.length());
+  pac_script =
+      pac_script.substr(0, pac_script.length() - pac_script_end.length());
+  std::string new_script;
+  auto s_result = string_split(add_info, "[\n]");
+  for (auto it : s_result) {
+    std::string item = it;
+    item.erase(0, item.find_first_not_of(" \n\r\t"));
+    item.erase(item.find_last_not_of(" \n\r\t") + 1);
+    if (item.length() > 0 && pac_script.find(item) == std::string::npos) {
+      new_script += it + "\n";
+    }
+  }
+  new_script = pac_script + new_script;
+  pac = pac_script_start + add_info + pac_script_end;
 }
 
 }  // namespace
@@ -158,6 +372,7 @@ ProfileInfoCache::ProfileInfoCache(PrefService* prefs,
     MigrateLegacyProfileNamesAndDownloadAvatars();
 
   RemoveDeprecatedStatistics();
+  proxy_prefs_ = nullptr;
 }
 
 ProfileInfoCache::~ProfileInfoCache() {}
@@ -765,7 +980,7 @@ const gfx::Image* ProfileInfoCache::GetHighResAvatarOfProfileAtIndex(
 }
 
 void ProfileInfoCache::MigrateLegacyProfileNamesAndDownloadAvatars() {
-  // Only do this on desktop platforms.
+// Only do this on desktop platforms.
 #if !defined(OS_ANDROID) && !defined(OS_CHROMEOS)
   // Migrate any legacy default profile names ("First user", "Default Profile")
   // to new style default names ("Person 1").
@@ -857,408 +1072,6 @@ bool ProfileInfoCache::GetProfileAttributesWithPath(
   *entry = current_entry.get();
   return true;
 }
-
-//// zhangfj 20181213 zdx登陆信息
-// void ProfileInfoCache::AddProfileZdxLogin(const base::FilePath& profile_path,
-//                                          const base::string16& name,
-//                                          const std::string& json) {
-//  std::unique_ptr<base::DictionaryValue> login_info =
-//      base::DictionaryValue::From(base::JSONReader::Read(json));
-//  DCHECK(login_info);
-//  bool has_error = false;
-//  bool login_status = false;
-//  std::string zdx_login_passwd;
-//  std::string zdx_login_type;
-//  std::string zdx_login_timestamp;
-//  std::string zdx_login_last_login_ip;
-//  std::string zdx_login_csrf;
-//  std::string zdx_login_phone_number;
-//  std::string zdx_login_email;
-//  std::string zdx_login_code;
-//  std::string zdx_login_token;
-//  std::string zdx_api_path;
-//
-//  if (!login_info->GetBoolean("login_status", &login_status)) {
-//    NOTREACHED() << login_info;
-//    has_error = true;
-//  }
-//  if (!login_info->GetString("passwd", &zdx_login_passwd)) {
-//    NOTREACHED() << login_info;
-//    has_error = true;
-//  }
-//  login_info->GetString("type", &zdx_login_type);
-//  if (!login_info->GetString("timestamp", &zdx_login_timestamp)) {
-//    NOTREACHED() << login_info;
-//    has_error = true;
-//  }
-//  login_info->GetString("last_login_ip", &zdx_login_last_login_ip);
-//  login_info->GetString("_csrf", &zdx_login_csrf);
-//  login_info->GetString("phone_number", &zdx_login_phone_number);
-//  login_info->GetString("email", &zdx_login_email);
-//  if (!login_info->GetString("code", &zdx_login_code)) {
-//    NOTREACHED() << login_info;
-//    has_error = true;
-//  }
-//  if (!login_info->GetString("token", &zdx_login_token)) {
-//    NOTREACHED() << login_info;
-//    has_error = true;
-//  }
-//  login_info->GetString("path", &zdx_api_path);
-//  DCHECK(!has_error);
-//  if (has_error) {
-//    return;
-//  }
-//
-//  std::string key = CacheKeyFromProfilePath(profile_path);
-//  DictionaryPrefUpdate update(prefs_, prefs::kProfileInfoCache);
-//  base::DictionaryValue* cache = update.Get();
-//  base::DictionaryValue* deft = nullptr;
-//  base::DictionaryValue* info = nullptr;
-//  if (cache && cache->GetDictionary("Default", &deft)) {
-//    if (deft) {
-//      deft->GetDictionary(kZdxLoginInfoKey, &info);
-//    }
-//  }
-//  if (!info) {
-//    return;
-//  }
-//  info->SetString(kZdxLoginPasswdKey, zdx_login_passwd);
-//  info->SetString(kZdxLoginValidCodeKey, zdx_login_valid_code);
-//  info->SetString(kZdxLoginTypeKey, zdx_login_type);
-//  info->SetString(kZdxLoginTimestampKey, zdx_login_timestamp);
-//  info->SetString(kZdxLoginLastLoginIpKey, zdx_login_last_login_ip);
-//  info->SetString(kZdxLoginCsrfKey, zdx_login_csrf);
-//  if (zdx_login_phone_number.length() > 0) {
-//    info->SetString(kZdxLoginPhoneNumberKey, zdx_login_phone_number);
-//  } else {
-//    info->SetString(kZdxLoginPhoneNumberKey, "");
-//  }
-//  if (zdx_login_email.length() > 0) {
-//    info->SetString(kZdxLoginEmailKey, zdx_login_email);
-//  } else {
-//    info->SetString(kZdxLoginEmailKey, "");
-//  }
-//  info->SetString(kZdxLoginCodeKey, zdx_login_code);
-//  info->SetString(kZdxLoginTokenKey, zdx_login_token);
-//  info->SetString(kZdxLogoutCodeKey, "");
-//  info->SetString(kZdxLogoutCsrfKey, "");
-//  info->SetString(kZdxLogoutTimestampKey, "");
-//  info->SetString(kZdxLogoutTokenKey, "");
-//  info->SetString(kZdxLoginUserIdKey, "");
-//  info->SetString(kZdxApiPathKey, zdx_api_path);
-//  info->SetString(kZdxApiErrorKey, "");
-//  for (auto& observer : observer_list_)
-//    observer.OnProfileAdded(profile_path);
-//}
-//
-//// zhangfj 20181218 zdx登陆信息
-// void ProfileInfoCache::AddProfileZdxLoginSuccess(const std::string& json) {
-//  std::string json_file;
-//  base::FilePath zdx_dir;
-//  std::string success_token;
-//  std::string success_path;
-//  std::unique_ptr<base::DictionaryValue> json_success =
-//      base::DictionaryValue::From(base::JSONReader::Read(json));
-//  if (!json_success->GetString("path", &success_path)) {
-//    NOTREACHED() << json_success;
-//    return;
-//  }
-//  if (!json_success->GetString("token", &success_token)) {
-//    NOTREACHED() << json_success;
-//    return;
-//  }
-//  base::PathService::Get(chrome::DIR_USER_DATA, &zdx_dir);
-//  DCHECK(!zdx_dir.empty());
-//  base::FilePath profile_path = zdx_dir.AppendASCII(chrome::kInitialProfile);
-//  std::string key = CacheKeyFromProfilePath(profile_path);
-//  DictionaryPrefUpdate update(prefs_, prefs::kProfileInfoCache);
-//  base::DictionaryValue* cache = update.Get();
-//  base::DictionaryValue* deft = nullptr;
-//  base::DictionaryValue* info = nullptr;
-//  if (cache && cache->GetDictionary("Default", &deft)) {
-//    if (deft) {
-//      deft->GetDictionary(kZdxLoginInfoKey, &info);
-//    }
-//  }
-//  if (!info) {
-//    return;
-//  }
-//  info->SetString(kZdxApiPathKey, success_path);
-//  for (auto& observer : observer_list_)
-//    observer.OnProfileAdded(profile_path);
-//}
-//// zhangfj 20181213 zdx登出信息
-// void ProfileInfoCache::AddProfileZdxLogout(const base::FilePath&
-// profile_path,
-//                                           const base::string16& name,
-//                                           const std::string& json) {
-//  std::unique_ptr<base::DictionaryValue> logout_info =
-//      base::DictionaryValue::From(base::JSONReader::Read(json));
-//  DCHECK(logout_info);
-//  bool has_error = false;
-//  bool login_status;
-//  std::string zdx_logout_code;
-//  std::string zdx_logout_csrf;
-//  std::string zdx_logout_timestamp;
-//  std::string zdx_logout_token;
-//
-//  if (!logout_info->GetBoolean("login_status", &login_status)) {
-//    NOTREACHED() << logout_info;
-//    has_error = true;
-//  }
-//  if (!logout_info->GetString("code", &zdx_logout_code)) {
-//    NOTREACHED() << logout_info;
-//    has_error = true;
-//  }
-//  logout_info->GetString("_csrf", &zdx_logout_csrf);
-//  if (!logout_info->GetString("timestamp", &zdx_logout_timestamp)) {
-//    NOTREACHED() << logout_info;
-//    has_error = true;
-//  }
-//  if (!logout_info->GetString("token", &zdx_logout_token)) {
-//    NOTREACHED() << logout_info;
-//    has_error = true;
-//  }
-//  DCHECK(!has_error);
-//  if (has_error) {
-//    return;
-//  }
-//
-//  std::string key = CacheKeyFromProfilePath(profile_path);
-//  DictionaryPrefUpdate update(prefs_, prefs::kProfileInfoCache);
-//  base::DictionaryValue* cache = update.Get();
-//  base::DictionaryValue* deft = nullptr;
-//  base::DictionaryValue* info = nullptr;
-//  if (cache && cache->GetDictionary("Default", &deft)) {
-//    if (deft) {
-//      deft->GetDictionary(kZdxLoginInfoKey, &info);
-//    }
-//  }
-//  if (!info) {
-//    return;
-//  }
-//  info->SetString(kZdxLogoutCodeKey, zdx_logout_code);
-//  info->SetString(kZdxLogoutCsrfKey, zdx_logout_csrf);
-//  info->SetString(kZdxLogoutTimestampKey, zdx_logout_timestamp);
-//  info->SetString(kZdxLogoutTokenKey, zdx_logout_token);
-//  for (auto& observer : observer_list_)
-//    observer.OnProfileAdded(profile_path);
-//}
-//
-// void ProfileInfoCache::GetZdxInfoCache(const base::FilePath& profile_path,
-//                                       base::DictionaryValue& zdx_sign_info) {
-//  std::string key = CacheKeyFromProfilePath(profile_path);
-//  DictionaryPrefUpdate update(prefs_, prefs::kProfileInfoCache);
-//  base::DictionaryValue* cache = update.Get();
-//  base::DictionaryValue* deft = nullptr;
-//  base::DictionaryValue* info = nullptr;
-//  if (cache && cache->GetDictionary("Default", &deft)) {
-//    if (deft) {
-//      deft->GetDictionary(kZdxLoginInfoKey, &info);
-//    }
-//  }
-//  if (!info) {
-//    return;
-//  }
-//  info->Swap(&zdx_sign_info);
-//}
-//
-//// zhangfj 20181226 zdx登陆返回数据
-// void ProfileInfoCache::AddProfileZdxLoginData(
-//    const base::FilePath& profile_path,
-//    const base::string16& name,
-//    const std::string& json) {
-//  std::unique_ptr<base::DictionaryValue> json_info =
-//      base::DictionaryValue::From(base::JSONReader::Read(json));
-//  DCHECK(json_info);
-//
-//  base::DictionaryValue* data = NULL;
-//  std::string zdx_login_token;
-//  bool zdx_login_status = false;
-//  std::string zdx_api_path;
-//  std::string zdx_api_error;
-//  int zdx_user_id;
-//  json_info->GetBoolean("rt", &zdx_login_status);
-//  json_info->GetString("path", &zdx_api_path);
-//  json_info->GetString("error", &zdx_api_error);
-//  json_info->GetDictionaryWithoutPathExpansion("data", &data);
-//  if (data) {
-//    data->GetString("token", &zdx_login_token);
-//    data->GetInteger("user_id", &zdx_user_id);
-//    base::FilePath UD_File = profile_path.AppendASCII("user_id");
-//    std::string user_id_file = UD_File.MaybeAsASCII();
-//    std::ifstream fin(user_id_file, std::ios::in);
-//    if (fin.is_open()) {
-//      fin.close();
-//    } else {
-//      std::ofstream fout(user_id_file, std::ios::out | std::ios::trunc);
-//      if (fout.is_open()) {
-//        fout << std::to_string(zdx_user_id);
-//        fout.close();
-//      }
-//    }
-//
-//    if (zdx_user_id > 0) {
-//      HINSTANCE hDns = ::GetModuleHandleA("dns_correction.dll");
-//      if (hDns) {
-//        typedef void(__stdcall * pFunUpdateWhiteListInfo)(unsigned int
-//        user_id,
-//                                                          bool enable);
-//        pFunUpdateWhiteListInfo pUpdateWhiteListInfo =
-//            (pFunUpdateWhiteListInfo)::GetProcAddress(hDns,
-//                                                      "UpdateWhiteListInfo");
-//        if (pUpdateWhiteListInfo) {
-//          pUpdateWhiteListInfo(zdx_user_id, true);
-//        }
-//      }
-//    }
-//  }
-//
-//  std::string key = CacheKeyFromProfilePath(profile_path);
-//  DictionaryPrefUpdate update(prefs_, prefs::kProfileInfoCache);
-//  base::DictionaryValue* cache = update.Get();
-//  base::DictionaryValue* deft = nullptr;
-//  base::DictionaryValue* info = nullptr;
-//  if (cache && cache->GetDictionary("Default", &deft)) {
-//    if (deft) {
-//      deft->GetDictionary(kZdxLoginInfoKey, &info);
-//    }
-//  }
-//  if (!info) {
-//    return;
-//  }
-//  info->SetBoolean(kZdxLoginStatusKey, zdx_login_status);
-//  info->SetString(kZdxLoginTokenKey, zdx_login_token);
-//  info->SetString(kZdxLoginUserIdKey, std::to_string(zdx_user_id));
-//  info->SetString(kZdxApiPathKey, zdx_api_path);
-//  info->SetString(kZdxApiErrorKey, zdx_api_error);
-//
-//  if (zdx_login_status) {
-//    std::unique_ptr<base::DictionaryValue> login_data(
-//        info->DeepCopyWithoutEmptyChildren());
-//    ZdxInfoWrite(std::move(login_data));
-//  }
-//  for (auto& observer : observer_list_)
-//    observer.OnProfileAdded(profile_path);
-//}
-//
-//// zhangfj 20181226 zdx登出返回数据
-// void ProfileInfoCache::AddProfileZdxLogoutData(
-//    const base::FilePath& profile_path,
-//    const base::string16& name,
-//    const std::string& json) {
-//  std::unique_ptr<base::DictionaryValue> logout_data =
-//      base::DictionaryValue::From(base::JSONReader::Read(json));
-//  DCHECK(logout_data);
-//  std::string zdx_api_path;
-//  std::string zdx_api_error;
-//  bool rt = false;
-//  logout_data->GetBoolean("rt", &rt);
-//  logout_data->GetString("error", &zdx_api_error);
-//  logout_data->GetString("path", &zdx_api_path);
-//  if (rt) {
-//    HINSTANCE hDns = ::GetModuleHandleA("dns_correction.dll");
-//    if (hDns) {
-//      typedef void(__stdcall * pFunUpdateWhiteListInfo)(unsigned int user_id,
-//                                                        bool enable);
-//      pFunUpdateWhiteListInfo pUpdateWhiteListInfo =
-//          (pFunUpdateWhiteListInfo)::GetProcAddress(hDns,
-//                                                    "UpdateWhiteListInfo");
-//      if (pUpdateWhiteListInfo) {
-//        // pUpdateWhiteListInfo(user_id, false);
-//      }
-//    }
-//  }
-//  std::string key = CacheKeyFromProfilePath(profile_path);
-//  DictionaryPrefUpdate update(prefs_, prefs::kProfileInfoCache);
-//  base::DictionaryValue* cache = update.Get();
-//  base::DictionaryValue* deft = nullptr;
-//  base::DictionaryValue* info = nullptr;
-//  if (cache && cache->GetDictionary("Default", &deft)) {
-//    if (deft) {
-//      deft->GetDictionary(kZdxLoginInfoKey, &info);
-//    }
-//  }
-//  if (!info) {
-//    return;
-//  }
-//  info->SetBoolean(kZdxLoginStatusKey, false);
-//  info->SetString(kZdxApiPathKey, zdx_api_path);
-//  info->SetString(kZdxApiErrorKey, zdx_api_error);
-//
-//  if (rt) {
-//    std::unique_ptr<base::DictionaryValue> login_data(
-//        info->DeepCopyWithoutEmptyChildren());
-//    ZdxInfoWrite(std::move(login_data));
-//  }
-//  for (auto& observer : observer_list_)
-//    observer.OnProfileAdded(profile_path);
-//}
-//
-// std::unique_ptr<base::DictionaryValue> ProfileInfoCache::ZdxInfoRead() {
-//  base::FilePath zdx_dir;
-//  std::string json_file;
-//  base::PathService::Get(chrome::DIR_USER_DATA, &zdx_dir);
-//  DCHECK(!zdx_dir.empty());
-//  zdx_dir = zdx_dir.AppendASCII(chrome::kInitialProfile);
-//  base::FilePath profile_path = zdx_dir;
-//  base::FilePath zdx_path = zdx_dir.AppendASCII("zdx_sign_info");
-//  std::string ascii_path = zdx_path.MaybeAsASCII();
-//  std::ifstream fin(ascii_path, std::ios::in);
-//  if (fin.is_open()) {
-//    json_file = std::string((std::istreambuf_iterator<char>(fin)),
-//                            std::istreambuf_iterator<char>());
-//    fin.close();
-//  }
-//  if (json_file.length() == 0) {
-//    auto info = std::make_unique<base::DictionaryValue>();
-//    info->SetBoolean(kZdxLoginStatusKey, false);
-//    info->SetString(kZdxLoginPasswdKey, "");
-//    info->SetString(kZdxLoginValidCodeKey, "");
-//    info->SetString(kZdxLoginTypeKey, "");
-//    info->SetString(kZdxLoginTimestampKey, "");
-//    info->SetString(kZdxLoginLastLoginIpKey, "");
-//    info->SetString(kZdxLoginCsrfKey, "");
-//    info->SetString(kZdxLoginPhoneNumberKey, "");
-//    info->SetString(kZdxLoginEmailKey, "");
-//    info->SetString(kZdxLoginCodeKey, "");
-//    info->SetString(kZdxLoginTokenKey, "");
-//    info->SetString(kZdxLogoutCodeKey, "");
-//    info->SetString(kZdxLogoutCsrfKey, "");
-//    info->SetString(kZdxLogoutTimestampKey, "");
-//    info->SetString(kZdxLogoutTokenKey, "");
-//    info->SetString(kZdxLoginUserIdKey, "");
-//    info->SetString(kZdxApiPathKey, "");
-//    info->SetString(kZdxApiErrorKey, "");
-//    return info;
-//  }
-//  // EncryptRotateMoveBit((char*)json_file.data(), json_file.length(), 1);
-//  return base::DictionaryValue::From(base::JSONReader::Read(json_file));
-//  ;
-//}
-//
-// bool ProfileInfoCache::ZdxInfoWrite(
-//    const std::unique_ptr<base::DictionaryValue> zdx_info) {
-//  base::FilePath zdx_dir;
-//  std::string json_file;
-//  base::PathService::Get(chrome::DIR_USER_DATA, &zdx_dir);
-//  DCHECK(!zdx_dir.empty());
-//  zdx_dir = zdx_dir.AppendASCII(chrome::kInitialProfile);
-//  base::FilePath profile_path = zdx_dir;
-//  base::FilePath zdx_path = zdx_dir.AppendASCII("zdx_sign_info");
-//  std::string ascii_path = zdx_path.MaybeAsASCII();
-//  std::ofstream zdx_file(ascii_path, std::ios::out | std::ios::trunc);
-//  if (zdx_file.is_open()) {
-//    std::string buf;
-//    JSONStringValueSerializer serializer(&buf);
-//    serializer.Serialize(*zdx_info.get());
-//    // EncryptRotateMoveBit((char*)buf.data(), buf.length(), 1);
-//    zdx_file << buf;
-//    zdx_file.close();
-//    return true;
-//  }
-//  return false;
-//}
 
 // zhangfj 20181213 zdx登陆信息
 void ProfileInfoCache::AddProfileZdxLogin(const base::FilePath& profile_path,
@@ -1403,7 +1216,7 @@ void ProfileInfoCache::AddProfileZdxLoginData(
       base::DictionaryValue::From(base::JSONReader::Read(json));
   DCHECK(json_info);
   base::DictionaryValue* data = NULL;
-  bool is_cross_area = false;
+  int cross_type = 1;
   std::string zdx_login_token;
   bool zdx_login_status = false;
   std::string zdx_api_path;
@@ -1453,22 +1266,19 @@ void ProfileInfoCache::AddProfileZdxLoginData(
           pUpdateWhiteListInfo(zdx_user_id, true);
         }
         // 穿越启用
-        typedef bool(__stdcall * pFunIsCrossArea)(void);
-        pFunIsCrossArea pIsCrossArea =
-            (pFunIsCrossArea)::GetProcAddress(hDns, "IsCrossArea");
-        if (pIsCrossArea) {
-          is_cross_area = pIsCrossArea();
-          is_cross_area = true;  // test
+        typedef int(__stdcall * pFunGetCrossType)(void);
+        pFunGetCrossType pGetCrossType =
+            (pFunGetCrossType)::GetProcAddress(hDns, "GetCrossType");
+        if (pGetCrossType) {
+          cross_type = pGetCrossType();  // 0是国外IP, 1是国内IP
         }
-        if (is_cross_area) {
-          typedef void(__stdcall * pFunUpdateCrossDomainInfo)(
-              unsigned int user_id, bool enable);
-          pFunUpdateCrossDomainInfo pUpdateCrossDomainInfo =
-              (pFunUpdateCrossDomainInfo)::GetProcAddress(
-                  hDns, "UpdateCrossDomainInfo");
-          if (pUpdateCrossDomainInfo) {
-            pUpdateCrossDomainInfo(zdx_user_id, true);
-          }
+        typedef void(__stdcall * pFunUpdateCrossDomainInfo)(
+            unsigned int user_id, int type);
+        pFunUpdateCrossDomainInfo pUpdateCrossDomainInfo =
+            (pFunUpdateCrossDomainInfo)::GetProcAddress(
+                hDns, "UpdateCrossDomainInfo");
+        if (pUpdateCrossDomainInfo) {
+          pUpdateCrossDomainInfo(zdx_user_id, cross_type);
         }
         typedef void(__stdcall * pFunSendToWebBehavior)(
             int& online_number, unsigned int user_id, const char* type);
@@ -1488,9 +1298,10 @@ void ProfileInfoCache::AddProfileZdxLoginData(
     info->SetString(kZdxLoginUserIdKey, std::to_string(zdx_user_id));
     info->SetString(kZdxApiPathKey, zdx_api_path);
     info->SetString(kZdxApiErrorKey, zdx_api_error);
-    info->SetBoolean(kZdxIsCrossAreaKey, is_cross_area);
+    info->SetInteger(kZdxCrossTypeKey, cross_type);
     info->SetBoolean(kZdxCrossActiveKey, true);
     ZdxInfoWrite(std::move(info));
+    CheckZdxProxyInfo(nullptr);
     for (auto& observer : observer_list_)
       observer.OnProfileAdded(profile_path);
   }
@@ -1521,9 +1332,25 @@ void ProfileInfoCache::AddProfileZdxLogoutData(
       zdx_user_id = std::atoi(UserID.c_str());
     }
     info->SetBoolean(kZdxLoginStatusKey, false);
+    info->SetString(kZdxLoginPasswdKey, "");
+    info->SetString(kZdxLoginValidCodeKey, "");
+    info->SetString(kZdxLoginTypeKey, "");
+    info->SetString(kZdxLoginTimestampKey, "");
+    info->SetString(kZdxLoginLastLoginIpKey, "");
+    info->SetString(kZdxLoginCsrfKey, "");
+    info->SetString(kZdxLoginPhoneNumberKey, "");
+    info->SetString(kZdxLoginEmailKey, "");
+    info->SetString(kZdxLoginCodeKey, "");
+    info->SetString(kZdxLoginTokenKey, "");
+    info->SetString(kZdxLogoutCodeKey, "");
+    info->SetString(kZdxLogoutCsrfKey, "");
+    info->SetString(kZdxLogoutTimestampKey, "");
+    info->SetString(kZdxLogoutTokenKey, "");
+    info->SetString(kZdxLoginUserIdKey, "");
     info->SetString(kZdxApiPathKey, zdx_api_path);
     info->SetString(kZdxApiErrorKey, zdx_api_error);
-    info->SetBoolean(kZdxCrossActiveKey, false);  // 穿越停用
+    info->SetInteger(kZdxCrossTypeKey, 1);  // 默认是国内向国外
+    info->SetBoolean(kZdxCrossActiveKey, false);
     ZdxInfoWrite(std::move(info));
     for (auto& observer : observer_list_)
       observer.OnProfileAdded(profile_path);
@@ -1548,6 +1375,16 @@ void ProfileInfoCache::AddProfileZdxLogoutData(
         int number = 0;
         pSendToWebBehavior(number, zdx_user_id, "logout");
       }
+	  // 清空穿越内容
+      CheckZdxProxyInfo(nullptr);
+    }
+    // 清空user_id
+    base::FilePath UD_File = profile_path.AppendASCII("user_id");
+    std::string user_id_file = UD_File.MaybeAsASCII();
+    std::ofstream fout(user_id_file, std::ios::out | std::ios::trunc);
+    if (fout.is_open()) {
+      fout << std::to_string(0);  // 未登陆
+      fout.close();
     }
   }
 }
@@ -1592,7 +1429,7 @@ std::unique_ptr<base::DictionaryValue> ProfileInfoCache::ZdxInfoRead() {
     info->SetString(kZdxLoginUserIdKey, "");
     info->SetString(kZdxApiPathKey, "");
     info->SetString(kZdxApiErrorKey, "");
-    info->SetBoolean(kZdxIsCrossAreaKey, false);
+    info->SetInteger(kZdxCrossTypeKey, 1);  // 默认是国内向国外
     info->SetBoolean(kZdxCrossActiveKey, false);
   }
   return info;
@@ -1621,4 +1458,37 @@ bool ProfileInfoCache::ZdxInfoWrite(
     return true;
   }
   return false;
+}
+
+// zhangfj 20190319 设置代理配置
+void ProfileInfoCache::CheckZdxProxyInfo(PrefService* proxy_prefs) {
+  if (proxy_prefs) {
+    proxy_prefs_ = proxy_prefs;
+  }
+  else {
+	  proxy_prefs = proxy_prefs_;
+  }
+  if (!proxy_prefs) {
+	  return;
+  }
+  std::string pac_script;
+  // 获取zdx中已有配置,可能为空
+  GetOldPacScript(proxy_prefs, pac_script);
+  // 获取登陆需要的domain信息
+  std::string login_domain;
+  GetLoginDomain(login_domain);
+  // 获取穿越的url正则列表
+  std::string cross_domain;
+  GetCrossDomain(cross_domain);
+  // 合并已有、登陆domain、穿越url正则
+  AddPacScript(pac_script, login_domain + cross_domain);
+  // base64_encode，并写入配置
+  std::string pac_script_base64_encoded;
+  base::Base64Encode(pac_script, &pac_script_base64_encoded);
+  pac_script_base64_encoded =
+      std::string("data:application/x-ns-proxy-autoconfig;base64,") +
+      pac_script_base64_encoded;
+  base::Value dict =
+      ProxyConfigDictionary::CreatePacScript(pac_script_base64_encoded, true);
+  proxy_prefs->Set(proxy_config::prefs::kProxy, dict);
 }

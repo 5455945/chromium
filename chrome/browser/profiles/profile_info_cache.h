@@ -152,14 +152,14 @@ class ProfileInfoCache : public ProfileInfoInterface,
   bool GetProfileAttributesWithPath(const base::FilePath& path,
                                     ProfileAttributesEntry** entry) override;
 
-    // zhangfj 20181213 zdx登陆信息
+  // zhangfj 20181213 zdx登陆信息
   void AddProfileZdxLogin(const base::FilePath& profile_path,
-                  const base::string16& name,
-                  const std::string& json) override;
+                          const base::string16& name,
+                          const std::string& json) override;
   void AddProfileZdxLoginSuccess(const std::string& json) override;
   void AddProfileZdxLogout(const base::FilePath& profile_path,
-                     const base::string16& name,
-                     const std::string& json) override;
+                           const base::string16& name,
+                           const std::string& json) override;
   void GetZdxInfoCache(const base::FilePath& profile_path,
                        base::DictionaryValue& zdx_sign_info) override;
   // zhangfj 20181226 zdx登陆返回数据
@@ -170,6 +170,9 @@ class ProfileInfoCache : public ProfileInfoInterface,
   void AddProfileZdxLogoutData(const base::FilePath& profile_path,
                                const base::string16& name,
                                const std::string& json) override;
+
+  // zhangfj 20190319 设置代理配置
+  void CheckZdxProxyInfo(PrefService* CheckZdxProxyInfo) override;
 
  private:
   FRIEND_TEST_ALL_PREFIXES(ProfileAttributesStorageTest,
@@ -208,6 +211,8 @@ class ProfileInfoCache : public ProfileInfoInterface,
 
   std::vector<std::string> sorted_keys_;
   const base::FilePath user_data_dir_;
+
+  PrefService* proxy_prefs_;
 
   DISALLOW_COPY_AND_ASSIGN(ProfileInfoCache);
 };
