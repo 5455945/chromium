@@ -89,6 +89,12 @@ extern const char kConversionMeasurementApiDescription[];
 extern const char kConversionMeasurementDebugModeName[];
 extern const char kConversionMeasurementDebugModeDescription[];
 
+extern const char kDefaultChromeAppUninstallSyncName[];
+extern const char kDefaultChromeAppUninstallSyncDescription[];
+
+extern const char kDeprecateMenagerieAPIName[];
+extern const char kDeprecateMenagerieAPIDescription[];
+
 extern const char kDetectedSourceLanguageOptionName[];
 extern const char kDetectedSourceLanguageOptionDescription[];
 
@@ -1314,6 +1320,9 @@ extern const char kWebOTPCrossDeviceDescription[];
 
 extern const char kSpeculativeServiceWorkerStartOnQueryInputName[];
 extern const char kSpeculativeServiceWorkerStartOnQueryInputDescription[];
+
+extern const char kSplitCacheByNetworkIsolationKeyName[];
+extern const char kSplitCacheByNetworkIsolationKeyDescription[];
 
 extern const char kStopInBackgroundName[];
 extern const char kStopInBackgroundDescription[];

@@ -2292,7 +2292,7 @@ bool RenderFrameHostImpl::CreateRenderFrame(
   params->previous_sibling_routing_id = previous_sibling_routing_id;
   params->replication_state =
       frame_tree_node()->current_replication_state().Clone();
-  params->frame_token = frame_token_;
+  params->token = frame_token_;
   params->devtools_frame_token = frame_tree_node()->devtools_frame_token();
 
   // If this is a new RenderFrameHost for a frame that has already committed a
@@ -5432,8 +5432,8 @@ void RenderFrameHostImpl::CreateNewWindow(
       devtools_instrumentation::ShouldWaitForDebuggerInWindowOpen();
   mojom::CreateNewWindowReplyPtr reply = mojom::CreateNewWindowReply::New(
       main_frame->GetRenderViewHost()->GetRoutingID(),
-      main_frame->GetRoutingID(), std::move(pending_frame_receiver),
-      main_frame->GetFrameToken(), std::move(widget_params),
+      main_frame->GetFrameToken(), main_frame->GetRoutingID(),
+      std::move(pending_frame_receiver), std::move(widget_params),
       std::move(page_broadcast_receiver), std::move(browser_interface_broker),
       cloned_namespace->id(), main_frame->GetDevToolsFrameToken(),
       wait_for_debugger,
@@ -9255,9 +9255,10 @@ void RenderFrameHostImpl::DidCommitNavigation(
   DCHECK(!IsInBackForwardCache());
 
   std::unique_ptr<NavigationRequest> request;
-  // A `committing_navigation_request` is not present only in the case of
-  // committing an initial empty document in a frame. In all other cases it
-  // should be non-null and present in the map of NavigationRequests.
+  // TODO(https://crbug.com/778318): a `committing_navigation_request` is not
+  // present if and only if this is a synchronous re-navigation to about:blank
+  // initiated by Blink. In all other cases it should be non-null and present in
+  // the map of NavigationRequests.
   if (committing_navigation_request) {
     committing_navigation_request->IgnoreCommitInterfaceDisconnection();
     if (!MaybeInterceptCommitCallback(committing_navigation_request, &params,

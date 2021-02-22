@@ -1776,14 +1776,14 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
   <owner>xingliu@chromium.org</owner>
   <summary>
     Logs the duration in milliseconds between bookmark creation time and
-    bookmark open time based on device local time. Recorded when the bookmark is
-    opened. Bookmark folder is not considered. Can be logged in multiple browser
-    sessions.
+    bookmark open time based on device local time. Recorded when {BookmarkType}
+    is opened. Bookmark folder is not considered. The creation and open can
+    happen on different runs of Chrome.
   </summary>
   <token key="BookmarkType">
-    <variant name="Normal" summary="A normal bookmark."/>
-    <variant name="Partner" summary="A partner bookmark."/>
-    <variant name="ReadingList" summary="A reading list article."/>
+    <variant name="Normal" summary="a normal bookmark."/>
+    <variant name="Partner" summary="a partner bookmark."/>
+    <variant name="ReadingList" summary="a reading list article."/>
   </token>
 </histogram>
 
@@ -18346,6 +18346,24 @@ regressions. -->
   </summary>
 </histogram>
 
+<histogram name="WebAuthentication.CableV2.AOADiscoveryEvent"
+    enum="WebAuthenticationAOADiscoveryEvent" expires_after="2021-11-19">
+  <owner>agl@chromium.org</owner>
+  <owner>martinkr@google.com</owner>
+  <summary>
+    Records events that happen during the discovery of USB-connected phones.
+  </summary>
+</histogram>
+
+<histogram name="WebAuthentication.CableV2.DiscoveryEvent"
+    enum="WebAuthenticationCableV2DiscoveryEvent" expires_after="2021-11-19">
+  <owner>agl@chromium.org</owner>
+  <owner>martinkr@google.com</owner>
+  <summary>
+    Records events that happen when listening for a caBLEv2 device.
+  </summary>
+</histogram>
+
 <histogram name="WebAuthentication.CableV2.MobileEvent"
     enum="WebAuthenticationCableV2MobileEvent" expires_after="2021-11-19">
   <owner>agl@chromium.org</owner>
@@ -18371,6 +18389,15 @@ regressions. -->
     The time between the phone connecting to the tunnel server (and thus
     starting its BLE broadcast) to the point where it receives the handshake
     message from the desktop.
+  </summary>
+</histogram>
+
+<histogram name="WebAuthentication.CableV2.TunnelEvent"
+    enum="WebAuthenticationCableV2TunnelEvent" expires_after="2021-11-19">
+  <owner>agl@chromium.org</owner>
+  <owner>martinkr@google.com</owner>
+  <summary>
+    Records events that occur during the creation of a caBLEv2 tunnel.
   </summary>
 </histogram>
 

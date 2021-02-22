@@ -136,6 +136,7 @@
 #include "third_party/blink/public/common/feature_policy/policy_value.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
+#include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/frame/frame.mojom-test-utils.h"
 #include "third_party/blink/public/mojom/frame/frame.mojom.h"
 #include "third_party/blink/public/mojom/leak_detector/leak_detector.mojom-test-utils.h"
@@ -940,9 +941,21 @@ class SitePerProcessWebBundleBrowserTest : public SitePerProcessBrowserTest {
   SitePerProcessWebBundleBrowserTest() {
     feature_list_.InitAndEnableFeature(features::kSubresourceWebBundles);
   }
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    SitePerProcessBrowserTestBase::SetUpCommandLine(command_line);
+    command_line->AppendSwitch(switches::kIgnoreCertificateErrors);
+  }
+  void SetUpOnMainThread() override {
+    SitePerProcessBrowserTestBase::SetUpOnMainThread();
+    https_server_.ServeFilesFromSourceDirectory(GetTestDataFilePath());
+    ASSERT_TRUE(https_server_.Start());
+  }
+  net::EmbeddedTestServer* https_server() { return &https_server_; }
 
  private:
   base::test::ScopedFeatureList feature_list_;
+  net::EmbeddedTestServer https_server_{
+      net::EmbeddedTestServer::Type::TYPE_HTTPS};
 };
 
 IN_PROC_BROWSER_TEST_P(SitePerProcessHighDPIBrowserTest,
@@ -6276,8 +6289,8 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
   // used to crash, as parent_routing_id refers to a proxy that doesn't exist
   // anymore.
   agent_scheduling_group_a->CreateFrameProxy(
-      new_routing_id, view_routing_id, base::nullopt, parent_routing_id,
-      mojom::FrameReplicationState::New(), base::UnguessableToken::Create(),
+      blink::RemoteFrameToken(), new_routing_id, base::nullopt, view_routing_id,
+      parent_routing_id, mojom::FrameReplicationState::New(),
       base::UnguessableToken::Create());
 
   // Ensure the subframe is detached in the browser process.
@@ -6328,7 +6341,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
       process, RenderProcessHostWatcher::WATCH_FOR_PROCESS_EXIT);
   int frame_routing_id =
       node->render_manager()->speculative_frame_host()->GetRoutingID();
-  base::UnguessableToken frame_token =
+  blink::LocalFrameToken frame_token =
       node->render_manager()->speculative_frame_host()->GetFrameToken();
   int previous_routing_id =
       node->render_manager()->GetProxyToParent()->GetRoutingID();
@@ -6351,7 +6364,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
         shell()->web_contents()->GetMainFrame()->GetRoutingID();
     params->previous_sibling_routing_id = IPC::mojom::kRoutingIdNone;
     params->frame_owner_properties = blink::mojom::FrameOwnerProperties::New();
-    params->frame_token = frame_token;
+    params->token = frame_token;
     params->devtools_frame_token = base::UnguessableToken::Create();
     params->policy_container = CreateStubPolicyContainer();
     params->replication_state = mojom::FrameReplicationState::New();
@@ -6401,7 +6414,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest, ParentDetachRemoteChild) {
   RenderProcessHostWatcher watcher(
       process, RenderProcessHostWatcher::WATCH_FOR_PROCESS_EXIT);
   int frame_routing_id = node->current_frame_host()->GetRoutingID();
-  base::UnguessableToken frame_token =
+  blink::LocalFrameToken frame_token =
       node->current_frame_host()->GetFrameToken();
   int widget_routing_id =
       node->current_frame_host()->GetRenderWidgetHost()->GetRoutingID();
@@ -6446,7 +6459,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest, ParentDetachRemoteChild) {
     params->replication_state = mojom::FrameReplicationState::New();
     params->replication_state->name = "name";
     params->replication_state->unique_name = "name";
-    params->frame_token = frame_token;
+    params->token = frame_token;
     params->devtools_frame_token = base::UnguessableToken::Create();
     params->policy_container = CreateStubPolicyContainer();
     agent_scheduling_group->CreateFrame(std::move(params));
@@ -11654,7 +11667,8 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest, TouchEventAckQueueOrdering) {
   }
   SyntheticTapGestureParams child_tap_params;
   child_tap_params.position = child_tap_point;
-  child_tap_params.gesture_source_type = SyntheticGestureParams::TOUCH_INPUT;
+  child_tap_params.gesture_source_type =
+      content::mojom::GestureSourceType::kTouchInput;
   child_tap_params.duration_ms = 300.f;
   auto child_tap_gesture =
       std::make_unique<SyntheticTapGesture>(child_tap_params);
@@ -11663,7 +11677,8 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest, TouchEventAckQueueOrdering) {
   SyntheticTapGestureParams root_tap_params;
   root_tap_params.position = gfx::PointF(5.f, 5.f);
   root_tap_params.duration_ms = 300.f;
-  root_tap_params.gesture_source_type = SyntheticGestureParams::TOUCH_INPUT;
+  root_tap_params.gesture_source_type =
+      content::mojom::GestureSourceType::kTouchInput;
   auto root_tap_gesture =
       std::make_unique<SyntheticTapGesture>(root_tap_params);
 
@@ -15602,7 +15617,7 @@ class ScrollingIntegrationTest : public SitePerProcessBrowserTest {
 
   void DoScroll(const gfx::Point& point,
                 const gfx::Vector2d& distance,
-                SyntheticGestureParams::GestureSourceType source) {
+                content::mojom::GestureSourceType source) {
     SyntheticSmoothScrollGestureParams params;
     params.gesture_source_type = source;
     params.anchor = gfx::PointF(point);
@@ -15678,14 +15693,14 @@ IN_PROC_BROWSER_TEST_P(ScrollingIntegrationTest,
     run_loop.Run();
   }
 
-  SyntheticGestureParams::GestureSourceType source;
+  content::mojom::GestureSourceType source;
 
 // TODO(bokan): Mac doesn't support touch events and for an unknown reason,
 // Android doesn't like mouse wheel here. https://crbug.com/897520.
 #if defined(OS_ANDROID)
-  source = SyntheticGestureParams::TOUCH_INPUT;
+  source = content::mojom::GestureSourceType::kTouchInput;
 #else
-  source = SyntheticGestureParams::TOUCHPAD_INPUT;
+  source = content::mojom::GestureSourceType::kTouchpadInput;
 #endif
 
   // Perform the scroll (below the iframe), ensure it's correctly processed.
@@ -16719,9 +16734,9 @@ IN_PROC_BROWSER_TEST_P(
 // reuses its parent's process.
 IN_PROC_BROWSER_TEST_P(SitePerProcessWebBundleBrowserTest, SameSiteBundle) {
   GURL bundle_url(
-      embedded_test_server()->GetURL("a.com", "/web_bundle/urn-uuid.wbn"));
-  GURL main_url(embedded_test_server()->GetURL(
-      "a.com", "/web_bundle/frame_parent.html?wbn=" + bundle_url.spec()));
+      https_server()->GetURL("foo.test", "/web_bundle/urn-uuid.wbn"));
+  GURL main_url(https_server()->GetURL(
+      "foo.test", "/web_bundle/frame_parent.html?wbn=" + bundle_url.spec()));
   EXPECT_TRUE(NavigateToURL(shell(), main_url));
   base::string16 expected_title(base::UTF8ToUTF16("OK"));
   TitleWatcher title_watcher(shell()->web_contents(), expected_title);
@@ -16740,9 +16755,9 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessWebBundleBrowserTest, SameSiteBundle) {
 // for the Bundle's origin.
 IN_PROC_BROWSER_TEST_P(SitePerProcessWebBundleBrowserTest, CrossSiteBundle) {
   GURL bundle_url(
-      embedded_test_server()->GetURL("foo.com", "/web_bundle/urn-uuid.wbn"));
-  GURL main_url(embedded_test_server()->GetURL(
-      "a.com", "/web_bundle/frame_parent.html?wbn=" + bundle_url.spec()));
+      https_server()->GetURL("bar.test", "/web_bundle/urn-uuid.wbn"));
+  GURL main_url(https_server()->GetURL(
+      "foo.test", "/web_bundle/frame_parent.html?wbn=" + bundle_url.spec()));
   EXPECT_TRUE(NavigateToURL(shell(), main_url));
   base::string16 expected_title(base::UTF8ToUTF16("OK"));
   TitleWatcher title_watcher(shell()->web_contents(), expected_title);
@@ -16756,8 +16771,8 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessWebBundleBrowserTest, CrossSiteBundle) {
   EXPECT_EQ(
       " Site A ------------ proxies for B\n"
       "   +--Site B ------- proxies for A\n"
-      "Where A = http://a.com/\n"
-      "      B = http://foo.com/",
+      "Where A = https://foo.test/\n"
+      "      B = https://bar.test/",
       DepictFrameTree(root));
 }
 

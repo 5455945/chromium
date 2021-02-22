@@ -87,9 +87,9 @@ using mojom::blink::MakeCredentialAuthenticatorResponsePtr;
 using MojoPublicKeyCredentialRequestOptions =
     mojom::blink::PublicKeyCredentialRequestOptions;
 using mojom::blink::GetAssertionAuthenticatorResponsePtr;
-using payments::mojom::blink::PaymentCredentialCreationStatus;
-using payments::mojom::blink::PaymentCredentialIconDownloadStatus;
 using payments::mojom::blink::PaymentCredentialInstrument;
+using payments::mojom::blink::PaymentCredentialStorageStatus;
+using payments::mojom::blink::PaymentCredentialUserPromptStatus;
 
 constexpr char kCryptotokenOrigin[] =
     "chrome-extension://kmendfapggjehodndflmmgagdbamhnfd";
@@ -671,16 +671,16 @@ void OnSmsReceive(ScriptPromiseResolver* resolver,
 void OnPaymentCredentialCreationComplete(
     std::unique_ptr<ScopedPromiseResolver> scoped_resolver,
     MakeCredentialAuthenticatorResponsePtr credential,
-    PaymentCredentialCreationStatus status) {
+    PaymentCredentialStorageStatus status) {
   auto* resolver = scoped_resolver->Release();
 
-  if (status == PaymentCredentialCreationStatus::FAILED_TO_STORE_INSTRUMENT) {
+  if (status == PaymentCredentialStorageStatus::FAILED_TO_STORE_INSTRUMENT) {
     resolver->Reject(MakeGarbageCollected<DOMException>(
         DOMExceptionCode::kUnknownError,
         "Failed to store payment instrument."));
     return;
   } else {
-    DCHECK(status == PaymentCredentialCreationStatus::SUCCESS);
+    DCHECK(status == PaymentCredentialStorageStatus::SUCCESS);
   }
 
   DOMArrayBuffer* client_data_buffer =
@@ -706,6 +706,14 @@ void OnPaymentCredentialCreationComplete(
       AuthenticationExtensionsClientOutputs::Create()));
 }
 
+void OnPaymentCredentialCreationFailure(
+    std::unique_ptr<ScopedPromiseResolver> scoped_resolver,
+    AuthenticatorStatus status) {
+  auto* resolver = scoped_resolver->Release();
+  resolver->Reject(CredentialManagerErrorToDOMException(
+      mojo::ConvertTo<CredentialManagerError>(status)));
+}
+
 void OnMakePublicKeyCredentialForPaymentComplete(
     std::unique_ptr<ScopedPromiseResolver> scoped_resolver,
     const PaymentCredentialCreationOptions* options,
@@ -715,45 +723,47 @@ void OnMakePublicKeyCredentialForPaymentComplete(
   const auto required_origin_type = RequiredOriginType::kSecure;
 
   AssertSecurityRequirementsBeforeResponse(resolver, required_origin_type);
+  auto* payment_credential_remote =
+      CredentialManagerProxy::From(resolver->GetScriptState())
+          ->PaymentCredential();
   if (status == AuthenticatorStatus::SUCCESS) {
     DCHECK(credential);
     DCHECK(!credential->info->client_data_json.IsEmpty());
     DCHECK(!credential->attestation_object.IsEmpty());
 
-    auto payment_instrument = PaymentCredentialInstrument::New();
-    payment_instrument->display_name = options->instrument()->displayName();
-    payment_instrument->icon = KURL(options->instrument()->icon());
-
-    auto* payment_credential_remote =
-        CredentialManagerProxy::From(resolver->GetScriptState())
-            ->PaymentCredential();
     auto credential_id = credential->info->raw_id;
-    payment_credential_remote->StorePaymentCredential(
-        std::move(payment_instrument), credential_id, options->rp()->id(),
-        WTF::Bind(
-            &OnPaymentCredentialCreationComplete,
-            WTF::Passed(std::make_unique<ScopedPromiseResolver>(resolver)),
-            std::move(credential)));
+    payment_credential_remote->StorePaymentCredentialAndHideUserPrompt(
+        PaymentCredentialInstrument::New(options->instrument()->displayName(),
+                                         KURL(options->instrument()->icon())),
+        credential_id, options->rp()->id(),
+        WTF::Bind(&OnPaymentCredentialCreationComplete,
+                  std::make_unique<ScopedPromiseResolver>(resolver),
+                  std::move(credential)));
   } else {
     DCHECK(!credential);
-    resolver->Reject(CredentialManagerErrorToDOMException(
-        mojo::ConvertTo<CredentialManagerError>(status)));
+    payment_credential_remote->HideUserPrompt(
+        WTF::Bind(&OnPaymentCredentialCreationFailure,
+                  std::make_unique<ScopedPromiseResolver>(resolver), status));
   }
 }
 
-void DidDownloadPaymentCredentialIcon(
+void DidDownloadPaymentCredentialIconAndShowUserPrompt(
     std::unique_ptr<ScopedPromiseResolver> scoped_resolver,
     mojom::blink::PublicKeyCredentialCreationOptionsPtr mojo_options,
     const PaymentCredentialCreationOptions* options,
-    PaymentCredentialIconDownloadStatus status) {
+    PaymentCredentialUserPromptStatus status) {
   auto* resolver = scoped_resolver->Release();
-  if (status == PaymentCredentialIconDownloadStatus::FAILED_TO_DOWNLOAD_ICON) {
+  if (status == PaymentCredentialUserPromptStatus::FAILED_TO_DOWNLOAD_ICON) {
     resolver->Reject(MakeGarbageCollected<DOMException>(
         DOMExceptionCode::kNetworkError,
         "Unable to download payment instrument icon."));
     return;
+  } else if (status == PaymentCredentialUserPromptStatus::USER_CANCEL_FROM_UI) {
+    resolver->Reject(
+        CredentialManagerErrorToDOMException(CredentialManagerError::ABORT));
+    return;
   } else {
-    DCHECK(status == PaymentCredentialIconDownloadStatus::SUCCESS);
+    DCHECK(status == PaymentCredentialUserPromptStatus::USER_CONFIRM_FROM_UI);
   }
 
   auto* authenticator =
@@ -761,7 +771,7 @@ void DidDownloadPaymentCredentialIcon(
   authenticator->MakeCredential(
       std::move(mojo_options),
       WTF::Bind(&OnMakePublicKeyCredentialForPaymentComplete,
-                WTF::Passed(std::make_unique<ScopedPromiseResolver>(resolver)),
+                std::make_unique<ScopedPromiseResolver>(resolver),
                 WrapPersistent(options)));
 }
 
@@ -886,15 +896,17 @@ void CreatePublicKeyCredentialForPaymentCredential(
 
   mojo_options->is_payment_credential_creation = true;
 
-  // Download instrument icon before creating the credential.
+  // Download instrument icon and prompt the user before creating the
+  // credential.
   auto* payment_credential_remote =
       CredentialManagerProxy::From(resolver->GetScriptState())
           ->PaymentCredential();
-  payment_credential_remote->DownloadFavicon(
-      KURL(options->instrument()->icon()),
-      WTF::Bind(&DidDownloadPaymentCredentialIcon,
-                WTF::Passed(std::make_unique<ScopedPromiseResolver>(resolver)),
-                WTF::Passed(std::move(mojo_options)), WrapPersistent(options)));
+  payment_credential_remote->DownloadIconAndShowUserPrompt(
+      PaymentCredentialInstrument::New(options->instrument()->displayName(),
+                                       KURL(options->instrument()->icon())),
+      WTF::Bind(&DidDownloadPaymentCredentialIconAndShowUserPrompt,
+                std::make_unique<ScopedPromiseResolver>(resolver),
+                std::move(mojo_options), WrapPersistent(options)));
 }
 
 }  // namespace
@@ -1056,9 +1068,8 @@ ScriptPromise CredentialsContainer::get(
           CredentialManagerProxy::From(script_state)->Authenticator();
       authenticator->GetAssertion(
           std::move(mojo_options),
-          WTF::Bind(
-              &OnGetAssertionComplete,
-              WTF::Passed(std::make_unique<ScopedPromiseResolver>(resolver))));
+          WTF::Bind(&OnGetAssertionComplete,
+                    std::make_unique<ScopedPromiseResolver>(resolver)));
     } else {
       resolver->Reject(MakeGarbageCollected<DOMException>(
           DOMExceptionCode::kNotSupportedError,
@@ -1123,7 +1134,7 @@ ScriptPromise CredentialsContainer::get(
   credential_manager->Get(
       requirement, options->password(), std::move(providers),
       WTF::Bind(&OnGetComplete,
-                WTF::Passed(std::make_unique<ScopedPromiseResolver>(resolver)),
+                std::make_unique<ScopedPromiseResolver>(resolver),
                 required_origin_type));
 
   return promise;
@@ -1161,9 +1172,8 @@ ScriptPromise CredentialsContainer::store(ScriptState* script_state,
       CredentialManagerProxy::From(script_state)->CredentialManager();
   credential_manager->Store(
       CredentialInfo::From(credential),
-      WTF::Bind(
-          &OnStoreComplete,
-          WTF::Passed(std::make_unique<ScopedPromiseResolver>(resolver))));
+      WTF::Bind(&OnStoreComplete,
+                std::make_unique<ScopedPromiseResolver>(resolver)));
 
   return promise;
 }
@@ -1378,9 +1388,8 @@ ScriptPromise CredentialsContainer::create(
           CredentialManagerProxy::From(script_state)->Authenticator();
       authenticator->MakeCredential(
           std::move(mojo_options),
-          WTF::Bind(
-              &OnMakePublicKeyCredentialComplete,
-              WTF::Passed(std::make_unique<ScopedPromiseResolver>(resolver))));
+          WTF::Bind(&OnMakePublicKeyCredentialComplete,
+                    std::make_unique<ScopedPromiseResolver>(resolver)));
     }
   }
 
@@ -1398,9 +1407,9 @@ ScriptPromise CredentialsContainer::preventSilentAccess(
 
   auto* credential_manager =
       CredentialManagerProxy::From(script_state)->CredentialManager();
-  credential_manager->PreventSilentAccess(WTF::Bind(
-      &OnPreventSilentAccessComplete,
-      WTF::Passed(std::make_unique<ScopedPromiseResolver>(resolver))));
+  credential_manager->PreventSilentAccess(
+      WTF::Bind(&OnPreventSilentAccessComplete,
+                std::make_unique<ScopedPromiseResolver>(resolver)));
 
   return promise;
 }

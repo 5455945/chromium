@@ -54,6 +54,9 @@
 
 namespace {
 
+using NearbyProcessShutdownReason =
+    chromeos::nearby::NearbyProcessManager::NearbyProcessShutdownReason;
+
 constexpr base::TimeDelta kBackgroundAdvertisementRotationDelayMin =
     base::TimeDelta::FromMinutes(12);
 // 870 seconds represents 14:30 minutes
@@ -275,10 +278,6 @@ void NearbySharingServiceImpl::Shutdown() {
   }
   observers_.Clear();
 
-  // Clear in-progress transfers.
-  ClearOutgoingShareTargetInfoMap();
-  incoming_share_target_info_map_.clear();
-
   StopAdvertising();
   StopFastInitiationAdvertising();
   StopScanning();
@@ -287,9 +286,9 @@ void NearbySharingServiceImpl::Shutdown() {
   // Destroy NearbyNotificationManager as its profile has been shut down.
   nearby_notification_manager_.reset();
 
-  // Release the process reference
-  if (process_reference_)
-    process_reference_.reset();
+  // On shutdown, we want to do all the same clean up as happens when
+  // the nearby process stops.
+  CleanupAfterNearbyProcessStopped();
 
   power_client_->RemoveObserver(this);
   certificate_manager_->RemoveObserver(this);
@@ -309,21 +308,6 @@ void NearbySharingServiceImpl::Shutdown() {
 
   foreground_receive_callbacks_.Clear();
   background_receive_callbacks_.Clear();
-  foreground_send_transfer_callbacks_.Clear();
-  foreground_send_discovery_callbacks_.Clear();
-  background_send_transfer_callbacks_.Clear();
-  background_send_discovery_callbacks_.Clear();
-
-  last_incoming_metadata_.reset();
-  last_outgoing_metadata_.reset();
-  attachment_info_map_.clear();
-  mutual_acceptance_timeout_alarm_.Cancel();
-  disconnection_timeout_alarms_.clear();
-
-  is_transferring_ = false;
-  is_receiving_files_ = false;
-  is_sending_files_ = false;
-  is_connecting_ = false;
 
   settings_receiver_.reset();
 
@@ -332,9 +316,6 @@ void NearbySharingServiceImpl::Shutdown() {
     contact_manager_->Stop();
     certificate_manager_->Stop();
   }
-
-  process_shutdown_pending_timer_.Stop();
-  rotate_background_advertisement_timer_.Stop();
 
   // |profile_| has now been shut down so we shouldn't use it anymore.
   profile_ = nullptr;
@@ -871,48 +852,99 @@ NearbySharingServiceImpl::GetCertificateManager() {
 }
 
 void NearbySharingServiceImpl::OnNearbyProcessStopped(
-    chromeos::nearby::NearbyProcessManager::NearbyProcessShutdownReason
-        shutdown_reason) {
+    NearbyProcessShutdownReason shutdown_reason) {
   DCHECK(process_reference_);
-
-  // Get the service back into a good state if the utility process crashed.
-  is_scanning_ = false;
-  is_transferring_ = false;
-  is_receiving_files_ = false;
-  is_sending_files_ = false;
-  is_connecting_ = false;
-  SetInHighVisibility(false);
-  ClearForegroundReceiveSurfaces();
-
-  InvalidateSurfaceState();
-  process_reference_.reset();
   NS_LOG(INFO) << __func__
                << ": Shutdown reason:" << static_cast<int>(shutdown_reason);
+  CleanupAfterNearbyProcessStopped();
+  ClearForegroundReceiveSurfaces();
+  RestartNearbyProcessIfAppropriate(shutdown_reason);
+  InvalidateSurfaceState();
   for (auto& observer : observers_) {
     observer.OnNearbyProcessStopped();
   }
 }
 
+void NearbySharingServiceImpl::CleanupAfterNearbyProcessStopped() {
+  if (process_reference_)
+    process_reference_.reset();
+
+  SetInHighVisibility(false);
+
+  endpoint_discovery_weak_ptr_factory_.InvalidateWeakPtrs();
+  endpoint_discovery_events_ = base::queue<base::OnceClosure>();
+
+  ClearOutgoingShareTargetInfoMap();
+  incoming_share_target_info_map_.clear();
+
+  foreground_send_transfer_callbacks_.Clear();
+  background_send_transfer_callbacks_.Clear();
+  foreground_send_discovery_callbacks_.Clear();
+  background_send_discovery_callbacks_.Clear();
+
+  last_incoming_metadata_.reset();
+  last_outgoing_metadata_.reset();
+  attachment_info_map_.clear();
+
+  mutual_acceptance_timeout_alarm_.Cancel();
+  disconnection_timeout_alarms_.clear();
+
+  is_scanning_ = false;
+  is_transferring_ = false;
+  is_receiving_files_ = false;
+  is_sending_files_ = false;
+  is_connecting_ = false;
+  advertising_power_level_ = PowerLevel::kUnknown;
+
+  process_shutdown_pending_timer_.Stop();
+  rotate_background_advertisement_timer_.Stop();
+}
+
+void NearbySharingServiceImpl::RestartNearbyProcessIfAppropriate(
+    NearbyProcessShutdownReason shutdown_reason) {
+  if (!settings_.GetEnabled())
+    return;
+
+  switch (shutdown_reason) {
+    case NearbyProcessShutdownReason::kCrash:
+    case NearbyProcessShutdownReason::kMojoPipeDisconnection:
+      NS_LOG(INFO) << __func__
+                   << ": Attempting to restart nearby process after shutdown: "
+                   << static_cast<int>(shutdown_reason);
+      BindToNearbyProcess();
+      break;
+    case NearbyProcessShutdownReason::kNormal:
+      break;
+  }
+}
+
+void NearbySharingServiceImpl::BindToNearbyProcess() {
+  if (process_reference_)
+    return;
+
+  process_reference_ = process_manager_->GetNearbyProcessReference(
+      base::BindOnce(&NearbySharingServiceImpl::OnNearbyProcessStopped,
+                     base::Unretained(this)));
+
+  if (!process_reference_) {
+    NS_LOG(WARNING) << __func__
+                    << ": Failed to get a reference to the nearby process.";
+  }
+}
+
 sharing::mojom::NearbySharingDecoder*
 NearbySharingServiceImpl::GetNearbySharingDecoder() {
-  if (!process_reference_) {
-    process_reference_ = process_manager_->GetNearbyProcessReference(
-        base::BindOnce(&NearbySharingServiceImpl::OnNearbyProcessStopped,
-                       base::Unretained(this)));
+  BindToNearbyProcess();
 
-    if (!process_reference_) {
-      NS_LOG(WARNING) << __func__
-                      << "Failed to get a reference to the nearby process.";
-      return nullptr;
-    }
-  }
+  if (!process_reference_)
+    return nullptr;
 
   sharing::mojom::NearbySharingDecoder* decoder =
       process_reference_->GetNearbySharingDecoder().get();
 
   if (!decoder)
     NS_LOG(WARNING) << __func__
-                    << "Failed to get decoder from process reference.";
+                    << ": Failed to get decoder from process reference.";
 
   return decoder;
 }
@@ -1259,7 +1291,8 @@ void NearbySharingServiceImpl::HandleEndpointDiscovered(
   decoder->DecodeAdvertisement(
       endpoint_info,
       base::BindOnce(&NearbySharingServiceImpl::OnOutgoingAdvertisementDecoded,
-                     weak_ptr_factory_.GetWeakPtr(), endpoint_id));
+                     endpoint_discovery_weak_ptr_factory_.GetWeakPtr(),
+                     endpoint_id));
 }
 
 void NearbySharingServiceImpl::HandleEndpointLost(
@@ -1319,8 +1352,8 @@ void NearbySharingServiceImpl::OnOutgoingAdvertisementDecoded(
   GetCertificateManager()->GetDecryptedPublicCertificate(
       std::move(encrypted_metadata_key),
       base::BindOnce(&NearbySharingServiceImpl::OnOutgoingDecryptedCertificate,
-                     weak_ptr_factory_.GetWeakPtr(), endpoint_id,
-                     std::move(advertisement)));
+                     endpoint_discovery_weak_ptr_factory_.GetWeakPtr(),
+                     endpoint_id, std::move(advertisement)));
 }
 
 void NearbySharingServiceImpl::OnOutgoingDecryptedCertificate(

@@ -3292,6 +3292,17 @@ Unknown properties are collapsed to zero. -->
   <int value="2" label="Can not install host code"/>
 </enum>
 
+<enum name="ArcClipboardDragDropEvent">
+  <int value="0" label="Text clipboard set from Chrome"/>
+  <int value="1" label="Image clipboard set from Chrome"/>
+  <int value="2" label="Text clipboard set from ARC"/>
+  <int value="3" label="Image clipboard set from ARC"/>
+  <int value="4" label="Text dropped from Chrome"/>
+  <int value="5" label="Image dropped from Chrome"/>
+  <int value="6" label="Text dropped from ARC"/>
+  <int value="7" label="Image dropped from ARC"/>
+</enum>
+
 <enum name="ArcCodeRelocationResult">
   <int value="0" label="Success"/>
   <int value="1" label="Error bootlockboxd not ready"/>
@@ -4475,6 +4486,9 @@ others/histograms.xml -->
 </enum>
 
 <enum name="AuthenticatedLaunchUserEvent">
+  <obsolete>
+    Removed in M90.
+  </obsolete>
   <int value="0" label="Local Reauth Dialog"/>
   <int value="1" label="Gaia Reauth Dialog"/>
   <int value="2" label="Supervised Profile Blocked Warning"/>
@@ -18050,8 +18064,8 @@ metrics consent we also won't be able to send UMA metrics. -->
   <int value="72" label="Tab Modal Confirm"/>
   <int value="73" label="Task Manager"/>
   <int value="74" label="Teleport Warning"/>
-  <int value="75" label="User Manager"/>
-  <int value="76" label="User Manager Profile"/>
+  <int value="75" label="User Manager (Obsolete)"/>
+  <int value="76" label="User Manager Profile (Obsolete)"/>
   <int value="77" label="Validation Message"/>
   <int value="78" label="Web Share Target Picker"/>
   <int value="79" label="Zoom"/>
@@ -18083,6 +18097,7 @@ metrics consent we also won't be able to send UMA metrics. -->
   <int value="105" label="Signin Reauth Dialog"/>
   <int value="106"
       label="Confirmation Box for getCurrentBrowsingContextMedia API"/>
+  <int value="107" label="Profile picker force signin"/>
 </enum>
 
 <enum name="DialogOriginRelationship">
@@ -44070,6 +44085,7 @@ from previous Chrome versions.
   <int value="-1182777927" label="ShareButtonInTopToolbar:enabled"/>
   <int value="-1182087678"
       label="CrossOriginOpenerPolicyAccessReporting:disabled"/>
+  <int value="-1179917414" label="DefaultChromeAppUninstallSync:disabled"/>
   <int value="-1178350793" label="RemoteCopyReceiver:disabled"/>
   <int value="-1177802205" label="enable-hosted-app-quit-notification"/>
   <int value="-1176748003"
@@ -44395,6 +44411,7 @@ from previous Chrome versions.
   <int value="-887094098" label="ForcedColors:enabled"/>
   <int value="-886912558" label="ChromeHomePromo:enabled"/>
   <int value="-886898803" label="CooperativeScheduling:enabled"/>
+  <int value="-886509859" label="DefaultChromeAppUninstallSync:enabled"/>
   <int value="-885601782" label="enable-contextual-search"/>
   <int value="-885209667" label="FilesZipMount:disabled"/>
   <int value="-884864731" label="WebPaymentsSingleAppUiSkip:enabled"/>
@@ -44412,6 +44429,7 @@ from previous Chrome versions.
       label="OmniboxEnableClipboardProviderTextSuggestions:enabled"/>
   <int value="-874602599" label="HorizontalTabSwitcherAndroid:enabled"/>
   <int value="-872764392" label="ContextualSuggestionsBottomSheet:disabled"/>
+  <int value="-871784177" label="DeprecateMenagerieAPI:enabled"/>
   <int value="-871520682"
       label="AccessibilityInternalsPageImprovements:enabled"/>
   <int value="-870994173" label="NtpChromeCartModule:enabled"/>
@@ -44704,6 +44722,7 @@ from previous Chrome versions.
   <int value="-603649079" label="ContextualSearchRankerQuery:enabled"/>
   <int value="-601384286" label="disable-contextual-search"/>
   <int value="-600792432" label="WebVrAutopresentFromIntent:disabled"/>
+  <int value="-600726805" label="DeprecateMenagerieAPI:disabled"/>
   <int value="-599932554" label="DoodlesOnLocalNtp:disabled"/>
   <int value="-599005750" label="ScanningUI:disabled"/>
   <int value="-598050737" label="disable-es3-apis"/>
@@ -45293,6 +45312,7 @@ from previous Chrome versions.
   <int value="-37966026" label="PermissionPredictions:enabled"/>
   <int value="-36503306" label="HomepageLocationPolicy:enabled"/>
   <int value="-36234530" label="PluginVmShowMicrophonePermissions:enabled"/>
+  <int value="-36077995" label="SplitCacheByNetworkIsolationKey:disabled"/>
   <int value="-35745997" label="TabSearch:enabled"/>
   <int value="-35388407" label="AshNewSystemMenu:disabled"/>
   <int value="-35256214" label="InterestFeedNoticeCardAutoDismiss:enabled"/>
@@ -46643,6 +46663,7 @@ from previous Chrome versions.
   <int value="1222017136" label="WebRtcUseEchoCanceller3:disabled"/>
   <int value="1222032915"
       label="kAutofillRationalizeRepeatedServerPredictions:enabled"/>
+  <int value="1222309415" label="SplitCacheByNetworkIsolationKey:enabled"/>
   <int value="1222808563" label="DisableInitialMostVisitedFadeIn:disabled"/>
   <int value="1226624874" label="Mus:disabled"/>
   <int value="1227633129" label="NtpChromeCartModule:disabled"/>
@@ -62144,6 +62165,11 @@ Called by update_net_trust_anchors.py.-->
   <int value="1" label="PriorityChanged"/>
 </enum>
 
+<enum name="PrivacySandboxReferrer">
+  <int value="0" label="Privacy Settings"/>
+  <int value="1" label="Cookie Settings Snackbar"/>
+</enum>
+
 <enum name="PrivacyScreenToggleUISurface">
   <int value="0" label="KeyboardShortcut"/>
   <int value="1" label="FeaturePod"/>
@@ -62606,6 +62632,9 @@ https://www.dmtf.org/sites/default/files/standards/documents/DSP0134_2.7.1.pdf
 </enum>
 
 <enum name="ProfileCreateResult">
+  <obsolete>
+    Removed M90.
+  </obsolete>
   <int value="0" label="Failed locally"/>
   <int value="1" label="Failed remotely"/>
   <int value="2" label="Created but not initialized (should never happen)"/>
@@ -67754,6 +67783,8 @@ https://www.dmtf.org/sites/default/files/standards/documents/DSP0134_2.7.1.pdf
   <int value="2" label="DATABASE_INTERSTITIAL_BYPASS"/>
   <int value="3" label="CSD_INTERSITITAL_BYPASS"/>
   <int value="4" label="REAL_TIME_INTERSTITIAL_BYPASS"/>
+  <int value="5" label="DANGEROUS_DOWNLOAD_BYPASS"/>
+  <int value="6" label="PASSWORD_REUSE_MODAL_BYPASS"/>
 </enum>
 
 <enum name="SBPhishingClassifierEvent">
@@ -79353,6 +79384,30 @@ others/histograms.xml -->
   <int value="2" label="Source Node start()"/>
 </enum>
 
+<enum name="WebAuthenticationAOADiscoveryEvent">
+  <int value="0" label="Started"/>
+  <int value="1" label="An AOA USB device appeared during a WebAuthn request"/>
+  <int value="2"
+      label="A non-AOA USB device was plugged in during a WebAuthn request"/>
+  <int value="3"
+      label="A non-AOA device did not have an AOA configuration interface"/>
+  <int value="4" label="Failed to open an AOA device"/>
+  <int value="5"
+      label="Failed to set the active configuration of an AOA device"/>
+  <int value="6" label="Failed to claim the interface of an AOA device"/>
+  <int value="7" label="Failed to write a sync message to an AOA device"/>
+  <int value="8" label="Failed to read a sync reply from an AOA device"/>
+  <int value="9" label="AOA device successfully discovered"/>
+  <int value="10" label="Failed to open a non-AOA device"/>
+  <int value="11"
+      label="Failed to get version information from non-AOA device"/>
+  <int value="12" label="AOA version one not supported"/>
+  <int value="13" label="Failed to set AOA configuration strings"/>
+  <int value="14" label="Device requested to switch to AOA mode"/>
+  <int value="15"
+      label="One or more previously discovered devices are still connected"/>
+</enum>
+
 <enum name="WebAuthenticationAttestationPromptResult">
   <int value="0" label="Queried"/>
   <int value="1" label="Timeout"/>
@@ -79390,6 +79445,18 @@ others/histograms.xml -->
   <int value="7" label="Timeout"/>
 </enum>
 
+<enum name="WebAuthenticationCableV2DiscoveryEvent">
+  <int value="0" label="Discovery started"/>
+  <int value="1" label="Pairing information was provided to this discovery"/>
+  <int value="2" label="QR keys were provided to this discovery"/>
+  <int value="3"
+      label="Keys from an extension were provided to this discovery"/>
+  <int value="4" label="An EID matched a pending tunnel"/>
+  <int value="5" label="An EID matched a QR code"/>
+  <int value="6" label="An EID matched an extension"/>
+  <int value="7" label="An EID was ignored because it didn't match anything"/>
+</enum>
+
 <enum name="WebAuthenticationCableV2MobileEvent">
   <int value="0" label="QR read"/>
   <int value="1" label="Server-linked connection started"/>
@@ -79419,6 +79486,20 @@ others/histograms.xml -->
   <int value="8" label="Internal error"/>
   <int value="9" label="Invalid QR"/>
   <int value="10" label="Invalid server link data"/>
+</enum>
+
+<enum name="WebAuthenticationCableV2TunnelEvent">
+  <int value="0"
+      label="Tunnel attempt started for QR- or extension-based connection"/>
+  <int value="1" label="Tunnel attempt started for linked connected"/>
+  <int value="2" label="Tunnel connected"/>
+  <int value="3" label="Contact ID was invalid"/>
+  <int value="4" label="Tunnel failed with unexpected HTTP 410 status"/>
+  <int value="5" label="Tunnel failed"/>
+  <int value="6" label="Handshake failed"/>
+  <int value="7" label="Error processing post-handshake message"/>
+  <int value="8" label="Tunnel established"/>
+  <int value="9" label="Failed to decrypt main-flow message"/>
 </enum>
 
 <enum name="WebAuthenticationChromeOSGetAssertionResult">

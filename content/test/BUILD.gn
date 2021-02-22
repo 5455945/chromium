@@ -1536,6 +1536,7 @@ test("content_browsertests") {
     # Non-Android.
     sources += [
       "../browser/direct_sockets/direct_sockets_browsertest.cc",
+      "../browser/file_system_access/file_system_access_clipboard_browsertest.cc",
       "../browser/file_system_access/file_system_access_drag_drop_browsertest.cc",
       "../browser/file_system_access/file_system_access_file_writer_impl_browsertest.cc",
       "../browser/file_system_access/file_system_chooser_browsertest.cc",
@@ -2026,6 +2027,7 @@ test("content_unittests") {
     "../browser/service_worker/service_worker_main_resource_loader_interceptor_unittest.cc",
     "../browser/service_worker/service_worker_main_resource_loader_unittest.cc",
     "../browser/service_worker/service_worker_metrics_unittest.cc",
+    "../browser/service_worker/service_worker_new_script_fetcher_unittest.cc",
     "../browser/service_worker/service_worker_new_script_loader_unittest.cc",
     "../browser/service_worker/service_worker_object_host_unittest.cc",
     "../browser/service_worker/service_worker_process_manager_unittest.cc",
