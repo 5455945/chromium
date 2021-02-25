@@ -13,6 +13,24 @@ declare var blink: MojomNamespace;
 declare var chromeosCamera: MojomNamespace;
 declare var cros: MojomNamespace;
 
+declare namespace chromeosCamera.mojom {
+  export type CameraAppHelperRemote = any;
+  export type ScreenState = any;
+  export type WindowStateControllerRemote = any;
+  export type WindowStateType = any;
+}
+
+declare namespace cros.mojom {
+  export type CameraAppDeviceProviderRemote = any;
+  export type CameraAppDeviceRemote = any;
+  export type CameraMetadata = any;
+  export type CameraMetadataEntry = any;
+  export type CameraMetadataTag = any;
+  export type CaptureIntent = any;
+  export type Effect = any;
+  export type StreamType = any;
+}
+
 // TODO(b/172340451): Remove this once we fully removed the legacy Chrome app
 // support.
 declare var chrome: any;
@@ -28,4 +46,12 @@ interface UIEvent extends Event {
 interface InputDeviceCapabilities {
   readonly firesTouchEvents: boolean;
   readonly pointerMovementScrolls: boolean;
+}
+
+// Chrome WebUI specific helper.
+// https://source.chromium.org/chromium/chromium/src/+/master:ui/webui/resources/js/load_time_data.js
+
+declare var loadTimeData: {
+  getString(id: string): string;
+  getStringF(id: string, ...args: (number|string)[]): string;
 }

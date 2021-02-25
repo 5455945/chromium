@@ -57,7 +57,6 @@
     'remove_from': [
       # On chromium.android, these do not need to run prior to M.
       'android-lollipop-arm-rel',
-      'android-code-coverage-native', # crbug/1018434
     ],
   },
   'angle_end2end_tests': {
@@ -143,6 +142,25 @@
         'args': [
           '--max-processes=1',
         ],
+      },
+    },
+  },
+  'aura_unittests': {
+    'modifications': {
+      'fuchsia-code-coverage': {
+        'args': [
+          # http://crbug.com/1181465
+          '--child-arg=--ozone-platform=headless',
+        ],
+      },
+    },
+  },
+  'base_unittests': {
+    'modifications': {
+      'fuchsia-code-coverage': {
+        'swarming': {
+          'shards': 5,
+        },
       },
     },
   },
@@ -677,6 +695,11 @@
           '--test-launcher-filter-file=../../testing/buildbot/filters/android.emulator.cc_unittests.filter',
         ],
       },
+      'fuchsia-code-coverage': {
+        'swarming': {
+          'shards': 4,
+        },
+      },
     },
   },
   'check_static_initializers': {
@@ -917,18 +940,13 @@
       'Win10 Tests x64 (dbg)',
     ],
   },
-  'components_browsertests': {
-    'remove_from': [
-      'android-code-coverage-native', # crbug/1018434
-    ],
-  },
   'components_unittests': {
     'remove_from': [
       # https://crbug.com/1147531 - covered on lollipop
       'android-marshmallow-arm64-rel',
       'Fuchsia ARM64',  # https://crbug.com/961457
       'Fuchsia x64', # https://crbug.com/961457
-      'android-code-coverage-native', # crbug/1018431
+      'fuchsia-code-coverage',  # https://crbug.com/961457
       'fuchsia-fyi-arm64-dbg',  # https://crbug.com/961457
       'fuchsia-fyi-arm64-rel',  # https://crbug.com/961457
       'fuchsia-fyi-x64-dbg',  # https://crbug.com/961457
@@ -973,10 +991,19 @@
       },
     },
   },
+  'compositor_unittests': {
+    'modifications': {
+      'fuchsia-code-coverage': {
+        'args': [
+          # http://crbug.com/1181465
+          '--child-arg=--ozone-platform=headless',
+        ],
+      },
+    },
+  },
   'content_browsertests': {
     'remove_from': [
       'CrWinAsan(dll)', # https://crbug.com/935598
-      'android-code-coverage-native', # crbug/1018434
       'android-lollipop-arm-rel', # crbug.com/1133002
       # http://crbug.com/1060245#c30: due to low utility and capacity.
       'android-marshmallow-arm64-rel',
@@ -1147,7 +1174,6 @@
   'content_shell_test_apk': {
     'remove_from': [
       'android-asan',  # https://crbug.com/964562
-      'android-code-coverage-native', # crbug/1018434
     ],
     'modifications': {
       'android-marshmallow-x86-rel-non-cq': {
@@ -1163,9 +1189,6 @@
     },
   },
   'content_unittests': {
-    'remove_from': [
-      'android-code-coverage-native', # crbug/1018434
-    ],
     'modifications': {
       'Linux ASan LSan Tests (1)': {
         # These are slow on the ASAN trybot for some reason.
@@ -1270,6 +1293,15 @@
           'BluetoothSocketApiUnittest.CreateThenClose:'
           'FeatureProviderTest.PermissionFeatureAvailability',
         ],
+      },
+    },
+  },
+  'gfx_unittests': {
+    'modifications': {
+      'fuchsia-code-coverage': {
+        'swarming': {
+          'shards': 2,
+        },
       },
     },
   },
@@ -1434,6 +1466,15 @@
       'Android FYI Release (Pixel 2)',
     ],
   },
+  'gpu_unittests': {
+    'modifications': {
+      'fuchsia-code-coverage': {
+        'swarming': {
+          'shards': 5,
+        },
+      },
+    },
+  },
   'hardware_accelerated_feature_tests': {
     # TODO(https://crbug.com/850107): Remove the Android FYI Release (Pixel 2)
     # exception once there is enough capacity to run these tests.
@@ -1513,7 +1554,7 @@
       'Linux TSan Tests': {
         # These are slow on the TSan bots for some reason, crbug.com/794372
         'swarming': {
-          'shards': 20,
+          'shards': 32, # Adjusted for testing, see https://crbug.com/1179567
         },
       },
       'ToTLinuxTSan': {
@@ -1681,6 +1722,11 @@
           '--test-launcher-filter-file=../../testing/buildbot/filters/android.emulator_p.media_unittests.filter',
         ],
       },
+      'fuchsia-code-coverage': {
+        'swarming': {
+          'shards': 3,
+        },
+      },
     },
   },
   'mojo_unittests': {
@@ -1688,6 +1734,11 @@
       'android-asan': {
         'swarming': {
           'shards': 5,
+        },
+      },
+      'fuchsia-code-coverage': {
+        'swarming': {
+          'shards': 2,
         },
       },
     },
@@ -2331,6 +2382,16 @@
       }
     }
   },
+  'snapshot_unittests': {
+    'modifications': {
+      'fuchsia-code-coverage': {
+        'args': [
+          # http://crbug.com/1181465
+          '--child-arg=--ozone-platform=headless',
+        ],
+      },
+    },
+  },
   'swiftshader_unittests': {
     'remove_from': [
       # Save capacity on the hardware where we have only a few machines.
@@ -2540,7 +2601,6 @@
   },
   'unit_tests': {
     'remove_from': [
-      'android-code-coverage-native', # crbug/1018434
       # There's no need to run unit_tests on both lollipop and marshmallow
       # on the CQ. https://crbug.com/1026487.
       'android-marshmallow-arm64-rel',
@@ -2671,26 +2731,29 @@
           '--test-launcher-filter-file=../../testing/buildbot/filters/android.emulator.viz_unittests.filter',
         ],
       },
+      'fuchsia-code-coverage': {
+        'args': [
+          # http://crbug.com/1181465
+          '--child-arg=--ozone-platform=headless',
+        ],
+      },
     },
   },
   'vr_android_unittests': {
     'remove_from': [
       'android-marshmallow-x86-rel-non-cq',
       'android-pie-x86-rel',
-      'android-code-coverage-native', # crbug/1018434
     ],
   },
   'vr_common_unittests': {
     'remove_from': [
       'android-pie-x86-rel',
-      'android-code-coverage-native', # crbug/1018431
     ],
   },
   'vr_pixeltests': {
     'remove_from': [
       'android-pie-x86-rel',
       'VR Linux',
-      'android-code-coverage-native', # crbug/1018431
     ],
   },
   'wayland_client_perftests': {
@@ -2780,7 +2843,6 @@
       # Flakily fails on Win7. https://crbug.com/943372.
       'Win7 Tests (1)',
       'Win 7 Tests x64 (1)',
-      'android-code-coverage-native', # crbug/1018431
       'android-lollipop-arm-rel', # crbug.com/1133002#c6
       # Runs on android-marshmallow-x86-rel already (crbug.com/1127110)
       'android-marshmallow-arm64-rel',
@@ -2890,7 +2952,6 @@
       # On chromium.swarm, this should possibly be being run (or removed
       # from android-marshmallow-arm64-rel-swarming).
       'android-lollipop-arm-rel-swarming',
-      'android-code-coverage-native', # https://crbug.com/1018431
       # https://crbug.com/1147531 - covered on pie
       'android-marshmallow-arm64-rel',
     ],

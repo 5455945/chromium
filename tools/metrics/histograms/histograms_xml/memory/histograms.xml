@@ -715,7 +715,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram base="true"
     name="Memory.Experimental.GpuChannelManagerPressureHandlerDuration"
-    units="ms" expires_after="2021-06-20">
+    units="ms" expires_after="2021-08-22">
 <!-- Name completed by histogram_suffixes name="GpuChannelManagerPressureHandlerDetails" -->
 
   <owner>sebmarchand@chromium.org</owner>
@@ -1048,7 +1048,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.Experimental.Renderer.Uptime" units="ms"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>keishi@chromium.org</owner>
   <summary>
     The uptime of a render process in time ticks (excludes extensions). Emitted
@@ -1156,7 +1156,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram
     name="Memory.Experimental.UserLevelMemoryPressureSignal.RendererPrivateMemoryFootprintBefore"
-    units="MB" expires_after="2021-06-20">
+    units="MB" expires_after="2021-08-22">
   <owner>keishi@chromium.org</owner>
   <owner>tasak@chromium.org</owner>
   <summary>
@@ -1293,7 +1293,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram base="true" name="Memory.GPU.PeakMemoryAllocationSource" units="KB"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
 <!-- Name completed by a combination of the following two histogram_suffixes: -->
 
 <!-- histogram_suffixes name="GPU.PeakMemoryAllocationSourceBase" -->
@@ -1311,7 +1311,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram base="true" name="Memory.GPU.PeakMemoryUsage" units="KB"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
 <!-- Name completed by histogram_suffixes name="GPU.PeakMemoryUsage" -->
 
   <owner>jonross@chromium.org</owner>
@@ -1455,7 +1455,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram
     name="Memory.NativeLibrary.MappedAndResidentMemoryFootprintCollectionStatus"
-    enum="MappedAndResidentPagesDumpState" expires_after="2021-06-20">
+    enum="MappedAndResidentPagesDumpState" expires_after="2021-08-22">
   <owner>lizeb@chromium.org</owner>
   <owner>pasko@chromium.org</owner>
   <summary>
@@ -1745,13 +1745,131 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
   </summary>
 </histogram>
 
+<histogram name="Memory.ParkableImage.DiskIsUsable.5min" enum="BooleanYesNo"
+    expires_after="M95">
+  <owner>thiabaud@google.com</owner>
+  <owner>lizeb@chromium.org</owner>
+  <summary>
+    Whether the disk allocator is usable. Recorded at the same time as
+    &quot;Memory.ParkableImage.*.5min&quot;. The disk may not be usable for
+    several reasons, including the profile being an Incognito one, permssions
+    error, or disk write error.
+  </summary>
+</histogram>
+
+<histogram name="Memory.ParkableImage.OnDiskSize.5min" units="KiB"
+    expires_after="M95">
+  <owner>thiabaud@google.com</owner>
+  <owner>lizeb@chromium.org</owner>
+  <summary>
+    Size of encoded image data of ParkableImages that are on disk. Collected
+    once, 5 minutes after the first ParkableImage is created.
+  </summary>
+</histogram>
+
+<histogram name="Memory.ParkableImage.Read.Latency" units="microseconds"
+    expires_after="M95">
+  <owner>thiabaud@google.com</owner>
+  <owner>lizeb@chromium.org</owner>
+  <summary>
+    Recorded each time a ParkableImage is read from disk. Records the time taken
+    to read a ParkableImage from disk. Note: This metric drops reports on
+    clients with low-resolution clocks, which means these reports will be biased
+    against a portion of the population on Windows. See
+    Windows.HasHighResolutionTimeTicks for the affected sample.
+  </summary>
+</histogram>
+
+<histogram name="Memory.ParkableImage.Read.Size" units="KiB"
+    expires_after="M95">
+  <owner>thiabaud@google.com</owner>
+  <owner>lizeb@chromium.org</owner>
+  <summary>
+    Recorded each time a ParkableImage is read from disk. Records the size of
+    the read, in KiB.
+  </summary>
+</histogram>
+
+<histogram name="Memory.ParkableImage.Read.Throughput" units="MiBps"
+    expires_after="M95">
+  <owner>thiabaud@google.com</owner>
+  <owner>lizeb@chromium.org</owner>
+  <summary>
+    Recorded each time a ParkableImage is read from disk. Records the throughput
+    of reading the ParkableImage from disk, in MiB/s.
+  </summary>
+</histogram>
+
+<histogram name="Memory.ParkableImage.TotalReadTime.5min" units="ms"
+    expires_after="M95">
+  <owner>thiabaud@google.com</owner>
+  <owner>lizeb@chromium.org</owner>
+  <summary>
+    Total time spent reading images from disk. Collected once, 5 minutes after
+    the first ParkableImage is created.
+  </summary>
+</histogram>
+
 <histogram name="Memory.ParkableImage.TotalSize.5min" units="KiB"
     expires_after="M95">
   <owner>thiabaud@google.com</owner>
   <owner>lizeb@chromium.org</owner>
   <summary>
-    Total size of encoded image data of BitmapImages. Collected once, 5 minutes
-    after the first BitmapImage is created.
+    Total size of encoded image data of ParkableImages. Collected once, 5
+    minutes after the first ParkableImage is created.
+  </summary>
+</histogram>
+
+<histogram name="Memory.ParkableImage.TotalWriteTime.5min" units="ms"
+    expires_after="M95">
+  <owner>thiabaud@google.com</owner>
+  <owner>lizeb@chromium.org</owner>
+  <summary>
+    Total time spent writing images to disk. Collected once, 5 minutes after the
+    first ParkableImage is created.
+  </summary>
+</histogram>
+
+<histogram name="Memory.ParkableImage.UnparkedSize.5min" units="KiB"
+    expires_after="M95">
+  <owner>thiabaud@google.com</owner>
+  <owner>lizeb@chromium.org</owner>
+  <summary>
+    Size of encoded image data of ParkableImages that are not written to disk.
+    Collected once, 5 minutes after the first ParkableImage is created.
+  </summary>
+</histogram>
+
+<histogram name="Memory.ParkableImage.Write.Latency" units="microseconds"
+    expires_after="M95">
+  <owner>thiabaud@google.com</owner>
+  <owner>lizeb@chromium.org</owner>
+  <summary>
+    Recorded each time a ParkableImage is written to disk. Records the time
+    taken to write the ParkableImage to disk. Note: This metric drops reports on
+    clients with low-resolution clocks, which means these reports will be biased
+    against a portion of the population on Windows. See
+    Windows.HasHighResolutionTimeTicks for the affected sample.
+  </summary>
+</histogram>
+
+<histogram name="Memory.ParkableImage.Write.Size" units="KiB"
+    expires_after="M95">
+  <owner>thiabaud@google.com</owner>
+  <owner>lizeb@chromium.org</owner>
+  <summary>
+    Recorded each time a ParkableImage is written to disk. Records the size of
+    the write, in KiB.
+  </summary>
+</histogram>
+
+<histogram name="Memory.ParkableImage.Write.Throughput" units="MiBps"
+    expires_after="M95">
+  <owner>thiabaud@google.com</owner>
+  <owner>lizeb@chromium.org</owner>
+  <summary>
+    Recorded each time a ParkableImage is written to disk. Records the
+    throughput of writing the ParkableImage to disk, in MiB/s.
   </summary>
 </histogram>
 
@@ -2037,7 +2155,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.PressureLevel" enum="MemoryPressureLevel"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>chrisha@chromium.org</owner>
   <summary>
     The memory pressure level, which is recorded periodically. This shows the
@@ -2056,7 +2174,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram base="true" name="Memory.PressureWindowDuration" units="ms"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
 <!-- Name completed by histogram_suffixes name="Memory.Pressure.TransitionType" -->
 
   <owner>sebmarchand@chromium.org</owner>
@@ -2149,7 +2267,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.RendererProcessCount" units="processes"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>creis@chromium.org</owner>
   <owner>nasko@chromium.org</owner>
   <summary>
@@ -2188,7 +2306,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.RenderProcessHost.Count.InitializedAndNotDead"
-    units="processes" expires_after="2021-06-20">
+    units="processes" expires_after="2021-08-22">
   <owner>alexmos@chromium.org</owner>
   <owner>creis@chromium.org</owner>
   <owner>lukasza@chromium.org</owner>

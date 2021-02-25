@@ -148,6 +148,10 @@
   "chrome/browser/resources/local_ntp/local_ntp_resources.grd": {
     "includes": [1620],
   },
+   "chrome/browser/resources/webid/webid_resources.grd": {
+    "includes": [1622],
+    "structures": [1626],
+  },
   "<(SHARED_INTERMEDIATE_DIR)/chrome/browser/resources/nearby_internals/nearby_internals_resources.grd": {
     "META": {"sizes": {"includes": [20]}},
     "includes": [1630],
@@ -305,7 +309,8 @@
   "components/resources/dev_ui_components_resources.grd": {
     "includes": [2260],
   },
-  "content/browser/resources/media/media_internals_resources.grd": {
+  "<(SHARED_INTERMEDIATE_DIR)/content/browser/resources/media/resources.grd": {
+    "META": {"sizes": {"includes": [10],}},
     "includes": [2270],
   },
   "content/browser/webrtc/resources/resources.grd": {

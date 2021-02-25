@@ -19,6 +19,7 @@
 #include "components/prefs/pref_service.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/safe_browsing/core/common/safebrowsing_constants.h"
+#include "components/safe_browsing/core/common/utils.h"
 #include "components/safe_browsing/core/features.h"
 #include "components/safe_browsing/ios/password_protection/password_protection_request_ios.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
@@ -32,8 +33,8 @@
 #include "ios/chrome/browser/browser_state/chrome_browser_state.h"
 #include "ios/chrome/browser/history/history_service_factory.h"
 #include "ios/chrome/browser/passwords/ios_chrome_password_store_factory.h"
-#include "ios/chrome/browser/policy/browser_policy_connector_ios.h"
 #import "ios/chrome/browser/safe_browsing/safe_browsing_service.h"
+#include "ios/chrome/browser/safe_browsing/user_population.h"
 #include "ios/chrome/browser/signin/identity_manager_factory.h"
 #include "ios/chrome/browser/sync/ios_user_event_service_factory.h"
 #include "ios/chrome/browser/sync/profile_sync_service_factory.h"
@@ -51,6 +52,7 @@
 using base::RecordAction;
 using base::UserMetricsAction;
 using password_manager::metrics_util::PasswordType;
+using safe_browsing::ChromeUserPopulation;
 using safe_browsing::LoginReputationClientRequest;
 using safe_browsing::LoginReputationClientResponse;
 using safe_browsing::PasswordProtectionTrigger;
@@ -318,11 +320,6 @@ ChromePasswordProtectionService::GetUrlDisplayExperiment() const {
   return experiment;
 }
 
-const policy::BrowserPolicyConnector*
-ChromePasswordProtectionService::GetBrowserPolicyConnector() const {
-  return GetApplicationContext()->GetBrowserPolicyConnector();
-}
-
 AccountInfo ChromePasswordProtectionService::GetAccountInfo() const {
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForBrowserState(browser_state_);
@@ -424,23 +421,6 @@ bool ChromePasswordProtectionService::IsIncognito() {
 bool ChromePasswordProtectionService::IsExtendedReporting() {
   // Not yet supported in iOS.
   return false;
-}
-
-bool ChromePasswordProtectionService::IsEnhancedProtection() {
-  // Not yet supported in iOS.
-  return false;
-}
-
-bool ChromePasswordProtectionService::IsUserMBBOptedIn() {
-  // Not yet supported in iOS.
-  return false;
-}
-
-bool ChromePasswordProtectionService::IsHistorySyncEnabled() {
-  syncer::SyncService* sync =
-      ProfileSyncServiceFactory::GetForBrowserState(browser_state_);
-  return sync && sync->IsSyncFeatureActive() && !sync->IsLocalSyncEnabled() &&
-         sync->GetActiveDataTypes().Has(syncer::HISTORY_DELETE_DIRECTIVES);
 }
 
 bool ChromePasswordProtectionService::IsPrimaryAccountSyncing() const {
@@ -738,6 +718,11 @@ void ChromePasswordProtectionService::RemoveWarningRequestsByWebState(
     else
       ++it;
   }
+}
+
+void ChromePasswordProtectionService::FillUserPopulation(
+    LoginReputationClientRequest* request_proto) {
+  *request_proto->mutable_population() = GetUserPopulation(browser_state_);
 }
 
 password_manager::PasswordStore*

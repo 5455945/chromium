@@ -465,6 +465,9 @@
         'merge': {
           'script': '//tools/perf/process_perf_results.py',
         },
+        'resultdb': {
+          'enable': False,
+        },
       },
     },
 
@@ -4070,6 +4073,7 @@
         'experiment_percentage': 100,
       },
       'wayland_client_perftests': {},
+      'wayland_client_tests': {},
     },
 
     'linux_example_builder_gtests': {
@@ -4348,6 +4352,7 @@
       },
       'chrome_app_unittests': {},
       'chromedriver_unittests': {},
+      'color_unittests': {},
       'extensions_browsertests': {},
       'extensions_unittests': {},
       'filesystem_service_unittests': {},  # https://crbug.com/862712

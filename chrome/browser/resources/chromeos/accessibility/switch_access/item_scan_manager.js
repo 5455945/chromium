@@ -7,7 +7,7 @@ import {AutoScanManager} from './auto_scan_manager.js';
 import {FocusRingManager} from './focus_ring_manager.js';
 import {FocusData, FocusHistory} from './history.js';
 import {MenuManager} from './menu_manager.js';
-import {Navigator, NavigatorInterface} from './navigator.js';
+import {ItemNavigatorInterface} from './navigator_interface.js';
 import {BackButtonNode} from './nodes/back_button_node.js';
 import {BasicNode, BasicRootNode} from './nodes/basic_node.js';
 import {DesktopNode} from './nodes/desktop_node.js';
@@ -17,12 +17,14 @@ import {ModalDialogRootNode} from './nodes/modal_dialog_node.js';
 import {SliderNode} from './nodes/slider_node.js';
 import {SAChildNode, SARootNode} from './nodes/switch_access_node.js';
 import {TabNode} from './nodes/tab_node.js';
+import {SwitchAccess} from './switch_access.js';
+import {SAConstants} from './switch_access_constants.js';
 import {SwitchAccessPredicate} from './switch_access_predicate.js';
 
 const AutomationNode = chrome.automation.AutomationNode;
 
 /** This class handles navigation amongst the elements onscreen. */
-export class ItemScanManager extends NavigatorInterface {
+export class ItemScanManager extends ItemNavigatorInterface {
   /**
    * @param {!AutomationNode} desktop
    */
@@ -50,7 +52,7 @@ export class ItemScanManager extends NavigatorInterface {
     this.init_();
   }
 
-  // =============== NavigatorInterface implementation ==============
+  // =============== ItemNavigatorInterface implementation ==============
 
   /** @override */
   currentGroupHasChild(node) {
@@ -247,7 +249,7 @@ export class ItemScanManager extends NavigatorInterface {
    * @private
    */
   onFocusChange_(event) {
-    if (ActionManager.inPointScanMode()) {
+    if (SwitchAccess.mode === SAConstants.Mode.POINT_SCAN) {
       return;
     }
 
@@ -268,7 +270,7 @@ export class ItemScanManager extends NavigatorInterface {
    * @private
    */
   onScrollChange_() {
-    if (ActionManager.inPointScanMode()) {
+    if (SwitchAccess.mode === SAConstants.Mode.POINT_SCAN) {
       return;
     }
 
@@ -286,7 +288,7 @@ export class ItemScanManager extends NavigatorInterface {
    * @private
    */
   onModalDialog_(event) {
-    if (ActionManager.inPointScanMode()) {
+    if (SwitchAccess.mode === SAConstants.Mode.POINT_SCAN) {
       return;
     }
 
@@ -304,7 +306,7 @@ export class ItemScanManager extends NavigatorInterface {
    * @private
    */
   onTreeChange_(treeChange) {
-    if (ActionManager.inPointScanMode()) {
+    if (SwitchAccess.mode === SAConstants.Mode.POINT_SCAN) {
       return;
     }
 

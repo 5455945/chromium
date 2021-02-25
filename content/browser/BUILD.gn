@@ -112,7 +112,7 @@ source_set("browser") {
     "//content/browser/notifications:notification_proto",
     "//content/browser/payments:payment_app_proto",
     "//content/browser/process_internals:mojo_bindings",
-    "//content/browser/resources/media:media_internals_resources",
+    "//content/browser/resources/media:resources",
     "//content/browser/webrtc/resources",
     "//content/common",
     "//content/common:buildflags",
@@ -255,6 +255,13 @@ source_set("browser") {
     "//v8:v8_version",
   ]
 
+  if (is_chromeos_ash) {
+    deps += [
+      "//chromeos/services/machine_learning/public/cpp",
+      "//chromeos/services/machine_learning/public/mojom",
+    ]
+  }
+
   public_deps = [
     "//base/util/memory_pressure",
     "//base/util/type_safety",
@@ -332,6 +339,8 @@ source_set("browser") {
     "accessibility/browser_accessibility_state_impl.h",
     "accessibility/one_shot_accessibility_tree_search.cc",
     "accessibility/one_shot_accessibility_tree_search.h",
+    "accessibility/touch_passthrough_manager.cc",
+    "accessibility/touch_passthrough_manager.h",
     "accessibility/web_contents_accessibility.h",
     "after_startup_task_utils.cc",
     "after_startup_task_utils.h",
@@ -886,6 +895,12 @@ source_set("browser") {
     "gpu/peak_gpu_memory_tracker_impl.h",
     "gpu/shader_cache_factory.cc",
     "gpu/shader_cache_factory.h",
+    "handwriting/handwriting_recognition_service_factory.cc",
+    "handwriting/handwriting_recognition_service_factory.h",
+    "handwriting/handwriting_recognition_service_impl.cc",
+    "handwriting/handwriting_recognition_service_impl.h",
+    "handwriting/handwriting_recognizer_impl.cc",
+    "handwriting/handwriting_recognizer_impl.h",
     "hid/hid_service.cc",
     "hid/hid_service.h",
     "histogram_controller.cc",
@@ -1269,6 +1284,8 @@ source_set("browser") {
     "renderer_host/cross_process_frame_connector.h",
     "renderer_host/cursor_manager.cc",
     "renderer_host/cursor_manager.h",
+    "renderer_host/data_transfer_util.cc",
+    "renderer_host/data_transfer_util.h",
     "renderer_host/debug_urls.cc",
     "renderer_host/debug_urls.h",
     "renderer_host/dip_util.cc",
@@ -1277,8 +1294,6 @@ source_set("browser") {
     "renderer_host/display_feature.h",
     "renderer_host/display_util.cc",
     "renderer_host/display_util.h",
-    "renderer_host/drop_data_util.cc",
-    "renderer_host/drop_data_util.h",
     "renderer_host/embedded_frame_sink_impl.cc",
     "renderer_host/embedded_frame_sink_impl.h",
     "renderer_host/embedded_frame_sink_provider_impl.cc",
@@ -1455,6 +1470,8 @@ source_set("browser") {
     "renderer_host/media/virtual_video_capture_devices_changed_observer.h",
     "renderer_host/mixed_content_navigation_throttle.cc",
     "renderer_host/mixed_content_navigation_throttle.h",
+    "renderer_host/modal_close_listener_host.cc",
+    "renderer_host/modal_close_listener_host.h",
     "renderer_host/native_web_keyboard_event_aura.cc",
     "renderer_host/navigation_controller_delegate.h",
     "renderer_host/navigation_controller_impl.cc",
@@ -2147,8 +2164,13 @@ source_set("browser") {
   }
 
   if (is_chromeos_ash) {
-    sources +=
-        [ "screenlock_monitor/screenlock_monitor_device_source_chromeos.cc" ]
+    sources += [
+      "handwriting/handwriting_recognition_service_impl_cros.cc",
+      "handwriting/handwriting_recognition_service_impl_cros.h",
+      "handwriting/handwriting_recognizer_impl_cros.cc",
+      "handwriting/handwriting_recognizer_impl_cros.h",
+      "screenlock_monitor/screenlock_monitor_device_source_chromeos.cc",
+    ]
   }
 
   if (is_linux || is_chromeos_lacros) {
@@ -2439,8 +2461,6 @@ source_set("browser") {
       "accessibility/accessibility_event_recorder_auralinux.h",
       "accessibility/accessibility_tree_formatter_auralinux.cc",
       "accessibility/accessibility_tree_formatter_auralinux.h",
-      "accessibility/accessibility_tree_formatter_utils_auralinux.cc",
-      "accessibility/accessibility_tree_formatter_utils_auralinux.h",
       "accessibility/browser_accessibility_auralinux.cc",
       "accessibility/browser_accessibility_auralinux.h",
       "accessibility/browser_accessibility_manager_auralinux.cc",

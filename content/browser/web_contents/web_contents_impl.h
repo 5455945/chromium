@@ -52,6 +52,7 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_receiver_set.h"
 #include "content/public/common/three_d_api_types.h"
+#include "mojo/public/cpp/bindings/pending_associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -88,6 +89,12 @@
 namespace base {
 class FilePath;
 }  // namespace base
+
+namespace device {
+namespace mojom {
+class WakeLock;
+}
+}  // namespace device
 
 namespace service_manager {
 class InterfaceProvider;
@@ -818,7 +825,8 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
                          const gfx::Rect& initial_rect) override;
   void CreateMediaPlayerHostForRenderFrameHost(
       RenderFrameHost* frame_host,
-      mojo::PendingReceiver<media::mojom::MediaPlayerHost> receiver) override;
+      mojo::PendingAssociatedReceiver<media::mojom::MediaPlayerHost> receiver)
+      override;
   void RequestMediaAccessPermission(const MediaStreamRequest& request,
                                     MediaResponseCallback callback) override;
   bool CheckMediaAccessPermission(RenderFrameHost* render_frame_host,
@@ -835,7 +843,6 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
   bool HideDownloadUI() const override;
   bool HasPersistentVideo() const override;
   bool IsSpatialNavigationDisabled() const override;
-  RenderFrameHostImpl* GetPendingMainFrame() override;
   void DidFirstVisuallyNonEmptyPaint(RenderViewHostImpl* source) override;
   void OnThemeColorChanged(RenderViewHostImpl* source) override;
   void OnBackgroundColorChanged(RenderViewHostImpl* source) override;
@@ -958,7 +965,7 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
 
   bool CreateRenderViewForRenderManager(
       RenderViewHost* render_view_host,
-      const base::Optional<base::UnguessableToken>& opener_frame_token,
+      const base::Optional<blink::FrameToken>& opener_frame_token,
       RenderFrameProxyHost* proxy_host) override;
   void ReattachOuterDelegateIfNeeded() override;
   void CreateRenderWidgetHostViewForRenderManager(
@@ -1239,6 +1246,7 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
   friend class BeforeUnloadBlockingDelegate;
   friend class TestWCDelegateForDialogsAndFullscreen;
 
+  FRIEND_TEST_ALL_PREFIXES(WebContentsImplTest, CaptureHoldsWakeLock);
   FRIEND_TEST_ALL_PREFIXES(WebContentsImplTest, NoJSMessageOnInterstitials);
   FRIEND_TEST_ALL_PREFIXES(WebContentsImplTest, UpdateTitle);
   FRIEND_TEST_ALL_PREFIXES(WebContentsImplTest, FindOpenerRVHWhenPending);
@@ -1817,6 +1825,7 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
   // to be hidden but still paint.
   int visible_capturer_count_;
   int hidden_capturer_count_;
+  mojo::Remote<device::mojom::WakeLock> capture_wake_lock_;
 
   // The visibility of the WebContents. Initialized from
   // |CreateParams::initially_hidden|. Updated from

@@ -50,6 +50,7 @@ mojom("mojom_platform") {
     "credentialmanager/credential_manager.mojom",
     "css/preferred_color_scheme.mojom",
     "css/preferred_contrast.mojom",
+    "data_transfer/data_transfer.mojom",
     "device/device.mojom",
     "devtools/console_message.mojom",
     "devtools/devtools_agent.mojom",
@@ -89,7 +90,6 @@ mojom("mojom_platform") {
     "input/pointer_lock_context.mojom",
     "input/pointer_lock_result.mojom",
     "input/scroll_direction.mojom",
-    "input/synchronous_compositor.mojom",
     "input/touch_event.mojom",
     "insecure_input/insecure_input_service.mojom",
     "keyboard_lock/keyboard_lock.mojom",
@@ -120,6 +120,7 @@ mojom("mojom_platform") {
     "mediastream/media_devices.mojom",
     "mediastream/media_stream.mojom",
     "mime/mime_registry.mojom",
+    "modal_close_watcher/modal_close_listener.mojom",
     "native_io/native_io.mojom",
     "notifications/notification.mojom",
     "notifications/notification_service.mojom",
@@ -205,6 +206,10 @@ mojom("mojom_platform") {
     "worker/worker_main_script_load_params.mojom",
     "worker/worker_options.mojom",
   ]
+
+  if (is_android) {
+    sources += [ "input/synchronous_compositor.mojom" ]
+  }
 
   if (is_win) {
     sources += [ "dwrite_font_proxy/dwrite_font_proxy.mojom" ]

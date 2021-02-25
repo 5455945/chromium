@@ -300,7 +300,7 @@ void ChromeClientImpl::SetOverscrollBehavior(
       overscroll_behavior);
 }
 
-void ChromeClientImpl::Show(const base::UnguessableToken& opener_frame_token,
+void ChromeClientImpl::Show(const blink::LocalFrameToken& opener_frame_token,
                             NavigationPolicy navigation_policy,
                             const IntRect& initial_rect,
                             bool user_gesture) {
@@ -452,7 +452,7 @@ float ChromeClientImpl::WindowToViewportScalar(LocalFrame* frame,
   return frame->GetWidgetForLocalRoot()->DIPsToBlinkSpace(scalar_value);
 }
 
-ScreenInfo ChromeClientImpl::GetScreenInfo(LocalFrame& frame) const {
+const ScreenInfo& ChromeClientImpl::GetScreenInfo(LocalFrame& frame) const {
   return frame.GetWidgetForLocalRoot()->GetScreenInfo();
 }
 

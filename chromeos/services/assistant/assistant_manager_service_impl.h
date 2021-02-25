@@ -111,6 +111,8 @@ class COMPONENT_EXPORT(ASSISTANT_SERVICE) AssistantManagerServiceImpl
       private libassistant::mojom::StateObserver,
       public ConversationObserver {
  public:
+  static void ResetIsFirstInitFlagForTesting();
+
   // |service| owns this class and must outlive this class.
   AssistantManagerServiceImpl(
       ServiceContext* context,
@@ -221,8 +223,7 @@ class COMPONENT_EXPORT(ASSISTANT_SERVICE) AssistantManagerServiceImpl
   // libassistant::mojom::StateObserver implementation:
   void OnStateChanged(libassistant::mojom::ServiceState new_state) override;
 
-  void InitAssistant(const base::Optional<UserInfo>& user,
-                     const std::string& locale);
+  void InitAssistant(const base::Optional<UserInfo>& user);
   void OnServiceStarted();
   void OnServiceRunning();
   bool IsServiceStarted() const;

@@ -22,38 +22,6 @@ namespace cart {
 
 namespace {
 
-const std::map<std::string, std::string>& GetDomainToTitle() {
-  static const base::NoDestructor<std::map<std::string, std::string>> table({
-      // TODO(crbug/1164236): add more known sites.
-      {"amazon.com", "Amazon"},
-      {"ebay.com", "eBay"},
-      {"etsy.com", "Etsy"},
-      {"amazon.co.uk", "Amazon"},
-      {"walmart.com", "Walmart"},
-      {"steampowered.com", "Steam"},
-      {"target.com", "Target"},
-      {"hm.com", "H&M"},
-      {"homedepot.com", "Home Depot"},
-      {"lowes.com", "Lowe's"},
-      {"bestbuy.com", "Best Buy"},
-  });
-  return *table;
-}
-
-const std::map<std::string, std::string>& GetDomainToCart() {
-  static const base::NoDestructor<std::map<std::string, std::string>> table({
-      // TODO(crbug/1164236): add more known sites.
-      {"walmart.com", "https://walmart.com/cart"},
-      {"amazon.com", "https://www.amazon.com/gp/cart/view.html"},
-      {"hm.com", "https://www2.hm.com/en_us/cart"},
-      {"ebay.com", "https://cart.payments.ebay.com/"},
-      {"etsy.com", "https://www.etsy.com/cart"},
-      {"bestbuy.com", "https://www.bestbuy.com/cart"},
-      {"homedepot.com", "https://www.homedepot.com/mycart/home"},
-  });
-  return *table;
-}
-
 // TODO(crbug/1164236): support multiple cart systems in the same domain.
 std::string eTLDPlusOne(const GURL& url) {
   return net::registry_controlled_domains::GetDomainAndRegistry(
@@ -73,21 +41,31 @@ class CommerceHintObserverImpl : public mojom::CommerceHintObserver {
 
   void OnAddToCart() override {
     VLOG(1) << "Received OnAddToCart in the browser process";
-    service_->OnAddToCart(service_->WebContents()->GetLastCommittedURL());
+    if (!service_)
+      return;
+    service_->OnAddToCart(service_->WebContents()->GetLastCommittedURL(),
+                          base::nullopt);
   }
 
   void OnVisitCart() override {
     VLOG(1) << "Received OnVisitCart in the browser process";
-    service_->OnAddToCart(service_->WebContents()->GetLastCommittedURL());
+    if (!service_)
+      return;
+    const GURL& main_frame_url = service_->WebContents()->GetLastCommittedURL();
+    service_->OnAddToCart(main_frame_url, main_frame_url);
   }
 
   void OnVisitCheckout() override {
     VLOG(1) << "Received OnVisitCheckout in the browser process";
+    if (!service_)
+      return;
     service_->OnRemoveCart(service_->WebContents()->GetLastCommittedURL());
   }
 
   void OnPurchase() override {
     VLOG(1) << "Received OnPurchase in the browser process";
+    if (!service_)
+      return;
     service_->OnRemoveCart(service_->WebContents()->GetLastCommittedURL());
   }
 
@@ -115,60 +93,24 @@ void CommerceHintService::BindCommerceHintObserver(
       std::move(receiver));
 }
 
-void CommerceHintService::OnAddToCart(const GURL& url) {
-  service_->LoadCart(eTLDPlusOne(url),
-                     base::BindOnce(&CommerceHintService::AddCartToDB,
-                                    weak_factory_.GetWeakPtr(), url));
+void CommerceHintService::OnAddToCart(const GURL& navigation_url,
+                                      const base::Optional<GURL>& cart_url) {
+  cart_db::ChromeCartContentProto proto;
+  ConstructCartProto(&proto, navigation_url);
+  service_->AddCart(eTLDPlusOne(navigation_url), cart_url, std::move(proto));
 }
 
 void CommerceHintService::OnRemoveCart(const GURL& url) {
   service_->DeleteCart(eTLDPlusOne(url));
 }
 
-void CommerceHintService::AddCartToDB(
-    const GURL& potential_cart_url,
-    bool success,
-    std::vector<CartDB::KeyAndValue> proto_pairs) {
-  if (!success)
-    return;
-  cart_db::ChromeCartContentProto proto;
-  // If there is an existing cart from that domain, update timestamp; otherwise,
-  // construct a new entry.
-  if (proto_pairs.size() > 0) {
-    DCHECK(proto_pairs.size() == 1);
-    proto = std::move(proto_pairs.at(0).second);
-    proto.set_timestamp(base::Time::Now().ToDoubleT());
-  } else {
-    ConstructCartProto(&proto, potential_cart_url);
-  }
-  service_->AddCart(proto.key(), std::move(proto));
-}
-
 void CommerceHintService::ConstructCartProto(
     cart_db::ChromeCartContentProto* proto,
-    const GURL& potential_cart_url) {
-  const std::string& domain = eTLDPlusOne(potential_cart_url);
-
-  std::string title;
-  const std::map<std::string, std::string>& domain_to_title =
-      GetDomainToTitle();
-  if (domain_to_title.count(domain) > 0) {
-    title = domain_to_title.at(domain);
-  } else {
-    title = domain;
-  }
-
-  std::string cart_url;
-  const std::map<std::string, std::string>& domain_to_cart = GetDomainToCart();
-  if (domain_to_cart.count(domain) > 0) {
-    cart_url = domain_to_cart.at(domain);
-  } else {
-    cart_url = potential_cart_url.spec();
-  }
-
-  proto->set_key(std::move(domain));
-  proto->set_merchant(std::move(title));
-  proto->set_merchant_cart_url(std::move(cart_url));
+    const GURL& navigation_url) {
+  const std::string& domain = eTLDPlusOne(navigation_url);
+  proto->set_key(domain);
+  proto->set_merchant(domain);
+  proto->set_merchant_cart_url(navigation_url.spec());
   proto->set_timestamp(base::Time::Now().ToDoubleT());
 }
 

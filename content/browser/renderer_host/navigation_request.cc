@@ -799,7 +799,7 @@ std::unique_ptr<NavigationRequest> NavigationRequest::CreateBrowserInitiated(
     mojom::CommitNavigationParamsPtr commit_params,
     bool browser_initiated,
     bool was_opener_suppressed,
-    const base::UnguessableToken* initiator_frame_token,
+    const blink::LocalFrameToken* initiator_frame_token,
     int initiator_process_id,
     const std::string& extra_headers,
     FrameNavigationEntry* frame_entry,
@@ -816,9 +816,8 @@ std::unique_ptr<NavigationRequest> NavigationRequest::CreateBrowserInitiated(
       GetDestinationFromFrameTreeNode(frame_tree_node);
 
   auto navigation_params = mojom::BeginNavigationParams::New(
-      initiator_frame_token ? base::make_optional(*initiator_frame_token)
-                            : base::nullopt,
-      extra_headers, net::LOAD_NORMAL, false /* skip_service_worker */,
+      base::OptionalFromPtr(initiator_frame_token), extra_headers,
+      net::LOAD_NORMAL, false /* skip_service_worker */,
       blink::mojom::RequestContextType::LOCATION, destination,
       blink::mojom::MixedContentContextType::kBlockable, is_form_submission,
       false /* was_initiated_by_link_click */, GURL() /* searchable_form_url */,
@@ -970,9 +969,9 @@ std::unique_ptr<NavigationRequest> NavigationRequest::CreateRendererInitiated(
   std::unique_ptr<NavigationRequest> navigation_request(new NavigationRequest(
       frame_tree_node, std::move(common_params), std::move(begin_params),
       std::move(commit_params),
-      false,  // browser_initiated
-      true,   // from_begin_navigation
-      false,  // is_for_commit
+      false,    // browser_initiated
+      true,     // from_begin_navigation
+      false,    // is_for_commit
       nullptr,  // frame_entry
       entry,
       nullptr,  // navigation_ui_data
@@ -2335,6 +2334,11 @@ void NavigationRequest::OnResponseStarted(
   ssl_info_ = response_head_->ssl_info;
   auth_challenge_info_ = response_head_->auth_challenge_info;
 
+  if (IsServedFromBackForwardCache()) {
+    response_head_ =
+        rfh_restored_from_back_forward_cache_->last_response_head()->Clone();
+  }
+
   bool is_mhtml_archive = response_head_->mime_type == "multipart/related" ||
                           response_head_->mime_type == "message/rfc822";
   if (is_mhtml_archive)
@@ -3135,6 +3139,8 @@ void NavigationRequest::OnRedirectChecksComplete(
     NavigationThrottle::ThrottleCheckResult result) {
   DCHECK(result.action() != NavigationThrottle::DEFER);
   DCHECK(result.action() != NavigationThrottle::BLOCK_RESPONSE);
+  DCHECK(!IsServedFromBackForwardCache());
+  DCHECK(!IsPrerenderedPageActivation());
 
   bool collapse_frame =
       result.action() == NavigationThrottle::BLOCK_REQUEST_AND_COLLAPSE;
@@ -5301,7 +5307,7 @@ const base::Optional<blink::Impression>& NavigationRequest::GetImpression() {
   return begin_params()->impression;
 }
 
-const base::Optional<base::UnguessableToken>&
+const base::Optional<blink::LocalFrameToken>&
 NavigationRequest::GetInitiatorFrameToken() {
   return initiator_frame_token_;
 }

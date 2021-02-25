@@ -126,7 +126,8 @@ public class ProfileDataCacheRenderTest extends DummyUiActivityTestCase {
             mContentView.addView(mImageView, LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT);
             activity.setContentView(mContentView);
 
-            mProfileDataCache = new ProfileDataCache(getActivity(), mImageSize, null);
+            mProfileDataCache = new ProfileDataCache(getActivity(), mImageSize,
+                    /*badgeConfig=*/null);
             // ProfileDataCache only populates the cache when an observer is added.
             mProfileDataCache.addObserver(accountId -> {});
         });
@@ -168,6 +169,20 @@ public class ProfileDataCacheRenderTest extends DummyUiActivityTestCase {
     @Feature("RenderTest")
     public void testProfileDataPopulatedFromIdentityManagerObserver() throws IOException {
         mIdentityManager.onExtendedAccountInfoUpdated(mAccountInfoWithAvatar);
+        TestThreadUtils.runOnUiThreadBlocking(
+                () -> { checkImageIsScaled(mAccountInfoWithAvatar.getEmail()); });
+        mRenderTestRule.render(mImageView, "profile_data_cache_avatar" + mImageSize);
+    }
+
+    @Test
+    @MediumTest
+    @Feature("RenderTest")
+    public void testNoProfileDataRemovedWithEmptyAccountInfo() throws IOException {
+        mIdentityManager.onExtendedAccountInfoUpdated(mAccountInfoWithAvatar);
+        final AccountInfo emptyAccountInfo =
+                new AccountInfo(mAccountInfoWithAvatar.getId(), mAccountInfoWithAvatar.getEmail(),
+                        mAccountInfoWithAvatar.getGaiaId(), null, null, null);
+        mIdentityManager.onExtendedAccountInfoUpdated(emptyAccountInfo);
         TestThreadUtils.runOnUiThreadBlocking(
                 () -> { checkImageIsScaled(mAccountInfoWithAvatar.getEmail()); });
         mRenderTestRule.render(mImageView, "profile_data_cache_avatar" + mImageSize);

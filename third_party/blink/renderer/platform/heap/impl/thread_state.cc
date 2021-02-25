@@ -439,6 +439,16 @@ void ThreadState::PerformIdleLazySweep(base::TimeTicks deadline) {
   if (SweepForbidden())
     return;
 
+  if (!AdvanceLazySweep(deadline)) {
+    ScheduleIdleLazySweep();
+  }
+}
+
+bool ThreadState::AdvanceLazySweep(base::TimeTicks deadline) {
+  DCHECK(CheckThread());
+  DCHECK(IsSweepingInProgress());
+  DCHECK(!SweepForbidden());
+
   RUNTIME_CALL_TIMER_SCOPE_IF_ISOLATE_EXISTS(
       GetIsolate(), RuntimeCallStats::CounterId::kPerformIdleLazySweep);
 
@@ -455,14 +465,13 @@ void ThreadState::PerformIdleLazySweep(base::TimeTicks deadline) {
     // We request another idle task for the remaining sweeping.
     if (sweep_completed) {
       SynchronizeAndFinishConcurrentSweeping();
-    } else {
-      ScheduleIdleLazySweep();
     }
   }
 
   if (sweep_completed) {
     NotifySweepDone();
   }
+  return sweep_completed;
 }
 
 void ThreadState::PerformConcurrentSweep(base::JobDelegate* job) {
@@ -909,6 +918,8 @@ void ThreadState::NotifySweepDone() {
   if (!in_atomic_pause()) {
     PostSweep();
   }
+
+  ThreadState::StatisticsCollector(this).Verify();
 }
 
 void ThreadState::PostSweep() {
@@ -1445,6 +1456,8 @@ void ThreadState::MarkPhasePrologue(BlinkGC::CollectionType collection_type,
                                     BlinkGC::GCReason reason) {
   SetGCPhase(GCPhase::kMarking);
 
+  ThreadState::StatisticsCollector(this).Verify();
+
   const bool compaction_enabled =
       Heap().Compaction()->ShouldCompact(stack_state, marking_type, reason);
 
@@ -1682,6 +1695,31 @@ size_t ThreadState::GetUsedSizeInBytes() {
   Statistics stats = ThreadState::StatisticsCollector(this).CollectStatistics(
       Statistics::kBrief);
   return stats.used_size_bytes;
+}
+
+void ThreadState::CollectNodeAndCssStatistics(
+    base::OnceCallback<void(size_t allocated_node_bytes,
+                            size_t allocated_css_bytes)> callback) {
+  if (IsSweepingInProgress()) {
+    // Help the sweeper to make progress using short-running delayed tasks.
+    // We use delayed tasks to give background threads a chance to sweep
+    // most of the heap.
+    const base::TimeDelta kStepSizeMs = base::TimeDelta::FromMilliseconds(5);
+    const base::TimeDelta kTaskDelayMs = base::TimeDelta::FromMilliseconds(10);
+    if (!AdvanceLazySweep(base::TimeTicks::Now() + kStepSizeMs)) {
+      ThreadScheduler::Current()->V8TaskRunner()->PostDelayedTask(
+          FROM_HERE,
+          WTF::Bind(&ThreadState::CollectNodeAndCssStatistics,
+                    WTF::Unretained(this), std::move(callback)),
+          kTaskDelayMs);
+      return;
+    }
+  }
+  size_t allocated_node_bytes =
+      Heap().Arena(BlinkGC::kNodeArenaIndex)->AllocatedBytes();
+  size_t allocated_css_bytes =
+      Heap().Arena(BlinkGC::kCSSValueArenaIndex)->AllocatedBytes();
+  std::move(callback).Run(allocated_node_bytes, allocated_css_bytes);
 }
 
 }  // namespace blink

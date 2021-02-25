@@ -40,9 +40,9 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
-#include "base/debug/dump_without_crashing.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/stl_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
@@ -2315,7 +2315,7 @@ void NavigationControllerImpl::GoToOffsetInSandboxedFrame(
 void NavigationControllerImpl::NavigateFromFrameProxy(
     RenderFrameHostImpl* render_frame_host,
     const GURL& url,
-    const base::UnguessableToken* initiator_frame_token,
+    const blink::LocalFrameToken* initiator_frame_token,
     int initiator_process_id,
     const base::Optional<url::Origin>& initiator_origin,
     bool is_renderer_initiated,
@@ -2415,9 +2415,7 @@ void NavigationControllerImpl::NavigateFromFrameProxy(
   }
 
   LoadURLParams params(url);
-  params.initiator_frame_token =
-      initiator_frame_token ? base::make_optional(*initiator_frame_token)
-                            : base::nullopt;
+  params.initiator_frame_token = base::OptionalFromPtr(initiator_frame_token);
   params.initiator_process_id = initiator_process_id;
   params.initiator_origin = initiator_origin;
   params.source_site_instance = source_site_instance;
@@ -3515,8 +3513,14 @@ NavigationControllerImpl::CreateNavigationRequestFromEntry(
   }
 
   if (!DoesURLMatchOriginForNavigation(dest_url, origin_to_commit)) {
-    DCHECK(false) << " url:" << dest_url
-                  << " origin:" << origin_to_commit.value();
+    if (!frame_tree_node->IsMainFrame() && dest_url.SchemeIs(url::kUrnScheme)) {
+      NOTIMPLEMENTED()
+          << "History navigation to urn:uuid resource in WebBundle is not"
+             "implemented. See crbug.com/1180697";
+    } else {
+      DCHECK(false) << " url:" << dest_url
+                    << " origin:" << origin_to_commit.value();
+    }
     return nullptr;
   }
 
@@ -3552,10 +3556,6 @@ NavigationControllerImpl::CreateNavigationRequestFromEntry(
       /*new_url=*/dest_url, reload_type, entry, *frame_entry,
       has_pending_cross_document_commit, is_currently_error_page,
       is_same_document_history_load);
-  if (navigation_type == mojom::NavigationType::HISTORY_SAME_DOCUMENT &&
-      frame_tree_node->current_frame_host()->GetLastCommittedURL() == GURL()) {
-    base::debug::DumpWithoutCrashing();
-  }
 
   // A form submission may happen here if the navigation is a
   // back/forward/reload navigation that does a form resubmission.

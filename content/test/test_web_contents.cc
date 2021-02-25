@@ -95,9 +95,9 @@ TestRenderViewHost* TestWebContents::GetRenderViewHost() {
   return static_cast<TestRenderViewHost*>(instance);
 }
 
-TestRenderFrameHost* TestWebContents::GetPendingMainFrame() {
+TestRenderFrameHost* TestWebContents::GetSpeculativePrimaryMainFrame() {
   return static_cast<TestRenderFrameHost*>(
-      WebContentsImpl::GetPendingMainFrame());
+      GetFrameTree()->root()->render_manager()->speculative_frame_host());
 }
 
 int TestWebContents::DownloadImage(const GURL& url,
@@ -227,7 +227,7 @@ bool TestWebContents::CrossProcessNavigationPending() {
 
 bool TestWebContents::CreateRenderViewForRenderManager(
     RenderViewHost* render_view_host,
-    const base::Optional<base::UnguessableToken>& opener_frame_token,
+    const base::Optional<blink::FrameToken>& opener_frame_token,
     RenderFrameProxyHost* proxy_host) {
   const auto proxy_routing_id =
       proxy_host ? proxy_host->GetRoutingID() : MSG_ROUTING_NONE;

@@ -83,6 +83,9 @@ extern const char kAriaElementReflectionDescription[];
 extern const char kCOLRV1FontsName[];
 extern const char kCOLRV1FontsDescription[];
 
+extern const char kContentLanguagesInLanguagePickerName[];
+extern const char kContentLanguagesInLanguagePickerDescription[];
+
 extern const char kConversionMeasurementApiName[];
 extern const char kConversionMeasurementApiDescription[];
 
@@ -230,6 +233,9 @@ extern const char kContextMenuShopWithGoogleLensDescription[];
 
 extern const char kContextMenuSearchAndShopWithGoogleLensName[];
 extern const char kContextMenuSearchAndShopWithGoogleLensDescription[];
+
+extern const char kContextMenuTranslateWithGoogleLensName[];
+extern const char kContextMenuTranslateWithGoogleLensDescription[];
 
 extern const char kClickToOpenPDFName[];
 extern const char kClickToOpenPDFDescription[];
@@ -687,9 +693,6 @@ extern const char kExtensionsOnChromeUrlsDescription[];
 extern const char kFilteringScrollPredictionName[];
 extern const char kFilteringScrollPredictionDescription[];
 
-extern const char kFirstScrollLatencyMeasurementName[];
-extern const char kFirstScrollLatencyMeasurementDescription[];
-
 extern const char kFractionalScrollOffsetsName[];
 extern const char kFractionalScrollOffsetsDescription[];
 
@@ -708,6 +711,9 @@ extern const char kEffectiveConnectionType4GDescription[];
 
 extern const char kFileHandlingAPIName[];
 extern const char kFileHandlingAPIDescription[];
+
+extern const char kFillingAcrossAffiliatedWebsitesName[];
+extern const char kFillingAcrossAffiliatedWebsitesDescription[];
 
 extern const char kFillOnAccountSelectName[];
 extern const char kFillOnAccountSelectDescription[];
@@ -835,6 +841,9 @@ extern const char kLegacyTLSEnforcedDescription[];
 extern const char kLegacyTLSWarningsName[];
 extern const char kLegacyTLSWarningsDescription[];
 
+extern const char kLensCameraAssistedSearchName[];
+extern const char kLensCameraAssistedSearchDescription[];
+
 extern const char kLiteVideoName[];
 extern const char kLiteVideoDescription[];
 
@@ -923,8 +932,8 @@ extern const char kNotificationSchedulerDebugOptionName[];
 extern const char kNotificationSchedulerDebugOptionDescription[];
 extern const char kNotificationSchedulerImmediateBackgroundTaskDescription[];
 
-extern const char kNotificationsNativeFlagName[];
-extern const char kNotificationsNativeFlagDescription[];
+extern const char kNotificationsSystemFlagName[];
+extern const char kNotificationsSystemFlagDescription[];
 
 extern const char kUseMultiloginEndpointName[];
 extern const char kUseMultiloginEndpointDescription[];

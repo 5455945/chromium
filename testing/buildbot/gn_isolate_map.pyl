@@ -608,6 +608,10 @@
     "label": "//:chromiumos_preflight",
     "type": "additional_compile_target",
   },
+  "color_unittests": {
+    "label": "//ui/color:color_unittests",
+    "type": "console_test_launcher",
+  },
   "command_buffer_perftests": {
     "args": [
       "command_buffer_perftests",
@@ -1866,6 +1870,10 @@
   },
   "wayland_client_perftests": {
     "label": "//components/exo/wayland:wayland_client_perftests",
+    "type": "windowed_test_launcher",
+  },
+  "wayland_client_tests": {
+    "label": "//components/exo/wayland:wayland_client_tests",
     "type": "windowed_test_launcher",
   },
   "web_engine_browsertests": {

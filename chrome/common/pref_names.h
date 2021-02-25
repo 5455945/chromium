@@ -618,6 +618,7 @@ extern const char kNtpCollapsedSyncPromo[];
 extern const char kNtpCustomBackgroundDict[];
 extern const char kNtpCustomBackgroundLocalToDevice[];
 extern const char kNtpModulesVisible[];
+extern const char kNtpDisabledModules[];
 extern const char kNtpPromoBlocklist[];
 extern const char kNtpSearchSuggestionsBlocklist[];
 extern const char kNtpSearchSuggestionsImpressions[];
@@ -1035,6 +1036,7 @@ extern const char kBlockAutoplayEnabled[];
 // of lacros-chrome is complete.
 #if defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
 extern const char kAllowNativeNotifications[];
+extern const char kAllowSystemNotifications[];
 #endif
 
 extern const char kNotificationNextPersistentId[];
@@ -1122,6 +1124,10 @@ extern const char kCartModuleWelcomeSurfaceShownTimes[];
 
 #if defined(OS_ANDROID)
 extern const char kWebXRImmersiveArEnabled[];
+#endif
+
+#if !defined(OS_ANDROID)
+extern const char kFetchKeepaliveDurationOnShutdown[];
 #endif
 
 }  // namespace prefs

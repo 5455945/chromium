@@ -15,6 +15,7 @@
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
+#include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/apps/app_service/app_launch_params.h"
@@ -29,8 +30,11 @@
 #include "chrome/browser/web_applications/components/app_registrar.h"
 #include "chrome/browser/web_applications/components/web_app_constants.h"
 #include "chrome/browser/web_applications/components/web_app_helpers.h"
+#include "chrome/browser/web_applications/proto/web_app.pb.h"
 #include "chrome/browser/web_applications/test/test_system_web_app_installation.h"
 #include "chrome/browser/web_applications/test/test_web_app_provider.h"
+#include "chrome/browser/web_applications/web_app.h"
+#include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_tab_helper.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
@@ -1091,14 +1095,14 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppManagerUninstallBrowserTest, Uninstall) {
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 
 // Test that all registered System Apps can be re-installed.
-class SystemWebAppManagerUpgradeBrowserTest
+class SystemWebAppManagerInstallAllAppsBrowserTest
     : public SystemWebAppManagerBrowserTest {
  public:
-  SystemWebAppManagerUpgradeBrowserTest()
+  SystemWebAppManagerInstallAllAppsBrowserTest()
       : SystemWebAppManagerBrowserTest(/*install_mock=*/false) {
     features_.InitAndEnableFeature(features::kEnableAllSystemWebApps);
   }
-  ~SystemWebAppManagerUpgradeBrowserTest() override = default;
+  ~SystemWebAppManagerInstallAllAppsBrowserTest() override = default;
 
   // Don't use WaitForTestSystemAppInstall in this test, because it artificially
   // resets the OnAppsSynchronized signal, and starts a new synchronize request.
@@ -1115,13 +1119,36 @@ class SystemWebAppManagerUpgradeBrowserTest
   base::test::ScopedFeatureList features_;
 };
 
-IN_PROC_BROWSER_TEST_P(SystemWebAppManagerUpgradeBrowserTest, PRE_Upgrade) {
+// TODO(https://crbug.com/1162992): At the moment, PRE_Test failures aren't
+// reported in test summary, thus won't fail the CI build job. So we need a
+// ordinary test to fail the job and block CQ.
+//
+// Technically speaking, this test can merge into PRE_Upgrade if the
+// aforementioned crbug is fixed.
+IN_PROC_BROWSER_TEST_P(SystemWebAppManagerInstallAllAppsBrowserTest,
+                       WebAppProtoEntryDefined) {
+  const auto& app_map = GetManager().GetRegisteredSystemAppsForTesting();
+  ASSERT_GT(app_map.size(), 0U);
+
+  // Check all system app types has a corresponding SystemWebAppDataProto entry
+  // defined.
+  for (const auto& type_and_info : app_map) {
+    EXPECT_TRUE(::web_app::SystemWebAppDataProto_SystemAppType_IsValid(
+        static_cast<::web_app::SystemWebAppDataProto_SystemAppType>(
+            type_and_info.first)))
+        << "Please make sure you have added a corresponding entry to "
+           "web_app::SystemWebAppDataProto when adding a new System Web App.";
+  }
+}
+
+IN_PROC_BROWSER_TEST_P(SystemWebAppManagerInstallAllAppsBrowserTest,
+                       PRE_Upgrade) {
   WaitForSystemAppsSynchronized();
   EXPECT_GE(GetManager().GetRegisteredSystemAppsForTesting().size(),
             GetManager().GetAppIds().size());
 }
 
-IN_PROC_BROWSER_TEST_P(SystemWebAppManagerUpgradeBrowserTest, Upgrade) {
+IN_PROC_BROWSER_TEST_P(SystemWebAppManagerInstallAllAppsBrowserTest, Upgrade) {
   WaitForSystemAppsSynchronized();
   const auto& app_ids = GetManager().GetAppIds();
 
@@ -1515,8 +1542,52 @@ INSTANTIATE_SYSTEM_WEB_APP_MANAGER_TEST_SUITE_REGULAR_PROFILE_P(
 
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
-INSTANTIATE_SYSTEM_WEB_APP_MANAGER_TEST_SUITE_REGULAR_PROFILE_P(
-    SystemWebAppManagerWebAppInfoBrowserTest);
+class SystemWebAppManagerBackgroundTaskTest
+    : public SystemWebAppManagerBrowserTest {
+ public:
+  SystemWebAppManagerBackgroundTaskTest()
+      : SystemWebAppManagerBrowserTest(/*install_mock=*/false) {
+    maybe_installation_ =
+        TestSystemWebAppInstallation::SetUpAppWithBackgroundTask();
+  }
+
+  void WaitForSystemAppsSynchronized() {
+    base::RunLoop run_loop;
+    WebAppProvider::Get(browser()->profile())
+        ->system_web_app_manager()
+        .on_apps_synchronized()
+        .Post(FROM_HERE, run_loop.QuitClosure());
+
+    run_loop.Run();
+  }
+};
+
+IN_PROC_BROWSER_TEST_P(SystemWebAppManagerBackgroundTaskTest, TimerFires) {
+  // The SystemWebAppManager gets created in the Setup(), in the test
+  // constructor, and the background tasks get created during synchronize.
+  // Ideally, we'd make a TestNavigationObserver in the constructor, but they
+  // have to be single threaded, and throw a check fail. There's a race
+  // condition here because the background tasks are fired as callbacks in
+  // response to the install finishing. So, we wait for the apps to be
+  // installed, then wait on the navigation. A cleaner solution would be to have
+  // a hook in the background pages to detect the navigation as an event. That's
+  // a little too much work for one test though, and since this is mostly tested
+  // in unittests, this is probably enough.
+
+  content::TestNavigationObserver navigation_observer(
+      GURL("chrome://test-system-app/page2.html"));
+
+  WaitForSystemAppsSynchronized();
+
+  navigation_observer.WatchExistingWebContents();
+  navigation_observer.Wait();
+
+  auto& tasks = GetManager().GetBackgroundTasksForTesting();
+  EXPECT_EQ(1u, tasks.size());
+  EXPECT_TRUE(tasks[0]->open_immediately_for_testing());
+  EXPECT_EQ(base::TimeDelta::FromDays(1), tasks[0]->period_for_testing());
+  EXPECT_EQ(1u, tasks[0]->timer_activated_count_for_testing());
+}
 
 INSTANTIATE_SYSTEM_WEB_APP_MANAGER_TEST_SUITE_REGULAR_PROFILE_P(
     SystemWebAppManagerLaunchFilesBrowserTest);
@@ -1552,7 +1623,10 @@ INSTANTIATE_SYSTEM_WEB_APP_MANAGER_TEST_SUITE_REGULAR_PROFILE_P(
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 INSTANTIATE_SYSTEM_WEB_APP_MANAGER_TEST_SUITE_REGULAR_PROFILE_P(
-    SystemWebAppManagerUpgradeBrowserTest);
+    SystemWebAppManagerInstallAllAppsBrowserTest);
 #endif
+
+INSTANTIATE_SYSTEM_WEB_APP_MANAGER_TEST_SUITE_REGULAR_PROFILE_P(
+    SystemWebAppManagerBackgroundTaskTest);
 
 }  // namespace web_app

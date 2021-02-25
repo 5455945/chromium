@@ -638,6 +638,7 @@ static_library("test_support") {
 
   if (is_chromeos_lacros) {
     deps += [
+      "//chromeos/crosapi/cpp",
       "//chromeos/lacros",
       "//chromeos/startup:constants",
     ]
@@ -1005,7 +1006,6 @@ test("content_browsertests") {
     "../browser/child_process_launcher_browsertest.cc",
     "../browser/child_process_security_policy_browsertest.cc",
     "../browser/content_index/content_index_browsertest.cc",
-    "../browser/content_security_policy_browsertest.cc",
     "../browser/conversions/conversion_internals_browsertest.cc",
     "../browser/conversions/conversion_registration_browsertest.cc",
     "../browser/conversions/conversions_browsertest.cc",
@@ -1134,6 +1134,7 @@ test("content_browsertests") {
     "../browser/renderer_host/input/wheel_event_listener_browsertest.cc",
     "../browser/renderer_host/input/wheel_scroll_latching_browsertest.cc",
     "../browser/renderer_host/media/video_capture_browsertest.cc",
+    "../browser/renderer_host/modal_close_listener_host_browsertest.cc",
     "../browser/renderer_host/navigation_controller_impl_browsertest.cc",
     "../browser/renderer_host/navigation_request_browsertest.cc",
     "../browser/renderer_host/page_lifecycle_state_manager_browsertest.cc",
@@ -1244,7 +1245,6 @@ test("content_browsertests") {
     "../test/content_browser_test_test.cc",
     "../test/top_frame_population_browsertest.cc",
     "../test/url_loader_interceptor_test.cc",
-    "../test/webui_resource_browsertest.cc",
   ]
 
   defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
@@ -1289,7 +1289,6 @@ test("content_browsertests") {
     "//content/app:for_content_tests",
     "//content/browser:for_content_tests",
     "//content/browser/background_sync:background_sync_proto",
-    "//content/browser/resources/media:media_internals_resources_grit",
     "//content/child:for_content_tests",
     "//content/gpu",
     "//content/public/browser",
@@ -1738,6 +1737,7 @@ test("content_unittests") {
     "../browser/accessibility/browser_accessibility_manager_unittest.cc",
     "../browser/accessibility/browser_accessibility_unittest.cc",
     "../browser/accessibility/one_shot_accessibility_tree_search_unittest.cc",
+    "../browser/accessibility/touch_passthrough_manager_unittest.cc",
     "../browser/appcache/appcache_cache_test_helper.cc",
     "../browser/appcache/appcache_cache_test_helper.h",
     "../browser/appcache/appcache_cache_test_helper_unittest.cc",
@@ -2125,7 +2125,6 @@ test("content_unittests") {
     "../renderer/child_frame_compositing_helper_unittest.cc",
     "../renderer/content_security_policy_util_unittest.cc",
     "../renderer/loader/navigation_body_loader_unittest.cc",
-    "../renderer/loader/web_url_loader_impl_unittest.cc",
     "../renderer/media/batching_media_log_unittest.cc",
     "../renderer/media/inspector_media_event_handler_unittest.cc",
     "../renderer/media/power_status_helper_impl_unittest.cc",
@@ -2518,6 +2517,9 @@ test("content_unittests") {
       "//device/fido:test_support",
       "//services/device/public/cpp/hid:test_support",
     ]
+    if (is_chromeos_ash) {
+      deps += [ "//chromeos/dbus/u2f" ]
+    }
   }
 
   if (use_aura) {

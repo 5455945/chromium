@@ -37,14 +37,15 @@
 #include "components/signin/public/identity_manager/primary_account_mutator.h"
 #include "content/public/test/browser_test.h"
 
+class SigninUIError;
+
 namespace {
 
 class TestDiceTurnSyncOnHelperDelegate : public DiceTurnSyncOnHelper::Delegate {
   ~TestDiceTurnSyncOnHelperDelegate() override {}
 
   // DiceTurnSyncOnHelper::Delegate:
-  void ShowLoginError(const std::string& email,
-                      const std::string& error_message) override {}
+  void ShowLoginError(const SigninUIError& error) override {}
   void ShowMergeSyncDataConfirmation(
       const std::string& previous_email,
       const std::string& new_email,
@@ -62,6 +63,7 @@ class TestDiceTurnSyncOnHelperDelegate : public DiceTurnSyncOnHelper::Delegate {
     std::move(callback).Run(LoginUIService::SYNC_WITH_DEFAULT_SETTINGS);
   }
   void ShowSyncDisabledConfirmation(
+      bool is_managed_account,
       base::OnceCallback<void(LoginUIService::SyncConfirmationUIClosedResult)>
           callback) override {}
   void ShowSyncSettings() override {}

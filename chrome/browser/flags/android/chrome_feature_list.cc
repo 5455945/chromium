@@ -167,6 +167,7 @@ const base::Feature* kFeaturesExposedToJava[] = {
     &kContextMenuSearchWithGoogleLens,
     &kContextMenuShopWithGoogleLens,
     &kContextMenuSearchAndShopWithGoogleLens,
+    &kContextMenuTranslateWithGoogleLens,
     &kContextualSearchDebug,
     &kContextualSearchDefinitions,
     &kContextualSearchLegacyHttpPolicy,
@@ -195,6 +196,7 @@ const base::Feature* kFeaturesExposedToJava[] = {
     &kInlineUpdateFlow,
     &kInstantStart,
     &kKitKatSupported,
+    &kLensCameraAssistedSearch,
     &kNotificationSuspender,
     &kOfflineIndicatorV2,
     &kOfflineMeasurementsBackgroundTask,
@@ -456,6 +458,12 @@ const base::Feature kContextMenuSearchAndShopWithGoogleLens{
     "ContextMenuSearchAndShopWithGoogleLens",
     base::FEATURE_DISABLED_BY_DEFAULT};
 
+const base::Feature kContextMenuTranslateWithGoogleLens{
+    "ContextMenuTranslateWithGoogleLens", base::FEATURE_DISABLED_BY_DEFAULT};
+
+const base::Feature kLensCameraAssistedSearch{
+    "LensCameraAssistedSearch", base::FEATURE_DISABLED_BY_DEFAULT};
+
 const base::Feature kContextualSearchDebug{"ContextualSearchDebug",
                                            base::FEATURE_DISABLED_BY_DEFAULT};
 
@@ -595,7 +603,7 @@ const base::Feature kShareButtonInTopToolbar{"ShareButtonInTopToolbar",
                                              base::FEATURE_DISABLED_BY_DEFAULT};
 
 const base::Feature kShareByDefaultInCCT{"ShareByDefaultInCCT",
-                                         base::FEATURE_DISABLED_BY_DEFAULT};
+                                         base::FEATURE_ENABLED_BY_DEFAULT};
 
 const base::Feature kShoppingAssist{"ShoppingAssist",
                                     base::FEATURE_DISABLED_BY_DEFAULT};

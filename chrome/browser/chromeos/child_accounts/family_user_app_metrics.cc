@@ -13,6 +13,7 @@
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "components/services/app_service/public/cpp/instance_registry.h"
 #include "components/user_manager/user_manager.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/extension.h"
@@ -23,41 +24,97 @@ namespace chromeos {
 
 namespace {
 // Recently launched apps this many days ago in the past will be recorded.
-constexpr base::TimeDelta k28Days = base::TimeDelta::FromDays(28);
-}  // namespace
+constexpr base::TimeDelta kOneDay = base::TimeDelta::FromDays(1);
 
-// static
 // UMA metrics for a snapshot count of installed and enabled extensions for a
 // given family user.
-const char FamilyUserAppMetrics::kInstalledExtensionsCountHistogramName[] =
+constexpr char kInstalledExtensionsCountHistogramName[] =
     "FamilyUser.InstalledExtensionsCount2";
-const char FamilyUserAppMetrics::kEnabledExtensionsCountHistogramName[] =
+constexpr char kEnabledExtensionsCountHistogramName[] =
     "FamilyUser.EnabledExtensionsCount2";
 
 // UMA metrics for a snapshot count of installed apps for a given family user.
-const char FamilyUserAppMetrics::kArcAppsCountHistogramName[] =
-    "FamilyUser.ArcAppsCount2";
-const char FamilyUserAppMetrics::kBorealisAppsCountHistogramName[] =
-    "FamilyUser.BorealisAppsCount2";
-const char FamilyUserAppMetrics::kCrostiniAppsCountHistogramName[] =
+constexpr char kUnknownAppsCountHistogramName[] =
+    "FamilyUser.UnknownAppsCount2";
+constexpr char kArcAppsCountHistogramName[] = "FamilyUser.ArcAppsCount2";
+constexpr char kBuiltInAppsCountHistogramName[] =
+    "FamilyUser.BuiltInAppsCount2";
+constexpr char kCrostiniAppsCountHistogramName[] =
     "FamilyUser.CrostiniAppsCount2";
-const char FamilyUserAppMetrics::kExtensionAppsCountHistogramName[] =
+// The InstalledExtensionsCount only includes regular browser extensions and
+// themes. This counter only includes apps. The two counters are mutually
+// exclusive.
+constexpr char kExtensionAppsCountHistogramName[] =
     "FamilyUser.ExtensionAppsCount2";
-const char FamilyUserAppMetrics::kWebAppsCountHistogramName[] =
-    "FamilyUser.WebAppsCount2";
+constexpr char kWebAppsCountHistogramName[] = "FamilyUser.WebAppsCount2";
+constexpr char kMacOsAppsCountHistogramName[] = "FamilyUser.MacOsAppsCount2";
+constexpr char kPluginVmAppsCountHistogramName[] =
+    "FamilyUser.PluginVmAppsCount2";
+constexpr char kLacrosAppsCountHistogramName[] = "FamilyUser.LacrosAppsCount2";
+constexpr char kRemoteAppsCountHistogramName[] = "FamilyUser.RemoteAppsCount2";
+constexpr char kBorealisAppsCountHistogramName[] =
+    "FamilyUser.BorealisAppsCount2";
+
+const char* GetAppsCountHistogramName(apps::mojom::AppType app_type) {
+  switch (app_type) {
+    case apps::mojom::AppType::kUnknown:
+      return kUnknownAppsCountHistogramName;
+    case apps::mojom::AppType::kArc:
+      return kArcAppsCountHistogramName;
+    case apps::mojom::AppType::kBuiltIn:
+      return kBuiltInAppsCountHistogramName;
+    case apps::mojom::AppType::kCrostini:
+      return kCrostiniAppsCountHistogramName;
+    case apps::mojom::AppType::kExtension:
+      return kExtensionAppsCountHistogramName;
+    case apps::mojom::AppType::kWeb:
+      return kWebAppsCountHistogramName;
+    case apps::mojom::AppType::kMacOs:
+      return kMacOsAppsCountHistogramName;
+    case apps::mojom::AppType::kPluginVm:
+      return kPluginVmAppsCountHistogramName;
+    case apps::mojom::AppType::kLacros:
+      return kLacrosAppsCountHistogramName;
+    case apps::mojom::AppType::kRemote:
+      return kRemoteAppsCountHistogramName;
+    case apps::mojom::AppType::kBorealis:
+      return kBorealisAppsCountHistogramName;
+  }
+}
+
+}  // namespace
 
 FamilyUserAppMetrics::FamilyUserAppMetrics(Profile* profile)
     : extension_registry_(extensions::ExtensionRegistry::Get(profile)),
       app_registry_(&apps::AppServiceProxyFactory::GetForProfile(profile)
                          ->AppRegistryCache()),
+      instance_registry_(&apps::AppServiceProxyFactory::GetForProfile(profile)
+                              ->InstanceRegistry()),
       first_report_on_current_device_(
           user_manager::UserManager::Get()->IsCurrentUserNew()) {
   DCHECK(extension_registry_);
   DCHECK(app_registry_);
   Observe(app_registry_);
+  DCHECK(instance_registry_);
 }
 
 FamilyUserAppMetrics::~FamilyUserAppMetrics() = default;
+
+// static
+const char*
+FamilyUserAppMetrics::GetInstalledExtensionsCountHistogramNameForTest() {
+  return kInstalledExtensionsCountHistogramName;
+}
+const char*
+FamilyUserAppMetrics::GetEnabledExtensionsCountHistogramNameForTest() {
+  return kEnabledExtensionsCountHistogramName;
+}
+
+// static
+const char* FamilyUserAppMetrics::GetAppsCountHistogramNameForTest(
+    apps::mojom::AppType app_type) {
+  return GetAppsCountHistogramName(app_type);
+}
 
 void FamilyUserAppMetrics::OnNewDay() {
   // Ignores the first report during OOBE. Apps and extensions may sync slowly
@@ -131,40 +188,25 @@ void FamilyUserAppMetrics::RecordRecentlyUsedAppsCount(
   base::Time now = base::Time::Now();
   // The below will execute synchronously.
   app_registry_->ForEachApp(
-      [app_type, now, &app_count](const apps::AppUpdate& update) {
+      [app_type, now, this, &app_count](const apps::AppUpdate& update) {
         if (update.AppType() != app_type)
           return;
         // Only count apps that have been used recently.
-        if (now - update.LastLaunchTime() > k28Days)
-          return;
-        app_count++;
+        if (now - update.LastLaunchTime() <= kOneDay ||
+            IsAppWindowOpen(update.AppId())) {
+          app_count++;
+        }
       });
   // If a family user has more than a thousand apps installed, then that count
   // is going into an overflow bucket. We don't expect this scenario to happen
   // often.
-  switch (app_type) {
-    case apps::mojom::AppType::kArc:
-      base::UmaHistogramCounts1000(kArcAppsCountHistogramName, app_count);
-      break;
-    case apps::mojom::AppType::kBorealis:
-      base::UmaHistogramCounts1000(kBorealisAppsCountHistogramName, app_count);
-      break;
-    case apps::mojom::AppType::kCrostini:
-      base::UmaHistogramCounts1000(kCrostiniAppsCountHistogramName, app_count);
-      break;
-    case apps::mojom::AppType::kExtension:
-      // The InstalledExtensionsCount only includes regular browser
-      // extensions and themes. This counter only includes apps. The two
-      // counters are mutually exclusive.
-      base::UmaHistogramCounts1000(kExtensionAppsCountHistogramName, app_count);
-      break;
-    case apps::mojom::AppType::kWeb:
-      base::UmaHistogramCounts1000(kWebAppsCountHistogramName, app_count);
-      break;
-    default:
-      // We're not interested in tracking other app types in detail.
-      break;
-  }
+  const std::string histogram_name = GetAppsCountHistogramName(app_type);
+  base::UmaHistogramCounts1000(histogram_name, app_count);
+}
+
+bool FamilyUserAppMetrics::IsAppWindowOpen(const std::string& app_id) {
+  // An app is active if it has an open window.
+  return !instance_registry_->GetWindows(app_id).empty();
 }
 
 }  // namespace chromeos

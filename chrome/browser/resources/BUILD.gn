@@ -24,6 +24,7 @@ group("resources") {
       ":component_extension_resources",
       ":dev_ui_paks",
       ":local_ntp_resources",
+      ":webid_resources",
       "bookmarks:resources",
       "commander:resources",
       "downloads:resources",
@@ -211,6 +212,18 @@ if (!is_android) {
     output_dir = "$root_gen_dir/chrome"
   }
 
+  grit("webid_resources") {
+    source = "webid/webid_resources.grd"
+    defines = chrome_grit_defines
+    outputs = [
+      "grit/webid_resources.h",
+      "grit/webid_resources_map.cc",
+      "grit/webid_resources_map.h",
+      "webid_resources_100_percent.pak",
+    ]
+    output_dir = "$root_gen_dir/chrome"
+  }
+
   if (is_chrome_branded) {
     grit("preinstalled_web_apps_resources") {
       source = "preinstalled_web_apps/resources.grd"
@@ -320,7 +333,7 @@ repack("dev_ui_paks") {
     "//components/resources:dev_ui_components_resources",
     "//components/sync/driver:resources",
     "//content:dev_ui_content_resources",
-    "//content/browser/resources/media:media_internals_resources",
+    "//content/browser/resources/media:resources",
     "//content/browser/webrtc/resources",
   ]
 

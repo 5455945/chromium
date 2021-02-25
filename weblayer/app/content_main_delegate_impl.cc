@@ -16,12 +16,12 @@
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "components/content_capture/common/content_capture_features.h"
-#include "components/payments/core/features.h"
 #include "components/startup_metric_utils/browser/startup_metric_utils.h"
 #include "content/public/browser/browser_main_runner.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/url_constants.h"
+#include "device/vr/buildflags/buildflags.h"
 #include "media/base/media_switches.h"
 #include "services/network/public/cpp/features.h"
 #include "third_party/blink/public/common/features.h"
@@ -153,14 +153,13 @@ bool ContentMainDelegateImpl::BasicStartupComplete(int* exit_code) {
   std::vector<base::Feature> disabled_features = {
     // TODO(crbug.com/1025627): make webauth work with WebLayer.
     ::features::kWebAuth,
-    // TODO(crbug.com/1057106): make web-xr work with WebLayer.
+#if !BUILDFLAG(ENABLE_ARCORE)
     ::features::kWebXr,
     ::features::kWebXrArModule,
     ::features::kWebXrHitTest,
+#endif
     // TODO(crbug.com/1057770): make Background Fetch work with WebLayer.
     ::features::kBackgroundFetch,
-    // TODO(crbug.com/1130989): Support GetInstalledRelatedApps on WebLayer.
-    ::features::kInstalledApp,
     // TODO(crbug.com/1091212): make Notification triggers work with
     // WebLayer.
     ::features::kNotificationTriggers,
@@ -183,7 +182,6 @@ bool ContentMainDelegateImpl::BasicStartupComplete(int* exit_code) {
     // TODO(crbug.com/1131021): Support WebOTP Service on WebLayer.
     ::features::kWebOTP,
 #endif
-    payments::features::kGPayAppDynamicUpdate,
   };
 
 #if defined(OS_ANDROID)

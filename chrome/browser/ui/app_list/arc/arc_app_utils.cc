@@ -100,7 +100,7 @@ constexpr char kAndroidFilesAppId[] = "gmiohhmfhgfclpeacmdfancbipocempm";
 constexpr char kAndroidContactsAppId[] = "kipfkokfekalckplgaikemhghlbkgpfl";
 
 constexpr char const* kAppIdsHiddenInLauncher[] = {
-    kAndroidClockAppId,   kSettingsAppId,     kAndroidFilesAppId,
+    kAndroidClockAppId, kSettingsAppId, kAndroidFilesAppId,
     kAndroidContactsAppId};
 
 // Returns true if |event_flags| came from a mouse or touch event.
@@ -168,7 +168,10 @@ bool Launch(content::BrowserContext* context,
 
   if (app_info->shortcut || intent.has_value()) {
     const std::string intent_uri = intent.value_or(app_info->intent_uri);
-    if (auto* app_instance = GET_APP_INSTANCE(LaunchIntent)) {
+    if (auto* app_instance = GET_APP_INSTANCE(LaunchIntentWithWindowInfo)) {
+      app_instance->LaunchIntentWithWindowInfo(intent_uri,
+                                               MakeWindowInfo(display_id));
+    } else if (auto* app_instance = GET_APP_INSTANCE(LaunchIntent)) {
       app_instance->LaunchIntent(intent_uri, display_id);
     } else if (auto* app_instance = GET_APP_INSTANCE(LaunchIntentDeprecated)) {
       app_instance->LaunchIntentDeprecated(intent_uri, gfx::Rect());
@@ -176,7 +179,11 @@ bool Launch(content::BrowserContext* context,
       return false;
     }
   } else {
-    if (auto* app_instance = GET_APP_INSTANCE(LaunchApp)) {
+    if (auto* app_instance = GET_APP_INSTANCE(LaunchAppWithWindowInfo)) {
+      app_instance->LaunchAppWithWindowInfo(app_info->package_name,
+                                            app_info->activity,
+                                            MakeWindowInfo(display_id));
+    } else if (auto* app_instance = GET_APP_INSTANCE(LaunchApp)) {
       app_instance->LaunchApp(app_info->package_name, app_info->activity,
                               display_id);
     } else if (auto* app_instance = GET_APP_INSTANCE(LaunchAppDeprecated)) {
@@ -216,10 +223,6 @@ const char kRequestStartTimeParamTemplate[] =
     "S.org.chromium.arc.request.start=%" PRId64;
 const char kPlayStoreActivity[] = "com.android.vending.AssetBrowserActivity";
 const char kPlayStorePackage[] = "com.android.vending";
-const char kSettingsAppDomainUrlActivity[] =
-    "com.android.settings.Settings$ManageDomainUrlsActivity";
-
-constexpr char kSettingsAppPackage[] = "com.android.settings";
 
 // App IDs, kept in sorted order.
 const char kGmailAppId[] = "hhkfkjpmacfncmbapfohfocpjpdnobjg";
@@ -421,17 +424,6 @@ bool LaunchAppShortcutItem(content::BrowserContext* context,
   app_instance->LaunchAppShortcutItem(app_info->package_name, shortcut_id,
                                       GetValidDisplayId(display_id));
   return true;
-}
-
-bool LaunchSettingsAppActivity(content::BrowserContext* context,
-                               const std::string& activity,
-                               int event_flags,
-                               int64_t display_id) {
-  const std::string launch_intent = GetLaunchIntent(
-      kSettingsAppPackage, activity, std::vector<std::string>());
-  return LaunchAppWithIntent(
-      context, kSettingsAppId, launch_intent, event_flags,
-      UserInteractionType::APP_STARTED_FROM_SETTINGS, display_id);
 }
 
 void SetTaskActive(int task_id) {

@@ -130,7 +130,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="NewTabPage.ContentSuggestions.BackgroundFetchTrigger"
-    enum="BackgroundFetchTrigger" expires_after="2021-06-20">
+    enum="BackgroundFetchTrigger" expires_after="2021-08-22">
   <owner>carlosk@chromium.org</owner>
   <owner>freedjm@chromium.org</owner>
   <owner>feed@chromium.org</owner>
@@ -363,7 +363,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="NewTabPage.ContentSuggestions.OpenedAge" units="ms"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>carlosk@chromium.org</owner>
   <owner>freedjm@chromium.org</owner>
   <owner>feed@chromium.org</owner>
@@ -401,7 +401,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="NewTabPage.ContentSuggestions.Preferences.RemoteSuggestions"
-    enum="BooleanEnabled" expires_after="2021-06-20">
+    enum="BooleanEnabled" expires_after="2021-08-22">
   <owner>carlosk@chromium.org</owner>
   <owner>freedjm@chromium.org</owner>
   <owner>feed@chromium.org</owner>
@@ -486,7 +486,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="NewTabPage.ContentSuggestions.TimeSinceSuggestionFetched"
-    units="ms" expires_after="2021-06-20">
+    units="ms" expires_after="2021-08-22">
   <owner>carlosk@chromium.org</owner>
   <owner>freedjm@chromium.org</owner>
   <owner>feed@chromium.org</owner>
@@ -499,7 +499,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram base="true"
     name="NewTabPage.ContentSuggestions.TimeUntilFirstShownTrigger" units="ms"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>carlosk@chromium.org</owner>
   <owner>freedjm@chromium.org</owner>
   <owner>feed@chromium.org</owner>
@@ -516,7 +516,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram base="true"
     name="NewTabPage.ContentSuggestions.TimeUntilFirstStartupTrigger"
-    units="ms" expires_after="2021-06-20">
+    units="ms" expires_after="2021-08-22">
   <owner>carlosk@chromium.org</owner>
   <owner>freedjm@chromium.org</owner>
   <owner>feed@chromium.org</owner>
@@ -568,7 +568,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="NewTabPage.ContentSuggestions.UsageTimeLocal" units="units"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>carlosk@chromium.org</owner>
   <owner>freedjm@chromium.org</owner>
   <owner>feed@chromium.org</owner>
@@ -791,6 +791,24 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
   </summary>
 </histogram>
 
+<histogram name="NewTabPage.Modules.Disabled{Interaction}" enum="NtpModules"
+    expires_after="2022-01-01">
+  <owner>danielms@google.com</owner>
+  <owner>tiborg@chromium.org</owner>
+  <owner>chrome-desktop-ntp@google.com</owner>
+  <summary>
+    Logged when a module was disabled by {Interaction}. Only logged on the 1P
+    NTP. Note that even if the user has Google as their default search engine,
+    Incognito and Guest mode NTPs are not considered 1P and don't log this
+    histogram.
+  </summary>
+  <token key="Interaction">
+    <variant name="" summary="any interaction"/>
+    <variant name=".ModuleRequest"
+        summary="a module request (e.g. action menu in header)"/>
+  </token>
+</histogram>
+
 <histogram name="NewTabPage.Modules.Dismissed" units="count"
     expires_after="2021-10-01">
   <owner>mahmadi@chromium.org</owner>
@@ -802,6 +820,23 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
     dismissal emits a 1 which has no inherent meaning aside from a dismissal
     occurred.
   </summary>
+</histogram>
+
+<histogram name="NewTabPage.Modules.Enabled{Interaction}" enum="NtpModules"
+    expires_after="2022-01-01">
+  <owner>danielms@google.com</owner>
+  <owner>tiborg@chromium.org</owner>
+  <owner>chrome-desktop-ntp@google.com</owner>
+  <summary>
+    Logged when a module was enabled by {Interaction}. Only logged on the 1P
+    NTP. Note that even if the user has Google as their default search engine,
+    Incognito and Guest mode NTPs are not considered 1P and don't log this
+    histogram.
+  </summary>
+  <token key="Interaction">
+    <variant name="" summary="any interaction"/>
+    <variant name=".Toast" summary="clicking undo on the module disable toast"/>
+  </token>
 </histogram>
 
 <histogram name="NewTabPage.Modules.Hover" enum="NtpModules"
@@ -909,7 +944,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="NewTabPage.Modules.VisibleOnNTPLoad" enum="BooleanVisible"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>tiborg@chromium.org</owner>
   <owner>yyushkina@chromium.org</owner>
   <owner>chrome-desktop-ntp@google.com</owner>
@@ -1185,7 +1220,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="NewTabPage.RepeatableQueries.ExtractedCount" units="count"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>mahmadi@chromium.org</owner>
   <owner>chrome-desktop-ntp@google.com</owner>
   <summary>
@@ -1197,7 +1232,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="NewTabPage.RepeatableQueries.ExtractionDuration" units="ms"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>mahmadi@chromium.org</owner>
   <owner>chrome-desktop-ntp@google.com</owner>
   <summary>
@@ -1595,7 +1630,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="NewTabPage.TileType" enum="NTPTileVisualType"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>dbeam@chromium.org</owner>
   <owner>yyushkina@chromium.org</owner>
   <summary>
@@ -1606,7 +1641,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="NewTabPage.TileTypeClicked" enum="NTPTileVisualType"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>dbeam@chromium.org</owner>
   <owner>yyushkina@chromium.org</owner>
   <summary>

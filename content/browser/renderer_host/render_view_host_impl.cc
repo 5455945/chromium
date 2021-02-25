@@ -384,7 +384,7 @@ RenderViewHostDelegate* RenderViewHostImpl::GetDelegate() {
 }
 
 bool RenderViewHostImpl::CreateRenderView(
-    const base::Optional<base::UnguessableToken>& opener_frame_token,
+    const base::Optional<blink::FrameToken>& opener_frame_token,
     int proxy_route_id,
     bool window_was_created_with_opener) {
   TRACE_EVENT0("renderer_host,navigation",
@@ -639,8 +639,10 @@ void RenderViewHostImpl::ClosePage() {
 
     // TODO(creis): Should this be moved to Shutdown?  It may not be called for
     // RenderViewHosts that have been swapped out.
+    CHECK_EQ(instance_.get(), GetMainFrame()->GetSiteInstance());
 #if !defined(OS_ANDROID)
-    static_cast<HostZoomMapImpl*>(HostZoomMap::Get(instance_.get()))
+    static_cast<HostZoomMapImpl*>(
+        HostZoomMap::Get(GetMainFrame()->GetSiteInstance()))
         ->WillCloseRenderView(GetProcess()->GetID(), GetRoutingID());
 #endif
 
@@ -697,10 +699,10 @@ int RenderViewHostImpl::GetRoutingID() {
 RenderFrameHost* RenderViewHostImpl::GetMainFrame() {
   // If the RenderViewHost is active, it should always have a main frame
   // RenderFrameHost.  If it is inactive, it could've been created for a
-  // pending main frame navigation, in which case it will transition to active
-  // once that navigation commits. In this case, return the pending main frame
-  // RenderFrameHost, as that's expected by certain code paths,
-  // such as RenderViewHostImpl::SetUIProperty().  If there's no pending main
+  // speculative main frame navigation, in which case it will transition to
+  // active once that navigation commits. In this case, return the speculative
+  // main frame RenderFrameHost, as that's expected by certain code paths, such
+  // as RenderViewHostImpl::SetUIProperty().  If there's no speculative main
   // frame navigation, return nullptr.
   //
   // TODO(alexmos, creis): Migrate these code paths to use RenderFrameHost APIs
@@ -709,7 +711,7 @@ RenderFrameHost* RenderViewHostImpl::GetMainFrame() {
     return RenderFrameHostImpl::FromID(GetProcess()->GetID(),
                                        main_frame_routing_id_);
   }
-  return delegate_->GetPendingMainFrame();
+  return frame_tree_->root()->render_manager()->speculative_frame_host();
 }
 
 void RenderViewHostImpl::RenderWidgetGotFocus() {

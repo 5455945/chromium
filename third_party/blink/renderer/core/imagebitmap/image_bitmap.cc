@@ -14,6 +14,7 @@
 #include "gpu/config/gpu_feature_info.h"
 #include "skia/ext/legacy_display_globals.h"
 #include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/platform/web_media_player.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
 #include "third_party/blink/renderer/core/html/canvas/image_data.h"
@@ -28,6 +29,7 @@
 #include "third_party/blink/renderer/platform/graphics/gpu/shared_gpu_context.h"
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
 #include "third_party/blink/renderer/platform/graphics/unaccelerated_static_bitmap_image.h"
+#include "third_party/blink/renderer/platform/graphics/video_frame_image_util.h"
 #include "third_party/blink/renderer/platform/heap/heap.h"
 #include "third_party/blink/renderer/platform/image-decoders/image_decoder.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
@@ -238,36 +240,6 @@ std::unique_ptr<CanvasResourceProvider> CreateProvider(
   return CanvasResourceProvider::CreateBitmapProvider(
       size, filter_quality, resource_params,
       CanvasResourceProvider::ShouldInitialize::kNo);
-}
-
-std::unique_ptr<CanvasResourceProvider> CreateProviderForVideoElement(
-    HTMLVideoElement* video,
-    const ImageBitmapOptions* options) {
-  // TODO(crbug.com/1098445): ImageBitmap resize test case failed when
-  // quality equals to "low" and "medium". Need further investigate to
-  // enable gpu backed imageBitmap with resize options.
-  if (!SharedGpuContext::ContextProviderWrapper() ||
-      SharedGpuContext::ContextProviderWrapper()
-          ->ContextProvider()
-          ->GetGpuFeatureInfo()
-          .IsWorkaroundEnabled(DISABLE_IMAGEBITMAP_FROM_VIDEO_USING_GPU) ||
-      options->hasResizeWidth() || options->hasResizeHeight()) {
-    return CanvasResourceProvider::CreateBitmapProvider(
-        IntSize(video->videoWidth(), video->videoHeight()),
-        kLow_SkFilterQuality, CanvasResourceParams(),
-        CanvasResourceProvider::ShouldInitialize::kCallClear);
-  }
-
-  uint32_t shared_image_usage_flags = gpu::SHARED_IMAGE_USAGE_DISPLAY;
-
-  return CanvasResourceProvider::CreateSharedImageProvider(
-      IntSize(video->videoWidth(), video->videoHeight()), kLow_SkFilterQuality,
-      CanvasResourceParams(CanvasColorSpace::kSRGB, kN32_SkColorType,
-                           kPremul_SkAlphaType),  // Default canvas settings,
-      CanvasResourceProvider::ShouldInitialize::kCallClear,
-      SharedGpuContext::ContextProviderWrapper(), RasterMode::kGPU,
-      false,  // Origin of GL texture is bottom left on screen
-      shared_image_usage_flags);
 }
 
 scoped_refptr<StaticBitmapImage> FlipImageVertically(
@@ -639,17 +611,15 @@ ImageBitmap::ImageBitmap(HTMLVideoElement* video,
   if (DstBufferSizeHasOverflow(parsed_options))
     return;
 
-  std::unique_ptr<CanvasResourceProvider> resource_provider =
-      CreateProviderForVideoElement(video, options);
-
-  if (!resource_provider)
+  // TODO(crbug.com/1181329): ImageBitmap resize test case failed when
+  // quality equals to "low" and "medium". Need further investigate to
+  // enable gpu backed imageBitmap with resize options.
+  const bool allow_accelerated_images =
+      !options->hasResizeWidth() && !options->hasResizeHeight();
+  auto input = video->CreateStaticBitmapImage(allow_accelerated_images);
+  if (!input)
     return;
 
-  video->PaintCurrentFrame(
-      resource_provider->Canvas(),
-      IntRect(IntPoint(), IntSize(video->videoWidth(), video->videoHeight())),
-      nullptr);
-  scoped_refptr<StaticBitmapImage> input = resource_provider->Snapshot();
   image_ =
       CropImageAndApplyColorSpaceConversion(std::move(input), parsed_options);
   if (!image_)
@@ -994,14 +964,13 @@ ScriptPromise ImageBitmap::CreateAsync(ImageElementBase* image,
   std::unique_ptr<ParsedOptions> passed_parsed_options =
       std::make_unique<ParsedOptions>(parsed_options);
   worker_pool::PostTask(
-      FROM_HERE,
-      CrossThreadBindOnce(
-          &RasterizeImageOnBackgroundThread, std::move(paint_record),
-          draw_dst_rect, Thread::MainThread()->GetTaskRunner(),
-          CrossThreadBindOnce(&ResolvePromiseOnOriginalThread,
-                              WrapCrossThreadPersistent(resolver),
-                              !image->WouldTaintOrigin(),
-                              WTF::Passed(std::move(passed_parsed_options)))));
+      FROM_HERE, CrossThreadBindOnce(
+                     &RasterizeImageOnBackgroundThread, std::move(paint_record),
+                     draw_dst_rect, Thread::MainThread()->GetTaskRunner(),
+                     CrossThreadBindOnce(&ResolvePromiseOnOriginalThread,
+                                         WrapCrossThreadPersistent(resolver),
+                                         !image->WouldTaintOrigin(),
+                                         std::move(passed_parsed_options))));
   return promise;
 }
 

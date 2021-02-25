@@ -8,13 +8,13 @@
 #include "ash/constants/ash_switches.h"
 #include "base/feature_list.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/chromeos/crostini/crostini_manager.h"
 #include "chrome/browser/chromeos/crostini/crostini_pref_names.h"
 #include "chrome/browser/chromeos/crostini/crostini_util.h"
 #include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
-#include "chrome/browser/chromeos/settings/cros_settings.h"
 #include "chrome/browser/chromeos/virtual_machines/virtual_machines_util.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
@@ -242,10 +242,17 @@ bool CrostiniFeatures::IsAllowedNow(Profile* profile, std::string* reason) {
     return false;
   }
 
-  if (!profile->GetPrefs()->GetBoolean(
-          crostini::prefs::kUserCrostiniAllowedByPolicy)) {
+  const PrefService::Preference* crostini_allowed_by_policy =
+      profile->GetPrefs()->FindPreference(
+          crostini::prefs::kUserCrostiniAllowedByPolicy);
+  if (!crostini_allowed_by_policy->GetValue()->GetBool()) {
     VLOG(1) << "kUserCrostiniAllowedByPolicy preference is false.";
     *reason = "Crostini is disabled by policy";
+    return false;
+  }
+  if (!crostini_allowed_by_policy->IsManaged() && user->IsAffiliated()) {
+    VLOG(1) << "Affiliated user is not allowed to run Crostini by default.";
+    *reason = "Affiliated user is not allowed to run Crostini by default.";
     return false;
   }
 

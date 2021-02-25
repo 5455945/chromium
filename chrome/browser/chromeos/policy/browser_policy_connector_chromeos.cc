@@ -23,6 +23,8 @@
 #include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/thread_task_runner_handle.h"
+#include "chrome/browser/ash/settings/cros_settings.h"
+#include "chrome/browser/ash/settings/device_settings_service.h"
 #include "chrome/browser/ash/system/timezone_util.h"
 #include "chrome/browser/chromeos/attestation/attestation_ca_client.h"
 #include "chrome/browser/chromeos/policy/active_directory_policy_manager.h"
@@ -54,8 +56,6 @@
 #include "chrome/browser/chromeos/policy/system_proxy_manager.h"
 #include "chrome/browser/chromeos/policy/tpm_auto_update_mode_policy_handler.h"
 #include "chrome/browser/chromeos/printing/bulk_printers_calculator_factory.h"
-#include "chrome/browser/chromeos/settings/cros_settings.h"
-#include "chrome/browser/chromeos/settings/device_settings_service.h"
 #include "chrome/browser/chromeos/ui/adb_sideloading_policy_change_notification.h"
 #include "chrome/browser/policy/device_management_service_configuration.h"
 #include "chrome/common/chrome_features.h"
@@ -377,6 +377,13 @@ std::string BrowserPolicyConnectorChromeOS::GetEnterpriseDomainManager() const {
   if (policy && policy->has_managed_by())
     return policy->managed_by();
   return GetEnterpriseDisplayDomain();
+}
+
+std::string BrowserPolicyConnectorChromeOS::GetSSOProfile() const {
+  const em::PolicyData* policy = GetDevicePolicy();
+  if (policy && policy->has_sso_profile())
+    return policy->sso_profile();
+  return std::string();
 }
 
 std::string BrowserPolicyConnectorChromeOS::GetRealm() const {

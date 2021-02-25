@@ -448,6 +448,11 @@ class CORE_EXPORT Element : public ContainerNode, public Animatable {
       const QualifiedName&,
       const AtomicString&,
       MutableCSSPropertyValueSet*) {}
+  // Subclasses can override these functions if there is extra style that needs
+  // to be mapped like attributes.
+  virtual bool HasExtraStyleForPresentationAttribute() const { return false; }
+  virtual void CollectExtraStyleForPresentationAttribute(
+      MutableCSSPropertyValueSet*) {}
 
   // For exposing to DOM only.
   NamedNodeMap* attributesForBindings() const;
@@ -1070,6 +1075,9 @@ class CORE_EXPORT Element : public ContainerNode, public Animatable {
   // If these conditions are met, propagates the changes to the current style
   // and returns the new style. Otherwise, returns null.
   scoped_refptr<ComputedStyle> PropagateInheritedProperties();
+
+  const ComputedStyle* EnsureOwnComputedStyle(const StyleRecalcContext&,
+                                              PseudoId);
 
   // Recalculate the ComputedStyle for this element and return a
   // StyleRecalcChange for propagation/traversal into child nodes.

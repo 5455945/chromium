@@ -28,6 +28,7 @@
 #include "components/viz/common/quads/solid_color_draw_quad.h"
 #include "components/viz/common/quads/surface_draw_quad.h"
 #include "components/viz/common/quads/texture_draw_quad.h"
+#include "components/viz/common/resources/resource_id.h"
 #include "components/viz/common/resources/single_release_callback.h"
 #include "third_party/khronos/GLES2/gl2.h"
 #include "third_party/skia/include/core/SkPath.h"
@@ -561,6 +562,36 @@ void Surface::SetUseImmersiveForFullscreen(bool value) {
     delegate_->SetUseImmersiveForFullscreen(value);
 }
 
+void Surface::ShowSnapPreviewToRight() {
+  if (delegate_)
+    delegate_->ShowSnapPreviewToRight();
+}
+
+void Surface::ShowSnapPreviewToLeft() {
+  if (delegate_)
+    delegate_->ShowSnapPreviewToLeft();
+}
+
+void Surface::HideSnapPreview() {
+  if (delegate_)
+    delegate_->HideSnapPreview();
+}
+
+void Surface::SetSnappedToRight() {
+  if (delegate_)
+    delegate_->SetSnappedToRight();
+}
+
+void Surface::SetSnappedToLeft() {
+  if (delegate_)
+    delegate_->SetSnappedToLeft();
+}
+
+void Surface::UnsetSnap() {
+  if (delegate_)
+    delegate_->UnsetSnap();
+}
+
 void Surface::SetColorSpace(gfx::ColorSpace color_space) {
   TRACE_EVENT1("exo", "Surface::SetColorSpace", "color_space",
                color_space.ToString());
@@ -1050,14 +1081,14 @@ void Surface::UpdateResource(FrameSinkResourceManager* resource_manager) {
         current_resource_.color_space = state_.basic_state.color_space;
       }
     } else {
-      current_resource_.id = 0;
+      current_resource_.id = viz::kInvalidResourceId;
       // Use the buffer's size, so the AppendContentsToFrame() will append
       // a SolidColorDrawQuad with the buffer's size.
       current_resource_.size = state_.buffer.size();
       current_resource_has_alpha_ = false;
     }
   } else {
-    current_resource_.id = 0;
+    current_resource_.id = viz::kInvalidResourceId;
     current_resource_.size = gfx::Size();
     current_resource_has_alpha_ = false;
   }

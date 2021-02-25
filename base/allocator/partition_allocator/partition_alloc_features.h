@@ -37,7 +37,10 @@ extern const BASE_EXPORT Feature kPartitionAllocPCScan;
 #endif  // PA_ALLOW_PCSCAN
 #if BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
 extern const BASE_EXPORT Feature kPartitionAllocPCScanBrowserOnly;
+extern const BASE_EXPORT Feature kPartitionAllocThreadCachePeriodicPurge;
 #endif  // BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+
+extern const BASE_EXPORT Feature kPartitionAllocLazyCommit;
 
 ALWAYS_INLINE bool IsPartitionAllocGigaCageEnabled() {
 #if defined(PA_HAS_64_BITS_POINTERS) && defined(OS_WIN)

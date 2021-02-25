@@ -172,6 +172,11 @@ NSIndexPath* CreateIndexPath(NSInteger index) {
   [super viewWillDisappear:animated];
 }
 
+- (void)viewDidLayoutSubviews {
+  [super viewDidLayoutSubviews];
+  [self updateFractionVisibleOfLastItem];
+}
+
 #pragma mark - UITraitEnvironment
 
 - (void)traitCollectionDidChange:(UITraitCollection*)previousTraitCollection {
@@ -836,6 +841,8 @@ NSIndexPath* CreateIndexPath(NSInteger index) {
 
 - (void)setCurrentLayout:(FlowLayout*)currentLayout {
   _currentLayout = currentLayout;
+  [self updateFractionVisibleOfLastItem];
+
   // The collection view should only always bounce horizonal when in horizontal
   // layout.
   self.collectionView.alwaysBounceHorizontal =

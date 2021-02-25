@@ -151,6 +151,7 @@
 #include "net/http/http_util.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "ppapi/buildflags/buildflags.h"
+#include "services/device/public/mojom/wake_lock.mojom.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/web_sandbox_flags.h"
@@ -940,12 +941,6 @@ WebContentsImpl::~WebContentsImpl() {
 
   color_chooser_.reset();
   find_request_manager_.reset();
-
-  // Notify any observer that have a reference on this WebContents.
-  NotificationService::current()->Notify(
-      NOTIFICATION_WEB_CONTENTS_DESTROYED,
-      Source<WebContents>(this),
-      NotificationService::NoDetails());
 
   // Destroy all subframes now. This notifies observers.
   GetMainFrame()->ResetChildren();
@@ -1823,6 +1818,19 @@ void WebContentsImpl::IncrementCapturerCount(const gfx::Size& capture_size,
     OnPreferredSizeChanged(preferred_size_);
   }
 
+  if (!capture_wake_lock_) {
+    if (auto* wake_lock_context = GetWakeLockContext()) {
+      auto receiver = capture_wake_lock_.BindNewPipeAndPassReceiver();
+      wake_lock_context->GetWakeLock(
+          device::mojom::WakeLockType::kPreventDisplaySleepAllowDimming,
+          device::mojom::WakeLockReason::kOther, "Capturing",
+          std::move(receiver));
+    }
+  }
+
+  if (capture_wake_lock_)
+    capture_wake_lock_->RequestWakeLock();
+
   UpdateVisibilityAndNotifyPageAndView(GetVisibility());
 }
 
@@ -1842,6 +1850,8 @@ void WebContentsImpl::DecrementCapturerCount(bool stay_hidden) {
     const gfx::Size old_size = preferred_size_for_capture_;
     preferred_size_for_capture_ = gfx::Size();
     OnPreferredSizeChanged(old_size);
+    if (capture_wake_lock_)
+      capture_wake_lock_->CancelWakeLock();
   }
 
   UpdateVisibilityAndNotifyPageAndView(GetVisibility());
@@ -3927,7 +3937,7 @@ RenderWidgetHostView* WebContentsImpl::GetCreatedWidget(int process_id,
 
 void WebContentsImpl::CreateMediaPlayerHostForRenderFrameHost(
     RenderFrameHost* frame_host,
-    mojo::PendingReceiver<media::mojom::MediaPlayerHost> receiver) {
+    mojo::PendingAssociatedReceiver<media::mojom::MediaPlayerHost> receiver) {
   media_web_contents_observer()->BindMediaPlayerHost(frame_host,
                                                      std::move(receiver));
 }
@@ -6608,10 +6618,6 @@ bool WebContentsImpl::IsSpatialNavigationDisabled() const {
   return is_spatial_navigation_disabled_;
 }
 
-RenderFrameHostImpl* WebContentsImpl::GetPendingMainFrame() {
-  return GetRenderManager()->speculative_frame_host();
-}
-
 bool WebContentsImpl::IsPictureInPictureAllowedForFullscreenVideo() const {
   return media_web_contents_observer_
       ->IsPictureInPictureAllowedForFullscreenVideo();
@@ -7616,7 +7622,7 @@ void WebContentsImpl::ReattachOuterDelegateIfNeeded() {
 
 bool WebContentsImpl::CreateRenderViewForRenderManager(
     RenderViewHost* render_view_host,
-    const base::Optional<base::UnguessableToken>& opener_frame_token,
+    const base::Optional<blink::FrameToken>& opener_frame_token,
     RenderFrameProxyHost* proxy_host) {
   TRACE_EVENT1("browser,navigation",
                "WebContentsImpl::CreateRenderViewForRenderManager",

@@ -145,6 +145,7 @@ struct PartitionOptions {
 template <bool thread_safe>
 struct BASE_EXPORT PartitionRoot {
   using SlotSpan = internal::SlotSpanMetadata<thread_safe>;
+  using Page = internal::PartitionPage<thread_safe>;
   using Bucket = internal::PartitionBucket<thread_safe>;
   using SuperPageExtentEntry =
       internal::PartitionSuperPageExtentEntry<thread_safe>;
@@ -175,6 +176,17 @@ struct BASE_EXPORT PartitionRoot {
 
   bool allow_ref_count;
   bool allow_cookies;
+
+  // Lazy commit should only be enabled on Windows, because commit charge is
+  // only meaningful and limited on Windows. It affects performance on other
+  // platforms and is simply not needed there due to OS supporting overcommit.
+#if defined(OS_WIN)
+  bool use_lazy_commit = true;
+  static constexpr bool never_used_lazy_commit = false;
+#else
+  static constexpr bool use_lazy_commit = false;
+  static constexpr bool never_used_lazy_commit = true;
+#endif
 
 #if !PARTITION_EXTRAS_REQUIRED
   // Teach the compiler that `AdjustSizeForExtrasAdd` etc. can be eliminated
@@ -241,6 +253,8 @@ struct BASE_EXPORT PartitionRoot {
   // preserves the layering of the includes.
   void Init(PartitionOptions);
 
+  void ConfigureLazyCommit();
+
   ALWAYS_INLINE static bool IsValidSlotSpan(SlotSpan* slot_span);
   ALWAYS_INLINE static PartitionRoot* FromSlotSpan(SlotSpan* slot_span);
   ALWAYS_INLINE static PartitionRoot* FromSuperPage(char* super_page);
@@ -267,7 +281,8 @@ struct BASE_EXPORT PartitionRoot {
   // posix_memalign() for POSIX systems). The returned pointer may include
   // padding, and can be passed to |Free()| later.
   //
-  // NOTE: Doesn't work when DCHECK_IS_ON(), as it is incompatible with cookies.
+  // NOTE: This is incompatible with anything that adds extra data to the
+  // allocations, such as cookies (with DCHECK_IS_ON()), or reference counts.
   ALWAYS_INLINE void* AlignedAllocFlags(int flags,
                                         size_t alignment,
                                         size_t size);
@@ -695,7 +710,8 @@ ALWAYS_INLINE void PartitionAllocFreeForRefCounting(void* slot_start) {
   // supports reference counts.
   PA_DCHECK(root->allow_ref_count);
 
-#if DCHECK_IS_ON()
+  // memset() can be really expensive.
+#if EXPENSIVE_DCHECKS_ARE_ON()
   memset(slot_start, kFreedByte, slot_span->GetUtilizedSlotSize());
 #endif
 
@@ -861,7 +877,7 @@ ALWAYS_INLINE void PartitionRoot<thread_safe>::FreeNoHooksImmediate(
   // Note: ref-count and cookies can be 0-sized.
   //
   // For more context, see the other "Layout inside the slot" comment below.
-#if DCHECK_IS_ON() || ZERO_RANDOMLY_ON_FREE
+#if EXPENSIVE_DCHECKS_ARE_ON() || ZERO_RANDOMLY_ON_FREE
   const size_t utilized_slot_size = slot_span->GetUtilizedSlotSize();
 #endif
 #if BUILDFLAG(USE_BACKUP_REF_PTR) || DCHECK_IS_ON()
@@ -896,7 +912,8 @@ ALWAYS_INLINE void PartitionRoot<thread_safe>::FreeNoHooksImmediate(
   }
 #endif  // BUILDFLAG(USE_BACKUP_REF_PTR)
 
-#if DCHECK_IS_ON()
+  // memset() can be really expensive.
+#if EXPENSIVE_DCHECKS_ARE_ON()
   memset(slot_start, kFreedByte, utilized_slot_size);
 #elif ZERO_RANDOMLY_ON_FREE
   // `memset` only once in a while: we're trading off safety for time
@@ -1284,7 +1301,8 @@ ALWAYS_INLINE void* PartitionRoot<thread_safe>::AllocFlagsNoHooks(
   bool zero_fill = flags & PartitionAllocZeroFill;
   // LIKELY: operator new() calls malloc(), not calloc().
   if (LIKELY(!zero_fill)) {
-#if DCHECK_IS_ON()
+    // memset() can be really expensive.
+#if EXPENSIVE_DCHECKS_ARE_ON()
     memset(ret, kUninitializedByte, usable_size);
 #endif
   } else if (!is_already_zeroed) {

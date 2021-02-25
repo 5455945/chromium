@@ -3177,13 +3177,13 @@ const FeatureEntry kFeatureEntries[] = {
          kOverrideSitePrefsForHrefTranslateVariations,
          "OverrideSitePrefsForHrefTranslate")},
 
-#if BUILDFLAG(ENABLE_NATIVE_NOTIFICATIONS) && !BUILDFLAG(IS_CHROMEOS_ASH)
-    {"enable-native-notifications",
-     flag_descriptions::kNotificationsNativeFlagName,
-     flag_descriptions::kNotificationsNativeFlagDescription,
+#if BUILDFLAG(ENABLE_SYSTEM_NOTIFICATIONS) && !BUILDFLAG(IS_CHROMEOS_ASH)
+    {"enable-system-notifications",
+     flag_descriptions::kNotificationsSystemFlagName,
+     flag_descriptions::kNotificationsSystemFlagDescription,
      kOsMac | kOsLinux | kOsWin,
-     FEATURE_VALUE_TYPE(features::kNativeNotifications)},
-#endif  // ENABLE_NATIVE_NOTIFICATIONS
+     FEATURE_VALUE_TYPE(features::kSystemNotifications)},
+#endif  // BUILDFLAG(ENABLE_SYSTEM_NOTIFICATIONS) && !BUILDFLAG(IS_CHROMEOS_ASH)
 #if defined(OS_ANDROID)
     {"reader-mode-heuristics", flag_descriptions::kReaderModeHeuristicsName,
      flag_descriptions::kReaderModeHeuristicsDescription, kOsAndroid,
@@ -5079,11 +5079,6 @@ const FeatureEntry kFeatureEntries[] = {
                                     kFilteringPredictionFeatureVariations,
                                     "FilteringScrollPrediction")},
 
-    {"enable-first-scroll-latency-measurement",
-     flag_descriptions::kFirstScrollLatencyMeasurementName,
-     flag_descriptions::kFirstScrollLatencyMeasurementDescription, kOsAll,
-     FEATURE_VALUE_TYPE(features::kFirstScrollLatencyMeasurement)},
-
     {"compositor-threaded-scrollbar-scrolling",
      flag_descriptions::kCompositorThreadedScrollbarScrollingName,
      flag_descriptions::kCompositorThreadedScrollbarScrollingDescription,
@@ -6049,6 +6044,17 @@ const FeatureEntry kFeatureEntries[] = {
      kOsAndroid,
      FEATURE_VALUE_TYPE(
          chrome::android::kContextMenuSearchAndShopWithGoogleLens)},
+
+    {"context-menu-translate-with-google-lens",
+     flag_descriptions::kContextMenuTranslateWithGoogleLensName,
+     flag_descriptions::kContextMenuTranslateWithGoogleLensDescription,
+     kOsAndroid,
+     FEATURE_VALUE_TYPE(chrome::android::kContextMenuTranslateWithGoogleLens)},
+
+    {"lens-camera-assisted-search",
+     flag_descriptions::kLensCameraAssistedSearchName,
+     flag_descriptions::kLensCameraAssistedSearchDescription, kOsAndroid,
+     FEATURE_VALUE_TYPE(chrome::android::kLensCameraAssistedSearch)},
 #endif  // defined(OS_ANDROID)
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
@@ -6916,13 +6922,6 @@ const FeatureEntry kFeatureEntries[] = {
      FEATURE_VALUE_TYPE(
          password_manager::features::kDetectFormSubmissionOnFormClear)},
 
-#if !defined(OS_ANDROID)
-    {"shutdown-support-for-keepalive",
-     flag_descriptions::kShutdownSupportForKeepaliveName,
-     flag_descriptions::kShutdownSupportForKeepaliveDescription, kOsDesktop,
-     FEATURE_VALUE_TYPE(features::kShutdownSupportForKeepalive)},
-#endif  // !defined(OS_ANDROID)
-
 #if defined(OS_ANDROID)
     {"enable-autofill-infobar-account-indication-footer-for-single-account-"
      "users",
@@ -7131,6 +7130,19 @@ const FeatureEntry kFeatureEntries[] = {
      flag_descriptions::kDetectedSourceLanguageOptionDescription,
      kOsDesktop | kOsAndroid,
      FEATURE_VALUE_TYPE(language::kDetectedSourceLanguageOption)},
+
+#if defined(OS_ANDROID)
+    {"content-languages-in-language-picker",
+     flag_descriptions::kContentLanguagesInLanguagePickerName,
+     flag_descriptions::kContentLanguagesInLanguagePickerName, kOsAndroid,
+     FEATURE_VALUE_TYPE(language::kContentLanguagesInLanguagePicker)},
+#endif
+
+    {"filling-across-affiliated-websites",
+     flag_descriptions::kFillingAcrossAffiliatedWebsitesName,
+     flag_descriptions::kFillingAcrossAffiliatedWebsitesDescription, kOsAll,
+     FEATURE_VALUE_TYPE(
+         password_manager::features::kFillingAcrossAffiliatedWebsites)},
 
     // NOTE: Adding a new flag requires adding a corresponding entry to enum
     // "LoginCustomFlags" in tools/metrics/histograms/enums.xml. See "Flag

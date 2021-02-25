@@ -223,7 +223,7 @@ class CORE_EXPORT ChromeClient : public GarbageCollected<ChromeClient> {
   // shown. Under some circumstances CreateWindow's implementation may return a
   // previously shown page. Calling this method should still work and the
   // browser will discard the unnecessary show request.
-  virtual void Show(const base::UnguessableToken& opener_frame_token,
+  virtual void Show(const blink::LocalFrameToken& opener_frame_token,
                     NavigationPolicy navigation_policy,
                     const IntRect& initial_rect,
                     bool consumed_user_gesture) = 0;
@@ -289,7 +289,8 @@ class CORE_EXPORT ChromeClient : public GarbageCollected<ChromeClient> {
                             String& result);
   virtual bool TabsToLinks() = 0;
 
-  virtual ScreenInfo GetScreenInfo(LocalFrame& frame) const = 0;
+  virtual const ScreenInfo& GetScreenInfo(LocalFrame& frame) const = 0;
+
   virtual void SetCursor(const ui::Cursor&, LocalFrame* local_root) = 0;
 
   virtual void SetCursorOverridden(bool) = 0;

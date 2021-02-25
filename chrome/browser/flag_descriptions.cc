@@ -76,6 +76,12 @@ const char kConditionalTabStripAndroidName[] = "Conditional Tab Strip";
 const char kConditionalTabStripAndroidDescription[] =
     "Allows users to access conditional tab strip.";
 
+const char kContentLanguagesInLanguagePickerName[] =
+    "Content languages in language picker";
+const char kContentLanguagesInLanguagePickerDescription[] =
+    "Enables bringing user's content languages that are translatable to the "
+    "top of the list with all languages shown in the translate menu";
+
 const char kConversionMeasurementApiName[] = "Conversion Measurement API";
 const char kConversionMeasurementApiDescription[] =
     "Enables usage of the Conversion Measurement API. Requires "
@@ -382,6 +388,12 @@ const char kContextMenuSearchAndShopWithGoogleLensName[] =
 const char kContextMenuSearchAndShopWithGoogleLensDescription[] =
     "Display an additional menu item for a Shopping intent to Google Lens "
     "below Search with Google Lens when Lens shopping feature is enabled";
+
+const char kContextMenuTranslateWithGoogleLensName[] =
+    "Google Lens powered image search for translatable images surfaced as a "
+    "chip under the context menu.";
+const char kContextMenuTranslateWithGoogleLensDescription[] =
+    "Enable a chip for a Translate intent into Google Lens when supported.";
 
 const char kClickToOpenPDFName[] = "Click to open embedded PDFs";
 const char kClickToOpenPDFDescription[] =
@@ -1166,12 +1178,6 @@ const char kFilteringScrollPredictionName[] = "Filtering scroll prediction";
 const char kFilteringScrollPredictionDescription[] =
     "Enable filtering of predicted scroll events";
 
-const char kFirstScrollLatencyMeasurementName[] =
-    "First Scroll Latency Measurement";
-const char kFirstScrollLatencyMeasurementDescription[] =
-    "Enables measurement of the latency between user input events and visual "
-    "updates for the first scroll of a navigation.";
-
 const char kFractionalScrollOffsetsName[] = "Fractional Scroll Offsets";
 const char kFractionalScrollOffsetsDescription[] =
     "Enables fractional scroll offsets inside Blink, exposing non-integer "
@@ -1204,6 +1210,12 @@ const char kFileHandlingAPIName[] = "File Handling API";
 const char kFileHandlingAPIDescription[] =
     "Enables the file handling API, allowing websites to register as file "
     "handlers.";
+
+const char kFillingAcrossAffiliatedWebsitesName[] =
+    "Fill passwords across affiliated websites.";
+const char kFillingAcrossAffiliatedWebsitesDescription[] =
+    "Enables filling password on a website when there is saved "
+    "password on affiliated website.";
 
 const char kFillOnAccountSelectName[] = "Fill passwords on account selection";
 const char kFillOnAccountSelectDescription[] =
@@ -1411,6 +1423,12 @@ const char kLegacyTLSWarningsDescription[] =
     "Show security warnings for sites that use legacy TLS versions (TLS 1.0 "
     "and TLS 1.1), which are deprecated and will be removed in the future.";
 
+const char kLensCameraAssistedSearchName[] =
+    "Google Lens in Omnibox and New Tab Page";
+const char kLensCameraAssistedSearchDescription[] =
+    "Enable an entry point to Google Lens to allow users to search what they "
+    "see using their mobile camera.";
+
 const char kLiteVideoName[] = "Enable LiteVideos";
 const char kLiteVideoDescription[] =
     "Enable the LiteVideo optimization to throttle media requests to "
@@ -1546,9 +1564,9 @@ const char kNotificationSchedulerDebugOptionDescription[] =
 const char kNotificationSchedulerImmediateBackgroundTaskDescription[] =
     "Show scheduled notification right away.";
 
-const char kNotificationsNativeFlagName[] = "Enable native notifications.";
-const char kNotificationsNativeFlagDescription[] =
-    "Enable support for using the native notification toasts and notification "
+const char kNotificationsSystemFlagName[] = "Enable system notifications.";
+const char kNotificationsSystemFlagDescription[] =
+    "Enable support for using the system notification toasts and notification "
     "center on platforms where these are available.";
 
 const char kUpdateHoverAtBeginFrameName[] = "Update hover at the begin frame";

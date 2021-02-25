@@ -21,8 +21,6 @@
 #include "base/metrics/user_metrics.h"
 #include "base/task/post_task.h"
 #include "base/threading/scoped_blocking_call.h"
-#include "content/browser/accessibility/browser_accessibility_android.h"
-#include "content/browser/accessibility/browser_accessibility_manager_android.h"
 #include "content/browser/android/java/gin_java_bridge_dispatcher_host.h"
 #include "content/browser/media/media_web_contents_observer.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
@@ -98,12 +96,14 @@ ScopedJavaLocalRef<jobject> JNI_WebContentsImpl_CreateJavaAXSnapshot(
       ConvertUTF16ToJavaString(env, node->text);
   ScopedJavaLocalRef<jstring> j_class =
       ConvertUTF8ToJavaString(env, node->class_name);
+  ScopedJavaLocalRef<jstring> j_html_tag =
+      ConvertUTF8ToJavaString(env, node->html_tag);
   ScopedJavaLocalRef<jobject> j_node =
       Java_WebContentsImpl_createAccessibilitySnapshotNode(
           env, node->rect.x(), node->rect.y(), node->rect.width(),
           node->rect.height(), is_root, j_text, node->color, node->bgcolor,
           node->text_size, node->bold, node->italic, node->underline,
-          node->line_through, j_class);
+          node->line_through, j_class, j_html_tag);
 
   if (node->selection.has_value()) {
     Java_WebContentsImpl_setAccessibilitySnapshotSelection(
@@ -127,11 +127,8 @@ void AXTreeSnapshotCallback(const ScopedJavaGlobalRef<jobject>& callback,
     Java_WebContentsImpl_onAccessibilitySnapshot(env, nullptr, callback);
     return;
   }
-  std::unique_ptr<BrowserAccessibilityManagerAndroid> manager(
-      static_cast<BrowserAccessibilityManagerAndroid*>(
-          BrowserAccessibilityManager::Create(result, nullptr)));
   std::unique_ptr<ui::AssistantTree> assistant_tree =
-      ui::CreateAssistantTree(result, manager->ShouldExposePasswordText());
+      ui::CreateAssistantTree(result);
   ScopedJavaLocalRef<jobject> j_root = JNI_WebContentsImpl_CreateJavaAXSnapshot(
       env, assistant_tree.get(), assistant_tree->nodes.front().get(), true);
   Java_WebContentsImpl_onAccessibilitySnapshot(env, j_root, callback);

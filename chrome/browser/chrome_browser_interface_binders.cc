@@ -12,6 +12,7 @@
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/accessibility/accessibility_labels_service.h"
 #include "chrome/browser/accessibility/accessibility_labels_service_factory.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/buildflags.h"
 #include "chrome/browser/dom_distiller/dom_distiller_service_factory.h"
 #include "chrome/browser/language/translate_frame_binder.h"
@@ -23,6 +24,8 @@
 #include "chrome/browser/prefetch/no_state_prefetch/chrome_no_state_prefetch_contents_delegate.h"
 #include "chrome/browser/prefetch/no_state_prefetch/chrome_no_state_prefetch_processor_impl_delegate.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ssl/insecure_sensitive_input_driver_factory.h"
 #include "chrome/browser/ssl/security_state_tab_helper.h"
 #include "chrome/browser/ui/ui_features.h"
@@ -54,6 +57,7 @@
 #include "components/safe_browsing/buildflags.h"
 #include "components/security_state/content/content_utils.h"
 #include "components/security_state/core/security_state.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/site_engagement/core/mojom/site_engagement_details.mojom.h"
 #include "components/translate/content/common/translate.mojom.h"
 #include "content/public/browser/browser_context.h"
@@ -222,8 +226,6 @@
 #endif
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "chrome/browser/loader/url_loader_factory_proxy_impl.h"
-#include "chrome/common/url_loader_factory_proxy.mojom.h"
 #include "extensions/browser/api/mime_handler_private/mime_handler_private.h"
 #include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.h"
 #include "extensions/common/api/mime_handler.mojom.h"  // nogncheck
@@ -296,6 +298,16 @@ void BindCommerceHintObserver(
     mojo::PendingReceiver<cart::mojom::CommerceHintObserver> receiver) {
   if (!base::FeatureList::IsEnabled(ntp_features::kNtpChromeCartModule))
     return;
+  // Cart is not available for non-signin single-profile users.
+  Profile* profile = Profile::FromBrowserContext(
+      frame_host->GetProcess()->GetBrowserContext());
+  auto* identity_manager = IdentityManagerFactory::GetForProfile(profile);
+  ProfileManager* profile_manager = g_browser_process->profile_manager();
+  if (!identity_manager->HasPrimaryAccount(
+          signin::ConsentLevel::kNotRequired) &&
+      profile_manager->GetNumberOfProfiles() <= 1) {
+    return;
+  }
   auto* web_contents = content::WebContents::FromRenderFrameHost(frame_host);
   if (!web_contents)
     return;
@@ -430,12 +442,6 @@ void BindBeforeUnloadControl(
   if (!guest_view)
     return;
   guest_view->FuseBeforeUnloadControl(std::move(receiver));
-}
-
-void BindUrlLoaderFactoryProxy(
-    content::RenderFrameHost* frame_host,
-    mojo::PendingReceiver<chrome::mojom::UrlLoaderFactoryProxy> receiver) {
-  UrlLoaderFactoryProxyImpl::Create(frame_host, std::move(receiver));
 }
 #endif
 
@@ -617,8 +623,6 @@ void PopulateChromeFrameBinders(
       base::BindRepeating(&BindMimeHandlerService));
   map->Add<extensions::mime_handler::BeforeUnloadControl>(
       base::BindRepeating(&BindBeforeUnloadControl));
-  map->Add<chrome::mojom::UrlLoaderFactoryProxy>(
-      base::BindRepeating(&BindUrlLoaderFactoryProxy));
 #endif
 
   map->Add<network_hints::mojom::NetworkHintsHandler>(

@@ -19,8 +19,8 @@
 #include "third_party/blink/public/common/client_hints/client_hints.h"
 #include "third_party/blink/public/common/loader/url_loader_throttle.h"
 #include "third_party/blink/public/platform/resource_load_info_notifier_wrapper.h"
-#include "third_party/blink/public/platform/sync_load_response.h"
 #include "third_party/blink/public/platform/web_back_forward_cache_loader_helper.h"
+#include "third_party/blink/renderer/platform/loader/fetch/url_loader/sync_load_response.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 
 namespace blink {
@@ -98,14 +98,14 @@ void SyncLoadContext::StartAsyncWithWaitableEvent(
     uint32_t loader_options,
     std::unique_ptr<network::PendingSharedURLLoaderFactory>
         pending_url_loader_factory,
-    std::vector<std::unique_ptr<URLLoaderThrottle>> throttles,
+    WebVector<std::unique_ptr<URLLoaderThrottle>> throttles,
     SyncLoadResponse* response,
     SyncLoadContext** context_for_redirect,
     base::WaitableEvent* redirect_or_response_event,
     base::WaitableEvent* abort_event,
     base::TimeDelta timeout,
     mojo::PendingRemote<mojom::BlobRegistry> download_to_blob_registry,
-    const std::vector<std::string>& cors_exempt_header_list,
+    const WebVector<WebString>& cors_exempt_header_list,
     std::unique_ptr<ResourceLoadInfoNotifierWrapper>
         resource_load_info_notifier_wrapper) {
   auto* context = new SyncLoadContext(
@@ -149,12 +149,8 @@ SyncLoadContext::SyncLoadContext(
   resource_request_sender_ = std::make_unique<WebResourceRequestSender>();
 
   // Initialize the final URL with the original request URL. It will be
-  // overwritten on redirects. Make a deep copy to pass it back to the main
-  // thread.
-  // TODO(https://crbug.com/860403): Remove the deep copy when SyncLoadResponse
-  // is moved to third_party/blink/renderer/platform/loader/fetch/url_loader/,
-  // where the url could be a GURL.
-  response_->url = KURL(request->url).Copy();
+  // overwritten on redirects.
+  response_->url = request->url;
 }
 
 SyncLoadContext::~SyncLoadContext() {}
@@ -173,10 +169,7 @@ bool SyncLoadContext::OnReceivedRedirect(
                             removed_headers);
   }
 
-  // TODO(https://crbug.com/860403): Remove the deep copy when SyncLoadResponse
-  // is moved to third_party/blink/renderer/platform/loader/fetch/url_loader/,
-  // where the url could be a GURL.
-  response_->url = KURL(redirect_info.new_url).Copy();
+  response_->url = redirect_info.new_url;
   response_->head = std::move(head);
   response_->redirect_info = redirect_info;
   *context_for_redirect_ = this;

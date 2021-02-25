@@ -4,6 +4,8 @@
 
 #include "content/browser/renderer_host/code_cache_host_impl.h"
 
+#include <utility>
+
 #include "base/bind.h"
 #include "base/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
@@ -151,10 +153,10 @@ void CodeCacheHostImpl::FetchCachedCode(blink::mojom::CodeCacheType cache_type,
     return;
   }
 
-  auto read_callback = base::BindRepeating(
-      &CodeCacheHostImpl::OnReceiveCachedCode, weak_ptr_factory_.GetWeakPtr(),
-      base::Passed(&callback));
-  code_cache->FetchEntry(url, *origin_lock, read_callback);
+  auto read_callback =
+      base::BindOnce(&CodeCacheHostImpl::OnReceiveCachedCode,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(callback));
+  code_cache->FetchEntry(url, *origin_lock, std::move(read_callback));
 }
 
 void CodeCacheHostImpl::ClearCodeCacheEntry(
@@ -185,14 +187,8 @@ void CodeCacheHostImpl::DidGenerateCacheableMetadataInCacheStorage(
   bool origin_allowed =
       ChildProcessSecurityPolicyImpl::GetInstance()->CanAccessDataForOrigin(
           render_process_id_, cache_storage_origin);
-  base::UmaHistogramBoolean(
-      "ServiceWorkerCache.DidGenerateCacheableMetadataMessageInCacheStorage."
-      "OriginAllowed",
-      origin_allowed);
   if (!origin_allowed) {
-    // TODO(crbug/925035): Report a bad mojo message here.  Currently we just
-    // null-route the request since this condition triggers more frequently
-    // than we expect.
+    receiver_.ReportBadMessage("Bad cache_storage origin.");
     return;
   }
 

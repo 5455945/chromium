@@ -53,17 +53,15 @@ void OfferNotificationIconView::UpdateImpl() {
 
 base::string16 OfferNotificationIconView::GetTextForTooltipAndAccessibleName()
     const {
-  // TODO(crbug/1093057): Change and finalize strings for offer notification.
-  // This needs to be non-empty for browsertests to pass.
-  return l10n_util::GetStringUTF16(IDS_TOOLTIP_SAVE_CREDIT_CARD);
+  return l10n_util::GetStringUTF16(
+      IDS_AUTOFILL_OFFERS_REMINDER_ICON_TOOLTIP_TEXT);
 }
 
 void OfferNotificationIconView::OnExecuting(
     PageActionIconView::ExecuteSource execute_source) {}
 
 const gfx::VectorIcon& OfferNotificationIconView::GetVectorIcon() const {
-  // TODO(crbug/1093057): Introduce a new vector icon.
-  return kCreditCardIcon;
+  return kGpayOfferIcon;
 }
 
 const char* OfferNotificationIconView::GetClassName() const {

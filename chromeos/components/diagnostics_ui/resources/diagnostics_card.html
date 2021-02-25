@@ -2,7 +2,6 @@
   ::slotted([slot=chip]) {
     background-color: var(--google-grey-100);
     border-radius: 16px;
-    color: var(--diagnostics-overview-text-color);
     padding: 4px 8px;
   }
 
@@ -15,6 +14,10 @@
     margin: 0 20px;
     padding: 8px;
     position: relative;
+  }
+
+  ::slotted([slot=title]) {
+    @apply --diagnostics-card-title-font;
   }
 
   ::slotted([slot=left-panel]) {
@@ -35,7 +38,7 @@
   }
 
   .card-wrapper {
-    border-radius: 8px;
+    border-radius: 4px;
     box-shadow: var(--diagnostics-box-shadow);
     margin: 10px 0;
   }

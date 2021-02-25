@@ -265,13 +265,6 @@ const base::Feature kExtraSafelistedRequestHeadersForOutOfBlinkCors{
 const base::Feature kFeaturePolicyForClientHints{
     "FeaturePolicyForClientHints", base::FEATURE_ENABLED_BY_DEFAULT};
 
-// Controls whether or not First Scroll Latency will be measured and reported.
-// First Scroll Latency (tracking bug: crbug.com/922980) measures, for the
-// first scroll of a navigation, the latency between the user's input and the
-// display's update.
-const base::Feature kFirstScrollLatencyMeasurement{
-    "FirstScrollLatencyMeasurement", base::FEATURE_ENABLED_BY_DEFAULT};
-
 // Enables fixes for matching src: local() for web fonts correctly against full
 // font name or postscript name. Rolling out behind a flag, as enabling this
 // enables a font indexer on Android which we need to test in the field first.
@@ -515,6 +508,10 @@ const base::Feature kPepper3DImageChromium {
 // Kill-switch to introduce a compatibility breaking restriction.
 const base::Feature kPepperCrossOriginRedirectRestriction{
     "PepperCrossOriginRedirectRestriction", base::FEATURE_ENABLED_BY_DEFAULT};
+
+// Enable in-browser script loading for a brand new service worker.
+const base::Feature kPlzServiceWorker{"PlzServiceWorker",
+                                      base::FEATURE_DISABLED_BY_DEFAULT};
 
 // Enables process sharing for sites that do not require a dedicated process
 // by using a default SiteInstance. Default SiteInstances will only be used

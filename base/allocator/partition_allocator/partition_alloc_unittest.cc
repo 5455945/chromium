@@ -727,7 +727,7 @@ TEST_F(PartitionAllocTest, Alloc) {
   // Check that the realloc copied correctly.
   char* new_char_ptr = static_cast<char*>(new_ptr);
   EXPECT_EQ(*new_char_ptr, 'A');
-#if DCHECK_IS_ON()
+#if EXPENSIVE_DCHECKS_ARE_ON()
   // Subtle: this checks for an old bug where we copied too much from the
   // source of the realloc. The condition can be detected by a trashing of
   // the uninitialized value in the space of the upsized allocation.
@@ -838,7 +838,7 @@ TEST_F(PartitionAllocTest, AllocSizes) {
   allocator.root()->Free(ptr3);
   allocator.root()->Free(ptr4);
 
-#if DCHECK_IS_ON()
+#if EXPENSIVE_DCHECKS_ARE_ON()
   // |SlotSpanMetadata::Free| must poison the slot's contents with |kFreedByte|.
   EXPECT_EQ(kFreedByte,
             *(reinterpret_cast<unsigned char*>(new_ptr) + (size - 1)));
@@ -1051,7 +1051,7 @@ TEST_F(PartitionAllocTest, Realloc) {
   char* char_ptr2 = static_cast<char*>(ptr2);
   EXPECT_EQ('A', char_ptr2[0]);
   EXPECT_EQ('A', char_ptr2[size - 1]);
-#if DCHECK_IS_ON()
+#if EXPENSIVE_DCHECKS_ARE_ON()
   EXPECT_EQ(kUninitializedByte, static_cast<unsigned char>(char_ptr2[size]));
 #endif
 
@@ -1063,7 +1063,7 @@ TEST_F(PartitionAllocTest, Realloc) {
   char* char_ptr = static_cast<char*>(ptr);
   EXPECT_EQ('A', char_ptr[0]);
   EXPECT_EQ('A', char_ptr[size - 2]);
-#if DCHECK_IS_ON()
+#if EXPENSIVE_DCHECKS_ARE_ON()
   EXPECT_EQ(kUninitializedByte, static_cast<unsigned char>(char_ptr[size - 1]));
 #endif
 
@@ -1082,7 +1082,7 @@ TEST_F(PartitionAllocTest, Realloc) {
   char_ptr2 = static_cast<char*>(ptr2);
   EXPECT_EQ('A', char_ptr2[0]);
   EXPECT_EQ('A', char_ptr2[size - 1]);
-#if DCHECK_IS_ON()
+#if EXPENSIVE_DCHECKS_ARE_ON()
   EXPECT_EQ(kUninitializedByte, static_cast<unsigned char>(char_ptr2[size]));
 #endif
 
@@ -1511,12 +1511,10 @@ TEST_F(PartitionAllocTest, FreeCache) {
       allocator.root()->AdjustPointerForExtrasSubtract(ptr));
   EXPECT_EQ(nullptr, bucket->empty_slot_spans_head);
   EXPECT_EQ(1, slot_span->num_allocated_slots);
-#if defined(OS_WIN)
-  // Windows uses lazy commit, thus committing only needed pages.
-  size_t expected_committed_size = SystemPageSize();
-#else
-  size_t expected_committed_size = PartitionPageSize();
-#endif
+  // Lazy commit commits only needed pages.
+  size_t expected_committed_size = allocator.root()->use_lazy_commit
+                                       ? SystemPageSize()
+                                       : PartitionPageSize();
   EXPECT_EQ(expected_committed_size,
             allocator.root()->get_total_size_of_committed_pages());
   allocator.root()->Free(ptr);
@@ -1530,15 +1528,13 @@ TEST_F(PartitionAllocTest, FreeCache) {
   EXPECT_FALSE(slot_span->freelist_head);
   EXPECT_EQ(-1, slot_span->empty_cache_index);
   EXPECT_EQ(0, slot_span->num_allocated_slots);
-#if defined(OS_WIN)
-  size_t expected_size = SystemPageSize();
-#else
-  PartitionBucket<base::internal::ThreadSafe>* cycle_free_cache_bucket =
-      &allocator.root()->buckets[test_bucket_index_];
+  size_t num_system_pages_per_slot_span = allocator.root()
+                                              ->buckets[test_bucket_index_]
+                                              .num_system_pages_per_slot_span;
   size_t expected_size =
-      cycle_free_cache_bucket->num_system_pages_per_slot_span *
-      SystemPageSize();
-#endif
+      allocator.root()->use_lazy_commit
+          ? SystemPageSize()
+          : num_system_pages_per_slot_span * SystemPageSize();
   EXPECT_EQ(expected_size,
             allocator.root()->get_total_size_of_committed_pages());
 
@@ -2735,12 +2731,10 @@ TEST_F(PartitionAllocTest, MAYBE_Bookkeeping) {
 
   // A full slot span of size 1 partition page is committed.
   void* ptr = root.Alloc(small_size - kExtraAllocSize, type_name);
-#if defined(OS_WIN)
-  // Windows uses lazy commit, thus committing only needed pages.
-  size_t expected_committed_size = SystemPageSize();
-#else
-  size_t expected_committed_size = PartitionPageSize();
-#endif
+  // Lazy commit commites only needed pages.
+  size_t expected_committed_size = allocator.root()->use_lazy_commit
+                                       ? SystemPageSize()
+                                       : PartitionPageSize();
   size_t expected_super_pages_size = kSuperPageSize;
   EXPECT_EQ(expected_committed_size, root.total_size_of_committed_pages);
   EXPECT_EQ(expected_super_pages_size, root.total_size_of_super_pages);
@@ -2762,11 +2756,9 @@ TEST_F(PartitionAllocTest, MAYBE_Bookkeeping) {
 
   // Allocating another size commits another slot span.
   ptr = root.Alloc(2 * small_size - kExtraAllocSize, type_name);
-#if defined(OS_WIN)
-  expected_committed_size += SystemPageSize();
-#else
-  expected_committed_size += PartitionPageSize();
-#endif
+  expected_committed_size += allocator.root()->use_lazy_commit
+                                 ? SystemPageSize()
+                                 : PartitionPageSize();
   EXPECT_EQ(expected_committed_size, root.total_size_of_committed_pages);
   EXPECT_EQ(expected_super_pages_size, root.total_size_of_super_pages);
 

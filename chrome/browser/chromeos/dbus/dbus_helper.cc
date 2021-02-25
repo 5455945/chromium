@@ -7,7 +7,7 @@
 #include "ash/constants/ash_paths.h"
 #include "base/path_service.h"
 #include "base/system/sys_info.h"
-#include "chrome/browser/chromeos/settings/device_settings_service.h"
+#include "chrome/browser/ash/settings/device_settings_service.h"
 #include "chrome/browser/chromeos/wilco_dtc_supportd/wilco_dtc_supportd_client.h"
 #include "chrome/common/chrome_paths.h"
 #include "chromeos/components/chromebox_for_meetings/buildflags/buildflags.h"  // PLATFORM_CFM
@@ -38,6 +38,7 @@
 #include "chromeos/dbus/system_clock/system_clock_client.h"
 #include "chromeos/dbus/system_proxy/system_proxy_client.h"
 #include "chromeos/dbus/tpm_manager/tpm_manager_client.h"
+#include "chromeos/dbus/u2f/u2f_client.h"
 #include "chromeos/dbus/upstart/upstart_client.h"
 #include "chromeos/tpm/install_attributes.h"
 #include "device/bluetooth/dbus/bluez_dbus_manager.h"
@@ -99,6 +100,7 @@ void InitializeDBus() {
   InitializeDBusClient<SystemClockClient>(bus);
   InitializeDBusClient<SystemProxyClient>(bus);
   InitializeDBusClient<TpmManagerClient>(bus);
+  InitializeDBusClient<U2FClient>(bus);
   InitializeDBusClient<UpstartClient>(bus);
 
   // Initialize the device settings service so that we'll take actions per
@@ -132,6 +134,7 @@ void ShutdownDBus() {
 
   // Other D-Bus clients are shut down, also in reverse order of initialization.
   UpstartClient::Shutdown();
+  U2FClient::Shutdown();
   TpmManagerClient::Shutdown();
   SystemProxyClient::Shutdown();
   SystemClockClient::Shutdown();

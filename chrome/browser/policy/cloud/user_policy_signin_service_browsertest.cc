@@ -38,6 +38,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 class UserPolicySigninServiceTest;
+class SigninUIError;
 
 namespace {
 
@@ -55,8 +56,7 @@ class TestDiceTurnSyncOnHelperDelegate : public DiceTurnSyncOnHelper::Delegate {
 
  private:
   // DiceTurnSyncOnHelper::Delegate:
-  void ShowLoginError(const std::string& email,
-                      const std::string& error_message) override;
+  void ShowLoginError(const SigninUIError& error) override;
   void ShowMergeSyncDataConfirmation(
       const std::string& previous_email,
       const std::string& new_email,
@@ -68,6 +68,7 @@ class TestDiceTurnSyncOnHelperDelegate : public DiceTurnSyncOnHelper::Delegate {
       base::OnceCallback<void(LoginUIService::SyncConfirmationUIClosedResult)>
           callback) override {}
   void ShowSyncDisabledConfirmation(
+      bool is_managed_account,
       base::OnceCallback<void(LoginUIService::SyncConfirmationUIClosedResult)>
           callback) override;
   void ShowSyncSettings() override;
@@ -331,8 +332,7 @@ TestDiceTurnSyncOnHelperDelegate::~TestDiceTurnSyncOnHelperDelegate() {
 }
 
 void TestDiceTurnSyncOnHelperDelegate::ShowLoginError(
-    const std::string& email,
-    const std::string& error_message) {
+    const SigninUIError& error) {
   NOTREACHED();
 }
 
@@ -351,6 +351,7 @@ void TestDiceTurnSyncOnHelperDelegate::ShowEnterpriseAccountConfirmation(
 }
 
 void TestDiceTurnSyncOnHelperDelegate::ShowSyncDisabledConfirmation(
+    bool is_managed_account,
     base::OnceCallback<void(LoginUIService::SyncConfirmationUIClosedResult)>
         callback) {
   test_fixture_->OnShowSyncDisabledConfirmation(std::move(callback));

@@ -13,6 +13,7 @@
 #include "base/hash/hash.h"
 #include "base/lazy_instance.h"
 #include "base/no_destructor.h"
+#include "base/stl_util.h"
 #include "content/browser/bad_message.h"
 #include "content/browser/blob_storage/chrome_blob_storage_context.h"
 #include "content/browser/child_process_security_policy_impl.h"
@@ -284,7 +285,7 @@ bool RenderFrameProxyHost::InitRenderFrameProxy() {
     CHECK_NE(parent_routing_id, MSG_ROUTING_NONE);
   }
 
-  base::Optional<base::UnguessableToken> opener_frame_token;
+  base::Optional<blink::FrameToken> opener_frame_token;
   if (frame_tree_node_->opener()) {
     opener_frame_token =
         frame_tree_node_->render_manager()->GetOpenerFrameToken(
@@ -734,9 +735,7 @@ void RenderFrameProxyHost::OpenURL(mojom::OpenURLParamsPtr params) {
   // to PAGE_TRANSITION_FORM_SUBMIT. See https://crbug.com/829827.
   frame_tree_node_->navigator().NavigateFromFrameProxy(
       current_rfh, validated_url,
-      params->initiator_frame_token.has_value()
-          ? &params->initiator_frame_token.value()
-          : nullptr,
+      base::OptionalOrNullptr(params->initiator_frame_token),
       GetProcess()->GetID(), params->initiator_origin, site_instance_.get(),
       params->referrer.To<content::Referrer>(), ui::PAGE_TRANSITION_LINK,
       params->should_replace_current_entry, download_policy,

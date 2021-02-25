@@ -611,24 +611,18 @@ cr.define('cr.ui.login.debug', function() {
     {
       id: 'ad-password-change',
       kind: ScreenKind.OTHER,
+      handledSteps: 'password',
       states: [
         {
           // No error
           id: 'no-error',
           data: {
             username: 'username',
-          },
-        },
-        {
-          // First error
-          id: 'error-0',
-          data: {
-            username: 'username',
             error: 0,
           },
         },
         {
-          // Second error
+          // First error
           id: 'error-1',
           data: {
             username: 'username',
@@ -636,15 +630,20 @@ cr.define('cr.ui.login.debug', function() {
           },
         },
         {
-          // Error bubble
-          id: 'error-bubble',
-          trigger: (screen) => {
-            let errorElement = document.createElement('div');
-            errorElement.textContent = 'Some error text';
-            screen.showErrorBubble(
-                1,  // Login attempts
-                errorElement);
+          // Second error
+          id: 'error-2',
+          data: {
+            username: 'username',
+            error: 2,
           },
+        },
+        {
+          // Error dialog
+          id: 'error-dialog',
+          trigger: (screen) => {
+            let error = 'Some error text';
+            screen.showErrorDialog(error);
+          }
         },
       ],
     },
@@ -752,6 +751,29 @@ cr.define('cr.ui.login.debug', function() {
     {
       id: 'terms-of-service',
       kind: ScreenKind.NORMAL,
+      handledSteps: 'loading,loaded,error',
+      states: [
+        {
+          id: 'loading',
+          trigger: (screen) => {
+            screen.setManager('TestCompany');
+            screen.setUIStep('loading');
+          },
+        },
+        {
+          id: 'loaded',
+          trigger: (screen) => {
+            screen.setManager('TestCompany');
+            screen.setTermsOfService('TOS BEGIN\nThese are the terms\nTOS END');
+          },
+        },
+        {
+          id: 'error',
+          trigger: (screen) => {
+            screen.setTermsOfServiceLoadError();
+          },
+        },
+      ],
     },
     {
       id: 'sync-consent',
@@ -801,12 +823,6 @@ cr.define('cr.ui.login.debug', function() {
       id: 'arc-tos',
       kind: ScreenKind.NORMAL,
       states: [
-        {
-          id: 'loading',
-          trigger: (screen) => {
-            screen.showLoadingScreenForTesting();
-          },
-        },
         {
           id: 'us-terms-loaded',
           trigger: (screen) => {
@@ -891,12 +907,9 @@ cr.define('cr.ui.login.debug', function() {
       id: 'parental-handoff',
       kind: ScreenKind.NORMAL,
       states: [{
-        id: 'parental-handoff',
+        id: 'default',
         data: {
-          title: 'Now it\'s Child 1\'s turn',
-          subtitle:
-              'You can hand this Chromebook to Child 1. Setup is almost done,' +
-              ' then it\'s time to explore.'
+          username: 'TestUsername',
         },
       }],
     },

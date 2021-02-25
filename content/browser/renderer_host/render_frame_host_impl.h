@@ -281,6 +281,10 @@ class CONTENT_EXPORT RenderFrameHostImpl
   using IsClipboardPasteContentAllowedCallback =
       ContentBrowserClient::IsClipboardPasteContentAllowedCallback;
 
+  // Exposed as a public constant to share with other entities that need to
+  // accommodate frame/process shutdown delays.
+  static const int kKeepAliveHandleFactoryTimeoutInSeconds = 30;
+
   // An accessibility reset is only allowed to prevent very rare corner cases
   // or race conditions where the browser and renderer get out of sync. If
   // this happens more than this many times, kill the renderer.
@@ -492,7 +496,7 @@ class CONTENT_EXPORT RenderFrameHostImpl
   // Creates a RenderFrame in the renderer process.
   bool CreateRenderFrame(
       int previous_routing_id,
-      const base::Optional<base::UnguessableToken>& opener_frame_token,
+      const base::Optional<blink::FrameToken>& opener_frame_token,
       int parent_routing_id,
       int previous_sibling_routing_id);
 
@@ -651,8 +655,7 @@ class CONTENT_EXPORT RenderFrameHostImpl
   // with paths to local copies as specified by |url_map| and |frame_token_map|.
   void GetSerializedHtmlWithLocalLinks(
       const base::flat_map<GURL, base::FilePath>& url_map,
-      const base::flat_map<base::UnguessableToken, base::FilePath>&
-          frame_token_map,
+      const base::flat_map<blink::FrameToken, base::FilePath>& frame_token_map,
       bool save_with_empty_url,
       mojo::PendingRemote<mojom::FrameHTMLSerializerHandler>
           serializer_handler);
@@ -677,12 +680,17 @@ class CONTENT_EXPORT RenderFrameHostImpl
   // call FrameTreeNode::IsLoading.
   bool is_loading() const { return is_loading_; }
 
-  // Returns true if this is a top-level frame, or if this frame's RenderFrame
-  // is in a different process from its parent frame. Local roots are
+  // Returns true if this is a top-level frame, or if this frame
+  // uses a proxy to communicate with its parent frame. Local roots are
   // distinguished by owning a RenderWidgetHost, which manages input events
   // and painting for this frame and its contiguous local subtree in the
   // renderer process.
   bool is_local_root() const { return !!GetLocalRenderWidgetHost(); }
+
+  // Returns true if this is not a top-level frame but is still a local root.
+  bool is_local_root_subframe() const {
+    return !is_main_frame() && is_local_root();
+  }
 
   media::MediaMetricsProvider::RecordAggregateWatchTimeCallback
   GetRecordAggregateWatchTimeCallback();
@@ -1089,9 +1097,12 @@ class CONTENT_EXPORT RenderFrameHostImpl
   // to send pid + RoutingID, but one cannot send pid.  One can get it from the
   // channel, but this makes it much harder to get wrong.
   // Once media switches to mojo, we should be able to remove this in favor of
-  // sending a mojo overlay factory.
+  // sending a mojo overlay factory. Note that this value should only be shared
+  // with the renderer process that hosts the frame and other utility processes;
+  // it should specifically *not* be shared with any renderer processes that
+  // do not host the frame.
   const base::UnguessableToken& GetOverlayRoutingToken() const {
-    return frame_token_;
+    return frame_token_.value();
   }
 
   // Binds the receiver end of the BrowserInterfaceBroker interface through
@@ -1279,7 +1290,8 @@ class CONTENT_EXPORT RenderFrameHostImpl
             interface_params) = 0;
   };
 
-  // Sets the specified |interceptor|.
+  // Sets the specified |interceptor|. The caller is responsible for ensuring
+  // |interceptor| remains live as long as it is set as the interceptor.
   void SetCommitCallbackInterceptorForTesting(
       CommitCallbackInterceptor* interceptor);
 
@@ -1476,9 +1488,6 @@ class CONTENT_EXPORT RenderFrameHostImpl
   void BindMediaMetricsProviderReceiver(
       mojo::PendingReceiver<media::mojom::MediaMetricsProvider> receiver);
 
-  void CreateMediaPlayerHost(
-      mojo::PendingReceiver<media::mojom::MediaPlayerHost> receiver);
-
 #if BUILDFLAG(ENABLE_MEDIA_REMOTING)
   void BindMediaRemoterFactoryReceiver(
       mojo::PendingReceiver<media::mojom::RemoterFactory> receiver);
@@ -1589,6 +1598,8 @@ class CONTENT_EXPORT RenderFrameHostImpl
   // add any more usages of this.
   // TODO(https://crbug.com/936696): Remove this.
   void reset_must_be_replaced() { must_be_replaced_ = false; }
+
+  int renderer_exit_count() const { return renderer_exit_count_; }
 
   // Re-creates loader factories and pushes them to |RenderFrame|.
   // Used in case we need to add or remove intercepting proxies to the
@@ -1748,18 +1759,20 @@ class CONTENT_EXPORT RenderFrameHostImpl
       const std::string& mime_type,
       network::mojom::RequestDestination request_destination) override;
   void DidChangeFrameOwnerProperties(
-      const base::UnguessableToken& child_frame_token,
+      const blink::FrameToken& child_frame_token,
       blink::mojom::FrameOwnerPropertiesPtr frame_owner_properties) override;
   void DidChangeOpener(
       const base::Optional<blink::LocalFrameToken>& opener_frame) override;
   void DidChangeCSPAttribute(
-      const base::UnguessableToken& child_frame_token,
+      const blink::FrameToken& child_frame_token,
       network::mojom::ContentSecurityPolicyPtr parsed_csp_attribute) override;
-  void DidChangeFramePolicy(const base::UnguessableToken& child_frame_token,
+  void DidChangeFramePolicy(const blink::FrameToken& child_frame_token,
                             const blink::FramePolicy& frame_policy) override;
   void CapturePaintPreviewOfSubframe(
       const gfx::Rect& clip_rect,
       const base::UnguessableToken& guid) override;
+  void SetModalCloseListener(
+      mojo::PendingRemote<blink::mojom::ModalCloseListener> listener) override;
   void Detach() override;
   void DidAddMessageToConsole(
       blink::mojom::ConsoleMessageLevel log_level,
@@ -1780,7 +1793,7 @@ class CONTENT_EXPORT RenderFrameHostImpl
                        blink::mojom::LocalMainFrameHost::UpdateTargetURLCallback
                            callback) override;
   void RequestClose() override;
-  void ShowCreatedWindow(const base::UnguessableToken& opener_frame_token,
+  void ShowCreatedWindow(const blink::LocalFrameToken& opener_frame_token,
                          WindowOpenDisposition disposition,
                          const gfx::Rect& initial_rect,
                          bool user_gesture,
@@ -1859,7 +1872,7 @@ class CONTENT_EXPORT RenderFrameHostImpl
   // untrusted, so the renderer process is killed if it refers to a
   // RenderFrameHostImpl that is not a child of this node.
   RenderFrameHostImpl* FindAndVerifyChild(
-      const base::UnguessableToken& child_frame_token,
+      const blink::FrameToken& child_frame_token,
       bad_message::BadMessageReason reason);
 
   // Whether we should run the pagehide/visibilitychange handlers of the
@@ -1944,6 +1957,10 @@ class CONTENT_EXPORT RenderFrameHostImpl
   void PepperInstanceClosed(int32_t instance_id);
   void PepperSetVolume(int32_t instance_id, double volume);
 #endif
+
+  const network::mojom::URLResponseHeadPtr& last_response_head() const {
+    return last_response_head_;
+  }
 
  protected:
   friend class RenderFrameHostFactory;
@@ -3059,6 +3076,12 @@ class CONTENT_EXPORT RenderFrameHostImpl
   bool has_committed_any_navigation_ = false;
   bool must_be_replaced_ = false;
 
+  // Counts the number of times the associated renderer process has exited.
+  // This is used to track problematic RenderFrameHost reuse.
+  // TODO(https://crbug.com/1172882): Remove once enough data has been
+  // collected.
+  int renderer_exit_count_ = 0;
+
   // Receivers must be reset in InvalidateMojoConnection().
   mojo::AssociatedReceiver<mojom::FrameHost> frame_host_associated_receiver_{
       this};
@@ -3462,6 +3485,10 @@ class CONTENT_EXPORT RenderFrameHostImpl
   // Note that it is the initiator RenderFrameHost that stores these receivers.
   mojo::UniqueReceiverSet<blink::mojom::PrerenderProcessor>
       prerender_processor_receivers_;
+
+  // The current document's HTTP response head. This is used by back-forward
+  // cache, for navigating a second time toward the same document.
+  network::mojom::URLResponseHeadPtr last_response_head_;
 
   // NOTE: This must be the last member.
   base::WeakPtrFactory<RenderFrameHostImpl> weak_ptr_factory_{this};

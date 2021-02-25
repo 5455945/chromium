@@ -61,7 +61,6 @@ CONTENT_EXPORT extern const base::Feature kExpensiveBackgroundTimerThrottling;
 CONTENT_EXPORT extern const base::Feature
     kExtraSafelistedRequestHeadersForOutOfBlinkCors;
 CONTENT_EXPORT extern const base::Feature kFeaturePolicyForClientHints;
-CONTENT_EXPORT extern const base::Feature kFirstScrollLatencyMeasurement;
 CONTENT_EXPORT extern const base::Feature kFontSrcLocalMatching;
 #if !defined(OS_ANDROID)
 CONTENT_EXPORT extern const base::Feature
@@ -124,6 +123,7 @@ CONTENT_EXPORT extern const base::Feature kPeriodicBackgroundSync;
 CONTENT_EXPORT extern const base::Feature kPermissionsPolicyHeader;
 CONTENT_EXPORT extern const base::Feature kPepper3DImageChromium;
 CONTENT_EXPORT extern const base::Feature kPepperCrossOriginRedirectRestriction;
+CONTENT_EXPORT extern const base::Feature kPlzServiceWorker;
 CONTENT_EXPORT extern const base::Feature kHighPriorityBeforeUnload;
 CONTENT_EXPORT extern const base::Feature kPrioritizeBootstrapTasks;
 CONTENT_EXPORT extern const base::Feature kProactivelySwapBrowsingInstance;

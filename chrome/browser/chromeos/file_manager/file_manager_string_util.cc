@@ -10,9 +10,9 @@
 #include "base/logging.h"
 #include "base/strings/stringprintf.h"
 #include "base/values.h"
+#include "chrome/browser/ash/login/demo_mode/demo_session.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/crostini/crostini_features.h"
-#include "chrome/browser/chromeos/login/demo_mode/demo_session.h"
 #include "chrome/browser/chromeos/plugin_vm/plugin_vm_features.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_features.h"
@@ -442,8 +442,6 @@ std::unique_ptr<base::DictionaryValue> GetFileManagerStrings() {
   AddStringsForSharesheet(dict.get());
   AddStringsForHoldingSpace(dict.get());
 
-  SET_STRING("ADD_NEW_SERVICES_BUTTON_LABEL",
-             IDS_FILE_BROWSER_ADD_NEW_SERVICES_BUTTON_LABEL);
   SET_STRING("ALL_FILES_FILTER", IDS_FILE_BROWSER_ALL_FILES_FILTER);
   SET_STRING("ARCHIVE_MOUNT_FAILED", IDS_FILE_BROWSER_ARCHIVE_MOUNT_FAILED);
   SET_STRING("ARCHIVE_MOUNT_MESSAGE", IDS_FILE_BROWSER_ARCHIVE_MOUNT_MESSAGE);
@@ -653,8 +651,6 @@ std::unique_ptr<base::DictionaryValue> GetFileManagerStrings() {
              IDS_SETTINGS_CROSTINI_CONFIRM_IMPORT_DIALOG_WINDOW_MESSAGE);
   SET_STRING("IMPORT_CROSTINI_IMAGE_DIALOG_OK_LABEL",
              IDS_SETTINGS_CROSTINI_IMPORT);
-  SET_STRING("INSTALL_NEW_EXTENSION_LABEL",
-             IDS_FILE_BROWSER_INSTALL_NEW_EXTENSION_LABEL);
   SET_STRING("MANY_DIRECTORIES_SELECTED",
              IDS_FILE_BROWSER_MANY_DIRECTORIES_SELECTED);
   SET_STRING("MANY_ENTRIES_SELECTED", IDS_FILE_BROWSER_MANY_ENTRIES_SELECTED);
@@ -845,6 +841,8 @@ std::unique_ptr<base::DictionaryValue> GetFileManagerStrings() {
              IDS_FILE_BROWSER_SEARCH_A11Y_CLEAR_SEARCH);
   SET_STRING("SELECT_ALL_COMMAND_LABEL",
              IDS_FILE_BROWSER_SELECT_ALL_COMMAND_LABEL);
+  SET_STRING("SHOW_PROVIDERS_BUTTON_LABEL",
+             IDS_FILE_BROWSER_SHOW_PROVIDERS_BUTTON_LABEL);
   SET_STRING("TASKS_BUTTON_LABEL", IDS_FILE_BROWSER_TASKS_BUTTON_LABEL);
   SET_STRING("TOGGLE_HIDDEN_FILES_COMMAND_LABEL",
              IDS_FILE_BROWSER_TOGGLE_HIDDEN_FILES_COMMAND_LABEL);

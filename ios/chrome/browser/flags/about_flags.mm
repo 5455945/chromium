@@ -72,6 +72,7 @@
 #import "ios/chrome/browser/ui/table_view/feature_flags.h"
 #import "ios/chrome/browser/ui/toolbar_container/toolbar_container_features.h"
 #include "ios/chrome/browser/ui/ui_feature_flags.h"
+#import "ios/chrome/browser/ui/whats_new/default_browser_utils.h"
 #include "ios/chrome/browser/web/features.h"
 #include "ios/chrome/grit/ios_strings.h"
 #include "ios/public/provider/chrome/browser/chrome_browser_provider.h"
@@ -216,6 +217,22 @@ const FeatureEntry::FeatureVariation
          base::size(kAutofillUseMobileLabelDisambiguationShowAll), nullptr},
         {"(show one)", kAutofillUseMobileLabelDisambiguationShowOne,
          base::size(kAutofillUseMobileLabelDisambiguationShowOne), nullptr}};
+
+const FeatureEntry::FeatureParam
+    kDefaultBrowserFullscreenPromoCTAExperimentSwitch[] = {
+        {kDefaultBrowserFullscreenPromoCTAExperimentSwitchParam, "true"}};
+const FeatureEntry::FeatureParam
+    kDefaultBrowserFullscreenPromoCTAExperimentOpenLinks[] = {
+        {kDefaultBrowserFullscreenPromoCTAExperimentOpenLinksParam, "true"}};
+const FeatureEntry::FeatureVariation
+    kDefaultBrowserFullscreenPromoCTAExperimentVariations[] = {
+        {"Switch to Chrome", kDefaultBrowserFullscreenPromoCTAExperimentSwitch,
+         base::size(kDefaultBrowserFullscreenPromoCTAExperimentSwitch),
+         nullptr},
+        {"Open Links in Chrome",
+         kDefaultBrowserFullscreenPromoCTAExperimentOpenLinks,
+         base::size(kDefaultBrowserFullscreenPromoCTAExperimentOpenLinks),
+         nullptr}};
 
 const FeatureEntry::FeatureParam kDiscoverFeedInNtpEnableNativeUI[] = {
     {kDiscoverFeedIsNativeUIEnabled, "true"}};
@@ -629,11 +646,20 @@ const flags_ui::FeatureEntry kFeatureEntries[] = {
      flag_descriptions::kDefaultBrowserFullscreenPromoCTAExperimentName,
      flag_descriptions::kDefaultBrowserFullscreenPromoCTAExperimentDescription,
      flags_ui::kOsIos,
-     FEATURE_VALUE_TYPE(kDefaultBrowserFullscreenPromoCTAExperiment)},
+     FEATURE_WITH_PARAMS_VALUE_TYPE(
+         kDefaultBrowserFullscreenPromoCTAExperiment,
+         kDefaultBrowserFullscreenPromoCTAExperimentVariations,
+         "DefaultBrowserFullscreenPromoCTAExperiment")},
     {"password-reuse-detection", flag_descriptions::kPasswordReuseDetectionName,
      flag_descriptions::kPasswordReuseDetectionDescription, flags_ui::kOsIos,
      FEATURE_VALUE_TYPE(
          password_manager::features::kPasswordReuseDetectionEnabled)},
+    {"enable-manual-password-generation",
+     flag_descriptions::kEnableManualPasswordGenerationName,
+     flag_descriptions::kEnableManualPasswordGenerationDescription,
+     flags_ui::kOsIos,
+     FEATURE_VALUE_TYPE(
+         password_manager::features::kEnableManualPasswordGeneration)},
 };
 
 bool SkipConditionalFeatureEntry(const flags_ui::FeatureEntry& entry) {

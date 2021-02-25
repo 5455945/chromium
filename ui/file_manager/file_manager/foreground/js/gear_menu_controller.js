@@ -64,34 +64,14 @@
   onShowGearMenu_() {
     this.toggleRipple_.activated = true;
     this.refreshRemainingSpace_(false); /* Without loading caption. */
-    this.updateNewServiceItem();
-  }
 
-  /**
-   * Update "New service" menu item to either directly show the Webstore dialog
-   * when there isn't any service/FSP extension installed, or display the
-   * providers menu with the currently installed extensions and also install new
-   * service.
-   *
-   * @private
-   */
-  updateNewServiceItem() {
     this.providersModel_.getMountableProviders().then(providers => {
-      // Go straight to webstore to install the first provider.
-      let desiredMenu = '#install-new-extension';
-      let label = str('INSTALL_NEW_EXTENSION_LABEL');
-
-      const shouldDisplayProvidersMenu = providers.length > 0;
-      if (shouldDisplayProvidersMenu) {
-        // Open the providers menu with an installed provider and an install new
-        // provider option.
-        desiredMenu = '#new-service';
-        label = str('ADD_NEW_SERVICES_BUTTON_LABEL');
+      const shouldHide = providers.length == 0;
+      if (!shouldHide) {
         // Trigger an update of the providers submenu.
         this.providersMenu_.updateSubMenu();
       }
-
-      this.gearMenu_.setNewServiceCommand(desiredMenu, label);
+      this.gearMenu_.updateShowProviders(shouldHide);
     });
   }
 
@@ -142,6 +122,13 @@
             VolumeManagerCommon.VolumeType.MEDIA_VIEW ||
         currentVolumeInfo.volumeType ==
             VolumeManagerCommon.VolumeType.ARCHIVE) {
+      this.gearMenu_.setSpaceInfo(null, false);
+      return;
+    }
+
+    // TODO(crbug.com/1177203): Remove once Drive sends proper quota info to
+    // Chrome.
+    if (currentVolumeInfo.volumeType == VolumeManagerCommon.VolumeType.DRIVE) {
       this.gearMenu_.setSpaceInfo(null, false);
       return;
     }

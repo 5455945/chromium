@@ -5,6 +5,7 @@
 #include "chrome/browser/ui/webui/chromeos/login/gaia_screen_handler.h"
 
 #include <memory>
+#include <string>
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
@@ -35,13 +36,14 @@
 #include "chrome/browser/ash/certificate_provider/certificate_provider_service.h"
 #include "chrome/browser/ash/certificate_provider/certificate_provider_service_factory.h"
 #include "chrome/browser/ash/certificate_provider/pin_dialog_manager.h"
+#include "chrome/browser/ash/login/saml/public_saml_url_fetcher.h"
+#include "chrome/browser/ash/login/saml/saml_metric_utils.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/chromeos/authpolicy/authpolicy_helper.h"
 #include "chrome/browser/chromeos/login/reauth_stats.h"
-#include "chrome/browser/chromeos/login/saml/public_saml_url_fetcher.h"
-#include "chrome/browser/chromeos/login/saml/saml_metric_utils.h"
 #include "chrome/browser/chromeos/login/screens/network_error.h"
 #include "chrome/browser/chromeos/login/screens/signin_fatal_error_screen.h"
 #include "chrome/browser/chromeos/login/signin_partition_manager.h"
@@ -52,7 +54,6 @@
 #include "chrome/browser/chromeos/login/users/chrome_user_manager_util.h"
 #include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
 #include "chrome/browser/chromeos/policy/device_network_configuration_updater.h"
-#include "chrome/browser/chromeos/settings/cros_settings.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/profiles/profile.h"
@@ -177,6 +178,12 @@ std::string GetEnterpriseEnrollmentDomain() {
   policy::BrowserPolicyConnectorChromeOS* connector =
       g_browser_process->platform_part()->browser_policy_connector_chromeos();
   return connector->GetEnterpriseEnrollmentDomain();
+}
+
+std::string GetSSOProfile() {
+  policy::BrowserPolicyConnectorChromeOS* connector =
+      g_browser_process->platform_part()->browser_policy_connector_chromeos();
+  return connector->GetSSOProfile();
 }
 
 std::string GetRealm() {
@@ -408,11 +415,16 @@ void GaiaScreenHandler::LoadGaiaWithPartitionAndVersionAndConsent(
   const std::string enterprise_enrollment_domain(
       GetEnterpriseEnrollmentDomain());
   const std::string enterprise_domain_manager(GetEnterpriseDomainManager());
+  const std::string sso_profile(GetSSOProfile());
+
   if (!enterprise_display_domain.empty())
     params.SetString("enterpriseDisplayDomain", enterprise_display_domain);
   if (!enterprise_enrollment_domain.empty()) {
     params.SetString("enterpriseEnrollmentDomain",
                      enterprise_enrollment_domain);
+  }
+  if (!sso_profile.empty()) {
+    params.SetString("ssoProfile", sso_profile);
   }
   if (!enterprise_domain_manager.empty()) {
     params.SetString("enterpriseDomainManager", enterprise_domain_manager);

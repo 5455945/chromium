@@ -1843,6 +1843,7 @@ const char kNtpCustomBackgroundDict[] = "ntp.custom_background_dict";
 const char kNtpCustomBackgroundLocalToDevice[] =
     "ntp.custom_background_local_to_device";
 const char kNtpModulesVisible[] = "NewTabPage.ModulesVisible";
+const char kNtpDisabledModules[] = "NewTabPage.DisabledModules";
 // List of promos that the user has dismissed while on the NTP.
 const char kNtpPromoBlocklist[] = "ntp.promo_blocklist";
 // Data associated with search suggestions that appear on the NTP.
@@ -2989,8 +2990,12 @@ const char kBlockAutoplayEnabled[] = "media.block_autoplay";
 // of lacros-chrome is complete.
 #if defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
 // Boolean that indicates if native notifications are allowed to be used in
-// place of Chrome notifications.
+// place of Chrome notifications. Will be replaced by kAllowSystemNotifications.
 const char kAllowNativeNotifications[] = "native_notifications.allowed";
+
+// Boolean that indicates if system notifications are allowed to be used in
+// place of Chrome notifications.
+const char kAllowSystemNotifications[] = "system_notifications.allowed";
 #endif
 
 // Integer that holds the value of the next persistent notification ID to be
@@ -3177,6 +3182,12 @@ const char kCartModuleWelcomeSurfaceShownTimes[] =
 // Boolean pref controlling whether immersive AR sessions are enabled
 // in WebXR Device API.
 const char kWebXRImmersiveArEnabled[] = "webxr.immersive_ar_enabled";
+#endif
+
+#if !defined(OS_ANDROID)
+// The duration for keepalive requests on browser shutdown.
+const char kFetchKeepaliveDurationOnShutdown[] =
+    "fetch_keepalive_duration_on_shutdown";
 #endif
 
 }  // namespace prefs

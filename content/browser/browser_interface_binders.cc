@@ -23,6 +23,7 @@
 #include "content/browser/feature_observer.h"
 #include "content/browser/federated_learning/floc_service_impl.h"
 #include "content/browser/gpu/gpu_process_host.h"
+#include "content/browser/handwriting/handwriting_recognition_service_factory.h"
 #include "content/browser/image_capture/image_capture_impl.h"
 #include "content/browser/keyboard_lock/keyboard_lock_service_impl.h"
 #include "content/browser/loader/content_security_notifier.h"
@@ -36,7 +37,6 @@
 #include "content/browser/renderer_host/file_utilities_host_impl.h"
 #include "content/browser/renderer_host/media/media_devices_dispatcher_host.h"
 #include "content/browser/renderer_host/media/media_stream_dispatcher_host.h"
-#include "content/browser/renderer_host/media/video_capture_host.h"
 #include "content/browser/renderer_host/raw_clipboard_host_impl.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
@@ -68,10 +68,8 @@
 #include "device/vr/buildflags/buildflags.h"
 #include "device/vr/public/mojom/vr_service.mojom.h"
 #include "media/capture/mojom/image_capture.mojom.h"
-#include "media/capture/mojom/video_capture.mojom.h"
 #include "media/mojo/mojom/interface_factory.mojom-forward.h"
 #include "media/mojo/mojom/media_metrics_provider.mojom.h"
-#include "media/mojo/mojom/media_player.mojom.h"
 #include "media/mojo/mojom/remoting.mojom.h"
 #include "media/mojo/mojom/video_decode_perf_history.mojom.h"
 #include "media/mojo/services/video_decode_perf_history.h"
@@ -709,6 +707,9 @@ void PopulateFrameBinders(RenderFrameHostImpl* host, mojo::BinderMap* map) {
   map->Add<payments::mojom::PaymentManager>(base::BindRepeating(
       &RenderFrameHostImpl::CreatePaymentManager, base::Unretained(host)));
 
+  map->Add<handwriting::mojom::HandwritingRecognitionService>(
+      base::BindRepeating(&CreateHandwritingRecognitionService));
+
   map->Add<blink::mojom::WebBluetoothService>(base::BindRepeating(
       &RenderFrameHostImpl::CreateWebBluetoothService, base::Unretained(host)));
 
@@ -746,12 +747,6 @@ void PopulateFrameBinders(RenderFrameHostImpl* host, mojo::BinderMap* map) {
                             host->GetProcess()->GetID(), host->GetRoutingID(),
                             base::Unretained(media_stream_manager)),
         GetIOThreadTaskRunner({}));
-
-    map->Add<media::mojom::VideoCaptureHost>(
-        base::BindRepeating(&VideoCaptureHost::Create,
-                            host->GetProcess()->GetID(),
-                            base::Unretained(media_stream_manager)),
-        GetIOThreadTaskRunner({}));
   }
 
   map->Add<blink::mojom::RendererAudioInputStreamFactory>(
@@ -772,9 +767,6 @@ void PopulateFrameBinders(RenderFrameHostImpl* host, mojo::BinderMap* map) {
   map->Add<media::mojom::MediaMetricsProvider>(base::BindRepeating(
       &RenderFrameHostImpl::BindMediaMetricsProviderReceiver,
       base::Unretained(host)));
-
-  map->Add<media::mojom::MediaPlayerHost>(base::BindRepeating(
-      &RenderFrameHostImpl::CreateMediaPlayerHost, base::Unretained(host)));
 
 #if BUILDFLAG(ENABLE_MEDIA_REMOTING)
   map->Add<media::mojom::RemoterFactory>(

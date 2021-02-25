@@ -561,6 +561,7 @@ test("ios_web_inttests") {
     "//ios/web/favicon:inttests",
     "//ios/web/js_features/context_menu",
     "//ios/web/js_messaging:inttests",
+    "//ios/web/js_messaging:java_script_feature_util",
     "//ios/web/navigation",
     "//ios/web/navigation:core",
     "//ios/web/navigation:wk_navigation_util",

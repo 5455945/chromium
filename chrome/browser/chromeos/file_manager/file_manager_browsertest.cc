@@ -774,11 +774,6 @@ WRAPPED_INSTANTIATE_TEST_SUITE_P(
                       TestCase("manageTeamDrive")));
 
 WRAPPED_INSTANTIATE_TEST_SUITE_P(
-    SuggestAppDialog, /* suggest_app_dialog.js */
-    FilesAppBrowserTest,
-    ::testing::Values(TestCase("suggestAppDialog")));
-
-WRAPPED_INSTANTIATE_TEST_SUITE_P(
     Traverse, /* traverse.js */
     FilesAppBrowserTest,
     ::testing::Values(TestCase("traverseDownloads").InGuestMode(),
@@ -918,9 +913,7 @@ WRAPPED_INSTANTIATE_TEST_SUITE_P(
                       TestCase("requestMountSourceFile"),
                       TestCase("requestMountSourceFile").DisableNativeSmb(),
                       TestCase("providerEject"),
-                      TestCase("providerEject").DisableNativeSmb(),
-                      TestCase("installNewServiceOnline"),
-                      TestCase("installNewServiceOffline").Offline()));
+                      TestCase("providerEject").DisableNativeSmb()));
 
 WRAPPED_INSTANTIATE_TEST_SUITE_P(
     GearMenu, /* gear_menu.js */
@@ -938,7 +931,9 @@ WRAPPED_INSTANTIATE_TEST_SUITE_P(
         TestCase("showSendFeedbackAction"),
         TestCase("enableDisableStorageSettingsLink"),
         TestCase("showAvailableStorageMyFiles"),
-        TestCase("showAvailableStorageDrive"),
+        // Disabled until Drive quota can be properly displayed.
+        // crbug.com/1177203
+        // TestCase("showAvailableStorageDrive"),
         TestCase("showAvailableStorageSmbfs").EnableSmbfs(),
         TestCase("showAvailableStorageDocProvider").EnableDocumentsProvider()));
 

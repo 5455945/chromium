@@ -48,6 +48,8 @@ class CrosapiAsh : public mojom::Crosapi {
   // crosapi::mojom::Crosapi:
   void BindAccountManager(
       mojo::PendingReceiver<mojom::AccountManager> receiver) override;
+  void BindBrowserServiceHost(
+      mojo::PendingReceiver<mojom::BrowserServiceHost> receiver) override;
   void BindCertDatabase(
       mojo::PendingReceiver<mojom::CertDatabase> receiver) override;
   void BindClipboard(mojo::PendingReceiver<mojom::Clipboard> receiver) override;
@@ -96,7 +98,10 @@ class CrosapiAsh : public mojom::Crosapi {
   void OnDisconnected();
 
   std::unique_ptr<BrowserServiceHostAsh> browser_service_host_ash_;
+  std::unique_ptr<CertDatabaseAsh> cert_database_ash_;
+  std::unique_ptr<ClipboardAsh> clipboard_ash_;
   std::unique_ptr<DeviceAttributesAsh> device_attributes_ash_;
+  std::unique_ptr<FeedbackAsh> feedback_ash_;
   std::unique_ptr<FileManagerAsh> file_manager_ash_;
   std::unique_ptr<KeystoreServiceAsh> keystore_service_ash_;
   std::unique_ptr<MessageCenterAsh> message_center_ash_;
@@ -104,10 +109,7 @@ class CrosapiAsh : public mojom::Crosapi {
   std::unique_ptr<PrefsAsh> prefs_ash_;
   std::unique_ptr<ScreenManagerAsh> screen_manager_ash_;
   std::unique_ptr<SelectFileAsh> select_file_ash_;
-  std::unique_ptr<FeedbackAsh> feedback_ash_;
-  std::unique_ptr<CertDatabaseAsh> cert_database_ash_;
   std::unique_ptr<TestControllerAsh> test_controller_ash_;
-  std::unique_ptr<ClipboardAsh> clipboard_ash_;
   std::unique_ptr<UrlHandlerAsh> url_handler_ash_;
 
   mojo::ReceiverSet<mojom::Crosapi, CrosapiId> receiver_set_;

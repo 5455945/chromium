@@ -23,19 +23,18 @@
 #include "base/system/sys_info.h"
 #include "base/values.h"
 #include "build/branding_buildflags.h"
+#include "chrome/browser/ash/login/enrollment/auto_enrollment_check_screen_view.h"
+#include "chrome/browser/ash/login/enrollment/enrollment_screen_view.h"
+#include "chrome/browser/ash/login/quick_unlock/quick_unlock_utils.h"
 #include "chrome/browser/ash/system/input_device_settings.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/chromeos/login/enrollment/auto_enrollment_check_screen_view.h"
-#include "chrome/browser/chromeos/login/enrollment/enrollment_screen_view.h"
-#include "chrome/browser/chromeos/login/quick_unlock/quick_unlock_utils.h"
 #include "chrome/browser/chromeos/login/screens/error_screen.h"
 #include "chrome/browser/chromeos/login/ui/login_display_host.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
 #include "chrome/browser/chromeos/multidevice_setup/multidevice_setup_service_factory.h"
 #include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
 #include "chrome/browser/chromeos/policy/enrollment_requisition_manager.h"
-#include "chrome/browser/chromeos/settings/shutdown_policy_handler.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -303,6 +302,13 @@ void AddFingerprintResources(content::WebUIDataSource* source) {
   source->AddBoolean("useLottieAnimationForFingerprint", is_lottie_animation);
 }
 
+void AddMultiDeviceSetupResources(content::WebUIDataSource* source) {
+  source->AddResourcePath("multidevice_setup.json",
+                          IDR_MULTIDEVICE_SETUP_ANIMATION);
+  source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::WorkerSrc, "worker-src blob: 'self';");
+}
+
 void AddDebuggerResources(content::WebUIDataSource* source) {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   bool enable_debugger =
@@ -382,6 +388,7 @@ content::WebUIDataSource* CreateOobeUIDataSource(
   AddAssistantScreensResources(source);
   AddGestureNavigationResources(source);
   AddMarketingOptInResources(source);
+  AddMultiDeviceSetupResources(source);
 
   AddDebuggerResources(source);
   AddTestAPIResources(source);
@@ -520,7 +527,7 @@ void OobeUI::ConfigureOobeDisplay() {
 
   auto password_change_handler =
       std::make_unique<ActiveDirectoryPasswordChangeScreenHandler>(
-          js_calls_container_.get(), core_handler_);
+          js_calls_container_.get());
 
   AddScreenHandler(std::make_unique<GaiaScreenHandler>(
       js_calls_container_.get(), core_handler_, network_state_informer_));
@@ -724,6 +731,13 @@ void OobeUI::AddOobeComponents(content::WebUIDataSource* source,
                             IDR_OOBE_COMPONENTS_OOBE_CONTENT_DIALOG_HTML);
     source->AddResourcePath(kOobeContentDialogJS,
                             IDR_OOBE_COMPONENTS_OOBE_CONTENT_DIALOG_JS);
+
+    source->AddResourcePath("welcome_screen_animation.json",
+                            IDR_LOGIN_WELCOME_SCREEN_ANIMATION);
+    source->OverrideContentSecurityPolicy(
+        network::mojom::CSPDirectiveName::WorkerSrc,
+        "worker-src blob: 'self';");
+
   } else {
     source->AddResourcePath(
         kOobeCustomVarsCssHTML,

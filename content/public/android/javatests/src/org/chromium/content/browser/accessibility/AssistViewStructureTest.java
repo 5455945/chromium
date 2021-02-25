@@ -17,7 +17,7 @@ import org.junit.runner.RunWith;
 
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.CriteriaHelper;
-import org.chromium.base.test.util.DisableIf;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.MinAndroidSdkLevel;
 import org.chromium.base.test.util.UrlUtils;
 import org.chromium.content_public.browser.test.util.TestThreadUtils;
@@ -60,7 +60,7 @@ public class AssistViewStructureTest {
     @MediumTest
     @MinAndroidSdkLevel(Build.VERSION_CODES.M)
     @TargetApi(Build.VERSION_CODES.M)
-    @DisableIf.Build(sdk_is_less_than = Build.VERSION_CODES.M)
+    @DisabledTest(message = "https://crbug.com/1181719")
     public void testSimpleParagraph() throws Throwable {
         TestViewStructureInterface testViewStructure =
                 getViewStructureFromHtml("<p>Hello World</p>");
@@ -78,7 +78,7 @@ public class AssistViewStructureTest {
     @MediumTest
     @MinAndroidSdkLevel(Build.VERSION_CODES.M)
     @TargetApi(Build.VERSION_CODES.M)
-    @DisableIf.Build(sdk_is_less_than = Build.VERSION_CODES.M)
+    @DisabledTest(message = "https://crbug.com/1181719")
     public void testStaticList() throws Throwable {
         TestViewStructureInterface testViewStructure = getViewStructureFromHtml("<ol>"
                 + "  <li>Kirk</li>"
@@ -110,7 +110,7 @@ public class AssistViewStructureTest {
     @MediumTest
     @MinAndroidSdkLevel(Build.VERSION_CODES.M)
     @TargetApi(Build.VERSION_CODES.M)
-    @DisableIf.Build(sdk_is_less_than = Build.VERSION_CODES.M)
+    @DisabledTest(message = "https://crbug.com/1181719")
     public void testUrl() throws Throwable {
         TestViewStructureInterface root = getViewStructureFromHtml("<p>Hello World</p>");
         Assert.assertEquals(1, root.getChildCount());
@@ -140,7 +140,7 @@ public class AssistViewStructureTest {
     @MediumTest
     @MinAndroidSdkLevel(Build.VERSION_CODES.M)
     @TargetApi(Build.VERSION_CODES.M)
-    @DisableIf.Build(sdk_is_less_than = Build.VERSION_CODES.M)
+    @DisabledTest(message = "https://crbug.com/1181719")
     public void testAccessibleLabelsAugmentInnerText() throws Throwable {
         TestViewStructureInterface testViewStructure =
                 getViewStructureFromHtml("<a href='#'>Link</a>"
@@ -159,5 +159,30 @@ public class AssistViewStructureTest {
                         + "        android.widget.TextView text='Button'\n"
                         + "      android.widget.Button text='AriaLabel'\n"
                         + "        android.widget.TextView text='Button'\n");
+    }
+
+    /**
+     * Test that the snapshot contains HTML tag names.
+     */
+    @Test
+    @MediumTest
+    @MinAndroidSdkLevel(Build.VERSION_CODES.M)
+    @TargetApi(Build.VERSION_CODES.M)
+    @DisabledTest(message = "https://crbug.com/1181719")
+    public void testHtmlTagNames() throws Throwable {
+        TestViewStructureInterface testViewStructure = getViewStructureFromHtml("<h1>Heading</h1>"
+                + "  <p>Paragraph</p>"
+                + "  <div><input></div>");
+        testViewStructure.dumpHtmlTags();
+        Assert.assertEquals(testViewStructure.toString(),
+                "\n"
+                        + "  android.webkit.WebView htmlTag='#document'\n"
+                        + "    android.view.View htmlTag='h1'\n"
+                        + "      android.widget.TextView text='Heading'\n"
+                        + "    android.view.View htmlTag='p'\n"
+                        + "      android.widget.TextView text='Paragraph'\n"
+                        + "    android.view.View htmlTag='div'\n"
+                        + "      android.widget.EditText htmlTag='input'\n"
+                        + "        android.view.View htmlTag='div'\n");
     }
 }

@@ -91,7 +91,6 @@
 #include "content/renderer/gpu_benchmarking_extension.h"
 #include "content/renderer/internal_document_state_data.h"
 #include "content/renderer/loader/navigation_body_loader.h"
-#include "content/renderer/loader/web_url_loader_impl.h"
 #include "content/renderer/loader/web_worker_fetch_context_impl.h"
 #include "content/renderer/media/media_permission_dispatcher.h"
 #include "content/renderer/mhtml_handle_writer.h"
@@ -178,6 +177,7 @@
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/platform/web_url.h"
 #include "third_party/blink/public/platform/web_url_error.h"
+#include "third_party/blink/public/platform/web_url_loader.h"
 #include "third_party/blink/public/platform/web_url_request_extra_data.h"
 #include "third_party/blink/public/platform/web_url_request_util.h"
 #include "third_party/blink/public/platform/web_url_response.h"
@@ -467,7 +467,7 @@ void FillNavigationParamsRequest(
 
     for (const auto& exchange : commit_params.prefetched_signed_exchanges) {
       blink::WebURLResponse web_response;
-      WebURLLoaderImpl::PopulateURLResponse(
+      blink::WebURLLoader::PopulateURLResponse(
           exchange->inner_url, *exchange->inner_response, &web_response,
           false /* report_security_info*/, -1 /* request_id */);
       navigation_params->prefetched_signed_exchanges.emplace_back(
@@ -652,17 +652,14 @@ class LinkRewritingDelegate : public WebFrameSerializer::LinkRewritingDelegate {
  public:
   LinkRewritingDelegate(
       const base::flat_map<GURL, base::FilePath>& url_to_local_path,
-      const base::flat_map<base::UnguessableToken, base::FilePath>&
+      const base::flat_map<blink::FrameToken, base::FilePath>&
           frame_token_to_local_path)
       : url_to_local_path_(url_to_local_path),
         frame_token_to_local_path_(frame_token_to_local_path) {}
 
   bool RewriteFrameSource(WebFrame* frame, WebString* rewritten_link) override {
-    const base::Optional<base::UnguessableToken>& frame_token =
-        frame->GetFrameToken();
-
-    DCHECK(frame_token.has_value());
-    auto it = frame_token_to_local_path_.find(frame_token.value());
+    const blink::FrameToken frame_token = frame->GetFrameToken();
+    auto it = frame_token_to_local_path_.find(frame_token);
     if (it == frame_token_to_local_path_.end())
       return false;  // This can happen because of https://crbug.com/541354.
 
@@ -683,7 +680,7 @@ class LinkRewritingDelegate : public WebFrameSerializer::LinkRewritingDelegate {
 
  private:
   const base::flat_map<GURL, base::FilePath>& url_to_local_path_;
-  const base::flat_map<base::UnguessableToken, base::FilePath>&
+  const base::flat_map<blink::FrameToken, base::FilePath>&
       frame_token_to_local_path_;
 };
 
@@ -1282,8 +1279,17 @@ class RenderFrameImpl::FrameURLLoaderFactory
     // This should not be called if the frame is detached.
     DCHECK(frame_);
 
-    return std::make_unique<WebURLLoaderImpl>(
-        RenderThreadImpl::current()->cors_exempt_header_list(),
+    std::vector<std::string> cors_exempt_header_list =
+        RenderThreadImpl::current()->cors_exempt_header_list();
+    blink::WebVector<blink::WebString> web_cors_exempt_header_list(
+        cors_exempt_header_list.size());
+    std::transform(
+        cors_exempt_header_list.begin(), cors_exempt_header_list.end(),
+        web_cors_exempt_header_list.begin(),
+        [](const std::string& h) { return blink::WebString::FromLatin1(h); });
+
+    return std::make_unique<blink::WebURLLoader>(
+        web_cors_exempt_header_list,
         /*terminate_sync_load_event=*/nullptr,
         std::move(freezable_task_runner_handle),
         std::move(unfreezable_task_runner_handle),
@@ -1622,7 +1628,7 @@ void RenderFrameImpl::CreateFrame(
     mojo::PendingRemote<blink::mojom::BrowserInterfaceBroker>
         browser_interface_broker,
     int previous_routing_id,
-    const base::Optional<base::UnguessableToken>& opener_frame_token,
+    const base::Optional<blink::FrameToken>& opener_frame_token,
     int parent_routing_id,
     int previous_sibling_routing_id,
     const base::UnguessableToken& devtools_frame_token,
@@ -2253,7 +2259,7 @@ void RenderFrameImpl::Unload(
   RenderViewImpl* render_view = render_view_;
   bool is_main_frame = is_main_frame_;
   auto& agent_scheduling_group = agent_scheduling_group_;
-  base::UnguessableToken frame_token = frame_->GetFrameToken();
+  blink::LocalFrameToken frame_token = frame_->GetLocalFrameToken();
 
   // Before |this| is destroyed, grab the TaskRunner to be used for sending the
   // mojo::AgentSchedulingGroupHost::DidUnloadRenderFrame.  This will be used to
@@ -2315,7 +2321,7 @@ void RenderFrameImpl::Unload(
   // sent before the ACK (see https://crbug.com/857274).
   auto send_unload_ack = base::BindOnce(
       [](AgentSchedulingGroup* agent_scheduling_group,
-         const base::UnguessableToken& frame_token) {
+         const blink::LocalFrameToken& frame_token) {
         agent_scheduling_group->DidUnloadRenderFrame(frame_token);
       },
       &agent_scheduling_group, frame_token);
@@ -2558,8 +2564,7 @@ void RenderFrameImpl::SnapshotAccessibilityTree(
 
 void RenderFrameImpl::GetSerializedHtmlWithLocalLinks(
     const base::flat_map<GURL, base::FilePath>& url_map,
-    const base::flat_map<base::UnguessableToken, base::FilePath>&
-        frame_token_map,
+    const base::flat_map<blink::FrameToken, base::FilePath>& frame_token_map,
     bool save_with_empty_url,
     mojo::PendingRemote<mojom::FrameHTMLSerializerHandler> handler_remote) {
   // Convert input to the canonical way of passing a map into a Blink API.
@@ -5483,7 +5488,7 @@ void RenderFrameImpl::OnWriteMHTMLComplete(
 
 void RenderFrameImpl::RequestOverlayRoutingToken(
     media::RoutingTokenCallback callback) {
-  std::move(callback).Run(GetWebFrame()->GetFrameToken());
+  std::move(callback).Run(GetWebFrame()->GetFrameToken().value());
 }
 
 void RenderFrameImpl::OpenURL(std::unique_ptr<blink::WebNavigationInfo> info) {
@@ -6018,15 +6023,6 @@ void RenderFrameImpl::OnStopLoading() {
     observer.OnStop();
 }
 
-void RenderFrameImpl::MaybeProxyURLLoaderFactory(
-    blink::CrossVariantMojoReceiver<
-        network::mojom::URLLoaderFactoryInterfaceBase>* factory_receiver) {
-  mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver(
-      std::move(*factory_receiver));
-  GetContentClient()->renderer()->MaybeProxyURLLoaderFactory(this, &receiver);
-  *factory_receiver = std::move(receiver);
-}
-
 void RenderFrameImpl::DraggableRegionsChanged() {
   for (auto& observer : observers_)
     observer.DraggableRegionsChanged();
@@ -6206,6 +6202,10 @@ void RenderFrameImpl::SetWebURLLoaderFactoryOverrideForTest(
 blink::scheduler::WebAgentGroupScheduler&
 RenderFrameImpl::GetAgentGroupScheduler() {
   return agent_scheduling_group_.agent_group_scheduler();
+}
+
+url::Origin RenderFrameImpl::GetSecurityOriginOfTopFrame() {
+  return frame_->Top()->GetSecurityOrigin();
 }
 
 gfx::RectF RenderFrameImpl::ElementBoundsInWindow(

@@ -100,6 +100,22 @@ TEST(HandwritingTypeConvertersTest, IdlHandwritingFeatureQueryToMojo) {
   EXPECT_EQ(mojo_query->segmentation_result, false);
 }
 
+TEST(HandwritingTypeConvertersTest,
+     IdlEmptyLanguageHandwritingFeatureQueryToMojo) {
+  V8TestingScope v8_testing_scope;
+  auto* idl_query = blink::HandwritingFeatureQuery::Create();
+  // Intentionally does not set `languages`.
+  // Intentionally does not set `alternatives`.
+  idl_query->setSegmentationResult(
+      blink::ScriptValue::From(v8_testing_scope.GetScriptState(), "a"));
+
+  auto mojo_query = mojo::ConvertTo<HandwritingFeatureQueryPtr>(idl_query);
+  ASSERT_FALSE(mojo_query.is_null());
+  ASSERT_EQ(mojo_query->languages.size(), 0u);
+  EXPECT_EQ(mojo_query->alternatives, false);
+  EXPECT_EQ(mojo_query->segmentation_result, true);
+}
+
 TEST(HandwritingTypeConvertersTest, MojoHandwritingPointToIdl) {
   auto mojo_point = handwriting::mojom::blink::HandwritingPoint::New();
   mojo_point->location = gfx::PointF(0.3, 0.4);
@@ -150,6 +166,81 @@ TEST(HandwritingTypeConvertersTest, MojoHandwritingFeatureQueryResultIdl) {
   EXPECT_TRUE(idl_query_result->alternatives());
   ASSERT_TRUE(idl_query_result->hasSegmentationResult());
   EXPECT_FALSE(idl_query_result->segmentationResult());
+}
+
+TEST(HandwritingTypeConvertersTest, MojoHandwritingDrawingSegmentIdl) {
+  auto mojo_drawing_segment =
+      handwriting::mojom::blink::HandwritingDrawingSegment::New();
+  mojo_drawing_segment->stroke_index = 123u;
+  mojo_drawing_segment->begin_point_index = 10u;
+  mojo_drawing_segment->end_point_index = 20u;
+
+  auto* idl_drawing_segment =
+      mojo_drawing_segment.To<blink::HandwritingDrawingSegment*>();
+  EXPECT_EQ(idl_drawing_segment->strokeIndex(), 123u);
+  EXPECT_EQ(idl_drawing_segment->beginPointIndex(), 10u);
+  EXPECT_EQ(idl_drawing_segment->endPointIndex(), 20u);
+}
+
+TEST(HandwritingTypeConvertersTest, MojoHandwritingSegmentIdl) {
+  auto mojo_drawing_segment =
+      handwriting::mojom::blink::HandwritingDrawingSegment::New();
+  mojo_drawing_segment->stroke_index = 321u;
+  mojo_drawing_segment->begin_point_index = 30u;
+  mojo_drawing_segment->end_point_index = 40u;
+  auto mojo_segment = handwriting::mojom::blink::HandwritingSegment::New();
+  mojo_segment->grapheme = "The grapheme";
+  mojo_segment->begin_index = 5u;
+  mojo_segment->end_index = 6u;
+  mojo_segment->drawing_segments.push_back(std::move(mojo_drawing_segment));
+
+  auto* idl_segment = mojo_segment.To<blink::HandwritingSegment*>();
+  EXPECT_EQ(idl_segment->grapheme(), "The grapheme");
+  EXPECT_EQ(idl_segment->beginIndex(), 5u);
+  EXPECT_EQ(idl_segment->endIndex(), 6u);
+  ASSERT_EQ(idl_segment->drawingSegments().size(), 1u);
+  EXPECT_EQ(idl_segment->drawingSegments()[0]->strokeIndex(), 321u);
+  EXPECT_EQ(idl_segment->drawingSegments()[0]->beginPointIndex(), 30u);
+  EXPECT_EQ(idl_segment->drawingSegments()[0]->endPointIndex(), 40u);
+}
+
+TEST(HandwritingTypeConvertersTest, MojoHandwritingPredictionIdl) {
+  auto mojo_drawing_segment =
+      handwriting::mojom::blink::HandwritingDrawingSegment::New();
+  mojo_drawing_segment->stroke_index = 456u;
+  mojo_drawing_segment->begin_point_index = 7u;
+  mojo_drawing_segment->end_point_index = 8u;
+  auto mojo_segment = handwriting::mojom::blink::HandwritingSegment::New();
+  mojo_segment->grapheme = "The grapheme";
+  mojo_segment->begin_index = 100u;
+  mojo_segment->end_index = 200u;
+  mojo_segment->drawing_segments.push_back(std::move(mojo_drawing_segment));
+  auto mojo_prediction =
+      handwriting::mojom::blink::HandwritingPrediction::New();
+  mojo_prediction->text = "The prediction";
+  mojo_prediction->segmentation_result.push_back(std::move(mojo_segment));
+
+  auto* idl_prediction = mojo_prediction.To<blink::HandwritingPrediction*>();
+  EXPECT_EQ(idl_prediction->text(), "The prediction");
+  ASSERT_EQ(idl_prediction->segmentationResult().size(), 1u);
+  EXPECT_EQ(idl_prediction->segmentationResult()[0]->grapheme(),
+            "The grapheme");
+  EXPECT_EQ(idl_prediction->segmentationResult()[0]->beginIndex(), 100u);
+  EXPECT_EQ(idl_prediction->segmentationResult()[0]->endIndex(), 200u);
+  ASSERT_EQ(idl_prediction->segmentationResult()[0]->drawingSegments().size(),
+            1u);
+  EXPECT_EQ(idl_prediction->segmentationResult()[0]
+                ->drawingSegments()[0]
+                ->strokeIndex(),
+            456u);
+  EXPECT_EQ(idl_prediction->segmentationResult()[0]
+                ->drawingSegments()[0]
+                ->beginPointIndex(),
+            7u);
+  EXPECT_EQ(idl_prediction->segmentationResult()[0]
+                ->drawingSegments()[0]
+                ->endPointIndex(),
+            8u);
 }
 
 }  // namespace blink

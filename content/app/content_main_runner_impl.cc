@@ -290,7 +290,9 @@ void InitializeZygoteSandboxForBrowserProcess(
 
   // Tickle the zygote host so it forks now.
   ZygoteHostImpl::GetInstance()->Init(parsed_command_line);
-  CreateUnsandboxedZygote(base::BindOnce(LaunchZygoteHelper));
+  if (!parsed_command_line.HasSwitch(switches::kNoUnsandboxedZygote)) {
+    CreateUnsandboxedZygote(base::BindOnce(LaunchZygoteHelper));
+  }
   ZygoteHandle generic_zygote =
       CreateGenericZygote(base::BindOnce(LaunchZygoteHelper));
 
@@ -394,6 +396,17 @@ void PreSandboxInit() {
 #endif  // BUILDFLAG(USE_ZYGOTE_HANDLE)
 
 #endif  // defined(OS_LINUX) || defined(OS_CHROMEOS)
+
+mojo::ScopedMessagePipeHandle MaybeAcceptMojoInvitation() {
+  const auto& command_line = *base::CommandLine::ForCurrentProcess();
+  if (!mojo::PlatformChannel::CommandLineHasPassedEndpoint(command_line))
+    return {};
+
+  mojo::PlatformChannelEndpoint endpoint =
+      mojo::PlatformChannel::RecoverPassedEndpointFromCommandLine(command_line);
+  auto invitation = mojo::IncomingInvitation::Accept(std::move(endpoint));
+  return invitation.ExtractMessagePipe(0);
+}
 
 }  // namespace
 
@@ -963,16 +976,8 @@ int ContentMainRunnerImpl::RunBrowser(MainFunctionParams& main_params,
     mojo_ipc_support_ =
         std::make_unique<MojoIpcSupport>(BrowserTaskExecutor::CreateIOThread());
 
-    const base::CommandLine& command_line =
-        *base::CommandLine::ForCurrentProcess();
-    if (mojo::PlatformChannel::CommandLineHasPassedEndpoint(command_line)) {
-      mojo::PlatformChannelEndpoint endpoint =
-          mojo::PlatformChannel::RecoverPassedEndpointFromCommandLine(
-              command_line);
-      auto invitation = mojo::IncomingInvitation::Accept(std::move(endpoint));
-      GetContentClient()->browser()->BindBrowserControlInterface(
-          invitation.ExtractMessagePipe(0));
-    }
+    GetContentClient()->browser()->BindBrowserControlInterface(
+        MaybeAcceptMojoInvitation());
 
     download::SetIOTaskRunner(mojo_ipc_support_->io_thread()->task_runner());
 
@@ -988,6 +993,7 @@ int ContentMainRunnerImpl::RunBrowser(MainFunctionParams& main_params,
 
   // No specified process type means this is the Browser process.
   internal::PartitionAllocSupport::Get()->ReconfigureAfterFeatureListInit("");
+  internal::PartitionAllocSupport::Get()->ReconfigureAfterThreadPoolInit("");
 
   if (should_start_minimal_browser) {
     DVLOG(0) << "Chrome is running in minimal browser mode.";

@@ -19,6 +19,7 @@ import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.graphics.Point;
 import android.os.Build;
+import android.os.Build.VERSION_CODES;
 import android.os.SystemClock;
 import android.support.test.InstrumentationRegistry;
 import android.text.TextUtils;
@@ -76,6 +77,7 @@ import org.chromium.chrome.browser.compositor.bottombar.contextualsearch.Context
 import org.chromium.chrome.browser.compositor.bottombar.contextualsearch.ContextualSearchImageControl;
 import org.chromium.chrome.browser.compositor.bottombar.contextualsearch.ContextualSearchPanel;
 import org.chromium.chrome.browser.compositor.bottombar.contextualsearch.ContextualSearchQuickActionControl;
+import org.chromium.chrome.browser.contextualsearch.ContextualSearchFakeServer.FakeResolveSearch;
 import org.chromium.chrome.browser.contextualsearch.ContextualSearchFakeServer.FakeSlowResolveSearch;
 import org.chromium.chrome.browser.contextualsearch.ContextualSearchInternalStateController.InternalState;
 import org.chromium.chrome.browser.contextualsearch.ResolvedSearchTerm.CardTag;
@@ -184,6 +186,10 @@ public class ContextualSearchManagerTest {
     private static final String LOW_PRIORITY_INVALID_SEARCH_ENDPOINT = "/s/invalid";
     private static final String CONTEXTUAL_SEARCH_PREFETCH_PARAM = "&pf=c";
 
+    /**
+     * Feature maps that we use for parameterized tests.
+     */
+
     /** This represents the current fully-launched configuration. */
     private static final ImmutableMap<String, Boolean> ENABLE_NONE =
             ImmutableMap.of(ChromeFeatureList.CONTEXTUAL_SEARCH_LONGPRESS_RESOLVE, false,
@@ -199,6 +205,12 @@ public class ContextualSearchManagerTest {
             ImmutableMap.of(ChromeFeatureList.CONTEXTUAL_SEARCH_LONGPRESS_RESOLVE, false,
                     ChromeFeatureList.CONTEXTUAL_SEARCH_LITERAL_SEARCH_TAP, true,
                     ChromeFeatureList.CONTEXTUAL_SEARCH_TRANSLATIONS, true);
+
+    /** Feature maps that we use for individual tests. */
+    private static final ImmutableMap<String, Boolean> ENABLE_RELATED_SEARCHES = ImmutableMap.of(
+            ChromeFeatureList.RELATED_SEARCHES, true, ChromeFeatureList.RELATED_SEARCHES_UI, false);
+    private static final ImmutableMap<String, Boolean> ENABLE_RELATED_SEARCHES_UI = ImmutableMap.of(
+            ChromeFeatureList.RELATED_SEARCHES, true, ChromeFeatureList.RELATED_SEARCHES_UI, true);
 
     private ActivityMonitor mActivityMonitor;
     private ContextualSearchFakeServer mFakeServer;
@@ -520,8 +532,7 @@ public class ContextualSearchManagerTest {
      * Waits for the Search Term Resolution to become ready.
      * @param search A given FakeResolveSearch.
      */
-    public void waitForSearchTermResolutionToStart(
-            final ContextualSearchFakeServer.FakeResolveSearch search) {
+    public void waitForSearchTermResolutionToStart(final FakeResolveSearch search) {
         CriteriaHelper.pollInstrumentationThread(() -> {
             return search.didStartSearchTermResolution();
         }, "Fake Search Term Resolution never started.", TEST_TIMEOUT, DEFAULT_POLLING_INTERVAL);
@@ -531,8 +542,7 @@ public class ContextualSearchManagerTest {
      * Waits for the Search Term Resolution to finish.
      * @param search A given FakeResolveSearch.
      */
-    public void waitForSearchTermResolutionToFinish(
-            final ContextualSearchFakeServer.FakeResolveSearch search) {
+    public void waitForSearchTermResolutionToFinish(final FakeResolveSearch search) {
         CriteriaHelper.pollInstrumentationThread(() -> {
             return search.didFinishSearchTermResolution();
         }, "Fake Search was never ready.", TEST_TIMEOUT, DEFAULT_POLLING_INTERVAL);
@@ -585,9 +595,9 @@ public class ContextualSearchManagerTest {
      * @throws InterruptedException
      * @throws TimeoutException
      */
-    private void simulateResolveSearch(String nodeId)
+    private FakeResolveSearch simulateResolveSearch(String nodeId)
             throws InterruptedException, TimeoutException {
-        simulateResolvableSearchAndAssertResolveAndPreload(nodeId, true);
+        return simulateResolvableSearchAndAssertResolveAndPreload(nodeId, true);
     }
 
     /**
@@ -599,10 +609,9 @@ public class ContextualSearchManagerTest {
      * @throws InterruptedException
      * @throws TimeoutException
      */
-    private void simulateResolvableSearchAndAssertResolveAndPreload(String nodeId,
+    private FakeResolveSearch simulateResolvableSearchAndAssertResolveAndPreload(String nodeId,
             boolean isResolveExpected) throws InterruptedException, TimeoutException {
-        ContextualSearchFakeServer.FakeResolveSearch search =
-                mFakeServer.getFakeResolveSearch(nodeId);
+        FakeResolveSearch search = mFakeServer.getFakeResolveSearch(nodeId);
         assertNotNull("Could not find FakeResolveSearch for node ID:" + nodeId, search);
         search.simulate();
         waitForPanelToPeek();
@@ -613,6 +622,7 @@ public class ContextualSearchManagerTest {
             assertNoSearchesLoaded();
             assertNoWebContents();
         }
+        return search;
     }
 
     /**
@@ -3666,8 +3676,8 @@ public class ContextualSearchManagerTest {
     @Test
     @SmallTest
     @Feature({"ContextualSearch"})
-    @DisableIf.Build(sdk_is_less_than = Build.VERSION_CODES.P,
-            message = "Flaky < P, https://crbug.com/1048827")
+    @DisableIf.Build(sdk_is_less_than = VERSION_CODES.O,
+            message = "Flaky < P, https://crbug.com/1048827; Flaky on P, crbug.com/1181088")
     public void
     testLongpressExtendingSelectionExactResolve() throws Exception {
         FeatureList.setTestFeatures(ENABLE_LONGPRESS);
@@ -3697,5 +3707,33 @@ public class ContextualSearchManagerTest {
         // Check UMA metrics recorded.
         Assert.assertEquals(2, userActionMonitor.get("ContextualSearch.ManualRefine"));
         Assert.assertEquals(2, userActionMonitor.get("ContextualSearch.SelectionEstablished"));
+    }
+
+    // --------------------------------------------------------------------------------------------
+    // Related Searches Feature tests: base feature enables requests, UI feature allows results.
+    // --------------------------------------------------------------------------------------------
+
+    @Test
+    @SmallTest
+    @Feature({"ContextualSearch"})
+    public void testRelatedSearchesRequestedWhenEnabled() throws Exception {
+        FeatureList.setTestFeatures(ENABLE_RELATED_SEARCHES);
+        mPolicy.overrideAllowSendingPageUrlForTesting(true);
+        simulateResolveSearch("search");
+        Assert.assertFalse("Related Searches should have been requested but were not!",
+                mFakeServer.getSearchContext().getRelatedSearchesStamp().isEmpty());
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"ContextualSearch"})
+    public void testRelatedSearchesResponseWhenEnabled() throws Exception {
+        FeatureList.setTestFeatures(ENABLE_RELATED_SEARCHES_UI);
+        mFakeServer.reset();
+        FakeResolveSearch fakeSearch = simulateResolveSearch("intelligence");
+        ResolvedSearchTerm resolvedSearchTerm = fakeSearch.getResolvedSearchTerm();
+        Assert.assertTrue("Related Searches results should have been returned but were not!",
+                resolvedSearchTerm.relatedSearches().length > 0);
+        // TODO(donnd): Add a check that the searches appeared in the Panel once the Panel can.
     }
 }

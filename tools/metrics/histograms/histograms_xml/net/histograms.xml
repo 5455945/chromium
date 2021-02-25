@@ -351,7 +351,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Net.CertVerifier_TrialComparisonResult"
-    enum="CertVerifierTrialComparisonResult" expires_after="2021-04-26">
+    enum="CertVerifierTrialComparisonResult" expires_after="2021-08-22">
   <owner>mattm@chromium.org</owner>
   <owner>rsleevi@chromium.org</owner>
   <summary>
@@ -560,6 +560,9 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram name="Net.DNS.DnsTask.ErrorBeforeFallback.Fast" enum="NetErrorCodes"
     expires_after="M77">
+  <obsolete>
+    Removed from code 2021-02.
+  </obsolete>
   <owner>pauljensen@chromium.org</owner>
   <owner>mef@chromium.org</owner>
   <summary>
@@ -570,6 +573,9 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram name="Net.DNS.DnsTask.ErrorBeforeFallback.Slow" enum="NetErrorCodes"
     expires_after="M77">
+  <obsolete>
+    Removed from code 2021-02.
+  </obsolete>
   <owner>pauljensen@chromium.org</owner>
   <owner>mef@chromium.org</owner>
   <summary>
@@ -728,6 +734,9 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram name="Net.DNS.DnsTransaction.SecureValidated.SuccessTimeoutRatio"
     units="10*ratio" expires_after="2020-12-20">
+  <obsolete>
+    Removed from code 2021-02.
+  </obsolete>
   <owner>ericorth@chromium.org</owner>
   <owner>src/net/OWNERS</owner>
   <summary>
@@ -1027,7 +1036,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Net.DNS.JobQueueTime.Failure" units="ms"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>dmcardle@chromium.org</owner>
   <owner>ericorth@chromium.org</owner>
   <summary>
@@ -1038,7 +1047,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Net.DNS.JobQueueTime.PerTransaction" units="ms"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>dmcardle@chromium.org</owner>
   <owner>ericorth@chromium.org</owner>
   <summary>
@@ -1051,7 +1060,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Net.DNS.JobQueueTime.Success" units="ms"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>dmcardle@chromium.org</owner>
   <owner>ericorth@chromium.org</owner>
   <summary>
@@ -1341,7 +1350,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Net.DNS.UpgradeConfig.Ineligible.UnhandledOptions"
-    enum="Boolean" expires_after="2021-02-28">
+    enum="Boolean" expires_after="2021-11-28">
   <owner>ericorth@chromium.org</owner>
   <owner>doh-core@google.com</owner>
   <summary>
@@ -1607,7 +1616,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Net.HttpAuthPromptType" enum="HttpAuthPromptType"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>meacer@chromium.org</owner>
   <owner>src/chrome/browser/ui/login/OWNERS</owner>
   <summary>Type of the HTTP auth prompt displayed.</summary>
@@ -1980,7 +1989,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Net.Ntlm.HashDependsOnLocale" enum="Boolean"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>eroman@chromium.org</owner>
   <owner>src/net/OWNERS</owner>
   <summary>
@@ -2003,7 +2012,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Net.Port.SlipstreamRestricted" enum="SlipstreamPort"
-    expires_after="2021-04-01">
+    expires_after="2021-06-01">
   <owner>ricea@chromium.org</owner>
   <owner>yhirano@chromium.org</owner>
   <summary>
@@ -2344,7 +2353,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Net.QuicHandshakeState" enum="QuicHandshakeState"
-    expires_after="2021-05-11">
+    expires_after="2021-08-22">
   <owner>dschinazi@chromium.org</owner>
   <owner>src/net/quic/OWNERS</owner>
   <summary>
@@ -3895,6 +3904,22 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
   </summary>
 </histogram>
 
+<histogram name="Net.QuicSession.StopSendingErrorCodeClient"
+    enum="QuicRstStreamErrorCodes" expires_after="2021-05-11">
+  <owner>dschinazi@chromium.org</owner>
+  <owner>src/net/quic/OWNERS</owner>
+  <summary>The QUIC error code that we sent in a STOP_SENDING frame.</summary>
+</histogram>
+
+<histogram name="Net.QuicSession.StopSendingErrorCodeServer"
+    enum="QuicRstStreamErrorCodes" expires_after="2021-05-11">
+  <owner>dschinazi@chromium.org</owner>
+  <owner>src/net/quic/OWNERS</owner>
+  <summary>
+    The QUIC error code that we received in a STOP_SENDING frame.
+  </summary>
+</histogram>
+
 <histogram name="Net.QuicSession.StreamCloseErrorCodeClient.HandshakeConfirmed"
     enum="QuicErrorCodes" expires_after="2021-08-09">
   <owner>dschinazi@chromium.org</owner>
@@ -4925,7 +4950,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Net.TcpConnectAttempt.Latency.Error" units="ms"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>eroman@chromium.org</owner>
   <owner>src/net/OWNERS</owner>
   <summary>
@@ -4936,7 +4961,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Net.TcpConnectAttempt.Latency.Success" units="ms"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>eroman@chromium.org</owner>
   <owner>src/net/OWNERS</owner>
   <summary>
@@ -4946,7 +4971,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Net.TcpConnectAttempt.LatencyPercentRTT.Error" units="%"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>eroman@chromium.org</owner>
   <owner>src/net/OWNERS</owner>
   <summary>
@@ -4959,7 +4984,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Net.TcpConnectAttempt.LatencyPercentRTT.Success" units="%"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>eroman@chromium.org</owner>
   <owner>src/net/OWNERS</owner>
   <summary>

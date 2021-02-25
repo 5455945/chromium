@@ -331,16 +331,13 @@ _BANNED_IOS_EGTEST_FUNCTIONS = (
 _NOT_CONVERTED_TO_MODERN_BIND_AND_CALLBACK = '|'.join((
   '^base/callback.h',  # Intentional.
   '^base/cancelable_callback.h',  # Intentional.
-  '^chrome/browser/apps/guest_view/web_view_browsertest.cc',
   "^chrome/browser/ash/accessibility/",
   '^chrome/browser/media_galleries/',
   "^chrome/browser/metrics/",
   "^chrome/browser/prefetch/no_state_prefetch/",
   '^chrome/browser/previews/',
   '^chrome/browser/resources/chromeos/accessibility/',
-  '^chrome/browser/rlz/chrome_rlz_tracker_delegate.cc',
   '^chrome/browser/signin/',
-  '^chrome/browser/site_isolation/site_per_process_text_input_browsertest.cc',
   '^chrome/browser/sync_file_system/',
   "^components/browsing_data/content/",
   "^components/feature_engagement/internal/",
@@ -3156,12 +3153,14 @@ def CheckSetNoParent(input_api, output_api):
               found_owners_files.add(glob)
 
     # Check that every set noparent line has a corresponding file:// line
-    # listed in build/OWNERS.setnoparent.
-    for set_noparent_line in found_set_noparent_lines:
-      if set_noparent_line in found_owners_files:
-        continue
-      errors.append('  %s:%d' % (f.LocalPath(),
-                                 found_set_noparent_lines[set_noparent_line]))
+    # listed in build/OWNERS.setnoparent. An exception is made for top level
+    # directories since src/OWNERS shouldn't review them.
+    if f.LocalPath().count('/') != 1:
+      for set_noparent_line in found_set_noparent_lines:
+        if set_noparent_line in found_owners_files:
+          continue
+        errors.append('  %s:%d' % (f.LocalPath(),
+                                   found_set_noparent_lines[set_noparent_line]))
 
   results = []
   if errors:
@@ -4135,7 +4134,7 @@ def CheckBuildtoolsRevisionsAreInSync(input_api, output_api):
 
   # Update this regexp if new revisions are added to the files.
   rev_regexp = input_api.re.compile(
-      ("'((clang_format|libcxx|libcxxabi|libunwind)_revision|gn_version|"
+      ("'((clang_format|libcxx|libcxxabi)_revision|gn_version|"
        "reclient_version)':"))
 
   # If a user is changing one revision, they need to change the same

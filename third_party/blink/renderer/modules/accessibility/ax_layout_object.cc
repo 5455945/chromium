@@ -94,7 +94,6 @@
 #include "third_party/blink/renderer/modules/accessibility/ax_object_cache_impl.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
-#include "third_party/blink/renderer/platform/text/text_direction.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 
 namespace blink {
@@ -678,7 +677,7 @@ ax::mojom::blink::ListStyle AXLayoutObject::GetListStyle() const {
     case ListMarker::ListStyleCategory::kNone:
       return ax::mojom::blink::ListStyle::kNone;
     case ListMarker::ListStyleCategory::kSymbol: {
-      AtomicString counter_style_name =
+      const AtomicString& counter_style_name =
           computed_style->GetListStyleType()->GetCounterStyleName();
       if (counter_style_name == "disc")
         return ax::mojom::blink::ListStyle::kDisc;
@@ -689,7 +688,7 @@ ax::mojom::blink::ListStyle AXLayoutObject::GetListStyle() const {
       return ax::mojom::blink::ListStyle::kOther;
     }
     case ListMarker::ListStyleCategory::kLanguage: {
-      AtomicString counter_style_name =
+      const AtomicString& counter_style_name =
           computed_style->GetListStyleType()->GetCounterStyleName();
       if (counter_style_name == "decimal")
         return ax::mojom::blink::ListStyle::kNumeric;
@@ -747,130 +746,6 @@ String AXLayoutObject::GetText() const {
   return AXNodeObject::GetText();
 }
 
-ax::mojom::blink::WritingDirection AXLayoutObject::GetTextDirection() const {
-  if (!GetLayoutObject())
-    return AXNodeObject::GetTextDirection();
-
-  const ComputedStyle* style = GetLayoutObject()->Style();
-  if (!style)
-    return AXNodeObject::GetTextDirection();
-
-  if (style->IsHorizontalWritingMode()) {
-    switch (style->Direction()) {
-      case TextDirection::kLtr:
-        return ax::mojom::blink::WritingDirection::kLtr;
-      case TextDirection::kRtl:
-        return ax::mojom::blink::WritingDirection::kRtl;
-    }
-  } else {
-    switch (style->Direction()) {
-      case TextDirection::kLtr:
-        return ax::mojom::blink::WritingDirection::kTtb;
-      case TextDirection::kRtl:
-        return ax::mojom::blink::WritingDirection::kBtt;
-    }
-  }
-
-  return AXNodeObject::GetTextDirection();
-}
-
-ax::mojom::blink::TextPosition AXLayoutObject::GetTextPosition() const {
-  if (!GetLayoutObject())
-    return AXNodeObject::GetTextPosition();
-
-  const ComputedStyle* style = GetLayoutObject()->Style();
-  if (!style)
-    return AXNodeObject::GetTextPosition();
-
-  switch (style->VerticalAlign()) {
-    case EVerticalAlign::kBaseline:
-    case EVerticalAlign::kMiddle:
-    case EVerticalAlign::kTextTop:
-    case EVerticalAlign::kTextBottom:
-    case EVerticalAlign::kTop:
-    case EVerticalAlign::kBottom:
-    case EVerticalAlign::kBaselineMiddle:
-    case EVerticalAlign::kLength:
-      return AXNodeObject::GetTextPosition();
-    case EVerticalAlign::kSub:
-      return ax::mojom::blink::TextPosition::kSubscript;
-    case EVerticalAlign::kSuper:
-      return ax::mojom::blink::TextPosition::kSuperscript;
-  }
-}
-
-static unsigned TextStyleFlag(ax::mojom::blink::TextStyle text_style_enum) {
-  return static_cast<unsigned>(1 << static_cast<int>(text_style_enum));
-}
-
-void AXLayoutObject::GetTextStyleAndTextDecorationStyle(
-    int32_t* text_style,
-    ax::mojom::blink::TextDecorationStyle* text_overline_style,
-    ax::mojom::blink::TextDecorationStyle* text_strikethrough_style,
-    ax::mojom::blink::TextDecorationStyle* text_underline_style) const {
-  if (!GetLayoutObject()) {
-    AXNodeObject::GetTextStyleAndTextDecorationStyle(
-        text_style, text_overline_style, text_strikethrough_style,
-        text_underline_style);
-    return;
-  }
-  const ComputedStyle* style = GetLayoutObject()->Style();
-  if (!style) {
-    AXNodeObject::GetTextStyleAndTextDecorationStyle(
-        text_style, text_overline_style, text_strikethrough_style,
-        text_underline_style);
-    return;
-  }
-
-  *text_style = 0;
-  *text_overline_style = ax::mojom::blink::TextDecorationStyle::kNone;
-  *text_strikethrough_style = ax::mojom::blink::TextDecorationStyle::kNone;
-  *text_underline_style = ax::mojom::blink::TextDecorationStyle::kNone;
-
-  if (style->GetFontWeight() == BoldWeightValue())
-    *text_style |= TextStyleFlag(ax::mojom::blink::TextStyle::kBold);
-  if (style->GetFontDescription().Style() == ItalicSlopeValue())
-    *text_style |= TextStyleFlag(ax::mojom::blink::TextStyle::kItalic);
-
-  for (const auto& decoration : style->AppliedTextDecorations()) {
-    if (EnumHasFlags(decoration.Lines(), TextDecoration::kOverline)) {
-      *text_style |= TextStyleFlag(ax::mojom::blink::TextStyle::kOverline);
-      *text_overline_style =
-          TextDecorationStyleToAXTextDecorationStyle(decoration.Style());
-    }
-    if (EnumHasFlags(decoration.Lines(), TextDecoration::kLineThrough)) {
-      *text_style |= TextStyleFlag(ax::mojom::blink::TextStyle::kLineThrough);
-      *text_strikethrough_style =
-          TextDecorationStyleToAXTextDecorationStyle(decoration.Style());
-    }
-    if (EnumHasFlags(decoration.Lines(), TextDecoration::kUnderline)) {
-      *text_style |= TextStyleFlag(ax::mojom::blink::TextStyle::kUnderline);
-      *text_underline_style =
-          TextDecorationStyleToAXTextDecorationStyle(decoration.Style());
-    }
-  }
-}
-
-ax::mojom::blink::TextDecorationStyle
-AXLayoutObject::TextDecorationStyleToAXTextDecorationStyle(
-    const blink::ETextDecorationStyle text_decoration_style) {
-  switch (text_decoration_style) {
-    case ETextDecorationStyle::kDashed:
-      return ax::mojom::blink::TextDecorationStyle::kDashed;
-    case ETextDecorationStyle::kSolid:
-      return ax::mojom::blink::TextDecorationStyle::kSolid;
-    case ETextDecorationStyle::kDotted:
-      return ax::mojom::blink::TextDecorationStyle::kDotted;
-    case ETextDecorationStyle::kDouble:
-      return ax::mojom::blink::TextDecorationStyle::kDouble;
-    case ETextDecorationStyle::kWavy:
-      return ax::mojom::blink::TextDecorationStyle::kWavy;
-  }
-
-  NOTREACHED();
-  return ax::mojom::blink::TextDecorationStyle::kNone;
-}
-
 static bool ShouldUseLayoutNG(const LayoutObject& layout_object) {
   return (layout_object.IsInline() || layout_object.IsLayoutInline() ||
           layout_object.IsText()) &&
@@ -881,7 +756,8 @@ static bool ShouldUseLayoutNG(const LayoutObject& layout_object) {
 // |start_object| does not have to be included in the tree.
 // If |first| is true, returns the deepest first descendant.
 // Otherwise, returns the deepest last descendant.
-static AXObject* GetDeepestChildOnSameLine(AXObject* start_object, bool first) {
+static AXObject* GetDeepestAXChildInLayoutTree(AXObject* start_object,
+                                               bool first) {
   if (!start_object)
     return nullptr;
 
@@ -913,7 +789,7 @@ static AXObject* GetDeepestChildOnSameLine(AXObject* start_object, bool first) {
     return nullptr;
 
   // Already a leaf: return current result.
-  if (!result->UnignoredChildCount())
+  if (!result->ChildCountIncludingIgnored())
     return result;
 
   // Get deepest AXObject descendant.
@@ -928,35 +804,48 @@ static AXObject* GetDeepestChildOnSameLine(AXObject* start_object, bool first) {
 // "next" and |back()| instead of "previous" and |front()|.
 static AXObject* NextOnLineInternalNG(const AXObject& ax_object) {
   DCHECK(!ax_object.IsDetached());
-  const LayoutObject& layout_object = *ax_object.GetLayoutObject();
-  DCHECK(ShouldUseLayoutNG(layout_object)) << layout_object;
-  if (layout_object.IsBoxListMarkerIncludingNG() ||
-      !layout_object.IsInLayoutNGInlineFormattingContext())
+  const LayoutObject* layout_object = ax_object.GetLayoutObject();
+  DCHECK(layout_object);
+  DCHECK(ShouldUseLayoutNG(*layout_object)) << layout_object;
+  if (layout_object->IsBoxListMarkerIncludingNG() ||
+      !layout_object->IsInLayoutNGInlineFormattingContext()) {
     return nullptr;
+  }
 
   NGInlineCursor cursor;
-  cursor.MoveTo(layout_object);
-  if (!cursor)
-    return nullptr;
-
-  for (;;) {
-    cursor.MoveToNextInlineLeafOnLine();
-    if (!cursor)
+  while (true) {
+    // Try to get cursor for layout_object.
+    cursor.MoveToIncludingCulledInline(*layout_object);
+    if (cursor)
       break;
-    LayoutObject* runner_layout_object = cursor.CurrentMutableLayoutObject();
-    AXObject* result =
-        ax_object.AXObjectCache().GetOrCreate(runner_layout_object);
-    result = GetDeepestChildOnSameLine(result, true);
-    if (result)
-      return result;
+
+    // No cursor found: will try get cursor from first layout child.
+    // This can happen on an inline element.
+    LayoutObject* layout_child = layout_object->SlowLastChild();
+    if (!layout_child)
+      break;
+
+    layout_object = layout_child;
+  }
+
+  // Found cursor: use it to find next inline leaf.
+  if (cursor) {
+    cursor.MoveToNextInlineLeafOnLine();
+    if (cursor) {
+      LayoutObject* runner_layout_object = cursor.CurrentMutableLayoutObject();
+      AXObject* result =
+          ax_object.AXObjectCache().GetOrCreate(runner_layout_object);
+      result = GetDeepestAXChildInLayoutTree(result, true);
+      if (result)
+        return result;
+    }
   }
 
   // We need to ensure that we are at the end of our parent layout object
   // before attempting to connect to the next AXObject that is on the same
   // line as its first line.
-  if (layout_object.NextSibling())
+  if (layout_object->NextSibling())
     return nullptr;  // Not at end of parent layout object.
-
   if (!ax_object.ParentObject()) {
     NOTREACHED();
     return nullptr;
@@ -980,7 +869,7 @@ AXObject* AXLayoutObject::NextOnLine() const {
     // A list marker should be followed by a list item on the same line.
     // Note that pseudo content is always included in the tree, so
     // NextSiblingIncludingIgnored() will succeed.
-    return GetDeepestChildOnSameLine(NextSiblingIncludingIgnored(), true);
+    return GetDeepestAXChildInLayoutTree(NextSiblingIncludingIgnored(), true);
   }
 
   if (ShouldUseLayoutNG(*GetLayoutObject())) {
@@ -1009,7 +898,7 @@ AXObject* AXLayoutObject::NextOnLine() const {
     LayoutObject* layout_object =
         LineLayoutAPIShim::LayoutObjectFrom(next->GetLineLayoutItem());
     AXObject* result = AXObjectCache().GetOrCreate(layout_object);
-    result = GetDeepestChildOnSameLine(result, true);
+    result = GetDeepestAXChildInLayoutTree(result, true);
     if (result)
       return result;
   }
@@ -1047,34 +936,48 @@ AXObject* AXLayoutObject::NextOnLine() const {
 // instead of "next" and |back()|.
 static AXObject* PreviousOnLineInlineNG(const AXObject& ax_object) {
   DCHECK(!ax_object.IsDetached());
-  const LayoutObject& layout_object = *ax_object.GetLayoutObject();
-  DCHECK(ShouldUseLayoutNG(layout_object)) << layout_object;
+  const LayoutObject* layout_object = ax_object.GetLayoutObject();
+  DCHECK(layout_object);
+  DCHECK(ShouldUseLayoutNG(*layout_object)) << layout_object;
 
-  if (layout_object.IsBoxListMarkerIncludingNG() ||
-      !layout_object.IsInLayoutNGInlineFormattingContext()) {
+  if (layout_object->IsBoxListMarkerIncludingNG() ||
+      !layout_object->IsInLayoutNGInlineFormattingContext()) {
     return nullptr;
   }
 
   NGInlineCursor cursor;
-  cursor.MoveTo(layout_object);
-  if (!cursor)
-    return nullptr;
-  for (;;) {
-    cursor.MoveToPreviousInlineLeafOnLine();
-    if (!cursor)
+  while (true) {
+    // Try to get cursor for layout_object.
+    cursor.MoveToIncludingCulledInline(*layout_object);
+    if (cursor)
       break;
-    LayoutObject* earlier_layout_object = cursor.CurrentMutableLayoutObject();
-    AXObject* result =
-        ax_object.AXObjectCache().GetOrCreate(earlier_layout_object);
-    result = GetDeepestChildOnSameLine(result, false);
-    if (result)
-      return result;
+
+    // No cursor found: will try get cursor from first layout child.
+    // This can happen on an inline element.
+    LayoutObject* layout_child = layout_object->SlowFirstChild();
+    if (!layout_child)
+      break;
+
+    layout_object = layout_child;
+  }
+
+  // Found cursor: use it to find previous inline leaf.
+  if (cursor) {
+    cursor.MoveToPreviousInlineLeafOnLine();
+    if (cursor) {
+      LayoutObject* runner_layout_object = cursor.CurrentMutableLayoutObject();
+      AXObject* result =
+          ax_object.AXObjectCache().GetOrCreate(runner_layout_object);
+      result = GetDeepestAXChildInLayoutTree(result, false);
+      if (result)
+        return result;
+    }
   }
 
   // We need to ensure that we are at the start of our parent layout object
   // before attempting to connect to the previous AXObject that is on the same
   // line as its first line.
-  if (layout_object.PreviousSibling())
+  if (layout_object->PreviousSibling())
     return nullptr;  // Not at start of parent layout object.
 
   if (!ax_object.ParentObject()) {
@@ -1102,7 +1005,7 @@ AXObject* AXLayoutObject::PreviousOnLine() const {
   if (previous_sibling && previous_sibling->GetLayoutObject() &&
       previous_sibling->GetLayoutObject()->IsLayoutNGOutsideListMarker()) {
     // A list item should be proceeded by a list marker on the same line.
-    return GetDeepestChildOnSameLine(previous_sibling, false);
+    return GetDeepestAXChildInLayoutTree(previous_sibling, false);
   }
 
   if (ShouldUseLayoutNG(*GetLayoutObject()))
@@ -1130,7 +1033,7 @@ AXObject* AXLayoutObject::PreviousOnLine() const {
     LayoutObject* layout_object =
         LineLayoutAPIShim::LayoutObjectFrom(prev->GetLineLayoutItem());
     AXObject* result = AXObjectCache().GetOrCreate(layout_object);
-    result = GetDeepestChildOnSameLine(result, false);
+    result = GetDeepestAXChildInLayoutTree(result, false);
     if (result)
       return result;
   }

@@ -271,6 +271,11 @@ VideoTrackRecorderImpl::Encoder::~Encoder() {
     origin_task_runner_->DeleteSoon(FROM_HERE,
                                     std::move(num_frames_in_encode_));
   }
+  if (encoder_thread_context_ &&
+      !encoding_task_runner_->RunsTasksInCurrentSequence()) {
+    encoding_task_runner_->DeleteSoon(FROM_HERE,
+                                      std::move(encoder_thread_context_));
+  }
 }
 
 void VideoTrackRecorderImpl::Encoder::StartFrameEncode(
@@ -481,8 +486,11 @@ VideoTrackRecorderImpl::Encoder::ConvertToI420ForSoftwareEncoder(
     scoped_refptr<media::VideoFrame> frame) {
   DCHECK_EQ(frame->format(), media::VideoPixelFormat::PIXEL_FORMAT_NV12);
 
-  if (frame->GetGpuMemoryBuffer())
-    frame = media::ConvertToMemoryMappedFrame(frame);
+  if (frame->GetGpuMemoryBuffer()) {
+    // TODO(crbug.com/1181292): wire up GpuVideoAcceleratorFactories and add
+    // SharedMemoryPool to pass here to allow DXGI GMBs processing.
+    frame = media::ConvertToMemoryMappedFrame(frame, nullptr, nullptr);
+  }
 
   scoped_refptr<media::VideoFrame> i420_frame = frame_pool_.CreateFrame(
       media::VideoPixelFormat::PIXEL_FORMAT_I420, frame->coded_size(),

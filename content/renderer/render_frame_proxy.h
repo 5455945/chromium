@@ -99,7 +99,7 @@ class CONTENT_EXPORT RenderFrameProxy : public IPC::Listener,
       AgentSchedulingGroup& agent_scheduling_group,
       const blink::RemoteFrameToken& frame_token,
       int routing_id,
-      const base::Optional<base::UnguessableToken>& opener_frame_token,
+      const base::Optional<blink::FrameToken>& opener_frame_token,
       int render_view_routing_id,
       int parent_routing_id,
       mojom::FrameReplicationStatePtr replicated_state,
@@ -156,7 +156,7 @@ class CONTENT_EXPORT RenderFrameProxy : public IPC::Listener,
       blink::CrossVariantMojoRemote<blink::mojom::BlobURLTokenInterfaceBase>
           blob_url_token,
       const base::Optional<blink::WebImpression>& impression,
-      const base::UnguessableToken* initiator_frame_token,
+      const blink::LocalFrameToken* initiator_frame_token,
       blink::CrossVariantMojoRemote<
           blink::mojom::PolicyContainerHostKeepAliveHandleInterfaceBase>
           initiator_policy_container_keep_alive_handle) override;

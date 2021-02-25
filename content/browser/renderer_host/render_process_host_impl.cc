@@ -117,8 +117,10 @@
 #include "content/browser/renderer_host/code_cache_host_impl.h"
 #include "content/browser/renderer_host/embedded_frame_sink_provider_impl.h"
 #include "content/browser/renderer_host/file_utilities_host_impl.h"
+#include "content/browser/renderer_host/media/media_stream_manager.h"
 #include "content/browser/renderer_host/media/media_stream_track_metrics_host.h"
 #include "content/browser/renderer_host/media/peer_connection_tracker_host.h"
+#include "content/browser/renderer_host/media/video_capture_host.h"
 #include "content/browser/renderer_host/p2p/socket_dispatcher_host.h"
 #include "content/browser/renderer_host/plugin_registry_impl.h"
 #include "content/browser/renderer_host/render_message_filter.h"
@@ -2200,7 +2202,7 @@ void RenderProcessHostImpl::CreateWebSocketConnector(
 void RenderProcessHostImpl::CancelProcessShutdownDelayForUnload() {
   if (IsKeepAliveRefCountDisabled())
     return;
-  DecrementKeepAliveRefCount(KeepAliveSource::KEEP_ALIVE_SUBFRAME_UNLOAD);
+  DecrementKeepAliveRefCount();
 }
 
 void RenderProcessHostImpl::DelayProcessShutdownForUnload(
@@ -2209,7 +2211,7 @@ void RenderProcessHostImpl::DelayProcessShutdownForUnload(
   if (IsKeepAliveRefCountDisabled() || deleting_soon_ || fast_shutdown_started_)
     return;
 
-  IncrementKeepAliveRefCount(KeepAliveSource::KEEP_ALIVE_SUBFRAME_UNLOAD);
+  IncrementKeepAliveRefCount();
   GetUIThreadTaskRunner({})->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(
@@ -2406,6 +2408,12 @@ void RenderProcessHostImpl::RegisterMojoInterfaces() {
 
   registry->AddInterface(
       base::BindRepeating(&GpuDataManagerImpl::BindReceiver));
+
+  MediaStreamManager* media_stream_manager =
+      BrowserMainLoop::GetInstance()->media_stream_manager();
+
+  registry->AddInterface(base::BindRepeating(&VideoCaptureHost::Create, GetID(),
+                                             media_stream_manager));
 
   registry->AddInterface(
       base::BindRepeating(&FileUtilitiesHostImpl::Create, GetID()),
@@ -2712,21 +2720,19 @@ bool RenderProcessHostImpl::IsProcessBackgrounded() {
   return priority_.is_background();
 }
 
-void RenderProcessHostImpl::IncrementKeepAliveRefCount(KeepAliveSource source) {
+void RenderProcessHostImpl::IncrementKeepAliveRefCount() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK(!is_keep_alive_ref_count_disabled_);
   ++keep_alive_ref_count_;
-  keep_alive_sources_ += base::StringPrintf("%d+", static_cast<int>(source));
   if (keep_alive_ref_count_ == 1)
     GetRendererInterface()->SetSchedulerKeepActive(true);
 }
 
-void RenderProcessHostImpl::DecrementKeepAliveRefCount(KeepAliveSource source) {
+void RenderProcessHostImpl::DecrementKeepAliveRefCount() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK(!is_keep_alive_ref_count_disabled_);
   DCHECK_GT(keep_alive_ref_count_, 0U);
   --keep_alive_ref_count_;
-  keep_alive_sources_ += base::StringPrintf("%d-", static_cast<int>(source));
   if (keep_alive_ref_count_ == 0) {
     Cleanup();
     GetRendererInterface()->SetSchedulerKeepActive(false);

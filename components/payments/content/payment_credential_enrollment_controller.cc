@@ -4,13 +4,35 @@
 
 #include "components/payments/content/payment_credential_enrollment_controller.h"
 
+#include <memory>
+#include <utility>
+
 #include "base/bind.h"
-#include "base/callback.h"
 #include "base/check.h"
 #include "build/build_config.h"
 #include "components/payments/content/payment_credential_enrollment_model.h"
+#include "components/payments/content/payment_credential_enrollment_view.h"
+#include "content/public/browser/navigation_handle.h"
 
 namespace payments {
+
+PaymentCredentialEnrollmentController::ScopedToken::ScopedToken() = default;
+PaymentCredentialEnrollmentController::ScopedToken::~ScopedToken() = default;
+
+base::WeakPtr<PaymentCredentialEnrollmentController::ScopedToken>
+PaymentCredentialEnrollmentController::ScopedToken::GetWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
+}
+
+// static
+PaymentCredentialEnrollmentController*
+PaymentCredentialEnrollmentController::GetOrCreateForWebContents(
+    content::WebContents* web_contents) {
+  // Creates a new object only if WebContents does not already have one attached
+  // to it:
+  PaymentCredentialEnrollmentController::CreateForWebContents(web_contents);
+  return PaymentCredentialEnrollmentController::FromWebContents(web_contents);
+}
 
 PaymentCredentialEnrollmentController::PaymentCredentialEnrollmentController(
     content::WebContents* web_contents)
@@ -20,13 +42,19 @@ PaymentCredentialEnrollmentController::
     ~PaymentCredentialEnrollmentController() = default;
 
 void PaymentCredentialEnrollmentController::ShowDialog(
+    content::GlobalFrameRoutingId initiator_frame_routing_id,
+    std::unique_ptr<SkBitmap> instrument_icon,
     ResponseCallback response_callback) {
 #if defined(OS_ANDROID)
   NOTREACHED();
 #endif  // OS_ANDROID
   DCHECK(!view_);
 
+  initiator_frame_routing_id_ = initiator_frame_routing_id;
   response_callback_ = std::move(response_callback);
+
+  model_.set_instrument_icon(std::move(instrument_icon));
+
   model_.set_progress_bar_visible(false);
   model_.set_accept_button_enabled(true);
   model_.set_cancel_button_enabled(true);
@@ -53,12 +81,6 @@ void PaymentCredentialEnrollmentController::ShowProcessingSpinner() {
   model_.set_accept_button_enabled(false);
   model_.set_cancel_button_enabled(false);
   view_->OnModelUpdated();
-}
-
-bool PaymentCredentialEnrollmentController::IsShowing() const {
-  // The `view_` is created when the dialog is being shown, is owned by the
-  // Views framework, and is destroyed when it is hidden.
-  return !!view_;
 }
 
 void PaymentCredentialEnrollmentController::CloseDialog() {
@@ -91,9 +113,42 @@ void PaymentCredentialEnrollmentController::OnConfirm() {
   std::move(response_callback_).Run(true);
 }
 
+std::unique_ptr<PaymentCredentialEnrollmentController::ScopedToken>
+PaymentCredentialEnrollmentController::GetTokenIfAvailable() {
+  if (token_)
+    return nullptr;
+
+  auto token = std::make_unique<ScopedToken>();
+  token_ = token->GetWeakPtr();
+  return token;
+}
+
 base::WeakPtr<PaymentCredentialEnrollmentController>
 PaymentCredentialEnrollmentController::GetWeakPtr() {
   return weak_ptr_factory_.GetWeakPtr();
+}
+
+void PaymentCredentialEnrollmentController::DidStartNavigation(
+    content::NavigationHandle* navigation_handle) {
+  // Close the dialog if either the initiator frame (which may be an iframe) or
+  // main frame was navigated away.
+  if (!navigation_handle->IsSameDocument() &&
+      (navigation_handle->IsInMainFrame() ||
+       navigation_handle->GetPreviousRenderFrameHostId() ==
+           initiator_frame_routing_id_)) {
+    CloseDialog();
+  }
+}
+
+void PaymentCredentialEnrollmentController::RenderFrameDeleted(
+    content::RenderFrameHost* render_frame_host) {
+  // Close the dialog if either the initiator frame (which may be an iframe) or
+  // main frame was deleted.
+  if (render_frame_host == web_contents()->GetMainFrame() ||
+      render_frame_host ==
+          content::RenderFrameHost::FromID(initiator_frame_routing_id_)) {
+    CloseDialog();
+  }
 }
 
 WEB_CONTENTS_USER_DATA_KEY_IMPL(PaymentCredentialEnrollmentController)

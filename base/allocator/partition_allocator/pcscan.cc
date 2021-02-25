@@ -386,6 +386,7 @@ void PCScan<
 
   PCSCAN_EVENT(scopes::kClear);
 
+  const bool giga_cage_enabled = features::IsPartitionAllocGigaCageEnabled();
   SuperPages filtered_super_pages;
   for (auto super_page : super_pages_) {
     auto* bitmap = QuarantineBitmapFromPointer(
@@ -394,7 +395,7 @@ void PCScan<
     auto* root = Root::FromSuperPage(reinterpret_cast<char*>(super_page));
     bool visited = false;
     bitmap->template Iterate<AccessType::kNonAtomic>(
-        [root, &visited](uintptr_t ptr) {
+        [root, giga_cage_enabled, &visited](uintptr_t ptr) {
           auto* object = reinterpret_cast<void*>(ptr);
           auto* slot_span = SlotSpan::FromSlotInnerPtr(object);
           // Use zero as a zapping value to speed up the fast bailout check in
@@ -402,8 +403,12 @@ void PCScan<
           const size_t size = slot_span->GetUsableSize(root);
           memset(object, 0, size);
 #if defined(PA_HAS_64_BITS_POINTERS)
-          // Set card(s) for this quarantined object.
-          QuarantineCardTable::GetFrom(ptr).Quarantine(ptr, size);
+          if (giga_cage_enabled) {
+            // Set card(s) for this quarantined object.
+            QuarantineCardTable::GetFrom(ptr).Quarantine(ptr, size);
+          }
+#else
+          (void)giga_cage_enabled;
 #endif
           visited = true;
         });
@@ -659,24 +664,31 @@ size_t PCScan<thread_safe>::PCScanTask::SweepQuarantine() {
   PCSCAN_EVENT(scopes::kSweep);
   size_t swept_bytes = 0;
 
+  const bool giga_cage_enabled = features::IsPartitionAllocGigaCageEnabled();
+
   for (auto super_page : super_pages_) {
     auto* bitmap = QuarantineBitmapFromPointer(
         QuarantineBitmapType::kScanner, pcscan_epoch_,
         reinterpret_cast<char*>(super_page));
     auto* root = Root::FromSuperPage(reinterpret_cast<char*>(super_page));
     bitmap->template IterateAndClear<AccessType::kNonAtomic>(
-        [root, &swept_bytes](uintptr_t ptr) {
+        [root, giga_cage_enabled, &swept_bytes](uintptr_t ptr) {
           auto* object = reinterpret_cast<void*>(ptr);
           auto* slot_span = SlotSpan::FromSlotInnerPtr(object);
           swept_bytes += slot_span->bucket->slot_size;
           root->FreeNoHooksImmediate(object, slot_span);
 #if defined(PA_HAS_64_BITS_POINTERS)
-          // Reset card(s) for this quarantined object. Please note that the
-          // cards may still contain quarantined objects (which were promoted in
-          // this scan cycle), but ClearQuarantinedObjectsAndFilterSuperPages()
-          // will set them again in the next PCScan cycle.
-          QuarantineCardTable::GetFrom(ptr).Unquarantine(
-              ptr, slot_span->GetUsableSize(root));
+          if (giga_cage_enabled) {
+            // Reset card(s) for this quarantined object. Please note that the
+            // cards may still contain quarantined objects (which were promoted
+            // in this scan cycle), but
+            // ClearQuarantinedObjectsAndFilterSuperPages() will set them again
+            // in the next PCScan cycle.
+            QuarantineCardTable::GetFrom(ptr).Unquarantine(
+                ptr, slot_span->GetUsableSize(root));
+          }
+#else
+          (void)giga_cage_enabled;
 #endif
         });
   }
@@ -707,9 +719,12 @@ PCScan<thread_safe>::PCScanTask::PCScanTask(PCScan& pcscan)
            super_page += kSuperPageSize) {
         // TODO(bikineev): Consider following freelists instead of slot spans.
         const size_t visited_slot_spans =
-            IterateActiveAndFullSlotSpans<thread_safe>(
+            IterateSlotSpans<thread_safe>(
                 super_page, true /*with_quarantine*/,
-                [this](SlotSpan* slot_span) {
+                [this](SlotSpan* slot_span) -> bool {
+                  if (slot_span->is_empty() || slot_span->is_decommitted()) {
+                    return false;
+                  }
                   auto* payload_begin = static_cast<uintptr_t*>(
                       SlotSpan::ToSlotSpanStartPtr(slot_span));
                   size_t provisioned_size = slot_span->GetProvisionedSize();
@@ -723,6 +738,7 @@ PCScan<thread_safe>::PCScanTask::PCScanTask(PCScan& pcscan)
                   } else {
                     scan_areas_.push_back({payload_begin, payload_end});
                   }
+                  return true;
                 });
         // If we haven't visited any slot spans, all the slot spans in the
         // super-page are either empty or decommitted. This means that all the

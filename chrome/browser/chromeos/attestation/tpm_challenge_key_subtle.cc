@@ -12,6 +12,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part_chromeos.h"
 #include "chrome/browser/chromeos/attestation/attestation_ca_client.h"
@@ -20,7 +21,6 @@
 #include "chrome/browser/chromeos/platform_keys/key_permissions/key_permissions_manager_impl.h"
 #include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
 #include "chrome/browser/chromeos/policy/device_cloud_policy_manager_chromeos.h"
-#include "chrome/browser/chromeos/settings/cros_settings.h"
 #include "chrome/browser/extensions/chrome_extension_function_details.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
@@ -548,7 +548,7 @@ void TpmChallengeKeySubtleImpl::PrepareKeyFinished(
     return;
   }
 
-  if (profile_ && will_register_key_) {
+  if (will_register_key_) {
     public_key_ = reply.public_key();
   }
 
@@ -648,6 +648,7 @@ void TpmChallengeKeySubtleImpl::RegisterKeyCallback(
       break;
   }
 
+  DCHECK(!public_key_.empty());
   key_permissions_manager->AllowKeyForUsage(
       base::BindOnce(&TpmChallengeKeySubtleImpl::MarkCorporateKeyCallback,
                      weak_factory_.GetWeakPtr()),

@@ -1450,8 +1450,45 @@ Unknown properties are collapsed to zero. -->
 </enum>
 
 <enum name="AMDDeviceId">
-  <int value="26464" label="0x6760, Radeon HD 6490M"/>
-  <int value="26657" label="0x6821, Radeon R9 M370X"/>
+  <int value="5592" label="0x15D8, Picasso"/>
+  <int value="5597"
+      label="0x15DD, Raven Ridge [Radeon Vega Series / Radeon Vega Mobile
+             Series]"/>
+  <int value="5686" label="0x1636, Renoir"/>
+  <int value="26112" label="0x6600, Mars [Radeon HD 8670A/8670M/8750M]"/>
+  <int value="26113" label="0x6601, Mars [Radeon HD 8730M]"/>
+  <int value="26129"
+      label="0x6611, Oland [Radeon HD 8570 / R5 430 OEM / R7 240/340 / Radeon
+             520 OEM]"/>
+  <int value="26208"
+      label="0x6660, Sun XT [Radeon HD 8670A/8670M/8690M / R5 M330 / M430 /
+             Radeon 520 Mobile]"/>
+  <int value="26213"
+      label="0x6665, Jet PRO [Radeon R5 M230 / R7 M260DX / Radeon 520 Mobile]"/>
+  <int value="26223" label="0x666F, Sun LE [Radeon HD 8550M / R5 M230]"/>
+  <int value="26464" label="0x6760, Seymour [Radeon HD 6400M/7400M Series]"/>
+  <int value="26591"
+      label="0x67DF, Ellesmere [Radeon RX 470/480/570/570X/580/580X/590]"/>
+  <int value="26607"
+      label="0x67EF, Baffin [Radeon RX 460/560D / Pro
+             450/455/460/555/555X/560/560X]"/>
+  <int value="26657"
+      label="0x6821, Venus XT [Radeon HD 8870M / R9 M270X/M370X]"/>
+  <int value="26688" label="0x6840, Thames [Radeon HD 7500M/7600M Series]"/>
+  <int value="26873"
+      label="0x68F9, Cedar [Radeon HD 5000/6000/7350/8350 Series]"/>
+  <int value="26880"
+      label="0x6900, Topaz XT [Radeon R7 M260/M265 / M340/M360 / M440/M445 /
+             530/535 / 620/625 Mobile]"/>
+  <int value="27015"
+      label="0x6987, Lexa [Radeon 540X/550X/630 / RX 640 / E9171 MCM]"/>
+  <int value="27039"
+      label="0x699F, Lexa PRO [Radeon 540/540X/550/550X / RX 540X/550/550X]"/>
+  <int value="27055" label="0x69AF, Vega 12 [Radeon Pro Vega 20]"/>
+  <int value="29471"
+      label="0x731F, Navi 10 [Radeon RX 5600 OEM/5600 XT / 5700/5700 XT]"/>
+  <int value="29504"
+      label="0x7340, Navi 14 [Radeon RX 5500/5500M / Pro 5500M]"/>
 </enum>
 
 <enum name="Android.ChildProcessBindingStateCombination">
@@ -3885,6 +3922,14 @@ others/histograms.xml -->
   <int value="7" label="kBackInLauncherDeprecated"/>
 </enum>
 
+<enum name="AssistantConsentOutcome">
+  <int value="0" label="ACCEPTED-VIA-BUTTON"/>
+  <int value="1" label="ACCEPTED-VIA-SETTINGS"/>
+  <int value="2" label="REJECTED-VIA-BUTTON"/>
+  <int value="3" label="REJECTED-VIA-SETTINGS"/>
+  <int value="4" label="REJECTED-VIA-DISMISS"/>
+</enum>
+
 <enum name="AssistantEntryPoint">
   <int value="0" label="kUnspecified"/>
   <int value="1" label="kDeepLink"/>
@@ -4172,6 +4217,38 @@ others/histograms.xml -->
   <int value="10" label="Access denied (file missing)"/>
   <int value="11" label="Other error (file exists)"/>
   <int value="12" label="Other error (file missing)"/>
+</enum>
+
+<enum name="AttestationFlowStatus">
+<!--
+  Uninteresting/unused values are not labeled.
+  See "ChromeOS.Attestation.AttestationFlowStatus" histogram
+-->
+
+  <int value="10" label="Failure w/o proxy"/>
+  <int value="11" label="Fallback w/o proxy"/>
+  <int value="12" label="Success w/o proxy"/>
+  <int value="34" label="Failure w/ default flow being skipped w/ proxy"/>
+  <int value="35" label="Success w/ default flow being skipped w/ proxy"/>
+</enum>
+
+<enum name="AttestationStatus">
+<!--
+  The alias of `enum AttestationStatus` defined in
+  `system_api/dbus/attestation/interface.proto` in
+  `chromiumos/platform2` repository.
+-->
+
+  <int value="0" label="STATUS_SUCCESS"/>
+  <int value="1" label="STATUS_UNEXPECTED_DEVICE_ERROR"/>
+  <int value="2" label="STATUS_NOT_AVAILABLE"/>
+  <int value="3" label="STATUS_NOT_READY"/>
+  <int value="4" label="STATUS_NOT_ALLOWED"/>
+  <int value="5" label="STATUS_INVALID_PARAMETER"/>
+  <int value="6" label="STATUS_REQUEST_DENIED_BY_CA"/>
+  <int value="7" label="STATUS_CA_NOT_AVAILABLE"/>
+  <int value="8" label="STATUS_NOT_SUPPORTED"/>
+  <int value="9" label="STATUS_DBUS_ERROR"/>
 </enum>
 
 <enum name="AudioCaptureDeviceError">
@@ -7035,6 +7112,16 @@ Called by update_bad_message_reasons.py.-->
   <int value="10" label="IMAGE_REL_BASED_DIR64"/>
 </enum>
 
+<enum name="BatteryDischargeMode">
+  <int value="0" label="Battery discharging"/>
+  <int value="1" label="Battery plugged-in"/>
+  <int value="2" label="Power state changed"/>
+  <int value="3" label="Charge level unavailable"/>
+  <int value="4" label="No battery"/>
+  <int value="5" label="Invalid discharge rate"/>
+  <int value="6" label="Invalid interval"/>
+</enum>
+
 <enum name="BatteryInfoSampleResult">
   <int value="0" label="Read"/>
   <int value="1" label="Good"/>
@@ -8987,6 +9074,11 @@ Called by update_bad_message_reasons.py.-->
 <enum name="BooleanSuppressed">
   <int value="0" label="No suppressions"/>
   <int value="1" label="Suppressed"/>
+</enum>
+
+<enum name="BooleanSystemNotifications">
+  <int value="0" label="Using Chrome notifications"/>
+  <int value="1" label="Using system notifications"/>
 </enum>
 
 <enum name="BooleanTabDiscard">
@@ -13002,6 +13094,10 @@ Called by update_net_error_codes.py.-->
   <int value="6" label="Invalid Package"/>
   <int value="7" label="Lens Shop Supported"/>
   <int value="8" label="Lens Search And Shop Supported"/>
+  <int value="9" label="Camera Not Available"/>
+  <int value="10" label="Low End Device"/>
+  <int value="11" label="Lens Camera Assisted Search Supported"/>
+  <int value="12" label="Lens Translate Supported"/>
 </enum>
 
 <enum name="ContextMenuOption">
@@ -13089,6 +13185,7 @@ Called by update_net_error_codes.py.-->
   <int value="32" label="Search Similar Products"/>
   <int value="33" label="Read later"/>
   <int value="34" label="Shop with Google Lens Chip"/>
+  <int value="35" label="Translate with Google Lens Chip"/>
 </enum>
 
 <enum name="ContextMenuOptionDesktop">
@@ -15106,6 +15203,7 @@ metrics consent we also won't be able to send UMA metrics. -->
   <int value="5" label="DISK_STATUS_DESTROYED"/>
   <int value="6" label="DISK_STATUS_IN_PROGRESS"/>
   <int value="7" label="DISK_STATUS_RESIZED"/>
+  <int value="8" label="DISK_STATUS_NOT_ENOUGH_SPACE"/>
 </enum>
 
 <!-- Keep this in sync with CrostiniDiskImageType in crostini_simple_types.h -->
@@ -15148,6 +15246,11 @@ metrics consent we also won't be able to send UMA metrics. -->
   <int value="8" label="FetchSshKeys"/>
   <int value="9" label="MountContainer"/>
   <int value="10" label="ConfigureContainer"/>
+</enum>
+
+<enum name="CrostiniInstallSource">
+  <int value="0" label="Component"/>
+  <int value="1" label="DLC"/>
 </enum>
 
 <enum name="CrostiniResult">
@@ -17579,6 +17682,7 @@ metrics consent we also won't be able to send UMA metrics. -->
   <int value="42" label="fullAccessibilityTree"/>
   <int value="43" label="ignoreListJSFramesOnTimeline"/>
   <int value="44" label="contrastIssues"/>
+  <int value="45" label="experimentalCookieFeatures"/>
 </enum>
 
 <enum name="DevToolsGridOverlayOpenedFrom">
@@ -23624,14 +23728,16 @@ Called by update_document_policy_enum.py.-->
   <int value="816" label="BrowserLabsEnabled"/>
   <int value="817" label="WindowOcclusionEnabled"/>
   <int value="818" label="DeviceAllowMGSToStoreDisplayProperties"/>
-  <int value="819" label="SSLErrorOverrideAllowedForUrls"/>
+  <int value="819" label="SSLErrorOverrideAllowedForOrigins"/>
   <int value="820" label="WebXRImmersiveArEnabled"/>
   <int value="821" label="GaiaOfflineSigninTimeLimitDays"/>
-  <int value="822" label="FileSystemEnterpriseConnector"/>
+  <int value="822" label="SendDownloadToCloudEnterpriseConnector"/>
   <int value="823" label="DeviceSystemWideTracingEnabled"/>
   <int value="824" label="WebAppSettings"/>
   <int value="825" label="DevicePciPeripheralDataAccessEnabled"/>
   <int value="826" label="ContextAwareAccessSignalsAllowlist"/>
+  <int value="827" label="FetchKeepaliveDurationOnShutdown"/>
+  <int value="828" label="AllowSystemNotifications"/>
 </enum>
 
 <enum name="EnterprisePolicyDeviceIdValidity">
@@ -26483,6 +26589,7 @@ Called by update_extension_histograms.py.-->
   <int value="1540" label="FILEMANAGERPRIVATE_NOTIFYDRIVEDIALOGRESULT"/>
   <int value="1541" label="ENTERPRISEREPORTINGPRIVATE_GETCONTEXTINFO"/>
   <int value="1542" label="SCRIPTING_REMOVECSS"/>
+  <int value="1543" label="FILEMANAGERPRIVATEINTERNAL_GETVOLUMEROOT"/>
 </enum>
 
 <enum name="ExtensionIconState">
@@ -27342,6 +27449,7 @@ Called by update_extension_permission.py.-->
   <int value="1" label="Supervised User"/>
   <int value="2" label="Supervised Student"/>
   <int value="3" label="Student at Home"/>
+  <int value="4" label="Regular User"/>
 </enum>
 
 <enum name="FaultTolerantHeap">
@@ -30864,12 +30972,12 @@ Called by update_use_counter_feature_enum.py.-->
   <int value="3202" label="V8Document_HasTrustToken_Method"/>
   <int value="3203" label="ForceLoadAtTop"/>
   <int value="3204" label="OBSOLETE_LegacyLayoutByButton"/>
-  <int value="3205" label="LegacyLayoutByDeprecatedFlexBox"/>
+  <int value="3205" label="OBSOLETE_LegacyLayoutByDeprecatedFlexBox"/>
   <int value="3206" label="LegacyLayoutByDetailsMarker"/>
   <int value="3207" label="LegacyLayoutByEditing"/>
-  <int value="3208" label="LegacyLayoutByFieldSet"/>
+  <int value="3208" label="OBSOLETE_LegacyLayoutByFieldSet"/>
   <int value="3209" label="OBSOLETE_LegacyLayoutByFileUploadControl"/>
-  <int value="3210" label="LegacyLayoutByFlexBox"/>
+  <int value="3210" label="OBSOLETE_LegacyLayoutByFlexBox"/>
   <int value="3211" label="LegacyLayoutByFrameSet"/>
   <int value="3212" label="LegacyLayoutByGrid"/>
   <int value="3213" label="OBSOLETE_LegacyLayoutByMenuList"/>
@@ -30882,7 +30990,8 @@ Called by update_use_counter_feature_enum.py.-->
   <int value="3220" label="LegacyLayoutByTextCombine"/>
   <int value="3221" label="LegacyLayoutByTextControl"/>
   <int value="3222" label="LegacyLayoutByVTTCue"/>
-  <int value="3223" label="LegacyLayoutByWebkitBoxWithoutVerticalLineClamp"/>
+  <int value="3223"
+      label="OBSOLETE_LegacyLayoutByWebkitBoxWithoutVerticalLineClamp"/>
   <int value="3224"
       label="LegacyLayoutByTableFlexGridBlockInNGFragmentationContext"/>
   <int value="3225" label="DocumentPolicyHeader"/>
@@ -31496,6 +31605,22 @@ Called by update_use_counter_feature_enum.py.-->
   <int value="3811" label="SelectMenuElement"/>
   <int value="3812"
       label="RTCPeerConnectionSdpSemanticsPlanBWithReverseOriginTrial"/>
+  <int value="3813" label="WebAppManifestCaptureLinks"/>
+  <int value="3814" label="SanitizerAPICreated"/>
+  <int value="3815" label="SanitizerAPIDefaultConfiguration"/>
+  <int value="3816" label="SanitizerAPIToString"/>
+  <int value="3817" label="SanitizerAPIToFragment"/>
+  <int value="3818" label="SanitizerAPIActionTaken"/>
+  <int value="3819" label="SanitizerAPIFromString"/>
+  <int value="3820" label="SanitizerAPIFromDocument"/>
+  <int value="3821" label="SanitizerAPIFromFragment"/>
+  <int value="3822" label="StorageFoundationOpen"/>
+  <int value="3823" label="StorageFoundationRead"/>
+  <int value="3824" label="StorageFoundationReadSync"/>
+  <int value="3825" label="StorageFoundationWrite"/>
+  <int value="3826" label="StorageFoundationWriteSync"/>
+  <int value="3827" label="StorageFoundationFlush"/>
+  <int value="3828" label="StorageFoundationFlushSync"/>
 </enum>
 
 <enum name="FeaturePolicyAllowlistType">
@@ -35874,6 +35999,25 @@ Called by update_feature_policy_enum.py.-->
   <int value="3" label="Url override was available in the FacetGroup and used"/>
 </enum>
 
+<enum name="GetCurrentBrowsingContextMediaExplicitSelectionUserInteraction">
+  <int value="0" label="kDialogDismissed"/>
+  <int value="1" label="kUserCancelled"/>
+  <int value="2" label="kUserSelectedScreen"/>
+  <int value="3" label="kUserSelectedWindow"/>
+  <int value="4" label="kUserSelectedOtherTab"/>
+  <int value="5" label="kUserSelectedThisTabAsGenericTab"/>
+  <int value="6" label="kUserSelectedThisTab"/>
+</enum>
+
+<enum name="GetDisplayMediaUserInteraction">
+  <int value="0" label="kDialogDismissed"/>
+  <int value="1" label="kUserCancelled"/>
+  <int value="2" label="kUserSelectedScreen"/>
+  <int value="3" label="kUserSelectedWindow"/>
+  <int value="4" label="kUserSelectedOtherTab"/>
+  <int value="5" label="kUserSelectedThisTab"/>
+</enum>
+
 <enum name="GetEncryptionKeyAction">
   <int value="0" label="Key is successfully found - not first time"/>
   <int value="1" label="Key is successfully found for the first time"/>
@@ -38667,6 +38811,13 @@ Called by update_gpu_driver_bug_workaround_entries.py.-->
   <int value="11"
       label="Image queued for transcoding was stored back to cache."/>
   <int value="12" label="Load image metadata"/>
+</enum>
+
+<enum name="ImageSmoothingQuality">
+  <int value="0" label="Image smoothing quality sets to None"/>
+  <int value="1" label="Image smoothing quality sets to Low"/>
+  <int value="2" label="Image smoothing quality sets to Medium"/>
+  <int value="3" label="Image smoothing quality sets to High"/>
 </enum>
 
 <enum name="IMEAssistiveAction">
@@ -42083,15 +42234,16 @@ Called by update_gpu_driver_bug_workaround_entries.py.-->
 <enum name="LensClassifyResultState">
   <int value="0" label="Unknown"/>
   <int value="1" label="Success: shoppy image"/>
-  <int value="2" label="Success: not shoppy image - other intent type"/>
-  <int value="3" label="Success: not shoppy image - empty Lens result"/>
-  <int value="4" label="Success: not shoppy image - empty intent type"/>
+  <int value="2" label="Success: unknown intent type"/>
+  <int value="3" label="Success: empty Lens result"/>
+  <int value="4" label="Success: empty intent type"/>
   <int value="5" label="Error: invalid callback"/>
   <int value="6" label="Error: invalid package signature"/>
   <int value="7" label="Error: invalid image uri"/>
   <int value="8" label="Error: early terminated"/>
   <int value="9" label="Disabled"/>
   <int value="10" label="Error: additional web context malformed (nonfatal)"/>
+  <int value="11" label="Success: Image is translatable"/>
 </enum>
 
 <enum name="LensSdkError">
@@ -43209,6 +43361,7 @@ from previous Chrome versions.
   <int value="-1938263248" label="enable-extension-info-dialog"/>
   <int value="-1937077699" label="http-form-warning"/>
   <int value="-1936032607" label="enable-experimental-webassembly-features"/>
+  <int value="-1935787681" label="SystemNotifications:disabled"/>
   <int value="-1935055754" label="WebShare:enabled"/>
   <int value="-1934661084" label="ForceUnifiedConsentBump:disabled"/>
   <int value="-1933425042" label="OfflinePreviews:enabled"/>
@@ -43837,6 +43990,7 @@ from previous Chrome versions.
       label="SyncPseudoUSSHistoryDeleteDirectives:enabled"/>
   <int value="-1390005994" label="AppCache:disabled"/>
   <int value="-1388817073" label="OmniboxReverseAnswers:disabled"/>
+  <int value="-1388044691" label="ContentLanguagesInLanguagePicker:enabled"/>
   <int value="-1386966873" label="disable-mac-views-native-app-windows"/>
   <int value="-1386790338" label="ImeMozcProto:disabled"/>
   <int value="-1386776772" label="FilesZipPack:disabled"/>
@@ -44879,6 +45033,7 @@ from previous Chrome versions.
   <int value="-450976085"
       label="AutofillSaveCreditCardUsesImprovedMessaging:disabled"/>
   <int value="-449465495" label="disable-browser-task-scheduler"/>
+  <int value="-447148659" label="ContextMenuTranslateWithGoogleLens:enabled"/>
   <int value="-446560063" label="finch-seed-min-update-period"/>
   <int value="-446220201" label="EnableIncognitoShortcutOnDesktop:enabled"/>
   <int value="-444867364" label="Metal:enabled"/>
@@ -45033,6 +45188,7 @@ from previous Chrome versions.
   <int value="-300542825" label="ChromeShareQRCode:disabled"/>
   <int value="-300018686" label="disable-cloud-import"/>
   <int value="-299841473" label="top-document-isolation:enabled"/>
+  <int value="-298458993" label="SystemNotifications:enabled"/>
   <int value="-297716805"
       label="CrossOriginMediaPlaybackRequiresUserGesture:disabled"/>
   <int value="-296762162" label="ExoOrdinalMotion:enabled"/>
@@ -45238,6 +45394,7 @@ from previous Chrome versions.
   <int value="-106373261" label="PaintPreviewDemo:enabled"/>
   <int value="-104106119" label="WebViewJavaJsBridgeMojo:disabled"/>
   <int value="-102537270" label="extension-content-verification"/>
+  <int value="-102387656" label="FillingAcrossAffiliatedWebsites:disabled"/>
   <int value="-102227288" label="PasswordExport:disabled"/>
   <int value="-100148609" label="EvDetailsInPageInfo:disabled"/>
   <int value="-99781021" label="disable-roboto-font-ui"/>
@@ -45919,6 +46076,7 @@ from previous Chrome versions.
   <int value="538468149" label="OfflinePagesCT:enabled"/>
   <int value="538600423" label="OmniboxDocumentProvider:enabled"/>
   <int value="538685995" label="InstallableInkDrop:enabled"/>
+  <int value="541667888" label="ContentLanguagesInLanguagePicker:disabled"/>
   <int value="542930298" label="WebAppEnableLinkCapturing:disabled"/>
   <int value="542960889" label="HeavyAdIntervention:enabled"/>
   <int value="544443920" label="QuickAnswers:disabled"/>
@@ -45988,6 +46146,7 @@ from previous Chrome versions.
   <int value="605150752" label="WebUSB:disabled"/>
   <int value="606288133" label="enable-print-preview-register-promos"/>
   <int value="606512202" label="AutofillCreditCardPopupLayout:enabled"/>
+  <int value="606611135" label="ContextMenuTranslateWithGoogleLens:disabled"/>
   <int value="606723570" label="SharingUseDeviceInfo:disabled"/>
   <int value="606834606" label="force-color-profile"/>
   <int value="606969417" label="DiscoverApp:enabled"/>
@@ -46214,6 +46373,7 @@ from previous Chrome versions.
   <int value="799680074" label="ContextualSearchTranslationModel:enabled"/>
   <int value="802463708" label="WebViewSurfaceControl:enabled"/>
   <int value="803282885" label="PreferHtmlOverPlugins:disabled"/>
+  <int value="804958673" label="LensCameraAssistedSearch:enabled"/>
   <int value="805882800" label="SafetyCheckChromeCleanerChild:disabled"/>
   <int value="806035639" label="EnableNeuralPalmDetectionFilter:disabled"/>
   <int value="806334184" label="AndroidSpellChecker:enabled"/>
@@ -46916,6 +47076,7 @@ from previous Chrome versions.
   <int value="1454006695" label="BlinkHeapUnifiedGarbageCollection:disabled"/>
   <int value="1454028829" label="EnhancedProtectionPromoCard:disabled"/>
   <int value="1454143461" label="CaptureThumbnailOnNavigatingAway:disabled"/>
+  <int value="1454295160" label="LensCameraAssistedSearch:disabled"/>
   <int value="1454363479" label="disable-storage-manager"/>
   <int value="1454527518" label="ArcNativeBridgeExperiment:enabled"/>
   <int value="1455881930" label="V8VmFuture:enabled"/>
@@ -47413,6 +47574,7 @@ from previous Chrome versions.
   <int value="1923496816" label="AssistantIntentTranslateInfo:disabled"/>
   <int value="1923780021" label="PrivacyReorderedAndroid:enabled"/>
   <int value="1924192543" label="ProactiveTabFreezeAndDiscard:enabled"/>
+  <int value="1925213304" label="FillingAcrossAffiliatedWebsites:enabled"/>
   <int value="1925627218" label="FullscreenToolbarReveal:disabled"/>
   <int value="1926524951" label="SystemWebApps:disabled"/>
   <int value="1927218315" label="ShelfNewUi:disabled"/>
@@ -51433,6 +51595,7 @@ Called by update_use_counter_css.py.-->
   <int value="10" label="Received unexpected payload type"/>
   <int value="11" label="Connection lost"/>
   <int value="12" label="Nearby process crash"/>
+  <int value="13" label="Nearby process Mojo dependency disconnection"/>
 </enum>
 
 <enum name="MultiDeviceNearbyMessageAction">
@@ -52069,6 +52232,13 @@ Called by update_use_counter_css.py.-->
   <int value="2" label="Error"/>
   <int value="3" label="Corrupt"/>
   <int value="4" label="Invalid Operation"/>
+</enum>
+
+<enum name="NearbyShareDeviceType">
+  <int value="0" label="Unknown device type"/>
+  <int value="1" label="Phone"/>
+  <int value="2" label="Tablet"/>
+  <int value="3" label="Laptop"/>
 </enum>
 
 <enum name="NearbyShareDiscoveryProgress">
@@ -55241,8 +55411,41 @@ Called by update_net_trust_anchors.py.-->
 </enum>
 
 <enum name="NvidiaDeviceId">
-  <int value="4073" label="0x0FE9, GeForce GT 750M"/>
-  <int value="7825" label="0x1E91, RTX 2070 Super"/>
+  <int value="1600" label="0x0640, GeForce 9500 GT"/>
+  <int value="2601" label="0x0A29, GeForce GT 330M"/>
+  <int value="4053" label="0x0FD5, GeForce GT 650M Mac Edition"/>
+  <int value="4056" label="0x0FD8, GeForce GT 640M Mac Edition"/>
+  <int value="4073" label="0x0FE9, GeForce GT 750M Mac Edition"/>
+  <int value="4074" label="0x0FEA, GeForce GT 755M Mac Edition"/>
+  <int value="4416"
+      label="0x1140, GeForce 610M/710M/810M/820M / GT 620M/625M/630M/720M"/>
+  <int value="4509" label="0x119D, GeForce GTX 775M Mac Edition"/>
+  <int value="4510" label="0x119E, GeForce GTX 780M Mac Edition"/>
+  <int value="4514" label="0x11A2, GeForce GTX 675MX Mac Edition"/>
+  <int value="4515" label="0x11A3, GeForce GTX 680MX"/>
+  <int value="4761" label="0x1299, GeForce 920M"/>
+  <int value="4929" label="0x1341, GeForce 840M"/>
+  <int value="4935" label="0x1347, GeForce 940M"/>
+  <int value="4941" label="0x134D, GeForce 940MX"/>
+  <int value="4943" label="0x134F, GeForce 920MX"/>
+  <int value="5018" label="0x139A, GeForce GTX 950M"/>
+  <int value="5019" label="0x139B, GeForce GTX 960M"/>
+  <int value="5965" label="0x174D, GeForce MX130"/>
+  <int value="5966" label="0x174E, GeForce MX110"/>
+  <int value="7171" label="0x1C03, GeForce GTX 1060 6GB"/>
+  <int value="7200" label="0x1C20, GeForce GTX 1060 Mobile"/>
+  <int value="7298" label="0x1C82, GeForce GTX 1050 Ti"/>
+  <int value="7308" label="0x1C8C, GeForce GTX 1050 Ti Mobile"/>
+  <int value="7309" label="0x1C8D, GeForce GTX 1050 Mobile"/>
+  <int value="7440" label="0x1D10, GeForce MX150"/>
+  <int value="7441" label="0x1D11, GeForce MX230"/>
+  <int value="7443" label="0x1D13, GeForce MX250"/>
+  <int value="7825" label="0x1E91, GeForce RTX 2070 SUPER Mobile / Max-Q"/>
+  <int value="7957" label="0x1F15, GeForce RTX 2060 Mobile"/>
+  <int value="8081" label="0x1F91, GeForce GTX 1650 Mobile / Max-Q"/>
+  <int value="8085" label="0x1F95, GeForce GTX 1650 Ti Mobile"/>
+  <int value="8089" label="0x1F99, GeForce ?"/>
+  <int value="8593" label="0x2191, GeForce GTX 1660 Ti Mobile"/>
 </enum>
 
 <enum name="OAuth2BadRequestError">
@@ -60547,6 +60750,7 @@ Called by update_net_trust_anchors.py.-->
   <int value="24" label="INVALID_LICENSE"/>
   <int value="25" label="OFFLINE"/>
   <int value="26" label="LIST_VM_DISKS_FAILED"/>
+  <int value="27" label="OUT_OF_DISK_SPACE"/>
 </enum>
 
 <enum name="PluginVmSetupResult">
@@ -67218,7 +67422,7 @@ https://www.dmtf.org/sites/default/files/standards/documents/DSP0134_2.7.1.pdf
   <int value="0" label="PROXY_FETCH"/>
   <int value="1" label="PRIVATE_IP"/>
   <int value="2" label="OFF_THE_RECORD"/>
-  <int value="3" label="MATCH_CSD_WHITELIST"/>
+  <int value="3" label="MATCH_CSD_ALLOWLIST"/>
   <int value="4" label="TOO_MANY_REPORTS"/>
   <int value="5" label="UNSUPPORTED_MIME_TYPE"/>
   <int value="6" label="NO_DATABASE_MANAGER"/>
@@ -69196,21 +69400,17 @@ https://www.dmtf.org/sites/default/files/standards/documents/DSP0134_2.7.1.pdf
 
 <enum name="SettingsSafetyCheckInteractions">
   <int value="0" label="Safety check started"/>
-  <int value="1" label="Safety check, relaunch after updates"/>
-  <int value="2" label="Safety check, manage passwords"/>
-  <int value="3" label="Safety check, manage safe browsing"/>
-  <int value="4" label="Safety check, review extensions"/>
-  <int value="5" label="Safety check, reboot via Chrome cleaner"/>
-  <int value="6" label="Safety check, review Chrome cleaner infected state"/>
-  <int value="7"
-      label="Safety check, manage passwords through caret navigation"/>
-  <int value="8"
-      label="Safety check, manage safe browsing through caret navigation"/>
-  <int value="9"
-      label="Safety check, review extensions through caret navigation"/>
-  <int value="10"
-      label="Safety check, caret navigation to the Chrome cleaner UI"/>
-  <int value="11" label="Safety check, manage weak passwords"/>
+  <int value="1" label="Updates, relaunch after updates"/>
+  <int value="2" label="Passwords, manage compromised passwords"/>
+  <int value="3" label="Safe browsing, manage safe browsing"/>
+  <int value="4" label="Extensions, review extensions"/>
+  <int value="5" label="Chrome cleaner, reboot"/>
+  <int value="6" label="Chrome cleaner, review infected state"/>
+  <int value="7" label="Passwords, caret navigation"/>
+  <int value="8" label="Safe browsing, caret navigation"/>
+  <int value="9" label="Extensions, caret navigation"/>
+  <int value="10" label="Chrome cleaner, caret navigation"/>
+  <int value="11" label="Passwords, manage weak passwords"/>
 </enum>
 
 <enum name="SettingsSections">
@@ -73149,6 +73349,25 @@ https://www.dmtf.org/sites/default/files/standards/documents/DSP0134_2.7.1.pdf
   <int value="11" label="AbortedBecauseSentinelFileWasPresent"/>
 </enum>
 
+<enum name="SubresourceRedirectRedirectResult">
+  <int value="0" label="Unknown"/>
+  <int value="1" label="Redirectable"/>
+  <int value="2" label="Ineligible due to disallowed by Blink"/>
+  <int value="3" label="Ineligible subframe resource"/>
+  <int value="4" label="Ineligible subresource redirect failed"/>
+  <int value="5" label="Ineligible public image hints unavailable"/>
+  <int value="6"
+      label="Ineligible public image hints unavailable, but found to be
+             redirectable later"/>
+  <int value="7"
+      label="Ineligible public image hints unavailable, and found to be
+             missing in the hints later"/>
+  <int value="8" label="Ineligible missing in the public image hints"/>
+  <int value="9" label="Ineligible due to disallowed by robots rules"/>
+  <int value="10" label="Ineligible due to robots rules fetch timeout"/>
+  <int value="11" label="Ineligible due to logged-in page"/>
+</enum>
+
 <enum name="SubresourceRedirectRobotsRulesReceiveResult">
   <int value="0" label="Success"/>
   <int value="1" label="Timeout"/>
@@ -75419,6 +75638,24 @@ would be helpful to identify which type is being sent.
   <int value="6" label="EXIT_CODE_NOT_UPDATABLE"/>
   <int value="7" label="EXIT_CODE_MISSING_APPROVAL"/>
   <int value="8" label="EXIT_CODE_SUCCESS_COLD_REBOOT"/>
+</enum>
+
+<enum name="TpmManagerSecretStatus">
+  <summary>
+    The status of the sercrets that tpm manager hold. Each bit field presents
+    the meanings listed below: 1. (0bX0000000): when the flag is set, the device
+    uses TPM2. 2. (0b0XX00000): reserved. 3. (0b000X0000): has owner password.
+    4. (0b0000X000): has endorsement password (TPM2.0 only). 5. (0b00000X00):
+    has lockout password (TPM2.0 only). 6. (0b000000X0): has owner delegate
+    (TPM1.2 only). 7. (0b0000000X): has reset DA premissions.
+  </summary>
+  <int value="0" label="(0b00000000) empty database (TPM1.2)"/>
+  <int value="2" label="(0b00000010) intact database (legacy TPM1.2)"/>
+  <int value="3" label="(0b00000011) intact database (TPM1.2)"/>
+  <int value="19" label="(0b00010011) stale owner auth (TPM1.2)"/>
+  <int value="128" label="(0b10000000) empty database (TPM2.0)"/>
+  <int value="141" label="(0b10001101) intact database (TPM2.0)"/>
+  <int value="157" label="(0b10011101) stale owner auth (TPM2.0)"/>
 </enum>
 
 <enum name="TPMResultCodeEnum">

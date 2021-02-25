@@ -89,7 +89,7 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
                              network::mojom::blink::WebSandboxFlags,
                              const SessionStorageNamespaceId&,
                              bool& consumed_user_gesture) override;
-  void Show(const base::UnguessableToken& opener_frame_token,
+  void Show(const blink::LocalFrameToken& opener_frame_token,
             NavigationPolicy navigation_policy,
             const IntRect& initial_rect,
             bool user_gesture) override;
@@ -137,7 +137,7 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
   IntRect ViewportToScreen(const IntRect&,
                            const LocalFrameView*) const override;
   float WindowToViewportScalar(LocalFrame*, const float) const override;
-  ScreenInfo GetScreenInfo(LocalFrame&) const override;
+  const ScreenInfo& GetScreenInfo(LocalFrame&) const override;
   void OverrideVisibleRectForMainFrame(LocalFrame& frame,
                                        IntRect* paint_rect) const override;
   float InputEventsScaleForEmulation() const override;

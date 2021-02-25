@@ -55,10 +55,10 @@
 #include "content/browser/file_system_access/file_system_access_manager_impl.h"
 #include "content/browser/gpu/compositor_util.h"
 #include "content/browser/renderer_host/agent_scheduling_group_host.h"
+#include "content/browser/renderer_host/data_transfer_util.h"
 #include "content/browser/renderer_host/dip_util.h"
 #include "content/browser/renderer_host/display_feature.h"
 #include "content/browser/renderer_host/display_util.h"
-#include "content/browser/renderer_host/drop_data_util.h"
 #include "content/browser/renderer_host/frame_token_message_queue.h"
 #include "content/browser/renderer_host/input/fling_scheduler.h"
 #include "content/browser/renderer_host/input/input_router_config_helper.h"
@@ -302,6 +302,7 @@ class UnboundWidgetInputHandler : public blink::mojom::WidgetInputHandler {
   void WaitForInputProcessed(WaitForInputProcessedCallback callback) override {
     DLOG(WARNING) << "Input request on unbound interface";
   }
+#if defined(OS_ANDROID)
   void AttachSynchronousCompositor(
       mojo::PendingRemote<blink::mojom::SynchronousCompositorControlHost>
           control_host,
@@ -311,6 +312,7 @@ class UnboundWidgetInputHandler : public blink::mojom::WidgetInputHandler {
           compositor_request) override {
     NOTREACHED() << "Input request on unbound interface";
   }
+#endif
   void GetFrameWidgetInputHandler(
       mojo::PendingAssociatedReceiver<blink::mojom::FrameWidgetInputHandler>
           request) override {
@@ -3105,6 +3107,16 @@ void RenderWidgetHostImpl::GotResponseToKeyboardLockRequest(bool allowed) {
 }
 
 void RenderWidgetHostImpl::GotResponseToForceRedraw(int snapshot_id) {
+  // Snapshots from surface do not need to wait for the screen update.
+  if (!pending_surface_browser_snapshots_.empty()) {
+    GetView()->CopyFromSurface(
+        gfx::Rect(), gfx::Size(),
+        base::BindOnce(&RenderWidgetHostImpl::OnSnapshotFromSurfaceReceived,
+                       weak_factory_.GetWeakPtr(), snapshot_id, 0));
+  }
+
+  if (pending_browser_snapshots_.empty())
+    return;
 #if defined(OS_MAC) || defined(OS_WIN)
   // On Mac, when using CoreAnimation, or Win32 when using GDI, there is a
   // delay between when content is drawn to the screen, and when the
@@ -3128,13 +3140,6 @@ void RenderWidgetHostImpl::DetachDelegate() {
 
 void RenderWidgetHostImpl::WindowSnapshotReachedScreen(int snapshot_id) {
   DCHECK(base::CurrentUIThread::IsSet());
-
-  if (!pending_surface_browser_snapshots_.empty()) {
-    GetView()->CopyFromSurface(
-        gfx::Rect(), gfx::Size(),
-        base::BindOnce(&RenderWidgetHostImpl::OnSnapshotFromSurfaceReceived,
-                       weak_factory_.GetWeakPtr(), snapshot_id, 0));
-  }
 
   if (!pending_browser_snapshots_.empty()) {
 #if defined(OS_ANDROID)
@@ -3292,8 +3297,9 @@ bool RenderWidgetHostImpl::HasGestureStopped() {
   return true;
 }
 
-void RenderWidgetHostImpl::DidProcessFrame(uint32_t frame_token) {
-  frame_token_message_queue_->DidProcessFrame(frame_token);
+void RenderWidgetHostImpl::DidProcessFrame(uint32_t frame_token,
+                                           base::TimeTicks activation_time) {
+  frame_token_message_queue_->DidProcessFrame(frame_token, activation_time);
 }
 
 #if defined(OS_MAC)
@@ -3383,7 +3389,8 @@ void RenderWidgetHostImpl::UnlockKeyboard() {
 void RenderWidgetHostImpl::OnRenderFrameMetadataChangedBeforeActivation(
     const cc::RenderFrameMetadata& metadata) {}
 
-void RenderWidgetHostImpl::OnRenderFrameMetadataChangedAfterActivation() {
+void RenderWidgetHostImpl::OnRenderFrameMetadataChangedAfterActivation(
+    base::TimeTicks activation_time) {
   const auto& metadata =
       render_frame_metadata_provider_.LastRenderFrameMetadata();
 

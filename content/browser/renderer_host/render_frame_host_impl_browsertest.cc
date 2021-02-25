@@ -203,7 +203,7 @@ class RenderFrameHostImplBrowserTest : public ContentBrowserTest {
     CHECK(base::PathService::Get(base::DIR_SOURCE_ROOT, &path));
     path = path.Append(GetTestDataFilePath());
     path = path.Append(file_path);
-    return GURL(FILE_PATH_LITERAL("file:") + path.value());
+    return GURL("file:" + path.AsUTF8Unsafe());
   }
 
  protected:
@@ -211,7 +211,9 @@ class RenderFrameHostImplBrowserTest : public ContentBrowserTest {
     host_resolver()->AddRule("*", "127.0.0.1");
     SetupCrossSiteRedirector(embedded_test_server());
     ASSERT_TRUE(embedded_test_server()->Start());
+  }
 
+  void SetUpCommandLine(base::CommandLine* command_line) override {
     // TODO(https://crbug.com/794320): Remove this when the new Java Bridge code
     // is integrated into WebView.
     base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
@@ -220,6 +222,7 @@ class RenderFrameHostImplBrowserTest : public ContentBrowserTest {
     base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
         switches::kEnableBlinkFeatures, "WebOTP");
   }
+
   net::EmbeddedTestServer* https_server() { return &https_server_; }
 
   WebContentsImpl* web_contents() const {

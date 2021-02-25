@@ -166,6 +166,8 @@ void VerifyManagedSettingItem(NSString* accessibilityID,
 // Tests changing the DefaultSearchProviderEnabled policy while the settings
 // are open updates the UI.
 - (void)testDefaultSearchProviderUpdate {
+  SetPolicy(true, policy::key::kDefaultSearchProviderEnabled);
+
   [ChromeEarlGreyUI openSettingsMenu];
 
   // Check that the non-managed item is present.

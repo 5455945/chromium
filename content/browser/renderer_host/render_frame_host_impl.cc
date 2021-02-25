@@ -96,6 +96,7 @@
 #include "content/browser/renderer_host/input/input_router.h"
 #include "content/browser/renderer_host/input/timeout_monitor.h"
 #include "content/browser/renderer_host/ipc_utils.h"
+#include "content/browser/renderer_host/modal_close_listener_host.h"
 #include "content/browser/renderer_host/navigation_controller_impl.h"
 #include "content/browser/renderer_host/navigation_entry_impl.h"
 #include "content/browser/renderer_host/navigation_request.h"
@@ -283,6 +284,7 @@ int RenderFrameHostImpl::max_accessibility_resets_ = 0;
 int RenderFrameHostImpl::max_accessibility_resets_ = 4;
 #endif  // AX_FAIL_FAST_BUILD
 
+// TODO(crbug.com/1181748): This should use absl::variant
 struct RenderFrameHostOrProxy {
   RenderFrameHostImpl* const frame;
   RenderFrameProxyHost* const proxy;
@@ -597,20 +599,23 @@ RenderFrameHostOrProxy LookupRenderFrameHostOrProxy(int process_id,
 
 RenderFrameHostOrProxy LookupRenderFrameHostOrProxy(
     int process_id,
-    const base::UnguessableToken& frame_token) {
-  auto it = g_token_frame_map.Get().find(frame_token);
-  RenderFrameHostImpl* rfh = nullptr;
-  RenderFrameProxyHost* proxy = nullptr;
-  if (it != g_token_frame_map.Get().end()) {
+    const blink::FrameToken& frame_token) {
+  if (frame_token.Is<blink::LocalFrameToken>()) {
+    auto it = g_token_frame_map.Get().find(
+        frame_token.GetAs<blink::LocalFrameToken>());
     // The check against |process_id| isn't strictly necessary, but represents
     // an extra level of protection against a renderer trying to force a frame
     // token.
-    rfh =
-        process_id == it->second->GetProcess()->GetID() ? it->second : nullptr;
-  } else {
-    proxy = RenderFrameProxyHost::FromFrameToken(process_id, frame_token);
+    if (it == g_token_frame_map.Get().end() ||
+        process_id != it->second->GetProcess()->GetID()) {
+      return RenderFrameHostOrProxy(nullptr, nullptr);
+    }
+    return RenderFrameHostOrProxy(it->second, nullptr);
   }
-  return RenderFrameHostOrProxy(rfh, proxy);
+  DCHECK(frame_token.Is<blink::RemoteFrameToken>());
+  return RenderFrameHostOrProxy(
+      nullptr, RenderFrameProxyHost::FromFrameToken(
+                   process_id, frame_token.GetAs<blink::RemoteFrameToken>()));
 }
 
 // Takes the lower 31 bits of the metric-name-hash of a Mojo interface |name|.
@@ -1045,7 +1050,8 @@ RenderFrameHostImpl::RenderFrameHostImpl(
               {ServiceWorkerContext::GetCoreThreadId()}))),
       frame_token_(frame_token),
       keep_alive_handle_factory_(agent_scheduling_group_.GetProcess(),
-                                 base::TimeDelta::FromSeconds(30)),
+                                 base::TimeDelta::FromSeconds(
+                                     kKeepAliveHandleFactoryTimeoutInSeconds)),
       subframe_unload_timeout_(RenderViewHostImpl::kUnloadTimeout),
       media_device_id_salt_base_(
           BrowserContext::CreateRandomMediaDeviceIDSalt()),
@@ -1118,8 +1124,12 @@ RenderFrameHostImpl::RenderFrameHostImpl(
   // - subframes in a different SiteInstance from their parent.
   //
   // Local roots require a RenderWidget for input/layout/painting.
-  if (!parent_ || IsCrossProcessSubframe()) {
-    if (!parent_) {
+  // Note: We cannot use is_local_root() here because this block sets up the
+  // fields that are used by that method.
+  const bool setup_local_render_widget_host =
+      is_main_frame() || IsCrossProcessSubframe();
+  if (setup_local_render_widget_host) {
+    if (is_main_frame()) {
       // For main frames, the RenderWidgetHost is owned by the RenderViewHost.
       // TODO(https://crbug.com/545684): Once RenderViewHostImpl has-a
       // RenderWidgetHostImpl, the main render frame should probably start
@@ -1147,6 +1157,9 @@ RenderFrameHostImpl::RenderFrameHostImpl(
     GetLocalRenderWidgetHost()->input_router()->SetFrameTreeNodeId(
         frame_tree_node_->frame_tree_node_id());
   }
+  // Verify is_local_root() now indicates whether this frame is a local root or
+  // not. It is safe to use this method anywhere beyond this point.
+  DCHECK_EQ(setup_local_render_widget_host, is_local_root());
   ResetFeaturePolicy();
 
   // New RenderFrameHostImpl are put in their own virtual browsing context
@@ -1630,8 +1643,7 @@ void RenderFrameHostImpl::GetCanonicalUrlForSharing(
 
 void RenderFrameHostImpl::GetSerializedHtmlWithLocalLinks(
     const base::flat_map<GURL, base::FilePath>& url_map,
-    const base::flat_map<base::UnguessableToken, base::FilePath>&
-        frame_token_map,
+    const base::flat_map<blink::FrameToken, base::FilePath>& frame_token_map,
     bool save_with_empty_url,
     mojo::PendingRemote<mojom::FrameHTMLSerializerHandler> serializer_handler) {
   if (!IsRenderFrameCreated())
@@ -2123,6 +2135,8 @@ void RenderFrameHostImpl::SetPolicyContainerHost(
 void RenderFrameHostImpl::RenderProcessExited(
     RenderProcessHost* host,
     const ChildProcessTerminationInfo& info) {
+  ++renderer_exit_count_;
+
   if (base::FeatureList::IsEnabled(features::kCrashReporting))
     MaybeGenerateCrashReport(info.status, info.exit_code);
 
@@ -2266,7 +2280,7 @@ bool RenderFrameHostImpl::RequiresPerformActionPointInPixels() const {
 
 bool RenderFrameHostImpl::CreateRenderFrame(
     int previous_routing_id,
-    const base::Optional<base::UnguessableToken>& opener_frame_token,
+    const base::Optional<blink::FrameToken>& opener_frame_token,
     int parent_routing_id,
     int previous_sibling_routing_id) {
   TRACE_EVENT0("navigation", "RenderFrameHostImpl::CreateRenderFrame");
@@ -3741,7 +3755,7 @@ void RenderFrameHostImpl::RequestClose() {
 }
 
 void RenderFrameHostImpl::ShowCreatedWindow(
-    const base::UnguessableToken& opener_frame_token,
+    const blink::LocalFrameToken& opener_frame_token,
     WindowOpenDisposition disposition,
     const gfx::Rect& initial_rect,
     bool user_gesture,
@@ -4136,7 +4150,7 @@ RenderFrameHostImpl* RenderFrameHostImpl::FindAndVerifyChild(
 }
 
 RenderFrameHostImpl* RenderFrameHostImpl::FindAndVerifyChild(
-    const base::UnguessableToken& child_frame_token,
+    const blink::FrameToken& child_frame_token,
     bad_message::BadMessageReason reason) {
   auto child_frame_or_proxy =
       LookupRenderFrameHostOrProxy(GetProcess()->GetID(), child_frame_token);
@@ -5008,7 +5022,7 @@ void RenderFrameHostImpl::DidLoadResourceFromMemoryCache(
 }
 
 void RenderFrameHostImpl::DidChangeFrameOwnerProperties(
-    const base::UnguessableToken& child_frame_token,
+    const blink::FrameToken& child_frame_token,
     blink::mojom::FrameOwnerPropertiesPtr properties) {
   auto* child =
       FindAndVerifyChild(child_frame_token, bad_message::RFH_OWNER_PROPERTY);
@@ -5036,7 +5050,7 @@ void RenderFrameHostImpl::DidChangeOpener(
 }
 
 void RenderFrameHostImpl::DidChangeCSPAttribute(
-    const base::UnguessableToken& child_frame_token,
+    const blink::FrameToken& child_frame_token,
     network::mojom::ContentSecurityPolicyPtr parsed_csp_attribute) {
   if (parsed_csp_attribute &&
       !ValidateCSPAttribute(parsed_csp_attribute->header->header_value)) {
@@ -5054,7 +5068,7 @@ void RenderFrameHostImpl::DidChangeCSPAttribute(
 }
 
 void RenderFrameHostImpl::DidChangeFramePolicy(
-    const base::UnguessableToken& child_frame_token,
+    const blink::FrameToken& child_frame_token,
     const blink::FramePolicy& frame_policy) {
   // Ensure that a frame can only update sandbox flags or feature policy for its
   // immediate children.  If this is not the case, the renderer is considered
@@ -5090,6 +5104,12 @@ void RenderFrameHostImpl::CapturePaintPreviewOfSubframe(
   }
 
   delegate()->CapturePaintPreviewOfCrossProcessSubframe(clip_rect, guid, this);
+}
+
+void RenderFrameHostImpl::SetModalCloseListener(
+    mojo::PendingRemote<blink::mojom::ModalCloseListener> listener) {
+  ModalCloseListenerHost::GetOrCreateForCurrentDocument(this)->SetListener(
+      std::move(listener));
 }
 
 void RenderFrameHostImpl::BindBrowserInterfaceBrokerReceiver(
@@ -5148,9 +5168,7 @@ void RenderFrameHostImpl::OpenURL(mojom::OpenURLParamsPtr params) {
 
   frame_tree_node_->navigator().RequestOpenURL(
       this, validated_url,
-      params->initiator_frame_token.has_value()
-          ? &(params->initiator_frame_token.value())
-          : nullptr,
+      base::OptionalOrNullptr(params->initiator_frame_token),
       GetProcess()->GetID(), params->initiator_origin, params->post_body,
       params->extra_headers, params->referrer.To<content::Referrer>(),
       params->disposition, params->should_replace_current_entry,
@@ -6976,6 +6994,15 @@ void RenderFrameHostImpl::SetUpMojoIfNeeded() {
       base::Unretained(this)));
 #endif
 
+  associated_registry_->AddInterface(base::BindRepeating(
+      [](RenderFrameHostImpl* impl,
+         mojo::PendingAssociatedReceiver<media::mojom::MediaPlayerHost>
+             receiver) {
+        impl->delegate()->CreateMediaPlayerHostForRenderFrameHost(
+            impl, std::move(receiver));
+      },
+      base::Unretained(this)));
+
   mojo::PendingRemote<service_manager::mojom::InterfaceProvider>
       remote_interfaces;
   GetMojomFrameInRenderer()->GetInterfaceProvider(
@@ -7899,11 +7926,6 @@ void RenderFrameHostImpl::BindMediaMetricsProviderReceiver(
       std::move(receiver));
 }
 
-void RenderFrameHostImpl::CreateMediaPlayerHost(
-    mojo::PendingReceiver<media::mojom::MediaPlayerHost> receiver) {
-  delegate_->CreateMediaPlayerHostForRenderFrameHost(this, std::move(receiver));
-}
-
 #if BUILDFLAG(ENABLE_MEDIA_REMOTING)
 void RenderFrameHostImpl::BindMediaRemoterFactoryReceiver(
     mojo::PendingReceiver<media::mojom::RemoterFactory> receiver) {
@@ -7946,6 +7968,12 @@ void RenderFrameHostImpl::CreateDedicatedWorkerHostFactory(
   // Allocate the worker in the same process as the creator.
   int worker_process_id = GetProcess()->GetID();
 
+  mojo::PendingRemote<network::mojom::CrossOriginEmbedderPolicyReporter>
+      coep_reporter;
+  auto coep_reporter_endpoint = coep_reporter.InitWithNewPipeAndPassReceiver();
+  if (coep_reporter_)
+    coep_reporter_->Clone(std::move(coep_reporter_endpoint));
+
   // When a dedicated worker is created from the frame script, the frame is both
   // the creator and the ancestor.
   mojo::MakeSelfOwnedReceiver(
@@ -7955,9 +7983,7 @@ void RenderFrameHostImpl::CreateDedicatedWorkerHostFactory(
           /*creator_worker_token=*/base::nullopt,
           /*ancestor_render_frame_host_id=*/GetGlobalFrameRoutingId(),
           last_committed_origin_, isolation_info_,
-          cross_origin_embedder_policy_,
-          /*creator_coep_reporter=*/coep_reporter_->GetWeakPtr(),
-          /*ancestor_coep_reporter=*/coep_reporter_->GetWeakPtr()),
+          cross_origin_embedder_policy_, std::move(coep_reporter)),
       std::move(receiver));
 }
 
@@ -9057,6 +9083,9 @@ void RenderFrameHostImpl::TakeNewDocumentPropertiesFromNavigation(
   // of the new document, inherited at RenderFrameHost creation time, with an
   // empty PolicyContainerHost).
   SetPolicyContainerHost(navigation_request->TakePolicyContainerHost());
+
+  if (navigation_request->response())
+    last_response_head_ = navigation_request->response()->Clone();
 }
 
 void RenderFrameHostImpl::OnSameDocumentCommitProcessed(
@@ -9143,7 +9172,7 @@ void RenderFrameHostImpl::MaybeGenerateCrashReport(
     return;
 
   // Only generate reports for local root frames.
-  if (!frame_tree_node_->IsMainFrame() && !IsCrossProcessSubframe())
+  if (!is_local_root())
     return;
 
   // Check the termination status to see if a crash occurred (and potentially
@@ -9499,7 +9528,7 @@ RenderFrameHostImpl::MaybeCreateWebBundleHandleTracker() {
 }
 
 RenderWidgetHostImpl* RenderFrameHostImpl::GetLocalRenderWidgetHost() const {
-  if (!parent_)
+  if (is_main_frame())
     return render_view_host_->GetWidget();
   else
     return owned_render_widget_host_.get();

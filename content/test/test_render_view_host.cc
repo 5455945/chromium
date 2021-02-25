@@ -15,7 +15,7 @@
 #include "content/browser/compositor/surface_utils.h"
 #include "content/browser/dom_storage/dom_storage_context_wrapper.h"
 #include "content/browser/dom_storage/session_storage_namespace_impl.h"
-#include "content/browser/renderer_host/drop_data_util.h"
+#include "content/browser/renderer_host/data_transfer_util.h"
 #include "content/browser/renderer_host/input/synthetic_gesture_target.h"
 #include "content/browser/renderer_host/render_widget_host_input_event_router.h"
 #include "content/browser/site_instance_impl.h"
@@ -203,8 +203,10 @@ void TestRenderWidgetHostView::OnFirstSurfaceActivation(
   // surface should be set here.
 }
 
-void TestRenderWidgetHostView::OnFrameTokenChanged(uint32_t frame_token) {
-  OnFrameTokenChangedForView(frame_token);
+void TestRenderWidgetHostView::OnFrameTokenChanged(
+    uint32_t frame_token,
+    base::TimeTicks activation_time) {
+  OnFrameTokenChangedForView(frame_token, activation_time);
 }
 
 std::unique_ptr<SyntheticGestureTarget>
@@ -260,7 +262,7 @@ bool TestRenderViewHost::CreateTestRenderView() {
 }
 
 bool TestRenderViewHost::CreateRenderView(
-    const base::Optional<base::UnguessableToken>& opener_frame_token,
+    const base::Optional<blink::FrameToken>& opener_frame_token,
     int proxy_route_id,
     bool window_was_created_with_opener) {
   DCHECK(!IsRenderViewLive());
@@ -356,9 +358,9 @@ TestRenderViewHost* RenderViewHostImplTestHarness::test_rvh() {
 }
 
 TestRenderViewHost* RenderViewHostImplTestHarness::pending_test_rvh() {
-  return contents()->GetPendingMainFrame() ?
-      contents()->GetPendingMainFrame()->GetRenderViewHost() :
-      nullptr;
+  return contents()->GetSpeculativePrimaryMainFrame()
+             ? contents()->GetSpeculativePrimaryMainFrame()->GetRenderViewHost()
+             : nullptr;
 }
 
 TestRenderViewHost* RenderViewHostImplTestHarness::active_test_rvh() {

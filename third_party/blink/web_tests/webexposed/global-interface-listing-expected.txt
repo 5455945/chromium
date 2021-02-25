@@ -4072,17 +4072,21 @@ interface HTMLSlotElement : HTMLElement
     setter name
 interface HTMLSourceElement : HTMLElement
     attribute @@toStringTag
+    getter height
     getter media
     getter sizes
     getter src
     getter srcset
     getter type
+    getter width
     method constructor
+    setter height
     setter media
     setter sizes
     setter src
     setter srcset
     setter type
+    setter width
 interface HTMLSpanElement : HTMLElement
     attribute @@toStringTag
     method constructor
@@ -5503,8 +5507,11 @@ interface NativeIOFileManager
     method constructor
     method delete
     method getAll
+    method getRemainingCapacity
     method open
+    method releaseCapacity
     method rename
+    method requestCapacity
 interface NavigationPreloadManager
     attribute @@toStringTag
     method constructor
@@ -11104,7 +11111,6 @@ namespace CSS
     getter locationbar
     getter menubar
     getter name
-    getter nativeIO
     getter navigator
     getter offscreenBuffering
     getter onabort
@@ -11248,6 +11254,7 @@ namespace CSS
     getter speechSynthesis
     getter status
     getter statusbar
+    getter storageFoundation
     getter styleMedia
     getter toolbar
     getter top

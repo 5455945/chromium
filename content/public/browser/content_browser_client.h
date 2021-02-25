@@ -53,6 +53,7 @@
 #include "storage/browser/file_system/file_system_context.h"
 #include "third_party/blink/public/common/loader/previews_state.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
+#include "third_party/blink/public/mojom/federated_learning/floc.mojom-forward.h"
 #include "ui/accessibility/ax_mode.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
@@ -104,6 +105,7 @@ class URLLoaderThrottle;
 }  // namespace blink
 
 namespace device {
+class GeolocationSystemPermissionManager;
 class LocationProvider;
 }  // namespace device
 
@@ -813,6 +815,9 @@ class CONTENT_EXPORT ContentBrowserClient {
   // * May be called from any thread.
   // * Default implementation returns empty string, meaning send no API key.
   virtual std::string GetGeolocationApiKey();
+
+  virtual device::GeolocationSystemPermissionManager*
+  GetLocationPermissionManager();
 
 #if defined(OS_ANDROID)
   // Allows an embedder to decide whether to use the GmsCoreLocationProvider.
@@ -1849,7 +1854,7 @@ class CONTENT_EXPORT ContentBrowserClient {
 
   // Returns the interest cohort associated with the browser context of
   // |web_contents|.
-  virtual std::string GetInterestCohortForJsApi(
+  virtual blink::mojom::InterestCohortPtr GetInterestCohortForJsApi(
       WebContents* web_contents,
       const GURL& url,
       const base::Optional<url::Origin>& top_frame_origin);
@@ -1973,7 +1978,7 @@ class CONTENT_EXPORT ContentBrowserClient {
 
   // Called when a keepalive request
   // (https://fetch.spec.whatwg.org/#request-keepalive-flag) is requested.
-  virtual void OnKeepaliveRequestStarted();
+  virtual void OnKeepaliveRequestStarted(BrowserContext* browser_context);
 
   // Called when a keepalive request finishes either successfully or
   // unsuccessfully.

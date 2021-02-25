@@ -852,7 +852,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Platform.StatefulLifetimeWrites" units="GiB"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>asavery@chromium.org</owner>
   <owner>gwendal@chromium.org</owner>
   <summary>
@@ -1221,6 +1221,13 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
     Trusted Platform Module hardware alerts that signal about the chip abnormal
     situation.
   </summary>
+</histogram>
+
+<histogram name="Platform.TPM.TpmManagerSecretStatus"
+    enum="TpmManagerSecretStatus" expires_after="2021-09-01">
+  <owner>cylai@chromium.org</owner>
+  <owner>cros-hwsec+uma@chromium.org</owner>
+  <summary>The status of the secrets that tpm manager holds.</summary>
 </histogram>
 
 <histogram name="Platform.TPM.VersionFingerprint" enum="TPMVersionFingerprint"

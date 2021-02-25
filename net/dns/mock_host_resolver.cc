@@ -794,8 +794,7 @@ void RuleBasedHostResolverProc::AddRuleForAddressFamily(
     AddressFamily address_family,
     const std::string& replacement) {
   DCHECK(!replacement.empty());
-  HostResolverFlags flags = HOST_RESOLVER_LOOPBACK_ONLY |
-                            HOST_RESOLVER_DEFAULT_FAMILY_SET_DUE_TO_NO_IPV6;
+  HostResolverFlags flags = HOST_RESOLVER_LOOPBACK_ONLY;
   Rule rule(Rule::kResolverTypeSystem, host_pattern, address_family, flags,
             replacement, {} /* dns_aliases */, 0);
   AddRuleInternal(rule);
@@ -820,8 +819,7 @@ void RuleBasedHostResolverProc::AddIPLiteralRule(
   // consequently we do not support remapping them.
   IPAddress ip_address;
   DCHECK(!ip_address.AssignFromIPLiteral(host_pattern));
-  HostResolverFlags flags = HOST_RESOLVER_LOOPBACK_ONLY |
-                            HOST_RESOLVER_DEFAULT_FAMILY_SET_DUE_TO_NO_IPV6;
+  HostResolverFlags flags = HOST_RESOLVER_LOOPBACK_ONLY;
   std::vector<std::string> aliases;
   if (!canonical_name.empty()) {
     flags |= HOST_RESOLVER_CANONNAME;
@@ -842,8 +840,7 @@ void RuleBasedHostResolverProc::AddIPLiteralRuleWithDnsAliases(
   // consequently we do not support remapping them.
   IPAddress ip_address;
   DCHECK(!ip_address.AssignFromIPLiteral(host_pattern));
-  HostResolverFlags flags = HOST_RESOLVER_LOOPBACK_ONLY |
-                            HOST_RESOLVER_DEFAULT_FAMILY_SET_DUE_TO_NO_IPV6;
+  HostResolverFlags flags = HOST_RESOLVER_LOOPBACK_ONLY;
   if (!dns_aliases.empty())
     flags |= HOST_RESOLVER_CANONNAME;
 
@@ -858,8 +855,7 @@ void RuleBasedHostResolverProc::AddRuleWithLatency(
     const std::string& replacement,
     int latency_ms) {
   DCHECK(!replacement.empty());
-  HostResolverFlags flags = HOST_RESOLVER_LOOPBACK_ONLY |
-                            HOST_RESOLVER_DEFAULT_FAMILY_SET_DUE_TO_NO_IPV6;
+  HostResolverFlags flags = HOST_RESOLVER_LOOPBACK_ONLY;
   Rule rule(Rule::kResolverTypeSystem, host_pattern, ADDRESS_FAMILY_UNSPECIFIED,
             flags, replacement, {} /* dns_aliases */, latency_ms);
   AddRuleInternal(rule);
@@ -867,8 +863,7 @@ void RuleBasedHostResolverProc::AddRuleWithLatency(
 
 void RuleBasedHostResolverProc::AllowDirectLookup(
     const std::string& host_pattern) {
-  HostResolverFlags flags = HOST_RESOLVER_LOOPBACK_ONLY |
-                            HOST_RESOLVER_DEFAULT_FAMILY_SET_DUE_TO_NO_IPV6;
+  HostResolverFlags flags = HOST_RESOLVER_LOOPBACK_ONLY;
   Rule rule(Rule::kResolverTypeSystem, host_pattern, ADDRESS_FAMILY_UNSPECIFIED,
             flags, std::string(), {} /* dns_aliases */, 0);
   AddRuleInternal(rule);
@@ -876,8 +871,7 @@ void RuleBasedHostResolverProc::AllowDirectLookup(
 
 void RuleBasedHostResolverProc::AddSimulatedFailure(
     const std::string& host_pattern) {
-  HostResolverFlags flags = HOST_RESOLVER_LOOPBACK_ONLY |
-                            HOST_RESOLVER_DEFAULT_FAMILY_SET_DUE_TO_NO_IPV6;
+  HostResolverFlags flags = HOST_RESOLVER_LOOPBACK_ONLY;
   Rule rule(Rule::kResolverTypeFail, host_pattern, ADDRESS_FAMILY_UNSPECIFIED,
             flags, std::string(), {} /* dns_aliases */, 0);
   AddRuleInternal(rule);
@@ -885,8 +879,7 @@ void RuleBasedHostResolverProc::AddSimulatedFailure(
 
 void RuleBasedHostResolverProc::AddSimulatedTimeoutFailure(
     const std::string& host_pattern) {
-  HostResolverFlags flags = HOST_RESOLVER_LOOPBACK_ONLY |
-                            HOST_RESOLVER_DEFAULT_FAMILY_SET_DUE_TO_NO_IPV6;
+  HostResolverFlags flags = HOST_RESOLVER_LOOPBACK_ONLY;
   Rule rule(Rule::kResolverTypeFailTimeout, host_pattern,
             ADDRESS_FAMILY_UNSPECIFIED, flags, std::string(),
             {} /* dns_aliases */, 0);
@@ -923,12 +916,10 @@ int RuleBasedHostResolverProc::Resolve(const std::string& host,
     bool matches_address_family =
         r->address_family == ADDRESS_FAMILY_UNSPECIFIED ||
         r->address_family == address_family;
-    // Ignore HOST_RESOLVER_SYSTEM_ONLY, since it should have no impact on
-    // whether a rule matches.
+    // Ignore HOST_RESOLVER_DEFAULT_FAMILY_SET_DUE_TO_NO_IPV6, since it should
+    // have no impact on whether a rule matches.
     HostResolverFlags flags =
-        host_resolver_flags &
-        (~HOST_RESOLVER_SYSTEM_ONLY &
-         ~HOST_RESOLVER_DEFAULT_FAMILY_SET_DUE_TO_NO_IPV6);
+        host_resolver_flags & ~HOST_RESOLVER_DEFAULT_FAMILY_SET_DUE_TO_NO_IPV6;
     // Flags match if all of the bitflags in host_resolver_flags are enabled
     // in the rule's host_resolver_flags. However, the rule may have additional
     // flags specified, in which case the flags should still be considered a

@@ -556,6 +556,17 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
   </summary>
 </histogram>
 
+<histogram name="Ash.ClipboardHistory.ZeroStateContextualNudge.ShownCount"
+    enum="BooleanHit" expires_after="2021-09-01">
+  <owner>anasalazar@chromium.org</owner>
+  <owner>newcomer@chromium.org</owner>
+  <summary>
+    The number of times the clipboard history zero state contextual nudge has
+    been shown. This number will be used as the baseline against the sum of the
+    NudgeToFeatureUseTime and NudgeToFeatureOpenTime.
+  </summary>
+</histogram>
+
 <histogram base="true" name="Ash.ContextualNudgeDismissContext"
     enum="ContextualNudgeDismissContext" expires_after="2021-12-01">
 <!-- Name completed by histogram_suffixes name="ContextualNudgesNames" -->
@@ -1737,7 +1748,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Ash.Shelf.NumberOfItems" units="Icons"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>anasalazar@google.com</owner>
   <owner>mmourgos@google.com</owner>
   <summary>
@@ -2022,7 +2033,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram base="true" name="Ash.SplitViewResize.PresentationTime" units="ms"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
 <!-- Name completed by histogram_suffixes name="SplitViewResizeModes" -->
 
   <owner>amusbach@chromium.org</owner>
@@ -2137,7 +2148,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Ash.TabletMode.AnimationSmoothness.Exit" units="%"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>oshima@chromium.org</owner>
   <owner>sammiequon@chromium.org</owner>
   <summary>
@@ -2216,7 +2227,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Ash.TouchView.TouchViewInactiveTotal" units="minutes"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>girard@chromium.org</owner>
   <summary>
     The total time that TouchView is not active during a session.
@@ -2385,7 +2396,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Ash.WindowCycleView.AnimationSmoothness.Container" units="%"
-    expires_after="2021-05-31">
+    expires_after="2021-08-22">
   <owner>yjliu@chromium.org</owner>
   <owner>chromeos-wmp@google.com</owner>
   <summary>

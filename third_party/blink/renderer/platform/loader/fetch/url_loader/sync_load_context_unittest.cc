@@ -15,9 +15,9 @@
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/resource_load_info_notifier_wrapper.h"
-#include "third_party/blink/public/platform/sync_load_response.h"
 #include "third_party/blink/public/platform/web_back_forward_cache_loader_helper.h"
 #include "third_party/blink/public/platform/web_resource_request_sender.h"
+#include "third_party/blink/renderer/platform/loader/fetch/url_loader/sync_load_response.h"
 
 namespace blink {
 
@@ -109,12 +109,12 @@ class SyncLoadContextTest : public testing::Test {
             MSG_ROUTING_NONE, loading_thread_.task_runner(),
             TRAFFIC_ANNOTATION_FOR_TESTS, 0 /* loader_options */,
             std::move(pending_factory),
-            std::vector<std::unique_ptr<URLLoaderThrottle>>(), out_response,
+            WebVector<std::unique_ptr<URLLoaderThrottle>>(), out_response,
             context_for_redirect, redirect_or_response_event,
             nullptr /* terminate_sync_load_event */,
             base::TimeDelta::FromSeconds(60) /* timeout */,
             mojo::NullRemote() /* download_to_blob_registry */,
-            std::vector<std::string>() /* cors_exempt_header_list */,
+            WebVector<WebString>() /* cors_exempt_header_list */,
             std::make_unique<ResourceLoadInfoNotifierWrapper>(
                 /*resource_load_info_notifier=*/nullptr,
                 task_environment_.GetMainThreadTaskRunner())));

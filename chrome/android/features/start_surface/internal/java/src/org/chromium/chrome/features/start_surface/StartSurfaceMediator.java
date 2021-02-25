@@ -8,6 +8,7 @@ import static org.chromium.chrome.browser.tasks.TasksSurfaceProperties.IS_FAKE_S
 import static org.chromium.chrome.browser.tasks.TasksSurfaceProperties.IS_INCOGNITO;
 import static org.chromium.chrome.browser.tasks.TasksSurfaceProperties.IS_INCOGNITO_DESCRIPTION_INITIALIZED;
 import static org.chromium.chrome.browser.tasks.TasksSurfaceProperties.IS_INCOGNITO_DESCRIPTION_VISIBLE;
+import static org.chromium.chrome.browser.tasks.TasksSurfaceProperties.IS_LENS_BUTTON_VISIBLE;
 import static org.chromium.chrome.browser.tasks.TasksSurfaceProperties.IS_SURFACE_BODY_VISIBLE;
 import static org.chromium.chrome.browser.tasks.TasksSurfaceProperties.IS_TAB_CAROUSEL_VISIBLE;
 import static org.chromium.chrome.browser.tasks.TasksSurfaceProperties.IS_VOICE_RECOGNITION_BUTTON_VISIBLE;
@@ -48,6 +49,7 @@ import org.chromium.chrome.browser.feed.FeedSurfaceCoordinator;
 import org.chromium.chrome.browser.feed.shared.stream.Stream;
 import org.chromium.chrome.browser.flags.CachedFeatureFlags;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.lens.LensEntryPoint;
 import org.chromium.chrome.browser.ntp.FakeboxDelegate;
 import org.chromium.chrome.browser.omnibox.UrlFocusChangeListener;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
@@ -166,7 +168,8 @@ class StartSurfaceMediator
     @Nullable
     private Boolean mFeedVisibilityInSharedPreferenceOnStartUp;
     private boolean mHadWarmStart;
-    private boolean mShowNewHomeSurface;
+    private boolean mHideMVForNewSurface;
+    private boolean mHideTabCarouselForNewSurface;
 
     StartSurfaceMediator(TabSwitcher.Controller controller, TabModelSelector tabModelSelector,
             @Nullable PropertyModel propertyModel,
@@ -425,14 +428,29 @@ class StartSurfaceMediator
         if (state == StartSurfaceState.SHOWING_HOMEPAGE) {
             mPropertyModel.set(RESET_TASK_SURFACE_HEADER_SCROLL_POSITION, true);
             mPropertyModel.set(RESET_FEED_SURFACE_SCROLL_POSITION, true);
-            if (StartSurfaceConfiguration.NEW_SURFACE_FROM_HOME_BUTTON.getValue()) {
-                mShowNewHomeSurface = true;
+
+            String newHomeSurface =
+                    StartSurfaceConfiguration.NEW_SURFACE_FROM_HOME_BUTTON.getValue();
+            switch (newHomeSurface) {
+                case "hide_tab_switcher_only":
+                    mHideMVForNewSurface = false;
+                    mHideTabCarouselForNewSurface = true;
+                    break;
+                case "hide_mv_tiles_and_tab_switcher":
+                    mHideMVForNewSurface = true;
+                    mHideTabCarouselForNewSurface = true;
+                    break;
+                default:
+                    mHideMVForNewSurface = false;
+                    mHideTabCarouselForNewSurface = false;
             }
         }
 
-        if (state == StartSurfaceState.SHOWING_START && !mTabModelSelector.isIncognitoSelected()
-                && StartSurfaceConfiguration.NEW_SURFACE_FROM_HOME_BUTTON.getValue()) {
-            mShowNewHomeSurface = false;
+        // Every time Chrome is started, no matter warm start or cold start, show MV tiles & tab
+        // carousel.
+        if (state == StartSurfaceState.SHOWING_START && !mTabModelSelector.isIncognitoSelected()) {
+            mHideMVForNewSurface = false;
+            mHideTabCarouselForNewSurface = false;
         }
 
         // Cache previous state.
@@ -501,8 +519,9 @@ class StartSurfaceMediator
 
             // If new home surface for home button is enabled, MV tiles and carousel tab switcher
             // will not show.
-            setTabCarouselVisibility(hasNormalTab && !mIsIncognito && !mShowNewHomeSurface);
-            setMVTilesVisibility(!mIsIncognito && !mShowNewHomeSurface);
+            setTabCarouselVisibility(
+                    hasNormalTab && !mIsIncognito && !mHideTabCarouselForNewSurface);
+            setMVTilesVisibility(!mIsIncognito && !mHideMVForNewSurface);
             setFakeBoxVisibility(!mIsIncognito);
             setSecondaryTasksSurfaceVisibility(mIsIncognito);
 
@@ -903,6 +922,8 @@ class StartSurfaceMediator
             if (mFakeboxDelegate != null && mFakeboxDelegate.getVoiceRecognitionHandler() != null) {
                 mPropertyModel.set(IS_VOICE_RECOGNITION_BUTTON_VISIBLE,
                         mFakeboxDelegate.getVoiceRecognitionHandler().isVoiceSearchEnabled());
+                mPropertyModel.set(IS_LENS_BUTTON_VISIBLE,
+                        mFakeboxDelegate.isLensEnabled(LensEntryPoint.TASKS_SURFACE));
             }
         });
     }

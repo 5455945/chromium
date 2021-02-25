@@ -36,6 +36,7 @@ class WebAppRegistrar : public AppRegistrar, public ProfileManagerObserver {
   bool is_empty() const { return registry_.empty(); }
 
   const WebApp* GetAppById(const AppId& app_id) const;
+  std::vector<AppId> GetAppsInSyncInstall();
 
   // AppRegistrar:
   void Start() override;
@@ -61,6 +62,7 @@ class WebAppRegistrar : public AppRegistrar, public ProfileManagerObserver {
   DisplayMode GetAppUserDisplayMode(const AppId& app_id) const override;
   std::vector<DisplayMode> GetAppDisplayModeOverride(
       const AppId& app_id) const override;
+  apps::UrlHandlers GetAppUrlHandlers(const AppId& app_id) const override;
   base::Time GetAppLastLaunchTime(const web_app::AppId& app_id) const override;
   base::Time GetAppInstallTime(const web_app::AppId& app_id) const override;
   std::vector<WebApplicationIconInfo> GetAppIconInfos(

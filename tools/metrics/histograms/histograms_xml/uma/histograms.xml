@@ -22,7 +22,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 <histograms>
 
 <histogram name="UMA.ActualLogUploadInterval" units="minutes"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>asvitkine@chromium.org</owner>
   <owner>src/base/metrics/OWNERS</owner>
   <summary>
@@ -123,8 +123,22 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
   </summary>
 </histogram>
 
+<histogram name="UMA.FileMetricsProvider.MergeHistogram.{Type}"
+    enum="HistogramNameHash" expires_after="2021-06-20">
+  <owner>asvitkine@chromium.org</owner>
+  <owner>chrome-metrics-team@google.com</owner>
+  <summary>
+    Records which histograms were merged into the current log from external
+    sources. {Type}
+  </summary>
+  <token key="Type">
+    <variant name="NotReadOnly" summary="From non-read-only sources."/>
+    <variant name="ReadOnly" summary="From read-only sources."/>
+  </token>
+</histogram>
+
 <histogram name="UMA.InitSequence" enum="UmaInitSequence"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>asvitkine@chromium.org</owner>
   <owner>src/base/metrics/OWNERS</owner>
   <summary>
@@ -217,7 +231,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
   </summary>
 </histogram>
 
-<histogram name="UMA.LogSize.OnSuccess" units="KB" expires_after="2021-06-20">
+<histogram name="UMA.LogSize.OnSuccess" units="KB" expires_after="2021-08-22">
   <owner>asvitkine@chromium.org</owner>
   <owner>src/base/metrics/OWNERS</owner>
   <summary>
@@ -241,7 +255,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="UMA.LogUpload.ResponseOrErrorCode"
-    enum="CombinedHttpResponseAndNetErrorCode" expires_after="2021-06-20">
+    enum="CombinedHttpResponseAndNetErrorCode" expires_after="2021-08-22">
   <owner>holte@chromium.org</owner>
   <owner>asvitkine@chromium.org</owner>
   <owner>src/base/metrics/OWNERS</owner>
@@ -263,7 +277,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="UMA.LowEntropySource3Value" units="units"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>asvitkine@chromium.org</owner>
   <owner>mpearson@chromium.org</owner>
   <owner>src/base/metrics/OWNERS</owner>
@@ -343,7 +357,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="UMA.NegativeSamples.Histogram" enum="HistogramNameHash"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>asvitkine@chromium.org</owner>
   <owner>bcwhite@chromium.org</owner>
   <owner>src/base/metrics/OWNERS</owner>
@@ -480,7 +494,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="UMA.ProtoCompressionRatio" units="%"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>asvitkine@chromium.org</owner>
   <owner>src/base/metrics/OWNERS</owner>
   <summary>
@@ -589,7 +603,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="UMA.TruncatedEvents.UserAction" units="events"
-    expires_after="2021-08-15">
+    expires_after="2021-08-22">
   <owner>rkaplow@chromium.org</owner>
   <owner>src/base/metrics/OWNERS</owner>
   <summary>
@@ -701,7 +715,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="UMA.UserDemographics.Status" enum="UserDemographicsStatus"
-    expires_after="2021-06-20">
+    expires_after="2021-08-22">
   <owner>vincb@google.com</owner>
   <owner>src/base/metrics/OWNERS</owner>
   <summary>

@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/allocator/allocator_shim_default_dispatch_to_partition_alloc.h"
+#include <cstddef>
 
 #include "base/allocator/allocator_shim_internals.h"
 #include "base/allocator/buildflags.h"
@@ -11,6 +12,7 @@
 #include "base/allocator/partition_allocator/partition_alloc_check.h"
 #include "base/allocator/partition_allocator/partition_alloc_constants.h"
 #include "base/allocator/partition_allocator/partition_alloc_features.h"
+#include "base/allocator/partition_allocator/partition_root.h"
 #include "base/allocator/partition_allocator/partition_stats.h"
 #include "base/bits.h"
 #include "base/no_destructor.h"
@@ -44,6 +46,9 @@ std::atomic<base::ThreadSafePartitionRoot*> g_root_;
 // Buffer for placement new.
 alignas(base::ThreadSafePartitionRoot) uint8_t
     g_allocator_buffer[sizeof(base::ThreadSafePartitionRoot)];
+
+// Original g_root_ if it was replaced by ConfigurePartitionRefCountSupport().
+std::atomic<base::ThreadSafePartitionRoot*> g_original_root_(nullptr);
 
 base::ThreadSafePartitionRoot* Allocator() {
   // Double-checked locking.
@@ -125,7 +130,17 @@ base::ThreadSafePartitionRoot* Allocator() {
   return new_root;
 }
 
+base::ThreadSafePartitionRoot* OriginalAllocator() {
+  return g_original_root_.load(std::memory_order_relaxed);
+}
+
 base::ThreadSafePartitionRoot* AlignedAllocator() {
+#if !DCHECK_IS_ON() && (!BUILDFLAG(USE_BACKUP_REF_PTR) || \
+                        BUILDFLAG(REF_COUNT_AT_END_OF_ALLOCATION))
+  // There are no tags or cookies in front of the allocation, so the regular
+  // allocator provides suitably aligned memory already.
+  return Allocator();
+#else
   // Since the general-purpose allocator uses the thread cache, this one cannot.
   static base::NoDestructor<base::ThreadSafePartitionRoot> aligned_allocator(
       base::PartitionOptions{base::PartitionOptions::Alignment::kAlignedAlloc,
@@ -133,6 +148,7 @@ base::ThreadSafePartitionRoot* AlignedAllocator() {
                              base::PartitionOptions::Quarantine::kAllowed,
                              base::PartitionOptions::RefCount::kDisabled});
   return aligned_allocator.get();
+#endif
 }
 
 #if defined(OS_WIN) && defined(ARCH_CPU_X86)
@@ -298,6 +314,11 @@ ThreadSafePartitionRoot* PartitionAllocMalloc::Allocator() {
 }
 
 // static
+ThreadSafePartitionRoot* PartitionAllocMalloc::OriginalAllocator() {
+  return ::OriginalAllocator();
+}
+
+// static
 ThreadSafePartitionRoot* PartitionAllocMalloc::AlignedAllocator() {
   return ::AlignedAllocator();
 }
@@ -311,14 +332,32 @@ namespace base {
 namespace allocator {
 
 void EnablePartitionAllocMemoryReclaimer() {
-  // Allocator() and AlignedAllocator() do not register their PartitionRoots to
-  // the memory reclaimer because the memory reclaimer allocates memory.  Thus,
-  // the registration to the memory reclaimer should be done sometime later.
-  // This function will be called sometime appropriate after PartitionRoots are
-  // initialized.
+  // Unlike other partitions, Allocator() and AlignedAllocator() do not register
+  // their PartitionRoots to the memory reclaimer, because doing so may allocate
+  // memory. Thus, the registration to the memory reclaimer has to be done
+  // some time later, when the main root is fully configured.
+  // TODO(bartekn): Aligned allocator can use the regular initialization path.
   PartitionAllocMemoryReclaimer::Instance()->RegisterPartition(Allocator());
-  PartitionAllocMemoryReclaimer::Instance()->RegisterPartition(
-      AlignedAllocator());
+  auto* original_root = OriginalAllocator();
+  if (original_root)
+    PartitionAllocMemoryReclaimer::Instance()->RegisterPartition(original_root);
+  if (AlignedAllocator() != Allocator()) {
+    PartitionAllocMemoryReclaimer::Instance()->RegisterPartition(
+        AlignedAllocator());
+  }
+}
+
+void ReconfigurePartitionAllocLazyCommit() {
+  // Unlike other partitions, Allocator() and AlignedAllocator() do not
+  // configure lazy commit upfront, because it uses base::Feature, which in turn
+  // allocates memory. Thus, lazy commit configuration has to be done after
+  // base::FeatureList is initialized.
+  // TODO(bartekn): Aligned allocator can use the regular initialization path.
+  Allocator()->ConfigureLazyCommit();
+  auto* original_root = OriginalAllocator();
+  if (original_root)
+    original_root->ConfigureLazyCommit();
+  AlignedAllocator()->ConfigureLazyCommit();
 }
 
 // Note that ENABLE_RUNTIME_BACKUP_REF_PTR_CONTROL implies that
@@ -352,6 +391,7 @@ void ConfigurePartitionRefCountSupport(bool enable_ref_count) {
                            : base::PartitionOptions::RefCount::kDisabled,
       });
   g_root_.store(new_root, std::memory_order_release);
+  g_original_root_ = current_root;
 }
 #endif  // BUILDFLAG(ENABLE_RUNTIME_BACKUP_REF_PTR_CONTROL)
 
@@ -359,7 +399,8 @@ void ConfigurePartitionRefCountSupport(bool enable_ref_count) {
 void EnablePCScan() {
   auto& pcscan = internal::PCScan<internal::ThreadSafe>::Instance();
   pcscan.RegisterScannableRoot(Allocator());
-  pcscan.RegisterScannableRoot(AlignedAllocator());
+  if (Allocator() != AlignedAllocator())
+    pcscan.RegisterScannableRoot(AlignedAllocator());
 }
 #endif
 
@@ -413,10 +454,13 @@ SHIM_ALWAYS_EXPORT int mallopt(int cmd, int value) __THROW {
 SHIM_ALWAYS_EXPORT struct mallinfo mallinfo(void) __THROW {
   base::SimplePartitionStatsDumper allocator_dumper;
   Allocator()->DumpStats("malloc", true, &allocator_dumper);
+  // TODO(bartekn): Dump OriginalAllocator() into "malloc" as well.
 
   base::SimplePartitionStatsDumper aligned_allocator_dumper;
-  AlignedAllocator()->DumpStats("posix_memalign", true,
-                                &aligned_allocator_dumper);
+  if (AlignedAllocator() != Allocator()) {
+    AlignedAllocator()->DumpStats("posix_memalign", true,
+                                  &aligned_allocator_dumper);
+  }
 
   struct mallinfo info = {0};
   info.arena = 0;  // Memory *not* allocated with mmap().

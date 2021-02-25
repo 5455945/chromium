@@ -801,19 +801,18 @@ LayoutUnit LayoutReplaced::ComputeReplacedLogicalWidth(
                                   BorderEnd() + ComputedCSSPaddingEnd(),
                                   BorderBefore() + ComputedCSSPaddingBefore(),
                                   BorderAfter() + ComputedCSSPaddingAfter());
-        // For no aspect-ratio case, height is content height, but
-        // InlineSizeFromAspectRatio expects border+padding height by default,
-        // so pretend we pass that to avoid extra border+padding calculations.
-        EBoxSizing box_sizing = EBoxSizing::kBorderBox;
-        if (StyleRef().AspectRatio().GetType() == EAspectRatioType::kRatio) {
+        // Because ComputeReplacedLogicalHeight returns a content size, we need
+        // to add border + padding for InlineSizeFromAspectRatio.
+        EBoxSizing box_sizing = EBoxSizing::kContentBox;
+        logical_height += border_padding.BlockSum();
+        if (StyleRef().AspectRatio().GetType() == EAspectRatioType::kRatio)
           box_sizing = StyleRef().BoxSizing();
-          logical_height += border_padding.BlockSum();
-        }
         double aspect_ratio = intrinsic_sizing_info.aspect_ratio.Width() /
                               intrinsic_sizing_info.aspect_ratio.Height();
         return ComputeReplacedLogicalWidthRespectingMinMaxWidth(
             InlineSizeFromAspectRatio(border_padding, aspect_ratio, box_sizing,
-                                      logical_height),
+                                      logical_height) -
+                border_padding.InlineSum(),
             should_compute_preferred);
       }
 
@@ -891,19 +890,18 @@ LayoutUnit LayoutReplaced::ComputeReplacedLogicalHeight(
                               BorderEnd() + ComputedCSSPaddingEnd(),
                               BorderBefore() + ComputedCSSPaddingBefore(),
                               BorderAfter() + ComputedCSSPaddingAfter());
-    // For no aspect-ratio case, width is content width, but
-    // BlockSizeFromAspectRatio expects border+padding width by default, so
-    // pretend we pass that to avoid extra border+padding calculations.
-    EBoxSizing box_sizing = EBoxSizing::kBorderBox;
-    if (StyleRef().AspectRatio().GetType() == EAspectRatioType::kRatio) {
+    // Because used_size contains a content size, we need
+    // to add border + padding for BlockSizeFromAspectRatio.
+    EBoxSizing box_sizing = EBoxSizing::kContentBox;
+    used_width += border_padding.InlineSum();
+    if (StyleRef().AspectRatio().GetType() == EAspectRatioType::kRatio)
       box_sizing = StyleRef().BoxSizing();
-      used_width += border_padding.InlineSum();
-    }
     double aspect_ratio = intrinsic_sizing_info.aspect_ratio.Height() /
                           intrinsic_sizing_info.aspect_ratio.Width();
     return ComputeReplacedLogicalHeightRespectingMinMaxHeight(
         BlockSizeFromAspectRatio(border_padding, aspect_ratio, box_sizing,
-                                 used_width));
+                                 used_width) -
+        border_padding.BlockSum());
   }
 
   // Otherwise, if 'height' has a computed value of 'auto', and the element has

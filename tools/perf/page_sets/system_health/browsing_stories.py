@@ -129,7 +129,7 @@ class _ArticleBrowsingStory(_BrowsingStory):
 ##############################################################################
 
 
-class CnnStory2020(_ArticleBrowsingStory):
+class CnnStory2021(_ArticleBrowsingStory):
   """The second top website in http://www.alexa.com/topsites/category/News"""
   NAME = 'browse:news:cnn:2021'
   URL = 'http://edition.cnn.com/'
@@ -437,7 +437,7 @@ class GoogleDesktopStory2018(_ArticleBrowsingStory):
     action_runner.ScrollPage()
 
 
-class GoogleIndiaDesktopStory2018(_ArticleBrowsingStory):
+class GoogleIndiaDesktopStory2021(_ArticleBrowsingStory):
   """
   A typical google search story in India:
     1. Start at self.URL
@@ -1272,6 +1272,7 @@ class _GmailBrowsingStory(system_health_story.SystemHealthStory):
   Adds common functionality for re-mapping + waiting on performance
   mark + measure data.
   """
+  SKIP_LOGIN = False
 
   # Patch performance.mark and measure to get notified about page events.
   PERFOMANCE_MARK_AND_MEASURE = '''
@@ -1334,7 +1335,6 @@ class GmailLabelClickStory2020(_GmailBrowsingStory):
   URL = 'http://mail.google.com/'
   SUPPORTED_PLATFORMS = platforms.DESKTOP_ONLY
   TAGS = [story_tags.YEAR_2020]
-  SKIP_LOGIN = False
 
   _IMPORTANT_SELECTOR = 'div[data-tooltip="Important"]'
 
@@ -1386,7 +1386,6 @@ class GmailOpenConversationStory2020(_GmailBrowsingStory):
   URL = 'http://mail.google.com/'
   SUPPORTED_PLATFORMS = platforms.DESKTOP_ONLY
   TAGS = [story_tags.YEAR_2020]
-  SKIP_LOGIN = False
 
   _CONV_SELECTOR = 'span[data-thread-id]'
 
@@ -1431,7 +1430,6 @@ class GmailSearchStory2020(_GmailBrowsingStory):
   URL = 'http://mail.google.com/'
   SUPPORTED_PLATFORMS = platforms.DESKTOP_ONLY
   TAGS = [story_tags.YEAR_2020]
-  SKIP_LOGIN = False
 
   _SEARCH_SELECTOR = 'input[aria-label="Search mail and chat"]'
 
@@ -1480,7 +1478,6 @@ class GmailComposeStory2020(_GmailBrowsingStory):
   URL = 'http://mail.google.com/'
   SUPPORTED_PLATFORMS = platforms.DESKTOP_ONLY
   TAGS = [story_tags.YEAR_2020]
-  SKIP_LOGIN = False
 
   # Page event queries.
   COMPOSE_BEGIN_EVENT = '''
