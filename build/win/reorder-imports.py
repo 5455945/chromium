@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..',
 import pefile
 
 def reorder_imports(input_dir, output_dir, architecture):
-  """Swap chrome_elf.dll to be the first import of chrome.exe.
+  """Swap chrome_elf.dll to be the first import of kgdsBrowser.exe.
   Also copy over any related files that might be needed
   (pdbs, manifests etc.).
   """
@@ -23,8 +23,8 @@ def reorder_imports(input_dir, output_dir, architecture):
   # correct executable in the first place, so that this script
   # only needs to verify that and not write a whole new exe.
 
-  input_image = os.path.join(input_dir, 'chrome.exe')
-  output_image = os.path.join(output_dir, 'chrome.exe')
+  input_image = os.path.join(input_dir, 'kgdsBrowser.exe')
+  output_image = os.path.join(output_dir, 'kgdsBrowser.exe')
 
   # pefile mmap()s the whole executable, and then parses parts of
   # it into python data structures for ease of processing.
@@ -72,7 +72,7 @@ def reorder_imports(input_dir, output_dir, architecture):
 
   pe.write(filename=output_image)
 
-  for fname in glob.iglob(os.path.join(input_dir, 'chrome.exe.*')):
+  for fname in glob.iglob(os.path.join(input_dir, 'kgdsBrowser.exe.*')):
     shutil.copy(fname, os.path.join(output_dir, os.path.basename(fname)))
   return 0
 
@@ -80,9 +80,9 @@ def reorder_imports(input_dir, output_dir, architecture):
 def main(argv):
   usage = 'reorder_imports.py -i <input_dir> -o <output_dir> -a <target_arch>'
   parser = optparse.OptionParser(usage=usage)
-  parser.add_option('-i', '--input', help='reorder chrome.exe in DIR',
+  parser.add_option('-i', '--input', help='reorder kgdsBrowser.exe in DIR',
       metavar='DIR')
-  parser.add_option('-o', '--output', help='write new chrome.exe to DIR',
+  parser.add_option('-o', '--output', help='write new kgdsBrowser.exe to DIR',
       metavar='DIR')
   parser.add_option('-a', '--arch', help='architecture of build (optional)',
       default='ia32')
