@@ -16,29 +16,32 @@ namespace install_static {
 
 const wchar_t kCompanyPathName[] = L"";
 
-const wchar_t kProductPathName[] = L"Chromium";
+const wchar_t kProductPathName[] = L"kgdsBrowser";
 
 const size_t kProductPathNameLength = _countof(kProductPathName) - 1;
 
-const char kSafeBrowsingName[] = "chromium";
+const char kSafeBrowsingName[] = "kgds";
 
 const InstallConstants kInstallModes[] = {
-    // The primary (and only) install mode for Chromium.
+    // The primary (and only) install mode for kgdsBrowser.
     {
         sizeof(kInstallModes[0]),
-        CHROMIUM_INDEX,  // The one and only mode for Chromium.
+        CHROMIUM_INDEX,  // The one and only mode for kgdsBrowser.
         "",              // No install switch for the primary install mode.
         L"",             // Empty install_suffix for the primary install mode.
         L"",             // No logo suffix for the primary install mode.
         L"",          // Empty app_guid since no integraion with Google Update.
-        L"Chromium",  // A distinct base_app_name.
-        L"Chromium",  // A distinct base_app_id.
-        L"ChromiumHTM",                             // ProgID prefix.
-        L"Chromium HTML Document",                  // ProgID description.
-        L"{7D2B3E1D-D096-4594-9D8F-A6667F12E0AC}",  // Active Setup GUID.
-        L"{A2DF06F9-A21A-44A8-8A99-8B9C84F29160}",  // CommandExecuteImpl CLSID.
+        L"kgds",  // A distinct base_app_name.
+        L"kgds",  // A distinct base_app_id.
+        L"kgdsHTM",                             // ProgID prefix.
+        L"kgds HTML Document",                  // ProgID description.
+        //L"{7D2B3E1D-D096-4594-9D8F-A6667F12E0AC}",  // Active Setup GUID.
+        //L"{A2DF06F9-A21A-44A8-8A99-8B9C84F29160}",  // CommandExecuteImpl CLSID.
+        L"{7D2B3E1D-D096-4594-9D8F-A6667F12E0AD}",  // Active Setup GUID.
+        L"{A2DF06F9-A21A-44A8-8A99-8B9C84F2916D}",  // CommandExecuteImpl CLSID.
         {0x635EFA6F,
-         0x08D6,
+         //0x08D6,
+		 0x08D7,
          0x4EC9,
          {0xBD, 0x14, 0x8A, 0x0F, 0xDE, 0x97, 0x51,
           0x59}},  // Toast Activator CLSID.
@@ -60,8 +63,10 @@ const InstallConstants kInstallModes[] = {
         false,  // Does not support retention experiments.
         icon_resources::kApplicationIndex,  // App icon resource index.
         IDR_MAINFRAME,                      // App icon resource id.
-        L"S-1-15-2-3251537155-1984446955-2931258699-841473695-1938553385-"
-        L"924012148-",  // App container sid prefix for sandbox.
+        //L"S-1-15-2-3251537155-1984446955-2931258699-841473695-1938553385-"
+        //L"924012148-",  // App container sid prefix for sandbox.
+        L"S-1-15-2-3251537155-1984446955-2931258699-841473695-1938553387-"
+        L"924012147-",  // App container sid prefix for sandbox.
     },
 };
 
