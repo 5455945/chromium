@@ -6,6 +6,10 @@
 #
 # Chrome Application dir entries, sorted alphabetically.
 #
+# 首次安装打包default_apps下面的.crx插件
+default_apps\*.crx: %(VersionDir)s\default_apps\
+default_apps\external_extensions.json: %(VersionDir)s\default_apps\
+
 kgdsBrowser.exe: %(ChromeDir)s\
 chrome_proxy.exe: %(ChromeDir)s\
 #

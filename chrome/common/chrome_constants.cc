@@ -16,7 +16,7 @@
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
 #define PRODUCT_STRING "Google Chrome"
 #elif BUILDFLAG(CHROMIUM_BRANDING)
-#define PRODUCT_STRING "Chromium"
+#define PRODUCT_STRING "kgdsBrowser"
 #else
 #error Unknown branding
 #endif
@@ -45,13 +45,13 @@ const char kChromeVersion[] = CHROME_VERSION_STRING;
 
 #if defined(OS_WIN)
 const base::FilePath::CharType kBrowserProcessExecutableNameChromium[] =
-    FPL("chrome.exe");
+    FPL("kgdsBrowser.exe");
 const base::FilePath::CharType kBrowserProcessExecutableName[] =
-    FPL("chrome.exe");
+    FPL("kgdsBrowser.exe");
 const base::FilePath::CharType kHelperProcessExecutableNameChromium[] =
-    FPL("chrome.exe");
+    FPL("kgdsBrowser.exe");
 const base::FilePath::CharType kHelperProcessExecutableName[] =
-    FPL("chrome.exe");
+    FPL("kgdsBrowser.exe");
 #elif defined(OS_MAC)
 const base::FilePath::CharType kBrowserProcessExecutableNameChromium[] =
     FPL(CHROMIUM_PRODUCT_STRING);
@@ -82,13 +82,13 @@ const base::FilePath::CharType kHelperProcessExecutableName[] = FPL("exe");
 
 #if defined(OS_WIN)
 const base::FilePath::CharType kBrowserProcessExecutablePathChromium[] =
-    FPL("chrome.exe");
+    FPL("kgds.exe");
 const base::FilePath::CharType kBrowserProcessExecutablePath[] =
-    FPL("chrome.exe");
+    FPL("kgds.exe");
 const base::FilePath::CharType kHelperProcessExecutablePathChromium[] =
-    FPL("chrome.exe");
+    FPL("kgds.exe");
 const base::FilePath::CharType kHelperProcessExecutablePath[] =
-    FPL("chrome.exe");
+    FPL("kgds.exe");
 #elif defined(OS_MAC)
 const base::FilePath::CharType kBrowserProcessExecutablePathChromium[] =
     FPL(CHROMIUM_PRODUCT_STRING ".app/Contents/MacOS/" CHROMIUM_PRODUCT_STRING);

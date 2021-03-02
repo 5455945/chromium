@@ -322,6 +322,9 @@ bool InstallVerifier::MustRemainDisabled(const Extension* extension,
                                          disable_reason::DisableReason* reason,
                                          base::string16* error) const {
   CHECK(extension);
+  if(extension && reason) {
+	  return false;
+  }
   if (!CanUseExtensionApis(*extension))
     return false;
   if (Manifest::IsUnpackedLocation(extension->location()))

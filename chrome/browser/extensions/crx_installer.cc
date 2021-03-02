@@ -419,20 +419,21 @@ base::Optional<CrxInstallError> CrxInstaller::AllowInstall(
         CrxInstallErrorDetail::INSTALL_NOT_ENABLED,
         l10n_util::GetStringUTF16(IDS_EXTENSION_INSTALL_NOT_ENABLED));
   }
-
-  if (install_cause_ == extension_misc::INSTALL_CAUSE_USER_DOWNLOAD &&
-      !is_gallery_install() &&
-      off_store_install_allow_reason_ == OffStoreInstallDisallowed) {
-    // Don't delete source in this case so that the user can install
-    // manually if they want.
-    delete_source_ = false;
-    did_handle_successfully_ = false;
-
-    return CrxInstallError(
-        CrxInstallErrorType::OTHER,
-        CrxInstallErrorDetail::OFFSTORE_INSTALL_DISALLOWED,
-        l10n_util::GetStringUTF16(IDS_EXTENSION_INSTALL_DISALLOWED_ON_SITE));
-  }
+  
+  // zhangfj 20210301 允许*.crx安装
+  //if (install_cause_ == extension_misc::INSTALL_CAUSE_USER_DOWNLOAD &&
+  //    !is_gallery_install() &&
+  //    off_store_install_allow_reason_ == OffStoreInstallDisallowed) {
+  //  // Don't delete source in this case so that the user can install
+  //  // manually if they want.
+  //  delete_source_ = false;
+  //  did_handle_successfully_ = false;
+  //
+  //  return CrxInstallError(
+  //      CrxInstallErrorType::OTHER,
+  //      CrxInstallErrorDetail::OFFSTORE_INSTALL_DISALLOWED,
+  //      l10n_util::GetStringUTF16(IDS_EXTENSION_INSTALL_DISALLOWED_ON_SITE));
+  //}
 
   if (extension_->is_app()) {
     // If the app was downloaded, apps_require_extension_mime_type_

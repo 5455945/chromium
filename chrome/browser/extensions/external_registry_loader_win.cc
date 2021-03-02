@@ -32,8 +32,10 @@ using content::BrowserThread;
 namespace {
 
 // The Registry subkey that contains information about external extensions.
-const base::char16 kRegistryExtensions[] =
-    L"Software\\Google\\Chrome\\Extensions";
+// zhangfj 20210301 windows版本插件更新使用的注册表
+// 参考:https://developer.chrome.com/extensions/external_extensions
+//const base::char16 kRegistryExtensions[] = L"Software\\Google\\Chrome\\Extensions";
+const base::char16 kRegistryExtensions[] = L"Software\\kgdsBrowser\\Extensions";
 
 // Registry value of the key that defines the installation parameter.
 const base::char16 kRegistryExtensionInstallParam[] = L"install_parameter";

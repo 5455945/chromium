@@ -40,7 +40,9 @@ bool IsLocaleSupported() {
   // TODO(rogerta): Do this check dynamically once the webstore can expose
   // an API. See http://crbug.com/101357
   const std::string& locale = g_browser_process->GetApplicationLocale();
-  static const char* const unsupported_locales[] = {"CN", "TR", "IR"};
+  // zhangfj 20210301 支持default_apps安装*.crx,默认禁用CN语言区域
+  //static const char* const unsupported_locales[] = {"CN", "TR", "IR"};
+  static const char* const unsupported_locales[] = {"TR", "IR"};
   for (size_t i = 0; i < base::size(unsupported_locales); ++i) {
     if (base::EndsWith(locale, unsupported_locales[i],
                        base::CompareCase::INSENSITIVE_ASCII)) {

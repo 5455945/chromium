@@ -558,8 +558,9 @@ void ContentVerifier::VerifyFailed(const ExtensionId& extension_id,
 
   VLOG(1) << "VerifyFailed " << extension_id << " reason:" << reason;
   DCHECK_NE(ContentVerifyJob::NONE, reason);
-
-  delegate_->VerifyFailed(extension_id, reason);
+  
+  //// zhangfj 20210301 停用本地加载hash等的检查
+  //delegate_->VerifyFailed(extension_id, reason);
 }
 
 void ContentVerifier::OnExtensionLoaded(

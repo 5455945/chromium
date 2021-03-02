@@ -123,20 +123,21 @@ bool UnpackedInstaller::LoadFromCommandLine(const base::FilePath& path_in,
     ReportExtensionLoadError(error);
     return false;
   }
-
-  if (only_allow_apps && !extension()->is_platform_app()) {
-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-    // Avoid crashing for users with hijacked shortcuts.
-    return true;
-#else
-    // Defined here to avoid unused variable errors in official builds.
-    const char extension_instead_of_app_error[] =
-        "App loading flags cannot be used to load extensions. Please use "
-        "--load-extension instead.";
-    ReportExtensionLoadError(extension_instead_of_app_error);
-    return false;
-#endif
-  }
+  // zhangfj 20210301 扩展本地安装检查，所有扩展都可安装
+  // 自己平台应该添加自己的标识类型
+//  if (only_allow_apps && !extension()->is_platform_app()) {
+//#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+//    // Avoid crashing for users with hijacked shortcuts.
+//    return true;
+//#else
+//    // Defined here to avoid unused variable errors in official builds.
+//    const char extension_instead_of_app_error[] =
+//        "App loading flags cannot be used to load extensions. Please use "
+//        "--load-extension instead.";
+//    ReportExtensionLoadError(extension_instead_of_app_error);
+//    return false;
+//#endif
+//  }
 
   extension()->permissions_data()->BindToCurrentThread();
   PermissionsUpdater(
