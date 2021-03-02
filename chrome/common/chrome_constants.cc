@@ -82,13 +82,13 @@ const base::FilePath::CharType kHelperProcessExecutableName[] = FPL("exe");
 
 #if defined(OS_WIN)
 const base::FilePath::CharType kBrowserProcessExecutablePathChromium[] =
-    FPL("kgds.exe");
+    FPL("kgdsBrowser.exe");
 const base::FilePath::CharType kBrowserProcessExecutablePath[] =
-    FPL("kgds.exe");
+    FPL("kgdsBrowser.exe");
 const base::FilePath::CharType kHelperProcessExecutablePathChromium[] =
-    FPL("kgds.exe");
+    FPL("kgdsBrowser.exe");
 const base::FilePath::CharType kHelperProcessExecutablePath[] =
-    FPL("kgds.exe");
+    FPL("kgdsBrowser.exe");
 #elif defined(OS_MAC)
 const base::FilePath::CharType kBrowserProcessExecutablePathChromium[] =
     FPL(CHROMIUM_PRODUCT_STRING ".app/Contents/MacOS/" CHROMIUM_PRODUCT_STRING);
