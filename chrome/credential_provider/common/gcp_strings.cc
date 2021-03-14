@@ -122,7 +122,7 @@ const wchar_t kAllowImportWhenPrimaryAccountExists[] =
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
 const wchar_t kRegHkcuAccountsPath[] = L"Software\\Google\\Accounts";
 #else
-const wchar_t kRegHkcuAccountsPath[] = L"Software\\Chromium\\Accounts";
+const wchar_t kRegHkcuAccountsPath[] = L"Software\\kgdsBrowser\\Accounts";
 #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
 }  // namespace credential_provider

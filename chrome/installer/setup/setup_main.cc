@@ -6,6 +6,7 @@
 
 // Must be before msi.h.
 #include <windows.h>
+#include "tchar.h"
 
 #include <msi.h>
 #include <psapi.h>
@@ -591,6 +592,8 @@ installer::InstallStatus UninstallProducts(InstallationState& original_state,
                                            InstallerState& installer_state,
                                            const base::FilePath& setup_exe,
                                            const base::CommandLine& cmd_line) {
+  // zhangfj 20210320 设置setup的调试点
+  //::MessageBox(NULL, _T("installer::UninstallProducts."), _T("steupWait"), MB_OK);
   // System-level Chrome will be launched via this command if its program gets
   // set below.
   base::CommandLine system_level_cmd(base::CommandLine::NO_PROGRAM);
@@ -1282,6 +1285,9 @@ int WINAPI wWinMain(HINSTANCE instance,
                     HINSTANCE prev_instance,
                     wchar_t* command_line,
                     int show_command) {
+  // zhangfj 20210306 设置setup的调试点
+  //::MessageBox(NULL, _T("Setup load point debugging."), _T("steupWait"), MB_OK);
+  //Sleep(60);  // 停止一分钟等待设置调试断点 ,提示 #include <vcruntime.h> 找不到
   // Check to see if the CPU is supported before doing anything else. There's
   // very little than can safely be accomplished if the CPU isn't supported
   // since dependent libraries (e.g., base) may use invalid instructions.

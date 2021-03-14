@@ -749,7 +749,7 @@ void RemoveChromeLegacyRegistryKeys(const base::FilePath& chrome_exe) {
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   const wchar_t kChromeExtProgId[] = L"ChromeExt";
 #else
-  const wchar_t kChromeExtProgId[] = L"ChromiumExt";
+  const wchar_t kChromeExtProgId[] = L"kgdsBrowserExt";
 #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING
 
   HKEY roots[] = {HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER};

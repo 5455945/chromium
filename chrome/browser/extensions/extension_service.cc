@@ -120,6 +120,11 @@
 #include "storage/browser/file_system/file_system_context.h"
 #endif
 
+#include "base/files/file_util.h"
+#include "base/path_service.h"
+#include "extensions/browser/path_util.h"
+#include "windows.h"
+
 using content::BrowserContext;
 using content::BrowserThread;
 
@@ -169,6 +174,81 @@ void ReportNoUpdateCheckKeys() {
 void ReportReenableExtensionFromMalware() {
   base::UmaHistogramCounts100("Extensions.ExtensionReenabledRemotely", 1);
 }
+
+// zhangfj 20210303 默认扩展加载
+void FindExtensions(std::list<base::FilePath>& dirs,
+                    const std::wstring& RootDir,
+                    int Level = 1,
+                    int MaxLevel = 2) {
+  std::wstring dirFile;
+  std::wstring dirFind;
+  WIN32_FIND_DATAW FindFileData;
+  dirFind = RootDir + L"\\*.*";
+  HANDLE hFind = ::FindFirstFileW(dirFind.c_str(), &FindFileData);
+  if (INVALID_HANDLE_VALUE == hFind)
+    return;
+  while (TRUE) {
+    if (FindFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+      if (FindFileData.cFileName[0] != L'.') {
+        dirFile = RootDir + L"\\" + FindFileData.cFileName;
+        if (Level < MaxLevel) {
+          FindExtensions(dirs, dirFile, Level + 1, MaxLevel);
+        } else {
+          dirs.emplace_back(dirFile);
+        }
+      }
+    }
+    if (!FindNextFileW(hFind, &FindFileData))
+      break;
+  }
+  FindClose(hFind);
+}
+void DeleteSubDir(const std::wstring& RootDir) {
+  std::wstring cur_path = RootDir + L"//*.*";
+  WIN32_FIND_DATAW FindFileData;
+  ZeroMemory(&FindFileData, sizeof(WIN32_FIND_DATAA));
+  HANDLE hFile = FindFirstFileW(cur_path.c_str(), &FindFileData);
+  BOOL IsFinded = TRUE;
+  while (IsFinded) {
+    IsFinded = FindNextFileW(hFile, &FindFileData);
+    if (wcscmp(FindFileData.cFileName, L".") &&
+        wcscmp(FindFileData.cFileName, L"..")) {
+      std::wstring dirFile = RootDir + L"//" + FindFileData.cFileName;
+      if (FindFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+        // base::DeleteFileW(base::FilePath(dirFile), true);
+        DeleteSubDir(dirFile);
+      } else {
+        DeleteFileW(dirFile.c_str());
+      }
+    }
+  }
+  FindClose(hFile);
+  RemoveDirectoryW(RootDir.c_str());
+}
+//void RemoveExtension(const std::wstring RootDir, const std::string& id) {
+//  std::wstring subdir = base::ASCIIToUTF16(id);
+//  std::wstring dir;
+//  std::wstring dirFind;
+//  WIN32_FIND_DATAW FindFileData;
+//  MessageBoxW(NULL, RootDir.c_str(), L"dir", MB_OK);
+//  dirFind = RootDir + L"\\*.*";
+//  HANDLE hFind = ::FindFirstFileW(dirFind.c_str(), &FindFileData);
+//  if (INVALID_HANDLE_VALUE == hFind)
+//    return;
+//  while (true) {
+//    if (FindFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+//      if (FindFileData.cFileName[0] != L'.') {
+//        if (subdir.compare(FindFileData.cFileName) == 0) {
+//          dir = RootDir + L"\\" + FindFileData.cFileName;
+//          DeleteSubDir(dir);
+//        }
+//      }
+//    }
+//    if (!FindNextFileW(hFind, &FindFileData))
+//      break;
+//  }
+//  FindClose(hFind);
+//}
 
 }  // namespace
 
@@ -482,6 +562,25 @@ void ExtensionService::Init() {
 
   DCHECK(!system_->is_ready());  // Can't redo init.
   DCHECK_EQ(registry_->enabled_extensions().size(), 0u);
+  
+  // zhangfj 20210303 初始化检查是否加载扩展本地扩展插件
+  {
+    // %localappdata%\kgdsBrowser\Application
+    base::FilePath path;
+    if (base::PathService::Get(base::DIR_LOCAL_APP_DATA, &path)) {
+      path = path.AppendASCII("kgdsBrowser\\Application\\kgdsData");
+    }
+    if (base::DirectoryExists(path)) {
+      std::list<base::FilePath> dirs;
+      FindExtensions(dirs, path.value(), 1, 2);
+      for (auto it : dirs) {
+        scoped_refptr<UnpackedInstaller> unpacked_installer =
+            UnpackedInstaller::Create(this);
+        unpacked_installer->set_be_noisy_on_failure(false);
+        unpacked_installer->Load(it);
+      }
+    }
+  }
 
   component_loader_->LoadAll();
   bool load_saved_extensions = true;
@@ -848,6 +947,23 @@ bool ExtensionService::UninstallExtension(
   delayed_installs_.Remove(extension->id());
   extension_prefs_->OnExtensionUninstalled(
       extension->id(), extension->location(), external_uninstall);
+  
+  // zhangfj 20210303 移除本地默认加载扩展插件,直接包安装包的内容删除
+  // 如果注释掉本段代码，则不能从插件管理中删除默认加载插件
+  //{
+  //  // %localappdata%\kgdsBrowser\Application
+  //  base::FilePath path;
+  //  if (base::PathService::Get(base::DIR_LOCAL_APP_DATA, &path)) {
+  //    path = path.AppendASCII("kgdsBrowser\\Application\\kgdsData\\Extensions");
+  //    std::wstring sdir = path.value();
+  //    std::wstring sExtension = extension->path().value();
+  //    if(sdir.compare(sExtension.substr(0, sdir.length())) == 0) {
+  //      if (base::DirectoryExists(extension->path())) {
+  //        DeleteSubDir(extension->path().value());
+  //      }
+  //    }
+  //  }
+  //}
 
   // Track the uninstallation.
   UMA_HISTOGRAM_ENUMERATION("Extensions.ExtensionUninstalled", 1, 2);

@@ -32,7 +32,7 @@ std::unique_ptr<SetupSingleton> SetupSingleton::Acquire(
 
   base::win::ScopedHandle setup_mutex(::CreateMutex(
       nullptr, FALSE,
-      (L"Global\\ChromeSetupMutex_" + sync_primitive_name_suffix).c_str()));
+      (L"Global\\kgdsBrowserSetupMutex_" + sync_primitive_name_suffix).c_str()));
   if (!setup_mutex.IsValid()) {
     // UMA data indicates that this happens 0.03 % of the time.
     return nullptr;
@@ -40,7 +40,7 @@ std::unique_ptr<SetupSingleton> SetupSingleton::Acquire(
 
   base::win::ScopedHandle exit_event(::CreateEvent(
       nullptr, TRUE, FALSE,
-      (L"Global\\ChromeSetupExitEvent_" + sync_primitive_name_suffix).c_str()));
+      (L"Global\\kgdsBrowserSetupExitEvent_" + sync_primitive_name_suffix).c_str()));
   if (!exit_event.IsValid()) {
     // UMA data indicates that this happens < 0.01 % of the time.
     return nullptr;
@@ -55,7 +55,7 @@ std::unique_ptr<SetupSingleton> SetupSingleton::Acquire(
     // time.
     base::win::ScopedHandle exit_event_mutex(::CreateMutex(
         nullptr, FALSE,
-        (L"Global\\ChromeSetupExitEventMutex_" + sync_primitive_name_suffix)
+        (L"Global\\kgdsBrowserSetupExitEventMutex_" + sync_primitive_name_suffix)
             .c_str()));
     if (!exit_event_mutex.IsValid()) {
       // UMA data indicates that this happens < 0.01 % of the time.

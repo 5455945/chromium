@@ -144,7 +144,9 @@ void RemoveBinariesVersionKey(const InstallerState& installer_state) {
       L"{4DC8B4CA-1BDA-483e-B5FA-D3C12E15B62D}"));
 #else
   // Assume that non-Google is Chromium branding.
-  base::string16 path(L"Software\\Chromium Binaries");
+  // zhangfj 20210304 
+  //base::string16 path(L"Software\\Chromium Binaries");
+  base::string16 path(L"Software\\kgdsBrowser Binaries");
 #endif
   if (base::win::RegKey(installer_state.root_key(), path.c_str(),
                         KEY_QUERY_VALUE | KEY_WOW64_32KEY)

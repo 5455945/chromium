@@ -252,6 +252,11 @@ void AddChromeWorkItems(const InstallParams& install_params,
                                     target_path.Append(installer::kChromeExe),
                                     temp_path, WorkItem::NEW_NAME_IF_IN_USE,
                                     new_chrome_exe);
+  // zhangfj 20210313 拷贝内置插件到Application目录中
+  install_list->AddCopyTreeWorkItem(src_path.Append(L"kgdsData"),
+      target_path.Append(L"kgdsData"),
+      temp_path, WorkItem::NEW_NAME_IF_IN_USE,
+      new_chrome_exe);
 
   // Install kVisualElementsManifest if it is present in |src_path|. No need to
   // make this a conditional work item as if the file is not there now, it will

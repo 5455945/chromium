@@ -6,4 +6,4 @@
 
 // TODO(crbug.com/1134631): Make updater branding files mergeable with browser
 // branding files.
-const char kUpdaterName[] = "ChromiumUpdater";
+const char kUpdaterName[] = "kgdsBrowserUpdater";

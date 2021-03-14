@@ -129,7 +129,7 @@ bool InstallerCrashReporterClient::ReportingIsEnforcedByPolicy(bool* enabled) {
       L"SOFTWARE\\Policies\\Google\\Chrome";
 #else
   static const wchar_t kRegistryChromePolicyKey[] =
-      L"SOFTWARE\\Policies\\Chromium";
+      L"SOFTWARE\\Policies\\kgdsBrowser";
 #endif
   static const wchar_t kMetricsReportingEnabled[] = L"MetricsReportingEnabled";
 

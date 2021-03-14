@@ -20,6 +20,7 @@ import os
 import shutil
 import subprocess
 import sys
+import string
 
 
 ARCHIVE_DIR = "installer_archive"
@@ -131,6 +132,31 @@ def insensiglob(pattern):
     return '[{}{}]'.format(c.lower(), c.upper()) if c.isalpha() else c
   return glob.glob(''.join(map(recase, pattern)))
 
+# kgdsBrowser kgdsData files
+def CopyDirs(path, dst_path):
+    lsdir = os.listdir(path)
+    dirs = [cdir for cdir in lsdir if os.path.isdir(os.path.join(path, cdir))]
+    for d in dirs:
+        curdir = os.path.join(path, d)
+        dstdir = os.path.join(dst_path, d)
+        if curdir and not os.path.exists(dstdir):
+            #print(dstdir)
+            if not os.path.exists(dstdir):
+                g_archive_inputs.append(curdir)
+            os.makedirs(dstdir)
+        #print(curdir)
+        #print(dstdir)
+        CopyDirs(curdir, dstdir)
+    files = [i for i in lsdir if os.path.isfile(os.path.join(path,i))]
+    for f in files:
+        curfile = os.path.join(path, f)
+        dstfile = os.path.join(dst_path, f)
+        if not os.path.exists(dstfile):
+            g_archive_inputs.append(curfile)
+        #print(curfile)
+        #print(dstfile)
+        shutil.copy(curfile, dstfile)
+
 def CopySectionFilesToStagingDir(config, section, staging_dir, src_dir,
                                  verbose):
   """Copies installer archive files specified in section from src_dir to
@@ -156,7 +182,10 @@ def CopySectionFilesToStagingDir(config, section, staging_dir, src_dir,
       dst_path = os.path.join(dst_dir, os.path.basename(src_path))
       if not os.path.exists(dst_path):
         g_archive_inputs.append(src_path)
-        shutil.copy(src_path, dst_dir)
+        if(string.find(src_path, '.\\kgdsData') == 0):
+          CopyDirs(src_path, dst_path)
+        else:
+          shutil.copy(src_path, dst_dir)
 
 def GenerateDiffPatch(options, orig_file, new_file, patch_file):
   if (options.diff_algorithm == "COURGETTE"):

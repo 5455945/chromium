@@ -285,16 +285,16 @@ class VariableExpander:
             'Google Chrome Canary Elevation Service'
             ' (GoogleChromeCanaryElevationService)'),
       })
-    elif mini_installer_product_name == 'Chromium Installer':
+    elif mini_installer_product_name == 'kgdsBrowser Installer':
       self._variable_mapping.update({
-          'BRAND': 'Chromium',
-          'BINARIES_UPDATE_REGISTRY_SUBKEY': 'Software\\Chromium Binaries',
-          'CHROME_DIR': 'Chromium',
-          'CHROME_HTML_PROG_ID': 'ChromiumHTM',
-          'CHROME_LONG_NAME': 'Chromium',
-          'CHROME_SHORT_NAME': 'Chromium',
-          'CHROME_UPDATE_REGISTRY_SUBKEY': 'Software\\Chromium',
-          'CHROME_CLIENT_STATE_KEY': 'Software\\Chromium',
+          'BRAND': 'kgdsBrowser',
+          'BINARIES_UPDATE_REGISTRY_SUBKEY': 'Software\\kgdsBrowser Binaries',
+          'CHROME_DIR': 'kgdsBrowser',
+          'CHROME_HTML_PROG_ID': 'kgdsBrowserHTM',
+          'CHROME_LONG_NAME': 'kgdsBrowser',
+          'CHROME_SHORT_NAME': 'kgdsBrowser',
+          'CHROME_UPDATE_REGISTRY_SUBKEY': 'Software\\kgdsBrowser',
+          'CHROME_CLIENT_STATE_KEY': 'Software\\kgdsBrowser',
           'CHROME_TOAST_ACTIVATOR_CLSID': (
             '{635EFA6F-08D6-4EC9-BD14-8A0FDE975159}'),
           'CHROME_ELEVATOR_CLSID': ('{D133B120-6DB4-4D6B-8BFE-83BF8CA1B1B0}'),

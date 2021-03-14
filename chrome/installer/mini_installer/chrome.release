@@ -6,9 +6,6 @@
 #
 # Chrome Application dir entries, sorted alphabetically.
 #
-# 首次安装打包default_apps下面的.crx插件
-default_apps\*.crx: %(VersionDir)s\default_apps\
-default_apps\external_extensions.json: %(VersionDir)s\default_apps\
 
 kgdsBrowser.exe: %(ChromeDir)s\
 chrome_proxy.exe: %(ChromeDir)s\
@@ -44,6 +41,15 @@ v8_context_snapshot.bin: %(VersionDir)s\
 #
 Extensions\*.*: %(VersionDir)s\Extensions\
 locales\*.pak: %(VersionDir)s\Locales
+
+#kgdsData\Extensions\odpallkkfelambhpmlmpmjeldndoocdm\background\*.*: %(ChromeDir)s\kgdsData\Extensions\odpallkkfelambhpmlmpmjeldndoocdm\background\
+#kgdsData\Extensions\odpallkkfelambhpmlmpmjeldndoocdm\content\*.*: %(ChromeDir)s\kgdsData\Extensions\odpallkkfelambhpmlmpmjeldndoocdm\content\
+#kgdsData\Extensions\odpallkkfelambhpmlmpmjeldndoocdm\image\*.*: %(ChromeDir)s\kgdsData\Extensions\odpallkkfelambhpmlmpmjeldndoocdm\image\
+#kgdsData\Extensions\odpallkkfelambhpmlmpmjeldndoocdm\lib\*.*: %(ChromeDir)s\kgdsData\Extensions\odpallkkfelambhpmlmpmjeldndoocdm\lib\
+#kgdsData\Extensions\odpallkkfelambhpmlmpmjeldndoocdm\popup\*.*: %(ChromeDir)s\kgdsData\Extensions\odpallkkfelambhpmlmpmjeldndoocdm\popup\
+#kgdsData\Extensions\odpallkkfelambhpmlmpmjeldndoocdm\*.*: %(ChromeDir)s\kgdsData\Extensions\odpallkkfelambhpmlmpmjeldndoocdm\
+
+kgdsData\*: %(ChromeDir)s\kgdsData\
 
 #
 # VisualElements sub-dir.

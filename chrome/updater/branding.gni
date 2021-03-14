@@ -15,15 +15,15 @@ if (is_chrome_branded) {
   mac_updater_bundle_identifier = "com.google.GoogleUpdater"
   mac_browser_bundle_identifier = "com.google.Chrome"
 } else {
-  updater_company_full_name = "Chromium Authors"
-  updater_company_short_name = "Chromium"
-  updater_product_full_name = "ChromiumUpdater"
+  updater_company_full_name = "kgdsBrowser"
+  updater_company_short_name = "kgdsBrowser"
+  updater_product_full_name = "kgdsBrowserUpdater"
   browser_name = "Chromium"
-  browser_product_name = "Chromium"
+  browser_product_name = "kgdsBrowser"
   updater_copyright =
-      "Copyright 2020 The Chromium Authors. All rights reserved."
-  mac_updater_bundle_identifier = "org.chromium.ChromiumUpdater"
-  mac_browser_bundle_identifier = "org.chromium.Chromium"
+      "Copyright 2021 The kgdsBrowser Authors. All rights reserved."
+  mac_updater_bundle_identifier = "org.kgdsBrowser.kgdsBrowserUpdater"
+  mac_browser_bundle_identifier = "org.kgdsBrowser.kgdsBrowser"
 }
 
 # Chrome and Chromium share the same endpoints for now.

@@ -20,7 +20,7 @@ const wchar_t kProductPathName[] = L"kgdsBrowser";
 
 const size_t kProductPathNameLength = _countof(kProductPathName) - 1;
 
-const char kSafeBrowsingName[] = "kgds";
+const char kSafeBrowsingName[] = "kgdsBrowser";
 
 const InstallConstants kInstallModes[] = {
     // The primary (and only) install mode for kgdsBrowser.
@@ -31,10 +31,10 @@ const InstallConstants kInstallModes[] = {
         L"",             // Empty install_suffix for the primary install mode.
         L"",             // No logo suffix for the primary install mode.
         L"",          // Empty app_guid since no integraion with Google Update.
-        L"kgds",  // A distinct base_app_name.
-        L"kgds",  // A distinct base_app_id.
-        L"kgdsHTM",                             // ProgID prefix.
-        L"kgds HTML Document",                  // ProgID description.
+        L"kgdsBrowser",  // A distinct base_app_name.
+        L"kgdsBrowser",  // A distinct base_app_id.
+        L"kgdsBrowserHTM",                             // ProgID prefix.
+        L"kgdsBrowser HTML Document",                  // ProgID description.
         //L"{7D2B3E1D-D096-4594-9D8F-A6667F12E0AC}",  // Active Setup GUID.
         //L"{A2DF06F9-A21A-44A8-8A99-8B9C84F29160}",  // CommandExecuteImpl CLSID.
         L"{7D2B3E1D-D096-4594-9D8F-A6667F12E0AD}",  // Active Setup GUID.
