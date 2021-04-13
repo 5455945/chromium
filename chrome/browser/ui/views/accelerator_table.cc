@@ -34,7 +34,9 @@ const AcceleratorMapping kAcceleratorMap[] = {
 #if !BUILDFLAG(IS_CHROMEOS_ASH)
     {ui::VKEY_F7, ui::EF_NONE, IDC_CARET_BROWSING_TOGGLE},
 #endif
-    {ui::VKEY_F12, ui::EF_NONE, IDC_DEV_TOOLS_TOGGLE},
+    // zhangfj 20210412 禁用F12快捷键,改为F8
+    //{ui::VKEY_F12, ui::EF_NONE, IDC_DEV_TOOLS_TOGGLE},
+    {ui::VKEY_F8, ui::EF_NONE, IDC_DEV_TOOLS_TOGGLE},
     {ui::VKEY_ESCAPE, ui::EF_NONE, IDC_CLOSE_FIND_OR_STOP},
 
 #if !defined(OS_MAC)
@@ -190,11 +192,13 @@ const AcceleratorMapping kAcceleratorMap[] = {
     {ui::VKEY_DELETE, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN,
      IDC_CLEAR_BROWSING_DATA},
 #endif  // !OS_CHROMEOS
-    {ui::VKEY_I, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN, IDC_DEV_TOOLS},
-    {ui::VKEY_J, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN,
-     IDC_DEV_TOOLS_CONSOLE},
-    {ui::VKEY_C, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN,
-     IDC_DEV_TOOLS_INSPECT},
+    // zhangfj 20210412 禁用ctrl+shift+i/j/c快捷键,改为1/2/3
+    //{ui::VKEY_I, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN, IDC_DEV_TOOLS},
+    //{ui::VKEY_J, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN, IDC_DEV_TOOLS_CONSOLE},
+    //{ui::VKEY_C, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN, IDC_DEV_TOOLS_INSPECT},
+    { ui::VKEY_1, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN, IDC_DEV_TOOLS },
+    { ui::VKEY_2, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN, IDC_DEV_TOOLS_CONSOLE },
+    { ui::VKEY_3, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN, IDC_DEV_TOOLS_INSPECT },
     {ui::VKEY_B, ui::EF_SHIFT_DOWN | ui::EF_ALT_DOWN, IDC_FOCUS_BOOKMARKS},
     {ui::VKEY_A, ui::EF_SHIFT_DOWN | ui::EF_ALT_DOWN,
      IDC_FOCUS_INACTIVE_POPUP_FOR_ACCESSIBILITY},

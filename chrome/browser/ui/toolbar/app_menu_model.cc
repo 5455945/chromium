@@ -231,8 +231,9 @@ void ToolsMenuModel::Build(Browser* browser) {
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   AddItemWithStringId(IDC_TAKE_SCREENSHOT, IDS_TAKE_SCREENSHOT);
 #endif
-  AddSeparator(ui::NORMAL_SEPARATOR);
-  AddItemWithStringId(IDC_DEV_TOOLS, IDS_DEV_TOOLS);
+  // zhangfj 20210412 不显示更多工具中的开发者工具
+  //AddSeparator(ui::NORMAL_SEPARATOR);
+  //AddItemWithStringId(IDC_DEV_TOOLS, IDS_DEV_TOOLS);
 
   if (base::debug::IsProfilingSupported()) {
     AddSeparator(ui::NORMAL_SEPARATOR);
