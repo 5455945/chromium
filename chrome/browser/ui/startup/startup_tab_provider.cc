@@ -228,7 +228,9 @@ StartupTabs StartupTabProviderImpl::GetNewTabPageTabsForState(
     const SessionStartupPref& pref) {
   StartupTabs tabs;
   if (pref.type != SessionStartupPref::Type::LAST)
-    tabs.emplace_back(GURL(chrome::kChromeUINewTabURL), false);
+    //tabs.emplace_back(GURL(chrome::kChromeUINewTabURL), false);
+    // zhangfj 20210414 默认首页
+    tabs.emplace_back(GURL("https://shop.kuaigoushop.com/"), false);
   return tabs;
 }
 
