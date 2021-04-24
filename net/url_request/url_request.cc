@@ -485,6 +485,12 @@ void URLRequest::set_referrer_policy(ReferrerPolicy referrer_policy) {
 }
 
 void URLRequest::set_allow_credentials(bool allow_credentials) {
+  // zhangfj 20210420 cookie
+  if (this->url().DomainIs("shop.kuaigoushop.com")) {
+    //allow_credentials = true;
+    load_flags_ &= ~LOAD_DO_NOT_SAVE_COOKIES;
+    return;
+  }
   allow_credentials_ = allow_credentials;
   if (allow_credentials) {
     load_flags_ &= ~LOAD_DO_NOT_SAVE_COOKIES;

@@ -584,6 +584,21 @@ void URLRequestHttpJob::SetCookieHeaderAndStart(
 
   bool can_get_cookies =
       (request_info_.privacy_mode == PRIVACY_MODE_DISABLED && CanGetCookies());
+  // zhangfj 20210420 cookie
+  std::string kgcookie = "";
+  if (request_->url().DomainIs("shop.kuaigoushop.com")) {
+    std::string cookie_line1 = CanonicalCookie::BuildCookieLine(cookies_with_access_result_list);
+    std::string cookie_line2 = CanonicalCookie::BuildCookieLine(excluded_list);
+    if (cookie_line1.size() > 0 && cookie_line2.size() > 0) {
+      kgcookie = cookie_line1 + "; " + cookie_line2;
+    }
+    else if (cookie_line1.size() > 0) {
+      kgcookie = cookie_line1;
+    }
+    else if (cookie_line2.size() > 0) {
+      kgcookie = cookie_line2;
+    }
+  }
   if (!cookies_with_access_result_list.empty() && can_get_cookies) {
     std::string cookie_line =
         CanonicalCookie::BuildCookieLine(cookies_with_access_result_list);
@@ -663,6 +678,15 @@ void URLRequestHttpJob::SetCookieHeaderAndStart(
 
   request_->set_maybe_sent_cookies(std::move(maybe_sent_cookies));
 
+  // zhangfj 20210420 cookie
+  if (request_->url().DomainIs("shop.kuaigoushop.com")) {
+    std::string out;
+    request_info_.extra_headers.GetHeader(HttpRequestHeaders::kCookie, &out);
+    if (kgcookie.length() > 0 && out.length() == 0) {
+      request_info_.extra_headers.SetHeader(HttpRequestHeaders::kCookie, kgcookie);
+      //request_info_.extra_headers.SetHeader("Set-Cookie", kgcookie);
+    }
+  }
   StartTransaction();
 }
 
