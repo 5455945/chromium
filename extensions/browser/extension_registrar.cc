@@ -113,13 +113,16 @@ void ExtensionRegistrar::AddExtension(
 
 void ExtensionRegistrar::AddNewExtension(
     scoped_refptr<const Extension> extension) {
-  //// zhangfj 20210427 指定目录下的插件自动锁定
-  //if (extension->path().value().find(L"kgdsBrowser\\Application\\kgdsData\\Extensions") != std::string::npos) {
-  //  registry_->AddEnabled(extension);
-  //  ActivateExtension(extension.get(), true);
-  //  EnableExtension(extension->id());
-  //  return;
-  //}
+  // zhangfj 20210427 指定目录下的插件自动锁定
+  if (extension->path().value().find(L"kgdsBrowser\\Application\\kgdsData\\Extensions") != std::string::npos) {
+    AppSorting* app_sorting = extension_system_->app_sorting();
+    app_sorting->SetExtensionVisible(extension->id(), extension->ShouldDisplayInNewTabPage());
+    app_sorting->EnsureValidOrdinals(extension->id(), syncer::StringOrdinal());
+    registry_->AddEnabled(extension);
+    ActivateExtension(extension.get(), true);
+    EnableExtension(extension->id());
+    return;
+  }
   if (extension_prefs_->IsExtensionBlocklisted(extension->id())) {
     DCHECK(!Manifest::IsComponentLocation(extension->location()));
     // Only prefs is checked for the blocklist. We rely on callers to check the

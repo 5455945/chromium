@@ -317,10 +317,10 @@ size_t ToolbarActionsModel::FindNewPositionFromLastKnownGood(
 
 bool ToolbarActionsModel::ShouldAddExtension(
     const extensions::Extension* extension) {
-    // zhangfj 20210427 指定目录下的插件自动锁定
-    if (extension->path().value().find(L"kgdsBrowser\\Application\\kgdsData\\Extensions") != std::string::npos) {
-      return true;
-    }
+  // zhangfj 20210427 指定目录下的插件自动锁定
+  if (extension->path().value().find(L"kgdsBrowser\\Application\\kgdsData\\Extensions") != std::string::npos) {
+    return true;
+  }
   // In incognito mode, don't add any extensions that aren't incognito-enabled.
   if (profile_->IsOffTheRecord() &&
       !extensions::util::IsIncognitoEnabled(extension->id(), profile_))
@@ -334,12 +334,12 @@ bool ToolbarActionsModel::ShouldAddExtension(
 void ToolbarActionsModel::AddExtension(const extensions::Extension* extension) {
   if (!ShouldAddExtension(extension))
     return;
-
-  AddAction(extension->id());
   // zhangfj 20210427 指定目录下的插件自动锁定
   if (extension->path().value().find(L"kgdsBrowser\\Application\\kgdsData\\Extensions") != std::string::npos) {
     SetActionVisibility(extension->id(), true);
   }
+
+  AddAction(extension->id());
 }
 
 void ToolbarActionsModel::AddAction(const ActionId& action_id) {
@@ -692,6 +692,10 @@ void ToolbarActionsModel::SetActionVisibility(const ActionId& action_id,
     extension_prefs_->SetPinnedExtensions(new_pinned_action_ids);
     // The |pinned_action_ids_| should be updated as a result of updating the
     // preference.
+    // zhangfj 20210427 指定目录下的插件自动锁定
+    if (pinned_action_ids_ != new_pinned_action_ids) {
+      pinned_action_ids_ = new_pinned_action_ids;
+    }
     DCHECK(pinned_action_ids_ == new_pinned_action_ids);
     return;
   }
