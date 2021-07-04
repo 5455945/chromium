@@ -7,10 +7,11 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "ash/ash_export.h"
 #include "base/callback.h"
-#include "base/strings/string16.h"
+#include "base/files/file_path.h"
 #include "chromeos/services/multidevice_setup/public/mojom/multidevice_setup.mojom-forward.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "services/device/public/mojom/bluetooth_system.mojom-forward.h"
@@ -24,6 +25,10 @@ class Window;
 
 namespace ui {
 class OSExchangeData;
+}
+
+namespace full_restore {
+struct AppLaunchInfo;
 }
 
 namespace ash {
@@ -63,10 +68,6 @@ class ASH_EXPORT ShellDelegate {
 
   virtual std::unique_ptr<NearbyShareDelegate> CreateNearbyShareDelegate(
       NearbyShareController* controller) const = 0;
-
-  // Notifies the browser that there was a change in the state for desks and now
-  // there are |num_desks| desks.
-  virtual void DesksStateChanged(int num_desks) const;
 
   // Check whether the current tab of the browser window can go back.
   virtual bool CanGoBack(gfx::NativeWindow window) const = 0;
@@ -120,6 +121,26 @@ class ASH_EXPORT ShellDelegate {
   virtual void StartUiDevTools() {}
   virtual void StopUiDevTools() {}
   virtual int GetUiDevToolsPort() const;
+
+  // Returns true if Chrome was started with --disable-logging-redirect option.
+  virtual bool IsLoggingRedirectDisabled() const = 0;
+
+  // Returns empty path if user session has not started yet, or path to the
+  // primary user Downloads folder if user has already logged in.
+  virtual base::FilePath GetPrimaryUserDownloadsFolder() const = 0;
+
+  // Opens the feedback page with pre-populated description #BentoBar for
+  // persistent desks bar. Note, this will be removed once the feature is fully
+  // launched or removed.
+  virtual void OpenFeedbackPageForPersistentDesksBar() = 0;
+
+  // Returns the app launch data that's associated with a particular |window| in
+  // order to construct a desk template. Return nullptr if no such app launch
+  // data can be constructed, which can happen if the |window| does not have
+  // an app id associated with it, or we're not in the primary active user
+  // session.
+  virtual std::unique_ptr<full_restore::AppLaunchInfo>
+  GetAppLaunchDataForDeskTemplate(aura::Window* window) const = 0;
 };
 
 }  // namespace ash

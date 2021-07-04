@@ -44,14 +44,16 @@ class AppServerMac : public AppServer {
   ~AppServerMac() override;
 
   // Overrides of AppServer.
-  void ActiveDuty(
-      scoped_refptr<UpdateService> update_service,
+  void ActiveDuty(scoped_refptr<UpdateService> update_service) override;
+  void ActiveDutyInternal(
       scoped_refptr<UpdateServiceInternal> update_service_internal) override;
   bool SwapRPCInterfaces() override;
   void UninstallSelf() override;
 
   void MarkTaskStarted();
   void AcknowledgeTaskCompletion();
+
+  base::TimeDelta ServerKeepAlive();
 
   SEQUENCE_CHECKER(sequence_checker_);
 

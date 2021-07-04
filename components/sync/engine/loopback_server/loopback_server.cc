@@ -17,7 +17,6 @@
 #include "base/rand_util.h"
 #include "base/sequence_checker.h"
 #include "base/sequenced_task_runner.h"
-#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -35,7 +34,6 @@
 using std::string;
 using std::vector;
 
-using syncer::GetModelType;
 using syncer::GetModelTypeFromSpecifics;
 using syncer::ModelType;
 using syncer::ModelTypeSet;
@@ -322,6 +320,10 @@ net::HttpStatusCode LoopbackServer::HandleCommand(
 
   if (message.has_store_birthday() &&
       message.store_birthday() != GetStoreBirthday()) {
+    // The birthday provided by the client does not match the authoritative
+    // value server-side, which in the absence of client-side bugs means that
+    // the birthday was reset (e.g. via ClearServerDataMessage) since the last
+    // time the client interacted with the server.
     response->set_error_code(sync_pb::SyncEnums::NOT_MY_BIRTHDAY);
   } else {
     bool success = false;
@@ -344,8 +346,9 @@ net::HttpStatusCode LoopbackServer::HandleCommand(
         response->mutable_clear_server_data();
         success = true;
         break;
-      default:
-        response->Clear();
+      case sync_pb::ClientToServerMessage::DEPRECATED_3:
+      case sync_pb::ClientToServerMessage::DEPRECATED_4:
+        NOTREACHED();
         return net::HTTP_BAD_REQUEST;
     }
 
@@ -526,7 +529,7 @@ string LoopbackServer::CommitEntity(
   }
 
   std::unique_ptr<LoopbackServerEntity> entity;
-  syncer::ModelType type = GetModelType(client_entity);
+  syncer::ModelType type = GetModelTypeFromSpecifics(client_entity.specifics());
   if (client_entity.deleted()) {
     entity = PersistentTombstoneEntity::CreateFromEntity(client_entity);
     if (entity) {
@@ -582,7 +585,6 @@ void LoopbackServer::BuildEntryResponseForSuccessfulCommit(
     entry_response->set_version(entity.GetVersion() + 1);
   } else {
     entry_response->set_version(entity.GetVersion());
-    entry_response->set_name(entity.GetName());
   }
 }
 
@@ -643,7 +645,8 @@ bool LoopbackServer::HandleCommitRequest(
       parent_id = client_to_server_ids[parent_id];
     }
 
-    const ModelType entity_model_type = GetModelType(client_entity);
+    const ModelType entity_model_type =
+        GetModelTypeFromSpecifics(client_entity.specifics());
     if (throttled_types_.Has(entity_model_type)) {
       entry_response->set_response_type(sync_pb::CommitResponse::OVER_QUOTA);
       throttled_datatypes_in_request->Put(entity_model_type);
@@ -741,8 +744,7 @@ LoopbackServer::GetEntitiesAsDictionaryValue() {
   // Initialize an empty ListValue for all ModelTypes.
   ModelTypeSet all_types = ModelTypeSet::All();
   for (ModelType type : all_types) {
-    dictionary->Set(ModelTypeToString(type),
-                    std::make_unique<base::ListValue>());
+    dictionary->SetKey(ModelTypeToString(type), base::ListValue());
   }
 
   for (const auto& kv : entities_) {
@@ -756,7 +758,7 @@ LoopbackServer::GetEntitiesAsDictionaryValue() {
     base::ListValue* list_value;
     if (!dictionary->GetList(ModelTypeToString(entity.GetModelType()),
                              &list_value)) {
-      return std::unique_ptr<base::DictionaryValue>();
+      return nullptr;
     }
     // TODO(pvalenzuela): Store more data for each entity so additional
     // verification can be performed. One example of additional verification

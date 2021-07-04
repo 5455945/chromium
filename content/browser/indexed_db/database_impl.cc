@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_math.h"
 #include "base/sequence_checker.h"
@@ -40,18 +41,18 @@ const char kTransactionAlreadyExists[] = "Transaction already exists";
 }  // namespace
 
 DatabaseImpl::DatabaseImpl(std::unique_ptr<IndexedDBConnection> connection,
-                           const url::Origin& origin,
+                           const blink::StorageKey& storage_key,
                            IndexedDBDispatcherHost* dispatcher_host,
                            scoped_refptr<base::SequencedTaskRunner> idb_runner)
     : dispatcher_host_(dispatcher_host),
       indexed_db_context_(dispatcher_host->context()),
       connection_(std::move(connection)),
-      origin_(origin),
+      storage_key_(storage_key),
       idb_runner_(std::move(idb_runner)) {
   DCHECK(idb_runner_->RunsTasksInCurrentSequence());
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(connection_);
-  indexed_db_context_->ConnectionOpened(origin_, connection_.get());
+  indexed_db_context_->ConnectionOpened(storage_key_, connection_.get());
 }
 
 DatabaseImpl::~DatabaseImpl() {
@@ -61,16 +62,16 @@ DatabaseImpl::~DatabaseImpl() {
     status = connection_->AbortTransactionsAndClose(
         IndexedDBConnection::CloseErrorHandling::kAbortAllReturnLastError);
   }
-  indexed_db_context_->ConnectionClosed(origin_, connection_.get());
+  indexed_db_context_->ConnectionClosed(storage_key_, connection_.get());
   if (!status.ok()) {
     indexed_db_context_->GetIDBFactory()->OnDatabaseError(
-        origin_, status, "Error during rollbacks.");
+        storage_key_, status, "Error during rollbacks.");
   }
 }
 
 void DatabaseImpl::RenameObjectStore(int64_t transaction_id,
                                      int64_t object_store_id,
-                                     const base::string16& new_name) {
+                                     const std::u16string& new_name) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!connection_->IsConnected())
     return;
@@ -124,7 +125,7 @@ void DatabaseImpl::CreateTransaction(
   connection_->database()->RegisterAndScheduleTransaction(transaction);
 
   dispatcher_host_->CreateAndBindTransactionImpl(
-      std::move(transaction_receiver), origin_, transaction->AsWeakPtr());
+      std::move(transaction_receiver), storage_key_, transaction->AsWeakPtr());
 }
 
 void DatabaseImpl::Close() {
@@ -137,7 +138,7 @@ void DatabaseImpl::Close() {
 
   if (!status.ok()) {
     indexed_db_context_->GetIDBFactory()->OnDatabaseError(
-        origin_, status, "Error during rollbacks.");
+        storage_key_, status, "Error during rollbacks.");
   }
 }
 
@@ -353,7 +354,7 @@ void DatabaseImpl::OpenCursor(
   transaction->ScheduleTask(
       BindWeakOperation(&IndexedDBDatabase::OpenCursorOperation,
                         connection_->database()->AsWeakPtr(), std::move(params),
-                        origin_, dispatcher_host_->AsWeakPtr()));
+                        storage_key_, dispatcher_host_->AsWeakPtr()));
 }
 
 void DatabaseImpl::Count(
@@ -364,9 +365,9 @@ void DatabaseImpl::Count(
     mojo::PendingAssociatedRemote<blink::mojom::IDBCallbacks>
         pending_callbacks) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  scoped_refptr<IndexedDBCallbacks> callbacks(
-      new IndexedDBCallbacks(dispatcher_host_->AsWeakPtr(), origin_,
-                             std::move(pending_callbacks), idb_runner_));
+  auto callbacks = base::MakeRefCounted<IndexedDBCallbacks>(
+      dispatcher_host_->AsWeakPtr(), storage_key_, std::move(pending_callbacks),
+      idb_runner_);
   if (!connection_->IsConnected())
     return;
 
@@ -389,9 +390,9 @@ void DatabaseImpl::DeleteRange(
     mojo::PendingAssociatedRemote<blink::mojom::IDBCallbacks>
         pending_callbacks) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  scoped_refptr<IndexedDBCallbacks> callbacks(
-      new IndexedDBCallbacks(dispatcher_host_->AsWeakPtr(), origin_,
-                             std::move(pending_callbacks), idb_runner_));
+  auto callbacks = base::MakeRefCounted<IndexedDBCallbacks>(
+      dispatcher_host_->AsWeakPtr(), storage_key_, std::move(pending_callbacks),
+      idb_runner_);
   if (!connection_->IsConnected())
     return;
 
@@ -412,9 +413,9 @@ void DatabaseImpl::GetKeyGeneratorCurrentNumber(
     mojo::PendingAssociatedRemote<blink::mojom::IDBCallbacks>
         pending_callbacks) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  scoped_refptr<IndexedDBCallbacks> callbacks(
-      new IndexedDBCallbacks(dispatcher_host_->AsWeakPtr(), origin_,
-                             std::move(pending_callbacks), idb_runner_));
+  auto callbacks = base::MakeRefCounted<IndexedDBCallbacks>(
+      dispatcher_host_->AsWeakPtr(), storage_key_, std::move(pending_callbacks),
+      idb_runner_);
   if (!connection_->IsConnected())
     return;
 
@@ -435,9 +436,9 @@ void DatabaseImpl::Clear(
     mojo::PendingAssociatedRemote<blink::mojom::IDBCallbacks>
         pending_callbacks) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  scoped_refptr<IndexedDBCallbacks> callbacks(
-      new IndexedDBCallbacks(dispatcher_host_->AsWeakPtr(), origin_,
-                             std::move(pending_callbacks), idb_runner_));
+  auto callbacks = base::MakeRefCounted<IndexedDBCallbacks>(
+      dispatcher_host_->AsWeakPtr(), storage_key_, std::move(pending_callbacks),
+      idb_runner_);
   if (!connection_->IsConnected())
     return;
 
@@ -454,7 +455,7 @@ void DatabaseImpl::Clear(
 void DatabaseImpl::CreateIndex(int64_t transaction_id,
                                int64_t object_store_id,
                                int64_t index_id,
-                               const base::string16& name,
+                               const std::u16string& name,
                                const IndexedDBKeyPath& key_path,
                                bool unique,
                                bool multi_entry) {
@@ -506,7 +507,7 @@ void DatabaseImpl::DeleteIndex(int64_t transaction_id,
 void DatabaseImpl::RenameIndex(int64_t transaction_id,
                                int64_t object_store_id,
                                int64_t index_id,
-                               const base::string16& new_name) {
+                               const std::u16string& new_name) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!connection_->IsConnected())
     return;

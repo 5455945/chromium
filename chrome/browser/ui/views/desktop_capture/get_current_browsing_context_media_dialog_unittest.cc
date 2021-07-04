@@ -67,7 +67,8 @@ class GetCurrentBrowsingContextMediaDialogTest
     DesktopMediaPickerManager::Get()->AddObserver(&mock_dialog_observer_);
     AddTab(browser(), GURL(url::kAboutBlankURL));
 
-    web_contents_ = browser()->tab_strip_model()->DetachWebContentsAt(0);
+    web_contents_ =
+        browser()->tab_strip_model()->DetachWebContentsAtForInsertion(0);
     web_contents_->SetDelegate(&web_delegate_);
 
     // Creates the parent widget which is needed for creating child widgets.
@@ -94,8 +95,8 @@ class GetCurrentBrowsingContextMediaDialogTest
     dialog_params.web_contents = web_contents_.get();
     dialog_params.context = GetContext();
     dialog_params.parent = parent_widget_->GetNativeWindow();
-    dialog_params.app_name = base::ASCIIToUTF16("OriginApp");
-    dialog_params.target_name = base::ASCIIToUTF16("TargetApp");
+    dialog_params.app_name = u"OriginApp";
+    dialog_params.target_name = u"TargetApp";
     dialog_params.request_audio = request_audio;
     dialog_params.approve_audio_by_default = approve_audio_by_default;
 
@@ -128,7 +129,7 @@ class GetCurrentBrowsingContextMediaDialogTest
     BrowserWithTestWindowTest::TearDown();
   }
 
-  base::Optional<content::DesktopMediaID> WaitForDialogDone() {
+  absl::optional<content::DesktopMediaID> WaitForDialogDone() {
     run_loop_.Run();
     return dialog_id_;
   }
@@ -152,7 +153,7 @@ class GetCurrentBrowsingContextMediaDialogTest
   }
 
  protected:
-  base::Optional<content::DesktopMediaID> dialog_id_;
+  absl::optional<content::DesktopMediaID> dialog_id_;
   int render_process_id_ = MSG_ROUTING_NONE;
   int render_frame_id_ = MSG_ROUTING_NONE;
   std::unique_ptr<content::WebContents> web_contents_;

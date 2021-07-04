@@ -11,7 +11,7 @@
 
 #include "base/callback_helpers.h"
 #include "base/guid.h"
-#include "base/strings/string16.h"
+#include "base/process/process_handle.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/win/scoped_bstr.h"
@@ -23,6 +23,7 @@
 #include "media/base/cdm_context.h"
 #include "media/base/timestamp_constants.h"
 #include "media/base/win/mf_helpers.h"
+#include "media/base/win/mf_initializer.h"
 
 namespace media {
 
@@ -69,11 +70,9 @@ bool MediaFoundationRenderer::IsSupported() {
 }
 
 MediaFoundationRenderer::MediaFoundationRenderer(
-    bool muted,
     scoped_refptr<base::SequencedTaskRunner> task_runner,
     bool force_dcomp_mode_for_testing)
-    : muted_(muted),
-      task_runner_(std::move(task_runner)),
+    : task_runner_(std::move(task_runner)),
       force_dcomp_mode_for_testing_(force_dcomp_mode_for_testing) {
   DVLOG_FUNC(1);
 }
@@ -126,8 +125,7 @@ HRESULT MediaFoundationRenderer::CreateMediaEngine(
     MediaResource* media_resource) {
   DVLOG_FUNC(1);
 
-  mf_session_life_time_ = InitializeMediaFoundation();
-  if (!mf_session_life_time_)
+  if (!InitializeMediaFoundation())
     return E_FAIL;
 
   // TODO(frankli): Only call the followings when there is a video stream.
@@ -204,7 +202,9 @@ HRESULT MediaFoundationRenderer::CreateMediaEngine(
 
   // Has encrypted stream.
   RETURN_IF_FAILED(MakeAndInitialize<MediaFoundationProtectionManager>(
-      &content_protection_manager_));
+      &content_protection_manager_, task_runner_,
+      base::BindRepeating(&MediaFoundationRenderer::OnWaiting,
+                          weak_factory_.GetWeakPtr())));
   ComPtr<IMFMediaEngineProtectedContent> protected_media_engine;
   RETURN_IF_FAILED(mf_media_engine_.As(&protected_media_engine));
   RETURN_IF_FAILED(protected_media_engine->SetContentProtectionManager(
@@ -321,13 +321,13 @@ void MediaFoundationRenderer::SetCdm(CdmContext* cdm_context,
 }
 
 void MediaFoundationRenderer::SetLatencyHint(
-    base::Optional<base::TimeDelta> /*latency_hint*/) {
+    absl::optional<base::TimeDelta> /*latency_hint*/) {
   // TODO(frankli): Ensure MFMediaEngine rendering pipeine is in real time mode.
   NOTIMPLEMENTED() << "We do not use the latency hint today";
 }
 
 void MediaFoundationRenderer::OnCdmProxyReceived(
-    ComPtr<IMFCdmProxy> cdm_proxy) {
+    scoped_refptr<MediaFoundationCdmProxy> cdm_proxy) {
   DVLOG_FUNC(1);
 
   if (!waiting_for_mf_cdm_ || !content_protection_manager_) {
@@ -337,9 +337,10 @@ void MediaFoundationRenderer::OnCdmProxyReceived(
   }
 
   waiting_for_mf_cdm_ = false;
+  cdm_proxy_ = std::move(cdm_proxy);
+  content_protection_manager_->SetCdmProxy(cdm_proxy_);
+  mf_source_->SetCdmProxy(cdm_proxy_);
 
-  content_protection_manager_->SetCdmProxy(cdm_proxy.Get());
-  mf_source_->SetCdmProxy(cdm_proxy.Get());
   HRESULT hr = SetSourceOnMediaEngine();
   if (FAILED(hr)) {
     DLOG(ERROR) << "Failed to set source on media engine: " << PrintHr(hr);
@@ -420,7 +421,19 @@ void MediaFoundationRenderer::GetDCompSurface(GetDCompSurfaceCB callback) {
   HANDLE surface_handle = INVALID_HANDLE_VALUE;
   HRESULT hr = GetDCompSurfaceInternal(&surface_handle);
   DVLOG_IF(1, FAILED(hr)) << "Failed to get DComp surface: " << PrintHr(hr);
-  std::move(callback).Run(std::move(surface_handle));
+
+  // Only need read & execute access right for the handle to be duplicated
+  // without breaking in sandbox_win.cc!CheckDuplicateHandle().
+  const base::ProcessHandle process = ::GetCurrentProcess();
+  HANDLE duplicated_handle = INVALID_HANDLE_VALUE;
+  const BOOL result = ::DuplicateHandle(
+      process, surface_handle, process, &duplicated_handle,
+      GENERIC_READ | GENERIC_EXECUTE, false, DUPLICATE_CLOSE_SOURCE);
+  if (!result) {
+    DLOG(ERROR) << "Duplicate surface_handle failed: " << ::GetLastError();
+  }
+
+  std::move(callback).Run(std::move(duplicated_handle));
 }
 
 // TODO(crbug.com/1070030): Investigate if we need to add
@@ -523,13 +536,12 @@ void MediaFoundationRenderer::StopSendingStatistics() {
 }
 
 void MediaFoundationRenderer::SetVolume(float volume) {
+  DVLOG_FUNC(2) << "volume=" << volume;
   volume_ = volume;
-  float set_volume = muted_ ? 0 : volume_;
-  DVLOG_FUNC(2) << "set_volume=" << set_volume;
   if (!mf_media_engine_)
     return;
 
-  HRESULT hr = mf_media_engine_->SetVolume(set_volume);
+  HRESULT hr = mf_media_engine_->SetVolume(volume_);
   DVLOG_IF(1, FAILED(hr)) << "Failed to set volume: " << PrintHr(hr);
 }
 
@@ -546,6 +558,10 @@ base::TimeDelta MediaFoundationRenderer::GetMediaTime() {
 
 void MediaFoundationRenderer::OnPlaybackError(PipelineStatus status) {
   DVLOG_FUNC(1) << "status=" << status;
+  DCHECK(task_runner_->RunsTasksInCurrentSequence());
+
+  if (status == PIPELINE_ERROR_HARDWARE_CONTEXT_RESET && cdm_proxy_)
+    cdm_proxy_->OnHardwareContextReset();
 
   renderer_client_->OnError(status);
   StopSendingStatistics();
@@ -553,6 +569,7 @@ void MediaFoundationRenderer::OnPlaybackError(PipelineStatus status) {
 
 void MediaFoundationRenderer::OnPlaybackEnded() {
   DVLOG_FUNC(2);
+  DCHECK(task_runner_->RunsTasksInCurrentSequence());
 
   renderer_client_->OnEnded();
   StopSendingStatistics();
@@ -562,6 +579,7 @@ void MediaFoundationRenderer::OnBufferingStateChange(
     BufferingState state,
     BufferingStateChangeReason reason) {
   DVLOG_FUNC(2);
+  DCHECK(task_runner_->RunsTasksInCurrentSequence());
 
   if (state == BufferingState::BUFFERING_HAVE_ENOUGH) {
     max_buffering_state_ = state;
@@ -579,7 +597,7 @@ void MediaFoundationRenderer::OnBufferingStateChange(
 }
 
 void MediaFoundationRenderer::OnVideoNaturalSizeChange() {
-  DVLOG_FUNC(2);
+  DCHECK(task_runner_->RunsTasksInCurrentSequence());
 
   const bool has_video = mf_media_engine_->HasVideo();
   DVLOG_FUNC(2) << "has_video=" << has_video;
@@ -600,7 +618,8 @@ void MediaFoundationRenderer::OnVideoNaturalSizeChange() {
                 << hr;
     native_video_size_ = {640, 320};
   } else {
-    native_video_size_ = {native_width, native_height};
+    native_video_size_ = {static_cast<int>(native_width),
+                          static_cast<int>(native_height)};
   }
 
   // TODO(frankli): Use actual dest rect provided by client instead of video
@@ -626,6 +645,15 @@ void MediaFoundationRenderer::OnVideoNaturalSizeChange() {
   return;
 }
 
-void MediaFoundationRenderer::OnTimeUpdate() {}
+void MediaFoundationRenderer::OnTimeUpdate() {
+  DVLOG_FUNC(3);
+  DCHECK(task_runner_->RunsTasksInCurrentSequence());
+}
+
+void MediaFoundationRenderer::OnWaiting(WaitingReason reason) {
+  DVLOG_FUNC(2);
+  DCHECK(task_runner_->RunsTasksInCurrentSequence());
+  renderer_client_->OnWaiting(reason);
+}
 
 }  // namespace media

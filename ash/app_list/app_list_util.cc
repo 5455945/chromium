@@ -4,6 +4,9 @@
 
 #include "ash/app_list/app_list_util.h"
 
+#include "ash/app_list/model/app_list_folder_item.h"
+#include "ash/app_list/model/app_list_item.h"
+#include "ui/gfx/image/image_skia_operations.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/focus/focus_manager.h"
 
@@ -48,6 +51,10 @@ bool IsArrowKeyEvent(const ui::KeyEvent& event) {
 bool IsArrowKey(const ui::KeyboardCode& key_code) {
   return key_code == ui::VKEY_DOWN || key_code == ui::VKEY_RIGHT ||
          key_code == ui::VKEY_LEFT || key_code == ui::VKEY_UP;
+}
+
+bool IsFolderItem(AppListItem* item) {
+  return item->GetItemType() == AppListFolderItem::kItemType;
 }
 
 bool LeftRightKeyEventShouldExitText(views::Textfield* textfield,
@@ -98,6 +105,16 @@ bool ProcessLeftRightKeyTraversalForTextfield(views::Textfield* textfield,
   // Move focus outside the textfield.
   textfield->GetFocusManager()->AdvanceFocus(move_focus_reverse);
   return true;
+}
+
+gfx::ImageSkia CreateIconWithCircleBackground(const gfx::ImageSkia& icon,
+                                              SkColor background_color) {
+  DCHECK_EQ(icon.width(), icon.height());
+  // TODO(crbug.com/1185943): We should not be passing in hardcoded
+  // `background_color`s here. Callers should be updated to use the appropriate
+  // color from the NativeTheme or AshColorProvider.
+  return gfx::ImageSkiaOperations::CreateImageWithCircleBackground(
+      icon.width() / 2, background_color, icon);
 }
 
 }  // namespace ash

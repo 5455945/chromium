@@ -10,9 +10,9 @@
 #include <cmath>
 
 #include "base/bits.h"
+#include "base/cxx17_backports.h"
 #include "base/logging.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/stl_util.h"
 #include "media/base/decrypt_config.h"
 #include "media/base/video_codecs.h"
 #include "ui/gfx/geometry/rect.h"
@@ -988,6 +988,14 @@ H265Parser::Result H265Parser::ParseSliceHeader(const H265NALU& nalu,
     memcpy(reinterpret_cast<uint8_t*>(shdr) + skip_amount,
            reinterpret_cast<uint8_t*>(prior_shdr) + skip_amount,
            sizeof(H265SliceHeader) - skip_amount);
+
+    // We also need to validate the fields that have conditions that depend on
+    // anything unique in this slice (i.e. anything already parsed).
+    if ((shdr->irap_pic ||
+         sps->sps_max_dec_pic_buffering_minus1[pps->temporal_id] == 0) &&
+        nalu.nuh_layer_id == 0) {
+      TRUE_OR_RETURN(shdr->slice_type == 2);
+    }
   } else {
     // Set these defaults if they are not present here.
     shdr->pic_output_flag = 1;

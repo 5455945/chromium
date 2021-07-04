@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/bind.h"
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
 #include "chrome/app/vector_icons/vector_icons.h"
@@ -19,13 +20,15 @@
 #include "chrome/browser/ui/views/hover_button.h"
 #include "chrome/grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/paint_vector_icon.h"
+#include "ui/views/animation/ink_drop.h"
 #include "ui/views/animation/ink_drop_host_view.h"
 #include "ui/views/controls/button/button.h"
+#include "ui/views/controls/button/menu_button_controller.h"
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/layout/flex_layout_types.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/vector_icons.h"
 #include "ui/views/view_class_properties.h"
 
@@ -61,7 +64,6 @@ ExtensionsMenuItemView::ExtensionsMenuItemView(
     bool allow_pinning)
     : profile_(browser->profile()),
       primary_action_button_(new ExtensionsMenuButton(browser,
-                                                      this,
                                                       controller.get(),
                                                       allow_pinning)),
       controller_(std::move(controller)),
@@ -70,8 +72,8 @@ ExtensionsMenuItemView::ExtensionsMenuItemView(
   // status when hovering child views.
   SetNotifyEnterExitOnChild(true);
 
-  context_menu_controller_ = std::make_unique<ExtensionContextMenuController>(
-      nullptr, controller_.get());
+  context_menu_controller_ =
+      std::make_unique<ExtensionContextMenuController>(controller_.get());
 
   views::FlexLayout* layout_manager_ =
       SetLayoutManager(std::make_unique<views::FlexLayout>());
@@ -88,7 +90,7 @@ ExtensionsMenuItemView::ExtensionsMenuItemView(
     auto pin_button = std::make_unique<HoverButton>(
         base::BindRepeating(&ExtensionsMenuItemView::PinButtonPressed,
                             base::Unretained(this)),
-        base::string16());
+        std::u16string());
     pin_button->SetID(EXTENSION_PINNING);
     pin_button->SetBorder(views::CreateEmptyBorder(kSecondaryButtonInsets));
 
@@ -98,7 +100,7 @@ ExtensionsMenuItemView::ExtensionsMenuItemView(
   UpdatePinButton();
 
   auto context_menu_button = std::make_unique<HoverButton>(
-      views::Button::PressedCallback(), base::string16());
+      views::Button::PressedCallback(), std::u16string());
   context_menu_button->SetID(EXTENSION_CONTEXT_MENU);
   context_menu_button->SetBorder(
       views::CreateEmptyBorder(kSecondaryButtonInsets));
@@ -123,7 +125,7 @@ void ExtensionsMenuItemView::OnThemeChanged() {
           ui::NativeTheme::kColorId_MenuIconColor));
 
   if (pin_button_)
-    pin_button_->SetInkDropBaseColor(icon_color);
+    views::InkDrop::Get(pin_button_)->SetBaseColor(icon_color);
 
   SetButtonIconWithColor(context_menu_button_, kBrowserToolsIcon, icon_color);
 
@@ -148,6 +150,8 @@ void ExtensionsMenuItemView::UpdatePinButton() {
   // user activity.
   pin_button_->SetEnabled(!is_force_pinned && !profile_->IsOffTheRecord());
 
+  if (!GetWidget())
+    return;
   SkColor unpinned_icon_color =
       GetAdjustedIconColor(GetNativeTheme()->GetSystemColor(
           ui::NativeTheme::kColorId_MenuIconColor));
@@ -160,7 +164,7 @@ void ExtensionsMenuItemView::UpdatePinButton() {
                          icon_color);
 }
 
-bool ExtensionsMenuItemView::IsContextMenuRunning() const {
+bool ExtensionsMenuItemView::IsContextMenuRunningForTesting() const {
   return context_menu_controller_->IsMenuRunning();
 }
 

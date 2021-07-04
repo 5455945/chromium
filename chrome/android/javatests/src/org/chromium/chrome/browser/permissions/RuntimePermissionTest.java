@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.permissions;
 
 import android.Manifest;
 
+import android.os.Build.VERSION_CODES;
 import androidx.test.filters.MediumTest;
 
 import org.junit.Assert;
@@ -15,7 +16,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.test.util.CommandLineFlags;
-import org.chromium.base.test.util.DisabledTest;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.browser.download.DownloadItem;
 import org.chromium.chrome.browser.download.DownloadManagerService;
@@ -23,6 +24,7 @@ import org.chromium.chrome.browser.download.DownloadManagerService.DownloadObser
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.permissions.RuntimePermissionTestUtils.RuntimePromptResponse;
 import org.chromium.chrome.browser.permissions.RuntimePermissionTestUtils.TestAndroidPermissionDelegate;
+import org.chromium.chrome.browser.profiles.ProfileKey;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.components.offline_items_collection.ContentId;
 import org.chromium.components.permissions.R;
@@ -147,17 +149,20 @@ public class RuntimePermissionTest {
     }
 
     @Test
+    @DisableIf.Build(sdk_is_less_than = VERSION_CODES.Q,
+            message = "Test has been very flaky crbug.com/1179099")
     @MediumTest
     @Feature({"RuntimePermissions", "Downloads"})
-    public void testDenyRuntimeDownload() throws Exception {
+    public void
+    testDenyRuntimeDownload() throws Exception {
         DownloadObserver observer = new DownloadObserver() {
             @Override
             public void onAllDownloadsRetrieved(
-                    final List<DownloadItem> list, boolean isOffTheRecord) {}
+                    final List<DownloadItem> list, ProfileKey profileKey) {}
             @Override
             public void onDownloadItemUpdated(DownloadItem item) {}
             @Override
-            public void onDownloadItemRemoved(String guid, boolean isOffTheRecord) {}
+            public void onDownloadItemRemoved(String guid) {}
             @Override
             public void onAddOrReplaceDownloadSharedPreferenceEntry(ContentId id) {}
 
@@ -269,7 +274,6 @@ public class RuntimePermissionTest {
 
     @Test
     @MediumTest
-    @DisabledTest(message = "https://crbug.com/1144670")
     @Feature({"RuntimePermissions", "Location"})
     public void testAllowRuntimeLocationIncognito() throws Exception {
         RuntimePermissionTestUtils.setupGeolocationSystemMock();
@@ -288,7 +292,6 @@ public class RuntimePermissionTest {
 
     @Test
     @MediumTest
-    @DisabledTest(message = "https://crbug.com/1144670")
     @Feature({"RuntimePermissions", "MediaPermissions"})
     @CommandLineFlags.Add(ContentSwitches.USE_FAKE_DEVICE_FOR_MEDIA_STREAM)
     public void testAllowRuntimeCameraIncognito() throws Exception {
@@ -306,7 +309,6 @@ public class RuntimePermissionTest {
 
     @Test
     @MediumTest
-    @DisabledTest(message = "https://crbug.com/1144670")
     @Feature({"RuntimePermissions", "MediaPermissions"})
     @CommandLineFlags.Add(ContentSwitches.USE_FAKE_DEVICE_FOR_MEDIA_STREAM)
     public void testAllowRuntimeMicrophoneIncognito() throws Exception {

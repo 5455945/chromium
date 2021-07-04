@@ -39,7 +39,6 @@ EListStyleType CounterStyleNameToDeprecatedEnum(const AtomicString& name) {
   auto iterator = predefined_counter_style_name_map.find(name);
   if (iterator != predefined_counter_style_name_map.end())
     return iterator->value;
-  DCHECK(RuntimeEnabledFeatures::CSSAtRuleCounterStyleEnabled());
   return EListStyleType::kDecimal;
 }
 

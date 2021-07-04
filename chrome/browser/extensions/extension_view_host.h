@@ -14,6 +14,7 @@
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "extensions/browser/extension_host.h"
+#include "extensions/common/mojom/view_type.mojom.h"
 
 class Browser;
 
@@ -40,7 +41,7 @@ class ExtensionViewHost
   ExtensionViewHost(const Extension* extension,
                     content::SiteInstance* site_instance,
                     const GURL& url,
-                    ViewType host_type,
+                    mojom::ViewType host_type,
                     Browser* browser);
   ~ExtensionViewHost() override;
 
@@ -67,7 +68,8 @@ class ExtensionViewHost
   content::WebContents* OpenURLFromTab(
       content::WebContents* source,
       const content::OpenURLParams& params) override;
-  bool ShouldTransferNavigation(bool is_main_frame_navigation) override;
+  bool ShouldAllowRendererInitiatedCrossProcessNavigation(
+      bool is_main_frame_navigation) override;
   content::KeyboardEventProcessingResult PreHandleKeyboardEvent(
       content::WebContents* source,
       const content::NativeWebKeyboardEvent& event) override;
@@ -76,7 +78,7 @@ class ExtensionViewHost
       const content::NativeWebKeyboardEvent& event) override;
   bool PreHandleGestureEvent(content::WebContents* source,
                              const blink::WebGestureEvent& event) override;
-  content::ColorChooser* OpenColorChooser(
+  std::unique_ptr<content::ColorChooser> OpenColorChooser(
       content::WebContents* web_contents,
       SkColor color,
       const std::vector<blink::mojom::ColorSuggestionPtr>& suggestions)
@@ -114,7 +116,7 @@ class ExtensionViewHost
 
  private:
   // Returns whether the provided event is a raw escape keypress in a
-  // VIEW_TYPE_EXTENSION_POPUP.
+  // mojom::ViewType::kExtensionPopup.
   bool IsEscapeInPopup(const content::NativeWebKeyboardEvent& event) const;
 
   // The browser associated with the ExtensionView, if any.

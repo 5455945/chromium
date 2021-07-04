@@ -6,7 +6,7 @@ here, and stored in `download_file_types.asciipb`, will be both baked into
 Chrome released and pushable to Chrome between releases (via
 `FileTypePolicies` class).  http://crbug.com/596555
 
-Rendered version of this file: https://chromium.googlesource.com/chromium/src/+/master/chrome/browser/resources/safe_browsing/README.md
+Rendered version of this file: https://chromium.googlesource.com/chromium/src/+/main/chrome/browser/resources/safe_browsing/README.md
 
 
 ## Procedure for adding/modifying file type(s)
@@ -143,6 +143,10 @@ See `download_file_types.proto` for all fields.
       In addition, Chrome skips the warning if the download was explicit (i.e.
       the user selected "Save link as ..." from the context menu), or if the
       navigation that resulted in the download was initiated using the Omnibox.
+
+    If the `SafeBrowsingForTrustedSourcesEnabled` policy is set and the download
+    originates from a Trusted source, no warnings will be shown even for types
+    with a `danger_level` of `DANGEROUS` or `ALLOW_ON_USER_GESTURE`.
 
   * `platform_settings.auto_open_hint`: (required).
     * `ALLOW_AUTO_OPEN`: File type can be opened automatically if the user

@@ -12,67 +12,98 @@
  *          label="Foo Options." buttons="{{fooOptionsList}}">
  *      </settings-radio-group>
  */
-Polymer({
-  is: 'settings-radio-group',
+import '//resources/cr_elements/cr_radio_button/cr_radio_button.m.js';
+import '//resources/cr_elements/cr_radio_group/cr_radio_group.m.js';
+import '../settings_shared_css.js';
 
-  behaviors: [PrefControlBehavior],
+import {html, mixinBehaviors, PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
-  properties: {
-    groupAriaLabel: String,
+import {prefToString, stringToPrefValue} from '../prefs/pref_util.js';
 
-    /**
-     * If true, do not automatically set the preference value. This allows the
-     * container to confirm the change first then call either sendPrefChange
-     * or resetToPrefValue accordingly.
-     */
-    noSetPref: {
-      type: Boolean,
-      value: false,
-    },
+import {PrefControlBehavior, PrefControlBehaviorInterface} from './pref_control_behavior.js';
 
-    selected: String,
+/**
+ * @constructor
+ * @extends {PolymerElement}
+ * @implements {PrefControlBehaviorInterface}
+ */
+const SettingsRadioGroupElementBase =
+    mixinBehaviors([PrefControlBehavior], PolymerElement);
 
-    selectableElements: {
-      type: String,
-      value: ['cr-radio-button', 'controlled-radio-button'].join(', '),
-    },
-  },
+/** @polymer */
+class SettingsRadioGroupElement extends SettingsRadioGroupElementBase {
+  static get is() {
+    return 'settings-radio-group';
+  }
 
-  hostAttributes: {
-    role: 'none',
-  },
+  static get template() {
+    return html`{__html_template__}`;
+  }
 
-  observers: [
-    'resetToPrefValue(pref.*)',
-  ],
+  static get properties() {
+    return {
+      groupAriaLabel: String,
+
+      /**
+       * If true, do not automatically set the preference value. This allows the
+       * container to confirm the change first then call either sendPrefChange
+       * or resetToPrefValue accordingly.
+       */
+      noSetPref: {
+        type: Boolean,
+        value: false,
+      },
+
+      selected: String,
+
+      selectableElements: {
+        type: String,
+        value: ['cr-radio-button', 'controlled-radio-button'].join(', '),
+      },
+    };
+  }
+
+  static get observers() {
+    return [
+      'resetToPrefValue(pref.*)',
+    ];
+  }
+
+  /** @override */
+  ready() {
+    super.ready();
+
+    this.setAttribute('role', 'none');
+  }
 
   /** @override */
   focus() {
-    this.$$('cr-radio-group').focus();
-  },
+    this.shadowRoot.querySelector('cr-radio-group').focus();
+  }
 
   /** Reset the selected value to match the current pref value. */
   resetToPrefValue() {
     const pref = /** @type {!chrome.settingsPrivate.PrefObject} */ (this.pref);
-    this.selected = Settings.PrefUtil.prefToString(pref);
-  },
+    this.selected = prefToString(pref);
+  }
 
   /** Update the pref to the current selected value. */
   sendPrefChange() {
     if (!this.pref) {
       return;
     }
-    this.set(
-        'pref.value',
-        Settings.PrefUtil.stringToPrefValue(this.selected, this.pref));
-  },
+    this.set('pref.value', stringToPrefValue(this.selected, this.pref));
+  }
 
   /** @private */
   onSelectedChanged_() {
-    this.selected = this.$$('cr-radio-group').selected;
+    this.selected = this.shadowRoot.querySelector('cr-radio-group').selected;
     if (!this.noSetPref) {
       this.sendPrefChange();
     }
-    this.fire('change');
-  },
-});
+    this.dispatchEvent(
+        new CustomEvent('change', {bubbles: true, composed: true}));
+  }
+}
+
+customElements.define(SettingsRadioGroupElement.is, SettingsRadioGroupElement);

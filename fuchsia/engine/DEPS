@@ -1,6 +1,7 @@
 include_rules = [
   "+cc/base/switches.h",
   "+components/cast/message_port",
+  "+components/cast_streaming",
   "+components/version_info",
   "+components/viz/common",
   "+components/media_control",
@@ -18,6 +19,7 @@ include_rules = [
   "+third_party/blink/public/common/switches.h",
   "+third_party/widevine/cdm/widevine_cdm_common.h",
   "+ui/base",
+  "+ui/display/display_switches.h",
   "+ui/gfx",
   "+ui/gl/gl_switches.h",
   "+ui/ozone/public",

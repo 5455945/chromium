@@ -5,75 +5,67 @@
 #include <memory>
 #include <utility>
 
+#include "base/test/scoped_feature_list.h"
+#include "chrome/browser/ui/views/overlay/back_to_tab_label_button.h"
 #include "chrome/browser/ui/views/overlay/overlay_window_views.h"
 #include "chrome/browser/ui/views/overlay/track_image_button.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "content/public/browser/picture_in_picture_window_controller.h"
 #include "content/public/test/test_web_contents_factory.h"
+#include "content/public/test/web_contents_tester.h"
+#include "media/base/media_switches.h"
+#include "ui/compositor/layer.h"
 #include "ui/display/test/scoped_screen_override.h"
 #include "ui/display/test/test_screen.h"
 
 class TestPictureInPictureWindowController
     : public content::PictureInPictureWindowController {
  public:
-  explicit TestPictureInPictureWindowController(
-      content::WebContents* web_contents)
-      : web_contents_(web_contents) {}
+  TestPictureInPictureWindowController() = default;
 
   // PictureInPictureWindowController:
   void Show() override {}
+  void FocusInitiator() override {}
   void Close(bool) override {}
   void CloseAndFocusInitiator() override {}
-  void OnWindowDestroyed() override {}
+  void OnWindowDestroyed(bool) override {}
   content::OverlayWindow* GetWindowForTesting() override { return nullptr; }
   void UpdateLayerBounds() override {}
   bool IsPlayerActive() override { return false; }
+  void set_web_contents(content::WebContents* web_contents) {
+    web_contents_ = web_contents;
+  }
   content::WebContents* GetWebContents() override { return web_contents_; }
-  void UpdatePlaybackState(bool, bool) override {}
   bool TogglePlayPause() override { return false; }
   void SkipAd() override {}
   void NextTrack() override {}
   void PreviousTrack() override {}
+  void ToggleMicrophone() override {}
+  void ToggleCamera() override {}
+  void HangUp() override {}
 
  private:
-  content::WebContents* const web_contents_;
-};
-
-// When running on ChromeOS, NativeWidgetAura requires the parent and/or
-// context to be non-null. OverlayWindowViews provides neither, so we do it
-// here. Normally this is done by the browser-specific ViewsDelegate.
-class TestViewsDelegateWithContext : public views::TestViewsDelegate {
- public:
-  // ViewsDelegate:
-  void OnBeforeWidgetInit(
-      views::Widget::InitParams* params,
-      views::internal::NativeWidgetDelegate* delegate) override {
-    views::TestViewsDelegate::OnBeforeWidgetInit(params, delegate);
-    if (!params->context)
-      params->context = context_;
-  }
-
-  void set_context(gfx::NativeWindow context) { context_ = context; }
-
- private:
-  gfx::NativeWindow context_;
+  content::WebContents* web_contents_;
 };
 
 class OverlayWindowViewsTest : public ChromeViewsTestBase {
  public:
+  OverlayWindowViewsTest() = default;
   // ChromeViewsTestBase:
   void SetUp() override {
-    // set_views_delegate() must be called before SetUp(), and GetContext() is
-    // null before that, hence the unobvious initialization order.
-    auto views_delegate = std::make_unique<TestViewsDelegateWithContext>();
-    auto* views_delegate_with_context = views_delegate.get();
-    set_views_delegate(std::move(views_delegate));
     // Purposely skip ChromeViewsTestBase::SetUp() as that creates ash::Shell
     // on ChromeOS, which we don't want.
     ViewsTestBase::SetUp();
-    views_delegate_with_context->set_context(GetContext());
+    // web_contents_ needs to be created after the constructor, so that
+    // |feature_list_| can be initialized before other threads check if a
+    // feature is enabled.
+    web_contents_ = web_contents_factory_.CreateWebContents(&profile_);
+    pip_window_controller_.set_web_contents(web_contents_);
 
+#if defined(OS_CHROMEOS)
+    test_views_delegate()->set_context(GetContext());
+#endif
     test_views_delegate()->set_use_desktop_native_widgets(true);
 
     // The default work area must be big enough to fit the minimum
@@ -97,11 +89,13 @@ class OverlayWindowViewsTest : public ChromeViewsTestBase {
 
   OverlayWindowViews& overlay_window() { return *overlay_window_; }
 
+  content::WebContents* web_contents() { return web_contents_; }
+
  private:
   TestingProfile profile_;
   content::TestWebContentsFactory web_contents_factory_;
-  TestPictureInPictureWindowController pip_window_controller_{
-      web_contents_factory_.CreateWebContents(&profile_)};
+  content::WebContents* web_contents_;
+  TestPictureInPictureWindowController pip_window_controller_;
 
   display::test::TestScreen test_screen_;
   display::test::ScopedScreenOverride scoped_screen_override_{&test_screen_};
@@ -333,4 +327,69 @@ TEST_F(OverlayWindowViewsTest, UpdateVideoSizeDoesNotMoveWindow) {
   // clamped to 500x250 to fit within the maximum size for the work area of
   // 1000x1000.
   EXPECT_EQ(gfx::Rect(100, 100, 500, 250), overlay_window().GetBounds());
+}
+
+// Tests that the OverlayWindowFrameView does not accept events so they can
+// propagate to the overlay.
+TEST_F(OverlayWindowViewsTest, HitTestFrameView) {
+  // Since the NonClientFrameView is the only non-custom direct descendent of
+  // the NonClientView, we can assume that if the frame does not accept the
+  // point but the NonClientView does, then it will be handled by one of the
+  // custom overlay views.
+  auto point = gfx::Point(50, 50);
+  views::NonClientView* non_client_view = overlay_window().non_client_view();
+  EXPECT_EQ(non_client_view->frame_view()->HitTestPoint(point), false);
+  EXPECT_EQ(non_client_view->HitTestPoint(point), true);
+}
+
+// Tests with MediaSessionWebRTC enabled.
+class OverlayWindowViewsMediaSessionWebRTCTest : public OverlayWindowViewsTest {
+ public:
+  // OverlayWindowViewsTest:
+  void SetUp() override {
+    OverlayWindowViewsTest::SetUp();
+  }
+
+  void NavigateTo(const GURL& url) {
+    content::WebContentsTester::For(web_contents())->SetLastCommittedURL(url);
+  }
+
+ private:
+  // |feature_list_| needs to be initialized as early as possible to avoid data
+  // races with other threads checking if a feature is enabled.
+  base::test::ScopedFeatureList feature_list_{media::kMediaSessionWebRTC};
+};
+
+TEST_F(OverlayWindowViewsMediaSessionWebRTCTest,
+       BackToTabLabelButtonDisplaysOrigin) {
+  NavigateTo(GURL("https://foo.com/bar?baz=1"));
+  overlay_window().UpdateVideoSize({200, 200});
+  overlay_window().ShowInactive();
+  EXPECT_EQ(u"foo.com",
+            overlay_window().back_to_tab_label_button_for_testing()->GetText());
+}
+
+TEST_F(OverlayWindowViewsMediaSessionWebRTCTest,
+       BackToTabLabelButtonDoesNotOutgrowWindow) {
+  overlay_window().UpdateVideoSize({200, 200});
+  BackToTabLabelButton* back_to_tab_button =
+      overlay_window().back_to_tab_label_button_for_testing();
+
+  // With a short origin to display, the button should be shorter than the width
+  // of the window and not truncated.
+  NavigateTo(GURL("https://foo.com/bar?baz=1"));
+  overlay_window().ShowInactive();
+  EXPECT_LT(back_to_tab_button->width(), 200);
+  EXPECT_FALSE(back_to_tab_button->IsTextElidedForTesting());
+  const int short_width = back_to_tab_button->width();
+
+  // With a long origin to display, the button should grow but not exceed the
+  // width of the window and become truncated.
+  NavigateTo(GURL(
+      "https://"
+      "somereallylong.origin.thatexceeds.thewidthof.theoverlaywindow.com/foo"));
+  overlay_window().ShowInactive();
+  EXPECT_GT(back_to_tab_button->width(), short_width);
+  EXPECT_LT(back_to_tab_button->width(), 200);
+  EXPECT_TRUE(back_to_tab_button->IsTextElidedForTesting());
 }

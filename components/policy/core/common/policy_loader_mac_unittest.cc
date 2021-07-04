@@ -10,11 +10,11 @@
 #include <utility>
 
 #include "base/callback.h"
+#include "base/cxx17_backports.h"
 #include "base/files/file_path.h"
 #include "base/mac/scoped_cftyperef.h"
 #include "base/run_loop.h"
 #include "base/sequenced_task_runner.h"
-#include "base/stl_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/values.h"
 #include "components/policy/core/common/async_policy_provider.h"
@@ -150,8 +150,8 @@ class PolicyLoaderMacTest : public PolicyTestBase {
     PolicyTestBase::SetUp();
     std::unique_ptr<AsyncPolicyLoader> loader(new PolicyLoaderMac(
         task_environment_.GetMainThreadTaskRunner(), base::FilePath(), prefs_));
-    provider_.reset(
-        new AsyncPolicyProvider(&schema_registry_, std::move(loader)));
+    provider_ = std::make_unique<AsyncPolicyProvider>(&schema_registry_,
+                                                      std::move(loader));
     provider_->Init(&schema_registry_);
   }
 

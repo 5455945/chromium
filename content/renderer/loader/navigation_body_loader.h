@@ -15,7 +15,6 @@
 #include "base/memory/weak_ptr.h"
 #include "base/single_thread_task_runner.h"
 #include "content/common/content_export.h"
-#include "content/common/navigation_params.h"
 #include "mojo/public/cpp/base/big_buffer.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -24,6 +23,8 @@
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom-forward.h"
 #include "third_party/blink/public/mojom/loader/resource_load_info.mojom.h"
+#include "third_party/blink/public/mojom/navigation/navigation_params.mojom-forward.h"
+#include "third_party/blink/public/platform/web_loader_freeze_mode.h"
 #include "third_party/blink/public/platform/web_navigation_body_loader.h"
 
 namespace blink {
@@ -54,8 +55,8 @@ class CONTENT_EXPORT NavigationBodyLoader
   // This method fills navigation params related to the navigation request,
   // redirects and response, and also creates a body loader if needed.
   static void FillNavigationParamsResponseAndBodyLoader(
-      mojom::CommonNavigationParamsPtr common_params,
-      mojom::CommitNavigationParamsPtr commit_params,
+      blink::mojom::CommonNavigationParamsPtr common_params,
+      blink::mojom::CommitNavigationParamsPtr commit_params,
       int request_id,
       network::mojom::URLResponseHeadPtr response_head,
       mojo::ScopedDataPipeConsumerHandle response_body,
@@ -103,14 +104,16 @@ class CONTENT_EXPORT NavigationBodyLoader
       network::mojom::URLLoaderClientEndpointsPtr url_loader_client_endpoints,
       scoped_refptr<base::SingleThreadTaskRunner> task_runner,
       std::unique_ptr<blink::ResourceLoadInfoNotifierWrapper>
-          resource_load_info_notifier_wrapper);
+          resource_load_info_notifier_wrapper,
+      bool is_main_frame);
 
   // blink::WebNavigationBodyLoader
-  void SetDefersLoading(blink::WebURLLoader::DeferType defers) override;
+  void SetDefersLoading(blink::WebLoaderFreezeMode mode) override;
   void StartLoadingBody(WebNavigationBodyLoader::Client* client,
-                        bool use_isolated_code_cache) override;
+                        blink::mojom::CodeCacheHost* code_cache_host) override;
 
   // network::mojom::URLLoaderClient
+  void OnReceiveEarlyHints(network::mojom::EarlyHintsPtr early_hints) override;
   void OnReceiveResponse(
       network::mojom::URLResponseHeadPtr response_head) override;
   void OnReceiveRedirect(
@@ -125,7 +128,8 @@ class CONTENT_EXPORT NavigationBodyLoader
       mojo::ScopedDataPipeConsumerHandle handle) override;
   void OnComplete(const network::URLLoaderCompletionStatus& status) override;
 
-  void CodeCacheReceived(base::Time response_head_response_time,
+  void CodeCacheReceived(base::TimeTicks start_time,
+                         base::Time response_head_response_time,
                          base::Time response_time,
                          mojo_base::BigBuffer data);
   void BindURLLoaderAndContinue();
@@ -170,10 +174,9 @@ class CONTENT_EXPORT NavigationBodyLoader
   // Whether we got all the body data.
   bool has_seen_end_of_data_ = false;
 
-  // Deferred body loader does not send any notifications to the client
+  // Frozen body loader does not send any notifications to the client
   // and tries not to read from the body pipe.
-  blink::WebURLLoader::DeferType defer_type_ =
-      blink::WebURLLoader::DeferType::kNotDeferred;
+  blink::WebLoaderFreezeMode freeze_mode_ = blink::WebLoaderFreezeMode::kNone;
 
   // This protects against reentrancy into OnReadable,
   // which can happen due to nested message loop triggered
@@ -182,6 +185,8 @@ class CONTENT_EXPORT NavigationBodyLoader
 
   // The original navigation url to start with.
   const GURL original_url_;
+
+  const bool is_main_frame_;
 
   base::WeakPtrFactory<NavigationBodyLoader> weak_factory_{this};
 

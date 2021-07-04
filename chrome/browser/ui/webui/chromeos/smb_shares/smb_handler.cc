@@ -9,8 +9,8 @@
 
 #include "base/bind.h"
 #include "base/values.h"
-#include "chrome/browser/chromeos/file_system_provider/provided_file_system_info.h"
-#include "chrome/browser/chromeos/smb_client/smb_service_factory.h"
+#include "chrome/browser/ash/file_system_provider/provided_file_system_info.h"
+#include "chrome/browser/ash/smb_client/smb_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 
 namespace chromeos {
@@ -81,7 +81,7 @@ void SmbHandler::HandleSmbMount(const base::ListValue* args) {
     return;
   }
 
-  chromeos::file_system_provider::MountOptions mo;
+  file_system_provider::MountOptions mo;
   mo.display_name = mount_name.empty() ? mount_url : mount_name;
   mo.writable = true;
 
@@ -102,7 +102,7 @@ void SmbHandler::HandleSmbMount(const base::ListValue* args) {
 }
 
 void SmbHandler::HandleSmbMountResponse(const std::string& callback_id,
-                                        SmbMountResult result) {
+                                        smb_client::SmbMountResult result) {
   AllowJavascript();
   ResolveJavascriptCallback(base::Value(callback_id),
                             base::Value(static_cast<int>(result)));

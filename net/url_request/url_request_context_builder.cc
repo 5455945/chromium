@@ -4,6 +4,7 @@
 
 #include "net/url_request/url_request_context_builder.h"
 
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -66,61 +67,6 @@
 namespace net {
 
 namespace {
-
-class BasicNetworkDelegate : public NetworkDelegateImpl {
- public:
-  BasicNetworkDelegate() = default;
-  ~BasicNetworkDelegate() override = default;
-
- private:
-  int OnBeforeURLRequest(URLRequest* request,
-                         CompletionOnceCallback callback,
-                         GURL* new_url) override {
-    return OK;
-  }
-
-  int OnBeforeStartTransaction(URLRequest* request,
-                               CompletionOnceCallback callback,
-                               HttpRequestHeaders* headers) override {
-    return OK;
-  }
-
-  int OnHeadersReceived(
-      URLRequest* request,
-      CompletionOnceCallback callback,
-      const HttpResponseHeaders* original_response_headers,
-      scoped_refptr<HttpResponseHeaders>* override_response_headers,
-      const IPEndPoint& endpoint,
-      base::Optional<GURL>* preserve_fragment_on_redirect_url) override {
-    return OK;
-  }
-
-  void OnBeforeRedirect(URLRequest* request,
-                        const GURL& new_location) override {}
-
-  void OnResponseStarted(URLRequest* request, int net_error) override {}
-
-  void OnCompleted(URLRequest* request, bool started, int net_error) override {}
-
-  void OnURLRequestDestroyed(URLRequest* request) override {}
-
-  void OnPACScriptError(int line_number, const base::string16& error) override {
-  }
-
-  bool OnCanGetCookies(const URLRequest& request,
-                       bool allowed_from_caller) override {
-    return allowed_from_caller;
-  }
-
-  bool OnCanSetCookie(const URLRequest& request,
-                      const CanonicalCookie& cookie,
-                      CookieOptions* options,
-                      bool allowed_from_caller) override {
-    return allowed_from_caller;
-  }
-
-  DISALLOW_COPY_AND_ASSIGN(BasicNetworkDelegate);
-};
 
 // A URLRequestContext subclass that owns most of its components
 // via a UrlRequestContextStorage object. When URLRequestContextBuilder::Build()
@@ -367,7 +313,7 @@ std::unique_ptr<URLRequestContext> URLRequestContextBuilder::Build() {
   }
 
   if (!network_delegate_)
-    network_delegate_ = std::make_unique<BasicNetworkDelegate>();
+    network_delegate_ = std::make_unique<NetworkDelegateImpl>();
   storage->set_network_delegate(std::move(network_delegate_));
 
   if (net_log_) {
@@ -579,9 +525,9 @@ std::unique_ptr<URLRequestContext> URLRequestContextBuilder::Build() {
           NOTREACHED();
           break;
       }
-      http_cache_backend.reset(new HttpCache::DefaultBackend(
+      http_cache_backend = std::make_unique<HttpCache::DefaultBackend>(
           DISK_CACHE, backend_type, http_cache_params_.path,
-          http_cache_params_.max_size, http_cache_params_.reset_cache));
+          http_cache_params_.max_size, http_cache_params_.reset_cache);
     } else {
       http_cache_backend =
           HttpCache::DefaultBackend::InMemory(http_cache_params_.max_size);
@@ -591,9 +537,9 @@ std::unique_ptr<URLRequestContext> URLRequestContextBuilder::Build() {
         http_cache_params_.app_status_listener);
 #endif
 
-    http_transaction_factory.reset(
-        new HttpCache(std::move(http_transaction_factory),
-                      std::move(http_cache_backend), true));
+    http_transaction_factory =
+        std::make_unique<HttpCache>(std::move(http_transaction_factory),
+                                    std::move(http_cache_backend), true);
   }
   storage->set_http_transaction_factory(std::move(http_transaction_factory));
 

@@ -12,8 +12,10 @@
 #include "base/callback_forward.h"
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
+#include "base/no_destructor.h"
 #include "base/sequence_checker.h"
-#include "base/strings/string16.h"
+#include "build/build_config.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/image/image_family.h"
 #include "url/gurl.h"
 
@@ -26,6 +28,27 @@ class ImageSkia;
 }
 
 namespace web_app {
+
+struct ShortcutOverrideForTesting {
+  ShortcutOverrideForTesting(const ShortcutOverrideForTesting& other);
+  ShortcutOverrideForTesting();
+  ~ShortcutOverrideForTesting();
+#if defined(OS_WIN)
+  base::FilePath desktop;
+  base::FilePath application_menu;
+  base::FilePath quick_launch;
+  base::FilePath startup;
+#elif defined(OS_MAC)
+  base::FilePath chrome_apps_folder;
+#elif defined(OS_LINUX)
+  base::FilePath desktop;
+#else
+#endif
+};
+
+absl::optional<ShortcutOverrideForTesting>& GetShortcutOverrideForTesting();
+void SetShortcutOverrideForTesting(
+    absl::optional<ShortcutOverrideForTesting> shortcut_override_for_testing);
 
 // Represents the info required to create a shortcut for an app.
 struct ShortcutInfo {
@@ -40,14 +63,15 @@ struct ShortcutInfo {
   // is still used to generate the app id (windows app id, not chrome app id).
   // TODO(loyso): Rename it to app_id.
   std::string extension_id;
-  base::string16 title;
-  base::string16 description;
+  std::u16string title;
+  std::u16string description;
   gfx::ImageFamily favicon;
   base::FilePath profile_path;
   std::string profile_name;
   std::string version_for_display;
   std::set<std::string> file_handler_extensions;
   std::set<std::string> file_handler_mime_types;
+  std::set<std::string> protocol_handlers;
 
   // An app is multi-profile if there is a single shortcut and single app shim
   // for all profiles. The app itself has a profile switcher that may be used
@@ -81,22 +105,20 @@ enum ApplicationsMenuLocation {
 
 // Info about which locations to create app shortcuts in.
 struct ShortcutLocations {
-  ShortcutLocations();
+  bool on_desktop = false;
 
-  bool on_desktop;
-
-  ApplicationsMenuLocation applications_menu_location;
+  ApplicationsMenuLocation applications_menu_location = APP_MENU_LOCATION_NONE;
 
   // For Windows, this refers to quick launch bar prior to Win7. In Win7,
   // this means "pin to taskbar". For Mac/Linux, this could be used for
   // Mac dock or the gnome/kde application launcher. However, those are not
   // implemented yet.
-  bool in_quick_launch_bar;
+  bool in_quick_launch_bar = false;
 
   // For Windows, this refers to the Startup folder.
   // For Mac, this refers to the Login Items list.
   // For Linux, this refers to the autostart folder.
-  bool in_startup;
+  bool in_startup = false;
 };
 
 // This encodes the cause of shortcut creation as the correct behavior in each
@@ -150,6 +172,11 @@ bool CreatePlatformShortcuts(const base::FilePath& shortcut_data_path,
                              ShortcutCreationReason creation_reason,
                              const ShortcutInfo& shortcut_info);
 
+// Implemented for each platform, does the platform specific parts of checking
+// desktop and application menu to get shortcut locations.
+ShortcutLocations GetAppExistingShortCutLocationImpl(
+    const ShortcutInfo& shortcut_info);
+
 // Schedules a call to |CreatePlatformShortcuts| on the Shortcut IO thread and
 // invokes |callback| when complete. This function must be called from the UI
 // thread.
@@ -183,7 +210,7 @@ void DeleteMultiProfileShortcutsForApp(const std::string& app_id);
 // platform specific implementation of the UpdateAllShortcuts function, and
 // is executed on the FILE thread.
 void UpdatePlatformShortcuts(const base::FilePath& shortcut_data_path,
-                             const base::string16& old_app_title,
+                             const std::u16string& old_app_title,
                              const ShortcutInfo& shortcut_info);
 
 // Run an IO task on a worker thread. Ownership of |shortcut_info| transfers

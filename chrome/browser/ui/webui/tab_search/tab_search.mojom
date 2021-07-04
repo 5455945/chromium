@@ -4,11 +4,16 @@
 
 module tab_search.mojom;
 
+import "components/tab_groups/public/mojom/tab_group_types.mojom";
 import "mojo/public/mojom/base/time.mojom";
+import "mojo/public/mojom/base/token.mojom";
 
 // Collection of window details associated with a profile.
 struct ProfileData {
   array<Window> windows;
+  array<TabGroup> tab_groups;
+  array<RecentlyClosedTab> recently_closed_tabs;
+  array<RecentlyClosedTabGroup> recently_closed_tab_groups;
 };
 
 // Properties and tabs associated with a window.
@@ -30,7 +35,7 @@ struct Tab {
   int32 tab_id;
 
   // The group identifier of the tab.
-  string? group_id;
+  mojo_base.mojom.Token? group_id;
 
   // Whether the tab is pinned.
   bool pinned;
@@ -51,20 +56,76 @@ struct Tab {
   // Whether the tab strip should show the icon.
   bool show_icon;
 
-  // Time ticks when the tab is last active.
+  // Time ticks when the tab is last active. This value is used to order open
+  // tabs by recency.
   mojo_base.mojom.TimeTicks last_active_time_ticks;
+
+  // String representing the elapsed time since the tab was last active.
+  string last_active_elapsed_text;
 };
 
-// Collection of tab groups.
-struct TabGroups {
-  map<string, TabGroup> groups;
+// Information about a recently closed tab. Recently closed tabs that were
+// closed as part of closing a group will contain a session id belonging to
+// the group while recently closed tabs that were closed individually will
+// contain a group id that associates them with either an open or no longer
+// present tab group.
+struct RecentlyClosedTab {
+  // The unique identifier of the tab.
+  int32 tab_id;
+
+  // The group identifier of the tab.
+  mojo_base.mojom.Token? group_id;
+
+  // The title of the tab.
+  string title;
+
+  // The URL of the tab.
+  // TODO(crbug.com/1099917): Change this and elsewhere to use url.mojom.Url.
+  string url;
+
+  // Elapsed time since the tab was last closed. This value is used to order
+  // closed tabs by recency.
+  mojo_base.mojom.Time last_active_time;
+
+  // String representing the elapsed time since the tab was closed.
+  string last_active_elapsed_text;
 };
 
 // Information about a tab group.
 struct TabGroup {
-  string color;
-  string text_color;
+  // The unique identifier of the tab group.
+  mojo_base.mojom.Token id;
+
+  // The color of the tab group.
+  tab_groups.mojom.Color color;
+
+  // The title of the tab group.
   string title;
+};
+
+// Information about a recently closed tab group.
+struct RecentlyClosedTabGroup {
+  // The unique identifier of the tab group that is only valid for the duration
+  // of the session.
+  int32 session_id;
+
+  // The unique identifier of the tab group.
+  mojo_base.mojom.Token id;
+
+  // The color of the tab group.
+  tab_groups.mojom.Color color;
+
+  // The title of the tab group.
+  string title;
+
+  // A count of tabs that belong to the tab group.
+  uint32 tab_count;
+
+  // Elapsed time since the group was closed.
+  mojo_base.mojom.Time last_active_time;
+
+  // String representing the elapsed time since the group was closed.
+  string last_active_elapsed_text;
 };
 
 // Information about switching to a tab.
@@ -87,14 +148,11 @@ interface PageHandler {
   // Get window and tab data for the current profile.
   GetProfileData() => (ProfileData profile_data);
 
-  // Get tab groups for the current profile.
-  GetTabGroups() => (TabGroups tab_groups);
-
-  // Show the feedback page.
-  ShowFeedbackPage();
-
   // Switch to a specific tab.
   SwitchToTab(SwitchToTabInfo switch_to_tab_info);
+
+  // Open a recently closed tab or tab group.
+  OpenRecentlyClosedEntry(int32 session_id);
 
   // Notify the backend that the UI is ready to be shown.
   ShowUI();

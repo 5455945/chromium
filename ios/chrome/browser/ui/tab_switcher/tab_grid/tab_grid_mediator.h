@@ -10,10 +10,12 @@
 #import "ios/chrome/browser/ui/tab_switcher/tab_grid/grid/grid_commands.h"
 #import "ios/chrome/browser/ui/tab_switcher/tab_grid/grid/grid_drag_drop_handler.h"
 #import "ios/chrome/browser/ui/tab_switcher/tab_grid/grid/grid_image_data_source.h"
+#import "ios/chrome/browser/ui/tab_switcher/tab_grid/grid/grid_menu_actions_data_source.h"
 
 class Browser;
 @protocol GridConsumer;
 @class TabGridMediator;
+@class URLWithTitle;
 
 namespace sessions {
 class TabRestoreService;
@@ -32,11 +34,26 @@ class TabRestoreService;
                                                        anchor:(UIBarButtonItem*)
                                                                   buttonAnchor;
 
+- (void)
+    showCloseItemsConfirmationActionSheetWithTabGridMediator:
+        (TabGridMediator*)tabGridMediator
+                                                       items:
+                                                           (NSArray<NSString*>*)
+                                                               items
+                                                      anchor:(UIBarButtonItem*)
+                                                                 buttonAnchor;
+
+- (void)tabGridMediator:(TabGridMediator*)tabGridMediator
+              shareURLs:(NSArray<URLWithTitle*>*)items
+                 anchor:(UIBarButtonItem*)buttonAnchor;
+
 @end
 
 // Mediates between model layer and tab grid UI layer.
-@interface TabGridMediator
-    : NSObject <GridCommands, GridDragDropHandler, GridImageDataSource>
+@interface TabGridMediator : NSObject <GridCommands,
+                                       GridDragDropHandler,
+                                       GridImageDataSource,
+                                       GridMenuActionsDataSource>
 
 // The source browser.
 @property(nonatomic, assign) Browser* browser;

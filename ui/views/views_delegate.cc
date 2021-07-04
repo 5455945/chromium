@@ -61,8 +61,8 @@ bool ViewsDelegate::GetSavedWindowPlacement(
   return false;
 }
 
-void ViewsDelegate::NotifyMenuItemFocused(const base::string16& menu_name,
-                                          const base::string16& menu_item_name,
+void ViewsDelegate::NotifyMenuItemFocused(const std::u16string& menu_name,
+                                          const std::u16string& menu_item_name,
                                           int item_index,
                                           int item_count,
                                           bool has_submenu) {}
@@ -117,7 +117,7 @@ bool ViewsDelegate::WindowManagerProvidesTitleBar(bool maximized) {
   return false;
 }
 
-#if defined(OS_APPLE)
+#if defined(OS_MAC)
 ui::ContextFactory* ViewsDelegate::GetContextFactory() {
   return nullptr;
 }

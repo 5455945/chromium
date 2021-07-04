@@ -7,7 +7,6 @@
 
 #include <string>
 
-#include "base/strings/string16.h"
 #include "base/strings/string_piece.h"
 #include "base/types/strong_alias.h"
 #include "ui/gfx/image/image.h"
@@ -26,7 +25,7 @@ struct Suggestion {
   Suggestion(const Suggestion& other);
   Suggestion(Suggestion&& other);
 
-  explicit Suggestion(base::string16 value);
+  explicit Suggestion(std::u16string value);
   // Constructor for unit tests. It will convert the strings from UTF-8 to
   // UTF-16.
   Suggestion(base::StringPiece value,
@@ -48,15 +47,19 @@ struct Suggestion {
   // (see popup_item_ids.h) have special built-in meanings.
   int frontend_id = 0;
 
-  base::string16 value;
-  base::string16 label;
+  // The text that will be filled in to the focused field and is displayed as
+  // the main text in the suggestion. Its style depends on |is_value_secondary|.
+  std::u16string value;
+
+  // The text displayed on the second line in a suggestion.
+  std::u16string label;
   // A label to be shown beneath |label| that will display information about any
   // credit card offers or rewards.
-  base::string16 offer_label;
+  std::u16string offer_label;
   // Used only for passwords to show the password value.
   // Also used to display an extra line of information if two line
   // display is enabled.
-  base::string16 additional_label;
+  std::u16string additional_label;
   // Contains an image to display for the suggestion.
   gfx::Image custom_icon;
   // TODO(crbug.com/1019660): Identify icons with enum instead of strings.
@@ -66,10 +69,12 @@ struct Suggestion {
   // account store. If it's empty, no store indication should be shown.
   std::string store_indicator_icon;
   MatchMode match = PREFIX_MATCH;
-  // |value| should be displayed as secondary text.
+  // Whether |value| should be displayed as secondary text.
   bool is_value_secondary = false;
   // Whether suggestion was interacted with and is now in a loading state.
   IsLoading is_loading = IsLoading(false);
+  // The In-Product-Help feature that should be shown for the suggestion.
+  std::string feature_for_iph;
 };
 
 }  // namespace autofill

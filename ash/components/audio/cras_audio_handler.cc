@@ -24,6 +24,7 @@
 #include "base/system/sys_info.h"
 #include "base/system/system_monitor.h"
 #include "base/threading/thread_task_runner_handle.h"
+#include "third_party/cros_system_api/dbus/service_constants.h"
 
 namespace ash {
 namespace {
@@ -61,6 +62,13 @@ bool IsDeviceInList(const AudioDevice& device, const AudioNodeList& node_list) {
   return false;
 }
 
+// Gets the current state of the microphone mute switch. If the switch is on,
+// cras will be kept in the muted state. The switch disables the internal audio
+// input.
+bool IsMicrophoneMuteSwitchOn() {
+  return ui::MicrophoneMuteSwitchMonitor::Get()->microphone_mute_switch_on();
+}
+
 }  // namespace
 
 CrasAudioHandler::AudioObserver::AudioObserver() = default;
@@ -69,17 +77,18 @@ CrasAudioHandler::AudioObserver::~AudioObserver() = default;
 
 void CrasAudioHandler::AudioObserver::OnOutputNodeVolumeChanged(
     uint64_t /* node_id */,
-    int /* volume */) {
-}
+    int /* volume */) {}
 
 void CrasAudioHandler::AudioObserver::OnInputNodeGainChanged(
     uint64_t /* node_id */,
-    int /* gain */) {
-}
+    int /* gain */) {}
 
 void CrasAudioHandler::AudioObserver::OnOutputMuteChanged(bool /* mute_on */) {}
 
 void CrasAudioHandler::AudioObserver::OnInputMuteChanged(bool /* mute_on */) {}
+
+void CrasAudioHandler::AudioObserver::OnInputMutedByMicrophoneMuteSwitchChanged(
+    bool /* muted */) {}
 
 void CrasAudioHandler::AudioObserver::OnAudioNodesChanged() {}
 
@@ -275,7 +284,7 @@ void CrasAudioHandler::MediaSessionInfoChanged(
 }
 
 void CrasAudioHandler::MediaSessionMetadataChanged(
-    const base::Optional<media_session::MediaMetadata>& metadata) {
+    const absl::optional<media_session::MediaMetadata>& metadata) {
   if (!metadata || metadata->IsEmpty()) {
     HandleMediaSessionMetadataReset();
     return;
@@ -294,7 +303,7 @@ void CrasAudioHandler::MediaSessionMetadataChanged(
 }
 
 void CrasAudioHandler::MediaSessionPositionChanged(
-    const base::Optional<media_session::MediaPosition>& position) {
+    const absl::optional<media_session::MediaPosition>& position) {
   if (!position)
     return;
 
@@ -312,6 +321,14 @@ void CrasAudioHandler::MediaSessionPositionChanged(
     return;
 
   CrasAudioClient::Get()->SetPlayerPosition(current_position);
+}
+
+void CrasAudioHandler::OnMicrophoneMuteSwitchValueChanged(bool muted) {
+  input_muted_by_microphone_mute_switch_ = muted;
+  SetInputMute(muted);
+
+  for (auto& observer : observers_)
+    observer.OnInputMutedByMicrophoneMuteSwitchChanged(muted);
 }
 
 void CrasAudioHandler::AddAudioObserver(AudioObserver* observer) {
@@ -340,6 +357,10 @@ bool CrasAudioHandler::IsOutputMutedForDevice(uint64_t device_id) {
     return false;
   DCHECK(!device->is_input);
   return audio_pref_handler_->GetMuteValue(*device);
+}
+
+bool CrasAudioHandler::IsOutputMutedByPolicy() {
+  return output_mute_locked_;
 }
 
 bool CrasAudioHandler::IsOutputVolumeBelowDefaultMuteLevel() {
@@ -428,6 +449,37 @@ CrasAudioHandler::GetNumberOfInputStreamsWithPermission() const {
 
 void CrasAudioHandler::GetDefaultOutputBufferSize(int32_t* buffer_size) const {
   *buffer_size = default_output_buffer_size_;
+}
+
+bool CrasAudioHandler::GetNoiseCancellationState() const {
+  return audio_pref_handler_->GetNoiseCancellationState();
+}
+
+void CrasAudioHandler::SetNoiseCancellationState(bool state) {
+  CrasAudioClient::Get()->SetNoiseCancellationEnabled(state);
+}
+
+void CrasAudioHandler::SetNoiseCancellationPrefState(bool state) {
+  audio_pref_handler_->SetNoiseCancellationState(state);
+}
+
+void CrasAudioHandler::RequestNoiseCancellationSupported(
+    OnNoiseCancellationSupportedCallback callback) {
+  CrasAudioClient::Get()->GetNoiseCancellationSupported(
+      base::BindOnce(&CrasAudioHandler::HandleGetNoiseCancellationSupported,
+                     weak_ptr_factory_.GetWeakPtr()));
+
+  std::move(callback).Run();
+}
+
+void CrasAudioHandler::HandleGetNoiseCancellationSupported(
+    absl::optional<bool> noise_cancellation_supported) {
+  if (!noise_cancellation_supported.has_value()) {
+    LOG(ERROR)
+        << "cras_audio_handler: Failed to retrieve noise cancellation support";
+    return;
+  }
+  noise_cancellation_supported_ = noise_cancellation_supported.value();
 }
 
 void CrasAudioHandler::SetKeyboardMicActive(bool active) {
@@ -562,6 +614,17 @@ void CrasAudioHandler::SwapInternalSpeakerLeftRightChannel(bool swap) {
   }
 }
 
+void CrasAudioHandler::SetDisplayRotation(cras::DisplayRotation rotation) {
+  display_rotation_ = rotation;
+  for (const auto& item : audio_devices_) {
+    const AudioDevice& device = item.second;
+    if (device.type == AudioDeviceType::kInternalSpeaker) {
+      CrasAudioClient::Get()->SetDisplayRotation(device.id, display_rotation_);
+      break;
+    }
+  }
+}
+
 void CrasAudioHandler::SetOutputMonoEnabled(bool enabled) {
   if (output_mono_enabled_ == enabled)
     return;
@@ -636,9 +699,13 @@ void CrasAudioHandler::AdjustOutputVolumeToAudibleLevel() {
 }
 
 void CrasAudioHandler::SetInputMute(bool mute_on) {
+  const bool old_mute_on = input_mute_on_;
   SetInputMuteInternal(mute_on);
-  for (auto& observer : observers_)
-    observer.OnInputMuteChanged(input_mute_on_);
+
+  if (old_mute_on != input_mute_on_) {
+    for (auto& observer : observers_)
+      observer.OnInputMuteChanged(input_mute_on_);
+  }
 }
 
 void CrasAudioHandler::SetActiveDevice(const AudioDevice& active_device,
@@ -747,6 +814,8 @@ CrasAudioHandler::CrasAudioHandler(
   DCHECK(CrasAudioClient::Get());
   CrasAudioClient::Get()->AddObserver(this);
   audio_pref_handler_->AddAudioPrefObserver(this);
+  ui::MicrophoneMuteSwitchMonitor::Get()->AddObserver(this);
+
   BindMediaControllerObserver();
   InitializeAudioState();
   // Unittest may not have the task runner for the current thread.
@@ -762,6 +831,7 @@ CrasAudioHandler::~CrasAudioHandler() {
   DCHECK(CrasAudioClient::Get());
   CrasAudioClient::Get()->RemoveObserver(this);
   audio_pref_handler_->RemoveAudioPrefObserver(this);
+  ui::MicrophoneMuteSwitchMonitor::Get()->RemoveObserver(this);
 
   DCHECK(g_cras_audio_handler);
   g_cras_audio_handler = nullptr;
@@ -880,6 +950,13 @@ void CrasAudioHandler::ResendBluetoothBattery() {
   CrasAudioClient::Get()->ResendBluetoothBattery();
 }
 
+void CrasAudioHandler::SetPrefHandlerForTesting(
+    scoped_refptr<AudioDevicesPrefHandler> audio_pref_handler) {
+  audio_pref_handler_->RemoveAudioPrefObserver(this);
+  audio_pref_handler_ = audio_pref_handler;
+  audio_pref_handler_->AddAudioPrefObserver(this);
+}
+
 void CrasAudioHandler::OnAudioPolicyPrefChanged() {
   ApplyAudioPolicy();
 }
@@ -955,13 +1032,11 @@ void CrasAudioHandler::SetupAudioOutputState() {
   // Mute the output during HDMI re-discovering grace period.
   if (hdmi_rediscovering_ && !IsHDMIPrimaryOutputDevice()) {
     VLOG(1) << "Mute the output during HDMI re-discovering grace period";
-    output_mute_on_ = true;
+    SetOutputMuteInternal(true);
   } else {
-    output_mute_on_ = audio_pref_handler_->GetMuteValue(*device);
+    SetOutputMuteInternal(audio_pref_handler_->GetMuteValue(*device));
   }
   output_volume_ = audio_pref_handler_->GetOutputVolumeValue(device);
-
-  SetOutputMuteInternal(output_mute_on_);
 
   if (initializing_audio_state_) {
     // During power up, InitializeAudioState() could be called twice, first
@@ -1021,6 +1096,8 @@ void CrasAudioHandler::InitializeAudioAfterCrasServiceAvailable(
   GetDefaultOutputBufferSizeInternal();
   GetSystemAecSupported();
   GetSystemAecGroupId();
+  GetSystemNsSupported();
+  GetSystemAgcSupported();
   GetNodes();
   GetNumberOfOutputStreams();
   GetNumberOfInputStreamsWithPermissionInternal();
@@ -1036,6 +1113,10 @@ void CrasAudioHandler::InitializeAudioAfterCrasServiceAvailable(
         base::BindOnce(&CrasAudioHandler::HandleGetDeprioritizeBtWbsMic,
                        weak_ptr_factory_.GetWeakPtr()));
   }
+
+  input_muted_by_microphone_mute_switch_ = IsMicrophoneMuteSwitchOn();
+  if (input_muted_by_microphone_mute_switch_)
+    SetInputMute(true);
 }
 
 void CrasAudioHandler::ApplyAudioPolicy() {
@@ -1077,7 +1158,7 @@ void CrasAudioHandler::SetOutputNodeVolumePercent(uint64_t node_id,
     SetOutputNodeVolume(node_id, volume_percent);
 }
 
-bool  CrasAudioHandler::SetOutputMuteInternal(bool mute_on) {
+bool CrasAudioHandler::SetOutputMuteInternal(bool mute_on) {
   if (output_mute_locked_)
     return false;
 
@@ -1111,6 +1192,13 @@ void CrasAudioHandler::SetInputNodeGainPercent(uint64_t node_id,
 }
 
 void CrasAudioHandler::SetInputMuteInternal(bool mute_on) {
+  // Do not allow unmuting the device if hardware microphone mute switch is on.
+  // The switch disables internal microphone, and cras audio handler is expected
+  // to keep system wide cras mute on while the switch is toggled (which should
+  // ensure non-internal audio input devices are kept muted).
+  if (!mute_on && input_muted_by_microphone_mute_switch_)
+    return;
+
   input_mute_on_ = mute_on;
   CrasAudioClient::Get()->SetInputMute(mute_on);
 }
@@ -1505,6 +1593,17 @@ void CrasAudioHandler::UpdateDevicesAndSwitchActive(
   bool input_devices_changed =
       HasDeviceChange(nodes, true, &hotplug_input_nodes, &has_input_removed,
                       &active_input_removed);
+
+  // Updates the display_rotation to the internal speaker when it's added.
+  for (auto node : nodes) {
+    AudioDevice device = ConvertAudioNodeWithModifiedPriority(node);
+    DeviceStatus status = CheckDeviceStatus(device);
+    if (status == NEW_DEVICE &&
+        device.type == AudioDeviceType::kInternalSpeaker) {
+      CrasAudioClient::Get()->SetDisplayRotation(device.id, display_rotation_);
+    }
+  }
+
   audio_devices_.clear();
   has_alternative_input_ = false;
   has_alternative_output_ = false;
@@ -1591,7 +1690,7 @@ void CrasAudioHandler::HandleAudioDeviceChange(
   }
 }
 
-void CrasAudioHandler::HandleGetNodes(base::Optional<AudioNodeList> node_list) {
+void CrasAudioHandler::HandleGetNodes(absl::optional<AudioNodeList> node_list) {
   if (!node_list.has_value()) {
     LOG(ERROR) << "Failed to retrieve audio nodes data";
     return;
@@ -1601,12 +1700,25 @@ void CrasAudioHandler::HandleGetNodes(base::Optional<AudioNodeList> node_list) {
     return;
 
   UpdateDevicesAndSwitchActive(node_list.value());
+
+  // Always set the input noise cancellation state on NodesChange event.
+  if (features::IsInputNoiseCancellationUiEnabled() &&
+      noise_cancellation_supported()) {
+    const AudioDevice* internal_mic =
+        GetDeviceByType(AudioDeviceType::kInternalMic);
+    if (internal_mic) {
+      SetNoiseCancellationState(
+          GetNoiseCancellationState() &&
+          (internal_mic->audio_effect & cras::EFFECT_TYPE_NOISE_CANCELLATION));
+    }
+  }
+
   for (auto& observer : observers_)
     observer.OnAudioNodesChanged();
 }
 
 void CrasAudioHandler::HandleGetNumActiveOutputStreams(
-    base::Optional<int> new_output_streams_count) {
+    absl::optional<int> new_output_streams_count) {
   if (!new_output_streams_count.has_value()) {
     LOG(ERROR) << "Failed to retrieve number of active output streams";
     return;
@@ -1624,7 +1736,7 @@ void CrasAudioHandler::HandleGetNumActiveOutputStreams(
 }
 
 void CrasAudioHandler::HandleGetDeprioritizeBtWbsMic(
-    base::Optional<bool> deprioritize_bt_wbs_mic) {
+    absl::optional<bool> deprioritize_bt_wbs_mic) {
   if (!deprioritize_bt_wbs_mic.has_value()) {
     LOG(ERROR) << "Failed to retrieve WBS mic deprioritized flag";
     return;
@@ -1704,8 +1816,9 @@ void CrasAudioHandler::StartHDMIRediscoverGracePeriod() {
   hdmi_rediscovering_ = true;
   hdmi_rediscover_timer_.Stop();
   hdmi_rediscover_timer_.Start(
-      FROM_HERE, base::TimeDelta::FromMilliseconds(
-                     hdmi_rediscover_grace_period_duration_in_ms_),
+      FROM_HERE,
+      base::TimeDelta::FromMilliseconds(
+          hdmi_rediscover_grace_period_duration_in_ms_),
       this, &CrasAudioHandler::UpdateAudioAfterHDMIRediscoverGracePeriod);
 }
 
@@ -1818,7 +1931,7 @@ CrasAudioHandler::ClientType CrasAudioHandler::ConvertClientTypeStringToEnum(
 }
 
 void CrasAudioHandler::HandleGetNumberOfInputStreamsWithPermission(
-    base::Optional<base::flat_map<std::string, uint32_t>> num_input_streams) {
+    absl::optional<base::flat_map<std::string, uint32_t>> num_input_streams) {
   if (!num_input_streams.has_value()) {
     LOG(ERROR) << "Failed to retrieve number of input streams with permission";
     return;
@@ -1837,7 +1950,7 @@ void CrasAudioHandler::GetDefaultOutputBufferSizeInternal() {
 }
 
 void CrasAudioHandler::HandleGetDefaultOutputBufferSize(
-    base::Optional<int> buffer_size) {
+    absl::optional<int> buffer_size) {
   if (!buffer_size.has_value()) {
     LOG(ERROR) << "Failed to retrieve output buffer size";
     return;
@@ -1846,13 +1959,17 @@ void CrasAudioHandler::HandleGetDefaultOutputBufferSize(
   default_output_buffer_size_ = buffer_size.value();
 }
 
+bool CrasAudioHandler::noise_cancellation_supported() const {
+  return noise_cancellation_supported_;
+}
+
 bool CrasAudioHandler::system_aec_supported() const {
   DCHECK(main_task_runner_->BelongsToCurrentThread());
   return system_aec_supported_;
 }
 
 // GetSystemAecSupported() is only called in the same thread
-// as the CrasAudioHanler constructor. We are safe here without
+// as the CrasAudioHandler constructor. We are safe here without
 // thread check, because unittest may not have the task runner
 // for the current thread.
 void CrasAudioHandler::GetSystemAecSupported() {
@@ -1862,7 +1979,7 @@ void CrasAudioHandler::GetSystemAecSupported() {
 }
 
 void CrasAudioHandler::HandleGetSystemAecSupported(
-    base::Optional<bool> system_aec_supported) {
+    absl::optional<bool> system_aec_supported) {
   if (!system_aec_supported.has_value()) {
     LOG(ERROR) << "Failed to retrieve system aec supported";
     return;
@@ -1876,7 +1993,7 @@ int32_t CrasAudioHandler::system_aec_group_id() const {
 }
 
 // GetSystemAecGroupId() is only called in the same thread
-// as the CrasAudioHanler constructor. We are safe here without
+// as the CrasAudioHandler constructor. We are safe here without
 // thread check, because unittest may not have the task runner
 // for the current thread.
 void CrasAudioHandler::GetSystemAecGroupId() {
@@ -1886,13 +2003,73 @@ void CrasAudioHandler::GetSystemAecGroupId() {
 }
 
 void CrasAudioHandler::HandleGetSystemAecGroupId(
-    base::Optional<int32_t> system_aec_group_id) {
+    absl::optional<int32_t> system_aec_group_id) {
   if (!system_aec_group_id.has_value()) {
     // If the group Id is not available, set the ID to reflect that.
     system_aec_group_id_ = kSystemAecGroupIdNotAvailable;
     return;
   }
   system_aec_group_id_ = system_aec_group_id.value();
+}
+
+bool CrasAudioHandler::system_ns_supported() const {
+  DCHECK(main_task_runner_->BelongsToCurrentThread());
+  return system_ns_supported_;
+}
+
+// GetSystemNsSupported() is only called in the same thread
+// as the CrasAudioHandler constructor. We are safe here without
+// thread check, because unittest may not have the task runner
+// for the current thread.
+void CrasAudioHandler::GetSystemNsSupported() {
+  CrasAudioClient::Get()->GetSystemNsSupported(
+      base::BindOnce(&CrasAudioHandler::HandleGetSystemNsSupported,
+                     weak_ptr_factory_.GetWeakPtr()));
+}
+
+void CrasAudioHandler::HandleGetSystemNsSupported(
+    absl::optional<bool> system_ns_supported) {
+  if (!system_ns_supported.has_value()) {
+    LOG(ERROR) << "Failed to retrieve system ns supported";
+    return;
+  }
+  system_ns_supported_ = system_ns_supported.value();
+}
+
+bool CrasAudioHandler::system_agc_supported() const {
+  DCHECK(main_task_runner_->BelongsToCurrentThread());
+  return system_agc_supported_;
+}
+
+// GetSystemAgcSupported() is only called in the same thread
+// as the CrasAudioHandler constructor. We are safe here without
+// thread check, because unittest may not have the task runner
+// for the current thread.
+void CrasAudioHandler::GetSystemAgcSupported() {
+  CrasAudioClient::Get()->GetSystemAgcSupported(
+      base::BindOnce(&CrasAudioHandler::HandleGetSystemAgcSupported,
+                     weak_ptr_factory_.GetWeakPtr()));
+}
+
+void CrasAudioHandler::HandleGetSystemAgcSupported(
+    absl::optional<bool> system_agc_supported) {
+  if (!system_agc_supported.has_value()) {
+    LOG(ERROR) << "Failed to retrieve system agc supported";
+    return;
+  }
+  system_agc_supported_ = system_agc_supported.value();
+}
+
+ScopedCrasAudioHandlerForTesting::ScopedCrasAudioHandlerForTesting() {
+  CrasAudioHandler::InitializeForTesting();
+}
+
+ScopedCrasAudioHandlerForTesting::~ScopedCrasAudioHandlerForTesting() {
+  CrasAudioHandler::Shutdown();
+}
+
+CrasAudioHandler& ScopedCrasAudioHandlerForTesting::Get() {
+  return *CrasAudioHandler::Get();
 }
 
 }  // namespace ash

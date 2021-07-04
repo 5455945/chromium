@@ -5,16 +5,14 @@
 #ifndef COMPONENTS_SYNC_ENGINE_SYNC_ENGINE_H_
 #define COMPONENTS_SYNC_ENGINE_SYNC_ENGINE_H_
 
-#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/compiler_specific.h"
+#include "base/callback_forward.h"
 #include "base/files/file_path.h"
 #include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/sync/base/extensions_activity.h"
@@ -27,14 +25,12 @@
 #include "components/sync/engine/sync_credentials.h"
 #include "components/sync/engine/sync_encryption_handler.h"
 #include "components/sync/engine/sync_manager_factory.h"
-#include "google_apis/gaia/core_account_id.h"
 #include "url/gurl.h"
 
 namespace syncer {
 
 class EngineComponentsFactory;
 class HttpPostProviderFactory;
-class JsEventHandler;
 class SyncEngineHost;
 struct SyncStatus;
 
@@ -58,7 +54,6 @@ class SyncEngine : public ModelTypeConfigurer {
     SyncEngineHost* host = nullptr;
     std::unique_ptr<SyncEncryptionHandler::Observer> encryption_observer_proxy;
     scoped_refptr<ExtensionsActivity> extensions_activity;
-    WeakHandle<JsEventHandler> event_handler;
     GURL service_url;
     SyncEngine::HttpPostProviderFactoryGetter http_factory_getter;
     CoreAccountInfo authenticated_account_info;
@@ -67,6 +62,7 @@ class SyncEngine : public ModelTypeConfigurer {
     bool enable_local_sync_backend = false;
     base::FilePath local_sync_backend_folder;
     std::unique_ptr<EngineComponentsFactory> engine_components_factory;
+    std::string encryption_bootstrap_token;
 
    private:
     DISALLOW_COPY_AND_ASSIGN(InitParams);
@@ -123,9 +119,8 @@ class SyncEngine : public ModelTypeConfigurer {
   // are no pending keys.
   virtual void SetDecryptionPassphrase(const std::string& passphrase) = 0;
 
-  // Legacy bootstrap tokens stored in preferences.
+  // Legacy bootstrap token stored in preferences.
   // TODO(crbug.com/1010397): Delete this API together with the preferences.
-  virtual void SetEncryptionBootstrapToken(const std::string& token) = 0;
   virtual void SetKeystoreEncryptionBootstrapToken(
       const std::string& token) = 0;
 
@@ -156,6 +151,9 @@ class SyncEngine : public ModelTypeConfigurer {
   virtual void HasUnsyncedItemsForTest(
       base::OnceCallback<void(bool)> cb) const = 0;
 
+  // Returns datatypes that are currently throttled.
+  virtual void GetThrottledDataTypesForTest(
+      base::OnceCallback<void(ModelTypeSet)> cb) const = 0;
 
   // Requests that the backend forward to the fronent any protocol events in
   // its buffer and begin forwarding automatically from now on.  Repeated calls

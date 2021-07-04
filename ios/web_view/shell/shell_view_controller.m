@@ -676,7 +676,7 @@ NSString* const kWebViewShellJavaScriptDialogTextFieldAccessibilityIdentifier =
   // Set a non empty CGRect to avoid DCHECKs that occur when a load happens
   // after state restoration, and before the view hierarchy is laid out for the
   // first time.
-  // https://source.chromium.org/chromium/chromium/src/+/master:ios/web/web_state/ui/crw_web_request_controller.mm;l=518;drc=df887034106ef438611326745a7cd276eedd4953
+  // https://source.chromium.org/chromium/chromium/src/+/main:ios/web/web_state/ui/crw_web_request_controller.mm;l=518;drc=df887034106ef438611326745a7cd276eedd4953
   CGRect frame = CGRectMake(0, 0, 1, 1);
   CWVWebView* webView = [[CWVWebView alloc] initWithFrame:frame
                                             configuration:configuration];
@@ -1026,7 +1026,7 @@ NSString* const kWebViewShellJavaScriptDialogTextFieldAccessibilityIdentifier =
   return YES;
 }
 
-- (void)webViewDidStartProvisionalNavigation:(CWVWebView*)webView {
+- (void)webViewDidStartNavigation:(CWVWebView*)webView {
   NSLog(@"%@", NSStringFromSelector(_cmd));
   [self updateToolbar];
 }
@@ -1049,6 +1049,31 @@ NSString* const kWebViewShellJavaScriptDialogTextFieldAccessibilityIdentifier =
   [self updateToolbar];
 }
 
+- (void)webView:(CWVWebView*)webView
+    handleSSLErrorWithHandler:(CWVSSLErrorHandler*)handler {
+  NSLog(@"%@", NSStringFromSelector(_cmd));
+  [handler displayErrorPageWithHTML:handler.error.localizedDescription];
+
+  if (!handler.overridable) {
+    return;
+  }
+
+  UIAlertController* alertController =
+      [self actionSheetWithTitle:@"SSL error encountered"
+                         message:@"Would you like to continue anyways?"];
+  [alertController
+      addAction:[UIAlertAction actionWithTitle:@"Yes"
+                                         style:UIAlertActionStyleDefault
+                                       handler:^(UIAlertAction* action) {
+                                         [handler overrideErrorAndReloadPage];
+                                       }]];
+  [alertController
+      addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                         style:UIAlertActionStyleCancel
+                                       handler:nil]];
+  [self presentViewController:alertController animated:YES completion:nil];
+}
+
 - (void)webViewWebContentProcessDidTerminate:(CWVWebView*)webView {
   NSLog(@"%@", NSStringFromSelector(_cmd));
 }
@@ -1068,15 +1093,6 @@ NSString* const kWebViewShellJavaScriptDialogTextFieldAccessibilityIdentifier =
 - (void)webView:(CWVWebView*)webView
     commitPreviewingViewController:(UIViewController*)previewingViewController {
   NSLog(@"%@", NSStringFromSelector(_cmd));
-}
-
-- (void)webView:(CWVWebView*)webView
-    didFailNavigationWithSSLError:(NSError*)error
-                      overridable:(BOOL)overridable
-                  decisionHandler:
-                      (void (^)(CWVSSLErrorDecision))decisionHandler {
-  NSLog(@"%@", NSStringFromSelector(_cmd));
-  decisionHandler(CWVSSLErrorDecisionDoNothing);
 }
 
 - (void)webView:(CWVWebView*)webView

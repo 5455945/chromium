@@ -45,6 +45,7 @@
 #include "third_party/blink/renderer/core/layout/list_marker.h"
 #include "third_party/blink/renderer/core/page/viewport_description.h"
 #include "third_party/blink/renderer/core/testing/color_scheme_helper.h"
+#include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_request.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_test.h"
@@ -116,8 +117,26 @@ class StyleEngineTest : public testing::Test {
     return ListMarker::Get(marker)->TextAlternative(*marker);
   }
 
+  StyleRuleScrollTimeline* FindScrollTimelineRule(AtomicString name) {
+    CSSScrollTimeline* timeline = GetStyleEngine().FindScrollTimeline(name);
+    if (!timeline)
+      return nullptr;
+    return timeline->GetRule();
+  }
+
  private:
   std::unique_ptr<DummyPageHolder> dummy_page_holder_;
+};
+
+// It's currently not possible to use ScopedCSSContainerQueriesForTest in
+// individual tests. CSSContainerQueries implies LayoutNGGrid, and
+// LayoutNGGrid needs to be enabled early (before StyleResolver::InitialStyle
+// is created, probably). Otherwise assumptions made by e.g.
+// GridTrackList::AssignFrom do not hold.
+class StyleEngineContainerQueryTest : public StyleEngineTest,
+                                      private ScopedCSSContainerQueriesForTest {
+ public:
+  StyleEngineContainerQueryTest() : ScopedCSSContainerQueriesForTest(true) {}
 };
 
 void StyleEngineTest::SetUp() {
@@ -1833,6 +1852,48 @@ TEST_F(StyleEngineTest, MediaQueriesChangeForcedColorsAndPreferredColorScheme) {
                 GetCSSPropertyColor()));
 }
 
+TEST_F(StyleEngineTest, MediaQueriesForcedColorsOverride) {
+  GetDocument().body()->setInnerHTML(R"HTML(
+    <style>
+      body {
+        forced-color-adjust: none;
+      }
+      @media (forced-colors: none) {
+        body { color: red }
+      }
+      @media (forced-colors: active) {
+        body { color: green }
+      }
+    </style>
+    <body></body>
+  )HTML");
+
+  UpdateAllLifecyclePhases();
+  EXPECT_EQ(MakeRGB(255, 0, 0),
+            GetDocument().body()->GetComputedStyle()->VisitedDependentColor(
+                GetCSSPropertyColor()));
+
+  ColorSchemeHelper color_scheme_helper(GetDocument());
+  GetDocument().GetPage()->SetMediaFeatureOverride("forced-colors", "active");
+
+  UpdateAllLifecyclePhases();
+  EXPECT_EQ(MakeRGB(0, 128, 0),
+            GetDocument().body()->GetComputedStyle()->VisitedDependentColor(
+                GetCSSPropertyColor()));
+
+  GetDocument().GetPage()->SetMediaFeatureOverride("forced-colors", "none");
+  UpdateAllLifecyclePhases();
+  EXPECT_EQ(MakeRGB(255, 0, 0),
+            GetDocument().body()->GetComputedStyle()->VisitedDependentColor(
+                GetCSSPropertyColor()));
+
+  GetDocument().GetPage()->ClearMediaFeatureOverrides();
+  UpdateAllLifecyclePhases();
+  EXPECT_EQ(MakeRGB(255, 0, 0),
+            GetDocument().body()->GetComputedStyle()->VisitedDependentColor(
+                GetCSSPropertyColor()));
+}
+
 TEST_F(StyleEngineTest, MediaQueriesColorSchemeOverride) {
   ColorSchemeHelper color_scheme_helper(GetDocument());
   color_scheme_helper.SetPreferredColorScheme(
@@ -2426,8 +2487,6 @@ TEST_F(StyleEngineTest, ColorSchemeBaseBackgroundChange) {
 }
 
 TEST_F(StyleEngineTest, ColorSchemeOverride) {
-  ScopedCSSColorSchemeUARenderingForTest enable_color_scheme_ua(true);
-
   ColorSchemeHelper color_scheme_helper(GetDocument());
   color_scheme_helper.SetPreferredColorScheme(
       mojom::blink::PreferredColorScheme::kLight);
@@ -3025,8 +3084,6 @@ TEST_F(StyleEngineTest, PrintNoDarkColorScheme) {
 }
 
 TEST_F(StyleEngineTest, AtPropertyUseCount) {
-  ScopedCSSVariables2AtPropertyForTest scoped_feature(true);
-
   GetDocument().body()->setInnerHTML(R"HTML(
     <style>
       body { --x: No @property rule here; }
@@ -3072,8 +3129,6 @@ TEST_F(StyleEngineTest, MediaQueryAffectedByViewportSanityCheck) {
 }
 
 TEST_F(StyleEngineTest, RemoveDeclaredPropertiesEmptyRegistry) {
-  ScopedCSSVariables2AtPropertyForTest scoped_feature(true);
-
   EXPECT_FALSE(GetDocument().GetPropertyRegistry());
   PropertyRegistration::RemoveDeclaredProperties(GetDocument());
   EXPECT_FALSE(GetDocument().GetPropertyRegistry());
@@ -3125,12 +3180,12 @@ TEST_F(StyleEngineTest, AtScrollTimelineInUserOrigin) {
   // @scroll-timeline in the user origin:
   InjectSheet("user1", WebDocument::kUserOrigin, R"CSS(
     @scroll-timeline timeline1 {
+      time-range: 10s;
       source: selector(#scroller1);
     }
   )CSS");
   UpdateAllLifecyclePhases();
-  StyleRuleScrollTimeline* rule1 =
-      GetStyleEngine().FindScrollTimelineRule("timeline1");
+  StyleRuleScrollTimeline* rule1 = FindScrollTimelineRule("timeline1");
   ASSERT_TRUE(rule1);
   ASSERT_TRUE(rule1->GetSource());
   EXPECT_EQ("selector(#scroller1)", rule1->GetSource()->CssText());
@@ -3138,12 +3193,12 @@ TEST_F(StyleEngineTest, AtScrollTimelineInUserOrigin) {
   // @scroll-timeline in the author origin (should win over user origin)
   InjectSheet("author", WebDocument::kAuthorOrigin, R"CSS(
     @scroll-timeline timeline1 {
+      time-range: 10s;
       source: selector(#scroller2);
     }
   )CSS");
   UpdateAllLifecyclePhases();
-  StyleRuleScrollTimeline* rule2 =
-      GetStyleEngine().FindScrollTimelineRule("timeline1");
+  StyleRuleScrollTimeline* rule2 = FindScrollTimelineRule("timeline1");
   ASSERT_TRUE(rule2);
   ASSERT_TRUE(rule2->GetSource());
   EXPECT_EQ("selector(#scroller2)", rule2->GetSource()->CssText());
@@ -3151,12 +3206,12 @@ TEST_F(StyleEngineTest, AtScrollTimelineInUserOrigin) {
   // An additional @scroll-timeline in the user origin:
   InjectSheet("user2", WebDocument::kUserOrigin, R"CSS(
     @scroll-timeline timeline2 {
+      time-range: 10s;
       source: selector(#scroller3);
     }
   )CSS");
   UpdateAllLifecyclePhases();
-  StyleRuleScrollTimeline* rule3 =
-      GetStyleEngine().FindScrollTimelineRule("timeline2");
+  StyleRuleScrollTimeline* rule3 = FindScrollTimelineRule("timeline2");
   ASSERT_TRUE(rule3);
   ASSERT_TRUE(rule3->GetSource());
   EXPECT_EQ("selector(#scroller3)", rule3->GetSource()->CssText());
@@ -3180,239 +3235,6 @@ TEST_F(StyleEngineTest, SystemColorComputeToSelfUseCount) {
   UpdateAllLifecyclePhases();
   EXPECT_TRUE(
       GetDocument().IsUseCounted(WebFeature::kCSSSystemColorComputeToSelf));
-}
-
-TEST_F(StyleEngineTest, InvalidVariableUnsetUseCount) {
-  // Do not count for basic variable usage.
-  GetDocument().body()->setInnerHTML(R"HTML(
-    <style>
-      #outer { --x: foo; }
-      #inner { --x: bar; }
-    </style>
-    <div id=outer>
-      <div id=inner></div>
-    <div>
-  )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSInvalidVariableUnset));
-  ClearUseCounter(WebFeature::kCSSInvalidVariableUnset);
-
-  // Do not count when a fallback handles the unknown variable.
-  GetDocument().body()->setInnerHTML(R"HTML(
-    <style>
-      #outer { --x: foo; }
-      #inner { --x: var(--unknown,bar); }
-    </style>
-    <div id=outer>
-      <div id=inner></div>
-    <div>
-  )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSInvalidVariableUnset));
-  ClearUseCounter(WebFeature::kCSSInvalidVariableUnset);
-
-  // Do not count for explicit 'unset'.
-  GetDocument().body()->setInnerHTML(R"HTML(
-    <style>
-      #outer { --x: foo; }
-      #inner { --x: unset; }
-    </style>
-    <div id=outer>
-      <div id=inner></div>
-    <div>
-  )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSInvalidVariableUnset));
-  ClearUseCounter(WebFeature::kCSSInvalidVariableUnset);
-
-  // Do not count when we anyway end up with the guaranteed-invalid value.
-  // (Applies to registered properties as well).
-  GetDocument().body()->setInnerHTML(R"HTML(
-    <style>
-      @property --y {
-        syntax: "*";
-        inherits: true;
-      }
-      @property --z {
-        syntax: "*";
-        inherits: false;
-      }
-      #inner {
-        --x: var(--unknown);
-        --y: var(--unknown);
-        --z: var(--unknown);
-      }
-    </style>
-    <div id=outer>
-      <div id=inner></div>
-    <div>
-  )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSInvalidVariableUnset));
-  ClearUseCounter(WebFeature::kCSSInvalidVariableUnset);
-
-  // Count when 'unset' inherits something that not guaranteed-invalid.
-  GetDocument().body()->setInnerHTML(R"HTML(
-    <style>
-      #outer { --x: foo; }
-      #inner { --x: var(--unknown); }
-    </style>
-    <div id=outer>
-      <div id=inner></div>
-    <div>
-  )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_TRUE(IsUseCounted(WebFeature::kCSSInvalidVariableUnset));
-  ClearUseCounter(WebFeature::kCSSInvalidVariableUnset);
-
-  // Do not count for non-universal registered custom properties.
-  GetDocument().body()->setInnerHTML(R"HTML(
-    <style>
-      @property --x {
-        syntax: "<length>";
-        inherits: true;
-        initial-value: 0px;
-      }
-      #outer { --x: 1px; }
-      #inner { --x: var(--unknown); }
-    </style>
-    <div id=outer>
-      <div id=inner></div>
-    <div>
-  )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSInvalidVariableUnset));
-  ClearUseCounter(WebFeature::kCSSInvalidVariableUnset);
-
-  // Count for universal registered custom properties.
-  GetDocument().body()->setInnerHTML(R"HTML(
-    <style>
-      @property --x {
-        syntax: "*";
-        inherits: true;
-      }
-      #outer { --x: bar; }
-      #inner { --x: var(--unknown); }
-    </style>
-    <div id=outer>
-      <div id=inner></div>
-    <div>
-  )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_TRUE(IsUseCounted(WebFeature::kCSSInvalidVariableUnset));
-  ClearUseCounter(WebFeature::kCSSInvalidVariableUnset);
-
-  // Do not count for non-inherited universal registered custom properties
-  // without initial value.
-  GetDocument().body()->setInnerHTML(R"HTML(
-    <style>
-      @property --x {
-        syntax: "*";
-        inherits: false;
-      }
-      #outer { --x: bar; }
-      #inner { --x: var(--unknown); }
-    </style>
-    <div id=outer>
-      <div id=inner></div>
-    <div>
-  )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSInvalidVariableUnset));
-  ClearUseCounter(WebFeature::kCSSInvalidVariableUnset);
-
-  // Count for universal registered custom properties even with an
-  // initial-value defined.
-  GetDocument().body()->setInnerHTML(R"HTML(
-    <style>
-      @property --x {
-        syntax: "*";
-        inherits: true;
-        initial-value: foo;
-      }
-      #outer { --x: bar; }
-      #inner { --x: var(--unknown); }
-    </style>
-    <div id=outer>
-      <div id=inner></div>
-    <div>
-  )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_TRUE(IsUseCounted(WebFeature::kCSSInvalidVariableUnset));
-  ClearUseCounter(WebFeature::kCSSInvalidVariableUnset);
-
-  // Do not count for cycles.
-  GetDocument().body()->setInnerHTML(R"HTML(
-    <style>
-      @property --a {
-        syntax: "*";
-        inherits: true;
-      }
-      @property --b {
-        syntax: "*";
-        inherits: true;
-      }
-      #outer {
-        --a: foo;
-        --b: foo;
-        --c: foo;
-        --d: foo;
-      }
-      #inner {
-        --a: var(--b);
-        --b: var(--a);
-        --c: var(--d);
-        --d: var(--c);
-      }
-    </style>
-    <div id=outer>
-      <div id=inner></div>
-    <div>
-  )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSInvalidVariableUnset));
-  ClearUseCounter(WebFeature::kCSSInvalidVariableUnset);
-
-  // Count for @keyframes
-  GetDocument().body()->setInnerHTML(R"HTML(
-    <style>
-      @keyframes anim {
-        from { --x: var(--unknown); }
-        to { --x: var(--unknown); }
-      }
-      #outer {
-        --x: foo;
-      }
-      #inner {
-        animation: anim 10s;
-      }
-    </style>
-    <div id=outer>
-      <div id=inner></div>
-    <div>
-  )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_TRUE(IsUseCounted(WebFeature::kCSSInvalidVariableUnset));
-  ClearUseCounter(WebFeature::kCSSInvalidVariableUnset);
-
-  // Don't count for @keyframes if there's nothing to inherit.
-  GetDocument().body()->setInnerHTML(R"HTML(
-    <style>
-      @keyframes anim {
-        from { --x: var(--unknown); }
-        to { --x: var(--unknown); }
-      }
-      #inner {
-        animation: anim 10s;
-      }
-    </style>
-    <div id=outer>
-      <div id=inner></div>
-    <div>
-  )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSInvalidVariableUnset));
-  ClearUseCounter(WebFeature::kCSSInvalidVariableUnset);
 }
 
 // https://crbug.com/1050564
@@ -3547,200 +3369,46 @@ TEST_F(StyleEngineSimTest, OwnerColorSchemeBaseBackground) {
   EXPECT_EQ(Color::kWhite, light_document->View()->BaseBackgroundColor());
 }
 
-TEST_F(StyleEngineTest, CSSPseudoHostCompoundListUseCount) {
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSPseudoHostCompoundList));
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSPseudoHostContextCompoundList));
+TEST_F(StyleEngineSimTest, ColorSchemeBaseBackgroundWhileRenderBlocking) {
+  SimRequest main_resource("https://example.com", "text/html");
+  SimSubresourceRequest css_resource("https://example.com/slow.css",
+                                     "text/css");
 
-  // Do not count for argument-less :host.
-  GetDocument().body()->setInnerHTML(R"HTML(
-    <style>
-      :host { color: red; }
-      :is(:host) { color: red; }
-    </style>
-  )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSPseudoHostCompoundList));
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSPseudoHostContextCompoundList));
-  ClearUseCounter(WebFeature::kCSSPseudoHostCompoundList);
-  ClearUseCounter(WebFeature::kCSSPseudoHostContextCompoundList);
+  LoadURL("https://example.com");
 
-  // Do not count when there's only one argument.
-  GetDocument().body()->setInnerHTML(R"HTML(
-    <style>
-      :host(.a) { color: red; }
-      :host(div#a) { color: red; }
-    </style>
+  main_resource.Write(R"HTML(
+    <!doctype html>
+    <meta name="color-scheme" content="dark">
+    <link rel="stylesheet" href="slow.css">
+    Some content
   )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSPseudoHostCompoundList));
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSPseudoHostContextCompoundList));
-  ClearUseCounter(WebFeature::kCSSPseudoHostCompoundList);
-  ClearUseCounter(WebFeature::kCSSPseudoHostContextCompoundList);
 
-  // Count when there's more than one argument.
-  GetDocument().body()->setInnerHTML(R"HTML(
-    <style>
-      :host(.a, .b) { color: red; }
-    </style>
-  )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_TRUE(IsUseCounted(WebFeature::kCSSPseudoHostCompoundList));
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSPseudoHostContextCompoundList));
+  css_resource.Start();
+  test::RunPendingTasks();
+
+  // No rendering updates should have happened yet.
+  ASSERT_TRUE(GetDocument().documentElement());
+  ASSERT_FALSE(GetDocument().documentElement()->GetComputedStyle());
+  EXPECT_TRUE(Compositor().DeferMainFrameUpdate());
+
+  // The dark color-scheme meta should affect the canvas color.
+  EXPECT_EQ(Color(0x12, 0x12, 0x12),
+            GetDocument().View()->BaseBackgroundColor());
+
+  main_resource.Finish();
+  css_resource.Finish();
 }
 
-TEST_F(StyleEngineTest, CSSPseudoHostContextCompoundListUseCount) {
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSPseudoHostCompoundList));
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSPseudoHostContextCompoundList));
-
-  // Do not count when there's only one argument.
-  GetDocument().body()->setInnerHTML(R"HTML(
-    <style>
-      :host-context(.a) { color: red; }
-      :host-context(div#a) { color: red; }
-    </style>
-  )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSPseudoHostCompoundList));
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSPseudoHostContextCompoundList));
-  ClearUseCounter(WebFeature::kCSSPseudoHostCompoundList);
-  ClearUseCounter(WebFeature::kCSSPseudoHostContextCompoundList);
-
-  // Count when there's more than one argument.
-  GetDocument().body()->setInnerHTML(R"HTML(
-    <style>
-      :host-context(.a, .b) { color: red; }
-    </style>
-  )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSPseudoHostCompoundList));
-  EXPECT_TRUE(IsUseCounted(WebFeature::kCSSPseudoHostContextCompoundList));
-}
-
-TEST_F(StyleEngineTest, CSSPseudoHostDynamicSpecificity) {
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSPseudoHostDynamicSpecificity));
-
-  GetDocument().body()->setInnerHTML(
-      "<div class=parent><div id=host></host></div>");
-  Element* host = GetDocument().getElementById("host");
-  ASSERT_TRUE(host);
-  ShadowRoot& root = host->AttachShadowRootInternal(ShadowRootType::kOpen);
-
-  // Do not count for argument-less :host
-  root.setInnerHTML(R"HTML(
-    <style>
-      :host { color: red; }
-    </style>
-    <div id=element></div>
-  )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSPseudoHostDynamicSpecificity));
-  ClearUseCounter(WebFeature::kCSSPseudoHostDynamicSpecificity);
-
-  // Do not count for cases where there's only one matching argument.
-  root.setInnerHTML(R"HTML(
-    <style>
-      :host(#host) { color: red; }
-      :host-context(#host) { color: red; }
-    </style>
-    <div id=element></div>
-  )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSPseudoHostDynamicSpecificity));
-  ClearUseCounter(WebFeature::kCSSPseudoHostDynamicSpecificity);
-
-  // Do not count for cases that don't match.
-  root.setInnerHTML(R"HTML(
-    <style>
-      :host(#nomatch) { color: red; }
-      :host(span) { color: red; }
-    </style>
-    <div id=element></div>
-  )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSPseudoHostDynamicSpecificity));
-  ClearUseCounter(WebFeature::kCSSPseudoHostDynamicSpecificity);
-
-  // Do not count when the dynamic specificity is equal to the static
-  // specificity.
-  //
-  // In this case the dynamic specificity is: max(#host, div:#host)+class,
-  // which is the same as the static specificity.
-  root.setInnerHTML(R"HTML(
-    <style>
-      :host(#host, div#host) { color: red; }
-    </style>
-    <div id=element></div>
-  )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSPseudoHostDynamicSpecificity));
-  ClearUseCounter(WebFeature::kCSSPseudoHostDynamicSpecificity);
-
-  // Do not count when the dynamic specificity is equal to the static
-  // specificity.
-  //
-  // In this case only #host matches, but since #host has higher specificty
-  // than .a, the dynamic max still turns out the same as the static
-  // specificity.
-  root.setInnerHTML(R"HTML(
-    <style>
-      :host(#host, .a) { color: red; }
-    </style>
-    <div id=element></div>
-  )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSPseudoHostDynamicSpecificity));
-  ClearUseCounter(WebFeature::kCSSPseudoHostDynamicSpecificity);
-
-  // Do not count when the dynamic specificity is not equal to the static
-  // specificity.
-  //
-  // In this case the dynamic specificity takes the max of all matching
-  // selectors (which is just div), whereas the static specificity takes
-  // the max of all the selectors (div, #nomatch).
-  root.setInnerHTML(R"HTML(
-    <style>
-      :host(div, #nomatch) { color: red; }
-    </style>
-    <div id=element></div>
-  )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_TRUE(IsUseCounted(WebFeature::kCSSPseudoHostDynamicSpecificity));
-  ClearUseCounter(WebFeature::kCSSPseudoHostDynamicSpecificity);
-
-  // (The same test as the previous one, except for :host-context()).
-  root.setInnerHTML(R"HTML(
-    <style>
-      :host-context(.parent, #nomatch) { color: red; }
-    </style>
-    <div id=element></div>
-  )HTML");
-  UpdateAllLifecyclePhases();
-  EXPECT_TRUE(IsUseCounted(WebFeature::kCSSPseudoHostDynamicSpecificity));
-  ClearUseCounter(WebFeature::kCSSPseudoHostDynamicSpecificity);
-}
-
-namespace {
-
-void SetDependsOnContainerQueries(Element& element) {
-  if (const ComputedStyle* style = element.GetComputedStyle()) {
-    scoped_refptr<ComputedStyle> cloned_style = ComputedStyle::Clone(*style);
-    cloned_style->SetDependsOnContainerQueries(true);
-    element.SetComputedStyle(cloned_style);
-  }
-}
-
-void SetDependsOnContainerQueries(HTMLCollection& affected) {
-  for (Element* element : affected)
-    SetDependsOnContainerQueries(*element);
-}
-
-}  // namespace
-
-TEST_F(StyleEngineTest, UpdateStyleAndLayoutTreeForContainer) {
+TEST_F(StyleEngineContainerQueryTest, UpdateStyleAndLayoutTreeForContainer) {
   GetDocument().body()->setInnerHTML(R"HTML(
     <style>
       .container {
-        contain: layout size;
+        contain: layout size style;
+        width: 100px;
+        height: 100px;
+      }
+      @container (min-width: 200px) {
+        .affected { background-color: green; }
       }
     </style>
     <div id="container1" class="container">
@@ -3774,83 +3442,99 @@ TEST_F(StyleEngineTest, UpdateStyleAndLayoutTreeForContainer) {
 
   auto* container1 = GetDocument().getElementById("container1");
   auto* container2 = GetDocument().getElementById("container2");
-  auto* affected = GetDocument().getElementsByClassName("affected");
   ASSERT_TRUE(container1);
   ASSERT_TRUE(container2);
-  ASSERT_TRUE(affected);
-  SetDependsOnContainerQueries(*affected);
 
   unsigned start_count = GetStyleEngine().StyleForElementCount();
   GetStyleEngine().UpdateStyleAndLayoutTreeForContainer(
-      *container1, LogicalSize(), LogicalAxes(kLogicalAxisBoth));
+      *container1, LogicalSize(200, 100), LogicalAxes(kLogicalAxisBoth));
 
   // The first span.affected child and #container2
   EXPECT_EQ(2u, GetStyleEngine().StyleForElementCount() - start_count);
 
   start_count = GetStyleEngine().StyleForElementCount();
   GetStyleEngine().UpdateStyleAndLayoutTreeForContainer(
-      *container2, LogicalSize(), LogicalAxes(kLogicalAxisBoth));
+      *container2, LogicalSize(200, 100), LogicalAxes(kLogicalAxisBoth));
 
   // Three direct span.affected children, and the two display:none elements.
   EXPECT_EQ(6u, GetStyleEngine().StyleForElementCount() - start_count);
 }
 
-TEST_F(StyleEngineTest, ContainerQueriesContainmentNotApplying) {
+TEST_F(StyleEngineContainerQueryTest, ContainerQueriesContainmentNotApplying) {
   GetDocument().body()->setInnerHTML(R"HTML(
     <style>
       .container {
-        contain: layout size;
+        contain: layout size style;
+        width: 100px;
+        height: 100px;
+      }
+      @container (min-width: 200px) {
+        .toggle { background-color: green; }
       }
     </style>
     <div id="container" class="container">
+
+      <!-- None of the following should be affected by a change in the
+           size of #container. -->
       <div class="container" style="display:contents">
-        <span class="affected"></span>
+        <span class="toggle"></span>
       </div>
       <span class="container">
-        <span class="affected"></span>
+        <span class="toggle"></span>
       </span>
       <rt class="container">
-        <span class="affected"></span>
+        <span class="toggle"></span>
       </rt>
       <div class="container" style="display:table">
-        <span class="affected"></span>
+        <span class="toggle"></span>
       </div>
       <div class="container" style="display:table-cell">
-        <span class="affected"></span>
+        <span class="toggle"></span>
       </div>
       <div class="container" style="display:table-row">
-        <span class="affected"></span>
+        <span class="toggle"></span>
       </div>
       <div class="container" style="display:table-row-group">
-        <span class="affected"></span>
+        <span class="toggle"></span>
       </div>
+
+      <!-- This should be affected, however. -->
+      <div class="toggle">Affected</div>
     </div>
   )HTML");
 
   UpdateAllLifecyclePhases();
 
   auto* container = GetDocument().getElementById("container");
-  auto* affected = GetDocument().getElementsByClassName("affected");
   ASSERT_TRUE(container);
-  ASSERT_TRUE(affected);
-  SetDependsOnContainerQueries(*affected);
 
   unsigned start_count = GetStyleEngine().StyleForElementCount();
-  GetStyleEngine().UpdateStyleAndLayoutTreeForContainer(
-      *container, LogicalSize(), LogicalAxes(kLogicalAxisBoth));
 
-  // span.affected is updated because containment does not apply to the display
-  // types on the element styled with containment. All marked as affected are
-  // recalculated.
-  EXPECT_EQ(7u, GetStyleEngine().StyleForElementCount() - start_count);
+  GetStyleEngine().UpdateStyleAndLayoutTreeForContainer(
+      *container, LogicalSize(200, 100), LogicalAxes(kLogicalAxisBoth));
+
+  // Even though none of the inner containers are eligible for containment,
+  // they are still containers for the purposes of evaluating container
+  // queries. Hence, they should not be affected when the outer container
+  // changes its size.
+  EXPECT_EQ(1u, GetStyleEngine().StyleForElementCount() - start_count);
 }
 
-TEST_F(StyleEngineTest, PseudoElementContainerQueryRecalc) {
+TEST_F(StyleEngineContainerQueryTest, PseudoElementContainerQueryRecalc) {
   GetDocument().body()->setInnerHTML(R"HTML(
     <style>
-      #container { contain: layout size }
+      #container {
+        contain: layout size style;
+        width: 100px;
+        height: 100px;
+      }
+      /* TODO(crbug.com/1217976): For now we need to create the pseudo-
+         element #container outside of the container query. */
       #container::before { content: " " }
-      span::before { content: " " }
+      @container (min-width: 200px) {
+        #container::before { content: " " }
+        span::before { content: " " }
+      }
     </style>
     <div id="container">
       <span id="span"></span>
@@ -3864,25 +3548,29 @@ TEST_F(StyleEngineTest, PseudoElementContainerQueryRecalc) {
   ASSERT_TRUE(container);
   ASSERT_TRUE(span);
 
-  auto* before = span->GetPseudoElement(kPseudoIdBefore);
-  ASSERT_TRUE(before);
-  SetDependsOnContainerQueries(*before);
-
-  before = container->GetPseudoElement(kPseudoIdBefore);
-  ASSERT_TRUE(before);
-  SetDependsOnContainerQueries(*before);
-
   unsigned start_count = GetStyleEngine().StyleForElementCount();
   GetStyleEngine().UpdateStyleAndLayoutTreeForContainer(
-      *container, LogicalSize(), LogicalAxes(kLogicalAxisBoth));
+      *container, LogicalSize(200, 100), LogicalAxes(kLogicalAxisBoth));
 
-  EXPECT_EQ(2u, GetStyleEngine().StyleForElementCount() - start_count);
+  // Two ::before elements, plus #span. (Originating elements are also
+  // marked as SetDependsOnContainerQueries).
+  EXPECT_EQ(3u, GetStyleEngine().StyleForElementCount() - start_count);
 }
 
-TEST_F(StyleEngineTest, MarkStyleDirtyFromContainerRecalc) {
+TEST_F(StyleEngineContainerQueryTest, MarkStyleDirtyFromContainerRecalc) {
   GetDocument().body()->setInnerHTML(R"HTML(
-    <div id="container" style="contain: layout size">
-      <input id="input" type="text" class="affected">
+    <style>
+      #container {
+        contain: layout size style;
+        width: 100px;
+        height: 100px;
+      }
+      @container (min-width: 200px) {
+        #input { background-color: green; }
+      }
+    </style>
+    <div id="container">
+      <input id="input" type="text">
     </div>
   )HTML");
 
@@ -3890,13 +3578,10 @@ TEST_F(StyleEngineTest, MarkStyleDirtyFromContainerRecalc) {
 
   auto* container = GetDocument().getElementById("container");
   auto* input = GetDocument().getElementById("input");
-  auto* affected = GetDocument().getElementsByClassName("affected");
   ASSERT_TRUE(container);
   ASSERT_TRUE(input);
   auto* inner_editor = DynamicTo<HTMLInputElement>(input)->InnerEditorElement();
   ASSERT_TRUE(inner_editor);
-  ASSERT_TRUE(affected);
-  SetDependsOnContainerQueries(*affected);
 
   scoped_refptr<const ComputedStyle> old_inner_style =
       inner_editor->GetComputedStyle();
@@ -3904,7 +3589,7 @@ TEST_F(StyleEngineTest, MarkStyleDirtyFromContainerRecalc) {
 
   unsigned start_count = GetStyleEngine().StyleForElementCount();
   GetStyleEngine().UpdateStyleAndLayoutTreeForContainer(
-      *container, LogicalSize(), LogicalAxes(kLogicalAxisBoth));
+      *container, LogicalSize(200, 100), LogicalAxes(kLogicalAxisBoth));
 
   // Input elements mark their InnerEditorElement() style-dirty when they are
   // recalculated. That means the UpdateStyleAndLayoutTreeForContainer() call
@@ -3921,6 +3606,124 @@ TEST_F(StyleEngineTest, MarkStyleDirtyFromContainerRecalc) {
   const ComputedStyle* new_inner_style = inner_editor->GetComputedStyle();
   EXPECT_TRUE(new_inner_style);
   EXPECT_NE(old_inner_style, new_inner_style);
+}
+
+TEST_F(StyleEngineContainerQueryTest, UsesContainerQueries) {
+  GetDocument().documentElement()->setInnerHTML(R"HTML(
+      <style>
+        #a { z-index:2; }
+      </style>
+      <style id=late>
+      </style>
+      <div id=a></div>
+    )HTML");
+  UpdateAllLifecyclePhases();
+  auto* a = GetDocument().getElementById("a");
+  ASSERT_TRUE(a);
+  EXPECT_EQ(2, a->ComputedStyleRef().ZIndex());
+  EXPECT_FALSE(GetStyleEngine().UsesContainerQueries());
+
+  auto* late_style = GetDocument().getElementById("late");
+  ASSERT_TRUE(late_style);
+
+  late_style->setTextContent(R"CSS(
+      @container (min-width: 1px) {
+        #a { color: green; }
+      }
+    )CSS");
+  GetStyleEngine().UpdateActiveStyle();
+  // Note the @container query does not match anything (it's not inside a
+  // container), but UsesContainerQueries should still be true.
+  EXPECT_TRUE(GetStyleEngine().UsesContainerQueries());
+
+  late_style->setTextContent("");
+  GetStyleEngine().UpdateActiveStyle();
+  EXPECT_FALSE(GetStyleEngine().UsesContainerQueries());
+}
+
+TEST_F(StyleEngineContainerQueryTest,
+       UpdateStyleAndLayoutTreeWithoutLayoutDependency) {
+  GetDocument().documentElement()->setInnerHTML(R"HTML(
+    <style>
+      .toggle { width: 200px; }
+    </style>
+    <div id=a></div>
+  )HTML");
+  UpdateAllLifecyclePhases();
+  EXPECT_FALSE(GetDocument().View()->NeedsLayout());
+
+  Element* a = GetDocument().getElementById("a");
+  ASSERT_TRUE(a);
+  a->classList().Add("toggle");
+
+  GetDocument().UpdateStyleAndLayoutTree();
+  EXPECT_TRUE(GetDocument().View()->NeedsLayout())
+      << "No layout if style does not depend on layout";
+}
+
+TEST_F(StyleEngineContainerQueryTest,
+       UpdateStyleAndLayoutTreeWithLayoutDependency) {
+  GetDocument().documentElement()->setInnerHTML(R"HTML(
+    <style>
+      #container {
+        container-type: inline-size;
+      }
+      #container.toggle {
+        width: 200px;
+      }
+
+      @container (min-width: 200px) {
+        #a { z-index: 2; }
+      }
+    </style>
+    <main id=container>
+      <div id=a></div>
+    </main>
+  )HTML");
+  UpdateAllLifecyclePhases();
+  EXPECT_FALSE(GetDocument().View()->NeedsLayout());
+
+  Element* container = GetDocument().getElementById("container");
+  ASSERT_TRUE(container);
+  container->classList().Add("toggle");
+
+  GetDocument().UpdateStyleAndLayoutTree();
+  EXPECT_FALSE(GetDocument().View()->NeedsLayout())
+      << "Layout should happen as part of UpdateStyleAndLayoutTree";
+
+  Element* a = GetDocument().getElementById("a");
+  ASSERT_TRUE(a);
+  EXPECT_EQ(2, a->ComputedStyleRef().ZIndex());
+}
+
+TEST_F(StyleEngineTest, ContainerRelativeUnitsRuntimeFlag) {
+  String css = R"CSS(
+    top: 1qw;
+    left: 1qh;
+    bottom: 1qi;
+    right: 1qb;
+    padding-top: 1qmin;
+    padding-right: 1qmax;
+    padding-bottom: calc(1qw);
+    margin-left: 1px;
+  )CSS";
+
+  {
+    ScopedCSSContainerRelativeUnitsForTest feature(false);
+    const CSSPropertyValueSet* set =
+        css_test_helpers::ParseDeclarationBlock(css);
+    ASSERT_TRUE(set);
+    EXPECT_EQ(1u, set->PropertyCount());
+    EXPECT_TRUE(set->HasProperty(CSSPropertyID::kMarginLeft));
+  }
+
+  {
+    ScopedCSSContainerRelativeUnitsForTest feature(true);
+    const CSSPropertyValueSet* set =
+        css_test_helpers::ParseDeclarationBlock(css);
+    ASSERT_TRUE(set);
+    EXPECT_EQ(8u, set->PropertyCount());
+  }
 }
 
 TEST_F(StyleEngineTest, VideoControlsReject) {
@@ -4080,34 +3883,6 @@ TEST_F(StyleEngineTest, TargetTextUseCount) {
   ClearUseCounter(WebFeature::kCSSSelectorTargetText);
 }
 
-// https://crbug.com/1172679
-TEST_F(StyleEngineTest, CounterContentNameCase) {
-  // Reproducible only with legacy counter styles
-  ScopedCSSAtRuleCounterStyleForTest disabled_scope(false);
-
-  GetDocument().body()->setInnerHTML(R"HTML(
-    <style>
-      body { counter-reset: a; }
-      #target::before {
-        counter-increment: a;
-        content: counter(a, Hiragana);
-      }
-    </style>
-    <p id="target"></p>
-  )HTML");
-
-  // Shouldn't crash
-  UpdateAllLifecyclePhases();
-
-  PseudoElement* before =
-      GetDocument().getElementById("target")->GetPseudoElement(kPseudoIdBefore);
-  LayoutCounter* counter =
-      To<LayoutCounter>(before->GetLayoutObject()->SlowFirstChild());
-
-  // Hiragana "A"
-  EXPECT_EQ(String(u"\u3042"), counter->GetText());
-}
-
 TEST_F(StyleEngineTest, NonDirtyStyleRecalcRoot) {
   GetDocument().body()->setInnerHTML(R"HTML(
     <div id="host">
@@ -4132,8 +3907,6 @@ TEST_F(StyleEngineTest, NonDirtyStyleRecalcRoot) {
 }
 
 TEST_F(StyleEngineTest, AtCounterStyleUseCounter) {
-  ScopedCSSAtRuleCounterStyleForTest scope(true);
-
   GetDocument().View()->UpdateAllLifecyclePhasesForTest();
   EXPECT_FALSE(IsUseCounted(WebFeature::kCSSAtRuleCounterStyle));
 
@@ -4143,7 +3916,6 @@ TEST_F(StyleEngineTest, AtCounterStyleUseCounter) {
 }
 
 TEST_F(StyleEngineTest, CounterStyleDisabledInShadowDOM) {
-  ScopedCSSAtRuleCounterStyleForTest counter_style_enabled(true);
   ScopedCSSAtRuleCounterStyleInShadowDOMForTest
       counter_style_in_shadow_dom_disabled(false);
 
@@ -4182,6 +3954,52 @@ TEST_F(StyleEngineTest, CounterStyleDisabledInShadowDOM) {
   LayoutObject* shadow_bar =
       shadow_root.getElementById("bar")->firstChild()->GetLayoutObject();
   EXPECT_EQ("1. ", GetListMarkerText(shadow_bar));
+}
+
+TEST_F(StyleEngineTest, SystemFontsObeyDefaultFontSize) {
+  // <input> get assigned "font: -webkit-small-control" in the UA sheet.
+  Element* body = GetDocument().body();
+  body->setInnerHTML("<input>");
+  Element* input = GetDocument().QuerySelector("input");
+
+  // Test the standard font sizes that can be chosen in chrome://settings/
+  for (int fontSize : {9, 12, 16, 20, 24}) {
+    GetDocument().GetSettings()->SetDefaultFontSize(fontSize);
+    UpdateAllLifecyclePhases();
+    EXPECT_EQ(fontSize, body->GetComputedStyle()->FontSize());
+    EXPECT_EQ(fontSize - 3, input->GetComputedStyle()->FontSize());
+  }
+
+  // Now test degenerate cases
+  GetDocument().GetSettings()->SetDefaultFontSize(-1);
+  UpdateAllLifecyclePhases();
+  EXPECT_EQ(1, body->GetComputedStyle()->FontSize());
+  EXPECT_EQ(1, input->GetComputedStyle()->FontSize());
+
+  GetDocument().GetSettings()->SetDefaultFontSize(0);
+  UpdateAllLifecyclePhases();
+  EXPECT_EQ(1, body->GetComputedStyle()->FontSize());
+  EXPECT_EQ(13, input->GetComputedStyle()->FontSize());
+
+  GetDocument().GetSettings()->SetDefaultFontSize(1);
+  UpdateAllLifecyclePhases();
+  EXPECT_EQ(1, body->GetComputedStyle()->FontSize());
+  EXPECT_EQ(1, input->GetComputedStyle()->FontSize());
+
+  GetDocument().GetSettings()->SetDefaultFontSize(2);
+  UpdateAllLifecyclePhases();
+  EXPECT_EQ(2, body->GetComputedStyle()->FontSize());
+  EXPECT_EQ(2, input->GetComputedStyle()->FontSize());
+
+  GetDocument().GetSettings()->SetDefaultFontSize(3);
+  UpdateAllLifecyclePhases();
+  EXPECT_EQ(3, body->GetComputedStyle()->FontSize());
+  EXPECT_EQ(0, input->GetComputedStyle()->FontSize());
+
+  GetDocument().GetSettings()->SetDefaultFontSize(12345);
+  UpdateAllLifecyclePhases();
+  EXPECT_EQ(10000, body->GetComputedStyle()->FontSize());
+  EXPECT_EQ(10000, input->GetComputedStyle()->FontSize());
 }
 
 }  // namespace blink

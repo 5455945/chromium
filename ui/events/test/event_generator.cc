@@ -117,8 +117,7 @@ EventGenerator::~EventGenerator() {
 
 void EventGenerator::SetTargetWindow(gfx::NativeWindow target_window) {
   delegate()->SetTargetWindow(target_window);
-  current_screen_location_ = delegate()->CenterOfWindow(target_window);
-  UpdateCurrentDispatcher(current_screen_location_);
+  SetCurrentScreenLocation(delegate()->CenterOfWindow(target_window));
 }
 
 void EventGenerator::PressLeftButton() {
@@ -192,7 +191,7 @@ void EventGenerator::MoveMouseToWithNative(const gfx::Point& point_in_host,
   native_event->set_location(point_for_native);
   Dispatch(&mouseev);
 
-  current_screen_location_ = point_in_host;
+  SetCurrentScreenLocation(point_in_host);
   delegate()->ConvertPointFromHost(current_target_, &current_screen_location_);
 }
 #endif
@@ -204,7 +203,7 @@ void EventGenerator::MoveMouseToInHost(const gfx::Point& point_in_host) {
                          ui::EventTimeForNow(), flags_, 0);
   Dispatch(&mouseev);
 
-  current_screen_location_ = point_in_host;
+  SetCurrentScreenLocation(point_in_host);
   delegate()->ConvertPointFromHost(current_target_, &current_screen_location_);
 }
 
@@ -227,7 +226,7 @@ void EventGenerator::MoveMouseTo(const gfx::Point& point_in_screen,
                            ui::EventTimeForNow(), flags_, 0);
     Dispatch(&mouseev);
   }
-  current_screen_location_ = point_in_screen;
+  SetCurrentScreenLocation(point_in_screen);
 }
 
 void EventGenerator::MoveMouseRelativeTo(const EventTarget* window,
@@ -266,15 +265,15 @@ void EventGenerator::SetTouchTilt(float x, float y) {
 }
 
 void EventGenerator::PressTouch(
-    const base::Optional<gfx::Point>& touch_location_in_screen) {
+    const absl::optional<gfx::Point>& touch_location_in_screen) {
   PressTouchId(0, touch_location_in_screen);
 }
 
 void EventGenerator::PressTouchId(
     int touch_id,
-    const base::Optional<gfx::Point>& touch_location_in_screen) {
+    const absl::optional<gfx::Point>& touch_location_in_screen) {
   if (touch_location_in_screen.has_value())
-    current_screen_location_ = *touch_location_in_screen;
+    SetCurrentScreenLocation(*touch_location_in_screen);
   TestTouchEvent touchev(ui::ET_TOUCH_PRESSED, GetLocationInCurrentRoot(),
                          touch_id, flags_, ui::EventTimeForNow());
   Dispatch(&touchev);
@@ -285,7 +284,7 @@ void EventGenerator::MoveTouch(const gfx::Point& point) {
 }
 
 void EventGenerator::MoveTouchId(const gfx::Point& point, int touch_id) {
-  current_screen_location_ = point;
+  SetCurrentScreenLocation(point);
   TestTouchEvent touchev(ui::ET_TOUCH_MOVED, GetLocationInCurrentRoot(),
                          touch_id, flags_, ui::EventTimeForNow());
   Dispatch(&touchev);
@@ -631,7 +630,7 @@ void EventGenerator::Init(gfx::NativeWindow root_window,
                                                        target_window);
   }
   if (target_window)
-    current_screen_location_ = delegate()->CenterOfWindow(target_window);
+    SetCurrentScreenLocation(delegate()->CenterOfWindow(target_window));
   else if (root_window)
     delegate()->ConvertPointFromWindow(root_window, &current_screen_location_);
   current_target_ = delegate()->GetTargetAt(current_screen_location_);
@@ -651,7 +650,7 @@ void EventGenerator::DispatchKeyEvent(bool is_press,
   uint16_t character = ui::DomCodeToUsLayoutCharacter(
       ui::UsLayoutKeyboardCodeToDomCode(key_code), flags);
   if (is_press && character) {
-    MSG native_event = { NULL, WM_KEYDOWN, key_code, 0 };
+    MSG native_event = {NULL, WM_KEYDOWN, static_cast<UINT>(key_code), 0};
     native_event.time =
         (ui::EventTimeForNow() - base::TimeTicks()).InMilliseconds() &
         UINT32_MAX;
@@ -662,17 +661,31 @@ void EventGenerator::DispatchKeyEvent(bool is_press,
     key_press = WM_CHAR;
     key_code = static_cast<ui::KeyboardCode>(character);
   }
-  MSG native_event =
-      { NULL, (is_press ? key_press : WM_KEYUP), key_code, 0 };
+  MSG native_event = {NULL, (is_press ? key_press : WM_KEYUP),
+                      static_cast<UINT>(key_code), 0};
   native_event.time =
       (ui::EventTimeForNow() - base::TimeTicks()).InMilliseconds() & UINT32_MAX;
   ui::KeyEvent keyev(native_event, flags);
 #else
   ui::EventType type = is_press ? ui::ET_KEY_PRESSED : ui::ET_KEY_RELEASED;
   ui::KeyEvent keyev(type, key_code, flags);
+  if (is_press) {
+    // Set a property as if this is a key event not consumed by IME.
+    // Ozone/X11+GTK IME works so already. Ozone/wayland IME relies on this
+    // flag to work properly.
+    keyev.SetProperties({{
+        kPropertyKeyboardImeFlag,
+        std::vector<uint8_t>{kPropertyKeyboardImeIgnoredFlag},
+    }});
+  }
 #endif  // OS_WIN
   keyev.set_source_device_id(source_device_id);
   Dispatch(&keyev);
+}
+
+void EventGenerator::SetCurrentScreenLocation(const gfx::Point& point) {
+  current_screen_location_ = point;
+  UpdateCurrentDispatcher(point);
 }
 
 void EventGenerator::UpdateCurrentDispatcher(const gfx::Point& point) {

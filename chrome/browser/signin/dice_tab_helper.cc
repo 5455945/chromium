@@ -37,7 +37,7 @@ void DiceTabHelper::InitializeSigninFlow(
   redirect_url_ = redirect_url;
   sync_signin_flow_status_ = SyncSigninFlowStatus::kNotStarted;
 
-  if (reason == signin_metrics::Reason::REASON_SIGNIN_PRIMARY_ACCOUNT) {
+  if (reason == signin_metrics::Reason::kSigninPrimaryAccount) {
     sync_signin_flow_status_ = SyncSigninFlowStatus::kStarted;
     signin_metrics::LogSigninAccessPointStarted(access_point, promo_action);
     signin_metrics::RecordSigninUserActionForAccessPoint(access_point,
@@ -65,7 +65,10 @@ void DiceTabHelper::DidStartNavigation(
     return;
 
   // Ignore internal navigations.
-  if (!navigation_handle->IsInMainFrame() ||
+  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
+  // frames. This caller was converted automatically to the primary main frame
+  // to preserve its semantics. Follow up to confirm correctness.
+  if (!navigation_handle->IsInPrimaryMainFrame() ||
       navigation_handle->IsSameDocument()) {
     return;
   }
@@ -82,7 +85,10 @@ void DiceTabHelper::DidFinishNavigation(
     return;
 
   // Ignore internal navigations.
-  if (!navigation_handle->IsInMainFrame() ||
+  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
+  // frames. This caller was converted automatically to the primary main frame
+  // to preserve its semantics. Follow up to confirm correctness.
+  if (!navigation_handle->IsInPrimaryMainFrame() ||
       navigation_handle->IsSameDocument()) {
     return;
   }

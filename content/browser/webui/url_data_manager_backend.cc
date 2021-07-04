@@ -8,16 +8,15 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "base/containers/contains.h"
 #include "base/location.h"
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/single_thread_task_runner.h"
-#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
-#include "base/strings/stringprintf.h"
 #include "base/task/post_task.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/trace_event.h"
@@ -53,6 +52,13 @@ const char kChromeURLContentSecurityPolicyReportOnlyHeaderName[] =
     "Content-Security-Policy-Report-Only";
 const char kChromeURLContentSecurityPolicyReportOnlyHeaderValue[] =
     "require-trusted-types-for 'script'";
+
+const char kChromeURLCrossOriginOpenerPolicyName[] =
+    "Cross-Origin-Opener-Policy";
+const char kChromeURLCrossOriginEmbedderPolicyName[] =
+    "Cross-Origin-Embedder-Policy";
+const char kChromeURLCrossOriginResourcePolicyName[] =
+    "Cross-Origin-Resource-Policy";
 
 const char kChromeURLXFrameOptionsHeaderName[] = "X-Frame-Options";
 const char kChromeURLXFrameOptionsHeaderValue[] = "DENY";
@@ -202,6 +208,19 @@ scoped_refptr<net::HttpResponseHeaders> URLDataManagerBackend::GetHeaders(
   if (source->ShouldServeMimeTypeAsContentTypeHeader() && !mime_type.empty())
     headers->SetHeader(net::HttpRequestHeaders::kContentType, mime_type);
 
+  const std::string coop_value = source->GetCrossOriginOpenerPolicy();
+  if (!coop_value.empty()) {
+    headers->SetHeader(kChromeURLCrossOriginOpenerPolicyName, coop_value);
+  }
+  const std::string coep_value = source->GetCrossOriginEmbedderPolicy();
+  if (!coep_value.empty()) {
+    headers->SetHeader(kChromeURLCrossOriginEmbedderPolicyName, coep_value);
+  }
+  const std::string corp_value = source->GetCrossOriginResourcePolicy();
+  if (!corp_value.empty()) {
+    headers->SetHeader(kChromeURLCrossOriginResourcePolicyName, corp_value);
+  }
+
   if (!origin.empty()) {
     std::string header = source->GetAccessControlAllowOriginForOrigin(origin);
     DCHECK(header.empty() || header == origin || header == "*" ||
@@ -235,7 +254,7 @@ bool URLDataManagerBackend::IsValidNetworkErrorCode(int error_code) {
   base::Value error_codes = net::GetNetConstants();
   const base::DictionaryValue* net_error_codes_dict = nullptr;
 
-  for (const auto& item : error_codes.DictItems()) {
+  for (auto item : error_codes.DictItems()) {
     if (item.first == kNetworkErrorKey) {
       item.second.GetAsDictionary(&net_error_codes_dict);
       break;
@@ -245,9 +264,7 @@ bool URLDataManagerBackend::IsValidNetworkErrorCode(int error_code) {
   if (net_error_codes_dict != nullptr) {
     for (base::DictionaryValue::Iterator itr(*net_error_codes_dict);
          !itr.IsAtEnd(); itr.Advance()) {
-      int net_error_code;
-      itr.value().GetAsInteger(&net_error_code);
-      if (error_code == net_error_code)
+      if (error_code == itr.value().GetInt())
         return true;
     }
   }

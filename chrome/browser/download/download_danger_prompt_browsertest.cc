@@ -19,8 +19,8 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/download/public/common/mock_download_item.h"
-#include "components/safe_browsing/core/db/database_manager.h"
-#include "components/safe_browsing/core/proto/csd.pb.h"
+#include "components/safe_browsing/core/browser/db/database_manager.h"
+#include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "content/public/browser/download_item_utils.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -85,10 +85,8 @@ class DownloadDangerPromptTest : public InProcessBrowserTest {
     expected_action_ = expected_action;
     SetUpDownloadItemExpectations(danger_type, token);
     SetUpSafeBrowsingReportExpectations(
-        expected_action == DownloadDangerPrompt::ACCEPT,
-        download_verdict,
-        token,
-        from_download_api);
+        expected_action == DownloadDangerPrompt::ACCEPT, download_verdict,
+        token, from_download_api);
     CreatePrompt(from_download_api);
   }
 
@@ -125,8 +123,8 @@ class DownloadDangerPromptTest : public InProcessBrowserTest {
   void SetUpDownloadItemExpectations(
       const download::DownloadDangerType& danger_type,
       const std::string& token) {
-    EXPECT_CALL(download_, GetFileNameToReportUser()).WillRepeatedly(Return(
-        base::FilePath(FILE_PATH_LITERAL("evil.exe"))));
+    EXPECT_CALL(download_, GetFileNameToReportUser())
+        .WillRepeatedly(Return(base::FilePath(FILE_PATH_LITERAL("evil.exe"))));
     EXPECT_CALL(download_, GetDangerType()).WillRepeatedly(Return(danger_type));
     auto token_obj =
         std::make_unique<DownloadProtectionService::DownloadPingToken>(token);
@@ -368,6 +366,17 @@ IN_PROC_BROWSER_TEST_F(DownloadDangerPromptBrowserTest,
 IN_PROC_BROWSER_TEST_F(DownloadDangerPromptBrowserTest,
                        InvokeUi_PotentiallyUnwantedFromApi) {
   RunTest(download::DOWNLOAD_DANGER_TYPE_POTENTIALLY_UNWANTED,
+          FROM_DOWNLOAD_API);
+}
+
+IN_PROC_BROWSER_TEST_F(DownloadDangerPromptBrowserTest,
+                       InvokeUi_AccountCompromise) {
+  RunTest(download::DOWNLOAD_DANGER_TYPE_DANGEROUS_ACCOUNT_COMPROMISE,
+          USER_INITIATED);
+}
+IN_PROC_BROWSER_TEST_F(DownloadDangerPromptBrowserTest,
+                       InvokeUi_AccountCompromiseFromApi) {
+  RunTest(download::DOWNLOAD_DANGER_TYPE_DANGEROUS_ACCOUNT_COMPROMISE,
           FROM_DOWNLOAD_API);
 }
 

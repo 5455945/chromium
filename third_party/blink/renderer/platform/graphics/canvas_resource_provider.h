@@ -114,10 +114,8 @@ class PLATFORM_EXPORT CanvasResourceProvider
 
   static std::unique_ptr<CanvasResourceProvider> CreateWebGPUImageProvider(
       const IntSize& size,
-      SkFilterQuality filter_quality,
       const CanvasResourceParams& params,
-      ShouldInitialize initialize_provider,
-      base::WeakPtr<WebGraphicsContext3DProviderWrapper>);
+      bool is_origin_top_left);
 
   static std::unique_ptr<CanvasResourceProvider> CreatePassThroughProvider(
       const IntSize& size,
@@ -148,7 +146,7 @@ class PLATFORM_EXPORT CanvasResourceProvider
   // WebGraphicsContext3DProvider::DestructionObserver implementation.
   void OnContextDestroyed() override;
 
-  cc::PaintCanvas* Canvas();
+  cc::PaintCanvas* Canvas(bool needs_will_draw = false);
   void ReleaseLockedImages();
   sk_sp<cc::PaintRecord> FlushCanvas();
   const CanvasResourceParams& ColorParams() const { return params_; }
@@ -205,7 +203,13 @@ class PLATFORM_EXPORT CanvasResourceProvider
     NOTREACHED();
     return nullptr;
   }
+  virtual uint32_t GetSharedImageUsageFlags() const {
+    NOTREACHED();
+    return 0;
+  }
 
+  CanvasResourceProvider(const CanvasResourceProvider&) = delete;
+  CanvasResourceProvider& operator=(const CanvasResourceProvider&) = delete;
   ~CanvasResourceProvider() override;
 
   base::WeakPtr<CanvasResourceProvider> CreateWeakPtr() {
@@ -238,6 +242,9 @@ class PLATFORM_EXPORT CanvasResourceProvider
   // method also calls FlushCanvas() to ensure that all operations are accounted
   // for in the digest.
   const IdentifiabilityPaintOpDigest& GetIdentifiablityPaintOpDigest();
+  virtual void OnAcquireRecyclableCanvasResource() {}
+  virtual void OnDestroyRecyclableCanvasResource(
+      const gpu::SyncToken& sync_token) {}
 
  protected:
   class CanvasImageProvider;
@@ -271,8 +278,17 @@ class PLATFORM_EXPORT CanvasResourceProvider
   // change.
   cc::PaintImage MakeImageSnapshot();
   virtual void RasterRecord(sk_sp<cc::PaintRecord>);
+  void RasterRecordOOP(sk_sp<cc::PaintRecord> last_recording,
+                       bool needs_clear,
+                       gpu::Mailbox mailbox);
+  void RestoreBackBufferOOP(const cc::PaintImage&);
+
   CanvasImageProvider* GetOrCreateCanvasImageProvider();
   void TearDownSkSurface();
+
+  // Will only notify a will draw if its needed. This is initially done for the
+  // CanvasResourceProviderSharedImage use case.
+  virtual void WillDrawIfNeeded() {}
 
   ResourceProviderType type_;
   mutable sk_sp<SkSurface> surface_;  // mutable for lazy init
@@ -341,10 +357,8 @@ class PLATFORM_EXPORT CanvasResourceProvider
   IdentifiabilityPaintOpDigest identifiability_paint_op_digest_;
 
   base::WeakPtrFactory<CanvasResourceProvider> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(CanvasResourceProvider);
 };
 
 }  // namespace blink
 
-#endif
+#endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_CANVAS_RESOURCE_PROVIDER_H_

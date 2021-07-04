@@ -13,6 +13,9 @@ namespace chromeos {
 namespace ime {
 
 namespace {
+
+absl::optional<ImeDecoder::EntryPoints> g_fake_decoder_entry_points_for_testing;
+
 const char kCrosImeDecoderLib[] = "libimedecoder.so";
 
 // TODO(b/161491092): Add test image path based on value of
@@ -55,6 +58,13 @@ bool IsEntryPointsLoaded(ImeDecoder::EntryPoints entry) {
 }  // namespace
 
 ImeDecoder::ImeDecoder() : status_(Status::kUninitialized) {
+  if (g_fake_decoder_entry_points_for_testing) {
+    entry_points_ = *g_fake_decoder_entry_points_for_testing;
+    status_ = Status::kSuccess;
+    entry_points_.is_ready = true;
+    return;
+  }
+
   base::FilePath path = GetImeDecoderLibPath();
 
   if (!base::PathExists(path)) {
@@ -71,10 +81,6 @@ ImeDecoder::ImeDecoder() : status_(Status::kUninitialized) {
     status_ = Status::kLoadLibraryFailed;
     return;
   }
-
-  // TODO(b/172527471): Remove it when decoder DSO is uprevved.
-  createMainEntry_ = reinterpret_cast<ImeMainEntryCreateFn>(
-      library.GetFunctionPointer(IME_MAIN_ENTRY_CREATE_FN_NAME));
 
   // TODO(b/172527471): Create a macro to fetch function pointers.
   entry_points_.init_once = reinterpret_cast<ImeDecoderInitOnceFn>(
@@ -118,15 +124,14 @@ ImeDecoder::Status ImeDecoder::GetStatus() const {
   return status_;
 }
 
-// TODO(b/172527471): Remove it when decoder DSO is uprevved.
-ImeEngineMainEntry* ImeDecoder::CreateMainEntry(ImeCrosPlatform* platform) {
-  DCHECK(createMainEntry_);
-  return createMainEntry_(platform);
-}
-
 ImeDecoder::EntryPoints ImeDecoder::GetEntryPoints() {
   DCHECK(status_ == Status::kSuccess);
   return entry_points_;
+}
+
+void FakeDecoderEntryPointsForTesting(  // IN-TEST
+    const ImeDecoder::EntryPoints& decoder_entry_points) {
+  g_fake_decoder_entry_points_for_testing = decoder_entry_points;
 }
 
 }  // namespace ime

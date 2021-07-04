@@ -7,7 +7,6 @@
 
 #include <stdint.h>
 
-#include <string>
 #include "content/public/browser/invalidate_type.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_details.h"
@@ -26,7 +25,6 @@ class NavigationControllerDelegate {
 
   // Duplicates of WebContents methods.
   virtual void NotifyNavigationStateChanged(InvalidateTypes changed_flags) = 0;
-  virtual void Stop() = 0;
   virtual bool IsBeingDestroyed() = 0;
 
   // Methods from WebContentsImpl that NavigationControllerImpl needs to

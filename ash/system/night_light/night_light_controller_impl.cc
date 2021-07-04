@@ -7,11 +7,10 @@
 #include <cmath>
 #include <memory>
 
+#include "ash/constants/ash_features.h"
 #include "ash/display/display_color_manager.h"
 #include "ash/display/window_tree_host_manager.h"
-#include "ash/public/cpp/ash_features.h"
 #include "ash/public/cpp/ash_pref_names.h"
-#include "ash/public/cpp/ash_switches.h"
 #include "ash/public/cpp/notification_utils.h"
 #include "ash/public/cpp/system_tray_client.h"
 #include "ash/resources/vector_icons/vector_icons.h"
@@ -24,6 +23,7 @@
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/ranges.h"
+#include "base/strings/stringprintf.h"
 #include "base/time/time.h"
 #include "cc/base/math_util.h"
 #include "components/prefs/pref_registry_simple.h"
@@ -174,14 +174,14 @@ int GetTemperatureRange(float temperature) {
 // If |in_linear_gamma_space| is true, the generated matrix is the one that
 // should be applied after gamma correction, and it corresponds to the
 // non-linear temperature value for the given |temperature|.
-SkMatrix44 MatrixFromTemperature(float temperature,
-                                 bool in_linear_gamma_space,
-                                 bool apply_ambient_temperature) {
+skia::Matrix44 MatrixFromTemperature(float temperature,
+                                     bool in_linear_gamma_space,
+                                     bool apply_ambient_temperature) {
   if (in_linear_gamma_space)
     temperature =
         NightLightControllerImpl::GetNonLinearTemperature(temperature);
 
-  SkMatrix44 matrix(SkMatrix44::kIdentity_Constructor);
+  skia::Matrix44 matrix(skia::Matrix44::kIdentity_Constructor);
   if (temperature != 0.0f) {
     const float blue_scale =
         NightLightControllerImpl::BlueColorScaleFromTemperature(temperature);
@@ -214,11 +214,11 @@ SkMatrix44 MatrixFromTemperature(float temperature,
 // either apply the |night_light_matrix| on the compositor, or reset it to
 // the identity matrix to avoid having double the Night Light effect.
 void UpdateCompositorMatrix(aura::WindowTreeHost* host,
-                            const SkMatrix44& night_light_matrix,
+                            const skia::Matrix44& night_light_matrix,
                             bool crtc_matrix_result) {
   if (host->compositor()) {
     host->compositor()->SetDisplayColorMatrix(
-        crtc_matrix_result ? SkMatrix44::I() : night_light_matrix);
+        crtc_matrix_result ? skia::Matrix44::I() : night_light_matrix);
   }
 }
 
@@ -232,8 +232,8 @@ void UpdateCompositorMatrix(aura::WindowTreeHost* host,
 // Returns true if the hardware supports this operation and one of the
 // matrices was successfully sent to the GPU.
 bool AttemptSettingHardwareCtm(int64_t display_id,
-                               const SkMatrix44& linear_gamma_space_matrix,
-                               const SkMatrix44& gamma_compressed_matrix) {
+                               const skia::Matrix44& linear_gamma_space_matrix,
+                               const skia::Matrix44& gamma_compressed_matrix) {
   for (const auto* snapshot :
        Shell::Get()->display_configurator()->cached_displays()) {
     if (snapshot->display_id() == display_id &&
@@ -274,9 +274,9 @@ void ApplyTemperatureToHost(aura::WindowTreeHost* host, float temperature) {
       night_light_controller->GetAmbientColorEnabled() &&
       display::Display::IsInternalDisplayId(display_id);
 
-  const SkMatrix44 linear_gamma_space_matrix =
+  const skia::Matrix44 linear_gamma_space_matrix =
       MatrixFromTemperature(temperature, true, apply_ambient_temperature);
-  const SkMatrix44 gamma_compressed_matrix =
+  const skia::Matrix44 gamma_compressed_matrix =
       MatrixFromTemperature(temperature, false, apply_ambient_temperature);
   const bool crtc_result = AttemptSettingHardwareCtm(
       display_id, linear_gamma_space_matrix, gamma_compressed_matrix);
@@ -723,8 +723,8 @@ void NightLightControllerImpl::Close(bool by_user) {
 }
 
 void NightLightControllerImpl::Click(
-    const base::Optional<int>& button_index,
-    const base::Optional<base::string16>& reply) {
+    const absl::optional<int>& button_index,
+    const absl::optional<std::u16string>& reply) {
   auto* shell = Shell::Get();
 
   DCHECK(!button_index.has_value());
@@ -824,7 +824,7 @@ void NightLightControllerImpl::ShowAutoNightLightNotification() {
           message_center::NOTIFICATION_TYPE_SIMPLE, kNotificationId,
           l10n_util::GetStringUTF16(IDS_ASH_AUTO_NIGHT_LIGHT_NOTIFY_TITLE),
           l10n_util::GetStringUTF16(IDS_ASH_AUTO_NIGHT_LIGHT_NOTIFY_BODY),
-          base::string16(), GURL(),
+          std::u16string(), GURL(),
           message_center::NotifierId(
               message_center::NotifierType::SYSTEM_COMPONENT, kNotifierId),
           message_center::RichNotificationData{},

@@ -4,7 +4,7 @@
 
 #include "components/security_interstitials/core/unsafe_resource.h"
 
-#include "components/safe_browsing/core/db/util.h"
+#include "components/safe_browsing/core/browser/db/util.h"
 
 namespace security_interstitials {
 
@@ -56,6 +56,17 @@ bool UnsafeResource::IsMainPageLoadBlocked() const {
   }
 
   return true;
+}
+
+void UnsafeResource::DispatchCallback(const base::Location& from_here,
+                                      bool proceed,
+                                      bool showed_interstitial) const {
+  if (callback.is_null())
+    return;
+
+  DCHECK(callback_thread);
+  callback_thread->PostTask(
+      from_here, base::BindOnce(callback, proceed, showed_interstitial));
 }
 
 }  // namespace security_interstitials

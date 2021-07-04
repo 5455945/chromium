@@ -25,7 +25,6 @@
 
 #include <unicode/uchar.h>
 #include <unicode/ustring.h>
-#include "third_party/blink/renderer/platform/wtf/assertions.h"
 
 // Define platform neutral 8 bit character type (L is for Latin-1).
 typedef unsigned char LChar;
@@ -208,6 +207,10 @@ inline CharDirection Direction(UChar32 c) {
 
 inline bool IsLower(UChar32 c) {
   return !!u_islower(c);
+}
+
+inline bool IsUpper(UChar32 c) {
+  return !!u_isupper(c);
 }
 
 inline uint8_t CombiningClass(UChar32 c) {

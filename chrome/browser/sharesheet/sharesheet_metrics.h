@@ -38,18 +38,32 @@ class SharesheetMetrics {
     kFilesAppShareButton = 1,
     kFilesAppContextMenu = 2,
     kWebShare = 3,
-    kMaxValue = kWebShare,
+    kArcNearbyShare = 4,
+    kOmniboxShare = 5,
+    kMaxValue = kOmniboxShare,
   };
 
   SharesheetMetrics();
 
-  static void RecordSharesheetActionMetrics(UserAction action);
+  static void RecordSharesheetActionMetrics(const UserAction action);
 
-  static void RecordSharesheetAppCount(int app_count);
+  // Records number of each target type that appear in the Sharesheet
+  // when it is invoked.
+  static void RecordSharesheetAppCount(const int app_count);
+  static void RecordSharesheetArcAppCount(const int app_count);
+  static void RecordSharesheetWebAppCount(const int app_count);
+  static void RecordSharesheetShareAction(const UserAction action);
 
-  static void RecordSharesheetFormFactor(FormFactor form_factor);
+  static void RecordSharesheetFormFactor(const FormFactor form_factor);
 
-  static void RecordSharesheetLaunchSource(LaunchSource source);
+  static void RecordSharesheetLaunchSource(const LaunchSource source);
+
+  static void RecordSharesheetFilesSharedCount(const int file_count);
+  // Records true if the data being shared is a drive folder. False otherwise.
+  static void RecordSharesheetIsDriveFolder(const bool is_drive_folder);
+  // Records true if the image preview was pressed in the current invocation.
+  // False otherwise.
+  static void RecordSharesheetImagePreviewPressed(const bool is_pressed);
 };
 
 }  // namespace sharesheet

@@ -4,7 +4,7 @@
 <script src="/resources/testharnessreport.js"></script>
 <style>
   .container {
-    contain: size layout;
+    contain: size layout style;
     width: 30px;
     height: 30px;
     background: tomato;
@@ -139,7 +139,7 @@
   <script>
     test(function() {
       let s = getComputedStyle(target6);
-      assert_equals(s.getPropertyValue('--x'), '50');
+      assert_equals(s.getPropertyValue('--x'), '');
     }, 'getComputedStyle when inner container is display:none');
   </script>
 
@@ -160,7 +160,7 @@
   <script>
     test(function() {
       let s = getComputedStyle(target7);
-      assert_equals(s.getPropertyValue('--x'), '50');
+      assert_equals(s.getPropertyValue('--x'), '');
     }, 'getComputedStyle when intermediate ancestor is display:none');
   </script>
 
@@ -272,7 +272,7 @@
       let s = getComputedStyle(target13);
       assert_equals(s.getPropertyValue('--x'), '30');
       container13.classList.add('none');
-      assert_equals(s.getPropertyValue('--x'), '50');
+      assert_equals(s.getPropertyValue('--x'), '');
     }, 'getComputedStyle when intermediate container becomes display:none');
   </script>
 

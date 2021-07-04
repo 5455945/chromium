@@ -136,7 +136,8 @@ class SessionRestoreStatsCollectorTest : public testing::Test {
       : task_environment_{base::test::TaskEnvironment::TimeSource::MOCK_TIME} {}
 
   void SetUp() override {
-    test_web_contents_factory_.reset(new content::TestWebContentsFactory);
+    test_web_contents_factory_ =
+        std::make_unique<content::TestWebContentsFactory>();
 
     // Ownership of the reporting delegate is passed to the
     // SessionRestoreStatsCollector, but a raw pointer is kept to it so it can
@@ -185,7 +186,7 @@ class SessionRestoreStatsCollectorTest : public testing::Test {
     content::WebContentsTester::For(contents)->SetLastActiveTime(
         base::TimeTicks::Now() - base::TimeDelta::FromMinutes(1));
     restored_tabs_.push_back(
-        RestoredTab(contents, is_active, false, false, base::nullopt));
+        RestoredTab(contents, is_active, false, false, absl::nullopt));
     if (is_active)
       Show(restored_tabs_.size() - 1);
   }

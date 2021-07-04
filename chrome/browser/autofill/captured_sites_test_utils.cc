@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/base_switches.h"
 #include "base/bind.h"
 #include "base/files/file_util.h"
 #include "base/json/json_reader.h"
@@ -16,7 +17,6 @@
 #include "base/path_service.h"
 #include "base/process/launch.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -333,13 +333,13 @@ std::string FilePathToUTF8(const base::FilePath::StringType& str) {
 #endif
 }
 
-base::Optional<base::FilePath> GetCommandFilePath() {
+absl::optional<base::FilePath> GetCommandFilePath() {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   if (command_line && command_line->HasSwitch(kCommandFileFlag)) {
-    return base::make_optional(
+    return absl::make_optional(
         command_line->GetSwitchValuePath(kCommandFileFlag));
   }
-  return base::nullopt;
+  return absl::nullopt;
 }
 
 void PrintInstructions(const char* test_file_name) {
@@ -495,7 +495,7 @@ TestRecipeReplayer::~TestRecipeReplayer() {}
 bool TestRecipeReplayer::ReplayTest(
     const base::FilePath& capture_file_path,
     const base::FilePath& recipe_file_path,
-    const base::Optional<base::FilePath>& command_file_path) {
+    const absl::optional<base::FilePath>& command_file_path) {
   if (!StartWebPageReplayServer(capture_file_path))
     return false;
   if (OverrideAutofillClock(capture_file_path))
@@ -527,7 +527,7 @@ bool TestRecipeReplayer::OverrideAutofillClock(
     return false;
   }
   // Convert the file text into a json object.
-  base::Optional<base::Value> parsed_json =
+  absl::optional<base::Value> parsed_json =
       base::JSONReader::Read(decompressed_json_text);
   if (!parsed_json) {
     VLOG(1) << kClockNotSetMessage << "Failed to deserialize json";
@@ -562,6 +562,11 @@ void TestRecipeReplayer::SetUpCommandLine(base::CommandLine* command_line) {
       network::switches::kIgnoreCertificateErrorsSPKIList,
       kWebPageReplayCertSPKI);
   command_line->AppendSwitch(switches::kStartMaximized);
+  // Tests are not expecting default field trials config, disable them by adding
+  // a fake field trial.
+  // TOOD(crbug/1212552) Remove this switch and either do this directly via gn
+  // args or not at all and update test expectations.
+  command_line->AppendSwitchASCII(::switches::kForceFieldTrials, "Foo/Bar");
 }
 
 void TestRecipeReplayer::Setup() {
@@ -672,7 +677,7 @@ void TestRecipeReplayer::CleanupSiteData() {
   // the cleanup is thorough and nothing is held.
   ui_test_utils::NavigateToURL(browser_, GURL(url::kAboutBlankURL));
   content::BrowsingDataRemover* remover =
-      content::BrowserContext::GetBrowsingDataRemover(browser_->profile());
+      browser_->profile()->GetBrowsingDataRemover();
   content::BrowsingDataRemoverCompletionObserver completion_observer(remover);
   remover->RemoveAndReply(
       base::Time(), base::Time::Max(),
@@ -863,7 +868,7 @@ const std::string* FindPopulateString(
 
 bool TestRecipeReplayer::ReplayRecordedActions(
     const base::FilePath& recipe_file_path,
-    const base::Optional<base::FilePath>& command_file_path) {
+    const absl::optional<base::FilePath>& command_file_path) {
   // Read the text of the recipe file.
   base::ScopedAllowBlockingForTesting for_testing;
   std::string json_text;
@@ -873,7 +878,7 @@ bool TestRecipeReplayer::ReplayRecordedActions(
   }
 
   // Convert the file text into a json object.
-  base::Optional<base::Value> parsed_json = base::JSONReader::Read(json_text);
+  absl::optional<base::Value> parsed_json = base::JSONReader::Read(json_text);
   if (!parsed_json) {
     ADD_FAILURE() << "Failed to deserialize json text!";
     return false;
@@ -989,6 +994,10 @@ bool TestRecipeReplayer::ReplayRecordedActions(
         return false;
     } else if (base::CompareCaseInsensitiveASCII(*type, "validateField") == 0) {
       if (!ExecuteValidateFieldValueAction(*action))
+        return false;
+    } else if (base::CompareCaseInsensitiveASCII(
+                   *type, "validatePasswordGenerationPrompt") == 0) {
+      if (!ExecuteValidatePasswordGenerationPromptAction(*action))
         return false;
     } else if (base::CompareCaseInsensitiveASCII(
                    *type, "validateNoSavePasswordPrompt") == 0) {
@@ -1296,7 +1305,7 @@ bool TestRecipeReplayer::ExecuteSavePasswordAction(
 
 bool TestRecipeReplayer::ExecuteSelectDropdownAction(
     const base::DictionaryValue& action) {
-  base::Optional<int> index = action.FindIntKey("index");
+  absl::optional<int> index = action.FindIntKey("index");
   if (!index) {
     ADD_FAILURE() << "Failed to extract Selection Index from action";
     return false;
@@ -1451,6 +1460,46 @@ bool TestRecipeReplayer::ExecuteValidateNoSavePasswordPromptAction(
   return true;
 }
 
+bool TestRecipeReplayer::ExecuteValidatePasswordGenerationPromptAction(
+    const base::DictionaryValue& action) {
+  VLOG(1) << "Verify that an element is properly displaying or not displaying "
+             "the password generation prompt";
+  std::string xpath;
+  content::RenderFrameHost* frame;
+  if (!ExtractFrameAndVerifyElement(action, &xpath, &frame, true))
+    return false;
+
+  // First, execute a click to focus on the field in question.
+  ExecuteClickAction(action);
+
+  // Most common scenario is validating that the password generation prompt is
+  // being shown, so if unspecified default to true.
+  bool expect_to_be_shown = action.FindBoolKey("shouldBeShown").value_or(true);
+  // Validate that the password generation prompt is shown when expected.
+  ValidatePasswordGenerationPromptState(frame, xpath, expect_to_be_shown);
+  return true;
+}
+
+void TestRecipeReplayer::ValidatePasswordGenerationPromptState(
+    const content::ToRenderFrameHost& frame,
+    const std::string& element_xpath,
+    bool expect_to_be_shown) {
+  bool is_password_generation_prompt_showing =
+      feature_action_executor()->IsChromeShowingPasswordGenerationPrompt();
+
+  if (expect_to_be_shown != is_password_generation_prompt_showing) {
+    std::string error_message =
+        base::StrCat({"Field xpath: `", element_xpath, "` is",
+                      is_password_generation_prompt_showing ? "" : " not",
+                      " showing password generation prompt but it should",
+                      expect_to_be_shown ? "" : " not", " be."});
+    VLOG(1) << error_message;
+    ADD_FAILURE() << error_message;
+    validation_failures_.push_back(testing::AssertionFailure()
+                                   << error_message);
+  }
+}
+
 bool TestRecipeReplayer::ExecuteValidateSaveFallbackAction(
     const base::DictionaryValue& action) {
   VLOG(1) << "Verify that Chrome shows the save fallback icon in the omnibox.";
@@ -1534,7 +1583,7 @@ bool TestRecipeReplayer::GetTargetFrameFromAction(
     return false;
   }
 
-  base::Optional<bool> is_iframe_container = iframe->FindBoolKey("isIframe");
+  absl::optional<bool> is_iframe_container = iframe->FindBoolKey("isIframe");
   if (!is_iframe_container) {
     ADD_FAILURE() << "Failed to extract isIframe from the iframe context! ";
     return false;
@@ -2176,6 +2225,14 @@ bool TestRecipeReplayChromeFeatureActionExecutor::UpdatePassword() {
 bool TestRecipeReplayChromeFeatureActionExecutor::WaitForSaveFallback() {
   ADD_FAILURE() << "TestRecipeReplayChromeFeatureActionExecutor"
                    "::WaitForSaveFallback is not implemented!";
+  return false;
+}
+
+bool TestRecipeReplayChromeFeatureActionExecutor::
+    IsChromeShowingPasswordGenerationPrompt() {
+  ADD_FAILURE()
+      << "TestRecipeReplayChromeFeatureActionExecutor"
+         "::IsChromeShowingPasswordGenerationPrompt is not implemented!";
   return false;
 }
 

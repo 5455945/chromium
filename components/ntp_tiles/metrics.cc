@@ -22,14 +22,12 @@ const int kLastTitleSource = static_cast<int>(TileTitleSource::LAST);
 
 // Identifiers for the various tile sources.
 const char kHistogramClientName[] = "client";
-const char kHistogramServerName[] = "server";
 const char kHistogramPopularName[] = "popular_fetched";
 const char kHistogramBakedInName[] = "popular_baked_in";
 const char kHistogramAllowlistName[] = "allowlist";
 const char kHistogramHomepageName[] = "homepage";
 const char kHistogramCustomLinksName[] = "custom_links";
 const char kHistogramExploreName[] = "explore";
-const char kHistogramRepeatableQueryName[] = "repeatable_query";
 
 // Suffixes for the various icon types.
 const char kTileTypeSuffixIconColor[] = "IconsColor";
@@ -52,16 +50,12 @@ std::string GetSourceHistogramName(TileSource source) {
       return kHistogramPopularName;
     case TileSource::ALLOWLIST:
       return kHistogramAllowlistName;
-    case TileSource::SUGGESTIONS_SERVICE:
-      return kHistogramServerName;
     case TileSource::HOMEPAGE:
       return kHistogramHomepageName;
     case TileSource::CUSTOM_LINKS:
       return kHistogramCustomLinksName;
     case TileSource::EXPLORE:
       return kHistogramExploreName;
-    case TileSource::REPEATABLE_QUERIES_SERVICE:
-      return kHistogramRepeatableQueryName;
   }
   NOTREACHED();
   return std::string();

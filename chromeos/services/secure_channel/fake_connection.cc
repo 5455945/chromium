@@ -8,7 +8,7 @@
 #include <utility>
 
 #include "base/callback.h"
-#include "base/stl_util.h"
+#include "base/containers/cxx20_erase.h"
 #include "chromeos/services/secure_channel/wire_message.h"
 
 namespace chromeos {
@@ -57,7 +57,7 @@ void FakeConnection::RemoveObserver(ConnectionObserver* observer) {
 }
 
 void FakeConnection::GetConnectionRssi(
-    base::OnceCallback<void(base::Optional<int32_t>)> callback) {
+    base::OnceCallback<void(absl::optional<int32_t>)> callback) {
   std::move(callback).Run(rssi_to_return_);
 }
 

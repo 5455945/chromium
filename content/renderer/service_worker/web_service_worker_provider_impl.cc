@@ -17,6 +17,7 @@
 #include "third_party/blink/public/common/messaging/message_port_channel.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_container_type.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_registration_options.mojom.h"
 #include "third_party/blink/public/platform/modules/service_worker/web_service_worker_error.h"
 #include "third_party/blink/public/platform/modules/service_worker/web_service_worker_provider_client.h"
 #include "third_party/blink/public/platform/web_url.h"
@@ -217,7 +218,7 @@ void WebServiceWorkerProviderImpl::CountFeature(
 void WebServiceWorkerProviderImpl::OnRegistered(
     std::unique_ptr<WebServiceWorkerRegistrationCallbacks> callbacks,
     blink::mojom::ServiceWorkerErrorType error,
-    const base::Optional<std::string>& error_msg,
+    const absl::optional<std::string>& error_msg,
     blink::mojom::ServiceWorkerRegistrationObjectInfoPtr registration) {
   TRACE_EVENT_ASYNC_END2(
       "ServiceWorker", "WebServiceWorkerProviderImpl::RegisterServiceWorker",
@@ -243,7 +244,7 @@ void WebServiceWorkerProviderImpl::OnRegistered(
 void WebServiceWorkerProviderImpl::OnDidGetRegistration(
     std::unique_ptr<WebServiceWorkerGetRegistrationCallbacks> callbacks,
     blink::mojom::ServiceWorkerErrorType error,
-    const base::Optional<std::string>& error_msg,
+    const absl::optional<std::string>& error_msg,
     blink::mojom::ServiceWorkerRegistrationObjectInfoPtr registration) {
   TRACE_EVENT_ASYNC_END2("ServiceWorker",
                          "WebServiceWorkerProviderImpl::GetRegistration", this,
@@ -271,8 +272,8 @@ void WebServiceWorkerProviderImpl::OnDidGetRegistration(
 void WebServiceWorkerProviderImpl::OnDidGetRegistrations(
     std::unique_ptr<WebServiceWorkerGetRegistrationsCallbacks> callbacks,
     blink::mojom::ServiceWorkerErrorType error,
-    const base::Optional<std::string>& error_msg,
-    base::Optional<
+    const absl::optional<std::string>& error_msg,
+    absl::optional<
         std::vector<blink::mojom::ServiceWorkerRegistrationObjectInfoPtr>>
         infos) {
   TRACE_EVENT_ASYNC_END2("ServiceWorker",

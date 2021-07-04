@@ -4,11 +4,16 @@
 
 #include "chrome/browser/search/task_module/task_module_service.h"
 
+#include "base/containers/contains.h"
+#include "base/containers/cxx20_erase.h"
+#include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/stl_util.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/webui_url_constants.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/google/core/common/google_util.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
@@ -19,6 +24,8 @@
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "ui/base/l10n/l10n_util.h"
+#include "ui/base/l10n/time_format.h"
 
 namespace {
 const char kXSSIResponsePreamble[] = ")]}'";
@@ -44,6 +51,25 @@ const base::Feature& GetFeature(
   }
 }
 
+const char* GetDataParam(task_module::mojom::TaskModuleType task_module_type) {
+  switch (task_module_type) {
+    case task_module::mojom::TaskModuleType::kRecipe:
+      return ntp_features::kNtpRecipeTasksModuleDataParam;
+    case task_module::mojom::TaskModuleType::kShopping:
+      return ntp_features::kNtpShoppingTasksModuleDataParam;
+  }
+}
+
+const char* GetCacheMaxAgeSParam(
+    task_module::mojom::TaskModuleType task_module_type) {
+  switch (task_module_type) {
+    case task_module::mojom::TaskModuleType::kRecipe:
+      return ntp_features::kNtpRecipeTasksModuleCacheMaxAgeSParam;
+    case task_module::mojom::TaskModuleType::kShopping:
+      return ntp_features::kNtpShoppingTasksModuleCacheMaxAgeSParam;
+  }
+}
+
 GURL GetApiUrl(task_module::mojom::TaskModuleType task_module_type,
                const std::string& application_locale) {
   GURL google_base_url = google_util::CommandLineGoogleBaseURL();
@@ -53,10 +79,16 @@ GURL GetApiUrl(task_module::mojom::TaskModuleType task_module_type,
   auto url = net::AppendQueryParameter(
       google_base_url.Resolve(GetPath(task_module_type)), "hl",
       application_locale);
-  if (base::GetFieldTrialParamValueByFeature(
-          GetFeature(task_module_type),
-          ntp_features::kNtpStatefulTasksModuleDataParam) == "fake") {
+  if (base::GetFieldTrialParamValueByFeature(GetFeature(task_module_type),
+                                             GetDataParam(task_module_type)) ==
+      "fake") {
     url = google_util::AppendToAsyncQueryParam(url, "fake_data", "1");
+  }
+  int cache_max_age_s = base::GetFieldTrialParamByFeatureAsInt(
+      GetFeature(task_module_type), GetCacheMaxAgeSParam(task_module_type), 0);
+  if (cache_max_age_s > 0) {
+    url = google_util::AppendToAsyncQueryParam(
+        url, "cache_max_age_s", base::NumberToString(cache_max_age_s));
   }
   return url;
 }
@@ -106,6 +138,38 @@ const char* GetModuleName(task_module::mojom::TaskModuleType task_module_type) {
       return "RecipeTasks";
     case task_module::mojom::TaskModuleType::kShopping:
       return "ShoppingTasks";
+  }
+}
+
+std::string GetViewedItemText(int viewed_timestamp) {
+  // GWS timestamps are relative to the Unix Epoch.
+  auto viewed_time =
+      base::Time::UnixEpoch() + base::TimeDelta::FromSeconds(viewed_timestamp);
+  auto viewed_delta = base::Time::Now() - viewed_time;
+  // Viewing items in the future is not supported. Assume the item was viewed
+  // today to account for small shifts between the local and server clock.
+  if (viewed_delta.InSeconds() < 0) {
+    viewed_delta = base::TimeDelta();
+  }
+  if (viewed_delta.InDays() < 1) {
+    return l10n_util::GetStringUTF8(
+        IDS_NTP_MODULES_STATEFUL_TASKS_VIEWED_TODAY);
+  }
+  return base::UTF16ToUTF8(l10n_util::GetStringFUTF16(
+      IDS_NTP_MODULES_STATEFUL_TASKS_VIEWED_AGO,
+      ui::TimeFormat::SimpleWithMonthAndYear(
+          ui::TimeFormat::Format::FORMAT_ELAPSED,
+          ui::TimeFormat::Length::LENGTH_LONG, viewed_delta,
+          /*use_month_and_year=*/true)));
+}
+
+std::string GetRecommendedItemText(
+    task_module::mojom::TaskModuleType task_module_type) {
+  switch (task_module_type) {
+    case task_module::mojom::TaskModuleType::kRecipe:
+      return l10n_util::GetStringUTF8(IDS_NTP_MODULES_RECIPE_TASKS_RECOMMENDED);
+    case task_module::mojom::TaskModuleType::kShopping:
+      return l10n_util::GetStringUTF8(IDS_NTP_MODULES_SHOPPING_TASKS_RELATED);
   }
 }
 }  // namespace
@@ -195,7 +259,9 @@ void TaskModuleService::DismissTask(
     const std::string& task_name) {
   ListPrefUpdate update(profile_->GetPrefs(),
                         GetDismissedTasksPrefName(task_module_type));
-  update->AppendIfNotPresent(std::make_unique<base::Value>(task_name));
+  base::Value task_name_value(task_name);
+  if (!base::Contains(update->GetList(), task_name_value))
+    update->Append(std::move(task_name_value));
 }
 
 void TaskModuleService::RestoreTask(
@@ -212,9 +278,16 @@ void TaskModuleService::OnDataLoaded(
     TaskModuleCallback callback,
     std::unique_ptr<std::string> response) {
   auto net_error = loader->NetError();
+  bool loaded_from_cache = loader->LoadedFromCache();
   base::EraseIf(loaders_, [loader](const auto& target) {
     return loader == target.get();
   });
+
+  if (!loaded_from_cache) {
+    base::UmaHistogramSparse(
+        "NewTabPage.Modules.DataRequest",
+        base::PersistentHash(GetTasksKey(task_module_type)));
+  }
 
   if (net_error != net::OK || !response) {
     std::move(callback).Run(nullptr);
@@ -266,10 +339,10 @@ void TaskModuleService::OnJsonParsed(
       auto* name = task_item.FindStringPath("name");
       auto* image_url = task_item.FindStringPath("image_url");
       auto* price = task_item.FindStringPath("price");
-      auto* info = task_item.FindStringPath("info");
+      auto viewed_timestamp = task_item.FindIntPath("viewed_timestamp.seconds");
       auto* site_name = task_item.FindStringPath("site_name");
       auto* target_url = task_item.FindStringPath("target_url");
-      if (!name || !image_url || !info || !target_url) {
+      if (!name || !image_url || !target_url) {
         continue;
       }
       if (task_module::mojom::TaskModuleType::kShopping == task_module_type &&
@@ -279,7 +352,9 @@ void TaskModuleService::OnJsonParsed(
       auto mojom_task_item = task_module::mojom::TaskItem::New();
       mojom_task_item->name = *name;
       mojom_task_item->image_url = GURL(*image_url);
-      mojom_task_item->info = *info;
+      mojom_task_item->info = viewed_timestamp
+                                  ? GetViewedItemText(*viewed_timestamp)
+                                  : GetRecommendedItemText(task_module_type);
       if (task_module_type == task_module::mojom::TaskModuleType::kRecipe &&
           site_name) {
         mojom_task_item->site_name = *site_name;
@@ -329,6 +404,5 @@ bool TaskModuleService::IsTaskDismissed(
   const base::ListValue* dismissed_tasks = profile_->GetPrefs()->GetList(
       GetDismissedTasksPrefName(task_module_type));
   DCHECK(dismissed_tasks);
-  return dismissed_tasks->Find(base::Value(task_name)) !=
-         dismissed_tasks->end();
+  return base::Contains(dismissed_tasks->GetList(), base::Value(task_name));
 }

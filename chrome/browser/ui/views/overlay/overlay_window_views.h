@@ -7,15 +7,10 @@
 
 #include "content/public/browser/overlay_window.h"
 
-#include "base/optional.h"
 #include "base/timer/timer.h"
-#include "build/chromeos_buildflags.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/widget/widget.h"
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "ash/public/cpp/rounded_corner_decorator.h"
-#endif
 
 namespace views {
 class BackToTabImageButton;
@@ -25,6 +20,15 @@ class ResizeHandleButton;
 class SkipAdLabelButton;
 class TrackImageButton;
 }  // namespace views
+
+namespace viz {
+class FrameSinkId;
+}  // namespace viz
+
+class BackToTabLabelButton;
+class HangUpButton;
+class ToggleMicrophoneButton;
+class ToggleCameraButton;
 
 // The Chrome desktop implementation of OverlayWindow. This will only be
 // implemented in views, which will support all desktop platforms.
@@ -52,6 +56,11 @@ class OverlayWindowViews : public content::OverlayWindow,
   void SetSkipAdButtonVisibility(bool is_visible) override;
   void SetNextTrackButtonVisibility(bool is_visible) override;
   void SetPreviousTrackButtonVisibility(bool is_visible) override;
+  void SetMicrophoneMuted(bool muted) override;
+  void SetCameraState(bool turned_on) override;
+  void SetToggleMicrophoneButtonVisibility(bool is_visible) override;
+  void SetToggleCameraButtonVisibility(bool is_visible) override;
+  void SetHangUpButtonVisibility(bool is_visible) override;
   void SetSurfaceId(const viz::SurfaceId& surface_id) override;
 
   // views::Widget:
@@ -76,6 +85,9 @@ class OverlayWindowViews : public content::OverlayWindow,
   gfx::Rect GetPlayPauseControlsBounds();
   gfx::Rect GetNextTrackControlsBounds();
   gfx::Rect GetPreviousTrackControlsBounds();
+  gfx::Rect GetToggleMicrophoneButtonBounds();
+  gfx::Rect GetToggleCameraButtonBounds();
+  gfx::Rect GetHangUpButtonBounds();
 
   // Gets the proper hit test component when the hit point is on the resize
   // handle in order to force a drag-to-resize.
@@ -95,7 +107,10 @@ class OverlayWindowViews : public content::OverlayWindow,
   views::TrackImageButton* next_track_controls_view_for_testing() const;
   views::TrackImageButton* previous_track_controls_view_for_testing() const;
   views::SkipAdLabelButton* skip_ad_controls_view_for_testing() const;
-  views::View* back_to_tab_controls_for_testing() const;
+  ToggleMicrophoneButton* toggle_microphone_button_for_testing() const;
+  ToggleCameraButton* toggle_camera_button_for_testing() const;
+  HangUpButton* hang_up_button_for_testing() const;
+  BackToTabLabelButton* back_to_tab_label_button_for_testing() const;
   gfx::Point close_image_position_for_testing() const;
   gfx::Point resize_handle_position_for_testing() const;
   OverlayWindowViews::PlaybackState playback_state_for_testing() const;
@@ -157,7 +172,10 @@ class OverlayWindowViews : public content::OverlayWindow,
     kPlayPause,
     kNextTrack,
     kPreviousTrack,
-    kMaxValue = kPreviousTrack
+    kToggleMicrophone,
+    kToggleCamera,
+    kHangUp,
+    kMaxValue = kHangUp
   };
   void RecordButtonPressed(OverlayWindowControl);
   void RecordTapGesture(OverlayWindowControl);
@@ -190,9 +208,6 @@ class OverlayWindowViews : public content::OverlayWindow,
   gfx::Size min_size_;
   gfx::Size max_size_;
 
-  // Current bounds of the Picture-in-Picture window.
-  gfx::Rect window_bounds_;
-
   // Bounds of |video_view_|.
   gfx::Rect video_bounds_;
 
@@ -211,15 +226,16 @@ class OverlayWindowViews : public content::OverlayWindow,
   views::View* controls_scrim_view_ = nullptr;
   views::View* controls_container_view_ = nullptr;
   views::CloseImageButton* close_controls_view_ = nullptr;
-  views::BackToTabImageButton* back_to_tab_controls_view_ = nullptr;
+  views::BackToTabImageButton* back_to_tab_image_button_ = nullptr;
+  BackToTabLabelButton* back_to_tab_label_button_ = nullptr;
   views::TrackImageButton* previous_track_controls_view_ = nullptr;
   views::PlaybackImageButton* play_pause_controls_view_ = nullptr;
   views::TrackImageButton* next_track_controls_view_ = nullptr;
   views::SkipAdLabelButton* skip_ad_controls_view_ = nullptr;
   views::ResizeHandleButton* resize_handle_view_ = nullptr;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  std::unique_ptr<ash::RoundedCornerDecorator> decorator_;
-#endif
+  ToggleMicrophoneButton* toggle_microphone_button_ = nullptr;
+  ToggleCameraButton* toggle_camera_button_ = nullptr;
+  HangUpButton* hang_up_button_ = nullptr;
 
   // Automatically hides the controls a few seconds after user tap gesture.
   base::RetainingOneShotTimer hide_controls_timer_;
@@ -243,10 +259,22 @@ class OverlayWindowViews : public content::OverlayWindow,
   // case when Media Session "previoustrack" action is handled by the website.
   bool show_previous_track_button_ = false;
 
+  // Whether or not the toggle microphone button will be shown. This is the case
+  // when Media Session "togglemicrophone" action is handled by the website.
+  bool show_toggle_microphone_button_ = false;
+
+  // Whether or not the toggle camera button will be shown. This is the case
+  // when Media Session "togglecamera" action is handled by the website.
+  bool show_toggle_camera_button_ = false;
+
+  // Whether or not the hang up button will be shown. This is the case when
+  // Media Session "hangup" action is handled by the website.
+  bool show_hang_up_button_ = false;
+
   // If set, controls will always either be shown or hidden, instead of showing
   // and hiding automatically. Only used for testing via
   // ForceControlsVisibleForTesting().
-  base::Optional<bool> force_controls_visible_;
+  absl::optional<bool> force_controls_visible_;
 
   DISALLOW_COPY_AND_ASSIGN(OverlayWindowViews);
 };

@@ -9,11 +9,11 @@
 #include <vector>
 
 #include "base/bind.h"
-#include "base/optional.h"
 #include "chromeos/services/network_config/in_process_instance.h"
 #include "chromeos/services/network_config/public/cpp/cros_network_config_util.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace chromeos {
 namespace network_diagnostics {
@@ -63,7 +63,9 @@ void DnsResolverPresentRoutine::RunRoutine(
 }
 
 void DnsResolverPresentRoutine::AnalyzeResultsAndExecuteCallback() {
-  if (!name_servers_found_) {
+  if (!connected_network_) {
+    set_verdict(mojom::RoutineVerdict::kNotRun);
+  } else if (!name_servers_found_) {
     set_verdict(mojom::RoutineVerdict::kProblem);
     problems_.emplace_back(
         mojom::DnsResolverPresentProblem::kNoNameServersFound);
@@ -138,6 +140,7 @@ void DnsResolverPresentRoutine::OnNetworkStateListReceived(
   if (default_guid.empty()) {
     AnalyzeResultsAndExecuteCallback();
   } else {
+    connected_network_ = true;
     FetchManagedProperties(default_guid);
   }
 }

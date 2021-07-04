@@ -10,11 +10,12 @@ import {
 } from '../device/constraints_preferrer.js';
 // eslint-disable-next-line no-unused-vars
 import {DeviceInfoUpdater} from '../device/device_info_updater.js';
+import {I18nString} from '../i18n_string.js';
 // eslint-disable-next-line no-unused-vars
 import {Intent} from '../intent.js';
 import * as metrics from '../metrics.js';
 // eslint-disable-next-line no-unused-vars
-import {AbstractFileEntry} from '../models/file_system_entry.js';
+import {FileAccessEntry} from '../models/file_system_access_entry.js';
 // eslint-disable-next-line no-unused-vars
 import {ResultSaver} from '../models/result_saver.js';
 import {VideoSaver} from '../models/video_saver.js';
@@ -63,8 +64,8 @@ export class CameraIntent extends Camera {
         const buf = await blob.arrayBuffer();
         await this.intent_.appendData(new Uint8Array(buf));
       },
-      startSaveVideo: async () => {
-        return await VideoSaver.createForIntent(intent);
+      startSaveVideo: async (outputVideoRotation) => {
+        return VideoSaver.createForIntent(intent, outputVideoRotation);
       },
       finishSaveVideo: async (video) => {
         this.videoResultFile_ = await video.endWrite();
@@ -93,7 +94,7 @@ export class CameraIntent extends Camera {
     this.videoResult_ = null;
 
     /**
-     * @type {?AbstractFileEntry}
+     * @type {?FileAccessEntry}
      * @private
      */
     this.videoResultFile_ = null;
@@ -113,7 +114,7 @@ export class CameraIntent extends Camera {
     try {
       await this.resultSaver_.savePhoto(result.blob, name);
     } catch (e) {
-      toast.show('error_msg_save_file_failed');
+      toast.show(I18nString.ERROR_MSG_SAVE_FILE_FAILED);
       throw e;
     }
   }
@@ -126,7 +127,7 @@ export class CameraIntent extends Camera {
     try {
       await this.resultSaver_.finishSaveVideo(result.videoSaver);
     } catch (e) {
-      toast.show('error_msg_save_file_failed');
+      toast.show(I18nString.ERROR_MSG_SAVE_FILE_FAILED);
       throw e;
     }
   }

@@ -7,6 +7,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
 
+namespace ash {
 namespace {
 
 const char* const kMetricEnrollment = "Enterprise.Enrollment";
@@ -28,8 +29,6 @@ const char* const kMetricEnrollmentConfiguration =
     "Enterprise.EnrollmentConfiguration";
 
 }  // namespace
-
-namespace chromeos {
 
 void EnrollmentUMA(policy::MetricEnrollment sample,
                    policy::EnrollmentConfig::Mode mode) {
@@ -67,16 +66,16 @@ void EnrollmentUMA(policy::MetricEnrollment sample,
           kMetricEnrollmentForcedInitialManualFallback, sample);
       break;
     case policy::EnrollmentConfig::MODE_RECOVERY:
-    case policy::EnrollmentConfig::MODE_ENROLLED_ROLLBACK:
       base::UmaHistogramSparse(kMetricEnrollmentRecovery, sample);
       break;
     case policy::EnrollmentConfig::MODE_ATTESTATION_ENROLLMENT_TOKEN:
       base::UmaHistogramSparse(kMetricEnrollmentConfiguration, sample);
       break;
+    case policy::EnrollmentConfig::OBSOLETE_MODE_ENROLLED_ROLLBACK:
     case policy::EnrollmentConfig::MODE_NONE:
       NOTREACHED();
       break;
   }
 }
 
-}  // namespace chromeos
+}  // namespace ash

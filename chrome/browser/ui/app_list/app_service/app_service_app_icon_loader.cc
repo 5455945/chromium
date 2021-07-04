@@ -4,12 +4,13 @@
 
 #include "chrome/browser/ui/app_list/app_service/app_service_app_icon_loader.h"
 
+#include "base/containers/contains.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
-#include "chrome/browser/chromeos/crostini/crostini_shelf_utils.h"
+#include "chrome/browser/ash/crostini/crostini_shelf_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/app_list/arc/arc_app_utils.h"
-#include "chrome/browser/ui/ash/launcher/arc_app_shelf_id.h"
+#include "chrome/browser/ui/ash/shelf/arc_app_shelf_id.h"
 #include "chrome/common/chrome_features.h"
 #include "components/services/app_service/public/cpp/app_registry_cache.h"
 #include "components/services/app_service/public/cpp/app_update.h"
@@ -64,9 +65,8 @@ AppServiceAppIconLoader::AppServiceAppIconLoader(
     int resource_size_in_dip,
     AppIconLoaderDelegate* delegate)
     : AppIconLoader(profile, resource_size_in_dip, delegate) {
-  apps::AppServiceProxy* proxy =
-      apps::AppServiceProxyFactory::GetForProfile(profile);
-  Observe(&proxy->AppRegistryCache());
+  Observe(&apps::AppServiceProxyFactory::GetForProfile(profile)
+               ->AppRegistryCache());
 }
 
 AppServiceAppIconLoader::~AppServiceAppIconLoader() = default;
@@ -133,7 +133,7 @@ void AppServiceAppIconLoader::OnAppRegistryCacheWillBeDestroyed(
 
 void AppServiceAppIconLoader::CallLoadIcon(const std::string& app_id,
                                            bool allow_placeholder_icon) {
-  apps::AppServiceProxy* proxy =
+  apps::AppServiceProxyChromeOs* proxy =
       apps::AppServiceProxyFactory::GetForProfile(profile());
 
   auto icon_type =

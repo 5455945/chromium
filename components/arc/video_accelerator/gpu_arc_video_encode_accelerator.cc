@@ -183,14 +183,15 @@ void GpuArcVideoEncodeAccelerator::Encode(
     return;
   }
   auto gmb_handle =
-      CreateGpuMemoryBufferHandle(format, coded_size_, std::move(fds), planes);
+      CreateGpuMemoryBufferHandle(format, gfx::NativePixmapHandle::kNoModifier,
+                                  coded_size_, std::move(fds), planes);
   if (!gmb_handle) {
     DLOG(ERROR) << "Failed to create GpuMemoryBufferHandle";
     client_->NotifyError(Error::kInvalidArgumentError);
     return;
   }
 
-  base::Optional<gfx::BufferFormat> buffer_format =
+  absl::optional<gfx::BufferFormat> buffer_format =
       VideoPixelFormatToGfxBufferFormat(format);
   if (!format) {
     DLOG(ERROR) << "Unexpected format: " << format;

@@ -5,6 +5,7 @@
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 
 #include "base/bind.h"
+#include "base/containers/cxx20_erase.h"
 #include "base/logging.h"
 #include "base/run_loop.h"
 #include "base/stl_util.h"
@@ -102,11 +103,9 @@ bool TestBrowserDialog::VerifyUi() {
   if (added.size() != 1) {
     LOG(INFO) << "VerifyUi(): Expected 1 added widget; got " << added.size();
     if (added.size() > 1) {
-      base::string16 widget_title_log =
-          base::ASCIIToUTF16("Added Widgets are: ");
+      std::u16string widget_title_log = u"Added Widgets are: ";
       for (views::Widget* widget : added) {
-        widget_title_log += widget->widget_delegate()->GetWindowTitle() +
-                            base::ASCIIToUTF16(" ");
+        widget_title_log += widget->widget_delegate()->GetWindowTitle() + u" ";
       }
       LOG(INFO) << widget_title_log;
     }

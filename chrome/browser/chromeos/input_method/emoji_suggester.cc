@@ -22,6 +22,7 @@
 #include "chrome/browser/ui/ash/keyboard/chrome_keyboard_controller_client.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/services/ime/constants.h"
+#include "chromeos/services/ime/public/cpp/suggestions.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -30,6 +31,10 @@
 namespace chromeos {
 
 namespace {
+
+using TextSuggestion = ::chromeos::ime::TextSuggestion;
+using TextSuggestionMode = ::chromeos::ime::TextSuggestionMode;
+using TextSuggestionType = ::chromeos::ime::TextSuggestionType;
 
 constexpr char kEmojiSuggesterShowSettingCount[] =
     "emoji_suggester.show_setting_count";
@@ -93,6 +98,12 @@ void RecordTimeToDismiss(base::TimeDelta delta) {
                              delta);
 }
 
+TextSuggestion MapToTextSuggestion(std::u16string candidate_string) {
+  return {.mode = TextSuggestionMode::kPrediction,
+          .type = TextSuggestionType::kAssistiveEmoji,
+          .text = base::UTF16ToUTF8(candidate_string)};
+}
+
 }  // namespace
 
 EmojiSuggester::EmojiSuggester(SuggestionHandlerInterface* suggestion_handler,
@@ -131,11 +142,10 @@ void EmojiSuggester::OnEmojiDataLoaded(const std::string& emoji_data) {
     const auto comma_pos = line.find_first_of(",");
     DCHECK(comma_pos != std::string::npos);
     std::string word = line.substr(0, comma_pos);
-    base::string16 emojis = base::UTF8ToUTF16(line.substr(comma_pos + 1));
+    std::u16string emojis = base::UTF8ToUTF16(line.substr(comma_pos + 1));
     // Build emoji_map_ from splitting the string of emojis.
-    emoji_map_[word] =
-        base::SplitString(emojis, base::UTF8ToUTF16(";"), base::TRIM_WHITESPACE,
-                          base::SPLIT_WANT_NONEMPTY);
+    emoji_map_[word] = base::SplitString(emojis, u";", base::TRIM_WHITESPACE,
+                                         base::SPLIT_WANT_NONEMPTY);
     // TODO(crbug/1093179): Implement arrow to indicate more emojis available.
     // Only loads 5 emojis for now until arrow is implemented.
     if (emoji_map_[word].size() > kMaxCandidateSize)
@@ -156,6 +166,12 @@ void EmojiSuggester::OnFocus(int context_id) {
 
 void EmojiSuggester::OnBlur() {
   context_id_ = -1;
+}
+
+void EmojiSuggester::OnExternalSuggestionsUpdated(
+    const std::vector<TextSuggestion>& suggestions) {
+  // EmojiSuggester doesn't utilize any suggestions produced externally, so
+  // ignore this call.
 }
 
 SuggestionStatus EmojiSuggester::HandleKeyEvent(const ui::KeyEvent& event) {
@@ -203,7 +219,7 @@ SuggestionStatus EmojiSuggester::HandleKeyEvent(const ui::KeyEvent& event) {
   return SuggestionStatus::kNotHandled;
 }
 
-bool EmojiSuggester::ShouldShowSuggestion(const base::string16& text) {
+bool EmojiSuggester::ShouldShowSuggestion(const std::u16string& text) {
   if (text[text.length() - 1] != kSpaceChar)
     return false;
 
@@ -215,7 +231,9 @@ bool EmojiSuggester::ShouldShowSuggestion(const base::string16& text) {
   return false;
 }
 
-bool EmojiSuggester::Suggest(const base::string16& text) {
+bool EmojiSuggester::Suggest(const std::u16string& text,
+                             size_t cursor_pos,
+                             size_t anchor_pos) {
   if (emoji_map_.empty() || text[text.length() - 1] != kSpaceChar)
     return false;
   std::string last_word =
@@ -342,8 +360,18 @@ AssistiveType EmojiSuggester::GetProposeActionType() {
   return AssistiveType::kEmoji;
 }
 
-bool EmojiSuggester::GetSuggestionShownForTesting() const {
+bool EmojiSuggester::HasSuggestions() {
   return suggestion_shown_;
+}
+
+std::vector<TextSuggestion> EmojiSuggester::GetSuggestions() {
+  std::vector<TextSuggestion> suggestions;
+  if (HasSuggestions()) {
+    for (const auto& candidate : candidates_) {
+      suggestions.emplace_back(MapToTextSuggestion(candidate));
+    }
+  }
+  return suggestions;
 }
 
 size_t EmojiSuggester::GetCandidatesSizeForTesting() const {

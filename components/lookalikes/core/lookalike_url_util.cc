@@ -8,6 +8,7 @@
 
 #include "base/bind.h"
 #include "base/callback.h"
+#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/i18n/char_iterator.h"
 #include "base/macros.h"
@@ -25,7 +26,9 @@
 #include "base/time/default_clock.h"
 #include "base/trace_event/trace_event.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "components/lookalikes/core/features.h"
+#include "components/reputation/core/safety_tips_config.h"
 #include "components/security_interstitials/core/pref_names.h"
 #include "components/security_state/core/features.h"
 #include "components/url_formatter/spoof_checks/common_words/common_words_util.h"
@@ -77,6 +80,11 @@ const char* kDomainsPermittedInEndEmbeddings[] = {"office.com", "medium.com",
 // What separators can be used to separate tokens in target embedding spoofs?
 // e.g. www-google.com.example.com uses "-" (www-google) and "." (google.com).
 const char kTargetEmbeddingSeparators[] = "-.";
+
+// A small subset of private registries on the PSL that act like public
+// registries AND are a common source of false positives in lookalike checks. We
+// treat them as public for the purposes of lookalike checks.
+const char* kPrivateRegistriesTreatedAsPublic[] = {"com.de", "com.se"};
 
 bool SkeletonsMatch(const url_formatter::Skeletons& skeletons1,
                     const url_formatter::Skeletons& skeletons2) {
@@ -206,13 +214,12 @@ bool ASubdomainIsAllowlisted(
     const base::span<const base::StringPiece>& domain_labels,
     const LookalikeTargetAllowlistChecker& in_target_allowlist) {
   DCHECK(domain_labels.size() >= 2);
-  std::string potential_hostname =
-      domain_labels[domain_labels.size() - 1].as_string();
+  std::string potential_hostname(domain_labels[domain_labels.size() - 1]);
   // Attach each token from the end to the embedded target to check if that
   // subdomain has been allowlisted.
   for (int i = domain_labels.size() - 2; i >= 0; i--) {
     potential_hostname =
-        domain_labels[i].as_string() + "." + potential_hostname;
+        std::string(domain_labels[i]) + "." + potential_hostname;
     if (in_target_allowlist.Run(potential_hostname)) {
       return true;
     }
@@ -280,7 +287,8 @@ bool DoesETLDPlus1MatchTopDomainOrEngagedSite(
 // Returns whether the e2LD of the provided domain is a common word (e.g.
 // weather.com, ask.com). Target embeddings of these domains are often false
 // positives (e.g. "super-best-fancy-hotels.com" isn't spoofing "hotels.com").
-bool UsesCommonWord(const DomainInfo& domain) {
+bool UsesCommonWord(const reputation::SafetyTipsConfig* config_proto,
+                    const DomainInfo& domain) {
   // kDomainsPermittedInEndEmbeddings are based on domains with common words,
   // but they should not be excluded here (and instead are checked later).
   for (auto* permitted_ending : kDomainsPermittedInEndEmbeddings) {
@@ -295,7 +303,13 @@ bool UsesCommonWord(const DomainInfo& domain) {
     return true;
   }
 
-  // Also check the local lists.
+  // Search for words in the component-provided word list.
+  if (reputation::IsCommonWordInConfigProto(config_proto,
+                                            domain.domain_without_registry)) {
+    return true;
+  }
+
+  // Search for words in the local word lists.
   for (auto* common_word : kLocalAdditionalCommonWords) {
     if (domain.domain_without_registry == common_word) {
       return true;
@@ -317,14 +331,13 @@ bool UsesCommonWord(const DomainInfo& domain) {
 bool IsEmbeddingItself(const base::span<const base::StringPiece>& domain_labels,
                        const std::string& embedding_domain) {
   DCHECK(domain_labels.size() >= 2);
-  std::string potential_hostname =
-      domain_labels[domain_labels.size() - 1].as_string();
+  std::string potential_hostname(domain_labels[domain_labels.size() - 1]);
   // Attach each token from the end to the embedded target to check if that
   // subdomain is the embedding domain. (e.g. using the earlier example, check
   // each ["com", "example.com", "foo.example.com"] against "example.com".
   for (int i = domain_labels.size() - 2; i >= 0; i--) {
     potential_hostname =
-        domain_labels[i].as_string() + "." + potential_hostname;
+        std::string(domain_labels[i]) + "." + potential_hostname;
     if (embedding_domain == potential_hostname) {
       return true;
     }
@@ -365,8 +378,9 @@ bool IsAllowedToBeEmbedded(
     const DomainInfo& embedded_target,
     const base::span<const base::StringPiece>& subdomain_span,
     const LookalikeTargetAllowlistChecker& in_target_allowlist,
-    const std::string& embedding_domain) {
-  return UsesCommonWord(embedded_target) ||
+    const std::string& embedding_domain,
+    const reputation::SafetyTipsConfig* config_proto) {
+  return UsesCommonWord(config_proto, embedded_target) ||
          ASubdomainIsAllowlisted(subdomain_span, in_target_allowlist) ||
          IsEmbeddingItself(subdomain_span, embedding_domain) ||
          IsCrossTLDMatch(embedded_target, embedding_domain) ||
@@ -444,17 +458,33 @@ DomainInfo GetDomainInfo(const GURL& url) {
 }
 
 std::string GetETLDPlusOne(const std::string& hostname) {
-  return net::registry_controlled_domains::GetDomainAndRegistry(
+  auto pub = net::registry_controlled_domains::GetDomainAndRegistry(
       hostname, net::registry_controlled_domains::EXCLUDE_PRIVATE_REGISTRIES);
+  auto priv = net::registry_controlled_domains::GetDomainAndRegistry(
+      hostname, net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
+  // If there is no difference in eTLD+1 with/without private registries, then
+  // the domain uses a public registry and we can return the eTLD+1 safely.
+  if (pub == priv) {
+    return pub;
+  }
+  // Otherwise, the domain uses a private registry and |pub| is that private
+  // registry. If it's a de-facto-public registry, return the private eTLD+1.
+  for (auto* private_registry : kPrivateRegistriesTreatedAsPublic) {
+    if (private_registry == pub) {
+      return priv;
+    }
+  }
+  // Otherwise, ignore the normal private registry and return the public eTLD+1.
+  return pub;
 }
 
-bool IsEditDistanceAtMostOne(const base::string16& str1,
-                             const base::string16& str2) {
+bool IsEditDistanceAtMostOne(const std::u16string& str1,
+                             const std::u16string& str2) {
   if (str1.size() > str2.size() + 1 || str2.size() > str1.size() + 1) {
     return false;
   }
-  base::string16::const_iterator i = str1.begin();
-  base::string16::const_iterator j = str2.begin();
+  std::u16string::const_iterator i = str1.begin();
+  std::u16string::const_iterator j = str2.begin();
   size_t edit_count = 0;
   while (i != str1.end() && j != str2.end()) {
     if (*i == *j) {
@@ -572,10 +602,15 @@ bool ShouldBlockLookalikeUrlNavigation(LookalikeUrlMatchType match_type) {
   if (match_type == LookalikeUrlMatchType::kSiteEngagement) {
     return true;
   }
-  if (match_type == LookalikeUrlMatchType::kTargetEmbedding &&
-      base::FeatureList::IsEnabled(
-          lookalikes::features::kDetectTargetEmbeddingLookalikes)) {
-    return true;
+  if (match_type == LookalikeUrlMatchType::kTargetEmbedding) {
+#if defined(OS_IOS)
+    // TODO(crbug.com/1104384): Only enable target embedding on iOS once we can
+    //    check engaged sites. Otherwise, false positives are too high.
+    return false;
+#else
+    return base::FeatureList::IsEnabled(
+        lookalikes::features::kDetectTargetEmbeddingLookalikes);
+#endif
   }
   if (match_type == LookalikeUrlMatchType::kFailedSpoofChecks &&
       base::FeatureList::IsEnabled(
@@ -589,6 +624,7 @@ bool GetMatchingDomain(
     const DomainInfo& navigated_domain,
     const std::vector<DomainInfo>& engaged_sites,
     const LookalikeTargetAllowlistChecker& in_target_allowlist,
+    const reputation::SafetyTipsConfig* config_proto,
     std::string* matched_domain,
     LookalikeUrlMatchType* match_type) {
   DCHECK(!navigated_domain.domain_and_registry.empty());
@@ -649,7 +685,7 @@ bool GetMatchingDomain(
 
   TargetEmbeddingType embedding_type =
       GetTargetEmbeddingType(navigated_domain.hostname, engaged_sites,
-                             in_target_allowlist, matched_domain);
+                             in_target_allowlist, config_proto, matched_domain);
   if (embedding_type == TargetEmbeddingType::kSafetyTip) {
     *match_type = LookalikeUrlMatchType::kTargetEmbeddingForSafetyTips;
     return true;
@@ -698,6 +734,37 @@ TargetEmbeddingType GetTargetEmbeddingType(
     const std::string& hostname,
     const std::vector<DomainInfo>& engaged_sites,
     const LookalikeTargetAllowlistChecker& in_target_allowlist,
+    const reputation::SafetyTipsConfig* config_proto,
+    std::string* safe_hostname) {
+  // Because of how target embeddings are detected (i.e. by sweeping the URL
+  // from back to front), we're guaranteed to find tail-embedding before other
+  // target embedding. Tail embedding triggers a safety tip, but interstitials
+  // are more important than safety tips, so if we find a safety tippable
+  // embedding with SearchForEmbeddings, go search again not permitting safety
+  // tips to see if we can also find an interstitiallable embedding.
+  auto result = SearchForEmbeddings(
+      hostname, engaged_sites, in_target_allowlist, config_proto,
+      /*safety_tips_allowed=*/true, safe_hostname);
+  if (result == TargetEmbeddingType::kSafetyTip) {
+    std::string no_st_safe_hostname;
+    auto no_st_result = SearchForEmbeddings(
+        hostname, engaged_sites, in_target_allowlist, config_proto,
+        /*safety_tips_allowed=*/false, &no_st_safe_hostname);
+    if (no_st_result == TargetEmbeddingType::kNone) {
+      return result;
+    }
+    *safe_hostname = no_st_safe_hostname;
+    return no_st_result;
+  }
+  return result;
+}
+
+TargetEmbeddingType SearchForEmbeddings(
+    const std::string& hostname,
+    const std::vector<DomainInfo>& engaged_sites,
+    const LookalikeTargetAllowlistChecker& in_target_allowlist,
+    const reputation::SafetyTipsConfig* config_proto,
+    bool safety_tips_allowed,
     std::string* safe_hostname) {
   const std::string embedding_domain = GetETLDPlusOne(hostname);
   const std::vector<base::StringPiece> hostname_tokens =
@@ -737,7 +804,8 @@ TargetEmbeddingType GetTargetEmbeddingType(
       if (no_separator_dominfo.domain_without_registry.length() >
               kMinE2LDLengthForTargetEmbedding &&
           !IsAllowedToBeEmbedded(no_separator_dominfo, no_separator_tokens,
-                                 in_target_allowlist, embedding_domain)) {
+                                 in_target_allowlist, embedding_domain,
+                                 config_proto)) {
         *safe_hostname = embedded_target;
         return TargetEmbeddingType::kInterstitial;
       }
@@ -766,9 +834,17 @@ TargetEmbeddingType GetTargetEmbeddingType(
       for (auto& engaged_site : engaged_sites) {
         if (engaged_site.hostname == embedded_dominfo.hostname &&
             !IsAllowedToBeEmbedded(embedded_dominfo, span, in_target_allowlist,
-                                   embedding_domain)) {
+                                   embedding_domain, config_proto)) {
           *safe_hostname = engaged_site.hostname;
-          return TargetEmbeddingType::kInterstitial;
+          // Tail-embedding (e.g. evil-google.com, where the embedding happens
+          // at the very end of the hostname) is a safety tip, but only when
+          // safety tips are allowed. If it's tail embedding but we can't create
+          // a safety tip, keep looking.  Non-tail-embeddings are interstitials.
+          if (end != static_cast<int>(hostname_tokens.size())) {
+            return TargetEmbeddingType::kInterstitial;
+          } else if (safety_tips_allowed) {
+            return TargetEmbeddingType::kSafetyTip;
+          }  // else keep searching.
         }
       }
     }
@@ -778,8 +854,17 @@ TargetEmbeddingType GetTargetEmbeddingType(
     if (DoesETLDPlus1MatchTopDomainOrEngagedSite(
             etld_check_dominfo, engaged_sites, safe_hostname) &&
         !IsAllowedToBeEmbedded(etld_check_dominfo, etld_check_span,
-                               in_target_allowlist, embedding_domain)) {
-      return TargetEmbeddingType::kInterstitial;
+                               in_target_allowlist, embedding_domain,
+                               config_proto)) {
+      // Tail-embedding (e.g. evil-google.com, where the embedding happens at
+      // the very end of the hostname) is a safety tip, but only when safety
+      // tips are allowed. If it's tail embedding but we can't create a safety
+      // tip, keep looking.  Non-tail-embeddings are interstitials.
+      if (end != static_cast<int>(hostname_tokens.size())) {
+        return TargetEmbeddingType::kInterstitial;
+      } else if (safety_tips_allowed) {
+        return TargetEmbeddingType::kSafetyTip;
+      }  // else keep searching.
     }
   }
   return TargetEmbeddingType::kNone;
@@ -852,7 +937,7 @@ bool IsAllowedByEnterprisePolicy(const PrefService* pref_service,
                                  const GURL& url) {
   const auto* list =
       pref_service->GetList(prefs::kLookalikeWarningAllowlistDomains);
-  for (const auto& domain_val : *list) {
+  for (const auto& domain_val : list->GetList()) {
     auto domain = domain_val.GetString();
     if (url.DomainIs(domain)) {
       return true;

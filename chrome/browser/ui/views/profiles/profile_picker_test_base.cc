@@ -49,45 +49,6 @@ class ViewVisibilityChangedWaiter : public views::ViewObserver {
   base::ScopedObservation<views::View, views::ViewObserver> observation_{this};
 };
 
-// Waits until a first non empty paint for given committed `url`.
-class FirstVisuallyNonEmptyPaintObserver : public content::WebContentsObserver {
- public:
-  explicit FirstVisuallyNonEmptyPaintObserver(content::WebContents* contents,
-                                              const GURL& url)
-      : content::WebContentsObserver(contents), url_(url) {}
-
-  // Waits for the first paint.
-  void Wait() {
-    if (IsExitConditionSatisfied()) {
-      return;
-    }
-    run_loop_.Run();
-    EXPECT_TRUE(IsExitConditionSatisfied())
-        << web_contents()->GetLastCommittedURL() << " != " << url_;
-  }
-
- private:
-  // WebContentsObserver:
-  void DidFirstVisuallyNonEmptyPaint() override {
-    if (IsExitConditionSatisfied())
-      run_loop_.Quit();
-  }
-
-  void NavigationEntryCommitted(
-      const content::LoadCommittedDetails& load_details) override {
-    if (IsExitConditionSatisfied())
-      run_loop_.Quit();
-  }
-
-  bool IsExitConditionSatisfied() {
-    return (web_contents()->GetLastCommittedURL() == url_ &&
-            web_contents()->CompletedFirstVisuallyNonEmptyPaint());
-  }
-
-  base::RunLoop run_loop_{base::RunLoop::Type::kNestableTasksAllowed};
-  GURL url_;
-};
-
 // Waits until a view is deleted.
 class ViewDeletedWaiter : public views::ViewObserver {
  public:
@@ -114,9 +75,7 @@ class ViewDeletedWaiter : public views::ViewObserver {
 
 }  // namespace
 
-ProfilePickerTestBase::ProfilePickerTestBase() {
-  feature_list_.InitAndEnableFeature(features::kNewProfilePicker);
-}
+ProfilePickerTestBase::ProfilePickerTestBase() = default;
 
 ProfilePickerTestBase::~ProfilePickerTestBase() = default;
 
@@ -144,10 +103,13 @@ void ProfilePickerTestBase::WaitForLayoutWithoutToolbar() {
       .Wait();
 }
 
-void ProfilePickerTestBase::WaitForFirstPaint(content::WebContents* contents,
-                                              const GURL& url) {
+void ProfilePickerTestBase::WaitForLoadStop(content::WebContents* contents,
+                                            const GURL& url) {
   DCHECK(contents);
-  FirstVisuallyNonEmptyPaintObserver(contents, url).Wait();
+  // Don't check for success as in many instances (e.g. GAIA) it fails with
+  // network error.
+  content::WaitForLoadStopWithoutSuccessCheck(contents);
+  EXPECT_EQ(contents->GetLastCommittedURL(), url);
 }
 
 void ProfilePickerTestBase::WaitForPickerClosed() {
@@ -155,6 +117,12 @@ void ProfilePickerTestBase::WaitForPickerClosed() {
     return;
   ViewDeletedWaiter(view()).Wait();
   ASSERT_FALSE(ProfilePicker::IsOpen());
+}
+
+void ProfilePickerTestBase::WaitForPickerClosedAndReopenedImmediately() {
+  ASSERT_TRUE(ProfilePicker::IsOpen());
+  ViewDeletedWaiter(view()).Wait();
+  EXPECT_TRUE(ProfilePicker::IsOpen());
 }
 
 content::WebContents* ProfilePickerTestBase::web_contents() {

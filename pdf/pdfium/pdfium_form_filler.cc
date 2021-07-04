@@ -9,12 +9,14 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "base/containers/contains.h"
 #include "base/feature_list.h"
+#include "base/location.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "pdf/pdf_features.h"
 #include "pdf/pdfium/pdfium_engine.h"
-#include "pdf/ppapi_migration/input_event_conversions.h"
+#include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/pdfium/public/fpdf_annot.h"
 #include "ui/gfx/geometry/rect.h"
 
@@ -25,7 +27,7 @@ namespace {
 int g_last_timer_id = 0;
 
 std::string WideStringToString(FPDF_WIDESTRING wide_string) {
-  return base::UTF16ToUTF8(reinterpret_cast<const base::char16*>(wide_string));
+  return base::UTF16ToUTF8(reinterpret_cast<const char16_t*>(wide_string));
 }
 
 }  // namespace
@@ -329,11 +331,12 @@ void PDFiumFormFiller::Form_DoURIActionWithKeyboardModifier(
     FPDF_BYTESTRING uri,
     int modifiers) {
   PDFiumEngine* engine = GetEngine(param);
-  bool middle_button = !!(modifiers & kInputEventModifierMiddleButtonDown);
-  bool alt_key = !!(modifiers & kInputEventModifierAltKey);
-  bool ctrl_key = !!(modifiers & kInputEventModifierControlKey);
-  bool meta_key = !!(modifiers & kInputEventModifierMetaKey);
-  bool shift_key = !!(modifiers & kInputEventModifierShiftKey);
+  bool middle_button =
+      !!(modifiers & blink::WebInputEvent::Modifiers::kMiddleButtonDown);
+  bool alt_key = !!(modifiers & blink::WebInputEvent::Modifiers::kAltKey);
+  bool ctrl_key = !!(modifiers & blink::WebInputEvent::Modifiers::kControlKey);
+  bool meta_key = !!(modifiers & blink::WebInputEvent::Modifiers::kMetaKey);
+  bool shift_key = !!(modifiers & blink::WebInputEvent::Modifiers::kShiftKey);
 
   WindowOpenDisposition disposition = ui::DispositionFromClick(
       middle_button, alt_key, ctrl_key, meta_key, shift_key);
@@ -610,8 +613,8 @@ int PDFiumFormFiller::Form_Response(IPDF_JSPLATFORM* param,
 
   PDFiumEngine* engine = GetEngine(param);
   std::string rv = engine->client_->Prompt(question_str, default_str);
-  base::string16 rv_16 = base::UTF8ToUTF16(rv);
-  int rv_bytes = rv_16.size() * sizeof(base::char16);
+  std::u16string rv_16 = base::UTF8ToUTF16(rv);
+  int rv_bytes = rv_16.size() * sizeof(char16_t);
   if (response) {
     int bytes_to_copy = rv_bytes < length ? rv_bytes : length;
     memcpy(response, rv_16.c_str(), bytes_to_copy);
@@ -640,7 +643,7 @@ void PDFiumFormFiller::Form_Mail(IPDF_JSPLATFORM* param,
                                  FPDF_WIDESTRING cc,
                                  FPDF_WIDESTRING bcc,
                                  FPDF_WIDESTRING message) {
-  // Note: |mail_data| and |length| are ignored. We don't handle attachments;
+  // Note: `mail_data` and `length` are ignored. We don't handle attachments;
   // there is no way with mailto.
   std::string to_str = WideStringToString(to);
   std::string cc_str = WideStringToString(cc);

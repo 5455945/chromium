@@ -10,12 +10,12 @@
 
 #include "base/bind.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/optional.h"
 #include "base/run_loop.h"
 #include "base/task/sequence_manager/task_queue.h"
 #include "base/task/sequence_manager/test/sequence_manager_for_test.h"
 #include "base/test/task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/platform/scheduler/main_thread/frame_scheduler_impl.h"
 #include "third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.h"
@@ -39,6 +39,9 @@ class FrameTaskQueueControllerTest : public testing::Test,
             base::test::TaskEnvironment::TimeSource::MOCK_TIME,
             base::test::TaskEnvironment::ThreadPoolExecutionMode::QUEUED),
         task_queue_created_count_(0) {}
+  FrameTaskQueueControllerTest(const FrameTaskQueueControllerTest&) = delete;
+  FrameTaskQueueControllerTest& operator=(const FrameTaskQueueControllerTest&) =
+      delete;
 
   ~FrameTaskQueueControllerTest() override = default;
 
@@ -47,7 +50,7 @@ class FrameTaskQueueControllerTest : public testing::Test,
         base::sequence_manager::SequenceManagerForTest::Create(
             nullptr, task_environment_.GetMainThreadTaskRunner(),
             task_environment_.GetMockTickClock()),
-        base::nullopt);
+        absl::nullopt);
     agent_group_scheduler_ = scheduler_->CreateAgentGroupScheduler();
     page_scheduler_ =
         agent_group_scheduler_->AsAgentGroupScheduler().CreatePageScheduler(
@@ -124,8 +127,6 @@ class FrameTaskQueueControllerTest : public testing::Test,
 
  private:
   size_t task_queue_created_count_;
-
-  DISALLOW_COPY_AND_ASSIGN(FrameTaskQueueControllerTest);
 };
 
 TEST_F(FrameTaskQueueControllerTest, CreateAllTaskQueues) {
@@ -259,7 +260,7 @@ TEST_F(FrameTaskQueueControllerTest,
   scoped_refptr<MainThreadTaskQueue> task_queue =
       frame_task_queue_controller_->GetTaskQueue(
           MainThreadTaskQueue::QueueTraits());
-  EXPECT_EQ(base::nullopt, task_queue->web_scheduling_priority());
+  EXPECT_EQ(absl::nullopt, task_queue->web_scheduling_priority());
 }
 
 TEST_F(FrameTaskQueueControllerTest, AddWebSchedulingTaskQueues) {

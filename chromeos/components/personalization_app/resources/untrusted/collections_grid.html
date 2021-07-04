@@ -1,0 +1,19 @@
+<style include="common-style untrusted-style">
+  :host {
+    margin: 12px 0;
+  }
+</style>
+<iron-list items="[[tiles_]]" grid scroll-target="document">
+  <template>
+    <div class="photo-container" data-id$="[[item.id]]"
+      on-click="onCollectionClicked_">
+      <template is="dom-if" if="[[item.preview]]">
+        <img src="[[item.preview.url]]">
+      </template>
+      <div class="photo-text-container">
+        <p>[[item.name]]</p>
+        <p>[[item.count]]</p>
+      </div>
+    </div>
+  </template>
+</iron-list>

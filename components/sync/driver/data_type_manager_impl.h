@@ -12,12 +12,12 @@
 #include "base/containers/queue.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "base/optional.h"
 #include "base/time/time.h"
 #include "components/sync/base/weak_handle.h"
 #include "components/sync/driver/configure_context.h"
 #include "components/sync/driver/model_load_manager.h"
 #include "components/sync/engine/model_type_configurer.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace syncer {
 
@@ -30,8 +30,6 @@ struct DataTypeConfigurationStats;
 class DataTypeManagerImpl : public DataTypeManager,
                             public ModelLoadManagerDelegate {
  public:
-  // TODO(crbug.com/1170318): Get rid of the |initial_types| param, it doesn't
-  // seem to actually do anything.
   DataTypeManagerImpl(
       const WeakHandle<DataTypeDebugInfoListener>& debug_info_listener,
       const DataTypeController::TypeMap* controllers,
@@ -113,9 +111,6 @@ class DataTypeManagerImpl : public DataTypeManager,
   ModelTypeConfigurer::ConfigureParams PrepareConfigureParams(
       const AssociationTypesInfo& association_types_info);
 
-  // Abort configuration and stop all data types due to configuration errors.
-  void Abort(ConfigureStatus status);
-
   // Divide |types| into sets by their priorities and return the sets from
   // high priority to low priority.
   base::queue<ModelTypeSet> PrioritizeTypes(const ModelTypeSet& types);
@@ -177,7 +172,13 @@ class DataTypeManagerImpl : public DataTypeManager,
   State state_ = DataTypeManager::STOPPED;
 
   // The set of types whose initial download of sync data has completed.
-  ModelTypeSet downloaded_types_;
+  // TODO(crbug.com/1170318): This class does not actually handle control types
+  // (i.e. NIGORI) - |controllers_| doesn't contain an entry for NIGORI.
+  // However, we have to pretend that NIGORI is already downloaded (which it
+  // is, but this class doesn't know that) to prevent a re-download on every
+  // browser startup. It would be cleaner to remove all NIGORI/ControlTypes()
+  // handling from this class.
+  ModelTypeSet downloaded_types_ = ControlTypes();
 
   // Types that requested in current configuration cycle.
   ModelTypeSet last_requested_types_;
@@ -190,9 +191,6 @@ class DataTypeManagerImpl : public DataTypeManager,
 
   // A set of types that should be redownloaded even if initial sync is
   // completed for them.
-  // TODO(crbug.com/967677): Once all datatypes are in USS, we should redesign
-  // this class and for example compute |downloaded_types_|'s initial value
-  // only after all datatypes have loaded for the first time.
   ModelTypeSet force_redownload_types_;
 
   // Whether an attempt to reconfigure was made while we were busy configuring.
@@ -209,7 +207,7 @@ class DataTypeManagerImpl : public DataTypeManager,
   // The manager that loads the local models of the data types.
   ModelLoadManager model_load_manager_;
 
-  // DataTypeManager must have only one observer -- the ProfileSyncService that
+  // DataTypeManager must have only one observer -- the SyncServiceImpl that
   // created it and manages its lifetime.
   DataTypeManagerObserver* const observer_;
 

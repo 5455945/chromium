@@ -5,20 +5,25 @@
 #ifndef FUCHSIA_RUNNERS_CAST_CAST_COMPONENT_H_
 #define FUCHSIA_RUNNERS_CAST_CAST_COMPONENT_H_
 
+#include <fuchsia/camera3/cpp/fidl.h>
+#include <fuchsia/legacymetrics/cpp/fidl.h>
+#include <fuchsia/media/cpp/fidl.h>
+#include <fuchsia/web/cpp/fidl.h>
 #include <lib/fidl/cpp/binding.h>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "base/fuchsia/startup_context.h"
 #include "base/message_loop/message_pump_for_io.h"
 #include "base/message_loop/message_pump_fuchsia.h"
-#include "base/optional.h"
 #include "fuchsia/fidl/chromium/cast/cpp/fidl.h"
 #include "fuchsia/runners/cast/api_bindings_client.h"
 #include "fuchsia/runners/cast/application_controller_impl.h"
 #include "fuchsia/runners/cast/named_message_port_connector_fuchsia.h"
 #include "fuchsia/runners/common/web_component.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace cr_fuchsia {
 class AgentManager;
@@ -54,9 +59,9 @@ class CastComponent : public WebComponent,
     chromium::cast::ApplicationConfig application_config;
     fidl::InterfaceHandle<chromium::cast::ApplicationContext>
         application_context;
-    base::Optional<std::vector<fuchsia::web::UrlRequestRewriteRule>>
+    absl::optional<std::vector<fuchsia::web::UrlRequestRewriteRule>>
         initial_url_rewrite_rules;
-    base::Optional<uint64_t> media_session_id;
+    absl::optional<uint64_t> media_session_id;
   };
 
   // See WebComponent documentation for details of |debug_name| and |runner|.
@@ -72,16 +77,22 @@ class CastComponent : public WebComponent,
 
   void SetOnDestroyedCallback(base::OnceClosure on_destroyed);
 
+  void ConnectMetricsRecorder(
+      fidl::InterfaceRequest<fuchsia::legacymetrics::MetricsRecorder> request);
+  void ConnectAudio(fidl::InterfaceRequest<fuchsia::media::Audio> request);
+  void ConnectDeviceWatcher(
+      fidl::InterfaceRequest<fuchsia::camera3::DeviceWatcher> request);
+
+  bool HasWebPermission(fuchsia::web::PermissionType permission_type) const;
+
+  const std::string& agent_url() const {
+    return application_config_.agent_url();
+  }
+
   // WebComponent overrides.
   void StartComponent() final;
   void DestroyComponent(int64_t termination_exit_code,
                         fuchsia::sys::TerminationReason reason) final;
-
-  const chromium::cast::ApplicationConfig& application_config() {
-    return application_config_;
-  }
-
-  cr_fuchsia::AgentManager* agent_manager() { return agent_manager_.get(); }
 
  private:
   void OnRewriteRulesReceived(

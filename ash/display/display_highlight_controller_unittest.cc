@@ -4,7 +4,7 @@
 
 #include "ash/display/display_highlight_controller.h"
 
-#include "ash/public/cpp/ash_features.h"
+#include "ash/constants/ash_features.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
 #include "base/test/scoped_feature_list.h"
@@ -159,8 +159,8 @@ TEST_F(DisplayHighlightControllerTest, VisibleMixedMode) {
   display::DisplayIdList dst_ids;
 
   dst_ids.emplace_back(id_list[1]);
-  base::Optional<display::MixedMirrorModeParams> mixed_params(
-      base::in_place, id_list[0], dst_ids);
+  absl::optional<display::MixedMirrorModeParams> mixed_params(
+      absl::in_place, id_list[0], dst_ids);
 
   display_manager_ptr->SetMirrorMode(display::MirrorMode::kMixed, mixed_params);
 

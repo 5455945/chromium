@@ -25,7 +25,6 @@
 #include "chrome/browser/ash/system/timezone_resolver_manager.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
@@ -54,7 +53,7 @@ base::LazyInstance<base::Lock>::Leaky g_timezone_bundle_lock =
     LAZY_INSTANCE_INITIALIZER;
 
 // Returns an exemplary city in the given timezone.
-base::string16 GetExemplarCity(const icu::TimeZone& zone) {
+std::u16string GetExemplarCity(const icu::TimeZone& zone) {
   // These will be leaked at the end.
   static UResourceBundle* zone_bundle = nullptr;
   static UResourceBundle* zone_strings = nullptr;
@@ -104,7 +103,7 @@ base::string16 GetExemplarCity(const icu::TimeZone& zone) {
 }
 
 // Gets the given timezone's name for visualization.
-base::string16 GetTimezoneName(const icu::TimeZone& timezone) {
+std::u16string GetTimezoneName(const icu::TimeZone& timezone) {
   // Instead of using the raw_offset, use the offset in effect now.
   // For instance, US Pacific Time, the offset shown will be -7 in summer
   // while it'll be -8 in winter.
@@ -142,7 +141,7 @@ base::string16 GetTimezoneName(const icu::TimeZone& timezone) {
   } else {
     timezone.getDisplayName(dst_offset != 0, icu::TimeZone::LONG, name);
   }
-  base::string16 result(l10n_util::GetStringFUTF16(
+  std::u16string result(l10n_util::GetStringFUTF16(
       IDS_OPTIONS_SETTINGS_TIMEZONE_DISPLAY_TEMPLATE,
       base::ASCIIToUTF16(offset_str), base::i18n::UnicodeStringToString16(name),
       GetExemplarCity(timezone)));
@@ -198,7 +197,7 @@ bool CanSetSystemTimezone(const user_manager::User* user) {
 namespace ash {
 namespace system {
 
-base::string16 GetCurrentTimezoneName() {
+std::u16string GetCurrentTimezoneName() {
   return GetTimezoneName(TimezoneSettings::GetInstance()->GetTimezone());
 }
 

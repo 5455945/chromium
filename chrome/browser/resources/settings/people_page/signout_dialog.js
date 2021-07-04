@@ -6,53 +6,89 @@
  * @fileoverview 'settings-signout-dialog' is a dialog that allows the
  * user to turn off sync and sign out of Chromium.
  */
-Polymer({
-  is: 'settings-signout-dialog',
+import '//resources/cr_elements/cr_button/cr_button.m.js';
+import '//resources/cr_elements/cr_checkbox/cr_checkbox.m.js';
+import '//resources/cr_elements/cr_dialog/cr_dialog.m.js';
+import '//resources/cr_elements/cr_expand_button/cr_expand_button.m.js';
+import '//resources/cr_elements/shared_style_css.m.js';
+import '//resources/cr_elements/shared_vars_css.m.js';
+import '//resources/polymer/v3_0/iron-collapse/iron-collapse.js';
+import '//resources/polymer/v3_0/iron-flex-layout/iron-flex-layout-classes.js';
+import '../settings_shared_css.js';
 
-  behaviors: [WebUIListenerBehavior],
+import {WebUIListenerBehavior, WebUIListenerBehaviorInterface} from '//resources/js/web_ui_listener_behavior.m.js';
+import {html, microTask, mixinBehaviors, PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
-  properties: {
-    /**
-     * The current sync status, supplied by the parent.
-     * @type {?settings.SyncStatus}
-     */
-    syncStatus: {
-      type: Object,
-      observer: 'syncStatusChanged_',
-    },
+import {loadTimeData} from '../i18n_setup.js';
 
-    /**
-     * True if the checkbox to delete the profile has been checked.
-     * @private
-     */
-    deleteProfile_: Boolean,
+import {ProfileInfoBrowserProxyImpl} from './profile_info_browser_proxy.js';
+import {SyncBrowserProxyImpl, SyncStatus} from './sync_browser_proxy.js';
 
-    /**
-     * True if the profile deletion warning is visible.
-     * @private
-     */
-    deleteProfileWarningVisible_: Boolean,
+/**
+ * @constructor
+ * @extends {PolymerElement}
+ * @implements {WebUIListenerBehaviorInterface}
+ */
+const SettingsSignoutDialogElementBase =
+    mixinBehaviors([WebUIListenerBehavior], PolymerElement);
 
-    /**
-     * The profile deletion warning. The message indicates the number of
-     * profile stats that will be deleted if a non-zero count for the profile
-     * stats is returned from the browser.
-     * @private
-     */
-    deleteProfileWarning_: String,
-  },
+/** @polymer */
+export class SettingsSignoutDialogElement extends
+    SettingsSignoutDialogElementBase {
+  static get is() {
+    return 'settings-signout-dialog';
+  }
+
+  static get template() {
+    return html`{__html_template__}`;
+  }
+
+  static get properties() {
+    return {
+      /**
+       * The current sync status, supplied by the parent.
+       * @type {?SyncStatus}
+       */
+      syncStatus: {
+        type: Object,
+        observer: 'syncStatusChanged_',
+      },
+
+      /**
+       * True if the checkbox to delete the profile has been checked.
+       * @private
+       */
+      deleteProfile_: Boolean,
+
+      /**
+       * True if the profile deletion warning is visible.
+       * @private
+       */
+      deleteProfileWarningVisible_: Boolean,
+
+      /**
+       * The profile deletion warning. The message indicates the number of
+       * profile stats that will be deleted if a non-zero count for the profile
+       * stats is returned from the browser.
+       * @private
+       */
+      deleteProfileWarning_: String,
+    };
+  }
 
   /** @override */
-  attached() {
+  connectedCallback() {
+    super.connectedCallback();
+
     this.addWebUIListener(
         'profile-stats-count-ready', this.handleProfileStatsCount_.bind(this));
     // <if expr="not chromeos">
-    settings.ProfileInfoBrowserProxyImpl.getInstance().getProfileStatsCount();
+    ProfileInfoBrowserProxyImpl.getInstance().getProfileStatsCount();
     // </if>
-    this.async(() => {
+    microTask.run(() => {
       this.$.dialog.showModal();
     });
-  },
+  }
 
   /**
    * Returns true when the user selected 'Confirm'.
@@ -62,7 +98,7 @@ Polymer({
     return /** @type {!CrDialogElement} */ (this.$.dialog)
                .getNative()
                .returnValue === 'success';
-  },
+  }
 
   /**
    * Handler for when the profile stats count is pushed from the browser.
@@ -81,7 +117,7 @@ Polymer({
       this.deleteProfileWarning_ = loadTimeData.getStringF(
           'deleteProfileWarningWithCountsPlural', count, username);
     }
-  },
+  }
 
   /**
    * Polymer observer for syncStatus.
@@ -91,7 +127,7 @@ Polymer({
     if (!this.syncStatus.signedIn && this.$.dialog.open) {
       this.$.dialog.close();
     }
-  },
+  }
 
   /**
    * @private
@@ -107,23 +143,26 @@ Polymer({
     }
     // </if>
     return loadTimeData.getString('syncDisconnectExplanation');
-  },
+  }
 
   /** @private */
   onDisconnectCancel_() {
     /** @type {!CrDialogElement} */ (this.$.dialog).cancel();
-  },
+  }
 
   /** @private */
   onDisconnectConfirm_() {
     this.$.dialog.close();
     // <if expr="not chromeos">
     const deleteProfile = !!this.syncStatus.domain || this.deleteProfile_;
-    settings.SyncBrowserProxyImpl.getInstance().signOut(deleteProfile);
+    SyncBrowserProxyImpl.getInstance().signOut(deleteProfile);
     // </if>
     // <if expr="chromeos">
     // Chrome OS users are always signed-in, so just turn off sync.
-    settings.SyncBrowserProxyImpl.getInstance().turnOffSync();
+    SyncBrowserProxyImpl.getInstance().turnOffSync();
     // </if>
-  },
-});
+  }
+}
+
+customElements.define(
+    SettingsSignoutDialogElement.is, SettingsSignoutDialogElement);

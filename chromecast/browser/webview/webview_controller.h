@@ -6,7 +6,6 @@
 #define CHROMECAST_BROWSER_WEBVIEW_WEBVIEW_CONTROLLER_H_
 
 #include <memory>
-#include <string>
 
 #include "base/supports_user_data.h"
 #include "chromecast/browser/cast_web_contents.h"
@@ -66,6 +65,9 @@ class WebviewController : public CastWebContents::Delegate,
   void OnNavigationThrottleDestroyed(WebviewNavigationThrottle* throttle);
 
  protected:
+  FRIEND_TEST_ALL_PREFIXES(WebviewTest, Focus);
+  FRIEND_TEST_ALL_PREFIXES(WebviewTest, KeyInput);
+  FRIEND_TEST_ALL_PREFIXES(WebviewTest, SendFocusEventWhenVKShouldBeShown);
   FRIEND_TEST_ALL_PREFIXES(WebviewTest, SetInsets);
   FRIEND_TEST_ALL_PREFIXES(WebviewTest, UserDataOverrideOnFirstRequest);
   FRIEND_TEST_ALL_PREFIXES(WebviewTest, UserDataOverride);

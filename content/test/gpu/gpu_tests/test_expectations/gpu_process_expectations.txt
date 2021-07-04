@@ -22,9 +22,9 @@
 #         release release-x64 ]
 # GPU
 # tags: [ amd amd-0x6613 amd-0x679e amd-0x6821 amd-0x7340
-#         apple apple-apple-a12z
+#         apple apple-apple-m1 apple-angle-metal-renderer:-apple-m1
 #         arm
-#         google google-0xffff google-angle-(metal-renderer:-apple-a12z)
+#         google google-0xffff
 #         intel intel-0xa2e intel-0xd26 intel-0xa011 intel-0x3e92 intel-0x3e9b
 #               intel-0x5912
 #         nvidia nvidia-0xfe9 nvidia-0x1cb3 nvidia-0x2184
@@ -53,6 +53,8 @@
 #         mesa_lt_19.1 mesa_ge_20.1 ]
 # ASan
 # tags: [ asan no-asan ]
+# Display Server
+# tags: [ display-server-wayland display-server-x ]
 # results: [ Failure RetryOnFailure Skip ]
 # END TAG HEADER
 
@@ -74,6 +76,9 @@ crbug.com/1170840 [ mac amd skia-renderer-gl ] GpuProcess_mac_webgl_terminated_h
 [ fuchsia ] GpuProcess_feature_status_under_swiftshader [ Skip ]
 [ fuchsia ] GpuProcess_swiftshader_for_webgl [ Skip ]
 
+# Fuchsia flakes.
+crbug.com/1207726 [ fuchsia ] GpuProcess_canvas2d [ RetryOnFailure ]
+
 # SwiftShader GL does not work on CrOS, wait for it to be replaced by SwANGLE.
 crbug.com/1084794 [ chromeos ] GpuProcess_feature_status_under_swiftshader [ Skip ]
 crbug.com/1084794 [ chromeos ] GpuProcess_swiftshader_for_webgl [ Skip ]
@@ -85,5 +90,5 @@ crbug.com/1084796 [ chromeos ] GpuProcess_readback_webgl_gpu_process [ Skip ]
 crbug.com/1099576 [ mac amd ] GpuProcess_mac_webgl_backgrounded_high_performance [ Skip ]
 crbug.com/1099576 [ mac intel ] GpuProcess_mac_webgl_backgrounded_high_performance [ Skip ]
 
-# Flaky on Fuchsia
-crbug.com/1087298 [ fuchsia ] GpuProcess_webgl_disabled_extension [ Skip ]
+# Flakily hits a DCHECK during shared image creation.
+crbug.com/1188437 [ linux intel display-server-wayland ] GpuProcess_webgl [ RetryOnFailure ]

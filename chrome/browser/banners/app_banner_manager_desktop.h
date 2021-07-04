@@ -9,7 +9,7 @@
 
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "base/scoped_observer.h"
+#include "base/scoped_observation.h"
 #include "chrome/browser/web_applications/components/app_registrar.h"
 #include "chrome/browser/web_applications/components/app_registrar_observer.h"
 #include "chrome/browser/web_applications/components/web_app_id.h"
@@ -44,9 +44,6 @@ class AppBannerManagerDesktop
   virtual TestAppBannerManagerDesktop*
   AsTestAppBannerManagerDesktopForTesting();
 
-  // AppBannerManager overrides.
-  bool IsExternallyInstalledWebApp() override;
-
  protected:
   explicit AppBannerManagerDesktop(content::WebContents* web_contents);
 
@@ -59,7 +56,7 @@ class AppBannerManagerDesktop
   base::WeakPtr<AppBannerManager> GetWeakPtr() override;
   void InvalidateWeakPtrs() override;
   bool IsSupportedNonWebAppPlatform(
-      const base::string16& platform) const override;
+      const std::u16string& platform) const override;
   bool IsRelatedNonWebAppInstalled(
       const blink::Manifest::RelatedApplication& related_app) const override;
   bool IsWebAppConsideredInstalled() const override;
@@ -96,8 +93,8 @@ class AppBannerManagerDesktop
 
   extensions::ExtensionRegistry* extension_registry_;
 
-  ScopedObserver<web_app::AppRegistrar, web_app::AppRegistrarObserver>
-      registrar_observer_{this};
+  base::ScopedObservation<web_app::AppRegistrar, web_app::AppRegistrarObserver>
+      registrar_observation_{this};
 
   base::WeakPtrFactory<AppBannerManagerDesktop> weak_factory_{this};
 

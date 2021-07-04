@@ -6,6 +6,7 @@ import("//build/config/chromeos/ui_mode.gni")
 
 source_set("components") {
   sources = [
+    "../system_web_apps/system_web_app_types.h",
     "app_icon_manager.cc",
     "app_icon_manager.h",
     "app_registrar.cc",
@@ -13,34 +14,26 @@ source_set("components") {
     "app_registrar_observer.h",
     "app_registry_controller.cc",
     "app_registry_controller.h",
-    "app_shortcut_manager.cc",
     "app_shortcut_manager.h",
-    "external_app_install_features.cc",
-    "external_app_install_features.h",
     "external_install_options.cc",
     "external_install_options.h",
-    "externally_installed_web_app_prefs.cc",
     "externally_installed_web_app_prefs.h",
-    "file_handler_manager.cc",
+    "externally_managed_app_manager.h",
     "file_handler_manager.h",
+    "file_handling_permission_context.cc",
+    "file_handling_permission_context.h",
+    "file_handling_permission_request_impl.cc",
+    "file_handling_permission_request_impl.h",
     "install_bounce_metric.cc",
     "install_bounce_metric.h",
-    "install_finalizer.cc",
     "install_finalizer.h",
-    "install_manager.cc",
     "install_manager.h",
-    "os_integration_manager.cc",
     "os_integration_manager.h",
-    "pending_app_manager.cc",
-    "pending_app_manager.h",
     "policy/web_app_policy_constants.cc",
     "policy/web_app_policy_constants.h",
-    "protocol_handler_manager.cc",
+    "preinstalled_app_install_features.cc",
+    "preinstalled_app_install_features.h",
     "protocol_handler_manager.h",
-    "system_web_app_background_task.cc",
-    "system_web_app_background_task.h",
-    "system_web_app_types.h",
-    "url_handler_manager.cc",
     "url_handler_manager.h",
     "web_app_audio_focus_id_map.cc",
     "web_app_audio_focus_id_map.h",
@@ -52,11 +45,11 @@ source_set("components") {
     "web_app_data_retriever.h",
     "web_app_file_handler_registration.cc",
     "web_app_file_handler_registration.h",
-    "web_app_helpers.cc",
     "web_app_helpers.h",
     "web_app_icon_generator.cc",
     "web_app_icon_generator.h",
     "web_app_id.h",
+    "web_app_id_constants.cc",
     "web_app_id_constants.h",
     "web_app_install_utils.cc",
     "web_app_install_utils.h",
@@ -87,7 +80,6 @@ source_set("components") {
     "web_app_uninstallation_via_os_settings_registration.h",
     "web_app_url_loader.cc",
     "web_app_url_loader.h",
-    "web_app_utils.cc",
     "web_app_utils.h",
     "web_application_info.cc",
     "web_application_info.h",
@@ -104,18 +96,24 @@ source_set("components") {
     "web_app_icon_downloader.h",
   ]
 
-  if (is_chromeos_ash) {
+  if (is_chromeos_ash || is_chromeos_lacros) {
     sources += [ "web_app_shortcut_chromeos.cc" ]
   }
 
-  if (is_linux || is_chromeos_lacros) {
+  if (is_linux) {
     # Desktop linux, doesn't count ChromeOS.
     sources += [
-      "web_app_file_handler_registration_linux.cc",
-      "web_app_run_on_os_login_linux.cc",
       "web_app_shortcut_linux.cc",
       "web_app_shortcut_linux.h",
     ]
+  }
+
+  if (is_linux) {
+    sources += [ "web_app_run_on_os_login_linux.cc" ]
+  }
+
+  if (is_chromeos_ash || is_chromeos_lacros) {
+    sources += [ "web_app_run_on_os_login_chromeos.cc" ]
   }
 
   if (is_mac) {
@@ -146,15 +144,18 @@ source_set("components") {
 
   if (is_win || is_mac || (is_linux && !is_chromeos_lacros)) {
     sources += [
-      "url_handler_manager_impl.cc",
+      "url_handler_launch_params.cc",
+      "url_handler_launch_params.h",
       "url_handler_manager_impl.h",
       "url_handler_prefs.cc",
       "url_handler_prefs.h",
     ]
   }
 
-  public_deps =
-      [ "//components/services/app_service/public/cpp:app_share_target" ]
+  public_deps = [
+    "//components/services/app_service/public/cpp:app_share_target",
+    "//components/services/app_service/public/cpp:app_url_handling",
+  ]
 
   deps = [
     "//base",
@@ -167,11 +168,10 @@ source_set("components") {
     "//chrome/common",
     "//components/crx_file",
     "//components/keyed_service/content",
+    "//components/permissions:permissions",
     "//components/pref_registry",
-    "//components/services/app_service/public/cpp:app_url_handling",
     "//components/services/app_service/public/cpp:protocol_handling",
     "//components/services/app_service/public/mojom",
-    "//components/site_engagement/content",
     "//components/site_engagement/core/mojom:mojo_bindings",
     "//components/user_manager:user_manager",
     "//components/webapps/browser",
@@ -194,10 +194,7 @@ source_set("components") {
   }
 
   if (is_win || is_mac || (is_linux && !is_chromeos_lacros)) {
-    deps += [
-      "//base/util/values:values_util",
-      "//components/services/app_service/public/cpp:app_url_handling",
-    ]
+    deps += [ "//base/util/values:values_util" ]
   }
 }
 
@@ -205,10 +202,11 @@ source_set("unit_tests") {
   testonly = true
 
   sources = [
+    "externally_managed_app_manager_unittest.cc",
     "file_handler_manager_unittest.cc",
     "install_finalizer_unittest.cc",
     "os_integration_manager_unittest.cc",
-    "pending_app_manager_unittest.cc",
+    "preinstalled_app_install_features_unittest.cc",
     "protocol_handler_manager_unittest.cc",
     "web_app_constants_unittest.cc",
     "web_app_data_retriever_unittest.cc",
@@ -228,6 +226,7 @@ source_set("unit_tests") {
       "web_app_handler_registration_utils_win_unittest.cc",
       "web_app_protocol_handler_registration_win_unittest.cc",
       "web_app_run_on_os_login_win_unittest.cc",
+      "web_app_shortcut_win_unittest.cc",
     ]
   }
 
@@ -239,13 +238,16 @@ source_set("unit_tests") {
     ]
   }
 
-  if (is_linux || is_chromeos_lacros) {
+  if (is_linux) {
     # Desktop linux, doesn't count ChromeOS.
     sources += [
       "web_app_file_handler_registration_linux_unittest.cc",
-      "web_app_run_on_os_login_linux_unittest.cc",
       "web_app_shortcut_linux_unittest.cc",
     ]
+  }
+
+  if (is_linux) {
+    sources += [ "web_app_run_on_os_login_linux_unittest.cc" ]
   }
 
   if (is_win || is_mac || (is_linux && !is_chromeos_lacros)) {
@@ -298,7 +300,7 @@ source_set("browser_tests") {
     "web_app_url_loader_browsertest.cc",
   ]
 
-  if (is_linux || is_chromeos_lacros) {
+  if (is_linux) {
     sources += [ "web_app_file_handler_registration_linux_browsertest.cc" ]
   }
 

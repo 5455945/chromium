@@ -13,25 +13,25 @@
 #include "base/bind.h"
 #include "base/files/file_path.h"
 #include "base/macros.h"
-#include "base/optional.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/timer/mock_timer.h"
 #include "chrome/browser/ash/login/demo_mode/demo_resources.h"
+#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/chromeos/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/component_updater/fake_cros_component_manager.h"
 #include "chrome/browser/prefs/browser_prefs.h"
 #include "chrome/browser/ui/apps/chrome_app_delegate.h"
 #include "chrome/browser/ui/ash/test_wallpaper_controller.h"
-#include "chrome/browser/ui/ash/wallpaper_controller_client.h"
+#include "chrome/browser/ui/ash/wallpaper_controller_client_impl.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/browser_process_platform_part_test_api_chromeos.h"
 #include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
+#include "chromeos/dbus/concierge/concierge_client.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "components/language/core/browser/pref_names.h"
 #include "components/session_manager/core/session_manager.h"
@@ -41,12 +41,12 @@
 #include "extensions/browser/app_window/app_window.h"
 #include "extensions/common/extension_builder.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
-using component_updater::FakeCrOSComponentManager;
-
-namespace chromeos {
-
+namespace ash {
 namespace {
+
+using ::component_updater::FakeCrOSComponentManager;
 
 constexpr char kOfflineResourcesComponent[] = "demo-mode-resources";
 constexpr char kTestDemoModeResourcesMountPoint[] =
@@ -55,8 +55,6 @@ constexpr char kTestDemoModeResourcesMountPoint[] =
 void SetBoolean(bool* value) {
   *value = true;
 }
-
-}  // namespace
 
 class DemoSessionTest : public testing::Test {
  public:
@@ -72,11 +70,12 @@ class DemoSessionTest : public testing::Test {
   void SetUp() override {
     ASSERT_TRUE(profile_manager_->SetUp());
     chromeos::DBusThreadManager::Initialize();
+    chromeos::ConciergeClient::InitializeFake(/*fake_cicerone_client=*/nullptr);
     DemoSession::SetDemoConfigForTesting(DemoSession::DemoModeConfig::kOnline);
     InitializeCrosComponentManager();
     session_manager_ = std::make_unique<session_manager::SessionManager>();
     wallpaper_controller_client_ =
-        std::make_unique<WallpaperControllerClient>();
+        std::make_unique<WallpaperControllerClientImpl>();
     wallpaper_controller_client_->InitForTesting(&test_wallpaper_controller_);
   }
 
@@ -85,6 +84,7 @@ class DemoSessionTest : public testing::Test {
     DemoSession::ResetDemoConfigForTesting();
 
     wallpaper_controller_client_.reset();
+    chromeos::ConciergeClient::Shutdown();
     chromeos::DBusThreadManager::Shutdown();
 
     cros_component_manager_ = nullptr;
@@ -131,11 +131,10 @@ class DemoSessionTest : public testing::Test {
         std::make_unique<sync_preferences::TestingPrefServiceSyncable>();
     RegisterUserProfilePrefs(prefs->registry());
     TestingProfile* profile = profile_manager_->CreateTestingProfile(
-        "test-profile", std::move(prefs), base::ASCIIToUTF16("Test profile"),
-        1 /* avatar_id */, std::string() /* supervised_user_id */,
+        "test-profile", std::move(prefs), u"Test profile", 1 /* avatar_id */,
+        std::string() /* supervised_user_id */,
         TestingProfile::TestingFactories());
-    chromeos::ProfileHelper::Get()->SetUserToProfileMappingForTesting(user,
-                                                                      profile);
+    ProfileHelper::Get()->SetUserToProfileMappingForTesting(user, profile);
 
     user_manager->LoginUser(account_id);
     return profile;
@@ -144,7 +143,7 @@ class DemoSessionTest : public testing::Test {
   FakeCrOSComponentManager* cros_component_manager_ = nullptr;
   content::BrowserTaskEnvironment task_environment_;
   std::unique_ptr<session_manager::SessionManager> session_manager_;
-  std::unique_ptr<WallpaperControllerClient> wallpaper_controller_client_;
+  std::unique_ptr<WallpaperControllerClientImpl> wallpaper_controller_client_;
   TestWallpaperController test_wallpaper_controller_;
   std::unique_ptr<TestingProfileManager> profile_manager_;
 
@@ -582,4 +581,5 @@ TEST_F(DemoSessionLocaleTest, DefaultAndCurrentLocaleIdentical) {
   EXPECT_FALSE(profile->requested_locale().has_value());
 }
 
-}  // namespace chromeos
+}  // namespace
+}  // namespace ash

@@ -19,6 +19,7 @@
 #include "base/logging.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_observer.h"
+#include "ui/compositor/layer.h"
 #include "ui/wm/core/window_util.h"
 
 namespace ash {
@@ -60,6 +61,7 @@ bool IsWindowDimmerWindowVisible(WindowDimmer* window_dimmer) {
 }  // namespace
 
 // Adapter to fire OnPinnedContainerWindowStackingChanged().
+// TODO(oshima): Consider using aura::clinet::WindowStakingClient instead.
 class ScreenPinningController::PinnedContainerChildWindowObserver
     : public aura::WindowObserver {
  public:
@@ -207,25 +209,7 @@ void ScreenPinningController::SetPinnedWindow(aura::Window* pinned_window) {
       return;
     }
 
-    aura::Window* container = pinned_window->parent();
-    aura::Window::Windows system_modal_containers =
-        GetSystemModalWindowsExceptPinned(pinned_window_);
-
-    // Unset observers.
-    for (aura::Window* system_modal :
-         GetSystemModalWindowsExceptPinned(pinned_window_)) {
-      RemoveObserverFromChildren(
-          system_modal, system_modal_container_child_window_observer_.get());
-      system_modal->RemoveObserver(
-          system_modal_container_window_observer_.get());
-    }
-    RemoveObserverFromChildren(container,
-                               pinned_container_child_window_observer_.get());
-    container->RemoveObserver(pinned_container_window_observer_.get());
-
-    window_dimmers_->clear();
-    pinned_window_->RemoveObserver(this);
-    pinned_window_ = nullptr;
+    ResetWindowPinningState();
   }
 
   Shell::Get()->NotifyPinnedStateChanged(pinned_window);
@@ -276,6 +260,27 @@ aura::Window* ScreenPinningController::CreateWindowDimmer(
   return window;
 }
 
+void ScreenPinningController::ResetWindowPinningState() {
+  aura::Window* container = pinned_window_->parent();
+  aura::Window::Windows system_modal_containers =
+      GetSystemModalWindowsExceptPinned(pinned_window_);
+
+  // Unset observers.
+  for (aura::Window* system_modal :
+       GetSystemModalWindowsExceptPinned(pinned_window_)) {
+    RemoveObserverFromChildren(
+        system_modal, system_modal_container_child_window_observer_.get());
+    system_modal->RemoveObserver(system_modal_container_window_observer_.get());
+  }
+  RemoveObserverFromChildren(container,
+                             pinned_container_child_window_observer_.get());
+  container->RemoveObserver(pinned_container_window_observer_.get());
+
+  window_dimmers_->clear();
+  pinned_window_->RemoveObserver(this);
+  pinned_window_ = nullptr;
+}
+
 void ScreenPinningController::OnDisplayConfigurationChanged() {
   // Note: this is called on display attached or detached.
   if (!IsPinned())
@@ -318,8 +323,14 @@ void ScreenPinningController::OnDisplayConfigurationChanged() {
 void ScreenPinningController::OnWindowDestroying(aura::Window* window) {
   DCHECK_EQ(pinned_window_, window);
   WindowState::Get(window)->Restore();
-  window->RemoveObserver(this);
-  pinned_window_ = nullptr;
+
+  // |pinned_window_| isn't cleared, which means the call to restore window
+  // didn't unpin itself. This is possible because the window is being
+  // destroyed and some requests are ignored, but we still want to restore
+  // the internal state of |ScreenPinningController| so that other windows
+  // can be pinned again.
+  if (pinned_window_)
+    ResetWindowPinningState();
 }
 
 void ScreenPinningController::KeepPinnedWindowOnTop() {

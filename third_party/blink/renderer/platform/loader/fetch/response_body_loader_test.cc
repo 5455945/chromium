@@ -27,6 +27,13 @@ class TestBackForwardCacheLoaderHelper : public BackForwardCacheLoaderHelper {
  public:
   TestBackForwardCacheLoaderHelper() = default;
 
+  void EvictFromBackForwardCache(
+      mojom::RendererEvictionReason reason) override {}
+
+  void DidBufferLoadWhileInBackForwardCache(size_t num_bytes) override {}
+
+  void Detach() override {}
+
   bool CanContinueBufferingWhileInBackForwardCache() const override {
     return true;
   }
@@ -66,7 +73,7 @@ class ResponseBodyLoaderTest : public testing::Test {
           loader_->Abort();
           break;
         case Option::kSuspendOnDidReceiveData:
-          loader_->Suspend(WebURLLoader::DeferType::kDeferred);
+          loader_->Suspend(LoaderFreezeMode::kStrict);
           break;
       }
     }
@@ -480,7 +487,7 @@ TEST_P(ResponseBodyLoaderLoadingTasksUnfreezableTest,
   EXPECT_FALSE(client->LoadingIsFailed());
 
   // Suspend (not for back-forward cache), then add some data to |consumer|.
-  body_loader->Suspend(WebURLLoader::DeferType::kDeferred);
+  body_loader->Suspend(LoaderFreezeMode::kStrict);
   consumer->Add(Command(Command::kData, "llo"));
   EXPECT_FALSE(consumer->IsCommandsEmpty());
   // Simulate the "readable again" signal.
@@ -495,7 +502,7 @@ TEST_P(ResponseBodyLoaderLoadingTasksUnfreezableTest,
   EXPECT_FALSE(client->LoadingIsFailed());
 
   // Suspend for back-forward cache, then add some more data to |consumer|.
-  body_loader->Suspend(WebURLLoader::DeferType::kDeferredWithBackForwardCache);
+  body_loader->Suspend(LoaderFreezeMode::kBufferIncoming);
   consumer->Add(Command(Command::kData, "w"));
   consumer->Add(Command(Command::kWait));
   consumer->Add(Command(Command::kData, "o"));
@@ -539,7 +546,7 @@ TEST_P(ResponseBodyLoaderLoadingTasksUnfreezableTest,
 
   // Suspend (not for back-forward cache), then add some data to |consumer| with
   // the finish signal at the end.
-  body_loader->Suspend(WebURLLoader::DeferType::kDeferred);
+  body_loader->Suspend(LoaderFreezeMode::kStrict);
   consumer->Add(Command(Command::kData, "llo"));
   consumer->Add(Command(Command::kDone));
   // Simulate the "readable again" signal.
@@ -555,7 +562,7 @@ TEST_P(ResponseBodyLoaderLoadingTasksUnfreezableTest,
   EXPECT_FALSE(client->LoadingIsFailed());
 
   // Suspend for back-forward cache.
-  body_loader->Suspend(WebURLLoader::DeferType::kDeferredWithBackForwardCache);
+  body_loader->Suspend(LoaderFreezeMode::kBufferIncoming);
   // ResponseBodyLoader will buffer data when deferred for back-forward cache,
   // but won't notify the client until it's resumed.
   EXPECT_FALSE(consumer->IsCommandsEmpty());
@@ -592,7 +599,7 @@ TEST_P(ResponseBodyLoaderLoadingTasksUnfreezableTest,
   EXPECT_FALSE(client->LoadingIsFailed());
 
   // Suspend for back-forward cache, then add some more data to |consumer|.
-  body_loader->Suspend(WebURLLoader::DeferType::kDeferredWithBackForwardCache);
+  body_loader->Suspend(LoaderFreezeMode::kBufferIncoming);
   consumer->Add(Command(Command::kData, "llo"));
   EXPECT_FALSE(consumer->IsCommandsEmpty());
   // Simulate the "readable again" signal.
@@ -609,7 +616,7 @@ TEST_P(ResponseBodyLoaderLoadingTasksUnfreezableTest,
   EXPECT_FALSE(client->LoadingIsFailed());
 
   // Suspend (not for back-forward cache), then add some data to |consumer|.
-  body_loader->Suspend(WebURLLoader::DeferType::kDeferred);
+  body_loader->Suspend(LoaderFreezeMode::kStrict);
   consumer->Add(Command(Command::kData, "w"));
   consumer->Add(Command(Command::kWait));
   consumer->Add(Command(Command::kData, "o"));
@@ -652,7 +659,7 @@ TEST_P(ResponseBodyLoaderLoadingTasksUnfreezableTest,
   EXPECT_FALSE(client->LoadingIsFailed());
 
   // Suspend, then add a long response body to |consumer|.
-  body_loader->Suspend(WebURLLoader::DeferType::kDeferredWithBackForwardCache);
+  body_loader->Suspend(LoaderFreezeMode::kBufferIncoming);
   std::string body(70000, '*');
   consumer->Add(Command(Command::kDataAndDone, body.c_str()));
 

@@ -10,11 +10,11 @@
 #include "ash/public/cpp/app_list/internal_app_id_constants.h"
 #include "base/bind.h"
 #include "base/callback_helpers.h"
+#include "base/cxx17_backports.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/path_service.h"
-#include "base/stl_util.h"
 #include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
@@ -48,6 +48,10 @@ const char* const kDefaultAppOrder[] = {
     arc::kGmailAppId,
     extension_misc::kGmailAppId,
     web_app::kGmailAppId,
+
+    web_app::kGoogleMeetAppId,
+
+    web_app::kGoogleChatAppId,
 
     extension_misc::kGoogleDocAppId,
     web_app::kGoogleDocsAppId,
@@ -110,6 +114,7 @@ const char* const kDefaultAppOrder[] = {
 
     web_app::kHelpAppId,
     extension_misc::kCalculatorAppId,
+    web_app::kA4AppId,
     web_app::kCanvasAppId,
     extension_misc::kTextEditorAppId,
     web_app::kYoutubeTVAppId,
@@ -119,7 +124,6 @@ const char* const kDefaultAppOrder[] = {
     arc::kInfinitePainterAppId,
     web_app::kShowtimeAppId,
     extension_misc::kGooglePlusAppId,
-    extension_misc::kChromeRemoteDesktopAppId,
 };
 
 // Reads external ordinal json file and returned the parsed value. Returns NULL

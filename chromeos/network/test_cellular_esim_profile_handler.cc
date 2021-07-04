@@ -4,42 +4,25 @@
 
 #include "chromeos/network/test_cellular_esim_profile_handler.h"
 
-#include "chromeos/dbus/hermes/hermes_euicc_client.h"
-#include "chromeos/dbus/hermes/hermes_manager_client.h"
-#include "chromeos/dbus/hermes/hermes_profile_client.h"
-#include "chromeos/network/cellular_esim_profile_handler.h"
+#include "base/containers/contains.h"
 #include "chromeos/network/cellular_utils.h"
+#include "chromeos/network/network_state_handler.h"
 
 namespace chromeos {
 
 TestCellularESimProfileHandler::TestCellularESimProfileHandler() = default;
 
-TestCellularESimProfileHandler::~TestCellularESimProfileHandler() {
-  HermesManagerClient::Get()->RemoveObserver(this);
-  HermesEuiccClient::Get()->RemoveObserver(this);
-  HermesProfileClient::Get()->RemoveObserver(this);
-}
+TestCellularESimProfileHandler::~TestCellularESimProfileHandler() = default;
 
-void TestCellularESimProfileHandler::Init() {
-  HermesManagerClient::Get()->AddObserver(this);
-  HermesEuiccClient::Get()->AddObserver(this);
-  HermesProfileClient::Get()->AddObserver(this);
-}
+void TestCellularESimProfileHandler::SetHasRefreshedProfilesForEuicc(
+    const std::string& eid,
+    bool has_refreshed) {
+  if (has_refreshed) {
+    refreshed_eids_.insert(eid);
+    return;
+  }
 
-void TestCellularESimProfileHandler::OnAvailableEuiccListChanged() {
-  UpdateESimProfiles();
-}
-
-void TestCellularESimProfileHandler::OnEuiccPropertyChanged(
-    const dbus::ObjectPath& euicc_path,
-    const std::string& property_name) {
-  UpdateESimProfiles();
-}
-
-void TestCellularESimProfileHandler::OnCarrierProfilePropertyChanged(
-    const dbus::ObjectPath& carrier_profile_path,
-    const std::string& property_name) {
-  UpdateESimProfiles();
+  refreshed_eids_.erase(eid);
 }
 
 std::vector<CellularESimProfile>
@@ -47,18 +30,23 @@ TestCellularESimProfileHandler::GetESimProfiles() {
   return esim_profile_states_;
 }
 
+bool TestCellularESimProfileHandler::HasRefreshedProfilesForEuicc(
+    const std::string& eid) {
+  return base::Contains(refreshed_eids_, eid);
+}
+
 void TestCellularESimProfileHandler::SetDevicePrefs(PrefService* device_prefs) {
 }
 
-void TestCellularESimProfileHandler::UpdateESimProfiles() {
-  std::vector<CellularESimProfile> new_profile_states_ =
+void TestCellularESimProfileHandler::OnHermesPropertiesUpdated() {
+  std::vector<CellularESimProfile> new_profile_states =
       GenerateProfilesFromHermes();
-  if (new_profile_states_ == esim_profile_states_) {
+  if (new_profile_states == esim_profile_states_)
     return;
-  }
-  this->esim_profile_states_ = new_profile_states_;
+  esim_profile_states_ = new_profile_states;
+
+  network_state_handler()->SyncStubCellularNetworks();
   NotifyESimProfileListUpdated();
-  return;
 }
 
 }  // namespace chromeos

@@ -38,6 +38,14 @@ struct RuleSet {
   std::vector<std::string> greylist;
 };
 
+// Values for the BrowserSwitcherParsingMode policy. Make sure they match the
+// values in policy_templates.json.
+enum class ParsingMode {
+  kDefault = 0,
+  kStrict = 1,
+  kMaxValue = kStrict,  // Always keep up-to-date.
+};
+
 // Contains the current state of the prefs related to LBS. For sensitive prefs,
 // only respects managed prefs. Also does some type conversions and
 // transformations on the prefs (e.g. expanding preset values for
@@ -75,6 +83,8 @@ class BrowserSwitcherPrefs : public KeyedService,
 
   // Returns the delay before switching, in milliseconds.
   int GetDelay() const;
+
+  ParsingMode GetParsingMode() const;
 
   // Returns the sitelist + greylist configured directly through Chrome
   // policies. If the pref is not managed, returns an empty vector.
@@ -138,6 +148,7 @@ class BrowserSwitcherPrefs : public KeyedService,
   // Hooks for PrefChangeRegistrar.
   void AlternativeBrowserPathChanged();
   void AlternativeBrowserParametersChanged();
+  void ParsingModeChanged();
   void UrlListChanged();
   void GreylistChanged();
 #if defined(OS_WIN)
@@ -163,6 +174,7 @@ class BrowserSwitcherPrefs : public KeyedService,
   // PrefChangeRegistrar hooks.
   std::string alt_browser_path_;
   std::vector<std::string> alt_browser_params_;
+  ParsingMode parsing_mode_ = ParsingMode::kDefault;
 #if defined(OS_WIN)
   base::FilePath chrome_path_;
   std::vector<std::string> chrome_params_;
@@ -173,7 +185,7 @@ class BrowserSwitcherPrefs : public KeyedService,
   // List of prefs (pref names) that changed since the last policy refresh.
   std::vector<std::string> dirty_prefs_;
 
-  base::CallbackList<PrefsChangedSignature> callback_list_;
+  base::RepeatingCallbackList<PrefsChangedSignature> callback_list_;
 
   base::WeakPtrFactory<BrowserSwitcherPrefs> weak_ptr_factory_{this};
 
@@ -187,6 +199,7 @@ extern const char kDelay[];
 extern const char kAlternativeBrowserPath[];
 extern const char kAlternativeBrowserParameters[];
 extern const char kKeepLastTab[];
+extern const char kParsingMode[];
 extern const char kUrlList[];
 extern const char kUrlGreylist[];
 extern const char kExternalSitelistUrl[];

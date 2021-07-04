@@ -32,6 +32,8 @@ class WallpaperView : public WallpaperBaseView,
   void set_blur_sigma(float blur_sigma) { blur_sigma_ = blur_sigma; }
   float blur_sigma() const { return blur_sigma_; }
 
+  views::View* shield_view_for_testing() { return shield_view_; }
+
  private:
   // views::View:
   const char* GetClassName() const override;
@@ -59,7 +61,7 @@ class WallpaperView : public WallpaperBaseView,
 
   // A cached downsampled image of the wallpaper image. It will help wallpaper
   // blur/brightness animations be more performant.
-  base::Optional<gfx::ImageSkia> small_image_;
+  absl::optional<gfx::ImageSkia> small_image_;
 
   DISALLOW_COPY_AND_ASSIGN(WallpaperView);
 };

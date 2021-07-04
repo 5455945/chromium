@@ -13,7 +13,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/settings/chromeos/ambient_mode_handler.h"
 #include "chrome/browser/ui/webui/settings/chromeos/change_picture_handler.h"
-#include "chrome/browser/ui/webui/settings/chromeos/constants/routes.mojom-forward.h"
 #include "chrome/browser/ui/webui/settings/chromeos/os_settings_features_util.h"
 #include "chrome/browser/ui/webui/settings/chromeos/search/search_tag_registry.h"
 #include "chrome/browser/ui/webui/settings/chromeos/wallpaper_handler.h"
@@ -42,6 +41,14 @@ const std::vector<SearchConcept>& GetPersonalizationSearchConcepts() {
        {.section = mojom::Section::kPersonalization},
        {IDS_OS_SETTINGS_TAG_PERSONALIZATION_ALT1,
         IDS_OS_SETTINGS_TAG_PERSONALIZATION_ALT2, SearchConcept::kAltTagEnd}},
+      {IDS_OS_SETTINGS_TAG_CHANGE_WALLPAPER,
+       mojom::kPersonalizationSectionPath,
+       mojom::SearchResultIcon::kWallpaper,
+       mojom::SearchResultDefaultRank::kMedium,
+       mojom::SearchResultType::kSetting,
+       {.setting = mojom::Setting::kOpenWallpaper},
+       {IDS_OS_SETTINGS_TAG_CHANGE_WALLPAPER_ALT1,
+        IDS_OS_SETTINGS_TAG_CHANGE_WALLPAPER_ALT2, SearchConcept::kAltTagEnd}},
       {IDS_OS_SETTINGS_TAG_CHANGE_DEVICE_ACCOUNT_IMAGE,
        mojom::kChangePictureSubpagePath,
        mojom::SearchResultIcon::kAvatar,
@@ -54,34 +61,6 @@ const std::vector<SearchConcept>& GetPersonalizationSearchConcepts() {
         IDS_OS_SETTINGS_TAG_CHANGE_DEVICE_ACCOUNT_IMAGE_ALT4,
         SearchConcept::kAltTagEnd}},
   });
-  return *tags;
-}
-
-const std::vector<SearchConcept>& GetWallpaperChromeAppSearchConcepts() {
-  static const base::NoDestructor<std::vector<SearchConcept>> tags(
-      {{IDS_OS_SETTINGS_TAG_CHANGE_WALLPAPER,
-        mojom::kPersonalizationSectionPath,
-        mojom::SearchResultIcon::kWallpaper,
-        mojom::SearchResultDefaultRank::kMedium,
-        mojom::SearchResultType::kSetting,
-        {.setting = mojom::Setting::kOpenWallpaper},
-        {IDS_OS_SETTINGS_TAG_CHANGE_WALLPAPER_ALT1,
-         IDS_OS_SETTINGS_TAG_CHANGE_WALLPAPER_ALT2,
-         SearchConcept::kAltTagEnd}}});
-  return *tags;
-}
-
-const std::vector<SearchConcept>& GetWallpaperWebUISearchConcepts() {
-  static const base::NoDestructor<std::vector<SearchConcept>> tags(
-      {{IDS_OS_SETTINGS_TAG_CHANGE_WALLPAPER,
-        mojom::kWallpaperSubpagePath,
-        mojom::SearchResultIcon::kWallpaper,
-        mojom::SearchResultDefaultRank::kMedium,
-        mojom::SearchResultType::kSubpage,
-        {.subpage = mojom::Subpage::kWallpaper},
-        {IDS_OS_SETTINGS_TAG_CHANGE_WALLPAPER_ALT1,
-         IDS_OS_SETTINGS_TAG_CHANGE_WALLPAPER_ALT2,
-         SearchConcept::kAltTagEnd}}});
   return *tags;
 }
 
@@ -154,6 +133,10 @@ bool IsAmbientModePhotoPreviewAllowed() {
   return chromeos::features::IsAmbientModePhotoPreviewEnabled();
 }
 
+bool IsDarkModeAllowed() {
+  return ash::features::IsDarkLightModeEnabled();
+}
+
 GURL GetGooglePhotosURL() {
   return GURL(chrome::kGooglePhotosURL);
 }
@@ -172,11 +155,6 @@ PersonalizationSection::PersonalizationSection(
 
   SearchTagRegistry::ScopedTagUpdater updater = registry()->StartUpdate();
   updater.AddSearchTags(GetPersonalizationSearchConcepts());
-
-  if (chromeos::features::IsWallpaperWebUIEnabled())
-    updater.AddSearchTags(GetWallpaperWebUISearchConcepts());
-  else
-    updater.AddSearchTags(GetWallpaperChromeAppSearchConcepts());
 
   if (IsAmbientModeAllowed()) {
     updater.AddSearchTags(GetAmbientModeSearchConcepts());
@@ -235,6 +213,15 @@ void PersonalizationSection::AddLoadTimeData(
       {"ambientModeArtAlbumDialogCloseButtonLabel",
        IDS_OS_SETTINGS_AMBIENT_MODE_ART_ALBUM_DIALOG_CLOSE_BUTTON_LABEL},
       {"changePictureTitle", IDS_OS_SETTINGS_CHANGE_PICTURE_TITLE},
+      {"darkModeTitle", IDS_OS_SETTINGS_DARK_MODE_TITLE},
+      {"darkModeOn", IDS_OS_SETTINGS_DARK_MODE_ON},
+      {"darkModeOff", IDS_OS_SETTINGS_DARK_MODE_OFF},
+      {"darkModeThemedRadioGroupTitle",
+       IDS_OS_SETTINGS_DARK_MODE_THEMED_RADIO_GROUP_TITLE},
+      {"darkModeThemedRadioGroupDescription",
+       IDS_OS_SETTINGS_DARK_MODE_THEMED_RADIO_GROUP_DESCRIPTION},
+      {"darkModeThemedOn", IDS_OS_SETTINGS_DARK_MODE_THEMED_ON},
+      {"darkModeThemedOff", IDS_OS_SETTINGS_DARK_MODE_THEMED_OFF},
       {"openWallpaperApp", IDS_OS_SETTINGS_OPEN_WALLPAPER_APP},
       {"personalizationPageTitle", IDS_OS_SETTINGS_PERSONALIZATION},
       {"setWallpaper", IDS_OS_SETTINGS_SET_WALLPAPER},
@@ -256,8 +243,6 @@ void PersonalizationSection::AddLoadTimeData(
        IDS_SETTINGS_PHOTO_DISCARD_ACCESSIBLE_TEXT},
       {"photoModeAccessibleText", IDS_SETTINGS_PHOTO_MODE_ACCESSIBLE_TEXT},
       {"videoModeAccessibleText", IDS_SETTINGS_VIDEO_MODE_ACCESSIBLE_TEXT},
-      // TODO(b/178399962) finalize error string for WallpaperWebUI.
-      {"wallpaperCollectionsError", IDS_WALLPAPER_MANAGER_NETWORK_ERROR},
   };
   html_source->AddLocalizedStrings(kLocalizedStrings);
 
@@ -277,9 +262,7 @@ void PersonalizationSection::AddLoadTimeData(
       l10n_util::GetStringFUTF16(
           IDS_OS_SETTINGS_AMBIENT_MODE_ALBUMS_SUBPAGE_GOOGLE_PHOTOS_NO_ALBUM,
           base::UTF8ToUTF16(GetGooglePhotosURL().spec())));
-
-  html_source->AddBoolean("isWallpaperWebUIEnabled",
-                          chromeos::features::IsWallpaperWebUIEnabled());
+  html_source->AddBoolean("isDarkModeAllowed", IsDarkModeAllowed());
 }
 
 void PersonalizationSection::AddHandlers(content::WebUI* web_ui) {
@@ -330,12 +313,6 @@ void PersonalizationSection::RegisterHierarchy(
   generator->RegisterNestedSetting(mojom::Setting::kChangeDeviceAccountImage,
                                    mojom::Subpage::kChangePicture);
 
-  // Wallpaper.
-  generator->RegisterTopLevelSubpage(
-      IDS_OS_SETTINGS_SET_WALLPAPER, mojom::Subpage::kWallpaper,
-      mojom::SearchResultIcon::kWallpaper,
-      mojom::SearchResultDefaultRank::kMedium, mojom::kWallpaperSubpagePath);
-
   // Ambient mode.
   generator->RegisterTopLevelSubpage(
       IDS_OS_SETTINGS_AMBIENT_MODE_TITLE, mojom::Subpage::kAmbientMode,
@@ -359,6 +336,17 @@ void PersonalizationSection::RegisterHierarchy(
       mojom::SearchResultIcon::kWallpaper,
       mojom::SearchResultDefaultRank::kMedium,
       mojom::kAmbientModeArtGalleryAlbumSubpagePath);
+
+  // Dark mode.
+  generator->RegisterTopLevelSubpage(
+      IDS_OS_SETTINGS_AMBIENT_MODE_TITLE, mojom::Subpage::kDarkMode,
+      mojom::SearchResultIcon::kWallpaper,
+      mojom::SearchResultDefaultRank::kMedium, mojom::kDarkModeSubpagePath);
+  static constexpr mojom::Setting kDarkModeSettings[] = {
+      mojom::Setting::kDarkModeOnOff,
+  };
+  RegisterNestedSettingBulk(mojom::Subpage::kDarkMode, kDarkModeSettings,
+                            generator);
 }
 
 void PersonalizationSection::OnAmbientModeEnabledStateChanged() {

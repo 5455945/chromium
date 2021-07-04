@@ -6,9 +6,11 @@
 
 #include "base/mac/foundation_util.h"
 #import "ios/chrome/browser/ui/authentication/cells/signin_promo_view_constants.h"
+#import "ios/chrome/browser/ui/authentication/signin/signin_constants.h"
 #import "ios/chrome/browser/ui/authentication/signin_earl_grey.h"
 #import "ios/chrome/browser/ui/authentication/signin_earl_grey_app_interface.h"
 #import "ios/chrome/browser/ui/authentication/unified_consent/unified_consent_constants.h"
+#import "ios/chrome/browser/ui/authentication/views/views_constants.h"
 #import "ios/chrome/browser/ui/recent_tabs/recent_tabs_constants.h"
 #import "ios/chrome/browser/ui/settings/google_services/accounts_table_view_controller_constants.h"
 #include "ios/chrome/grit/ios_strings.h"
@@ -18,7 +20,7 @@
 #import "ios/chrome/test/earl_grey/chrome_matchers_app_interface.h"
 #import "ios/chrome/test/scoped_eg_synchronization_disabler.h"
 #import "ios/public/provider/chrome/browser/signin/fake_chrome_identity.h"
-#import "ios/public/provider/chrome/browser/signin/fake_chrome_identity_service.h"
+#import "ios/public/provider/chrome/browser/signin/fake_chrome_identity_service_constants.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 
@@ -65,22 +67,25 @@ void CloseSigninManagedAccountDialogIfAny(FakeChromeIdentity* fakeIdentity) {
   [ChromeEarlGreyUI
       tapSettingsMenuButton:chrome_test_util::PrimarySignInButton()];
   [[EarlGrey selectElementWithMatcher:grey_accessibilityID(
-                                          kIdentityPickerViewIdentifier)]
+                                          kIdentityButtonControlIdentifier)]
       performAction:grey_tap()];
   [self selectIdentityWithEmail:fakeIdentity.userEmail];
+  [self tapSigninConfirmationDialog];
+  CloseSigninManagedAccountDialogIfAny(fakeIdentity);
+
+  [[EarlGrey selectElementWithMatcher:SettingsDoneButton()]
+      performAction:grey_tap()];
+
+  // Sync utilities require sync to be initialized in order to perform
+  // operations on the Sync server.
+  [ChromeEarlGrey waitForSyncInitialized:YES syncTimeout:10.0];
+
   if (!enableSync) {
-    // Use "settings" link and open an external URL to not turn on sync.
-    [SigninEarlGreyUI tapSettingsLink];
-    CloseSigninManagedAccountDialogIfAny(fakeIdentity);
-    [ChromeEarlGreyUI waitForAppToIdle];
-    [ChromeEarlGrey simulateExternalAppURLOpening];
-  } else {
-    [self tapSigninConfirmationDialog];
-    CloseSigninManagedAccountDialogIfAny(fakeIdentity);
-    [[EarlGrey selectElementWithMatcher:SettingsDoneButton()]
-        performAction:grey_tap()];
+    [ChromeEarlGrey stopSync];
+    [ChromeEarlGrey revokeSyncConsent];
+    // Ensure that Sync preferences do not take into account the first setup.
+    [ChromeEarlGrey clearSyncFirstSetupComplete];
   }
-  [SigninEarlGrey verifySignedInWithFakeIdentity:fakeIdentity];
 }
 
 + (void)signOut {
@@ -126,9 +131,10 @@ void CloseSigninManagedAccountDialogIfAny(FakeChromeIdentity* fakeIdentity) {
 
 + (void)tapSettingsLink {
   [[EarlGrey
-      selectElementWithMatcher:grey_accessibilityID(
-                                   kAdvancedSigninSettingsLinkIdentifier)]
-      performAction:grey_tap()];
+      selectElementWithMatcher:grey_allOf(grey_accessibilityLabel(@"settings"),
+                                          grey_accessibilityTrait(
+                                              UIAccessibilityTraitLink),
+                                          nil)] performAction:grey_tap()];
 }
 
 + (void)tapSigninConfirmationDialog {
@@ -151,12 +157,6 @@ void CloseSigninManagedAccountDialogIfAny(FakeChromeIdentity* fakeIdentity) {
       assertWithMatcher:chrome_test_util::ContentViewSmallerThanScrollView()
                   error:&error];
   if (error) {
-    // If the consent is bigger than the scroll view, the primary button should
-    // be "MORE".
-    [[EarlGrey selectElementWithMatcher:
-                   chrome_test_util::ButtonWithAccessibilityLabelId(
-                       IDS_IOS_ACCOUNT_CONSISTENCY_CONFIRMATION_SCROLL_BUTTON)]
-        assertWithMatcher:grey_notNil()];
     [[EarlGrey selectElementWithMatcher:confirmationScrollViewMatcher]
         performAction:grey_scrollToContentEdge(kGREYContentEdgeBottom)];
   }
@@ -197,18 +197,11 @@ void CloseSigninManagedAccountDialogIfAny(FakeChromeIdentity* fakeIdentity) {
                              closeButton:(BOOL)closeButton {
   [ChromeEarlGreyUI waitForAppToIdle];
 
-  // The sign-in promo is not visible when showing illustrated empty states.
-  if (![ChromeEarlGrey isIllustratedEmptyStatesEnabled]) {
-    [[EarlGrey
-        selectElementWithMatcher:grey_allOf(
-                                     grey_accessibilityID(kSigninPromoViewId),
-                                     grey_sufficientlyVisible(), nil)]
-        assertWithMatcher:grey_notNil()];
-  }
   [[EarlGrey
       selectElementWithMatcher:grey_allOf(PrimarySignInButton(),
                                           grey_sufficientlyVisible(), nil)]
       assertWithMatcher:grey_notNil()];
+
   switch (mode) {
     case SigninPromoViewModeNoAccounts:
     case SigninPromoViewModeSyncWithPrimaryAccount:
@@ -218,15 +211,11 @@ void CloseSigninManagedAccountDialogIfAny(FakeChromeIdentity* fakeIdentity) {
           assertWithMatcher:grey_nil()];
       break;
     case SigninPromoViewModeSigninWithAccount:
-      if (![ChromeEarlGrey isIllustratedEmptyStatesEnabled]) {
-        [[EarlGrey
-            selectElementWithMatcher:grey_allOf(SecondarySignInButton(),
-                                                grey_sufficientlyVisible(),
-                                                nil)]
-            assertWithMatcher:grey_notNil()];
-      }
+      // TODO(crbug.com/1210846): Determine when the SecondarySignInButton
+      // should be present and assert that.
       break;
   }
+
   if (closeButton) {
     [[EarlGrey
         selectElementWithMatcher:grey_allOf(grey_accessibilityID(
@@ -308,6 +297,14 @@ void CloseSigninManagedAccountDialogIfAny(FakeChromeIdentity* fakeIdentity) {
                          kRecentTabsTableViewControllerAccessibilityIdentifier),
                      grey_sufficientlyVisible(), nil)]
       performAction:grey_tap()];
+}
+
++ (void)verifyWebSigninIsVisible:(BOOL)isVisible {
+  id<GREYMatcher> visibilityMatcher =
+      isVisible ? grey_sufficientlyVisible() : grey_notVisible();
+  [[EarlGrey selectElementWithMatcher:grey_accessibilityID(
+                                          kWebSigninAccessibilityIdentifier)]
+      assertWithMatcher:visibilityMatcher];
 }
 
 #pragma mark - Private

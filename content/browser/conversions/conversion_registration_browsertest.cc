@@ -6,11 +6,9 @@
 #include <memory>
 
 #include "base/bind.h"
-#include "base/test/scoped_feature_list.h"
 #include "content/browser/conversions/conversion_host.h"
 #include "content/browser/conversions/conversion_manager_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
-#include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -29,11 +27,12 @@ namespace content {
 namespace {
 
 // Well known path for registering conversions.
-const std::string kWellKnownUrl = ".well-known/register-conversion";
+const std::string kWellKnownUrl =
+    ".well-known/attribution-reporting/trigger-attribution";
 
 }  // namespace
 
-// A mock conversion host which waits for a conversion registration
+// A mock conversion host which waits until a conversion registration
 // mojo message is received. Tracks the last seen conversion data.
 class TestConversionHost : public ConversionHost {
  public:
@@ -48,7 +47,7 @@ class TestConversionHost : public ConversionHost {
       : ConversionHost(contents) {}
 
   void RegisterConversion(blink::mojom::ConversionPtr conversion) override {
-    last_conversion_data_ = conversion->conversion_data;
+    last_conversion_ = std::move(conversion);
     num_conversions_++;
 
     // Don't quit the run loop if we have not seen the expected number of
@@ -62,16 +61,20 @@ class TestConversionHost : public ConversionHost {
   // observed.
   uint64_t WaitForNumConversions(size_t expected_num_conversions) {
     if (expected_num_conversions == num_conversions_)
-      return last_conversion_data_;
+      return last_conversion_->conversion_data;
     expected_num_conversions_ = expected_num_conversions;
     conversion_waiter_.Run();
-    return last_conversion_data_;
+    return last_conversion_->conversion_data;
   }
 
   size_t num_conversions() { return num_conversions_; }
 
+  const blink::mojom::ConversionPtr& last_conversion() const {
+    return last_conversion_;
+  }
+
  private:
-  uint64_t last_conversion_data_ = 0;
+  blink::mojom::ConversionPtr last_conversion_ = nullptr;
   size_t num_conversions_ = 0;
   size_t expected_num_conversions_ = 0;
   base::RunLoop conversion_waiter_;
@@ -81,7 +84,6 @@ class ConversionDisabledBrowserTest : public ContentBrowserTest {
  public:
   ConversionDisabledBrowserTest() {
     ConversionManagerImpl::RunInMemoryForTesting();
-    feature_list_.InitAndEnableFeature(features::kConversionMeasurement);
   }
 
   void SetUpOnMainThread() override {
@@ -105,9 +107,6 @@ class ConversionDisabledBrowserTest : public ContentBrowserTest {
 
   net::EmbeddedTestServer* https_server() { return https_server_.get(); }
 
- protected:
-  base::test::ScopedFeatureList feature_list_;
-
  private:
   std::unique_ptr<net::EmbeddedTestServer> https_server_;
 };
@@ -121,7 +120,7 @@ IN_PROC_BROWSER_TEST_F(
   std::unique_ptr<TestConversionHost> host =
       TestConversionHost::ReplaceAndGetConversionHost(web_contents());
 
-  EXPECT_TRUE(ExecJs(web_contents(), "registerConversion(123)"));
+  EXPECT_TRUE(ExecJs(web_contents(), "registerConversion({data: 123})"));
 
   EXPECT_TRUE(NavigateToURL(shell(), GURL("about:blank")));
   EXPECT_EQ(0u, host->num_conversions());
@@ -146,7 +145,7 @@ IN_PROC_BROWSER_TEST_F(ConversionRegistrationBrowserTest,
       shell(),
       embedded_test_server()->GetURL("/page_with_conversion_redirect.html")));
   EXPECT_TRUE(ExecJs(web_contents(), "createTrackingPixel(\"" + kWellKnownUrl +
-                                         "?conversion-data=100\");"));
+                                         "?trigger-data=100\");"));
 
   ASSERT_NO_FATAL_FAILURE(
       EXPECT_TRUE(NavigateToURL(shell(), GURL("about:blank"))));
@@ -160,12 +159,43 @@ IN_PROC_BROWSER_TEST_F(ConversionRegistrationBrowserTest,
   std::unique_ptr<TestConversionHost> host =
       TestConversionHost::ReplaceAndGetConversionHost(web_contents());
 
-  EXPECT_TRUE(ExecJs(web_contents(), "registerConversion(123)"));
+  EXPECT_TRUE(ExecJs(web_contents(), "registerConversion({data: 123})"));
   EXPECT_EQ(123UL, host->WaitForNumConversions(1));
+  EXPECT_EQ(0UL, host->last_conversion()->event_source_trigger_data);
+  EXPECT_EQ(0, host->last_conversion()->priority);
 }
 
 IN_PROC_BROWSER_TEST_F(ConversionRegistrationBrowserTest,
-                       FeaturePolicyDisabled_ConversionNotRegistered) {
+                       ConversionRegistered_EventSourceTriggerDataReceived) {
+  EXPECT_TRUE(NavigateToURL(
+      shell(),
+      embedded_test_server()->GetURL("/page_with_conversion_redirect.html")));
+  std::unique_ptr<TestConversionHost> host =
+      TestConversionHost::ReplaceAndGetConversionHost(web_contents());
+
+  EXPECT_TRUE(
+      ExecJs(web_contents(),
+             "registerConversion({data: 123, eventSourceTriggerData: 456})"));
+  EXPECT_EQ(123UL, host->WaitForNumConversions(1));
+  EXPECT_EQ(456UL, host->last_conversion()->event_source_trigger_data);
+}
+
+IN_PROC_BROWSER_TEST_F(ConversionRegistrationBrowserTest,
+                       ConversionRegistered_PriorityReceived) {
+  EXPECT_TRUE(NavigateToURL(
+      shell(),
+      embedded_test_server()->GetURL("/page_with_conversion_redirect.html")));
+  std::unique_ptr<TestConversionHost> host =
+      TestConversionHost::ReplaceAndGetConversionHost(web_contents());
+
+  EXPECT_TRUE(
+      ExecJs(web_contents(), "registerConversion({data: 123, priority: 456})"));
+  EXPECT_EQ(123UL, host->WaitForNumConversions(1));
+  EXPECT_EQ(456, host->last_conversion()->priority);
+}
+
+IN_PROC_BROWSER_TEST_F(ConversionRegistrationBrowserTest,
+                       PermissionsPolicyDisabled_ConversionNotRegistered) {
   EXPECT_TRUE(NavigateToURL(
       shell(), embedded_test_server()->GetURL(
                    "/page_with_conversion_measurement_disabled.html")));
@@ -173,7 +203,7 @@ IN_PROC_BROWSER_TEST_F(ConversionRegistrationBrowserTest,
       TestConversionHost::ReplaceAndGetConversionHost(web_contents());
 
   GURL redirect_url = embedded_test_server()->GetURL(
-      "/server-redirect?" + kWellKnownUrl + "?conversion-data=200");
+      "/server-redirect?" + kWellKnownUrl + "trigger-data=200");
   ResourceLoadObserver load_observer(shell());
   EXPECT_TRUE(ExecJs(web_contents(),
                      JsReplace("createTrackingPixel($1);", redirect_url)));
@@ -191,8 +221,8 @@ IN_PROC_BROWSER_TEST_F(ConversionRegistrationBrowserTest,
   std::unique_ptr<TestConversionHost> host =
       TestConversionHost::ReplaceAndGetConversionHost(web_contents());
 
-  GURL registration_url = embedded_test_server()->GetURL(
-      "/" + kWellKnownUrl + "?conversion-data=200");
+  GURL registration_url =
+      embedded_test_server()->GetURL("/" + kWellKnownUrl + "?trigger-data=200");
 
   // Create a load observer that will wait for the redirect to complete. If a
   // conversion was registered, this redirect would never complete.
@@ -222,7 +252,7 @@ IN_PROC_BROWSER_TEST_F(
   // a.test/.well-known/...; this conversion registration should not be allowed,
   // a.test did not initiate the redirect to the reporting endpoint.
   GURL redirect_url = https_server()->GetURL(
-      "a.test", "/" + kWellKnownUrl + "?conversion-data=200");
+      "a.test", "/" + kWellKnownUrl + "?trigger-data=200");
   GURL registration_url = https_server()->GetURL(
       "b.test", "/server-redirect?" + redirect_url.spec());
 
@@ -252,7 +282,7 @@ IN_PROC_BROWSER_TEST_F(ConversionRegistrationBrowserTest,
   // Create a url that does the following redirect chain b.test -> a.test ->
   // a.test/.well-known/...; this conversion registration should be allowed.
   GURL well_known_url = https_server()->GetURL(
-      "a.test", "/" + kWellKnownUrl + "?conversion-data=200");
+      "a.test", "/" + kWellKnownUrl + "?trigger-data=200");
   GURL redirect_url = https_server()->GetURL(
       "a.test", "/server-redirect?" + well_known_url.spec());
   GURL registration_url = https_server()->GetURL(
@@ -261,6 +291,7 @@ IN_PROC_BROWSER_TEST_F(ConversionRegistrationBrowserTest,
   EXPECT_TRUE(ExecJs(web_contents(),
                      JsReplace("createTrackingPixel($1);", registration_url)));
   EXPECT_EQ(200UL, host->WaitForNumConversions(1));
+  EXPECT_EQ(0UL, host->last_conversion()->event_source_trigger_data);
 }
 
 IN_PROC_BROWSER_TEST_F(ConversionRegistrationBrowserTest,
@@ -286,12 +317,13 @@ IN_PROC_BROWSER_TEST_F(ConversionRegistrationBrowserTest,
   EXPECT_TRUE(ExecJs(web_contents(), "createTrackingPixel(\"server-redirect?" +
                                          kWellKnownUrl + "\");"));
 
-  // Conversion data should be defaulted to 0.
+  // Conversion data and event source trigger data should be defaulted to 0.
   EXPECT_EQ(0UL, host->WaitForNumConversions(1));
+  EXPECT_EQ(0UL, host->last_conversion()->event_source_trigger_data);
 }
 
 IN_PROC_BROWSER_TEST_F(ConversionRegistrationBrowserTest,
-                       ConversionRegisteredFromChildFrame_NotReceived) {
+                       ConversionRegisteredFromChildFrame_Received) {
   EXPECT_TRUE(NavigateToURL(
       shell(),
       embedded_test_server()->GetURL("/page_with_subframe_conversion.html")));
@@ -299,7 +331,33 @@ IN_PROC_BROWSER_TEST_F(ConversionRegistrationBrowserTest,
       TestConversionHost::ReplaceAndGetConversionHost(web_contents());
 
   GURL redirect_url = embedded_test_server()->GetURL(
-      "/server-redirect?" + kWellKnownUrl + "?conversion-data=200");
+      "/server-redirect?" + kWellKnownUrl + "?trigger-data=200");
+  ResourceLoadObserver load_observer(shell());
+  EXPECT_TRUE(ExecJs(ChildFrameAt(web_contents()->GetMainFrame(), 0),
+                     JsReplace("createTrackingPixel($1);", redirect_url)));
+  EXPECT_EQ(200u, host->WaitForNumConversions(1));
+  EXPECT_EQ(0u, host->last_conversion()->event_source_trigger_data);
+
+  EXPECT_TRUE(NavigateToURL(shell(), GURL("about:blank")));
+  EXPECT_EQ(1u, host->num_conversions());
+}
+
+IN_PROC_BROWSER_TEST_F(
+    ConversionRegistrationBrowserTest,
+    ConversionRegisteredFromChildFrameWithoutPermissionPolicy_NotReceived) {
+  GURL page_url = embedded_test_server()->GetURL("/page_with_iframe.html");
+  EXPECT_TRUE(NavigateToURL(web_contents(), page_url));
+
+  GURL subframe_url =
+      https_server()->GetURL("b.test", "/page_with_conversion_redirect.html");
+  NavigateIframeToURL(web_contents(), "test_iframe", subframe_url);
+
+  std::unique_ptr<TestConversionHost> host =
+      TestConversionHost::ReplaceAndGetConversionHost(web_contents());
+
+  GURL redirect_url = https_server()->GetURL(
+      "b.test", "/server-redirect?" + kWellKnownUrl + "?trigger-data=200");
+
   ResourceLoadObserver load_observer(shell());
   EXPECT_TRUE(ExecJs(ChildFrameAt(web_contents()->GetMainFrame(), 0),
                      JsReplace("createTrackingPixel($1);", redirect_url)));
@@ -311,26 +369,60 @@ IN_PROC_BROWSER_TEST_F(ConversionRegistrationBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(
     ConversionRegistrationBrowserTest,
+    ConversionRegisteredFromChildFrameWithPermissionPolicy_Received) {
+  GURL page_url = embedded_test_server()->GetURL("/page_with_iframe.html");
+  EXPECT_TRUE(NavigateToURL(web_contents(), page_url));
+
+  EXPECT_TRUE(ExecJs(shell(), R"(
+      let frame = document.getElementById('test_iframe');
+      frame.setAttribute('allow', 'attribution-reporting');)"));
+
+  GURL subframe_url =
+      https_server()->GetURL("b.test", "/page_with_conversion_redirect.html");
+  NavigateIframeToURL(web_contents(), "test_iframe", subframe_url);
+
+  std::unique_ptr<TestConversionHost> host =
+      TestConversionHost::ReplaceAndGetConversionHost(web_contents());
+
+  GURL redirect_url = https_server()->GetURL(
+      "b.test", "/server-redirect?" + kWellKnownUrl + "?trigger-data=200");
+
+  ResourceLoadObserver load_observer(shell());
+  EXPECT_TRUE(ExecJs(ChildFrameAt(web_contents()->GetMainFrame(), 0),
+                     JsReplace("createTrackingPixel($1);", redirect_url)));
+  EXPECT_EQ(200u, host->WaitForNumConversions(1));
+  EXPECT_EQ(0u, host->last_conversion()->event_source_trigger_data);
+
+  EXPECT_TRUE(NavigateToURL(shell(), GURL("about:blank")));
+  EXPECT_EQ(1u, host->num_conversions());
+}
+
+IN_PROC_BROWSER_TEST_F(
+    ConversionRegistrationBrowserTest,
     RegisterWithDifferentUrlTypes_ConversionReceivedOrIgnored) {
   const char kSecureHost[] = "a.test";
-  // TODO(crbug.com/1137113): Should include a test where an insecure request is
-  // blocked from conversion registration if it is made on a secure page. Note
-  // that this can't work for image requests due to image auto-upgrade.
   struct {
     std::string page_host;
     std::string redirect_host;
     bool expected_conversion;
-  } kTestCases[] = {
-      {"localhost" /* page_host */, "localhost" /* redirect_host */,
-       true /* conversion_expected */},
-      {"127.0.0.1" /* page_host */, "127.0.0.1" /* redirect_host */,
-       true /* conversion_expected */},
-      {"insecure.com" /* page_host */, "insecure.com" /* redirect_host */,
-       false /* conversion_expected */},
-      {kSecureHost /* page_host */, kSecureHost /* redirect_host */,
-       true /* conversion_expected */},
-      {"insecure.com" /* page_host */, kSecureHost /* redirect_host */,
-       false /* conversion_expected */}};
+  } kTestCases[] = {{.page_host = "localhost",
+                     .redirect_host = "localhost",
+                     .expected_conversion = true},
+                    {.page_host = "127.0.0.1",
+                     .redirect_host = "127.0.0.1",
+                     .expected_conversion = true},
+                    {.page_host = "insecure.com",
+                     .redirect_host = "insecure.com",
+                     .expected_conversion = false},
+                    {.page_host = kSecureHost,
+                     .redirect_host = kSecureHost,
+                     .expected_conversion = true},
+                    {.page_host = "insecure.com",
+                     .redirect_host = kSecureHost,
+                     .expected_conversion = false},
+                    {.page_host = kSecureHost,
+                     .redirect_host = "insecure.com",
+                     .expected_conversion = false}};
 
   for (const auto& test_case : kTestCases) {
     std::unique_ptr<TestConversionHost> host =
@@ -349,20 +441,14 @@ IN_PROC_BROWSER_TEST_F(
                                                  : embedded_test_server();
     GURL redirect_url = redirect_server->GetURL(
         test_case.redirect_host,
-        "/server-redirect?" + kWellKnownUrl + "?conversion-data=200");
-    ResourceLoadObserver load_observer(shell());
-    EXPECT_TRUE(ExecJs(web_contents(),
-                       JsReplace("createTrackingPixel($1);", redirect_url)));
+        "/server-redirect?" + kWellKnownUrl + "?trigger-data=200");
+    EXPECT_TRUE(ExecJs(
+        web_contents(),
+        JsReplace("window.fetch($1, {mode: 'no-cors'}).catch(console.log);",
+                  redirect_url)));
 
-    // Either wait for a conversion redirect to be received, or wait for the url
-    // to finish loading if we are not expecting a conversions. Because
-    // conversion redirects are blocked, we do not receive completed load
-    // information for them.
-    if (test_case.expected_conversion) {
+    if (test_case.expected_conversion)
       EXPECT_EQ(200UL, host->WaitForNumConversions(1));
-    } else {
-      load_observer.WaitForResourceCompletion(redirect_url);
-    }
 
     // Navigate the page. By the time the navigation finishes, we will have
     // received any conversion mojo messages.

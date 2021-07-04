@@ -14,7 +14,6 @@
 #include "base/location.h"
 #include "base/process/process_handle.h"
 #include "base/single_thread_task_runner.h"
-#include "base/stl_util.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "content/browser/child_process_security_policy_impl.h"
@@ -22,7 +21,6 @@
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/common/child_process_host_impl.h"
-#include "content/common/frame_messages.h"
 #include "content/common/renderer.mojom.h"
 #include "content/public/browser/android/child_process_importance.h"
 #include "content/public/browser/browser_context.h"
@@ -145,6 +143,7 @@ void MockRenderProcessHost::RemoveObserver(
 void MockRenderProcessHost::ShutdownForBadMessage(
     CrashReportMode crash_report_mode) {
   ++bad_msg_count_;
+  shutdown_requested_ = true;
 }
 
 void MockRenderProcessHost::UpdateClientPriority(PriorityClient* client) {}
@@ -174,6 +173,10 @@ bool MockRenderProcessHost::IsForGuestsOnly() {
   return is_for_guests_only_;
 }
 
+bool MockRenderProcessHost::IsJitDisabled() {
+  return false;
+}
+
 void MockRenderProcessHost::OnMediaStreamAdded() {}
 
 void MockRenderProcessHost::OnMediaStreamRemoved() {}
@@ -188,11 +191,10 @@ void MockRenderProcessHost::OnForegroundServiceWorkerRemoved() {
 }
 
 StoragePartition* MockRenderProcessHost::GetStoragePartition() {
-  return BrowserContext::GetDefaultStoragePartition(browser_context_);
+  return browser_context_->GetDefaultStoragePartition();
 }
 
-void MockRenderProcessHost::AddWord(const base::string16& word) {
-}
+void MockRenderProcessHost::AddWord(const std::u16string& word) {}
 
 bool MockRenderProcessHost::Shutdown(int exit_code) {
   shutdown_requested_ = true;
@@ -349,8 +351,7 @@ MockRenderProcessHost::TakeMetricsAllocator() {
   return nullptr;
 }
 
-const base::TimeTicks&
-MockRenderProcessHost::GetInitTimeForNavigationMetrics() {
+const base::TimeTicks& MockRenderProcessHost::GetLastInitTime() {
   static base::TimeTicks dummy_time = base::TimeTicks::Now();
   return dummy_time;
 }
@@ -447,7 +448,7 @@ bool MockRenderProcessHost::IsProcessLockedToSiteForTesting() {
 void MockRenderProcessHost::BindCacheStorage(
     const network::CrossOriginEmbedderPolicy&,
     mojo::PendingRemote<network::mojom::CrossOriginEmbedderPolicyReporter>,
-    const url::Origin& origin,
+    const blink::StorageKey& storage_key,
     mojo::PendingReceiver<blink::mojom::CacheStorage> receiver) {
   cache_storage_receiver_ = std::move(receiver);
 }
@@ -466,6 +467,11 @@ MockRenderProcessHost::GetInfoForBrowserContextDestructionCrashReporting() {
   return std::string();
 }
 
+void MockRenderProcessHost::WriteIntoTrace(perfetto::TracedValue context) {
+  auto dict = std::move(context).WriteDictionary();
+  dict.Add("id", GetID());
+}
+
 void MockRenderProcessHost::FilterURL(bool empty_allowed, GURL* url) {
   RenderProcessHostImpl::FilterURL(this, empty_allowed, url);
 }
@@ -482,10 +488,6 @@ MockRenderProcessHost::StartRtpDump(bool incoming,
                                     WebRtcRtpPacketCallback packet_callback) {
   return base::NullCallback();
 }
-
-void MockRenderProcessHost::EnableWebRtcEventLogOutput(int lid,
-                                                       int output_period_ms) {}
-void MockRenderProcessHost::DisableWebRtcEventLogOutput(int lid) {}
 
 bool MockRenderProcessHost::OnMessageReceived(const IPC::Message& msg) {
   IPC::Listener* listener = listeners_.Lookup(msg.routing_id());

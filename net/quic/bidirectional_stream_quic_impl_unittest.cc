@@ -4,6 +4,7 @@
 
 #include "net/quic/bidirectional_stream_quic_impl.h"
 
+#include <memory>
 #include <utility>
 
 #include "base/memory/ptr_util.h"
@@ -19,6 +20,7 @@
 #include "net/base/load_timing_info.h"
 #include "net/base/load_timing_info_test_util.h"
 #include "net/base/net_errors.h"
+#include "net/dns/public/secure_dns_policy.h"
 #include "net/http/bidirectional_stream_request_info.h"
 #include "net/http/transport_security_state.h"
 #include "net/log/net_log_event_type.h"
@@ -42,8 +44,7 @@
 #include "net/socket/socket_test_util.h"
 #include "net/test/gtest_util.h"
 #include "net/test/test_with_task_environment.h"
-#include "net/third_party/quiche/src/common/platform/api/quiche_string_piece.h"
-#include "net/third_party/quiche/src/common/platform/api/quiche_text_utils.h"
+#include "net/third_party/quiche/src/common/quiche_text_utils.h"
 #include "net/third_party/quiche/src/quic/core/crypto/crypto_protocol.h"
 #include "net/third_party/quiche/src/quic/core/crypto/null_decrypter.h"
 #include "net/third_party/quiche/src/quic/core/crypto/quic_decrypter.h"
@@ -527,8 +528,8 @@ class BidirectionalStreamQuicImplTest
         socket_data_.get(), net_log().bound().net_log()));
     socket->Connect(peer_addr_);
     runner_ = new TestTaskRunner(&clock_);
-    helper_.reset(
-        new QuicChromiumConnectionHelper(&clock_, &random_generator_));
+    helper_ = std::make_unique<QuicChromiumConnectionHelper>(
+        &clock_, &random_generator_);
     alarm_factory_ =
         std::make_unique<QuicChromiumAlarmFactory>(runner_.get(), &clock_);
     connection_ = new quic::QuicConnection(
@@ -552,9 +553,8 @@ class BidirectionalStreamQuicImplTest
         base::WrapUnique(static_cast<QuicServerInfo*>(nullptr)),
         QuicSessionKey(kDefaultServerHostName, kDefaultServerPort,
                        PRIVACY_MODE_DISABLED, SocketTag(),
-                       NetworkIsolationKey(), false /* disable_secure_dns */),
+                       NetworkIsolationKey(), SecureDnsPolicy::kAllow),
         /*require_confirmation=*/false,
-        /*max_allowed_push_id=*/0,
         /*migrate_session_early_v2=*/false,
         /*migrate_session_on_network_change_v2=*/false,
         /*default_network=*/NetworkChangeNotifier::kInvalidNetworkHandle,
@@ -810,10 +810,9 @@ class BidirectionalStreamQuicImplTest
     if (!version_.UsesHttp3()) {
       return "";
     }
-    std::unique_ptr<char[]> buffer;
-    auto header_length =
-        quic::HttpEncoder::SerializeDataFrameHeader(body_len, &buffer);
-    return std::string(buffer.get(), header_length);
+    quic::QuicBuffer buffer = quic::HttpEncoder::SerializeDataFrameHeader(
+        body_len, quic::SimpleBufferAllocator::Get());
+    return std::string(buffer.data(), buffer.size());
   }
 
  protected:

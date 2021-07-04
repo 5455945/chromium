@@ -23,6 +23,23 @@ class PLATFORM_EXPORT RWBuffer {
  public:
   struct BufferHead;
   struct BufferBlock;
+  class ROIter {
+   public:
+    explicit ROIter(RWBuffer*, size_t);
+    size_t size() const;
+    const void* data() const;
+    // Checks whether there is another block available and advances the iterator
+    // if there is.
+    bool Next();
+    // Checks whether there is another block available. Does not advance the
+    // iterator.
+    bool HasNext() const;
+
+   private:
+    const RWBuffer* rw_buffer_;
+    RWBuffer::BufferBlock* block_;
+    size_t remaining_;
+  };
 
   explicit RWBuffer(size_t initialCapacity = 0);
   ~RWBuffer();

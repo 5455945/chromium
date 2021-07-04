@@ -8,18 +8,21 @@
 #include "base/files/file_path.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class GURL;
 
 // Externally-defined printers for base types.
 namespace base {
 
+class CommandLine;
+
 template <class T>
-std::ostream& operator<<(std::ostream& os, const base::Optional<T>& opt) {
+std::ostream& operator<<(std::ostream& os, const absl::optional<T>& opt) {
   if (opt.has_value()) {
     return os << opt.value();
   } else {
-    return os << "base::nullopt";
+    return os << "absl::nullopt";
   }
 }
 
@@ -27,29 +30,44 @@ std::ostream& operator<<(std::ostream& os, const base::Optional<T>& opt) {
 
 namespace updater {
 
+namespace tagging {
+struct TagArgs;
+}
+
+enum class UpdaterScope;
+
 // Returns the base directory common to all versions of the updater. For
 // instance, this function may return %localappdata%\Chromium\ChromiumUpdater
-// for a User install.
-bool GetBaseDirectory(base::FilePath* path);
+// for a user install.
+absl::optional<base::FilePath> GetBaseDirectory(UpdaterScope scope);
 
 // Returns a versioned directory under which the running version of the updater
 // stores its files and data. For instance, this function may return
-// %localappdata%\Chromium\ChromiumUpdater\1.2.3.4 for a User install.
-bool GetVersionedDirectory(base::FilePath* path);
+// %localappdata%\Chromium\ChromiumUpdater\1.2.3.4 for a user install.
+absl::optional<base::FilePath> GetVersionedDirectory(UpdaterScope scope);
 
-// Returns true if the user running the updater also owns the |path|.
+// Returns the parsed values from --tag command line argument. The function
+// implementation uses lazy initialization and caching to avoid reparsing
+// the tag.
+absl::optional<tagging::TagArgs> GetTagArgs();
+
+// Returns true if the user running the updater also owns the `path`.
 bool PathOwnedByUser(const base::FilePath& path);
 
 // Initializes logging for an executable.
-void InitLogging(const base::FilePath::StringType& filename);
+void InitLogging(UpdaterScope updater_scope,
+                 const base::FilePath::StringType& filename);
+
+// Wraps the 'command_line' to be executed in an elevated context.
+// On macOS this is done with 'sudo'.
+base::CommandLine MakeElevated(base::CommandLine command_line);
 
 // Functor used by associative containers of strings as a case-insensitive ASCII
-// compare. |T| could be std::string or base::string16.
-template <typename T>
+// compare. `StringT` could be either UTF-8 or UTF-16.
 struct CaseInsensitiveASCIICompare {
  public:
-  bool operator()(base::BasicStringPiece<T> x,
-                  base::BasicStringPiece<T> y) const {
+  template <typename StringT>
+  bool operator()(const StringT& x, const StringT& y) const {
     return base::CompareCaseInsensitiveASCII(x, y) > 0;
   }
 };

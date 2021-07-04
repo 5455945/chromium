@@ -5,8 +5,6 @@
 #ifndef CHROMEOS_DBUS_U2F_FAKE_U2F_CLIENT_H_
 #define CHROMEOS_DBUS_U2F_FAKE_U2F_CLIENT_H_
 
-#include <map>
-
 #include "base/component_export.h"
 #include "base/macros.h"
 #include "chromeos/dbus/u2f/u2f_client.h"
@@ -34,8 +32,9 @@ class COMPONENT_EXPORT(CHROMEOS_DBUS_U2F) FakeU2FClient : public U2FClient {
   void GetAssertion(
       const u2f::GetAssertionRequest& request,
       DBusMethodCallback<u2f::GetAssertionResponse> callback) override;
-  base::Optional<u2f::HasCredentialsResponse> HasCredentialsBlocking(
-      const u2f::HasCredentialsRequest& request) override;
+  void HasCredentials(
+      const u2f::HasCredentialsRequest& request,
+      DBusMethodCallback<u2f::HasCredentialsResponse> callback) override;
   void HasLegacyU2FCredentials(
       const u2f::HasCredentialsRequest& request,
       DBusMethodCallback<u2f::HasCredentialsResponse> callback) override;

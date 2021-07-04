@@ -11,30 +11,36 @@
 
 namespace autofill {
 
-UserInfo::Field::Field(base::string16 display_text,
-                       base::string16 a11y_description,
+// TODO(crbug.com/1224179) Delete this constructor.
+UserInfo::Field::Field(std::u16string display_text,
+                       std::u16string a11y_description,
                        bool is_obfuscated,
                        bool selectable)
-    : display_text_(std::move(display_text)),
+    : display_text_(display_text),
+      text_to_fill_(std::move(display_text)),
       a11y_description_(std::move(a11y_description)),
       is_obfuscated_(is_obfuscated),
       selectable_(selectable),
       estimated_memory_use_by_strings_(
           base::trace_event::EstimateMemoryUsage(display_text_) +
+          base::trace_event::EstimateMemoryUsage(text_to_fill_) +
           base::trace_event::EstimateMemoryUsage(a11y_description_)) {}
 
-UserInfo::Field::Field(base::string16 display_text,
-                       base::string16 a11y_description,
+UserInfo::Field::Field(std::u16string display_text,
+                       std::u16string text_to_fill,
+                       std::u16string a11y_description,
                        std::string id,
                        bool is_obfuscated,
                        bool selectable)
     : display_text_(std::move(display_text)),
+      text_to_fill_(std::move(text_to_fill)),
       a11y_description_(std::move(a11y_description)),
       id_(std::move(id)),
       is_obfuscated_(is_obfuscated),
       selectable_(selectable),
       estimated_memory_use_by_strings_(
           base::trace_event::EstimateMemoryUsage(display_text_) +
+          base::trace_event::EstimateMemoryUsage(text_to_fill_) +
           base::trace_event::EstimateMemoryUsage(a11y_description_) +
           base::trace_event::EstimateMemoryUsage(id_)) {}
 
@@ -50,6 +56,7 @@ UserInfo::Field& UserInfo::Field::operator=(Field&& field) = default;
 
 bool UserInfo::Field::operator==(const UserInfo::Field& field) const {
   return display_text_ == field.display_text_ &&
+         text_to_fill_ == field.text_to_fill_ &&
          a11y_description_ == field.a11y_description_ && id_ == field.id_ &&
          is_obfuscated_ == field.is_obfuscated_ &&
          selectable_ == field.selectable_;
@@ -61,6 +68,7 @@ size_t UserInfo::Field::EstimateMemoryUsage() const {
 
 std::ostream& operator<<(std::ostream& os, const UserInfo::Field& field) {
   os << "(display text: \"" << field.display_text() << "\", "
+     << "text_to_fill: \"" << field.text_to_fill() << "\", "
      << "a11y_description: \"" << field.a11y_description() << "\", "
      << "id: \"" << field.id() << "\", "
      << "is " << (field.selectable() ? "" : "not ") << "selectable, "
@@ -108,7 +116,7 @@ std::ostream& operator<<(std::ostream& os, const UserInfo& user_info) {
   return os << "]";
 }
 
-FooterCommand::FooterCommand(base::string16 display_text,
+FooterCommand::FooterCommand(std::u16string display_text,
                              autofill::AccessoryAction action)
     : display_text_(std::move(display_text)),
       accessory_action_(action),
@@ -141,7 +149,7 @@ std::ostream& operator<<(std::ostream& os, const FooterCommand& fc) {
             << "action: " << static_cast<int>(fc.accessory_action()) << ")";
 }
 
-OptionToggle::OptionToggle(base::string16 display_text,
+OptionToggle::OptionToggle(std::u16string display_text,
                            bool enabled,
                            autofill::AccessoryAction action)
     : display_text_(display_text),
@@ -185,8 +193,8 @@ std::ostream& operator<<(std::ostream& os, const AccessoryTabType& type) {
       return os << "Payments sheet";
     case AccessoryTabType::ADDRESSES:
       return os << "Address sheet";
-    case AccessoryTabType::TOUCH_TO_FILL:
-      return os << "Touch to Fill sheet";
+    case AccessoryTabType::OBSOLETE_TOUCH_TO_FILL:
+      return os << "(obsolete) Touch to Fill sheet";
     case AccessoryTabType::ALL:
       return os << "All sheets";
     case AccessoryTabType::COUNT:
@@ -196,11 +204,11 @@ std::ostream& operator<<(std::ostream& os, const AccessoryTabType& type) {
 }
 
 AccessorySheetData::AccessorySheetData(AccessoryTabType sheet_type,
-                                       base::string16 title)
-    : AccessorySheetData(sheet_type, std::move(title), base::string16()) {}
+                                       std::u16string title)
+    : AccessorySheetData(sheet_type, std::move(title), std::u16string()) {}
 AccessorySheetData::AccessorySheetData(AccessoryTabType sheet_type,
-                                       base::string16 title,
-                                       base::string16 warning)
+                                       std::u16string title,
+                                       std::u16string warning)
     : sheet_type_(sheet_type),
       title_(std::move(title)),
       warning_(std::move(warning)) {}
@@ -256,25 +264,25 @@ std::ostream& operator<<(std::ostream& os, const AccessorySheetData& data) {
 }
 
 AccessorySheetData::Builder::Builder(AccessoryTabType type,
-                                     base::string16 title)
+                                     std::u16string title)
     : accessory_sheet_data_(type, std::move(title)) {}
 
 AccessorySheetData::Builder::~Builder() = default;
 
 AccessorySheetData::Builder&& AccessorySheetData::Builder::SetWarning(
-    base::string16 warning) && {
-  // Calls SetWarning(base::string16 warning)()& since |this| is an lvalue.
+    std::u16string warning) && {
+  // Calls SetWarning(std::u16string warning)()& since |this| is an lvalue.
   return std::move(SetWarning(std::move(warning)));
 }
 
 AccessorySheetData::Builder& AccessorySheetData::Builder::SetWarning(
-    base::string16 warning) & {
+    std::u16string warning) & {
   accessory_sheet_data_.set_warning(std::move(warning));
   return *this;
 }
 
 AccessorySheetData::Builder&& AccessorySheetData::Builder::SetOptionToggle(
-    base::string16 display_text,
+    std::u16string display_text,
     bool enabled,
     autofill::AccessoryAction action) && {
   // Calls SetOptionToggle(...)& since |this| is an lvalue.
@@ -282,7 +290,7 @@ AccessorySheetData::Builder&& AccessorySheetData::Builder::SetOptionToggle(
 }
 
 AccessorySheetData::Builder& AccessorySheetData::Builder::SetOptionToggle(
-    base::string16 display_text,
+    std::u16string display_text,
     bool enabled,
     autofill::AccessoryAction action) & {
   accessory_sheet_data_.set_option_toggle(
@@ -306,74 +314,81 @@ AccessorySheetData::Builder& AccessorySheetData::Builder::AddUserInfo(
 }
 
 AccessorySheetData::Builder&& AccessorySheetData::Builder::AppendSimpleField(
-    base::string16 text) && {
+    std::u16string text) && {
   // Calls AppendSimpleField(...)& since |this| is an lvalue.
   return std::move(AppendSimpleField(std::move(text)));
 }
 
 AccessorySheetData::Builder& AccessorySheetData::Builder::AppendSimpleField(
-    base::string16 text) & {
-  base::string16 display_text = text;
-  base::string16 a11y_description = std::move(text);
-  return AppendField(std::move(display_text), std::move(a11y_description),
-                     false, true);
+    std::u16string text) & {
+  std::u16string display_text = text;
+  std::u16string text_to_fill = text;
+  std::u16string a11y_description = std::move(text);
+  return AppendField(std::move(display_text), std::move(text_to_fill),
+                     std::move(a11y_description), false, true);
 }
 
 AccessorySheetData::Builder&& AccessorySheetData::Builder::AppendField(
-    base::string16 display_text,
-    base::string16 a11y_description,
+    std::u16string display_text,
+    std::u16string a11y_description,
     bool is_obfuscated,
     bool selectable) && {
+  std::u16string text_to_fill = display_text;
   // Calls AppendField(...)& since |this| is an lvalue.
-  return std::move(AppendField(std::move(display_text),
+  return std::move(AppendField(std::move(display_text), std::move(text_to_fill),
                                std::move(a11y_description), is_obfuscated,
                                selectable));
 }
 
 AccessorySheetData::Builder& AccessorySheetData::Builder::AppendField(
-    base::string16 display_text,
-    base::string16 a11y_description,
+    std::u16string display_text,
+    std::u16string text_to_fill,
+    std::u16string a11y_description,
     bool is_obfuscated,
     bool selectable) & {
   accessory_sheet_data_.mutable_user_info_list().back().add_field(
-      UserInfo::Field(std::move(display_text), std::move(a11y_description),
+      UserInfo::Field(std::move(display_text), std::move(text_to_fill),
+                      std::move(a11y_description), /*id=*/std::string(),
                       is_obfuscated, selectable));
   return *this;
 }
 
 AccessorySheetData::Builder&& AccessorySheetData::Builder::AppendField(
-    base::string16 display_text,
-    base::string16 a11y_description,
+    std::u16string display_text,
+    std::u16string text_to_fill,
+    std::u16string a11y_description,
     std::string id,
     bool is_obfuscated,
     bool selectable) && {
   // Calls AppendField(...)& since |this| is an lvalue.
-  return std::move(AppendField(std::move(display_text),
+  return std::move(AppendField(std::move(display_text), std::move(text_to_fill),
                                std::move(a11y_description), std::move(id),
                                is_obfuscated, selectable));
 }
 
 AccessorySheetData::Builder& AccessorySheetData::Builder::AppendField(
-    base::string16 display_text,
-    base::string16 a11y_description,
+    std::u16string display_text,
+    std::u16string text_to_fill,
+    std::u16string a11y_description,
     std::string id,
     bool is_obfuscated,
     bool selectable) & {
   accessory_sheet_data_.mutable_user_info_list().back().add_field(
-      UserInfo::Field(std::move(display_text), std::move(a11y_description),
-                      std::move(id), is_obfuscated, selectable));
+      UserInfo::Field(std::move(display_text), std::move(text_to_fill),
+                      std::move(a11y_description), std::move(id), is_obfuscated,
+                      selectable));
   return *this;
 }
 
 AccessorySheetData::Builder&& AccessorySheetData::Builder::AppendFooterCommand(
-    base::string16 display_text,
+    std::u16string display_text,
     autofill::AccessoryAction action) && {
   // Calls AppendFooterCommand(...)& since |this| is an lvalue.
   return std::move(AppendFooterCommand(std::move(display_text), action));
 }
 
 AccessorySheetData::Builder& AccessorySheetData::Builder::AppendFooterCommand(
-    base::string16 display_text,
+    std::u16string display_text,
     autofill::AccessoryAction action) & {
   accessory_sheet_data_.add_footer_command(
       FooterCommand(std::move(display_text), action));

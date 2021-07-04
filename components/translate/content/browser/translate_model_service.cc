@@ -10,7 +10,7 @@
 #include "base/files/file_util.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/task/post_task.h"
-#include "components/optimization_guide/content/browser/optimization_guide_decider.h"
+#include "components/optimization_guide/core/optimization_guide_model_provider.h"
 #include "components/optimization_guide/proto/models.pb.h"
 #include "content/public/browser/browser_thread.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -24,6 +24,13 @@ base::File LoadModelFile(const base::FilePath& model_file_path) {
 
   return base::File(model_file_path,
                     base::File::FLAG_OPEN | base::File::FLAG_READ);
+}
+
+// Close the provided model file.
+void CloseModelFile(base::File model_file) {
+  if (!model_file.IsValid())
+    return;
+  model_file.Close();
 }
 
 // Util class for recording the result of loading the detection model. The
@@ -51,12 +58,12 @@ constexpr int kMaxPendingRequestsAllowed = 100;
 namespace translate {
 
 TranslateModelService::TranslateModelService(
-    optimization_guide::OptimizationGuideDecider* opt_guide,
+    optimization_guide::OptimizationGuideModelProvider* opt_guide,
     const scoped_refptr<base::SequencedTaskRunner>& background_task_runner)
     : opt_guide_(opt_guide), background_task_runner_(background_task_runner) {
   opt_guide_->AddObserverForOptimizationTargetModel(
       optimization_guide::proto::OPTIMIZATION_TARGET_LANGUAGE_DETECTION,
-      /*model_metadata=*/base::nullopt, this);
+      /*model_metadata=*/absl::nullopt, this);
 }
 
 TranslateModelService::~TranslateModelService() = default;
@@ -69,7 +76,7 @@ void TranslateModelService::Shutdown() {
 
 void TranslateModelService::OnModelFileUpdated(
     optimization_guide::proto::OptimizationTarget optimization_target,
-    const base::Optional<optimization_guide::proto::Any>& model_metadata,
+    const absl::optional<optimization_guide::proto::Any>& model_metadata,
     const base::FilePath& file_path) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (optimization_target !=
@@ -88,6 +95,13 @@ void TranslateModelService::OnModelFileLoaded(base::File model_file) {
   if (!model_file.IsValid())
     return;
 
+  if (language_detection_model_file_) {
+    // If the model file is already loaded, it should be closed on a
+    // background thread.
+    background_task_runner_->PostTask(
+        FROM_HERE, base::BindOnce(&CloseModelFile,
+                                  std::move(*language_detection_model_file_)));
+  }
   language_detection_model_file_ = std::move(model_file);
   result_recorder.set_was_loaded();
   UMA_HISTOGRAM_COUNTS_100(
@@ -96,13 +110,15 @@ void TranslateModelService::OnModelFileLoaded(base::File model_file) {
   for (auto& pending_request : pending_model_requests_) {
     std::move(pending_request).Run(language_detection_model_file_->Duplicate());
   }
+  pending_model_requests_.clear();
 }
 
 void TranslateModelService::GetLanguageDetectionModelFile(
     GetModelCallback callback) {
   if (!language_detection_model_file_) {
-    if (pending_model_requests_.size() < kMaxPendingRequestsAllowed)
+    if (pending_model_requests_.size() < kMaxPendingRequestsAllowed) {
       pending_model_requests_.emplace_back(std::move(callback));
+    }
     return;
   }
   // The model must be valid at this point.

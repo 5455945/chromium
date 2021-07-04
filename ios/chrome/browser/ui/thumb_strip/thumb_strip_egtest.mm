@@ -22,7 +22,7 @@
 #error "This file requires ARC support."
 #endif
 
-using chrome_test_util::ContentSuggestionCollectionView;
+using chrome_test_util::NTPCollectionView;
 using chrome_test_util::PrimaryToolbar;
 using chrome_test_util::WebStateScrollViewMatcher;
 
@@ -90,6 +90,11 @@ id<GREYMatcher> GetAccessibilityValue(__strong NSString** value) {
 // this tests that the thumb strip is not partially covered when Smooth
 // Scrolling is on.
 - (void)testThumbStripVisibleInPeekedState {
+  // TODO(crbug.com/1220137): This test is failing on iOS 15.
+  if (@available(iOS 15, *)) {
+    EARL_GREY_TEST_DISABLED(@"Disabled on iOS 15 as it is failing.");
+  }
+
   // The feature only works on iPad.
   if (![ChromeEarlGrey isIPadIdiom]) {
     EARL_GREY_TEST_SKIPPED(@"Thumb strip is not enabled on iPhone");
@@ -122,6 +127,11 @@ id<GREYMatcher> GetAccessibilityValue(__strong NSString** value) {
 
 // Tests that the web content ends up covered when in revealed state.
 - (void)testWebContentCoveredInRevealedState {
+  // TODO(crbug.com/1220137): This test is failing on iOS 15.
+  if (@available(iOS 15, *)) {
+    EARL_GREY_TEST_DISABLED(@"Disabled on iOS 15 as it is failing.");
+  }
+
   // The feature only works on iPad.
   if (![ChromeEarlGrey isIPadIdiom]) {
     EARL_GREY_TEST_SKIPPED(@"Thumb strip is not enabled on iPhone");
@@ -174,6 +184,11 @@ id<GREYMatcher> GetAccessibilityValue(__strong NSString** value) {
 
 // Tests that scrolling the web content can open and close the thumb strip.
 - (void)testScrollingInWebContent {
+  // TODO(crbug.com/1220137): This test is failing on iOS 15.
+  if (@available(iOS 15, *)) {
+    EARL_GREY_TEST_DISABLED(@"Disabled on iOS 15 as it is failing.");
+  }
+
   // The feature only works on iPad.
   if (![ChromeEarlGrey isIPadIdiom]) {
     EARL_GREY_TEST_SKIPPED(@"Thumb strip is not enabled on iPhone");
@@ -217,6 +232,11 @@ id<GREYMatcher> GetAccessibilityValue(__strong NSString** value) {
 
 // Tests that scrolling the web content can open and close the thumb strip.
 - (void)testScrollingOnNTP {
+  // TODO(crbug.com/1220137): This test is failing on iOS 15.
+  if (@available(iOS 15, *)) {
+    EARL_GREY_TEST_DISABLED(@"Disabled on iOS 15 as it is failing.");
+  }
+
   // The feature only works on iPad.
   if (![ChromeEarlGrey isIPadIdiom]) {
     EARL_GREY_TEST_SKIPPED(@"Thumb strip is not enabled on iPhone");
@@ -228,7 +248,7 @@ id<GREYMatcher> GetAccessibilityValue(__strong NSString** value) {
   }
 
   // Scroll the NTP to reveal the thumb strip.
-  [[EarlGrey selectElementWithMatcher:ContentSuggestionCollectionView()]
+  [[EarlGrey selectElementWithMatcher:NTPCollectionView()]
       performAction:grey_swipeSlowInDirection(kGREYDirectionDown)];
 
   // Make sure that the entire tab thumbnail is fully visible and not covered.
@@ -240,7 +260,7 @@ id<GREYMatcher> GetAccessibilityValue(__strong NSString** value) {
       assertWithMatcher:grey_minimumVisiblePercent(1)];
 
   // Scroll the NTP the other way to close the thumb strip.
-  [[EarlGrey selectElementWithMatcher:ContentSuggestionCollectionView()]
+  [[EarlGrey selectElementWithMatcher:NTPCollectionView()]
       performAction:grey_swipeSlowInDirection(kGREYDirectionUp)];
 
   // Make sure that the tab thumbnail is not visible.
@@ -253,6 +273,11 @@ id<GREYMatcher> GetAccessibilityValue(__strong NSString** value) {
 
 // Tests that switching tabs in the peeked state doesn't close the thumb strip.
 - (void)testSwitchTabInPeekedState {
+  // TODO(crbug.com/1220137): This test is failing on iOS 15.
+  if (@available(iOS 15, *)) {
+    EARL_GREY_TEST_DISABLED(@"Disabled on iOS 15 as it is failing.");
+  }
+
   // The feature only works on iPad.
   if (![ChromeEarlGrey isIPadIdiom]) {
     EARL_GREY_TEST_SKIPPED(@"Thumb strip is not enabled on iPhone");

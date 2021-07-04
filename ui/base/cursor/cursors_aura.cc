@@ -6,7 +6,7 @@
 
 #include <stddef.h>
 
-#include "base/stl_util.h"
+#include "base/cxx17_backports.h"
 #include "build/build_config.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/cursor/cursor.h"
@@ -108,18 +108,34 @@ const CursorData kNormalCursors[] = {
      IDR_AURA_CURSOR_COL_RESIZE,
      {12, 11},
      {25, 23}},
+    {mojom::CursorType::kEastWestNoResize,
+     IDR_AURA_CURSOR_EAST_WEST_NO_RESIZE,
+     {12, 11},
+     {25, 23}},
     {mojom::CursorType::kEastWestResize,
      IDR_AURA_CURSOR_EAST_WEST_RESIZE,
      {12, 11},
      {25, 23}},
+    {mojom::CursorType::kNorthSouthNoResize,
+     IDR_AURA_CURSOR_NORTH_SOUTH_NO_RESIZE,
+     {11, 12},
+     {23, 23}},
     {mojom::CursorType::kNorthSouthResize,
      IDR_AURA_CURSOR_NORTH_SOUTH_RESIZE,
      {11, 12},
      {23, 23}},
+    {mojom::CursorType::kNorthEastSouthWestNoResize,
+     IDR_AURA_CURSOR_NORTH_EAST_SOUTH_WEST_NO_RESIZE,
+     {12, 11},
+     {25, 23}},
     {mojom::CursorType::kNorthEastSouthWestResize,
      IDR_AURA_CURSOR_NORTH_EAST_SOUTH_WEST_RESIZE,
      {12, 11},
      {25, 23}},
+    {mojom::CursorType::kNorthWestSouthEastNoResize,
+     IDR_AURA_CURSOR_NORTH_WEST_SOUTH_EAST_NO_RESIZE,
+     {11, 11},
+     {24, 23}},
     {mojom::CursorType::kNorthWestSouthEastResize,
      IDR_AURA_CURSOR_NORTH_WEST_SOUTH_EAST_RESIZE,
      {11, 11},
@@ -213,18 +229,34 @@ const CursorData kLargeCursors[] = {
      IDR_AURA_CURSOR_BIG_COL_RESIZE,
      {35, 29},
      {70, 58}},
+    {mojom::CursorType::kEastWestNoResize,
+     IDR_AURA_CURSOR_BIG_EAST_WEST_NO_RESIZE,
+     {35, 29},
+     {70, 58}},
     {mojom::CursorType::kEastWestResize,
      IDR_AURA_CURSOR_BIG_EAST_WEST_RESIZE,
      {35, 29},
      {70, 58}},
+    {mojom::CursorType::kNorthSouthNoResize,
+     IDR_AURA_CURSOR_BIG_NORTH_SOUTH_NO_RESIZE,
+     {29, 32},
+     {58, 64}},
     {mojom::CursorType::kNorthSouthResize,
      IDR_AURA_CURSOR_BIG_NORTH_SOUTH_RESIZE,
      {29, 32},
      {58, 64}},
+    {mojom::CursorType::kNorthEastSouthWestNoResize,
+     IDR_AURA_CURSOR_BIG_NORTH_EAST_SOUTH_WEST_NO_RESIZE,
+     {32, 30},
+     {64, 60}},
     {mojom::CursorType::kNorthEastSouthWestResize,
      IDR_AURA_CURSOR_BIG_NORTH_EAST_SOUTH_WEST_RESIZE,
      {32, 30},
      {64, 60}},
+    {mojom::CursorType::kNorthWestSouthEastNoResize,
+     IDR_AURA_CURSOR_BIG_NORTH_WEST_SOUTH_EAST_NO_RESIZE,
+     {32, 31},
+     {64, 62}},
     {mojom::CursorType::kNorthWestSouthEastResize,
      IDR_AURA_CURSOR_BIG_NORTH_WEST_SOUTH_EAST_RESIZE,
      {32, 31},
@@ -301,7 +333,7 @@ SkBitmap GetDefaultBitmap(const Cursor& cursor) {
   CursorLoader cursor_loader;
   cursor_loader.SetPlatformCursor(&cursor_copy);
   return IconUtil::CreateSkBitmapFromHICON(
-      static_cast<WinCursor*>(cursor_copy.platform())->hcursor());
+      WinCursor::FromPlatformCursor(cursor_copy.platform())->hcursor());
 #else
   int resource_id;
   gfx::Point hotspot;
@@ -309,9 +341,10 @@ SkBitmap GetDefaultBitmap(const Cursor& cursor) {
                         cursor.image_scale_factor(), &resource_id, &hotspot)) {
     return SkBitmap();
   }
-  return *ResourceBundle::GetSharedInstance()
-              .GetImageSkiaNamed(resource_id)
-              ->bitmap();
+  return ResourceBundle::GetSharedInstance()
+      .GetImageSkiaNamed(resource_id)
+      ->GetRepresentation(cursor.image_scale_factor())
+      .GetBitmap();
 #endif
 }
 
@@ -321,7 +354,7 @@ gfx::Point GetDefaultHotspot(const Cursor& cursor) {
   CursorLoader cursor_loader;
   cursor_loader.SetPlatformCursor(&cursor_copy);
   return IconUtil::GetHotSpotFromHICON(
-      static_cast<WinCursor*>(cursor_copy.platform())->hcursor());
+      WinCursor::FromPlatformCursor(cursor_copy.platform())->hcursor());
 #else
   int resource_id;
   gfx::Point hotspot;

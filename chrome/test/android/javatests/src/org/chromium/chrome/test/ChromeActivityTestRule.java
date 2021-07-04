@@ -227,7 +227,7 @@ public class ChromeActivityTestRule<T extends ChromeActivity> extends BaseActivi
     public boolean waitForDeferredStartup() {
         CriteriaHelper.pollUiThread(() -> {
             getActivity().deferredStartupPostedForTesting();
-        }, ScalableTimeout.scaleTimeout(20000L), CriteriaHelper.DEFAULT_POLLING_INTERVAL);
+        }, 20000L, CriteriaHelper.DEFAULT_POLLING_INTERVAL);
         return DeferredStartupHandler.waitForDeferredStartupCompleteForTesting(
                 ScalableTimeout.scaleTimeout(CriteriaHelper.DEFAULT_MAX_TIME_TO_POLL));
     }
@@ -259,8 +259,7 @@ public class ChromeActivityTestRule<T extends ChromeActivity> extends BaseActivi
      * preloading mechanism of the UrlBar.
      * @param url            The URL to load in the current tab.
      * @param secondsToWait  The number of seconds to wait for the page to be loaded.
-     * @return FULL_PRERENDERED_PAGE_LOAD or PARTIAL_PRERENDERED_PAGE_LOAD if the page has been
-     *         prerendered. DEFAULT_PAGE_LOAD if it had not.
+     * @return PAGE_LOAD_FAILED if the URL could not be loaded, otherwise DEFAULT_PAGE_LOAD.
      */
     public int loadUrl(String url, long secondsToWait) throws IllegalArgumentException {
         return loadUrlInTab(url, PageTransition.TYPED | PageTransition.FROM_ADDRESS_BAR,
@@ -271,8 +270,7 @@ public class ChromeActivityTestRule<T extends ChromeActivity> extends BaseActivi
      * Navigates to a URL directly without going through the UrlBar. This bypasses the page
      * preloading mechanism of the UrlBar.
      * @param url The URL to load in the current tab.
-     * @return FULL_PRERENDERED_PAGE_LOAD or PARTIAL_PRERENDERED_PAGE_LOAD if the page has been
-     *         prerendered. DEFAULT_PAGE_LOAD if it had not.
+     * @return PAGE_LOAD_FAILED if the URL could not be loaded, otherwise DEFAULT_PAGE_LOAD.
      */
     public int loadUrl(String url) throws IllegalArgumentException {
         return loadUrlInTab(url, PageTransition.TYPED | PageTransition.FROM_ADDRESS_BAR,
@@ -291,8 +289,8 @@ public class ChromeActivityTestRule<T extends ChromeActivity> extends BaseActivi
      *                       for valid values.
      * @param tab            The tab to load the URL into.
      * @param secondsToWait  The number of seconds to wait for the page to be loaded.
-     * @return               FULL_PRERENDERED_PAGE_LOAD or PARTIAL_PRERENDERED_PAGE_LOAD if the
-     *                       page has been prerendered. DEFAULT_PAGE_LOAD if it had not.
+     * @return               PAGE_LOAD_FAILED if the URL could not be loaded, otherwise
+     *                       DEFAULT_PAGE_LOAD.
      */
     public int loadUrlInTab(String url, int pageTransition, Tab tab, long secondsToWait) {
         Assert.assertNotNull("Cannot load the URL in a null tab", tab);
@@ -316,8 +314,8 @@ public class ChromeActivityTestRule<T extends ChromeActivity> extends BaseActivi
      *                       {@link org.chromium.ui.base.PageTransition}
      *                       for valid values.
      * @param tab            The tab to load the URL into.
-     * @return               FULL_PRERENDERED_PAGE_LOAD or PARTIAL_PRERENDERED_PAGE_LOAD if the
-     *                       page has been prerendered. DEFAULT_PAGE_LOAD if it had not.
+     * @return               PAGE_LOAD_FAILED if the URL could not be loaded, otherwise
+     *                       DEFAULT_PAGE_LOAD.
      */
     public int loadUrlInTab(String url, int pageTransition, Tab tab) {
         return loadUrlInTab(url, pageTransition, tab, CallbackHelper.WAIT_TIMEOUT_SECONDS);

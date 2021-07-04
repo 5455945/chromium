@@ -9,6 +9,8 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "base/numerics/safe_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/view.h"
 
@@ -88,7 +90,7 @@ class LazyMinimumSize {
 
  private:
   const View* const view_;
-  mutable base::Optional<gfx::Size> size_;
+  mutable absl::optional<gfx::Size> size_;
 };
 
 gfx::Size GetPreferredSize(MinimumFlexSizeRule minimum_width_rule,
@@ -283,14 +285,14 @@ void Span::Center(const Span& container, const Inset1D& margins) {
   // Case 1: no room for any margins. Just center the span in the container,
   // with equal overflow on each side.
   if (remaining <= 0) {
-    set_start(container.start() + std::ceil(remaining * 0.5f));
+    set_start(container.start() + base::ClampCeil(remaining * 0.5f));
     return;
   }
 
   // Case 2: room for only part of the margins.
   if (margins.size() > remaining) {
-    float scale = float{remaining} / float{margins.size()};
-    set_start(container.start() + std::roundf(scale * margins.leading()));
+    float scale = static_cast<float>(remaining) / margins.size();
+    set_start(container.start() + base::ClampRound(scale * margins.leading()));
     return;
   }
 

@@ -118,8 +118,8 @@ void SetIsIncognitoEnabled(const std::string& extension_id,
       return;
 
     // TODO(treib,kalman): Should this be Manifest::IsComponentLocation(..)?
-    // (which also checks for EXTERNAL_COMPONENT).
-    if (extension->location() == Manifest::COMPONENT) {
+    // (which also checks for kExternalComponent).
+    if (extension->location() == mojom::ManifestLocation::kComponent) {
       // This shouldn't be called for component extensions unless it is called
       // by sync, for syncable component extensions.
       // See http://crbug.com/112290 and associated CLs for the sordid history.
@@ -309,6 +309,29 @@ std::unique_ptr<const PermissionSet> GetInstallPromptPermissionSetForExtension(
                                                         optional_permissions);
   }
   return permissions_to_display;
+}
+
+std::vector<content::BrowserContext*> GetAllRelatedProfiles(
+    Profile* profile,
+    const Extension& extension) {
+  std::vector<content::BrowserContext*> related_contexts;
+  related_contexts.push_back(profile->GetOriginalProfile());
+
+  // The returned `related_contexts` should include all the related incognito
+  // profiles if the extension is globally allowed in incognito (this is a
+  // global, rather than per-profile toggle - this is why we it can be checked
+  // globally here, rather than once for every incognito profile looped over
+  // below).
+  if (IsIncognitoEnabled(extension.id(), profile)) {
+    std::vector<Profile*> off_the_record_profiles =
+        profile->GetAllOffTheRecordProfiles();
+    related_contexts.reserve(related_contexts.size() +
+                             off_the_record_profiles.size());
+    for (Profile* off_the_record_profile : off_the_record_profiles)
+      related_contexts.push_back(off_the_record_profile);
+  }
+
+  return related_contexts;
 }
 
 }  // namespace util

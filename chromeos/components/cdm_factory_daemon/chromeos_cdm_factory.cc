@@ -11,6 +11,7 @@
 #include "base/no_destructor.h"
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
+#include "base/unguessable_token.h"
 #include "chromeos/components/cdm_factory_daemon/cdm_storage_adapter.h"
 #include "chromeos/components/cdm_factory_daemon/content_decryption_module_adapter.h"
 #include "chromeos/components/cdm_factory_daemon/mojom/content_decryption_module.mojom.h"
@@ -88,14 +89,14 @@ void ChromeOsCdmFactory::Create(
   // Check that the user has Verified Access enabled in their Chrome settings
   // and if they do not then block this connection since OEMCrypto utilizes
   // remote attestation as part of verification.
-  if (!platform_verification_) {
+  if (!cdm_document_service_) {
     frame_interfaces_->BindEmbedderReceiver(mojo::GenericPendingReceiver(
-        platform_verification_.BindNewPipeAndPassReceiver()));
-    platform_verification_.set_disconnect_handler(
+        cdm_document_service_.BindNewPipeAndPassReceiver()));
+    cdm_document_service_.set_disconnect_handler(
         base::BindOnce(&ChromeOsCdmFactory::OnVerificationMojoConnectionError,
                        weak_factory_.GetWeakPtr()));
   }
-  platform_verification_->IsVerifiedAccessEnabled(base::BindOnce(
+  cdm_document_service_->IsVerifiedAccessEnabled(base::BindOnce(
       &ChromeOsCdmFactory::OnVerifiedAccessEnabled, weak_factory_.GetWeakPtr(),
       key_system, cdm_config, session_message_cb, session_closed_cb,
       session_keys_change_cb, session_expiration_update_cb,
@@ -238,14 +239,12 @@ void ChromeOsCdmFactory::CreateCdm(
           &GetOutputProtectionOnTaskRunner,
           output_protection_remote.InitWithNewPipeAndPassReceiver()));
 
-  url::Origin cdm_origin;
-  frame_interfaces_->GetCdmOrigin(&cdm_origin);
-
   // Now create the remote CDM instance that links everything up.
-  remote_factory_->CreateCdm(
-      cdm->GetClientInterface(), std::move(storage_remote),
-      std::move(output_protection_remote), cdm_origin.host(),
-      std::move(cros_cdm_pending_receiver));
+  remote_factory_->CreateCdm(cdm->GetClientInterface(),
+                             std::move(storage_remote),
+                             std::move(output_protection_remote),
+                             base::UnguessableToken::Create().ToString(),
+                             std::move(cros_cdm_pending_receiver));
 
   base::ThreadTaskRunnerHandle::Get()->PostTask(
       FROM_HERE, base::BindOnce(std::move(cdm_created_cb), std::move(cdm), ""));
@@ -258,7 +257,7 @@ void ChromeOsCdmFactory::OnFactoryMojoConnectionError() {
 
 void ChromeOsCdmFactory::OnVerificationMojoConnectionError() {
   DVLOG(1) << __func__;
-  platform_verification_.reset();
+  cdm_document_service_.reset();
 }
 
 }  // namespace chromeos

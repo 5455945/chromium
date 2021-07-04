@@ -9,8 +9,8 @@
 #include <utility>
 #include <vector>
 
+#include "base/cxx17_backports.h"
 #include "base/feature_list.h"
-#include "base/stl_util.h"
 #include "base/threading/sequenced_task_runner_handle.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
@@ -38,10 +38,6 @@
 namespace extensions {
 
 namespace {
-
-bool AreWebAppsOffExtensions() {
-  return base::FeatureList::IsEnabled(features::kDesktopPWAsWithoutExtensions);
-}
 
 template <typename Multimap, typename Key, typename Value>
 bool DoesMultimapContainKeyAndValue(const Multimap& map,
@@ -85,7 +81,14 @@ ChromeAppSorting::ChromeAppSorting(content::BrowserContext* browser_context)
     : browser_context_(browser_context),
       default_ordinals_created_(false) {
   ExtensionIdList extensions;
-  ExtensionPrefs::Get(browser_context_)->GetExtensions(&extensions);
+  ExtensionPrefs* prefs = ExtensionPrefs::Get(browser_context_);
+  std::unique_ptr<extensions::ExtensionPrefs::ExtensionsInfo> extensions_info =
+      prefs->GetInstalledExtensionsInfo();
+  for (size_t i = 0; i < extensions_info->size(); ++i) {
+    ExtensionInfo* info = extensions_info->at(i).get();
+    if (!prefs->IsFromBookmark(info->extension_id))
+      extensions.push_back(info->extension_id);
+  }
   InitializePageOrdinalMap(extensions);
   MigrateAppIndex(extensions);
 }
@@ -193,8 +196,6 @@ void ChromeAppSorting::MigrateAppIndex(
 }
 
 void ChromeAppSorting::InitializePageOrdinalMapFromWebApps() {
-  if (!AreWebAppsOffExtensions())
-    return;
   auto* profile = Profile::FromBrowserContext(browser_context_);
   DCHECK(profile);
   auto* web_app_provider =
@@ -203,8 +204,18 @@ void ChromeAppSorting::InitializePageOrdinalMapFromWebApps() {
   web_app_registrar_ = web_app_provider->registrar().AsWebAppRegistrar();
   web_app_sync_bridge_ =
       web_app_provider->registry_controller().AsWebAppSyncBridge();
-  app_registrar_observer_.Add(&web_app_provider->registrar());
+  app_registrar_observation_.Observe(&web_app_provider->registrar());
   InitializePageOrdinalMap(web_app_registrar_->GetAppIds());
+}
+
+void ChromeAppSorting::SetWebAppRegistrarForTesting(
+    const web_app::WebAppRegistrar* web_app_registrar) {
+  web_app_registrar_ = web_app_registrar;
+}
+
+void ChromeAppSorting::SetWebAppSyncBridgeForTesting(
+    web_app::WebAppSyncBridge* sync_bridge) {
+  web_app_sync_bridge_ = sync_bridge;
 }
 
 void ChromeAppSorting::FixNTPOrdinalCollisions() {
@@ -573,7 +584,7 @@ void ChromeAppSorting::OnWebAppsWillBeUpdatedFromSync(
 }
 
 void ChromeAppSorting::OnAppRegistrarDestroyed() {
-  app_registrar_observer_.RemoveAll();
+  app_registrar_observation_.Reset();
 }
 
 syncer::StringOrdinal ChromeAppSorting::GetMinOrMaxAppLaunchOrdinalsOnPage(

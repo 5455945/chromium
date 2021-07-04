@@ -112,10 +112,10 @@ class SynchronousLayerTreeFrameSink : public TestLayerTreeFrameSink {
         std::move(frame), hit_test_data_changed, show_hit_test_borders);
   }
   void DidReceiveCompositorFrameAck(
-      const std::vector<viz::ReturnedResource>& resources) override {
+      std::vector<viz::ReturnedResource> resources) override {
     DCHECK(frame_ack_pending_);
     frame_ack_pending_ = false;
-    TestLayerTreeFrameSink::DidReceiveCompositorFrameAck(resources);
+    TestLayerTreeFrameSink::DidReceiveCompositorFrameAck(std::move(resources));
     InvalidateIfPossible();
   }
 
@@ -191,7 +191,7 @@ class LayerTreeHostImplForTesting : public LayerTreeHostImpl {
 
   bool WillBeginImplFrame(const viz::BeginFrameArgs& args) override {
     bool has_damage = LayerTreeHostImpl::WillBeginImplFrame(args);
-    test_hooks_->WillBeginImplFrameOnThread(this, args);
+    test_hooks_->WillBeginImplFrameOnThread(this, args, has_damage);
     return has_damage;
   }
 
@@ -471,7 +471,6 @@ class LayerTreeHostClientForTesting : public LayerTreeHostClient,
 
   void DidSubmitCompositorFrame() override {}
   void DidLoseLayerTreeFrameSink() override {}
-  void RequestScheduleComposite() override { test_hooks_->ScheduleComposite(); }
   void DidCompletePageScaleAnimation() override {}
   void BeginMainFrameNotExpectedSoon() override {
     test_hooks_->BeginMainFrameNotExpectedSoon();
@@ -677,7 +676,7 @@ LayerTreeTest::LayerTreeTest(viz::RendererType renderer_type)
 #if defined(OS_LINUX) || defined(OS_CHROMEOS)
     init_vulkan = true;
 #elif defined(OS_WIN)
-    // TODO(sgilhuly): Initialize D3D12 for Windows.
+    // TODO(rivr): Initialize D3D12 for Windows.
 #else
     NOTREACHED();
 #endif
@@ -972,10 +971,7 @@ void LayerTreeTest::RealEndTest() {
 }
 
 bool LayerTreeTest::use_swangle() const {
-  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  return (gl::GetGLImplementation() == gl::kGLImplementationEGLANGLE) &&
-         (command_line->GetSwitchValueASCII(::switches::kUseANGLE) ==
-          gl::kANGLEImplementationSwiftShaderName);
+  return gl::GetGLImplementationParts() == gl::GetSoftwareGLImplementation();
 }
 
 void LayerTreeTest::DispatchAddNoDamageAnimation(
@@ -1080,7 +1076,7 @@ void LayerTreeTest::DispatchNextCommitWaitsForActivation() {
 void LayerTreeTest::RunTest(CompositorMode mode) {
   mode_ = mode;
   if (mode_ == CompositorMode::THREADED) {
-    impl_thread_.reset(new base::Thread("Compositor"));
+    impl_thread_ = std::make_unique<base::Thread>("Compositor");
     ASSERT_TRUE(impl_thread_->Start());
   }
 
@@ -1089,7 +1085,7 @@ void LayerTreeTest::RunTest(CompositorMode mode) {
 
   gpu_memory_buffer_manager_ =
       std::make_unique<viz::TestGpuMemoryBufferManager>();
-  task_graph_runner_.reset(new TestTaskGraphRunner);
+  task_graph_runner_ = std::make_unique<TestTaskGraphRunner>();
 
   if (mode == CompositorMode::THREADED) {
     settings_.commit_to_active_tree = false;
@@ -1114,7 +1110,6 @@ void LayerTreeTest::RunTest(CompositorMode mode) {
   client_ = nullptr;
   if (timed_out_) {
     FAIL() << "Test timed out";
-    return;
   }
   AfterTest();
 }

@@ -4,6 +4,8 @@
 
 #include "chrome/browser/android/search_permissions/search_permissions_service.h"
 
+#include <memory>
+
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/values.h"
@@ -54,7 +56,7 @@ class SearchEngineDelegateImpl
       template_url_service_->RemoveObserver(this);
   }
 
-  base::string16 GetDSEName() override {
+  std::u16string GetDSEName() override {
     if (template_url_service_) {
       const TemplateURL* template_url =
           template_url_service_->GetDefaultSearchProvider();
@@ -62,7 +64,7 @@ class SearchEngineDelegateImpl
         return template_url->short_name();
     }
 
-    return base::string16();
+    return std::u16string();
   }
 
   url::Origin GetDSEOrigin() override {
@@ -98,7 +100,7 @@ class SearchEngineDelegateImpl
 }  // namespace
 
 struct SearchPermissionsService::PrefValue {
-  base::string16 dse_name;
+  std::u16string dse_name;
   std::string dse_origin;
   ContentSetting geolocation_setting_to_restore;
   ContentSetting notifications_setting_to_restore;
@@ -153,7 +155,7 @@ SearchPermissionsService::SearchPermissionsService(Profile* profile)
   // This class should never be constructed in incognito.
   DCHECK(!profile_->IsOffTheRecord());
 
-  delegate_.reset(new SearchEngineDelegateImpl(profile_));
+  delegate_ = std::make_unique<SearchEngineDelegateImpl>(profile_);
   delegate_->SetDSEChangedCallback(base::BindRepeating(
       &SearchPermissionsService::OnDSEChanged, base::Unretained(this)));
 
@@ -214,8 +216,8 @@ void SearchPermissionsService::OnDSEChanged() {
 
   PrefValue pref = GetDSEPref();
 
-  base::string16 new_dse_name = delegate_->GetDSEName();
-  base::string16 old_dse_name = pref.dse_name;
+  std::u16string new_dse_name = delegate_->GetDSEName();
+  std::u16string old_dse_name = pref.dse_name;
 
   GURL old_dse_origin(pref.dse_origin);
   GURL new_dse_origin = delegate_->GetDSEOrigin().GetURL();
@@ -421,7 +423,7 @@ SearchPermissionsService::PrefValue SearchPermissionsService::GetDSEPref() {
       pref_service_->GetDictionary(prefs::kDSEPermissionsSettings);
 
   PrefValue pref;
-  base::string16 dse_name;
+  std::u16string dse_name;
   std::string dse_origin;
   int geolocation_setting_to_restore;
   int notifications_setting_to_restore;

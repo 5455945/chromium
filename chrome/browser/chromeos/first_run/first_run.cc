@@ -10,18 +10,15 @@
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_macros.h"
-#include "chrome/browser/apps/app_service/app_service_proxy.h"
-#include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
+#include "chrome/browser/ash/arc/arc_util.h"
+#include "chrome/browser/ash/login/ui/login_display_host.h"
+#include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chromeos/arc/arc_util.h"
-#include "chrome/browser/chromeos/login/ui/login_display_host.h"
-#include "chrome/browser/chromeos/login/wizard_controller.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_observer.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/web_applications/system_web_app_ui_utils.h"
-#include "chrome/browser/web_applications/components/web_app_id_constants.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension_constants.h"
@@ -47,15 +44,6 @@ namespace chromeos {
 namespace first_run {
 
 namespace {
-
-void LaunchApp(Profile* profile, std::string app_id) {
-  apps::AppServiceProxy* proxy =
-      apps::AppServiceProxyFactory::GetForProfile(profile);
-
-  proxy->Launch(app_id, ui::EventFlags::EF_NONE,
-                apps::mojom::LaunchSource::kFromChromeInternal);
-  profile->GetPrefs()->SetBoolean(prefs::kFirstRunTutorialShown, true);
-}
 
 // Returns true if this user type is probably a human who wants to configure
 // their device through the help app. Other user types are robots, guests or
@@ -105,7 +93,7 @@ class AppLauncher : public ProfileObserver,
  private:
   explicit AppLauncher(Profile* profile) : profile_(profile) {
     profile->AddObserver(this);
-    web_app::WebAppProvider::Get(profile)
+    web_app::WebAppProvider::GetForSystemWebApps(profile)
         ->system_web_app_manager()
         .on_apps_synchronized()
         .Post(FROM_HERE,
@@ -117,7 +105,8 @@ class AppLauncher : public ProfileObserver,
   AppLauncher& operator=(const AppLauncher&) = delete;
 
   void LaunchHelpApp() {
-    LaunchApp(this->profile_, web_app::kHelpAppId);
+    LaunchSystemWebAppAsync(profile_, web_app::SystemAppType::HELP);
+    profile_->GetPrefs()->SetBoolean(prefs::kFirstRunTutorialShown, true);
     delete this;
   }
   Profile* profile_;

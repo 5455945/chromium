@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "base/bind.h"
-#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/time/default_clock.h"
 #include "base/time/time.h"
@@ -193,7 +192,7 @@ void DialRegistry::StartPeriodicDiscovery() {
   dial_ = CreateDialService();
   dial_->AddObserver(this);
   DoDiscovery();
-  repeating_timer_.reset(new base::RepeatingTimer());
+  repeating_timer_ = std::make_unique<base::RepeatingTimer>();
   repeating_timer_->Start(FROM_HERE, refresh_interval_delta_, this,
                           &DialRegistry::DoDiscovery);
 }

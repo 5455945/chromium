@@ -7,14 +7,14 @@
 
 #include "ios/public/provider/chrome/browser/signin/chrome_identity_service.h"
 
+#import <Foundation/Foundation.h>
+
 #include "testing/gmock/include/gmock/gmock.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 @class FakeChromeIdentityInteractionManager;
-@class NSMutableArray;
 
 namespace ios {
-// Email suffix used for managed accounts.
-extern NSString* const kManagedIdentityEmailSuffix;
 
 // A fake ChromeIdentityService used for testing.
 class FakeChromeIdentityService : public ChromeIdentityService {
@@ -32,18 +32,12 @@ class FakeChromeIdentityService : public ChromeIdentityService {
       UIViewController* viewController,
       BOOL animated) override;
   ChromeIdentityInteractionManager* CreateChromeIdentityInteractionManager(
-      ChromeBrowserState* browser_state,
       id<ChromeIdentityInteractionManagerDelegate> delegate) const override;
   FakeChromeIdentityInteractionManager*
   CreateFakeChromeIdentityInteractionManager(
-      ChromeBrowserState* browser_state,
       id<ChromeIdentityInteractionManagerDelegate> delegate) const;
 
-  bool IsValidIdentity(ChromeIdentity* identity) override;
-  ChromeIdentity* GetIdentityWithGaiaID(const std::string& gaia_id) override;
-  bool HasIdentities() override;
-  NSArray* GetAllIdentities() override;
-  NSArray* GetAllIdentitiesSortedForDisplay() override;
+  void IterateOverIdentities(IdentityIteratorCallback callback) override;
   void ForgetIdentity(ChromeIdentity* identity,
                       ForgetIdentityCallback callback) override;
 
@@ -73,8 +67,17 @@ class FakeChromeIdentityService : public ChromeIdentityService {
                     NSDictionary* user_info,
                     ios::MDMStatusCallback callback));
 
+  // Simulates |identity| removed from another Google app.
+  void SimulateForgetIdentityFromOtherApp(ChromeIdentity* identity);
+
+  // Simulates reloading the identities from the keychain by SSOAuth.
+  void FireChromeIdentityReload();
+
   // Sets up the mock methods for integration tests.
   void SetUpForIntegrationTests();
+
+  // Adds the identities subject to minor mode restrictions given their name.
+  void AddMinorModeIdentities(NSArray* identitiesName);
 
   // Adds the managed identities given their name.
   void AddManagedIdentities(NSArray* identitiesName);
@@ -93,8 +96,11 @@ class FakeChromeIdentityService : public ChromeIdentityService {
   // Returns true on successful completion.
   bool WaitForServiceCallbacksToComplete();
 
+  // Triggers an update notification for |identity|.
+  void TriggerIdentityUpdateNotification(ChromeIdentity* identity);
+
  private:
-  NSMutableArray* identities_;
+  NSMutableArray<ChromeIdentity*>* identities_;
 
   // If true, call to GetAccessToken() fakes a MDM error.
   bool _fakeMDMError;

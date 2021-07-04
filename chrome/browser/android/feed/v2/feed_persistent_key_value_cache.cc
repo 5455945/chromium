@@ -11,8 +11,8 @@
 #include "chrome/browser/android/feed/v2/feed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "components/feed/core/v2/public/feed_api.h"
 #include "components/feed/core/v2/public/feed_service.h"
-#include "components/feed/core/v2/public/feed_stream_api.h"
 #include "components/feed/core/v2/public/persistent_key_value_store.h"
 
 namespace feed {
@@ -52,7 +52,7 @@ PersistentKeyValueStore* GetStore() {
   if (!feed_service)
     return nullptr;
 
-  return feed_service->GetStream()->GetPersistentKeyValueStore();
+  return &feed_service->GetStream()->GetPersistentKeyValueStore();
 }
 
 }  // namespace

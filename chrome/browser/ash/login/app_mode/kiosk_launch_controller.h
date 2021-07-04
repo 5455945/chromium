@@ -10,11 +10,11 @@
 #include "chrome/browser/ash/app_mode/kiosk_profile_loader.h"
 #include "chrome/browser/extensions/forced_extensions/force_installed_tracker.h"
 #include "chrome/browser/ui/webui/chromeos/login/app_launch_splash_screen_handler.h"
+// TODO(https://crbug.com/1164001): use forward declaration.
+#include "chrome/browser/ui/webui/chromeos/login/oobe_ui.h"
 
-namespace chromeos {
-
+namespace ash {
 class LoginDisplayHost;
-class OobeUI;
 
 // Controller for the kiosk launch process, responsible for loading the kiosk
 // profile, and updating the splash screen UI.
@@ -183,6 +183,9 @@ class KioskLaunchController
   // Whether the network is required for the installation.
   bool network_required_ = false;
 
+  // Whether the controller has already been cleaned-up.
+  bool cleaned_up_ = false;
+
   // Used to login into kiosk user profile.
   std::unique_ptr<KioskProfileLoader> kiosk_profile_loader_;
 
@@ -204,6 +207,18 @@ class KioskLaunchController
   base::WeakPtrFactory<KioskLaunchController> weak_ptr_factory_{this};
 };
 
-}  // namespace chromeos
+}  // namespace ash
+
+// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
+// source migration is finished.
+namespace chromeos {
+using ::ash::KioskLaunchController;
+}
+
+// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
+// source migration is finished.
+namespace ash {
+using ::chromeos::KioskLaunchController;
+}
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_APP_MODE_KIOSK_LAUNCH_CONTROLLER_H_

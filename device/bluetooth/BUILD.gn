@@ -69,7 +69,7 @@ source_set("deprecated_experimental_mojo") {
 
     # Approved clients:
     "//chrome/browser/ui/webui/bluetooth_internals:*",
-    "//chrome/browser/chromeos/nearby:bluetooth_adapter_util",
+    "//chrome/browser/chromeos/nearby:*",
 
     # Implementation tests
     # Ideally only device_unittests, however android & fushia generate
@@ -306,6 +306,7 @@ component("bluetooth") {
   if (is_chromeos || is_linux) {
     if (use_dbus) {
       sources += [
+        "bluetooth_adapter_chromeos.cc",
         "bluez/bluetooth_adapter_bluez.cc",
         "bluez/bluetooth_adapter_bluez.h",
         "bluez/bluetooth_adapter_profile_bluez.cc",
@@ -344,6 +345,8 @@ component("bluetooth") {
         "bluez/bluetooth_socket_bluez.h",
         "dbus/bluetooth_adapter_client.cc",
         "dbus/bluetooth_adapter_client.h",
+        "dbus/bluetooth_admin_policy_client.cc",
+        "dbus/bluetooth_admin_policy_client.h",
         "dbus/bluetooth_agent_manager_client.cc",
         "dbus/bluetooth_agent_manager_client.h",
         "dbus/bluetooth_agent_service_provider.cc",
@@ -405,6 +408,10 @@ component("bluetooth") {
         "dbus/bluez_dbus_thread_manager.h",
         "dbus/dbus_bluez_manager_wrapper_linux.cc",
         "dbus/dbus_bluez_manager_wrapper_linux.h",
+        "floss/bluetooth_adapter_floss.cc",
+        "floss/bluetooth_adapter_floss.h",
+        "floss/floss_features.cc",
+        "floss/floss_features.h",
       ]
       if (is_chromeos_ash) {
         configs += [ "//chromeos/dbus:use_real_dbus_clients_config" ]
@@ -418,6 +425,8 @@ component("bluetooth") {
         sources += [
           "dbus/fake_bluetooth_adapter_client.cc",
           "dbus/fake_bluetooth_adapter_client.h",
+          "dbus/fake_bluetooth_admin_policy_client.cc",
+          "dbus/fake_bluetooth_admin_policy_client.h",
           "dbus/fake_bluetooth_agent_manager_client.cc",
           "dbus/fake_bluetooth_agent_manager_client.h",
           "dbus/fake_bluetooth_agent_service_provider.cc",
@@ -547,7 +556,6 @@ if (is_android) {
     sources = java_sources_needing_jni
     deps = [
       "//base:base_java",
-      "//base:jni_java",
       "//components/location/android:location_java",
     ]
     annotation_processor_deps = [ "//base/android/jni_generator:jni_processor" ]

@@ -5,6 +5,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_PAINT_NG_NG_BOX_FRAGMENT_PAINTER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_PAINT_NG_NG_BOX_FRAGMENT_PAINTER_H_
 
+#include "base/dcheck_is_on.h"
 #include "third_party/blink/renderer/core/layout/api/hit_test_action.h"
 #include "third_party/blink/renderer/core/layout/background_bleed_avoidance.h"
 #include "third_party/blink/renderer/core/layout/ng/inline/ng_inline_cursor.h"
@@ -20,6 +21,7 @@ class BoxDecorationData;
 class FillLayer;
 class HitTestLocation;
 class HitTestResult;
+class LayoutNGTextCombine;
 class NGFragmentItems;
 class NGInlineCursor;
 class NGInlineBackwardCursor;
@@ -157,7 +159,7 @@ class CORE_EXPORT NGBoxFragmentPainter : public BoxPainterBase {
                     const PhysicalOffset& paint_offset,
                     const PhysicalOffset& parent_offset);
   void PaintFloatingItems(const PaintInfo&, NGInlineCursor* cursor);
-  void PaintFloatingChildren(const NGPhysicalContainerFragment&,
+  void PaintFloatingChildren(const NGPhysicalFragment&,
                              const PaintInfo& paint_info,
                              const PaintInfo& float_paint_info);
   void PaintFloats(const PaintInfo&);
@@ -166,7 +168,9 @@ class CORE_EXPORT NGBoxFragmentPainter : public BoxPainterBase {
                        const PhysicalRect&,
                        const Color& background_color,
                        BackgroundBleedAvoidance = kBackgroundBleedNone);
-  void PaintCarets(const PaintInfo&, const PhysicalOffset& paint_offset);
+  void PaintCaretsIfNeeded(const ScopedPaintState&,
+                           const PaintInfo&,
+                           const PhysicalOffset& paint_offset);
 
   // This should be called in the background paint phase even if there is no
   // other painted content.
@@ -192,17 +196,21 @@ class CORE_EXPORT NGBoxFragmentPainter : public BoxPainterBase {
 
     // Add |node| to |HitTestResult|. Returns true if the hit-testing should
     // stop.
+    // T is PhysicalRect or FloatQuad.
+    template <typename T>
     bool AddNodeToResult(Node* node,
                          const NGPhysicalBoxFragment* box_fragment,
-                         const PhysicalRect& bounds_rect,
+                         const T& bounds_rect,
                          const PhysicalOffset& offset) const;
     // Same as |AddNodeToResult|, except that |offset| is in the content
     // coordinate system rather than the container coordinate system. They
     // differ when |container| is a scroll container.
+    // T is PhysicalRect or FloatQuad.
+    template <typename T>
     bool AddNodeToResultWithContentOffset(
         Node* node,
         const NGPhysicalBoxFragment& container,
-        const PhysicalRect& bounds_rect,
+        const T& bounds_rect,
         PhysicalOffset offset) const;
 
     HitTestAction action;
@@ -213,6 +221,10 @@ class CORE_EXPORT NGBoxFragmentPainter : public BoxPainterBase {
     // The result is set to this member, but its address does not change during
     // the traversal.
     HitTestResult* result;
+
+    // Non-null when processing a line box in |LayoutNGTextCombine| uses
+    // scaling. This field is populated in |NodeAtPoint()|.
+    const LayoutNGTextCombine* text_combine = nullptr;
   };
 
   // Hit tests the children of a container fragment, which is either
@@ -236,7 +248,7 @@ class CORE_EXPORT NGBoxFragmentPainter : public BoxPainterBase {
                             const NGPhysicalBoxFragment& container,
                             const NGInlineCursor& children);
   bool HitTestFloatingChildren(const HitTestContext& hit_test,
-                               const NGPhysicalContainerFragment& container,
+                               const NGPhysicalFragment& container,
                                const PhysicalOffset& accumulated_offset);
   bool HitTestFloatingChildItems(const HitTestContext& hit_test,
                                  const NGInlineCursor& children,
@@ -287,7 +299,7 @@ class CORE_EXPORT NGBoxFragmentPainter : public BoxPainterBase {
   const DisplayItemClient& GetDisplayItemClient() const {
     return display_item_client_;
   }
-  PhysicalRect SelfInkOverflow() const;
+  PhysicalRect InkOverflowIncludingFilters() const;
 
   const NGPhysicalBoxFragment& box_fragment_;
   const DisplayItemClient& display_item_client_;

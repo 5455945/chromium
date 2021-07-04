@@ -11,8 +11,7 @@
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
-#include "components/safe_browsing/core/common/thread_utils.h"
-#include "components/safe_browsing/core/features.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "net/base/url_util.h"
 #include "url/gurl.h"
 #include "url/url_canon.h"
@@ -139,8 +138,7 @@ bool IsSafeBrowsingEnabled(const PrefService& prefs) {
 bool IsEnhancedProtectionEnabled(const PrefService& prefs) {
   // SafeBrowsingEnabled is checked too due to devices being out
   // of sync or not on a version that includes SafeBrowsingEnhanced pref.
-  return base::FeatureList::IsEnabled(kEnhancedProtection) &&
-         prefs.GetBoolean(prefs::kSafeBrowsingEnhanced) &&
+  return prefs.GetBoolean(prefs::kSafeBrowsingEnhanced) &&
          IsSafeBrowsingEnabled(prefs);
 }
 
@@ -169,11 +167,6 @@ bool IsExtendedReportingPolicyManaged(const PrefService& prefs) {
 bool IsSafeBrowsingPolicyManaged(const PrefService& prefs) {
   return prefs.IsManagedPreference(prefs::kSafeBrowsingEnabled) ||
          prefs.IsManagedPreference(prefs::kSafeBrowsingEnhanced);
-}
-
-bool IsEnhancedProtectionMessageInInterstitialsEnabled() {
-  return base::FeatureList::IsEnabled(
-      kEnhancedProtectionMessageInInterstitials);
 }
 
 void RecordExtendedReportingMetrics(const PrefService& prefs) {
@@ -302,21 +295,7 @@ void CanonicalizeDomainList(
   }
 }
 
-bool IsURLAllowlistedByPolicy(const GURL& url,
-                              StringListPrefMember* pref_member) {
-  DCHECK(CurrentlyOnThread(ThreadID::IO));
-  if (!pref_member)
-    return false;
-
-  std::vector<std::string> sb_allowlist_domains = pref_member->GetValue();
-  return std::find_if(sb_allowlist_domains.begin(), sb_allowlist_domains.end(),
-                      [&url](const std::string& domain) {
-                        return url.DomainIs(domain);
-                      }) != sb_allowlist_domains.end();
-}
-
 bool IsURLAllowlistedByPolicy(const GURL& url, const PrefService& pref) {
-  DCHECK(CurrentlyOnThread(ThreadID::UI));
   if (!pref.HasPrefPath(prefs::kSafeBrowsingAllowlistDomains))
     return false;
   const base::ListValue* allowlist =
@@ -326,6 +305,16 @@ bool IsURLAllowlistedByPolicy(const GURL& url, const PrefService& pref) {
       return true;
   }
   return false;
+}
+
+std::vector<std::string> GetURLAllowlistByPolicy(PrefService* pref_service) {
+  std::vector<std::string> allowlist_domains;
+  const base::ListValue* allowlist =
+      pref_service->GetList(prefs::kSafeBrowsingAllowlistDomains);
+  for (const base::Value& value : allowlist->GetList()) {
+    allowlist_domains.push_back(value.GetString());
+  }
+  return allowlist_domains;
 }
 
 bool MatchesEnterpriseAllowlist(const PrefService& pref,

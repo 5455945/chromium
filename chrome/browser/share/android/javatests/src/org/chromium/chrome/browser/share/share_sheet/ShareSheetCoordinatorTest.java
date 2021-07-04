@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.share.share_sheet;
 
 import static org.junit.Assert.assertEquals;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anySet;
 import static org.mockito.Matchers.any;
@@ -24,6 +25,7 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 import org.chromium.base.test.BaseActivityTestRule;
+import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
@@ -39,6 +41,8 @@ import org.chromium.ui.test.util.DummyUiActivity;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Tests {@link ShareSheetCoordinator}.
@@ -91,7 +95,7 @@ public final class ShareSheetCoordinatorTest {
         ArrayList<PropertyModel> thirdPartyPropertyModels =
                 new ArrayList<>(Arrays.asList(testModel1, testModel2));
         when(mPropertyModelBuilder.selectThirdPartyApps(
-                     any(), anySet(), any(), anyBoolean(), any(), anyLong()))
+                     any(), anySet(), any(), anyBoolean(), any(), anyLong(), anyInt()))
                 .thenReturn(thirdPartyPropertyModels);
 
         mShareSheetCoordinator = new ShareSheetCoordinator(mController, mLifecycleDispatcher, null,
@@ -105,16 +109,24 @@ public final class ShareSheetCoordinatorTest {
 
         List<PropertyModel> propertyModels = mShareSheetCoordinator.createFirstPartyPropertyModels(
                 mActivity, mParams, /*chromeShareExtras=*/null,
-                ShareSheetPropertyModelBuilder.ALL_CONTENT_TYPES);
+                ShareSheetPropertyModelBuilder.ALL_CONTENT_TYPES_FOR_TEST);
         assertEquals("Property model list should be empty.", 0, propertyModels.size());
     }
 
     @Test
     @MediumTest
-    public void testCreateThirdPartyPropertyModels() {
-        List<PropertyModel> propertyModels = mShareSheetCoordinator.createThirdPartyPropertyModels(
-                mActivity, mParams, ShareSheetPropertyModelBuilder.ALL_CONTENT_TYPES,
-                /*saveLastUsed=*/false);
+    public void testCreateThirdPartyPropertyModels() throws TimeoutException {
+        final AtomicReference<List<PropertyModel>> resultPropertyModels =
+                new AtomicReference<List<PropertyModel>>();
+        CallbackHelper helper = new CallbackHelper();
+        mShareSheetCoordinator.createThirdPartyPropertyModels(mActivity, mParams,
+                ShareSheetPropertyModelBuilder.ALL_CONTENT_TYPES_FOR_TEST,
+                /*saveLastUsed=*/false, models -> {
+                    resultPropertyModels.set(models);
+                    helper.notifyCalled();
+                });
+        helper.waitForFirst();
+        List<PropertyModel> propertyModels = resultPropertyModels.get();
 
         assertEquals("Incorrect number of property models.", 3, propertyModels.size());
         assertEquals("First property model isn't testModel1.", "testModel1",

@@ -6,10 +6,10 @@
 
 #include <algorithm>
 #include <array>
+#include <string>
 #include <utility>
 
 #include "base/i18n/time_formatting.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browsing_data/cookies_tree_model.h"
@@ -18,14 +18,14 @@
 #include "net/cookies/canonical_cookie.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/canvas.h"
 #include "ui/native_theme/native_theme.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/layout/grid_layout.h"
-#include "ui/views/metadata/metadata_header_macros.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/window/dialog_delegate.h"
 
 namespace {
@@ -119,14 +119,13 @@ CookieInfoView::CookieInfoView() {
     property_textfields_[cookie_property_and_label.first] = AddTextfieldRow(
         three_column_layout_id, layout, cookie_property_and_label.second);
   }
-  SetTextfieldColors();
 }
 
 CookieInfoView::~CookieInfoView() = default;
 
 void CookieInfoView::SetCookie(const std::string& domain,
                                const net::CanonicalCookie& cookie) {
-  const std::unordered_map<CookieProperty, base::string16> strings_map{
+  const std::unordered_map<CookieProperty, std::u16string> strings_map{
       {CookieProperty::kName, base::UTF8ToUTF16(cookie.Name())},
       {CookieProperty::kContent, base::UTF8ToUTF16(cookie.Value())},
       {CookieProperty::kDomain, base::UTF8ToUTF16(domain)},

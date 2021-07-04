@@ -3,10 +3,16 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/metrics/power/power_metrics_reporter.h"
+#include <vector>
 
+#include "base/bind.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "chrome/browser/lifetime/browser_shutdown.h"
+#include "chrome/browser/metrics/power/power_details_provider.h"
+#include "chrome/browser/performance_monitor/process_metrics_recorder_util.h"
 #include "chrome/browser/performance_monitor/process_monitor.h"
 #include "services/metrics/public/cpp/metrics_utils.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
@@ -18,6 +24,29 @@ constexpr const char* kBatteryDischargeRateHistogramName =
     "Power.BatteryDischargeRate2";
 constexpr const char* kBatteryDischargeModeHistogramName =
     "Power.BatteryDischargeMode";
+constexpr const char* kZeroWindowSuffix = ".ZeroWindow";
+constexpr const char* kBatterySamplingDelayHistogramName =
+    "Power.BatterySamplingDelay";
+constexpr const char* kMainScreenBrightnessHistogramName =
+    "Power.MainScreenBrightness";
+constexpr const char* kMainScreenBrightnessAvailableHistogramName =
+    "Power.MainScreenBrightnessAvailable";
+
+// Calculates the UKM bucket |value| falls in and returns it. This uses an
+// exponential bucketing approach with an exponent base of 1.3, resulting in
+// 17 buckets for an interval of 120 seconds.
+int64_t GetBucketForSample(base::TimeDelta value) {
+  const float kBucketSpacing = 1.3;
+  // Put all the abnormal values in an overflow bucket. The default interval
+  // length is 120 seconds, with an exponent base of 1.3 the bucket for this
+  // value includes all values in the [113, 146] range.
+  constexpr int64_t kOverflowBucket = 147;
+  DCHECK_EQ(kOverflowBucket,
+            ukm::GetExponentialBucketMin(kOverflowBucket, kBucketSpacing));
+  return std::min(
+      ukm::GetExponentialBucketMin(value.InSeconds(), kBucketSpacing),
+      kOverflowBucket);
+}
 
 }  // namespace
 
@@ -28,7 +57,14 @@ PowerMetricsReporter::PowerMetricsReporter(
       battery_level_provider_(std::move(battery_level_provider)) {
   DCHECK(performance_monitor::ProcessMonitor::Get());
   performance_monitor::ProcessMonitor::Get()->AddObserver(this);
-  battery_state_ = battery_level_provider_->GetBatteryState();
+
+  battery_level_provider_->GetBatteryState(
+      base::BindOnce(&PowerMetricsReporter::OnFirstBatteryStateSampled,
+                     weak_factory_.GetWeakPtr()));
+
+#if defined(OS_MAC)
+  power_details_provider_ = PowerDetailsProvider::Create();
+#endif
 }
 
 PowerMetricsReporter::~PowerMetricsReporter() {
@@ -37,33 +73,54 @@ PowerMetricsReporter::~PowerMetricsReporter() {
   }
 }
 
+void PowerMetricsReporter::OnFirstSampleForTesting(base::OnceClosure closure) {
+  if (!interval_begin_.is_null()) {
+    std::move(closure).Run();
+  } else {
+    on_battery_sampled_for_testing_ = std::move(closure);
+  }
+}
+
+int64_t PowerMetricsReporter::GetBucketForSampleForTesting(
+    base::TimeDelta value) {
+  return GetBucketForSample(value);
+}
+
 void PowerMetricsReporter::OnAggregatedMetricsSampled(
     const performance_monitor::ProcessMonitor::Metrics& metrics) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  auto* process_monitor = performance_monitor::ProcessMonitor::Get();
-  base::TimeDelta sampling_interval =
-      process_monitor->GetScheduledSamplingInterval();
-
-  auto now = base::TimeTicks::Now();
-  base::TimeDelta interval_duration = now - interval_begin_;
-  interval_begin_ = now;
-
-  auto discharge_mode_and_rate =
-      GetBatteryDischargeRateDuringInterval(interval_duration);
-
-  ReportHistograms(sampling_interval, interval_duration,
-                   discharge_mode_and_rate.first,
-                   discharge_mode_and_rate.second);
-  ReportUKMs(metrics, interval_duration, discharge_mode_and_rate.first,
-             discharge_mode_and_rate.second);
+  battery_level_provider_->GetBatteryState(
+      base::BindOnce(&PowerMetricsReporter::OnBatteryStateAndMetricsSampled,
+                     weak_factory_.GetWeakPtr(), metrics,
+                     /* scheduled_time=*/base::TimeTicks::Now()));
 }
 
-void PowerMetricsReporter::ReportHistograms(
+// Returns all usage scenario suffixes that apply to |interval_data|.
+std::vector<const char*> GetSuffixes(
+    const UsageScenarioDataStore::IntervalData& interval_data) {
+  std::vector<const char*> suffixes;
+  if (interval_data.max_tab_count == 0) {
+    suffixes.push_back(kZeroWindowSuffix);
+  }
+  return suffixes;
+}
+
+std::vector<const char*> PowerMetricsReporter::GetSuffixesForTesting(
+    const UsageScenarioDataStore::IntervalData& interval_data) {
+  std::vector<const char*> suffixes = GetSuffixes(interval_data);
+  // Always at least record the unsuffixed version for tested histograms.
+  suffixes.push_back("");
+  return suffixes;
+}
+
+void PowerMetricsReporter::ReportBatteryHistograms(
+    const UsageScenarioDataStore::IntervalData& interval_data,
     base::TimeDelta sampling_interval,
     base::TimeDelta interval_duration,
     BatteryDischargeMode discharge_mode,
-    base::Optional<int64_t> discharge_rate_during_interval) {
+    absl::optional<int64_t> discharge_rate_during_interval,
+    const std::vector<const char*>& suffixes) {
   // Ratio by which the time elapsed can deviate from |recording_interval|
   // without invalidating this sample.
   constexpr double kTolerableTimeElapsedRatio = 0.10;
@@ -84,20 +141,114 @@ void PowerMetricsReporter::ReportHistograms(
     discharge_mode = BatteryDischargeMode::kInvalidInterval;
   }
 
-  base::UmaHistogramEnumeration(kBatteryDischargeModeHistogramName,
-                                discharge_mode);
-  if (discharge_mode == BatteryDischargeMode::kDischarging) {
-    DCHECK(discharge_rate_during_interval.has_value());
-    base::UmaHistogramCounts1000(kBatteryDischargeRateHistogramName,
-                                 *discharge_rate_during_interval);
+  for (const char* suffix : suffixes) {
+    base::UmaHistogramEnumeration(
+        base::JoinString({kBatteryDischargeModeHistogramName, suffix}, ""),
+        discharge_mode);
+
+    if (discharge_mode == BatteryDischargeMode::kDischarging) {
+      DCHECK(discharge_rate_during_interval.has_value());
+      base::UmaHistogramCounts1000(
+          base::JoinString({kBatteryDischargeRateHistogramName, suffix}, ""),
+          *discharge_rate_during_interval);
+    }
+  }
+}
+
+void PowerMetricsReporter::OnFirstBatteryStateSampled(
+    const BatteryLevelProvider::BatteryState& battery_state) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  battery_state_ = battery_state;
+  interval_begin_ = base::TimeTicks::Now();
+  if (on_battery_sampled_for_testing_)
+    std::move(on_battery_sampled_for_testing_).Run();
+}
+
+void PowerMetricsReporter::OnBatteryStateAndMetricsSampled(
+    const performance_monitor::ProcessMonitor::Metrics& metrics,
+    base::TimeTicks scheduled_time,
+    const BatteryLevelProvider::BatteryState& battery_state) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  auto now = base::TimeTicks::Now();
+  base::TimeDelta interval_duration = now - interval_begin_;
+  interval_begin_ = now;
+  base::UmaHistogramMicrosecondsTimes(kBatterySamplingDelayHistogramName,
+                                      now - scheduled_time);
+
+  auto discharge_mode_and_rate =
+      GetBatteryDischargeRateDuringInterval(battery_state, interval_duration);
+  ReportUKMsAndHistograms(metrics, interval_duration,
+                          discharge_mode_and_rate.first,
+                          discharge_mode_and_rate.second);
+
+  if (on_battery_sampled_for_testing_)
+    std::move(on_battery_sampled_for_testing_).Run();
+}
+
+void PowerMetricsReporter::ReportUKMsAndHistograms(
+    const performance_monitor::ProcessMonitor::Metrics& metrics,
+    base::TimeDelta interval_duration,
+    BatteryDischargeMode discharge_mode,
+    absl::optional<int64_t> discharge_rate_during_interval) const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DCHECK(data_store_.MaybeValid());
+
+  UsageScenarioDataStore::IntervalData interval_data =
+      data_store_->ResetIntervalData();
+
+  ReportUKMs(interval_data, metrics, interval_duration, discharge_mode,
+             discharge_rate_during_interval);
+
+  std::vector<const char*> suffixes = GetSuffixes(interval_data);
+  ReportCPUHistograms(interval_data, metrics, suffixes);
+
+  // Always at least record the unsuffixed version for the remaining histograms.
+  suffixes.push_back("");
+
+  auto* process_monitor = performance_monitor::ProcessMonitor::Get();
+  base::TimeDelta sampling_interval =
+      process_monitor->GetScheduledSamplingInterval();
+
+  ReportBatteryHistograms(interval_data, sampling_interval, interval_duration,
+                          discharge_mode, discharge_rate_during_interval,
+                          suffixes);
+
+  bool brightness_read_successfully = false;
+  if (power_details_provider_.get()) {
+    auto brightness = power_details_provider_->GetMainScreenBrightnessLevel();
+    if (brightness != PowerDetailsProvider::kInvalidScreenBrightness) {
+      // Report the percentage as an integer as UMA doesn't allow reporting
+      // reals.
+      int brightness_int = brightness * 100;
+      DCHECK_GE(100, brightness_int);
+      brightness_read_successfully = true;
+      base::UmaHistogramPercentage(kMainScreenBrightnessHistogramName,
+                                   brightness_int);
+    }
+  }
+  base::UmaHistogramBoolean(kMainScreenBrightnessAvailableHistogramName,
+                            brightness_read_successfully);
+}
+
+// static
+void PowerMetricsReporter::ReportCPUHistograms(
+    const UsageScenarioDataStore::IntervalData& interval_data,
+    const performance_monitor::ProcessMonitor::Metrics& metrics,
+    const std::vector<const char*>& suffixes) {
+  for (const char* suffix : GetSuffixes(interval_data)) {
+    std::string complete_suffix = base::JoinString({"Total", suffix}, "");
+    performance_monitor::RecordProcessHistograms(complete_suffix.c_str(),
+                                                 metrics);
   }
 }
 
 void PowerMetricsReporter::ReportUKMs(
+    const UsageScenarioDataStore::IntervalData& interval_data,
     const performance_monitor::ProcessMonitor::Metrics& metrics,
     base::TimeDelta interval_duration,
     BatteryDischargeMode discharge_mode,
-    base::Optional<int64_t> discharge_rate_during_interval) const {
+    absl::optional<int64_t> discharge_rate_during_interval) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(data_store_.MaybeValid());
 
@@ -108,20 +259,17 @@ void PowerMetricsReporter::ReportUKMs(
   if (!ukm_recorder)
     return;
 
-  auto usage_metrics = data_store_->ResetIntervalData();
-  auto source_id = usage_metrics.source_id_for_longest_visible_origin;
-
-  // TODO(sebmarchand): Figure out if we need to report data when we don't have
-  // a valid sourceID.
-  if (source_id == ukm::kInvalidSourceId)
-    return;
+  auto source_id = interval_data.source_id_for_longest_visible_origin;
 
   ukm::builders::PowerUsageScenariosIntervalData builder(source_id);
-  builder.SetURLVisibilityTimeSeconds(ukm::GetExponentialBucketMinForUserTiming(
-      usage_metrics.source_id_for_longest_visible_origin_duration.InSeconds()));
+
+  builder.SetURLVisibilityTimeSeconds(GetBucketForSample(
+      interval_data.source_id_for_longest_visible_origin_duration));
   builder.SetIntervalDurationSeconds(interval_duration.InSeconds());
+  // An exponential bucket is fine here as this value isn't limited to the
+  // interval duration.
   builder.SetUptimeSeconds(ukm::GetExponentialBucketMinForUserTiming(
-      usage_metrics.uptime_at_interval_end.InSeconds()));
+      interval_data.uptime_at_interval_end.InSeconds()));
   builder.SetBatteryDischargeMode(static_cast<int64_t>(discharge_mode));
   if (discharge_mode == BatteryDischargeMode::kDischarging) {
     DCHECK(discharge_rate_during_interval.has_value());
@@ -134,50 +282,56 @@ void PowerMetricsReporter::ReportUKMs(
   builder.SetEnergyImpactScore(metrics.energy_impact);
 #endif
   builder.SetMaxTabCount(
-      ukm::GetExponentialBucketMinForCounts1000(usage_metrics.max_tab_count));
+      ukm::GetExponentialBucketMinForCounts1000(interval_data.max_tab_count));
   // The number of windows is usually relatively low, use a small bucket
   // spacing.
   builder.SetMaxVisibleWindowCount(ukm::GetExponentialBucketMin(
-      usage_metrics.max_visible_window_count, 1.05));
+      interval_data.max_visible_window_count, 1.05));
   builder.SetTabClosed(ukm::GetExponentialBucketMinForCounts1000(
-      usage_metrics.tabs_closed_during_interval));
+      interval_data.tabs_closed_during_interval));
   builder.SetTimePlayingVideoInVisibleTab(
-      ukm::GetExponentialBucketMinForUserTiming(
-          usage_metrics.time_playing_video_in_visible_tab.InSeconds()));
+      GetBucketForSample(interval_data.time_playing_video_in_visible_tab));
   builder.SetTopLevelNavigationEvents(ukm::GetExponentialBucketMinForCounts1000(
-      usage_metrics.top_level_navigation_count));
+      interval_data.top_level_navigation_count));
   builder.SetUserInteractionCount(ukm::GetExponentialBucketMinForCounts1000(
-      usage_metrics.user_interaction_count));
-  builder.SetFullscreenVideoSingleMonitorSeconds(
-      ukm::GetExponentialBucketMinForUserTiming(
-          usage_metrics.time_playing_video_full_screen_single_monitor
-              .InSeconds()));
+      interval_data.user_interaction_count));
+  builder.SetFullscreenVideoSingleMonitorSeconds(GetBucketForSample(
+      interval_data.time_playing_video_full_screen_single_monitor));
   builder.SetTimeWithOpenWebRTCConnectionSeconds(
-      ukm::GetExponentialBucketMinForUserTiming(
-          usage_metrics.time_with_open_webrtc_connection.InSeconds()));
+      GetBucketForSample(interval_data.time_with_open_webrtc_connection));
+  builder.SetTimeSinceInteractionWithBrowserSeconds(GetBucketForSample(
+      interval_data.time_since_last_user_interaction_with_browser));
+  builder.SetVideoCaptureSeconds(
+      GetBucketForSample(interval_data.time_capturing_video));
+  builder.SetBrowserShuttingDown(browser_shutdown::HasShutdownStarted());
+  builder.SetPlayingAudioSeconds(
+      GetBucketForSample(interval_data.time_playing_audio));
+  builder.SetOriginVisibilityTimeSeconds(
+      GetBucketForSample(interval_data.longest_visible_origin_duration));
 
   builder.Record(ukm_recorder);
 }
 
-std::pair<PowerMetricsReporter::BatteryDischargeMode, base::Optional<int64_t>>
+std::pair<PowerMetricsReporter::BatteryDischargeMode, absl::optional<int64_t>>
 PowerMetricsReporter::GetBatteryDischargeRateDuringInterval(
+    const BatteryLevelProvider::BatteryState& new_battery_state,
     base::TimeDelta interval_duration) {
   auto previous_battery_state =
-      std::exchange(battery_state_, battery_level_provider_->GetBatteryState());
+      std::exchange(battery_state_, new_battery_state);
 
   if (previous_battery_state.battery_count == 0 ||
       battery_state_.battery_count == 0) {
-    return {BatteryDischargeMode::kNoBattery, base::nullopt};
+    return {BatteryDischargeMode::kNoBattery, absl::nullopt};
   }
   if (!previous_battery_state.on_battery && !battery_state_.on_battery) {
-    return {BatteryDischargeMode::kPluggedIn, base::nullopt};
+    return {BatteryDischargeMode::kPluggedIn, absl::nullopt};
   }
   if (previous_battery_state.on_battery != battery_state_.on_battery) {
-    return {BatteryDischargeMode::kStateChanged, base::nullopt};
+    return {BatteryDischargeMode::kStateChanged, absl::nullopt};
   }
   if (!previous_battery_state.charge_level.has_value() ||
       !battery_state_.charge_level.has_value()) {
-    return {BatteryDischargeMode::kChargeLevelUnavailable, base::nullopt};
+    return {BatteryDischargeMode::kChargeLevelUnavailable, absl::nullopt};
   }
 
   // The battery discharge rate is reported per minute with 1/10000 of full
@@ -189,6 +343,6 @@ PowerMetricsReporter::GetBatteryDischargeRateDuringInterval(
                          battery_state_.charge_level.value()) *
                         kDischargeRateFactor / interval_duration.InSeconds();
   if (discharge_rate < 0)
-    return {BatteryDischargeMode::kInvalidDischargeRate, base::nullopt};
+    return {BatteryDischargeMode::kInvalidDischargeRate, absl::nullopt};
   return {BatteryDischargeMode::kDischarging, discharge_rate};
 }

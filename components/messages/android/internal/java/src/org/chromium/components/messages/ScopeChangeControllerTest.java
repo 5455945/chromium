@@ -5,93 +5,150 @@
 package org.chromium.components.messages;
 
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doNothing;
-import static org.mockito.Mockito.doReturn;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.description;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import androidx.test.filters.SmallTest;
 
 import org.junit.Assert;
-import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mockito;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.content_public.browser.Visibility;
-import org.chromium.content_public.browser.WebContents;
+import org.chromium.components.messages.MessageScopeChange.ChangeType;
+import org.chromium.content_public.browser.LoadCommittedDetails;
+import org.chromium.content_public.browser.NavigationController;
+import org.chromium.content_public.browser.NavigationEntry;
+import org.chromium.content_public.browser.WebContentsObserver;
+import org.chromium.content_public.browser.test.mock.MockWebContents;
+import org.chromium.ui.base.PageTransition;
 
 /**
- * Unit tests for {@link ScopeChangeController}.
+ * A test for {@link ScopeChangeController}.
  */
 @RunWith(BaseRobolectricTestRunner.class)
 public class ScopeChangeControllerTest {
-    @Mock
-    private WebContents mWebContents;
-
-    @Before
-    public void setUp() {
-        MockitoAnnotations.initMocks(this);
-    }
-
-    /**
-     * Ensure that message key and web contents are registered and that all maps are cleared
-     * when ref count decrements to zero.
-     */
     @Test
     @SmallTest
-    public void testEnqueueMultipleMessageOnSameWebContents() {
-        MessageQueueManager queueManager = new MessageQueueManager();
-        ScopeChangeController controller = new ScopeChangeController(queueManager);
-        Object key1 = new Object();
-        Object key2 = new Object();
-        doReturn(Visibility.VISIBLE).when(mWebContents).getVisibility();
-        doNothing().when(mWebContents).addObserver(any());
-        controller.observe(key1, mWebContents);
-        controller.observe(key2, mWebContents);
+    public void testNavigationScopeChange() {
+        ScopeChangeController.Delegate delegate =
+                Mockito.mock(ScopeChangeController.Delegate.class);
+        ScopeChangeController controller = new ScopeChangeController(delegate);
 
-        Assert.assertEquals("Each message key should be registered in the map.", 2,
-                controller.getMessageToWebContentsMap().size());
-        Assert.assertEquals("Each web contents should be registered in the map.", 1,
-                controller.getRefCountedWebContentsObserverMap().size());
+        MockWebContents webContents = mock(MockWebContents.class);
+        NavigationController navigationController = mock(NavigationController.class);
+        NavigationEntry entry = mock(NavigationEntry.class);
+        when(webContents.getNavigationController()).thenReturn(navigationController);
+        when(navigationController.getLastCommittedEntryIndex()).thenReturn(1);
+        when(navigationController.getEntryAtIndex(anyInt())).thenReturn(entry);
+        when(entry.getTransition()).thenReturn(PageTransition.HOME_PAGE);
 
-        controller.stopObservation(key1);
-        Assert.assertEquals("The message key should be removed in the map if it is not observed.",
-                1, controller.getMessageToWebContentsMap().size());
-        Assert.assertEquals("The web contents should stay in the map if it still being observed.",
-                1, controller.getRefCountedWebContentsObserverMap().size());
+        int expectedOnScopeChangeCalls = 0;
+        ScopeKey key = new ScopeKey(MessageScopeType.NAVIGATION, webContents);
+        controller.firstMessageEnqueued(key);
 
-        controller.stopObservation(key2);
-        Assert.assertTrue("All maps should be cleared if ref count decrements to zero.",
-                controller.getMessageToWebContentsMap().isEmpty());
-        Assert.assertTrue("All maps should be cleared if ref count decrements to zero.",
-                controller.getRefCountedWebContentsObserverMap().isEmpty());
+        final ArgumentCaptor<WebContentsObserver> runnableCaptor =
+                ArgumentCaptor.forClass(WebContentsObserver.class);
+        verify(webContents).addObserver(runnableCaptor.capture());
+
+        WebContentsObserver observer = runnableCaptor.getValue();
+
+        // Default visibility of web contents is invisible.
+        expectedOnScopeChangeCalls++;
+        ArgumentCaptor<MessageScopeChange> captor =
+                ArgumentCaptor.forClass(MessageScopeChange.class);
+        verify(delegate,
+                times(expectedOnScopeChangeCalls)
+                        .description("Delegate should be called when page is hidden"))
+                .onScopeChange(captor.capture());
+        Assert.assertEquals("Scope type should be inactive when page is hidden",
+                ChangeType.INACTIVE, captor.getValue().changeType);
+
+        observer.wasShown();
+        expectedOnScopeChangeCalls++;
+        verify(delegate,
+                times(expectedOnScopeChangeCalls)
+                        .description("Delegate should be called when page is shown"))
+                .onScopeChange(captor.capture());
+        Assert.assertEquals("Scope type should be active when page is shown", ChangeType.ACTIVE,
+                captor.getValue().changeType);
+
+        observer.wasHidden();
+        expectedOnScopeChangeCalls++;
+        verify(delegate,
+                times(expectedOnScopeChangeCalls)
+                        .description("Delegate should be called when page is hidden"))
+                .onScopeChange(captor.capture());
+        Assert.assertEquals("Scope type should be inactive when page is hidden",
+                ChangeType.INACTIVE, captor.getValue().changeType);
+
+        observer.navigationEntryCommitted(createLoadCommittedDetails(true));
+        verify(delegate,
+                times(expectedOnScopeChangeCalls)
+                        .description("Delegate should not be called when entry is replaced"))
+                .onScopeChange(any());
+
+        observer.navigationEntryCommitted(createLoadCommittedDetails(false));
+
+        expectedOnScopeChangeCalls++;
+        verify(delegate,
+                times(expectedOnScopeChangeCalls)
+                        .description(
+                                "Delegate should be called when page is navigated to another page"))
+                .onScopeChange(captor.capture());
+        Assert.assertEquals("Scope type should be destroy when navigated to another page",
+                ChangeType.DESTROY, captor.getValue().changeType);
+
+        observer.onTopLevelNativeWindowChanged(null);
+
+        expectedOnScopeChangeCalls++;
+        verify(delegate,
+                times(expectedOnScopeChangeCalls)
+                        .description(
+                                "Delegate should be called when top level native window changes"))
+                .onScopeChange(captor.capture());
+        Assert.assertEquals("Scope type should be destroy when top level native window changes",
+                ChangeType.DESTROY, captor.getValue().changeType);
     }
 
-    /**
-     * Test {@link ScopeChangeController#stopAllObservation()}.
-     */
     @Test
     @SmallTest
-    public void testStopAllObservation() {
-        MessageQueueManager queueManager = new MessageQueueManager();
-        ScopeChangeController controller = new ScopeChangeController(queueManager);
-        Object key1 = new Object();
-        Object key2 = new Object();
-        doReturn(Visibility.VISIBLE).when(mWebContents).getVisibility();
-        doNothing().when(mWebContents).addObserver(any());
-        controller.observe(key1, mWebContents);
-        controller.observe(key2, mWebContents);
+    public void testIgnoreNavigation() {
+        ScopeChangeController.Delegate delegate =
+                Mockito.mock(ScopeChangeController.Delegate.class);
+        ScopeChangeController controller = new ScopeChangeController(delegate);
 
-        Assert.assertEquals("Each message key should be registered in the map.", 2,
-                controller.getMessageToWebContentsMap().size());
-        Assert.assertEquals("Each web contents should be registered in the map.", 1,
-                controller.getRefCountedWebContentsObserverMap().size());
+        MockWebContents webContents = mock(MockWebContents.class);
+        ScopeKey key = new ScopeKey(MessageScopeType.WEB_CONTENTS, webContents);
+        controller.firstMessageEnqueued(key);
 
-        controller.stopAllObservation();
-        Assert.assertTrue("All maps should be cleared if ref count decrements to zero.",
-                controller.getMessageToWebContentsMap().isEmpty());
-        Assert.assertTrue("All maps should be cleared if ref count decrements to zero.",
-                controller.getRefCountedWebContentsObserverMap().isEmpty());
+        final ArgumentCaptor<WebContentsObserver> runnableCaptor =
+                ArgumentCaptor.forClass(WebContentsObserver.class);
+        verify(webContents).addObserver(runnableCaptor.capture());
+
+        WebContentsObserver observer = runnableCaptor.getValue();
+
+        // Default visibility of web contents is invisible.
+        ArgumentCaptor<MessageScopeChange> captor =
+                ArgumentCaptor.forClass(MessageScopeChange.class);
+        verify(delegate, description("Delegate should be called when page is hidden"))
+                .onScopeChange(captor.capture());
+        Assert.assertEquals("Scope type should be inactive when page is hidden",
+                ChangeType.INACTIVE, captor.getValue().changeType);
+
+        observer.navigationEntryCommitted(createLoadCommittedDetails(false));
+        verify(delegate,
+                times(1).description("Delegate should not be called when navigation is ignored"))
+                .onScopeChange(any());
+    }
+
+    private LoadCommittedDetails createLoadCommittedDetails(boolean didReplaceEntry) {
+        return new LoadCommittedDetails(-1, null, didReplaceEntry, false, true, -1);
     }
 }

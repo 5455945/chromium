@@ -24,6 +24,7 @@
 #include "base/callback_helpers.h"
 #include "base/command_line.h"
 #include "base/cpu.h"
+#include "base/cxx17_backports.h"
 #include "base/files/file.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
@@ -32,7 +33,6 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/stl_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/version.h"
@@ -726,15 +726,15 @@ base::Time GetConsoleSessionStartTime() {
 
   wts_info = reinterpret_cast<WTSINFO*>(buffer);
   FILETIME filetime = {wts_info->LogonTime.u.LowPart,
-                       wts_info->LogonTime.u.HighPart};
+                       static_cast<DWORD>(wts_info->LogonTime.u.HighPart)};
   return base::Time::FromFileTime(filetime);
 }
 
-base::Optional<std::string> DecodeDMTokenSwitchValue(
+absl::optional<std::string> DecodeDMTokenSwitchValue(
     const std::wstring& encoded_token) {
   if (encoded_token.empty()) {
     LOG(ERROR) << "Empty DMToken specified on the command line";
-    return base::nullopt;
+    return absl::nullopt;
   }
 
   // The token passed on the command line is base64-encoded, but since this is
@@ -743,7 +743,7 @@ base::Optional<std::string> DecodeDMTokenSwitchValue(
   if (!base::IsStringASCII(encoded_token) ||
       !base::Base64Decode(base::WideToASCII(encoded_token), &token)) {
     LOG(ERROR) << "DMToken passed on the command line is not correctly encoded";
-    return base::nullopt;
+    return absl::nullopt;
   }
 
   return token;
@@ -801,6 +801,29 @@ base::FilePath GetElevationServicePath(const base::FilePath& target_path,
                                        const base::Version& version) {
   return target_path.AppendASCII(version.GetString())
       .Append(kElevationServiceExe);
+}
+
+void AddUpdateDowngradeVersionItem(HKEY root,
+                                   const base::Version& current_version,
+                                   const base::Version& new_version,
+                                   WorkItemList* list) {
+  DCHECK(list);
+  DCHECK(new_version.IsValid());
+  const auto downgrade_version = InstallUtil::GetDowngradeVersion();
+  const std::wstring client_state_key = install_static::GetClientStateKeyPath();
+  if (current_version.IsValid() && new_version < current_version) {
+    // This is a downgrade. Write the value if this is the first one (i.e., no
+    // previous value exists). Otherwise, leave any existing value in place.
+    if (!downgrade_version) {
+      list->AddSetRegValueWorkItem(
+          root, client_state_key, KEY_WOW64_32KEY, kRegDowngradeVersion,
+          base::ASCIIToWide(current_version.GetString()), true);
+    }
+  } else if (!current_version.IsValid() || new_version >= downgrade_version) {
+    // This is a new install or an upgrade to/past a previous DowngradeVersion.
+    list->AddDeleteRegValueWorkItem(root, client_state_key, KEY_WOW64_32KEY,
+                                    kRegDowngradeVersion);
+  }
 }
 
 }  // namespace installer

@@ -7,7 +7,7 @@
 
 #include <stdint.h>
 #include <string>
-#include "base/optional.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/common_export.h"
 
 namespace blink {
@@ -19,7 +19,7 @@ namespace scheduler {
 //
 // Please keep in sync with WebSchedulerTrackedFeature in
 // tools/metrics/histograms/enums.xml. These values should not be renumbered.
-enum class WebSchedulerTrackedFeature {
+enum class WebSchedulerTrackedFeature : uint32_t {
   kWebSocket = 0,
   kWebRTC = 1,
 
@@ -30,12 +30,13 @@ enum class WebSchedulerTrackedFeature {
   kSubresourceHasCacheControlNoCache = 4,
   kSubresourceHasCacheControlNoStore = 5,
 
-  kPageShowEventListener = 6,
-  kPageHideEventListener = 7,
-  kBeforeUnloadEventListener = 8,
-  kUnloadEventListener = 9,
-  kFreezeEventListener = 10,
-  kResumeEventListener = 11,
+  // These are unused.
+  // kPageShowEventListener = 6,
+  // kPageHideEventListener = 7,
+  // kBeforeUnloadEventListener = 8,
+  // kUnloadEventListener = 9,
+  // kFreezeEventListener = 10,
+  // kResumeEventListener = 11,
 
   kContainsPlugins = 12,
   kDocumentLoaded = 13,
@@ -69,7 +70,7 @@ enum class WebSchedulerTrackedFeature {
   kIndexedDBConnection = 28,
 
   // kWebGL = 29. Removed after implementing WebGL support.
-  kWebVR = 30,
+  // kWebVR = 30. The entire feature has been deleted.
   kWebXR = 31,
 
   kSharedWorker = 32,
@@ -100,9 +101,12 @@ enum class WebSchedulerTrackedFeature {
   kKeyboardLock = 51,
   kWebOTPService = 52,
   kOutstandingNetworkRequestDirectSocket = 53,
+  kIsolatedWorldScript = 54,
+  kInjectedStyleSheet = 55,
+  kMediaSessionImplOnServiceCreated = 56,
 
   // NB: This enum is used in a bitmask, so kMaxValue must be less than 64.
-  kMaxValue = kOutstandingNetworkRequestDirectSocket
+  kMaxValue = kMediaSessionImplOnServiceCreated,
 };
 
 static_assert(static_cast<uint32_t>(WebSchedulerTrackedFeature::kMaxValue) < 64,
@@ -112,7 +116,7 @@ static_assert(static_cast<uint32_t>(WebSchedulerTrackedFeature::kMaxValue) < 64,
 BLINK_COMMON_EXPORT std::string FeatureToHumanReadableString(
     WebSchedulerTrackedFeature feature);
 
-BLINK_COMMON_EXPORT base::Optional<WebSchedulerTrackedFeature> StringToFeature(
+BLINK_COMMON_EXPORT absl::optional<WebSchedulerTrackedFeature> StringToFeature(
     const std::string& str);
 
 // Converts a WebSchedulerTrackedFeature to a bit for use in a bitmask.

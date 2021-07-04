@@ -6,14 +6,13 @@
 #define CHROME_BROWSER_WEB_APPLICATIONS_COMPONENTS_FILE_HANDLER_MANAGER_H_
 
 #include <set>
-#include <string>
 #include <vector>
 
-#include "chrome/browser/web_applications/components/app_registrar.h"
 #include "chrome/browser/web_applications/components/app_shortcut_manager.h"
 #include "chrome/browser/web_applications/components/web_app_id.h"
 #include "components/services/app_service/public/cpp/file_handler.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/web_launch/file_handling_expiry.mojom-forward.h"
 
 class Profile;
@@ -23,6 +22,8 @@ class WebContents;
 }
 
 namespace web_app {
+
+class AppRegistrar;
 
 class FileHandlerManager {
  public:
@@ -57,7 +58,7 @@ class FileHandlerManager {
 
   // Returns |app_id|'s URL registered to handle |launch_files|'s extensions, or
   // nullopt otherwise.
-  const base::Optional<GURL> GetMatchingFileHandlerURL(
+  const absl::optional<GURL> GetMatchingFileHandlerURL(
       const AppId& app_id,
       const std::vector<base::FilePath>& launch_files);
 
@@ -69,7 +70,10 @@ class FileHandlerManager {
   // Disables file handlers for all OSs and unregisters OS specific file
   // handlers for OSs that need them. On Chrome OS file handlers are registered
   // separately but they are still enabled and disabled here.
-  void DisableAndUnregisterOsFileHandlers(const AppId& app_id);
+  void DisableAndUnregisterOsFileHandlers(
+      const AppId& app_id,
+      std::unique_ptr<ShortcutInfo> info,
+      base::OnceCallback<void(bool)> callback);
 
   // Updates the file handling origin trial expiry timer based on a currently
   // open instance of the site. This will not update the expiry timer if

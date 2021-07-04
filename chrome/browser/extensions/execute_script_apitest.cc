@@ -17,6 +17,12 @@ namespace extensions {
 using ContextType = ExtensionApiTest::ContextType;
 
 class ExecuteScriptApiTestBase : public ExtensionApiTest {
+ public:
+  ExecuteScriptApiTestBase() = default;
+  ~ExecuteScriptApiTestBase() override = default;
+  ExecuteScriptApiTestBase(const ExecuteScriptApiTestBase&) = delete;
+  ExecuteScriptApiTestBase& operator=(const ExecuteScriptApiTestBase&) = delete;
+
  protected:
   void SetUpOnMainThread() override {
     ExtensionApiTest::SetUpOnMainThread();
@@ -29,10 +35,16 @@ class ExecuteScriptApiTestBase : public ExtensionApiTest {
 
 class ExecuteScriptApiTest : public ExecuteScriptApiTestBase,
                              public testing::WithParamInterface<ContextType> {
+ public:
+  ExecuteScriptApiTest() = default;
+  ~ExecuteScriptApiTest() override = default;
+  ExecuteScriptApiTest(const ExecuteScriptApiTest&) = delete;
+  ExecuteScriptApiTest& operator=(const ExecuteScriptApiTest&) = delete;
+
  protected:
   bool RunTest(const char* extension_name, bool allow_file_access = false) {
     return RunExtensionTest(
-        {.name = extension_name},
+        extension_name, {},
         {.allow_file_access = allow_file_access,
          .load_as_service_worker = GetParam() == ContextType::kServiceWorker});
   }
@@ -109,7 +121,7 @@ IN_PROC_BROWSER_TEST_P(ExecuteScriptApiTest, ExecuteScriptCallback) {
 }
 
 IN_PROC_BROWSER_TEST_P(ExecuteScriptApiTest, ExecuteScriptRemoveCSS) {
-  ASSERT_TRUE(RunExtensionTest("executescript/remove_css")) << message_;
+  ASSERT_TRUE(RunTest("executescript/remove_css")) << message_;
 }
 
 IN_PROC_BROWSER_TEST_P(ExecuteScriptApiTest, UserGesture) {
@@ -167,11 +179,12 @@ class DestructiveScriptTest : public ExecuteScriptApiTestBase,
  protected:
   // The test extension selects the sub test based on the host name.
   bool RunSubtest(const std::string& test_host) {
-    return RunExtensionSubtest(
-        "executescript/destructive",
+    const std::string page_url =
         "test.html?" + test_host + "#bucketcount=" +
-            base::NumberToString(kDestructiveScriptTestBucketCount) +
-            "&bucketindex=" + base::NumberToString(GetParam()));
+        base::NumberToString(kDestructiveScriptTestBucketCount) +
+        "&bucketindex=" + base::NumberToString(GetParam());
+    return RunExtensionTest("executescript/destructive",
+                            {.page_url = page_url.c_str()});
   }
 };
 

@@ -15,6 +15,7 @@ import org.chromium.chrome.R;
 import org.chromium.chrome.browser.compositor.bottombar.OverlayPanelAnimation;
 import org.chromium.chrome.browser.contextualsearch.QuickActionCategory;
 import org.chromium.chrome.browser.contextualsearch.ResolvedSearchTerm.CardTag;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.layouts.animation.CompositorAnimator;
 import org.chromium.ui.base.LocalizationUtils;
 import org.chromium.ui.resources.dynamics.DynamicResourceLoader;
@@ -112,6 +113,12 @@ public class ContextualSearchBarControl {
     /** The animator that controls touch highlighting. */
     private CompositorAnimator mTouchHighlightAnimation;
 
+    /** The animator that gradually exposes the Related Searches in the Bar. */
+    private CompositorAnimator mInBarRelatedSearchesAnimation;
+
+    /** The height of the Related Searches section of the Bar, as adjusted during animation. */
+    private float mInBarRelatedSearchesAnimatedHeightDps;
+
     /**
      * Constructs a new bottom bar control container by inflating views from XML.
      *
@@ -189,9 +196,13 @@ public class ContextualSearchBarControl {
         if (percentage == FULL_OPACITY) onUpdateFromPeekToExpand(TRANSPARENT_OPACITY);
 
         // When the panel is completely closed the caption and custom image should be hidden.
+        // TODO(donnd): Do we really need to do any of this?
+        // The space will be freed when the panel closes.
         if (percentage == TRANSPARENT_OPACITY) {
             mQuickActionControl.reset();
-            mCaptionControl.hide();
+            if (!ChromeFeatureList.isEnabled(ChromeFeatureList.CONTEXTUAL_SEARCH_FORCE_CAPTION)) {
+                mCaptionControl.hide();
+            }
             getImageControl().hideCustomImage(false);
         }
     }
@@ -285,6 +296,11 @@ public class ContextualSearchBarControl {
      */
     public int getSearchTermViewId() {
         return mSearchTermControl.getViewId();
+    }
+
+    @VisibleForTesting
+    public CharSequence getSearchTerm() {
+        return mSearchTermControl.getTextView().getText();
     }
 
     /**
@@ -501,8 +517,7 @@ public class ContextualSearchBarControl {
         if (mTextOpacityAnimation == null) {
             mTextOpacityAnimation = CompositorAnimator.ofFloat(
                     mContextualSearchPanel.getAnimationHandler(), TRANSPARENT_OPACITY, FULL_OPACITY,
-                    OverlayPanelAnimation.BASE_ANIMATION_DURATION_MS, null);
-            mTextOpacityAnimation.addUpdateListener(
+                    OverlayPanelAnimation.BASE_ANIMATION_DURATION_MS,
                     animator -> updateSearchBarTextOpacity(animator.getAnimatedValue()));
         }
         mTextOpacityAnimation.cancel();
@@ -534,5 +549,44 @@ public class ContextualSearchBarControl {
 
         mSearchBarContextOpacity = fadingOutPercentage;
         mSearchBarTermOpacity = fadingInPercentage;
+    }
+
+    /** Animates showing Related Searches in the bottom part of the Bar. */
+    void animateInBarRelatedSearches(boolean shouldGrowNotShrink) {
+        if (mInBarRelatedSearchesAnimation != null && mInBarRelatedSearchesAnimation.isRunning()) {
+            mInBarRelatedSearchesAnimation.cancel();
+        }
+        if (mInBarRelatedSearchesAnimation == null || mInBarRelatedSearchesAnimation.hasEnded()) {
+            float startValue = shouldGrowNotShrink ? 0.f : 1.f;
+            float endValue = shouldGrowNotShrink ? 1.f : 0.f;
+            mInBarRelatedSearchesAnimation = CompositorAnimator.ofFloat(
+                    mContextualSearchPanel.getAnimationHandler(), startValue, endValue,
+                    OverlayPanelAnimation.BASE_ANIMATION_DURATION_MS,
+                    animator -> updateInBarRelatedSearchesSize(animator.getAnimatedValue()));
+            mInBarRelatedSearchesAnimation.start();
+        }
+    }
+
+    /**
+     * Updates the portion of the Related Searches UI that is shown.
+     * @param percentage The percentage (from 0 to 1) of the UI to expose.
+     */
+    private void updateInBarRelatedSearchesSize(float percentage) {
+        mInBarRelatedSearchesAnimatedHeightDps =
+                getInBarRelatedSearchesMaximumHeight() * percentage;
+        mContextualSearchPanel.setClampedPanelHeight(mInBarRelatedSearchesAnimatedHeightDps);
+    }
+
+    /** Returns the maximum height of the Related Searches UI that we show right in the Bar. */
+    private float getInBarRelatedSearchesMaximumHeight() {
+        return mContextualSearchPanel.getRelatedSearchesMaximumHeightDps();
+    }
+
+    /**
+     * Returns the current height of the portion of the Related Searches UI that is visible
+     * due to animation.
+     */
+    float getInBarRelatedSearchesAnimatedHeightDps() {
+        return mInBarRelatedSearchesAnimatedHeightDps;
     }
 }

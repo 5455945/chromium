@@ -36,6 +36,13 @@ void RecordContextDowngradeUKM(RenderFrameHost* rfh,
   }
 }
 
+bool ShouldReportDevToolsIssueForStatus(
+    const net::CookieInclusionStatus& status) {
+  return status.ShouldWarn() ||
+         status.HasExclusionReason(
+             net::CookieInclusionStatus::EXCLUDE_INVALID_SAMEPARTY);
+}
+
 }  // namespace
 
 void SplitCookiesIntoAllowedAndBlocked(
@@ -72,12 +79,13 @@ void EmitCookieWarningsAndMetrics(
     const network::mojom::CookieAccessDetailsPtr& cookie_details) {
   RenderFrameHostImpl* root_frame_host = rfh->GetMainFrame();
 
-  if (!root_frame_host->IsCurrent())
+  if (!root_frame_host->IsActive())
     return;
 
   bool samesite_treated_as_lax_cookies = false;
   bool samesite_none_insecure_cookies = false;
   bool breaking_context_downgrade = false;
+  bool lax_allow_unsafe_cookies = false;
 
   bool same_party = false;
   bool same_party_exclusion_overruled_samesite = false;
@@ -85,6 +93,16 @@ void EmitCookieWarningsAndMetrics(
 
   for (const network::mojom::CookieOrLineWithAccessResultPtr& cookie :
        cookie_details->cookie_list) {
+    if (ShouldReportDevToolsIssueForStatus(cookie->access_result.status)) {
+      devtools_instrumentation::ReportSameSiteCookieIssue(
+          root_frame_host, cookie, cookie_details->url,
+          cookie_details->site_for_cookies,
+          cookie_details->type == CookieAccessDetails::Type::kRead
+              ? blink::mojom::SameSiteCookieOperation::kReadCookie
+              : blink::mojom::SameSiteCookieOperation::kSetCookie,
+          cookie_details->devtools_request_id);
+    }
+
     if (cookie->access_result.status.ShouldWarn()) {
       const net::CookieInclusionStatus& status = cookie->access_result.status;
       samesite_treated_as_lax_cookies =
@@ -101,17 +119,11 @@ void EmitCookieWarningsAndMetrics(
           status.HasWarningReason(
               net::CookieInclusionStatus::WARN_SAMESITE_NONE_INSECURE);
 
-      if (cookie->cookie_or_line->is_cookie()) {
-        // TODO(sigurds): report issues on cookie line problems as well.
-        devtools_instrumentation::ReportSameSiteCookieIssue(
-            root_frame_host,
-            {cookie->cookie_or_line->get_cookie(), cookie->access_result},
-            cookie_details->url, cookie_details->site_for_cookies,
-            cookie_details->type == CookieAccessDetails::Type::kRead
-                ? blink::mojom::SameSiteCookieOperation::kReadCookie
-                : blink::mojom::SameSiteCookieOperation::kSetCookie,
-            cookie_details->devtools_request_id);
-      }
+      lax_allow_unsafe_cookies =
+          lax_allow_unsafe_cookies ||
+          status.HasWarningReason(
+              net::CookieInclusionStatus::
+                  WARN_SAMESITE_UNSPECIFIED_LAX_ALLOW_UNSAFE);
 
       same_party = same_party ||
                    status.HasWarningReason(
@@ -155,6 +167,11 @@ void EmitCookieWarningsAndMetrics(
   if (breaking_context_downgrade) {
     GetContentClient()->browser()->LogWebFeatureForCurrentPage(
         rfh, blink::mojom::WebFeature::kSchemefulSameSiteContextDowngrade);
+  }
+
+  if (lax_allow_unsafe_cookies) {
+    GetContentClient()->browser()->LogWebFeatureForCurrentPage(
+        rfh, blink::mojom::WebFeature::kLaxAllowingUnsafeCookies);
   }
 
   if (same_party) {

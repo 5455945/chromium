@@ -9,6 +9,7 @@
 
 #include "base/bind.h"
 #include "base/callback.h"
+#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/memory/ref_counted.h"
@@ -56,7 +57,7 @@
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #include "chrome/browser/apps/icon_standardizer.h"
-#include "chrome/browser/chromeos/arc/icon_decode_request.h"
+#include "chrome/browser/ash/arc/icon_decode_request.h"
 #include "chrome/browser/ui/app_list/md_icon_normalizer.h"
 #include "chrome/grit/chrome_unscaled_resources.h"
 #include "ui/chromeos/resources/grit/ui_chromeos_resources.h"
@@ -276,7 +277,8 @@ void LoadCompressedDataFromExtension(
       extensions::IconsInfo::GetIconResource(extension, size_hint_in_px,
                                              ExtensionIconSet::MATCH_BIGGER);
 
-  if (extension && extension->location() == extensions::Manifest::COMPONENT) {
+  if (extension && extension->location() ==
+                       extensions::mojom::ManifestLocation::kComponent) {
     int resource_id = 0;
     const extensions::ComponentExtensionResourceManager* manager =
         extensions::ExtensionsBrowserClient::Get()
@@ -299,16 +301,16 @@ void LoadCompressedDataFromExtension(
       std::move(compressed_data_callback));
 }
 
-base::Optional<IconPurpose> GetIconPurpose(
+absl::optional<IconPurpose> GetIconPurpose(
     const std::string& web_app_id,
     const web_app::AppIconManager& icon_manager,
     int size_hint_in_dip) {
   // Get the max supported pixel size.
   int max_icon_size_in_px = 0;
-  for (auto scale_factor : ui::GetSupportedScaleFactors()) {
-    const gfx::Size icon_size_in_px =
-        gfx::ScaleToFlooredSize(gfx::Size(size_hint_in_dip, size_hint_in_dip),
-                                ui::GetScaleForScaleFactor(scale_factor));
+  for (auto scale_factor : ui::GetSupportedResourceScaleFactors()) {
+    const gfx::Size icon_size_in_px = gfx::ScaleToFlooredSize(
+        gfx::Size(size_hint_in_dip, size_hint_in_dip),
+        ui::GetScaleForResourceScaleFactor(scale_factor));
     DCHECK_EQ(icon_size_in_px.width(), icon_size_in_px.height());
     if (max_icon_size_in_px < icon_size_in_px.width()) {
       max_icon_size_in_px = icon_size_in_px.width();
@@ -319,17 +321,61 @@ base::Optional<IconPurpose> GetIconPurpose(
   if (base::FeatureList::IsEnabled(features::kAppServiceAdaptiveIcon) &&
       icon_manager.HasSmallestIcon(web_app_id, {IconPurpose::MASKABLE},
                                    max_icon_size_in_px)) {
-    return base::make_optional(IconPurpose::MASKABLE);
+    return absl::make_optional(IconPurpose::MASKABLE);
   }
 #endif
 
   if (icon_manager.HasSmallestIcon(web_app_id, {IconPurpose::ANY},
                                    max_icon_size_in_px)) {
-    return base::make_optional(IconPurpose::ANY);
+    return absl::make_optional(IconPurpose::ANY);
   }
 
-  return base::nullopt;
+  return absl::nullopt;
 }
+
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+apps::mojom::IconValuePtr ApplyEffects(apps::IconEffects icon_effects,
+                                       int size_hint_in_dip,
+                                       apps::mojom::IconValuePtr iv,
+                                       gfx::ImageSkia mask_image) {
+  base::AssertLongCPUWorkAllowed();
+
+  extensions::ChromeAppIcon::ResizeFunction resize_function;
+  if (icon_effects & apps::IconEffects::kResizeAndPad) {
+    // TODO(crbug.com/826982): MD post-processing is not always applied: "See
+    // legacy code:
+    // https://cs.chromium.org/search/?q=ChromeAppIconLoader&type=cs In one
+    // cases MD design is used in another not."
+    resize_function =
+        base::BindRepeating(&app_list::MaybeResizeAndPadIconForMd);
+  }
+
+  if ((icon_effects & apps::IconEffects::kCrOsStandardMask) &&
+      !mask_image.isNull()) {
+    if (icon_effects & apps::IconEffects::kCrOsStandardBackground) {
+      iv->uncompressed = gfx::ImageSkiaOperations::CreateButtonBackground(
+          SK_ColorWHITE, iv->uncompressed, mask_image);
+    } else {
+      iv->uncompressed = gfx::ImageSkiaOperations::CreateMaskedImage(
+          iv->uncompressed, mask_image);
+    }
+  }
+
+  if (icon_effects & apps::IconEffects::kCrOsStandardIcon) {
+    iv->uncompressed = apps::CreateStandardIconImage(iv->uncompressed);
+  }
+
+  if (!resize_function.is_null()) {
+    resize_function.Run(gfx::Size(size_hint_in_dip, size_hint_in_dip),
+                        &iv->uncompressed);
+  }
+
+  if (!iv->uncompressed.isNull())
+    iv->uncompressed.MakeThreadSafe();
+
+  return iv;
+}
+#endif
 
 // This pipeline is meant to:
 // * Simplify loading icons, as things like effects and type are common
@@ -390,6 +436,16 @@ class IconLoadingPipeline : public base::RefCounted<IconLoadingPipeline> {
       base::OnceCallback<void(const std::vector<gfx::ImageSkia>& icons)>
           callback)
       : arc_activity_icons_callback_(std::move(callback)) {}
+
+  IconLoadingPipeline(int size_hint_in_dip,
+                      apps::mojom::Publisher::LoadIconCallback callback)
+      : size_hint_in_dip_(size_hint_in_dip), callback_(std::move(callback)) {}
+
+  void ApplyIconEffects(apps::IconEffects icon_effects,
+                        apps::mojom::IconValuePtr iv);
+
+  void ApplyBadges(apps::IconEffects icon_effects,
+                   apps::mojom::IconValuePtr iv);
 
   void LoadWebAppIcon(const std::string& web_app_id,
                       const GURL& launch_url,
@@ -454,7 +510,9 @@ class IconLoadingPipeline : public base::RefCounted<IconLoadingPipeline> {
 
   void CompleteWithCompressed(std::vector<uint8_t> data);
 
-  void CompleteWithImageSkia(gfx::ImageSkia image);
+  void CompleteWithUncompressed(apps::mojom::IconValuePtr iv);
+
+  void CompleteWithIconValue(apps::mojom::IconValuePtr iv);
 
   void OnReadWebAppIcon(std::map<int, SkBitmap> icon_bitmaps);
 
@@ -493,6 +551,10 @@ class IconLoadingPipeline : public base::RefCounted<IconLoadingPipeline> {
 
   base::CancelableTaskTracker cancelable_task_tracker_;
 
+  // A sequenced task runner to create standard icons and not spamming the
+  // thread pool.
+  scoped_refptr<base::SequencedTaskRunner> standard_icon_task_runner_;
+
   gfx::ImageSkia foreground_image_;
   gfx::ImageSkia background_image_;
   bool foreground_is_set_ = false;
@@ -510,6 +572,65 @@ class IconLoadingPipeline : public base::RefCounted<IconLoadingPipeline> {
   std::unique_ptr<arc::IconDecodeRequest> arc_background_icon_decode_request_;
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 };
+
+void IconLoadingPipeline::ApplyIconEffects(apps::IconEffects icon_effects,
+                                           apps::mojom::IconValuePtr iv) {
+  if (!iv || iv->uncompressed.isNull())
+    return;
+
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+  if (!standard_icon_task_runner_) {
+    standard_icon_task_runner_ = base::ThreadPool::CreateSequencedTaskRunner(
+        {base::TaskPriority::USER_VISIBLE,
+         base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN});
+  }
+
+  gfx::ImageSkia mask_image;
+  if (icon_effects & apps::IconEffects::kCrOsStandardMask) {
+    mask_image = apps::LoadMaskImage(GetScaleToSize(iv->uncompressed));
+    mask_image.MakeThreadSafe();
+  }
+
+  iv->uncompressed.MakeThreadSafe();
+
+  base::PostTaskAndReplyWithResult(
+      standard_icon_task_runner_.get(), FROM_HERE,
+      base::BindOnce(&ApplyEffects, icon_effects, size_hint_in_dip_,
+                     std::move(iv), mask_image),
+      base::BindOnce(&IconLoadingPipeline::ApplyBadges,
+                     base::WrapRefCounted(this), icon_effects));
+#else
+  ApplyBadges(icon_effects, std::move(iv));
+#endif
+}
+
+void IconLoadingPipeline::ApplyBadges(apps::IconEffects icon_effects,
+                                      apps::mojom::IconValuePtr iv) {
+  const bool from_bookmark = icon_effects & apps::IconEffects::kRoundCorners;
+
+  bool app_launchable = true;
+  // Only one badge can be visible at a time.
+  // Priority in which badges are applied (from the highest): Blocked > Paused >
+  // Chrome. This means than when apps are disabled or paused app type
+  // distinction information (Chrome vs Android) is lost.
+  extensions::ChromeAppIcon::Badge badge_type =
+      extensions::ChromeAppIcon::Badge::kNone;
+  if (icon_effects & apps::IconEffects::kBlocked) {
+    badge_type = extensions::ChromeAppIcon::Badge::kBlocked;
+    app_launchable = false;
+  } else if (icon_effects & apps::IconEffects::kPaused) {
+    badge_type = extensions::ChromeAppIcon::Badge::kPaused;
+    app_launchable = false;
+  } else if (icon_effects & apps::IconEffects::kChromeBadge) {
+    badge_type = extensions::ChromeAppIcon::Badge::kChrome;
+  }
+
+  extensions::ChromeAppIcon::ApplyEffects(
+      size_hint_in_dip_, extensions::ChromeAppIcon::ResizeFunction(),
+      app_launchable, from_bookmark, badge_type, &iv->uncompressed);
+
+  std::move(callback_).Run(std::move(iv));
+}
 
 void IconLoadingPipeline::LoadWebAppIcon(
     const std::string& web_app_id,
@@ -530,7 +651,7 @@ void IconLoadingPipeline::LoadWebAppIcon(
   // constructor.
   icon_scale_for_compressed_response_ = icon_scale_;
 
-  base::Optional<IconPurpose> icon_purpose_to_read =
+  absl::optional<IconPurpose> icon_purpose_to_read =
       GetIconPurpose(web_app_id, icon_manager, size_hint_in_dip_);
 
   if (!icon_purpose_to_read.has_value()) {
@@ -577,12 +698,12 @@ void IconLoadingPipeline::LoadWebAppIcon(
       // uncompressed image to apply the icon effects, and then re-encode the
       // image if the compressed icon is requested.
       std::vector<int> icon_pixel_sizes;
-      for (auto scale_factor : ui::GetSupportedScaleFactors()) {
+      for (auto scale_factor : ui::GetSupportedResourceScaleFactors()) {
         auto size_and_purpose = icon_manager.FindIconMatchBigger(
             web_app_id, {*icon_purpose_to_read},
             gfx::ScaleToFlooredSize(
                 gfx::Size(size_hint_in_dip_, size_hint_in_dip_),
-                ui::GetScaleForScaleFactor(scale_factor))
+                ui::GetScaleForResourceScaleFactor(scale_factor))
                 .width());
         DCHECK(size_and_purpose.has_value());
         if (!base::Contains(icon_pixel_sizes, size_and_purpose->size_px)) {
@@ -883,28 +1004,24 @@ void IconLoadingPipeline::MaybeApplyEffectsAndComplete(
     MaybeLoadFallbackOrCompleteEmpty();
     return;
   }
-  gfx::ImageSkia processed_image = image;
+
+  apps::mojom::IconValuePtr iv = apps::mojom::IconValue::New();
+  iv->icon_type = icon_type_;
+  iv->uncompressed = image;
+  iv->is_placeholder_icon = is_placeholder_icon_;
 
   // Apply the icon effects on the uncompressed data. If the caller requests
   // an uncompressed icon, return the uncompressed result; otherwise, encode
   // the icon to a compressed icon, return the compressed result.
   if (icon_effects_) {
-    apps::ApplyIconEffects(icon_effects_, size_hint_in_dip_, &processed_image);
-  }
-
-  if (icon_type_ == apps::mojom::IconType::kUncompressed ||
-      icon_type_ == apps::mojom::IconType::kStandard) {
-    CompleteWithImageSkia(processed_image);
+    apps::ApplyIconEffects(
+        icon_effects_, size_hint_in_dip_, std::move(iv),
+        base::BindOnce(&IconLoadingPipeline::CompleteWithIconValue,
+                       base::WrapRefCounted(this)));
     return;
   }
 
-  processed_image.MakeThreadSafe();
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
-      base::BindOnce(&apps::EncodeImageToPngBytes, processed_image,
-                     icon_scale_for_compressed_response_),
-      base::BindOnce(&IconLoadingPipeline::CompleteWithCompressed,
-                     base::WrapRefCounted(this)));
+  CompleteWithIconValue(std::move(iv));
 }
 
 void IconLoadingPipeline::CompleteWithCompressed(std::vector<uint8_t> data) {
@@ -920,18 +1037,31 @@ void IconLoadingPipeline::CompleteWithCompressed(std::vector<uint8_t> data) {
   std::move(callback_).Run(std::move(iv));
 }
 
-void IconLoadingPipeline::CompleteWithImageSkia(gfx::ImageSkia image) {
+void IconLoadingPipeline::CompleteWithUncompressed(
+    apps::mojom::IconValuePtr iv) {
   DCHECK_NE(icon_type_, apps::mojom::IconType::kCompressed);
   DCHECK_NE(icon_type_, apps::mojom::IconType::kUnknown);
-  if (image.isNull()) {
+  if (iv->uncompressed.isNull()) {
     MaybeLoadFallbackOrCompleteEmpty();
     return;
   }
-  apps::mojom::IconValuePtr iv = apps::mojom::IconValue::New();
-  iv->icon_type = icon_type_;
-  iv->uncompressed = std::move(image);
-  iv->is_placeholder_icon = is_placeholder_icon_;
   std::move(callback_).Run(std::move(iv));
+}
+
+void IconLoadingPipeline::CompleteWithIconValue(apps::mojom::IconValuePtr iv) {
+  if (icon_type_ == apps::mojom::IconType::kUncompressed ||
+      icon_type_ == apps::mojom::IconType::kStandard) {
+    CompleteWithUncompressed(std::move(iv));
+    return;
+  }
+
+  iv->uncompressed.MakeThreadSafe();
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+      base::BindOnce(&apps::EncodeImageToPngBytes, iv->uncompressed,
+                     icon_scale_for_compressed_response_),
+      base::BindOnce(&IconLoadingPipeline::CompleteWithCompressed,
+                     base::WrapRefCounted(this)));
 }
 
 // Callback for reading uncompressed web app icons.
@@ -944,8 +1074,8 @@ void IconLoadingPipeline::OnReadWebAppIcon(
 
   gfx::ImageSkia image_skia;
   auto it = icon_bitmaps.begin();
-  for (auto scale_factor : ui::GetSupportedScaleFactors()) {
-    float icon_scale = ui::GetScaleForScaleFactor(scale_factor);
+  for (auto scale_factor : ui::GetSupportedResourceScaleFactors()) {
+    float icon_scale = ui::GetScaleForResourceScaleFactor(scale_factor);
     int icon_size_in_px =
         gfx::ScaleToFlooredSize(gfx::Size(size_hint_in_dip_, size_hint_in_dip_),
                                 icon_scale)
@@ -972,7 +1102,7 @@ void IconLoadingPipeline::OnReadWebAppIcon(
     image_skia.AddRepresentation(gfx::ImageSkiaRep(bitmap, icon_scale));
   }
   DCHECK_EQ(image_skia.image_reps().size(),
-            ui::GetSupportedScaleFactors().size());
+            ui::GetSupportedResourceScaleFactors().size());
   MaybeApplyEffectsAndComplete(image_skia);
 }
 
@@ -1154,8 +1284,7 @@ void ArcRawIconPngDataToImageSkia(
   if (!icon->is_adaptive_icon) {
     base::UmaHistogramBoolean("Arc.AdaptiveIconLoad.FromNonArcAppIcon", false);
 
-    if (!icon->icon_png_data.has_value() ||
-        icon->icon_png_data.value().empty()) {
+    if (!icon->icon_png_data.has_value()) {
       std::move(callback).Run(gfx::ImageSkia());
       return;
     }
@@ -1205,6 +1334,25 @@ gfx::ImageSkia ConvertSquareBitmapsToImageSkia(
     const std::map<SquareSizePx, SkBitmap>& icon_bitmaps,
     IconEffects icon_effects,
     int size_hint_in_dip) {
+  auto image_skia =
+      ConvertIconBitmapsToImageSkia(icon_bitmaps, size_hint_in_dip);
+
+  if (image_skia.isNull()) {
+    return gfx::ImageSkia{};
+  }
+
+  if ((icon_effects & IconEffects::kCrOsStandardMask) &&
+      (icon_effects & IconEffects::kCrOsStandardBackground)) {
+    image_skia = apps::ApplyBackgroundAndMask(image_skia);
+  }
+  return image_skia;
+}
+
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+
+gfx::ImageSkia ConvertIconBitmapsToImageSkia(
+    const std::map<SquareSizePx, SkBitmap>& icon_bitmaps,
+    int size_hint_in_dip) {
   if (icon_bitmaps.empty()) {
     return gfx::ImageSkia{};
   }
@@ -1212,8 +1360,9 @@ gfx::ImageSkia ConvertSquareBitmapsToImageSkia(
   gfx::ImageSkia image_skia;
   auto it = icon_bitmaps.begin();
 
-  for (ui::ScaleFactor scale_factor : ui::GetSupportedScaleFactors()) {
-    float icon_scale = ui::GetScaleForScaleFactor(scale_factor);
+  for (ui::ResourceScaleFactor scale_factor :
+       ui::GetSupportedResourceScaleFactors()) {
+    float icon_scale = ui::GetScaleForResourceScaleFactor(scale_factor);
 
     SquareSizePx icon_size_in_px =
         gfx::ScaleToFlooredSize(gfx::Size(size_hint_in_dip, size_hint_in_dip),
@@ -1231,7 +1380,7 @@ gfx::ImageSkia ConvertSquareBitmapsToImageSkia(
     SkBitmap bitmap = it->second;
     // Resize |bitmap| to match |icon_scale|.
     //
-    // TODO(crbug.com/1140356): All conversions in app_icon_factory.cc must
+    // TODO(crbug.com/1189994): All conversions in app_icon_factory.cc must
     // perform CPU-heavy operations off the Browser UI thread.
     if (bitmap.width() != icon_size_in_px) {
       bitmap = skia::ImageOperations::Resize(
@@ -1247,70 +1396,18 @@ gfx::ImageSkia ConvertSquareBitmapsToImageSkia(
   }
 
   image_skia.EnsureRepsForSupportedScales();
-  ApplyIconEffects(icon_effects, size_hint_in_dip, &image_skia);
 
   return image_skia;
 }
 
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-
 void ApplyIconEffects(IconEffects icon_effects,
                       int size_hint_in_dip,
-                      gfx::ImageSkia* image_skia) {
-  extensions::ChromeAppIcon::ResizeFunction resize_function;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  if (icon_effects & IconEffects::kResizeAndPad) {
-    // TODO(crbug.com/826982): MD post-processing is not always applied: "See
-    // legacy code:
-    // https://cs.chromium.org/search/?q=ChromeAppIconLoader&type=cs In one
-    // cases MD design is used in another not."
-    resize_function =
-        base::BindRepeating(&app_list::MaybeResizeAndPadIconForMd);
-  }
-
-  if (icon_effects & IconEffects::kCrOsStandardMask) {
-    if (icon_effects & IconEffects::kCrOsStandardBackground) {
-      *image_skia = apps::ApplyBackgroundAndMask(*image_skia);
-    } else {
-      auto mask_image = LoadMaskImage(GetScaleToSize(*image_skia));
-      *image_skia =
-          gfx::ImageSkiaOperations::CreateMaskedImage(*image_skia, mask_image);
-    }
-  }
-
-  if (icon_effects & IconEffects::kCrOsStandardIcon) {
-    *image_skia = apps::CreateStandardIconImage(*image_skia);
-  }
-#endif
-
-  const bool from_bookmark = icon_effects & IconEffects::kRoundCorners;
-
-  bool app_launchable = true;
-  // Only one badge can be visible at a time.
-  // Priority in which badges are applied (from the highest): Blocked > Paused >
-  // Chrome. This means than when apps are disabled or paused app type
-  // distinction information (Chrome vs Android) is lost.
-  extensions::ChromeAppIcon::Badge badge_type =
-      extensions::ChromeAppIcon::Badge::kNone;
-  if (icon_effects & IconEffects::kBlocked) {
-    badge_type = extensions::ChromeAppIcon::Badge::kBlocked;
-    app_launchable = false;
-  } else if (icon_effects & IconEffects::kPaused) {
-    badge_type = extensions::ChromeAppIcon::Badge::kPaused;
-    app_launchable = false;
-  } else if (icon_effects & IconEffects::kChromeBadge) {
-    badge_type = extensions::ChromeAppIcon::Badge::kChrome;
-  }
-
-  extensions::ChromeAppIcon::ApplyEffects(size_hint_in_dip, resize_function,
-                                          app_launchable, from_bookmark,
-                                          badge_type, image_skia);
-
-  if (icon_effects & IconEffects::kPendingLocalLaunch) {
-    color_utils::HSL shift = {-1, 0, 0.6};
-    *image_skia =
-        gfx::ImageSkiaOperations::CreateHSLShiftedImage(*image_skia, shift);
-  }
+                      apps::mojom::IconValuePtr iv,
+                      apps::mojom::Publisher::LoadIconCallback callback) {
+  scoped_refptr<IconLoadingPipeline> icon_loader =
+      base::MakeRefCounted<IconLoadingPipeline>(size_hint_in_dip,
+                                                std::move(callback));
+  icon_loader->ApplyIconEffects(icon_effects, std::move(iv));
 }
 
 void LoadIconFromExtension(apps::mojom::IconType icon_type,

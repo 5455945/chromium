@@ -3,15 +3,15 @@
 // found in the LICENSE file.
 
 import {assert} from 'chrome://resources/js/assert.m.js';
-import {isChromeOS} from 'chrome://resources/js/cr.m.js';
+import {isChromeOS, isLacros} from 'chrome://resources/js/cr.m.js';
 import {NativeEventTarget as EventTarget} from 'chrome://resources/js/cr/event_target.m.js';
 import {EventTracker} from 'chrome://resources/js/event_tracker.m.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.m.js';
 
-import {CloudPrintInterface, CloudPrintInterfaceEventType, CloudPrintInterfacePrinterFailedDetail, CloudPrintInterfaceProcessInviteDetail, CloudPrintInterfaceSearchDoneDetail} from '../cloud_print_interface.js';
+import {CloudPrintInterface, CloudPrintInterfaceEventType, CloudPrintInterfacePrinterFailedDetail, CloudPrintInterfaceSearchDoneDetail} from '../cloud_print_interface.js';
 import {Metrics, MetricsContext} from '../metrics.js';
 import {CapabilitiesResponse, NativeLayer, NativeLayerImpl} from '../native_layer.js';
-// <if expr="chromeos">
+// <if expr="chromeos or lacros">
 import {NativeLayerCros, NativeLayerCrosImpl, PrinterSetupResponse} from '../native_layer_cros.js';
 
 // </if>
@@ -217,12 +217,6 @@ export class DestinationStore extends EventTarget {
     /** @private {boolean} */
     this.initialDestinationSelected_ = false;
 
-    /** @private {boolean} */
-    this.initialized_ = false;
-
-    /** @private {boolean} */
-    this.readyToReloadCookieDestinations_ = false;
-
     /**
      * Maps user account to the list of origins for which destinations are
      * already loaded.
@@ -242,7 +236,7 @@ export class DestinationStore extends EventTarget {
      */
     this.nativeLayer_ = NativeLayerImpl.getInstance();
 
-    // <if expr="chromeos">
+    // <if expr="chromeos or lacros">
     /**
      * Used to fetch information about Chrome OS local print destinations.
      * @private {!NativeLayerCros}
@@ -262,8 +256,8 @@ export class DestinationStore extends EventTarget {
      * require extra setup.
      * @private {!DestinationOrigin}
      */
-    this.platformOrigin_ =
-        isChromeOS ? DestinationOrigin.CROS : DestinationOrigin.LOCAL;
+    this.platformOrigin_ = (isChromeOS || isLacros) ? DestinationOrigin.CROS :
+                                                      DestinationOrigin.LOCAL;
 
     /** @private {!Array<string>} */
     this.recentDestinationKeys_ = [];
@@ -296,11 +290,6 @@ export class DestinationStore extends EventTarget {
      */
     this.useSystemDefaultAsDefault_ =
         loadTimeData.getBoolean('useSystemDefaultPrinter');
-
-    // <if expr="chromeos">
-    /** @private */
-    this.saveToDriveFlagEnabled_ = loadTimeData.getBoolean('printSaveToDrive');
-    // </if>
 
     addListenerCallback('printers-added', this.onPrintersAdded_.bind(this));
   }
@@ -396,8 +385,8 @@ export class DestinationStore extends EventTarget {
 
     this.pdfPrinterEnabled_ = !pdfPrinterDisabled;
     this.createLocalPdfPrintDestination_();
-    // <if expr="chromeos">
-    if (this.saveToDriveFlagEnabled_ && isDriveMounted) {
+    // <if expr="chromeos or lacros">
+    if (isDriveMounted) {
       this.createLocalDrivePrintDestination_();
     }
     // </if>
@@ -406,36 +395,49 @@ export class DestinationStore extends EventTarget {
     // destinationsInserted_ may never be called.
     if (this.typesToSearch_.size === 0) {
       this.tryToSelectInitialDestination_();
-      this.initialized_ = true;
-      if (this.readyToReloadCookieDestinations_) {
-        this.reloadUserCookieBasedDestinations(this.activeUser_);
-      }
       return;
     }
 
-    // Load all possible printers.
+    // Check for Cloud Print printers and remove them if the interface is not
+    // present. This indicates that Cloud Print is unavailable for this user.
+    if (this.typesToSearch_.has(PrinterType.CLOUD_PRINTER)) {
+      if (this.cloudPrintInterface_ === null) {
+        this.typesToSearch_.delete(PrinterType.CLOUD_PRINTER);
+      } else {
+        // Accounts are not known on startup. Send an initial search query to
+        // get tokens and user accounts.
+        this.cloudPrintInterface_.search();
+      }
+    }
+
+    // Load all possible printers except for Cloud Print printers since they're
+    // fetched by Javascript instead of through the native layer (which
+    // startLoadDestinations_ invokes).
     for (const printerType of this.typesToSearch_) {
-      if (printerType === PrinterType.CLOUD_PRINTER) {
-        this.startLoadCloudDestinations();
-      } else if (
-          printerType !== PrinterType.PRIVET_PRINTER ||
-          loadTimeData.getBoolean('forceEnablePrivetPrinting')) {
+      if (printerType !== PrinterType.CLOUD_PRINTER &&
+          (printerType !== PrinterType.PRIVET_PRINTER ||
+           loadTimeData.getBoolean('forceEnablePrivetPrinting'))) {
         this.startLoadDestinations_(printerType);
       }
     }
-    this.initialized_ = true;
-    if (this.readyToReloadCookieDestinations_) {
-      this.reloadUserCookieBasedDestinations(this.activeUser_);
-    }
+
+    // Start a 10s timeout so that we never hang forever.
+    window.setTimeout(() => {
+      this.tryToSelectInitialDestination_(true);
+    }, 10000);
   }
 
-  /** @private */
-  tryToSelectInitialDestination_() {
+  /**
+   * @param {boolean=} timeoutExpired Whether the select timeout is expired.
+   *     Defaults to false.
+   * @private
+   */
+  tryToSelectInitialDestination_(timeoutExpired = false) {
     if (this.initialDestinationSelected_) {
       return;
     }
 
-    const success = this.selectInitialDestination_();
+    const success = this.selectInitialDestination_(timeoutExpired);
     if (!success && !this.isPrintDestinationSearchInProgress &&
         this.typesToSearch_.size === 0) {
       // No destinations
@@ -458,11 +460,12 @@ export class DestinationStore extends EventTarget {
    * Called when destinations are added to the store when the initial
    * destination has not yet been set. Selects the initial destination based on
    * relevant policies, recent printers, and system default.
+   * @param {boolean} timeoutExpired Whether the initial timeout has expired.
    * @return {boolean} Whether an initial destination was successfully selected.
    * @private
    */
-  selectInitialDestination_() {
-    const searchInProgress = this.typesToSearch_.size !== 0;
+  selectInitialDestination_(timeoutExpired) {
+    const searchInProgress = this.typesToSearch_.size !== 0 && !timeoutExpired;
 
     // System default printer policy takes priority.
     if (this.useSystemDefaultAsDefault_) {
@@ -542,7 +545,7 @@ export class DestinationStore extends EventTarget {
    * @return {boolean}
    */
   isDestinationLocal_(destinationId) {
-    // <if expr="chromeos">
+    // <if expr="chromeos or lacros">
     if (destinationId === Destination.GooglePromotedId.SAVE_TO_DRIVE_CROS) {
       return true;
     }
@@ -556,7 +559,7 @@ export class DestinationStore extends EventTarget {
     this.tracker_.removeAll();
   }
 
-  // <if expr="chromeos">
+  // <if expr="chromeos or lacros">
   /**
    * Attempts to find the EULA URL of the the destination ID.
    * @param {string} destinationId ID of the destination.
@@ -597,7 +600,7 @@ export class DestinationStore extends EventTarget {
         matchRules = JSON.parse(serializedDefaultDestinationSelectionRulesStr);
       }
     } catch (e) {
-      console.error('Failed to parse defaultDestinationSelectionRules: ' + e);
+      console.warn('Failed to parse defaultDestinationSelectionRules: ' + e);
     }
     if (!matchRules) {
       return null;
@@ -606,14 +609,18 @@ export class DestinationStore extends EventTarget {
     const isLocal = !matchRules.kind || matchRules.kind === 'local';
     const isCloud = !matchRules.kind || matchRules.kind === 'cloud';
     if (!isLocal && !isCloud) {
-      console.error('Unsupported type: "' + matchRules.kind + '"');
+      console.warn('Unsupported type: "' + matchRules.kind + '"');
       return null;
     }
 
     const origins = [];
     if (isLocal) {
       origins.push(DestinationOrigin.LOCAL);
-      origins.push(DestinationOrigin.PRIVET);
+      // TODO (rbpotter): Remove the code below once this flag and policy are no
+      // longer supported. Remove the privet flag in M90.
+      if (loadTimeData.getBoolean('forceEnablePrivetPrinting')) {
+        origins.push(DestinationOrigin.PRIVET);
+      }
       origins.push(DestinationOrigin.EXTENSION);
       origins.push(DestinationOrigin.CROS);
     }
@@ -627,7 +634,7 @@ export class DestinationStore extends EventTarget {
         idRegExp = new RegExp(matchRules.idPattern || '.*');
       }
     } catch (e) {
-      console.error('Failed to parse regexp for "id": ' + e);
+      console.warn('Failed to parse regexp for "id": ' + e);
     }
 
     let displayNameRegExp = null;
@@ -636,7 +643,7 @@ export class DestinationStore extends EventTarget {
         displayNameRegExp = new RegExp(matchRules.namePattern || '.*');
       }
     } catch (e) {
-      console.error('Failed to parse regexp for "name": ' + e);
+      console.warn('Failed to parse regexp for "name": ' + e);
     }
 
     return new DestinationMatch(
@@ -674,10 +681,6 @@ export class DestinationStore extends EventTarget {
         this.cloudPrintInterface_.getEventTarget(),
         CloudPrintInterfaceEventType.PRINTER_FAILED,
         this.onCloudPrintPrinterFailed_.bind(this));
-    this.tracker_.add(
-        this.cloudPrintInterface_.getEventTarget(),
-        CloudPrintInterfaceEventType.PROCESS_INVITE_DONE,
-        this.onCloudPrintProcessInviteDone_.bind(this));
   }
 
   /** @param {string} key Key identifying the destination to select */
@@ -729,6 +732,8 @@ export class DestinationStore extends EventTarget {
                     destination.origin, destination.id, caps),
                 () => this.onGetCapabilitiesFail_(
                     destination.origin, destination.id));
+        MetricsContext.getPrinterCapabilities().record(
+            Metrics.PrintPreviewInitializationEvents.FUNCTION_INITIATED);
       } else {
         assert(
             this.cloudPrintInterface_ !== null,
@@ -741,7 +746,7 @@ export class DestinationStore extends EventTarget {
     }
   }
 
-  // <if expr="chromeos">
+  // <if expr="chromeos or lacros">
   /**
    * Attempt to resolve the capabilities for a Chrome OS printer.
    * @param {!Destination} destination The destination which
@@ -832,6 +837,8 @@ export class DestinationStore extends EventTarget {
         type, DestinationStorePrinterSearchStatus.SEARCHING);
     this.nativeLayer_.getPrinters(type).then(
         this.onDestinationSearchDone_.bind(this, type));
+    MetricsContext.getPrinters(type).record(
+        Metrics.PrintPreviewInitializationEvents.FUNCTION_INITIATED);
   }
 
   /**
@@ -839,11 +846,6 @@ export class DestinationStore extends EventTarget {
    * @param {string} account
    */
   reloadUserCookieBasedDestinations(account) {
-    if (!this.initialized_) {
-      this.readyToReloadCookieDestinations_ = true;
-      return;
-    }
-
     const origins = this.loadedCloudOrigins_.get(account) || [];
     if (origins.includes(DestinationOrigin.COOKIES)) {
       this.dispatchEvent(
@@ -861,8 +863,8 @@ export class DestinationStore extends EventTarget {
       PrinterType.LOCAL_PRINTER,
     ];
 
-    // TODO (rbpotter): Remove the code below once this flag and policy are no
-    // longer supported. Remove the privet flag in M90.
+    // TODO (https://crbug.com/1223593): Remove the code below once this policy
+    // is no longer supported.
     if (loadTimeData.getBoolean('forceEnablePrivetPrinting')) {
       types.push(PrinterType.PRIVET_PRINTER);
     }
@@ -900,7 +902,7 @@ export class DestinationStore extends EventTarget {
     return this.destinationMap_.get(key);
   }
 
-  // <if expr="chromeos">
+  // <if expr="chromeos or lacros">
   /**
    * Removes the provisional destination with ID |provisionalId| from
    * |destinationMap_| and |destinations_|.
@@ -1058,7 +1060,7 @@ export class DestinationStore extends EventTarget {
     }
   }
 
-  // <if expr="chromeos">
+  // <if expr="chromeos or lacros">
   /**
    * Creates a local Drive print destination.
    * @private
@@ -1077,6 +1079,8 @@ export class DestinationStore extends EventTarget {
    *     done being retrieved.
    */
   onDestinationSearchDone_(type) {
+    MetricsContext.getPrinters(type).record(
+        Metrics.PrintPreviewInitializationEvents.FUNCTION_SUCCESSFUL);
     this.destinationSearchStatus_.set(
         type, DestinationStorePrinterSearchStatus.DONE);
     this.dispatchEvent(
@@ -1103,6 +1107,8 @@ export class DestinationStore extends EventTarget {
    * @private
    */
   onCapabilitiesSet_(origin, id, settingsInfo) {
+    MetricsContext.getPrinterCapabilities().record(
+        Metrics.PrintPreviewInitializationEvents.FUNCTION_SUCCESSFUL);
     let dest = null;
     if (origin !== DestinationOrigin.PRIVET) {
       const key = createDestinationKey(id, origin, '');
@@ -1131,7 +1137,7 @@ export class DestinationStore extends EventTarget {
       }
       dest.capabilities = settingsInfo.capabilities;
       this.updateDestination_(dest);
-      // <if expr="chromeos">
+      // <if expr="chromeos or lacros">
       // Start the fetch for the PPD EULA URL.
       this.fetchEulaUrl(dest.id);
       // </if>
@@ -1148,6 +1154,8 @@ export class DestinationStore extends EventTarget {
    * @private
    */
   onGetCapabilitiesFail_(origin, destinationId) {
+    MetricsContext.getPrinterCapabilities().record(
+        Metrics.PrintPreviewInitializationEvents.FUNCTION_FAILED);
     console.warn(
         'Failed to get print capabilities for printer ' + destinationId);
     if (this.selectedDestination_ &&
@@ -1169,13 +1177,16 @@ export class DestinationStore extends EventTarget {
     const payload = event.detail;
     const searchingCloudPrintersDone =
         this.typesToSearch_.has(PrinterType.CLOUD_PRINTER) &&
-        !this.cloudPrintInterface_.isCloudDestinationSearchInProgress();
+        !this.cloudPrintInterface_.isCloudDestinationSearchInProgress() &&
+        (!!payload.user ||
+         event.type === CloudPrintInterfaceEventType.SEARCH_FAILED);
     if (searchingCloudPrintersDone) {
       this.typesToSearch_.delete(PrinterType.CLOUD_PRINTER);
     }
     if (payload.printers && payload.printers.length > 0) {
       this.insertDestinations_(payload.printers);
-    } else if (searchingCloudPrintersDone) {
+    }
+    if (searchingCloudPrintersDone) {
       this.tryToSelectInitialDestination_();
     }
     if (payload.searchDone) {
@@ -1222,19 +1233,6 @@ export class DestinationStore extends EventTarget {
   }
 
   /**
-   * Called when printer sharing invitation was processed successfully.
-   * @param {!CustomEvent<!CloudPrintInterfaceProcessInviteDetail>}
-   *     event Contains detailed information about the invite and newly
-   *     accepted destination (if known).
-   * @private
-   */
-  onCloudPrintProcessInviteDone_(event) {
-    if (event.detail.accept && event.detail.printer) {
-      this.insertDestination_(event.detail.printer);
-    }
-  }
-
-  /**
    * Called when a printer or printers are detected after sending getPrinters
    * from the native layer.
    * @param {!PrinterType} type The type of printer(s) added.
@@ -1261,7 +1259,7 @@ DestinationStore.EventType = {
   ERROR: 'DestinationStore.ERROR',
   SELECTED_DESTINATION_CAPABILITIES_READY: 'DestinationStore' +
       '.SELECTED_DESTINATION_CAPABILITIES_READY',
-  // <if expr="chromeos">
+  // <if expr="chromeos or lacros">
   DESTINATION_EULA_READY: 'DestinationStore.DESTINATION_EULA_READY',
   // </if>
 };

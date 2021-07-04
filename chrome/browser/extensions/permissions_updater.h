@@ -6,7 +6,6 @@
 #define CHROME_BROWSER_EXTENSIONS_PERMISSIONS_UPDATER_H__
 
 #include <memory>
-#include <string>
 
 #include "base/callback_forward.h"
 #include "base/macros.h"
@@ -179,8 +178,8 @@ class PermissionsUpdater {
   // Issues the relevant events, messages and notifications when the
   // |extension|'s permissions have |changed| (|changed| is the delta).
   // Specifically, this sends the EXTENSION_PERMISSIONS_UPDATED notification,
-  // the ExtensionMsg_UpdatePermissions IPC message, and fires the
-  // onAdded/onRemoved events in the extension.
+  // the UpdatePermissions Mojo message, and fires the onAdded/onRemoved events
+  // in the extension.
   static void NotifyPermissionsUpdated(
       content::BrowserContext* browser_context,
       EventType event_type,

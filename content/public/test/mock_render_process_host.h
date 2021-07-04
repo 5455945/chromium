@@ -34,6 +34,10 @@
 #include "content/public/browser/android/child_process_importance.h"
 #endif
 
+namespace blink {
+class StorageKey;
+}  // namespace blink
+
 namespace network {
 namespace mojom {
 
@@ -92,12 +96,13 @@ class MockRenderProcessHost : public RenderProcessHost {
   unsigned int GetFrameDepth() override;
   bool GetIntersectsViewport() override;
   bool IsForGuestsOnly() override;
+  bool IsJitDisabled() override;
   void OnMediaStreamAdded() override;
   void OnMediaStreamRemoved() override;
   void OnForegroundServiceWorkerAdded() override;
   void OnForegroundServiceWorkerRemoved() override;
   StoragePartition* GetStoragePartition() override;
-  virtual void AddWord(const base::string16& word);
+  virtual void AddWord(const std::u16string& word);
   bool Shutdown(int exit_code) override;
   bool ShutdownRequested() override;
   bool FastShutdownIfPossible(size_t page_count,
@@ -137,12 +142,10 @@ class MockRenderProcessHost : public RenderProcessHost {
       bool incoming,
       bool outgoing,
       WebRtcRtpPacketCallback packet_callback) override;
-  void EnableWebRtcEventLogOutput(int lid, int output_period_ms) override;
-  void DisableWebRtcEventLogOutput(int lid) override;
   void BindReceiver(mojo::GenericPendingReceiver receiver) override;
   std::unique_ptr<base::PersistentMemoryAllocator> TakeMetricsAllocator()
       override;
-  const base::TimeTicks& GetInitTimeForNavigationMetrics() override;
+  const base::TimeTicks& GetLastInitTime() override;
   bool IsProcessBackgrounded() override;
   size_t GetKeepAliveRefCount() const;
   void IncrementKeepAliveRefCount() override;
@@ -162,10 +165,11 @@ class MockRenderProcessHost : public RenderProcessHost {
   void SetProcessLock(const IsolationContext& isolation_context,
                       const ProcessLock& process_lock) override;
   bool IsProcessLockedToSiteForTesting() override;
+  void CancelAllProcessShutdownDelays() override {}
   void BindCacheStorage(
       const network::CrossOriginEmbedderPolicy&,
       mojo::PendingRemote<network::mojom::CrossOriginEmbedderPolicyReporter>,
-      const url::Origin& origin,
+      const blink::StorageKey& storage_key,
       mojo::PendingReceiver<blink::mojom::CacheStorage> receiver) override;
   void BindFileSystemManager(
       const url::Origin& origin,
@@ -213,6 +217,7 @@ class MockRenderProcessHost : public RenderProcessHost {
       mojo::PendingReceiver<payments::mojom::PaymentManager> receiver)
       override {}
   void CreateNotificationService(
+      int render_frame_id,
       const url::Origin& origin,
       mojo::PendingReceiver<blink::mojom::NotificationService> receiver)
       override {}
@@ -223,6 +228,7 @@ class MockRenderProcessHost : public RenderProcessHost {
 
   void CleanupNetworkServicePluginExceptionsUponDestruction() override;
   std::string GetInfoForBrowserContextDestructionCrashReporting() override;
+  void WriteIntoTrace(perfetto::TracedValue context) override;
 
   // IPC::Sender via RenderProcessHost.
   bool Send(IPC::Message* msg) override;

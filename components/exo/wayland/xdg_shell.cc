@@ -204,7 +204,7 @@ class WaylandToplevel : public aura::WindowObserver {
           parent->shell_surface_data_->shell_surface.get());
   }
 
-  void SetTitle(const base::string16& title) {
+  void SetTitle(const std::u16string& title) {
     if (shell_surface_data_)
       shell_surface_data_->shell_surface->SetTitle(title);
   }
@@ -319,7 +319,7 @@ void xdg_toplevel_set_title(wl_client* client,
                             wl_resource* resource,
                             const char* title) {
   GetUserDataAs<WaylandToplevel>(resource)->SetTitle(
-      base::string16(base::UTF8ToUTF16(title)));
+      std::u16string(base::UTF8ToUTF16(title)));
 }
 
 void xdg_toplevel_set_app_id(wl_client* client,
@@ -623,6 +623,9 @@ void xdg_surface_get_popup(wl_client* client,
   xdg_popup_send_configure(xdg_popup_resource, position.origin.x(),
                            position.origin.y(), position.size.width(),
                            position.size.height());
+  uint32_t serial = shell_surface_data->serial_tracker->GetNextSerial(
+      SerialTracker::EventType::OTHER_EVENT);
+  xdg_surface_send_configure(resource, serial);
 }
 
 void xdg_surface_set_window_geometry(wl_client* client,

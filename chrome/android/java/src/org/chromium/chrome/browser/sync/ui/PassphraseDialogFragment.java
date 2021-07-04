@@ -38,10 +38,13 @@ import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeStringConstants;
 import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncherImpl;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.sync.ProfileSyncService;
+import org.chromium.chrome.browser.sync.SyncService;
 import org.chromium.components.sync.PassphraseType;
 import org.chromium.ui.text.SpanApplier;
 import org.chromium.ui.text.SpanApplier.SpanInfo;
+
+import java.text.DateFormat;
+import java.util.Date;
 
 /**
  * Dialog to ask to user to enter their sync passphrase.
@@ -78,7 +81,7 @@ public class PassphraseDialogFragment extends DialogFragment implements OnClickL
      * Create a new instanceof of {@link PassphraseDialogFragment} and set its arguments.
      */
     public static PassphraseDialogFragment newInstance(Fragment target) {
-        assert ProfileSyncService.get() != null;
+        assert SyncService.get() != null;
         PassphraseDialogFragment dialog = new PassphraseDialogFragment();
         if (target != null) {
             dialog.setTargetFragment(target, -1);
@@ -181,37 +184,40 @@ public class PassphraseDialogFragment extends DialogFragment implements OnClickL
     }
 
     private SpannableString getPromptText() {
-        ProfileSyncService pss = ProfileSyncService.get();
-        String accountName = pss.getCurrentSignedInAccountText() + "\n\n";
-        @PassphraseType
-        int passphraseType = pss.getPassphraseType();
-        if (pss.hasExplicitPassphraseTime()) {
+        SyncService syncService = SyncService.get();
+        String accountName = getString(R.string.sync_account_info,
+                                     syncService.getAuthenticatedAccountInfo().getEmail())
+                + "\n\n";
+        Date passphraseTime = syncService.getExplicitPassphraseTime();
+        if (passphraseTime != null) {
             String syncPassphraseHelpContext =
                     getString(R.string.help_context_change_sync_passphrase);
+            String passphraseTimeString =
+                    DateFormat.getDateInstance(DateFormat.MEDIUM).format(passphraseTime);
+            @PassphraseType
+            int passphraseType = syncService.getPassphraseType();
             switch (passphraseType) {
                 case PassphraseType.FROZEN_IMPLICIT_PASSPHRASE:
-                    return applyInProductHelpSpan(
-                            accountName + pss.getSyncEnterGooglePassphraseBodyWithDateText(),
-                            syncPassphraseHelpContext);
                 case PassphraseType.CUSTOM_PASSPHRASE:
-                    return applyInProductHelpSpan(
-                            accountName + pss.getSyncEnterCustomPassphraseBodyWithDateText(),
+                    return applyInProductHelpSpan(accountName
+                                    + getString(
+                                            R.string.sync_enter_passphrase_body_with_date_android,
+                                            passphraseTimeString),
                             syncPassphraseHelpContext);
-                case PassphraseType.IMPLICIT_PASSPHRASE: // Falling through intentionally.
-                case PassphraseType.KEYSTORE_PASSPHRASE: // Falling through intentionally.
-                case PassphraseType.TRUSTED_VAULT_PASSPHRASE: // Falling through intentionally.
+                case PassphraseType.IMPLICIT_PASSPHRASE:
+                case PassphraseType.KEYSTORE_PASSPHRASE:
+                case PassphraseType.TRUSTED_VAULT_PASSPHRASE:
                 default:
                     Log.w(TAG, "Found incorrect passphrase type " + passphraseType
                                     + ". Falling back to default string.");
             }
         }
-        return new SpannableString(accountName + pss.getSyncEnterCustomPassphraseBodyText());
+        return new SpannableString(accountName + getString(R.string.sync_enter_passphrase_body));
     }
 
     private SpannableString getResetText() {
         final Context context = getActivity();
-        return SpanApplier.applySpans(
-                context.getString(R.string.sync_passphrase_reset_instructions),
+        return SpanApplier.applySpans(getString(R.string.sync_passphrase_reset_instructions),
                 new SpanInfo("<resetlink>", "</resetlink>", new ClickableSpan() {
                     @Override
                     public void onClick(View view) {

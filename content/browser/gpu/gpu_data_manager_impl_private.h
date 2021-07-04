@@ -24,6 +24,7 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "content/browser/gpu/gpu_data_manager_impl.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/display/display_observer.h"
 #include "ui/gl/gpu_preference.h"
 
@@ -42,11 +43,12 @@ class CONTENT_EXPORT GpuDataManagerImplPrivate {
   void BlocklistWebGLForTesting();
   gpu::GPUInfo GetGPUInfo() const;
   gpu::GPUInfo GetGPUInfoForHardwareGpu() const;
+  std::vector<std::string> GetDawnInfoList() const;
   bool GpuAccessAllowed(std::string* reason) const;
   bool GpuAccessAllowedForHardwareGpu(std::string* reason) const;
-  bool GpuProcessStartAllowed() const;
-  void RequestDxdiagDx12VulkanGpuInfoIfNeeded(GpuInfoRequest request,
-                                              bool delayed);
+  void RequestDxdiagDx12VulkanGpuInfoIfNeeded(
+      GpuDataManagerImpl::GpuInfoRequest request,
+      bool delayed);
   bool IsEssentialGpuInfoAvailable() const;
   bool IsDx12VulkanVersionAvailable() const;
   bool IsGpuFeatureInfoAvailable() const;
@@ -61,7 +63,7 @@ class CONTENT_EXPORT GpuDataManagerImplPrivate {
 
   void UpdateGpuInfo(
       const gpu::GPUInfo& gpu_info,
-      const base::Optional<gpu::GPUInfo>& optional_gpu_info_for_hardware_gpu);
+      const absl::optional<gpu::GPUInfo>& optional_gpu_info_for_hardware_gpu);
 #if defined(OS_WIN)
   void UpdateDxDiagNode(const gpu::DxDiagNode& dx_diagnostics);
   void UpdateDx12Info(uint32_t d3d12_feature_level);
@@ -75,11 +77,13 @@ class CONTENT_EXPORT GpuDataManagerImplPrivate {
   void UpdateVulkanRequestStatus(bool request_continues);
   bool Dx12Requested() const;
   bool VulkanRequested() const;
-  void OnBrowserThreadsStarted();
+  void PostCreateThreads();
   void TerminateInfoCollectionGpuProcess();
 #endif
+  void UpdateDawnInfo(const std::vector<std::string>& dawn_info_list);
+
   void UpdateGpuFeatureInfo(const gpu::GpuFeatureInfo& gpu_feature_info,
-                            const base::Optional<gpu::GpuFeatureInfo>&
+                            const absl::optional<gpu::GpuFeatureInfo>&
                                 gpu_feature_info_for_hardware_gpu);
   void UpdateGpuExtraInfo(const gfx::GpuExtraInfo& process_info);
 
@@ -202,6 +206,7 @@ class CONTENT_EXPORT GpuDataManagerImplPrivate {
   void RequestDxDiagNodeData();
   void RequestGpuSupportedDx12Version(bool delayed);
   void RequestGpuSupportedVulkanVersion(bool delayed);
+  void RequestDawnInfo();
 
   void RecordCompositingMode();
 
@@ -220,6 +225,9 @@ class CONTENT_EXPORT GpuDataManagerImplPrivate {
   bool gpu_info_vulkan_requested_ = false;
   bool gpu_info_vulkan_request_failed_ = false;
 #endif
+  bool gpu_info_dawn_toggles_requested_ = false;
+  // The Dawn info queried from the GPU process.
+  std::vector<std::string> dawn_info_list_;
 
   // What we would have gotten if we haven't fallen back to SwiftShader or
   // pure software (in the viz case).

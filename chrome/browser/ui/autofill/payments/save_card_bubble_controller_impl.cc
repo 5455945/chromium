@@ -14,7 +14,6 @@
 #include "chrome/browser/signin/account_consistency_mode_manager.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ssl/security_state_tab_helper.h"
-#include "chrome/browser/sync/profile_sync_service_factory.h"
 #include "chrome/browser/ui/autofill/autofill_bubble_base.h"
 #include "chrome/browser/ui/autofill/autofill_bubble_handler.h"
 #include "chrome/browser/ui/autofill/payments/payments_ui_constants.h"
@@ -164,7 +163,7 @@ void SaveCardBubbleControllerImpl::ReshowBubble() {
   ShowBubble();
 }
 
-base::string16 SaveCardBubbleControllerImpl::GetWindowTitle() const {
+std::u16string SaveCardBubbleControllerImpl::GetWindowTitle() const {
   switch (current_bubble_type_) {
     case BubbleType::LOCAL_SAVE:
       return l10n_util::GetStringUTF16(
@@ -182,16 +181,16 @@ base::string16 SaveCardBubbleControllerImpl::GetWindowTitle() const {
     case BubbleType::UPLOAD_IN_PROGRESS:
     case BubbleType::INACTIVE:
       NOTREACHED();
-      return base::string16();
+      return std::u16string();
   }
 }
 
-base::string16 SaveCardBubbleControllerImpl::GetExplanatoryMessage() const {
+std::u16string SaveCardBubbleControllerImpl::GetExplanatoryMessage() const {
   if (current_bubble_type_ == BubbleType::FAILURE)
     return l10n_util::GetStringUTF16(IDS_AUTOFILL_FAILURE_BUBBLE_EXPLANATION);
 
   if (current_bubble_type_ != BubbleType::UPLOAD_SAVE)
-    return base::string16();
+    return std::u16string();
 
   if (options_.should_request_name_from_user) {
     return l10n_util::GetStringUTF16(
@@ -202,7 +201,7 @@ base::string16 SaveCardBubbleControllerImpl::GetExplanatoryMessage() const {
       IDS_AUTOFILL_SAVE_CARD_PROMPT_UPLOAD_EXPLANATION_V3);
 }
 
-base::string16 SaveCardBubbleControllerImpl::GetAcceptButtonText() const {
+std::u16string SaveCardBubbleControllerImpl::GetAcceptButtonText() const {
   switch (current_bubble_type_) {
     case BubbleType::LOCAL_SAVE:
       return l10n_util::GetStringUTF16(
@@ -215,11 +214,11 @@ base::string16 SaveCardBubbleControllerImpl::GetAcceptButtonText() const {
     case BubbleType::UPLOAD_IN_PROGRESS:
     case BubbleType::FAILURE:
     case BubbleType::INACTIVE:
-      return base::string16();
+      return std::u16string();
   }
 }
 
-base::string16 SaveCardBubbleControllerImpl::GetDeclineButtonText() const {
+std::u16string SaveCardBubbleControllerImpl::GetDeclineButtonText() const {
   switch (current_bubble_type_) {
     case BubbleType::LOCAL_SAVE:
       return l10n_util::GetStringUTF16(
@@ -231,7 +230,7 @@ base::string16 SaveCardBubbleControllerImpl::GetDeclineButtonText() const {
     case BubbleType::MANAGE_CARDS:
     case BubbleType::FAILURE:
     case BubbleType::INACTIVE:
-      return base::string16();
+      return std::u16string();
   }
 }
 
@@ -264,13 +263,11 @@ bool SaveCardBubbleControllerImpl::ShouldRequestExpirationDateFromUser() const {
 
 void SaveCardBubbleControllerImpl::OnSaveButton(
     const AutofillClient::UserProvidedCardDetails& user_provided_card_details) {
-  set_bubble_view(nullptr);
-
   switch (current_bubble_type_) {
     case BubbleType::UPLOAD_SAVE: {
       DCHECK(!upload_save_card_prompt_callback_.is_null());
 
-      base::string16 name_provided_by_user;
+      std::u16string name_provided_by_user;
       if (!user_provided_card_details.cardholder_name.empty()) {
         // Log whether the name was changed by the user or simply accepted
         // without edits.
@@ -431,7 +428,7 @@ AutofillSyncSigninState SaveCardBubbleControllerImpl::GetSyncState() const {
   return personal_data_manager_->GetSyncSigninState();
 }
 
-base::string16 SaveCardBubbleControllerImpl::GetSavePaymentIconTooltipText()
+std::u16string SaveCardBubbleControllerImpl::GetSavePaymentIconTooltipText()
     const {
   switch (current_bubble_type_) {
     case BubbleType::LOCAL_SAVE:
@@ -447,7 +444,7 @@ base::string16 SaveCardBubbleControllerImpl::GetSavePaymentIconTooltipText()
     case BubbleType::FAILURE:
       return l10n_util::GetStringUTF16(IDS_TOOLTIP_SAVE_CREDIT_CARD_FAILURE);
     case BubbleType::INACTIVE:
-      return base::string16();
+      return std::u16string();
   }
 }
 
@@ -532,10 +529,8 @@ void SaveCardBubbleControllerImpl::FetchAccountInfo() {
       PersonalDataManagerFactory::GetForProfile(profile);
   if (!personal_data_manager)
     return;
-  base::Optional<AccountInfo> account_info =
-      identity_manager->FindExtendedAccountInfoForAccountWithRefreshToken(
-          personal_data_manager->GetAccountInfoForPaymentsServer());
-  account_info_ = account_info.value_or(AccountInfo{});
+  account_info_ = identity_manager->FindExtendedAccountInfo(
+      personal_data_manager->GetAccountInfoForPaymentsServer());
 }
 
 void SaveCardBubbleControllerImpl::ShowBubble() {

@@ -560,7 +560,7 @@ static Position MostBackwardOrForwardCaretPosition(
   Node* position_anchor = position.AnchorNode();
   if (!position_anchor)
     return Position();
-  DCHECK(position.IsValidFor(*position.GetDocument()));
+  DCHECK(position.IsValidFor(*position.GetDocument())) << position;
 
   // Find the most backward or forward caret position in the flat tree.
   const Position& candidate = ToPositionInDOMTree(
@@ -643,6 +643,7 @@ static PositionTemplate<Strategy> MostBackwardCaretPosition(
   const bool start_editable = HasEditableStyle(*start_node);
   Node* last_node = start_node;
   bool boundary_crossed = false;
+  absl::optional<WritingMode> writing_mode;
   for (PositionIteratorAlgorithm<Strategy> current_pos = last_visible;
        !current_pos.AtStart(); current_pos.Decrement()) {
     Node* current_node = current_pos.GetNode();
@@ -680,6 +681,12 @@ static PositionTemplate<Strategy> MostBackwardCaretPosition(
 
     if (DisplayLockUtilities::NearestLockedExclusiveAncestor(*layout_object))
       continue;
+
+    if (!writing_mode.has_value()) {
+      writing_mode.emplace(layout_object->Style()->GetWritingMode());
+    } else if (*writing_mode != layout_object->Style()->GetWritingMode()) {
+      return last_visible.ComputePosition();
+    }
 
     if (rule == kCanCrossEditingBoundary && boundary_crossed) {
       last_visible = current_pos;
@@ -786,6 +793,7 @@ PositionTemplate<Strategy> MostForwardCaretPosition(
   const bool start_editable = HasEditableStyle(*start_node);
   Node* last_node = start_node;
   bool boundary_crossed = false;
+  absl::optional<WritingMode> writing_mode;
   for (PositionIteratorAlgorithm<Strategy> current_pos = last_visible;
        !current_pos.AtEnd(); current_pos.Increment()) {
     Node* current_node = current_pos.GetNode();
@@ -832,6 +840,12 @@ PositionTemplate<Strategy> MostForwardCaretPosition(
 
     if (DisplayLockUtilities::NearestLockedExclusiveAncestor(*layout_object))
       continue;
+
+    if (!writing_mode.has_value()) {
+      writing_mode.emplace(layout_object->Style()->GetWritingMode());
+    } else if (*writing_mode != layout_object->Style()->GetWritingMode()) {
+      return last_visible.ComputePosition();
+    }
 
     if (rule == kCanCrossEditingBoundary && boundary_crossed)
       return current_pos.DeprecatedComputePosition();
@@ -1090,6 +1104,13 @@ static VisiblePositionTemplate<Strategy> NextPositionOfAlgorithm(
   }
   NOTREACHED();
   return next;
+}
+
+VisiblePosition NextPositionOf(const Position& position,
+                               EditingBoundaryCrossingRule rule) {
+  DCHECK(position.IsValidFor(*position.GetDocument())) << position;
+  return NextPositionOfAlgorithm<EditingStrategy>(
+      PositionWithAffinityTemplate<EditingStrategy>(position), rule);
 }
 
 VisiblePosition NextPositionOf(const VisiblePosition& visible_position,

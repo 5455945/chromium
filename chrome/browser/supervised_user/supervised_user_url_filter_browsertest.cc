@@ -11,10 +11,9 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/values.h"
+#include "chrome/browser/ash/login/test/logged_in_user_mixin.h"
 #include "chrome/browser/chrome_notification_types.h"
-#include "chrome/browser/chromeos/login/test/logged_in_user_mixin.h"
 #include "chrome/browser/history/history_service_factory.h"
-#include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
 #include "chrome/browser/supervised_user/supervised_user_constants.h"
@@ -28,6 +27,7 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/infobars/content/content_infobar_manager.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
 #include "components/infobars/core/infobar.h"
 #include "components/pref_registry/pref_registry_syncable.h"
@@ -67,25 +67,23 @@ class SupervisedUserURLFilterTest : public MixinBasedInProcessBrowserTest {
   bool ShownPageIsInterstitial(Browser* browser) {
     WebContents* tab = browser->tab_strip_model()->GetActiveWebContents();
     EXPECT_FALSE(tab->IsCrashed());
-    base::string16 title;
+    std::u16string title;
     ui_test_utils::GetCurrentTabTitle(browser, &title);
     return tab->GetController().GetLastCommittedEntry()->GetPageType() ==
                content::PAGE_TYPE_ERROR &&
-           title == base::ASCIIToUTF16("Site blocked");
+           title == u"Site blocked";
   }
 
   void SendAccessRequest(WebContents* tab) {
     tab->GetMainFrame()->ExecuteJavaScriptForTests(
-        base::ASCIIToUTF16(
-            "supervisedUserErrorPageController.requestPermission()"),
+        u"supervisedUserErrorPageController.requestPermission()",
         base::NullCallback());
     return;
   }
 
   void GoBack(WebContents* tab) {
     tab->GetMainFrame()->ExecuteJavaScriptForTests(
-        base::ASCIIToUTF16("supervisedUserErrorPageController.goBack()"),
-        base::NullCallback());
+        u"supervisedUserErrorPageController.goBack()", base::NullCallback());
     return;
   }
 
@@ -178,7 +176,9 @@ class TabClosingObserver : public TabStripModelObserver {
 
     auto* remove = change.GetRemove();
     for (const auto& contents : remove->contents) {
-      if (contents_ == contents.contents && contents.will_be_deleted) {
+      if (contents_ == contents.contents &&
+          contents.remove_reason ==
+              TabStripModelChange::RemoveReason::kDeleted) {
         if (run_loop_.running())
           run_loop_.Quit();
         contents_ = nullptr;

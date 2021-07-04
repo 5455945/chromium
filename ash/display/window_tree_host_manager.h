@@ -17,7 +17,6 @@
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
-#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host_observer.h"
@@ -205,6 +204,9 @@ class ASH_EXPORT WindowTreeHostManager
   // Stores the cursor's display. The id is used to determine whether the mouse
   // should be moved after a display configuration change.
   int64_t cursor_display_id_for_restore_;
+
+  // Receive DisplayObserver callbacks between Start and Shutdown.
+  absl::optional<display::ScopedDisplayObserver> display_observer_;
 
   // A repeating timer to trigger sending UMA metrics for primary display's
   // effective resolution at fixed intervals.

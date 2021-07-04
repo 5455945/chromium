@@ -5,8 +5,10 @@
 #include "components/sync/engine/get_updates_processor.h"
 
 #include <stddef.h>
+#include <map>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "base/logging.h"
 #include "base/trace_event/trace_event.h"
@@ -76,13 +78,11 @@ SyncerError HandleGetEncryptionKeyResponse(
 void PartitionUpdatesByType(const sync_pb::GetUpdatesResponse& gu_response,
                             ModelTypeSet requested_types,
                             TypeSyncEntityMap* updates_by_type) {
-  int update_count = gu_response.entries().size();
   for (ModelType type : requested_types) {
     updates_by_type->insert(std::make_pair(type, SyncEntityList()));
   }
-  for (int i = 0; i < update_count; ++i) {
-    const sync_pb::SyncEntity& update = gu_response.entries(i);
-    ModelType type = GetModelType(update);
+  for (const sync_pb::SyncEntity& update : gu_response.entries()) {
+    ModelType type = GetModelTypeFromSpecifics(update.specifics());
     if (!IsRealDataType(type)) {
       NOTREACHED() << "Received update with invalid type.";
       continue;
@@ -208,7 +208,7 @@ void GetUpdatesProcessor::PrepareGetUpdates(
 
     sync_pb::DataTypeContext context = handler_it->second->GetDataTypeContext();
     if (!context.context().empty())
-      get_updates->add_client_contexts()->Swap(&context);
+      *get_updates->add_client_contexts() = std::move(context);
   }
 
   delegate_.HelpPopulateGuMessage(get_updates);
@@ -349,12 +349,9 @@ SyncerError GetUpdatesProcessor::ProcessGetUpdatesResponse(
       context.CopyFrom(gu_response.context_mutations(context_iter->second));
 
     if (update_handler_iter != update_handler_map_->end()) {
-      SyncerError result =
-          update_handler_iter->second->ProcessGetUpdatesResponse(
-              gu_response.new_progress_marker(progress_marker_iter->second),
-              context, updates_iter->second, status_controller);
-      if (result.value() != SyncerError::SYNCER_OK)
-        return result;
+      update_handler_iter->second->ProcessGetUpdatesResponse(
+          gu_response.new_progress_marker(progress_marker_iter->second),
+          context, updates_iter->second, status_controller);
     } else {
       DLOG(WARNING) << "Ignoring received updates of a type we can't handle.  "
                     << "Type is: " << ModelTypeToString(type);
@@ -370,7 +367,11 @@ SyncerError GetUpdatesProcessor::ProcessGetUpdatesResponse(
 void GetUpdatesProcessor::ApplyUpdates(const ModelTypeSet& gu_types,
                                        StatusController* status_controller) {
   status_controller->set_get_updates_request_types(gu_types);
-  delegate_.ApplyUpdates(gu_types, status_controller, update_handler_map_);
+  for (const auto& kv : *update_handler_map_) {
+    if (gu_types.Has(kv.first)) {
+      kv.second->ApplyUpdates(status_controller);
+    }
+  }
 }
 
 }  // namespace syncer

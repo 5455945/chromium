@@ -6,10 +6,10 @@
 
 #include <stddef.h>
 
+#include "base/cxx17_backports.h"
 #include "base/feature_list.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
-#include "base/stl_util.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
@@ -147,10 +147,17 @@ const AcceleratorMapping kAcceleratorMap[] = {
     {ui::VKEY_BROWSER_REFRESH, ui::EF_SHIFT_DOWN, IDC_RELOAD_BYPASSING_CACHE},
 #endif  // defined(OS_LINUX) || defined(OS_CHROMEOS)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    // On Chrome OS, VKEY_BROWSER_SEARCH is handled in Ash.
+#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
+    // Chrome OS keyboard does not have delete key, so assign it to backspace.
     {ui::VKEY_BACK, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN,
      IDC_CLEAR_BROWSING_DATA},
+#else   // !(BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS))
+    {ui::VKEY_DELETE, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN,
+     IDC_CLEAR_BROWSING_DATA},
+#endif  // !(BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS))
+
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+    // On Chrome OS, VKEY_BROWSER_SEARCH is handled in Ash.
     {ui::VKEY_OEM_2, ui::EF_CONTROL_DOWN, IDC_HELP_PAGE_VIA_KEYBOARD},
     {ui::VKEY_OEM_2, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN,
      IDC_HELP_PAGE_VIA_KEYBOARD},
@@ -187,10 +194,6 @@ const AcceleratorMapping kAcceleratorMap[] = {
 #if BUILDFLAG(ENABLE_PRINTING)
     {ui::VKEY_P, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN, IDC_BASIC_PRINT},
 #endif  // ENABLE_PRINTING
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
-    {ui::VKEY_DELETE, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN,
-     IDC_CLEAR_BROWSING_DATA},
-#endif  // !OS_CHROMEOS
     {ui::VKEY_I, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN, IDC_DEV_TOOLS},
     {ui::VKEY_J, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN,
      IDC_DEV_TOOLS_CONSOLE},
@@ -213,6 +216,7 @@ const AcceleratorMapping kAcceleratorMap[] = {
     {ui::VKEY_J, ui::EF_CONTROL_DOWN, IDC_SHOW_DOWNLOADS},
     {ui::VKEY_H, ui::EF_CONTROL_DOWN, IDC_SHOW_HISTORY},
     {ui::VKEY_U, ui::EF_CONTROL_DOWN, IDC_VIEW_SOURCE},
+    {ui::VKEY_H, ui::EF_ALT_DOWN | ui::EF_SHIFT_DOWN, IDC_FOCUS_HELP_BUBBLE},
 #if !BUILDFLAG(IS_CHROMEOS_ASH)
     // On Chrome OS, these keys are assigned to change UI scale.
     {ui::VKEY_OEM_MINUS, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN,

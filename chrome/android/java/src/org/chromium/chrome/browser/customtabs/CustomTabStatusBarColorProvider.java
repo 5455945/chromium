@@ -7,13 +7,10 @@ package org.chromium.chrome.browser.customtabs;
 import static org.chromium.chrome.browser.ui.system.StatusBarColorController.DEFAULT_STATUS_BAR_COLOR;
 import static org.chromium.chrome.browser.ui.system.StatusBarColorController.UNDEFINED_STATUS_BAR_COLOR;
 
-import androidx.annotation.VisibleForTesting;
-
-import org.chromium.chrome.browser.browserservices.BrowserServicesIntentDataProvider;
+import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
 import org.chromium.chrome.browser.customtabs.features.toolbar.CustomTabToolbarColorController;
 import org.chromium.chrome.browser.customtabs.features.toolbar.CustomTabToolbarColorController.ToolbarColorType;
 import org.chromium.chrome.browser.dependency_injection.ActivityScope;
-import org.chromium.chrome.browser.previews.Previews;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.ui.system.StatusBarColorController;
 
@@ -52,20 +49,15 @@ public class CustomTabStatusBarColorProvider {
 
         @ToolbarColorType
         int toolbarColorType = CustomTabToolbarColorController.computeToolbarColorType(
-                mIntentDataProvider, mUseTabThemeColor, tab, () -> isPreview(tab));
+                mIntentDataProvider, mUseTabThemeColor, tab);
         switch (toolbarColorType) {
             case ToolbarColorType.THEME_COLOR:
                 return UNDEFINED_STATUS_BAR_COLOR;
             case ToolbarColorType.DEFAULT_COLOR:
                 return DEFAULT_STATUS_BAR_COLOR;
             case ToolbarColorType.INTENT_TOOLBAR_COLOR:
-                return mIntentDataProvider.getToolbarColor();
+                return mIntentDataProvider.getColorProvider().getToolbarColor();
         }
         return DEFAULT_STATUS_BAR_COLOR;
-    }
-
-    @VisibleForTesting
-    boolean isPreview(Tab tab) {
-        return Previews.isPreview(tab);
     }
 }

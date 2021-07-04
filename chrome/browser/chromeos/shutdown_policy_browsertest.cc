@@ -7,7 +7,6 @@
 
 #include "ash/constants/ash_switches.h"
 #include "ash/login_status.h"
-#include "ash/public/cpp/ash_switches.h"
 #include "ash/public/cpp/ash_view_ids.h"
 #include "ash/public/cpp/login_screen_test_api.h"
 #include "ash/public/cpp/system_tray_test_api.h"
@@ -17,17 +16,16 @@
 #include "base/macros.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/ash/login/lock/screen_locker.h"
 #include "chrome/browser/ash/login/lock/screen_locker_tester.h"
+#include "chrome/browser/ash/login/ui/login_display_host.h"
+#include "chrome/browser/ash/login/ui/webui_login_view.h"
+#include "chrome/browser/ash/policy/core/device_policy_builder.h"
+#include "chrome/browser/ash/policy/core/device_policy_cros_browser_test.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
 #include "chrome/browser/chrome_notification_types.h"
-#include "chrome/browser/chromeos/login/ui/login_display_host.h"
-#include "chrome/browser/chromeos/login/ui/webui_login_view.h"
-#include "chrome/browser/chromeos/policy/device_policy_builder.h"
-#include "chrome/browser/chromeos/policy/device_policy_cros_browser_test.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/ui/webui/chromeos/login/oobe_ui.h"
 #include "chromeos/dbus/session_manager/fake_session_manager_client.h"
@@ -87,7 +85,7 @@ class ShutdownPolicyBaseTest
 
   // Refreshes device policy and waits for it to be applied.
   void SyncRefreshDevicePolicy() {
-    run_loop_.reset(new base::RunLoop());
+    run_loop_ = std::make_unique<base::RunLoop>();
     DeviceSettingsService::Get()->AddObserver(this);
     RefreshDevicePolicy();
     run_loop_->Run();
@@ -124,7 +122,7 @@ class ShutdownPolicyInSessionTest
 
   // Returns true if the shutdown button's tooltip matches |tooltip|.
   bool HasShutdownButtonTooltip(const std::string& tooltip) {
-    base::string16 actual_tooltip =
+    std::u16string actual_tooltip =
         tray_test_api_->GetBubbleViewTooltip(ash::VIEW_ID_POWER_BUTTON);
     return base::UTF8ToUTF16(tooltip) == actual_tooltip;
   }
@@ -173,8 +171,9 @@ class ShutdownPolicyLockerTest : public ShutdownPolicyBaseTest {
 
   void SetUpInProcessBrowserTestFixture() override {
     ShutdownPolicyBaseTest::SetUpInProcessBrowserTestFixture();
-    zero_duration_mode_.reset(new ui::ScopedAnimationDurationScaleMode(
-        ui::ScopedAnimationDurationScaleMode::ZERO_DURATION));
+    zero_duration_mode_ =
+        std::make_unique<ui::ScopedAnimationDurationScaleMode>(
+            ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
   }
 
   void SetUpOnMainThread() override {

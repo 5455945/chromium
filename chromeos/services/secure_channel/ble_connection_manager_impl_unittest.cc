@@ -449,7 +449,8 @@ class SecureChannelBleConnectionManagerImplTest : public testing::Test {
 
     fake_ble_scanner_->NotifyReceivedAdvertisementFromDevice(
         remote_device, mock_bluetooth_device.get(),
-        ConnectionMedium::kBluetoothLowEnergy, connection_role);
+        ConnectionMedium::kBluetoothLowEnergy, connection_role,
+        {0, 0} /* eid */);
 
     // As a result of the connection, all ongoing connection attmepts should
     // have been canceled, since a connection is in progress.
@@ -621,7 +622,7 @@ class SecureChannelBleConnectionManagerImplTest : public testing::Test {
     successful_connections_.push_back(
         std::make_pair(device_id_pair, std::move(authenticated_channel)));
 
-    base::Optional<std::tuple<DeviceIdPair, ConnectionRole, ConnectionPriority>>
+    absl::optional<std::tuple<DeviceIdPair, ConnectionRole, ConnectionPriority>>
         tuple_which_received_callback;
     for (const auto& tuple :
          remote_device_id_to_metadata_map_[device_id_pair.remote_device_id()]) {

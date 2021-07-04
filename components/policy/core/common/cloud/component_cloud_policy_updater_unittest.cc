@@ -11,7 +11,6 @@
 #include "base/callback.h"
 #include "base/compiler_specific.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/optional.h"
 #include "base/sequenced_task_runner.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
@@ -19,8 +18,8 @@
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/component_cloud_policy_store.h"
 #include "components/policy/core/common/cloud/external_policy_data_fetcher.h"
-#include "components/policy/core/common/cloud/policy_builder.h"
 #include "components/policy/core/common/cloud/resource_cache.h"
+#include "components/policy/core/common/cloud/test/policy_builder.h"
 #include "components/policy/core/common/external_data_fetcher.h"
 #include "components/policy/core/common/policy_bundle.h"
 #include "components/policy/core/common/policy_map.h"
@@ -34,6 +33,7 @@
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 namespace em = enterprise_management;
@@ -116,7 +116,7 @@ void ComponentCloudPolicyUpdaterTest::SetUp() {
   ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
   cache_ = std::make_unique<ResourceCache>(temp_dir_.GetPath(),
                                            task_env_.GetMainThreadTaskRunner(),
-                                           /* max_cache_size */ base::nullopt);
+                                           /* max_cache_size */ absl::nullopt);
   store_ = std::make_unique<ComponentCloudPolicyStore>(
       &store_delegate_, cache_.get(), dm_protocol::kChromeExtensionPolicyType,
       POLICY_SOURCE_CLOUD);

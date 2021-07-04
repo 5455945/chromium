@@ -6,7 +6,7 @@
   TestRunner.addResult(
       `Tests a handling of a click on the link in a message, which had been shown before its originating script was added.\n`);
 
-  await TestRunner.loadModule('console_test_runner');
+  await TestRunner.loadModule('console'); await TestRunner.loadTestModule('console_test_runner');
   await TestRunner.showPanel('console');
 
   await TestRunner.evaluateInPagePromise(`
@@ -21,9 +21,9 @@
 
 
   var message = new SDK.ConsoleMessage(
-      TestRunner.runtimeModel, SDK.ConsoleMessage.MessageSource.JS,
-      SDK.ConsoleMessage.MessageLevel.Info, 'hello?', null,
-      'http://127.0.0.1:8000/devtools/resources/source2.js');
+      TestRunner.runtimeModel, Protocol.Log.LogEntrySource.JS,
+      Protocol.Log.LogEntryLevel.Info, 'hello?',
+      {url: 'http://127.0.0.1:8000/devtools/resources/source2.js'});
 
   SDK.consoleModel.addMessage(message);
   TestRunner.debuggerModel.addEventListener(SDK.DebuggerModel.Events.ParsedScriptSource, onScriptAdded);

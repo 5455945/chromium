@@ -24,23 +24,18 @@ ScopedClipboardWriter::ScopedClipboardWriter(
 
 ScopedClipboardWriter::~ScopedClipboardWriter() {
   static constexpr size_t kMaxRepresentations = 1 << 12;
-  DCHECK(objects_.empty() || platform_representations_.empty())
-      << "Portable and Platform representations should not be written on the "
-         "same write.";
   DCHECK(platform_representations_.size() < kMaxRepresentations);
-  if (!objects_.empty()) {
-    Clipboard::GetForCurrentThread()->WritePortableRepresentations(
-        buffer_, objects_, std::move(data_src_));
-  } else if (!platform_representations_.empty()) {
-    Clipboard::GetForCurrentThread()->WritePlatformRepresentations(
-        buffer_, std::move(platform_representations_), std::move(data_src_));
+  if (!objects_.empty() || !platform_representations_.empty()) {
+    Clipboard::GetForCurrentThread()->WritePortableAndPlatformRepresentations(
+        buffer_, objects_, std::move(platform_representations_),
+        std::move(data_src_));
   }
 
   if (confidential_)
     Clipboard::GetForCurrentThread()->MarkAsConfidential();
 }
 
-void ScopedClipboardWriter::WriteText(const base::string16& text) {
+void ScopedClipboardWriter::WriteText(const std::u16string& text) {
   RecordWrite(ClipboardFormatMetric::kText);
   std::string utf8_text = base::UTF16ToUTF8(text);
 
@@ -50,7 +45,7 @@ void ScopedClipboardWriter::WriteText(const base::string16& text) {
   objects_[Clipboard::PortableFormat::kText] = parameters;
 }
 
-void ScopedClipboardWriter::WriteHTML(const base::string16& markup,
+void ScopedClipboardWriter::WriteHTML(const std::u16string& markup,
                                       const std::string& source_url) {
   RecordWrite(ClipboardFormatMetric::kHtml);
   std::string utf8_markup = base::UTF16ToUTF8(markup);
@@ -67,7 +62,7 @@ void ScopedClipboardWriter::WriteHTML(const base::string16& markup,
   objects_[Clipboard::PortableFormat::kHtml] = parameters;
 }
 
-void ScopedClipboardWriter::WriteSvg(const base::string16& markup) {
+void ScopedClipboardWriter::WriteSvg(const std::u16string& markup) {
   RecordWrite(ClipboardFormatMetric::kSvg);
   std::string utf8_markup = base::UTF16ToUTF8(markup);
 
@@ -93,7 +88,7 @@ void ScopedClipboardWriter::WriteFilenames(const std::string& uri_list) {
   objects_[Clipboard::PortableFormat::kFilenames] = parameters;
 }
 
-void ScopedClipboardWriter::WriteBookmark(const base::string16& bookmark_title,
+void ScopedClipboardWriter::WriteBookmark(const std::u16string& bookmark_title,
                                           const std::string& url) {
   if (bookmark_title.empty() || url.empty())
     return;
@@ -108,7 +103,7 @@ void ScopedClipboardWriter::WriteBookmark(const base::string16& bookmark_title,
   objects_[Clipboard::PortableFormat::kBookmark] = parameters;
 }
 
-void ScopedClipboardWriter::WriteHyperlink(const base::string16& anchor_text,
+void ScopedClipboardWriter::WriteHyperlink(const std::u16string& anchor_text,
                                            const std::string& url) {
   if (anchor_text.empty() || url.empty())
     return;
@@ -173,11 +168,11 @@ void ScopedClipboardWriter::WritePickledData(
   objects_[Clipboard::PortableFormat::kData] = parameters;
 }
 
-void ScopedClipboardWriter::WriteData(const base::string16& format,
+void ScopedClipboardWriter::WriteData(const std::u16string& format,
                                       mojo_base::BigBuffer data) {
   RecordWrite(ClipboardFormatMetric::kData);
   platform_representations_.push_back(
-      {base::UTF16ToUTF8(format), std::move(data)});
+      {base::UTF16ToASCII(format), std::move(data)});
 }
 
 void ScopedClipboardWriter::Reset() {

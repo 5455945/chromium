@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-#include "ash/accessibility/accessibility_panel_layout_manager.h"
+#include "ash/accessibility/ui/accessibility_panel_layout_manager.h"
 #include "ash/ambient/test/ambient_ash_test_helper.h"
 #include "ash/app_list/test/app_list_test_helper.h"
 #include "ash/display/extended_mouse_warp_controller.h"
@@ -32,6 +32,7 @@
 #include "ash/test_screenshot_delegate.h"
 #include "ash/test_shell_delegate.h"
 #include "ash/utility/screenshot_controller.h"
+#include "ash/wm/overview/overview_controller.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "ash/wm/window_positioner.h"
 #include "ash/wm/work_area_insets.h"
@@ -56,7 +57,7 @@
 #include "ui/display/screen.h"
 #include "ui/display/test/display_manager_test_api.h"
 #include "ui/display/types/display_constants.h"
-#include "ui/events/devices/device_data_manager_test_api.h"
+#include "ui/events/devices/device_data_manager.h"
 #include "ui/events/devices/touchscreen_device.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
@@ -81,13 +82,6 @@ class AshEventGeneratorDelegate
     display::Screen* screen = display::Screen::GetScreen();
     display::Display display = screen->GetDisplayNearestPoint(point_in_screen);
     return Shell::GetRootWindowForDisplayId(display.id())->GetHost()->window();
-  }
-
-  ui::EventDispatchDetails DispatchKeyEventToIME(ui::EventTarget* target,
-                                                 ui::KeyEvent* event) override {
-    // In Ash environment, the key event will be processed by event rewriters
-    // first.
-    return ui::EventDispatchDetails();
   }
 
  private:
@@ -148,8 +142,7 @@ void AshTestBase::TearDown() {
   display::Display::SetInternalDisplayId(display::kInvalidDisplayId);
 
   // Tests can add devices, so reset the lists for future tests.
-  ui::DeviceDataManagerTestApi().SetTouchscreenDevices({});
-  ui::DeviceDataManagerTestApi().SetKeyboardDevices({});
+  ui::DeviceDataManager::GetInstance()->ResetDeviceListsForTest();
 }
 
 // static
@@ -211,6 +204,13 @@ std::unique_ptr<views::Widget> AshTestBase::CreateTestWidget(
       .SetBounds(bounds)
       .SetParent(Shell::GetPrimaryRootWindow()->GetChildById(container_id))
       .SetShow(show)
+      .BuildOwnsNativeWidget();
+}
+
+// static
+std::unique_ptr<views::Widget> AshTestBase::CreateFramelessTestWidget() {
+  return TestWidgetBuilder()
+      .SetWidgetType(views::Widget::InitParams::TYPE_WINDOW_FRAMELESS)
       .BuildOwnsNativeWidget();
 }
 
@@ -474,6 +474,16 @@ void AshTestBase::SimulateMouseClickAt(
   event_generator->ClickLeftButton();
 }
 
+bool AshTestBase::EnterOverview(OverviewEnterExitType type) {
+  return Shell::Get()->overview_controller()->StartOverview(
+      OverviewStartAction::kTests, type);
+}
+
+bool AshTestBase::ExitOverview(OverviewEnterExitType type) {
+  return Shell::Get()->overview_controller()->EndOverview(
+      OverviewEndAction::kTests, type);
+}
+
 void AshTestBase::SwapPrimaryDisplay() {
   if (display::Screen::GetScreen()->GetNumDisplays() <= 1)
     return;
@@ -491,5 +501,20 @@ display::Display AshTestBase::GetPrimaryDisplay() const {
 display::Display AshTestBase::GetSecondaryDisplay() const {
   return ash_test_helper_->GetSecondaryDisplay();
 }
+
+// ============================================================================
+// NoSessionAshTestBase:
+
+NoSessionAshTestBase::NoSessionAshTestBase() {
+  set_start_session(false);
+}
+
+NoSessionAshTestBase::NoSessionAshTestBase(
+    base::test::TaskEnvironment::TimeSource time_source)
+    : AshTestBase(time_source) {
+  set_start_session(false);
+}
+
+NoSessionAshTestBase::~NoSessionAshTestBase() = default;
 
 }  // namespace ash

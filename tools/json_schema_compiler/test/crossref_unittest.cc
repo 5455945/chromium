@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "base/values.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -29,7 +30,8 @@ std::unique_ptr<base::DictionaryValue> CreateTestTypeValue() {
 
 TEST(JsonSchemaCompilerCrossrefTest, CrossrefTypePopulateAndToValue) {
   base::DictionaryValue crossref_orig;
-  crossref_orig.Set("testType", CreateTestTypeValue());
+  crossref_orig.SetKey("testType",
+                       base::Value::FromUniquePtrValue(CreateTestTypeValue()));
   crossref_orig.SetString("testEnumRequired", "one");
   crossref_orig.SetString("testEnumOptional", "two");
 
@@ -78,18 +80,18 @@ TEST(JsonSchemaCompilerCrossrefTest, GetTestType) {
   auto test_type = std::make_unique<simple_api::TestType>();
   EXPECT_TRUE(simple_api::TestType::Populate(*value, test_type.get()));
 
-  base::Value results = base::Value::FromUniquePtrValue(
-      crossref::GetTestType::Results::Create(*test_type));
-  ASSERT_TRUE(results.is_list());
-  ASSERT_EQ(1u, results.GetList().size());
-  EXPECT_EQ(*value, results.GetList()[0]);
+  std::vector<base::Value> results =
+      crossref::GetTestType::Results::Create(*test_type);
+  ASSERT_EQ(1u, results.size());
+  EXPECT_EQ(*value, results[0]);
 }
 
 TEST(JsonSchemaCompilerCrossrefTest, TestTypeInObjectParamsCreate) {
   {
     auto params_value = std::make_unique<base::ListValue>();
     auto param_object_value = std::make_unique<base::DictionaryValue>();
-    param_object_value->Set("testType", CreateTestTypeValue());
+    param_object_value->SetKey(
+        "testType", base::Value::FromUniquePtrValue(CreateTestTypeValue()));
     param_object_value->SetBoolean("boolean", true);
     params_value->Append(std::move(param_object_value));
     std::unique_ptr<crossref::TestTypeInObject::Params> params(
@@ -124,7 +126,8 @@ TEST(JsonSchemaCompilerCrossrefTest, TestTypeInObjectParamsCreate) {
   {
     auto params_value = std::make_unique<base::ListValue>();
     auto param_object_value = std::make_unique<base::DictionaryValue>();
-    param_object_value->Set("testType", CreateTestTypeValue());
+    param_object_value->SetKey(
+        "testType", base::Value::FromUniquePtrValue(CreateTestTypeValue()));
     params_value->Append(std::move(param_object_value));
     std::unique_ptr<crossref::TestTypeInObject::Params> params(
         crossref::TestTypeInObject::Params::Create(*params_value));

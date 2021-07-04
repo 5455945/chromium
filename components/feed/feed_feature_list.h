@@ -16,17 +16,15 @@ namespace feed {
 
 extern const base::Feature kInterestFeedContentSuggestions;
 extern const base::Feature kInterestFeedV2;
+extern const base::Feature kInterestFeedV2Autoplay;
 extern const base::Feature kInterestFeedV2Hearts;
+extern const base::Feature kInterestFeedV2Scrolling;
 
 extern const base::FeatureParam<std::string> kDisableTriggerTypes;
 extern const base::FeatureParam<int> kSuppressRefreshDurationMinutes;
 extern const base::FeatureParam<int> kTimeoutDurationSeconds;
 extern const base::FeatureParam<bool> kThrottleBackgroundFetches;
 extern const base::FeatureParam<bool> kOnlySetLastRefreshAttemptOnSuccess;
-
-// Indicates if user card clicks and views in Chrome's feed should be reported
-// for personalization. Also enables the feed header menu to manage the feed.
-extern const base::Feature kReportFeedUserActions;
 
 // Determines whether conditions should be reached before enabling the upload of
 // click and view actions in the feed (e.g., the user needs to view X cards).
@@ -42,15 +40,21 @@ extern const base::Feature kInterestFeedNoticeCardAutoDismiss;
 // Used for A:B testing of a bug fix (crbug.com/1151391).
 extern const base::Feature kInterestFeedSpinnerAlwaysAnimate;
 
-// Feature that allows the user to share articles from their feed.
-extern const base::Feature kFeedShare;
-
 // Feature that allows users to keep up with and consume web content.
 extern const base::Feature kWebFeed;
+
+// Use the new DiscoFeed endpoint.
+extern const base::Feature kDiscoFeedEndpoint;
 
 // Feature that enables xsurface to provide the metrics reporting state to an
 // xsurface feed.
 extern const base::Feature kXsurfaceMetricsReporting;
+
+// Whether to log reliability events.
+extern const base::Feature kReliabilityLogging;
+
+// Feature that enables refreshing feeds triggered by the users.
+extern const base::Feature kFeedInteractiveRefresh;
 
 std::string GetFeedReferrerUrl();
 

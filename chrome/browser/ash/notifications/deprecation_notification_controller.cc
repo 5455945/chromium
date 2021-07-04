@@ -4,13 +4,14 @@
 
 #include "chrome/browser/ash/notifications/deprecation_notification_controller.h"
 
+#include <string>
+
 #include "ash/public/cpp/notification_utils.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/shell_delegate.h"
 #include "ash/strings/grit/ash_strings.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -51,27 +52,41 @@ bool DeprecationNotificationController::NotifyDeprecatedRightClickRewrite() {
   return true;
 }
 
-bool DeprecationNotificationController::NotifyDeprecatedAltBasedKeyRewrite(
+bool DeprecationNotificationController::NotifyDeprecatedFKeyRewrite() {
+  if (fkey_notification_shown_) {
+    return false;
+  }
+
+  const std::string id = std::string(kNotificationIdPrefix) + "fkey";
+  ShowNotificationFromIdWithLauncherKey(id, IDS_ASH_SHORTCUT_DEPRECATION_FKEY);
+
+  // Don't show the notification again.
+  fkey_notification_shown_ = true;
+  return true;
+}
+
+bool DeprecationNotificationController::NotifyDeprecatedSixPackKeyRewrite(
     ui::KeyboardCode key_code) {
-  if (!ShouldShowAltBasedDeprecationNotification(key_code)) {
+  if (!ShouldShowSixPackKeyDeprecationNotification(key_code)) {
     return false;
   }
 
   // The notification id is not user visible.
   const std::string id =
       std::string(kNotificationIdPrefix) + base::NumberToString(key_code);
-  const int message_id = GetAltBasedDeprecationMessageId(key_code);
+  const int message_id = GetSixPackKeyDeprecationMessageId(key_code);
   ShowNotificationFromIdWithLauncherKey(id, message_id);
 
   // Keep track that the notification was shown to decide whether to show it
   // again in future.
-  RecordAltBasedDeprecationNotificationShown(key_code);
+  RecordSixPackKeyDeprecationNotificationShown(key_code);
   return true;
 }
 
 void DeprecationNotificationController::ResetStateForTesting() {
   shown_key_notifications_.clear();
   right_click_notification_shown_ = false;
+  fkey_notification_shown_ = false;
 }
 
 void DeprecationNotificationController::ShowNotificationFromIdWithLauncherKey(
@@ -80,9 +95,9 @@ void DeprecationNotificationController::ShowNotificationFromIdWithLauncherKey(
   const int launcher_key_name_id = ui::DeviceUsesKeyboardLayout2()
                                        ? IDS_ASH_SHORTCUT_MODIFIER_LAUNCHER
                                        : IDS_ASH_SHORTCUT_MODIFIER_SEARCH;
-  const base::string16 launcher_key_name =
+  const std::u16string launcher_key_name =
       l10n_util::GetStringUTF16(launcher_key_name_id);
-  const base::string16 message_body =
+  const std::u16string message_body =
       l10n_util::GetStringFUTF16(message_id, launcher_key_name);
 
   ShowNotification(id, message_body);
@@ -90,7 +105,7 @@ void DeprecationNotificationController::ShowNotificationFromIdWithLauncherKey(
 
 void DeprecationNotificationController::ShowNotification(
     const std::string& id,
-    const base::string16& message_body) {
+    const std::u16string& message_body) {
   auto on_click_handler =
       base::MakeRefCounted<message_center::HandleNotificationClickDelegate>(
           base::BindRepeating([]() {
@@ -101,7 +116,7 @@ void DeprecationNotificationController::ShowNotification(
   auto notification = CreateSystemNotification(
       message_center::NOTIFICATION_TYPE_SIMPLE, id,
       l10n_util::GetStringUTF16(IDS_DEPRECATED_SHORTCUT_TITLE), message_body,
-      base::string16(), GURL(),
+      std::u16string(), GURL(),
       message_center::NotifierId(message_center::NotifierType::SYSTEM_COMPONENT,
                                  kNotifierId),
       message_center::RichNotificationData(), std::move(on_click_handler),
@@ -111,21 +126,23 @@ void DeprecationNotificationController::ShowNotification(
 }
 
 bool DeprecationNotificationController::
-    ShouldShowAltBasedDeprecationNotification(ui::KeyboardCode key_code) {
+    ShouldShowSixPackKeyDeprecationNotification(ui::KeyboardCode key_code) {
   return !shown_key_notifications_.contains(key_code);
 }
 
 void DeprecationNotificationController::
-    RecordAltBasedDeprecationNotificationShown(ui::KeyboardCode key_code) {
+    RecordSixPackKeyDeprecationNotificationShown(ui::KeyboardCode key_code) {
   DCHECK(!shown_key_notifications_.contains(key_code));
   shown_key_notifications_.insert(key_code);
 }
 
-int DeprecationNotificationController::GetAltBasedDeprecationMessageId(
+int DeprecationNotificationController::GetSixPackKeyDeprecationMessageId(
     ui::KeyboardCode key_code) {
   switch (key_code) {
     case ui::VKEY_DELETE:
       return IDS_ASH_SHORTCUT_DEPRECATION_ALT_BASED_DELETE;
+    case ui::VKEY_INSERT:
+      return IDS_ASH_SHORTCUT_DEPRECATION_SEARCH_PERIOD_INSERT;
     case ui::VKEY_HOME:
       return IDS_ASH_SHORTCUT_DEPRECATION_ALT_BASED_HOME;
     case ui::VKEY_END:

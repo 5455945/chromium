@@ -48,10 +48,10 @@
 #include "ui/views/view_observer.h"
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/chromeos/arc/arc_util.h"
-#include "chrome/browser/chromeos/arc/session/arc_session_manager.h"
+#include "chrome/browser/ash/arc/arc_util.h"
+#include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/ui/app_list/arc/arc_app_list_prefs.h"
-#include "components/arc/arc_util.h"
+#include "components/arc/test/arc_util_test_support.h"
 #include "components/arc/test/connection_holder_util.h"
 #include "components/arc/test/fake_app_instance.h"
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
@@ -92,6 +92,8 @@ void PwaInstallIconChangeWaiter::VerifyIconVisibility(views::View* iconView,
 
 }  // namespace
 
+// Tests various cases that effect the visibility of the install icon in the
+// omnibox.
 class PwaInstallViewBrowserTest : public extensions::ExtensionBrowserTest {
  public:
   PwaInstallViewBrowserTest()
@@ -252,14 +254,14 @@ class PwaInstallViewBrowserTest : public extensions::ExtensionBrowserTest {
     base::RunLoop run_loop;
     web_app::WebAppProvider::Get(browser()->profile())
         ->install_finalizer()
-        .UninstallExternalAppByUser(
-            app_id, base::BindLambdaForTesting([&](bool uninstalled) {
-              EXPECT_TRUE(uninstalled);
-              run_loop.Quit();
-            }));
+        .UninstallWebApp(app_id, webapps::WebappUninstallSource::kAppMenu,
+                         base::BindLambdaForTesting([&](bool uninstalled) {
+                           EXPECT_TRUE(uninstalled);
+                           run_loop.Quit();
+                         }));
     run_loop.Run();
 
-    web_app::SetInstallBounceMetricTimeForTesting(base::nullopt);
+    web_app::SetInstallBounceMetricTimeForTesting(absl::nullopt);
 
     std::vector<base::Bucket> expected_buckets;
     if (expected_count > 0) {

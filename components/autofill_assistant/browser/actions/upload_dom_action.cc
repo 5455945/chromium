@@ -9,8 +9,8 @@
 #include "base/bind.h"
 #include "base/callback.h"
 #include "components/autofill_assistant/browser/actions/action_delegate.h"
-#include "components/autofill_assistant/browser/actions/action_delegate_util.h"
 #include "components/autofill_assistant/browser/client_status.h"
+#include "components/autofill_assistant/browser/web/element_action_util.h"
 #include "components/autofill_assistant/browser/web/web_controller.h"
 
 namespace autofill_assistant {
@@ -32,7 +32,7 @@ void UploadDomAction::InternalProcessAction(ProcessActionCallback callback) {
     EndAction(ClientStatus(INVALID_SELECTOR));
     return;
   }
-  delegate_->ShortWaitForElement(
+  delegate_->ShortWaitForElementWithSlowWarning(
       selector,
       base::BindOnce(
           &UploadDomAction::OnWaitForElementTimed,
@@ -54,7 +54,7 @@ void UploadDomAction::OnWaitForElement(const Selector& selector,
     delegate_->FindAllElements(
         selector,
         base::BindOnce(
-            &action_delegate_util::TakeElementAndGetProperty<
+            &element_action_util::TakeElementAndGetProperty<
                 std::vector<std::string>>,
             base::BindOnce(&WebController::GetOuterHtmls,
                            delegate_->GetWebController()->GetWeakPtr()),
@@ -66,7 +66,7 @@ void UploadDomAction::OnWaitForElement(const Selector& selector,
   delegate_->FindElement(
       selector,
       base::BindOnce(
-          &action_delegate_util::TakeElementAndGetProperty<std::string>,
+          &element_action_util::TakeElementAndGetProperty<std::string>,
           base::BindOnce(&WebController::GetOuterHtml,
                          delegate_->GetWebController()->GetWeakPtr()),
           base::BindOnce(&UploadDomAction::OnGetOuterHtml,

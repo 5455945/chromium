@@ -28,6 +28,7 @@ const char kBackgroundPage[] = "background.page";
 const char kBackgroundPersistent[] = "background.persistent";
 const char kBackgroundScripts[] = "background.scripts";
 const char kBackgroundServiceWorkerScript[] = "background.service_worker";
+const char kBackgroundServiceWorkerType[] = "background.type";
 const char kBluetooth[] = "bluetooth";
 const char kBookmarkUI[] = "bookmarks_ui";
 const char kBrowserAction[] = "browser_action";
@@ -122,7 +123,6 @@ const char kPublicKey[] = "key";
 const char kRemoveButton[] = "remove_button";
 const char kReplacementAndroidApp[] = "replacement_android_app";
 const char kReplacementWebApp[] = "replacement_web_app";
-const char kRequirements[] = "requirements";
 const char kSandboxedPages[] = "sandbox.pages";
 const char kSandboxedPagesCSP[] = "sandbox.content_security_policy";
 const char kSettingsOverride[] = "chrome_settings_overrides";
@@ -139,6 +139,8 @@ const char kThemeDisplayProperties[] = "properties";
 const char kThemeImages[] = "images";
 const char kThemeTints[] = "tints";
 const char kTtsEngine[] = "tts_engine";
+const char kTtsEngineSampleRate[] = "sample_rate";
+const char kTtsEngineBufferSize[] = "buffer_size";
 const char kTtsVoices[] = "voices";
 const char kTtsVoicesEventTypeEnd[] = "end";
 const char kTtsVoicesEventTypeError[] = "error";
@@ -244,8 +246,6 @@ const char kAppsNotEnabled[] =
 const char kBackgroundPermissionNeeded[] =
     "Hosted apps that use 'background_page' must have the 'background' "
     "permission.";
-const char kBackgroundPersistentInvalidForPlatformApps[] =
-    "The key 'background.persistent' is not supported for packaged apps.";
 const char kBackgroundRequiredForPlatformApps[] =
     "Packaged apps must have a background page or background scripts.";
 const char kBackgroundSpecificationInvalidForManifestV3[] =
@@ -309,14 +309,16 @@ const char kInvalidBackground[] =
 const char kInvalidBackgroundAllowJsAccess[] =
     "Invalid value for 'background.allow_js_access'.";
 const char kInvalidBackgroundCombination[] =
-    "The background.page and background.scripts properties cannot be used at "
-    "the same time.";
+    "Only one of 'background.page', 'background.scripts', and "
+    "'background.service_worker' can be specified.";
 const char kInvalidBackgroundScript[] =
     "Invalid value for 'background.scripts[*]'.";
 const char kInvalidBackgroundScripts[] =
     "Invalid value for 'background.scripts'.";
 const char kInvalidBackgroundServiceWorkerScript[] =
     "Invalid value for 'background.service_worker'.";
+const char kInvalidBackgroundServiceWorkerType[] =
+    "Invalid value for 'background.type'.";
 const char kInvalidBackgroundInHostedApp[] =
     "Invalid value for 'background_page'. Hosted apps must specify an "
     "absolute HTTPS URL for the background page.";
@@ -488,12 +490,12 @@ const char kInvalidLinkedAppIcons[] =
     "Invalid 'app.linked_icons'. Must be an array";
 const char kInvalidManifest[] = "Manifest file is invalid";
 const char kInvalidManifestKey[] = "Invalid value for '*'.";
-const char kInvalidManifestVersion[] =
-    "Invalid value for 'manifest_version'. Must be an integer greater than "
-    "zero.";
-const char kInvalidManifestVersionOld[] =
-    "The 'manifest_version' key must be present and set to * (without quotes). "
-    "See developer.chrome.com/*/manifestVersion.html for details.";
+const char kInvalidManifestVersionMissingKey[] =
+    "Missing 'manifest_version' key. Its value must be an integer *. "
+    "See developer.chrome.com/*/manifestVersion for details.";
+const char kInvalidManifestVersionUnsupported[] =
+    "Invalid value for 'manifest_version'. Must be an integer *. "
+    "See developer.chrome.com/*/manifestVersion for details.";
 const char kInvalidMatch[] =
     "Invalid value for 'content_scripts[*].matches[*]': *";
 const char kInvalidMatchCount[] =
@@ -552,10 +554,6 @@ const char kInvalidReplacementAndroidApp[] =
     "Invalid value for 'replacement_android_app'";
 const char kInvalidReplacementWebApp[] =
     "Invalid value for 'replacement_web_app'.";
-const char kInvalidRequirement[] =
-    "Invalid value for requirement \"*\"";
-const char kInvalidRequirements[] =
-    "Invalid value for 'requirements'";
 const char kInvalidRulesetID[] =
     "'*.*': Invalid 'id' specified for Ruleset at index *. The ID must be "
     "non-empty, unique and must not start with '_'.";
@@ -588,6 +586,19 @@ const char kInvalidThemeTints[] =
     "Invalid value for theme images - tints must be decimal numbers.";
 const char kInvalidTts[] =
     "Invalid value for 'tts_engine'.";
+const char kInvalidTtsSampleRateFormat[] =
+    "Invalid format for tts_engine.sample_rate: expected integer.";
+const char kInvalidTtsSampleRateRange[] =
+    "Invalid tts_engine.sample_rate: out of range. Expected sample_rate >= %d "
+    "and sample_rate <= %d.";
+const char kInvalidTtsBufferSizeFormat[] =
+    "Invalid format for tts_engine.buffer_size: expected integer.";
+const char kInvalidTtsBufferSizeRange[] =
+    "Invalid tts_engine.buffer_size: out of range. Expected buffer_size >= %d "
+    "and buffer_size <= %d.";
+const char kInvalidTtsRequiresSampleRateAndBufferSize[] =
+    "Invalid tts_engine: requires both sample_rate and buffer_size if either "
+    "is specified.";
 const char kInvalidTtsVoices[] =
     "Invalid value for 'tts_engine.voices'.";
 const char kInvalidTtsVoicesEventTypes[] =

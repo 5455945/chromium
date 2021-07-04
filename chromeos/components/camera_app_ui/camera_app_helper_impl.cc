@@ -8,6 +8,7 @@
 
 #include "ash/public/cpp/tablet_mode.h"
 #include "ash/public/cpp/window_properties.h"
+#include "base/callback_helpers.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/trace_event/trace_event.h"
 #include "content/public/browser/web_contents.h"
@@ -17,14 +18,28 @@
 namespace chromeos_camera {
 namespace {
 
-mojom::ScreenState ToMojoScreenState(ash::ScreenState s) {
+mojom::ScreenState ToMojoScreenState(ash::ScreenBacklightState s) {
   switch (s) {
-    case ash::ScreenState::ON:
+    case ash::ScreenBacklightState::ON:
       return mojom::ScreenState::ON;
-    case ash::ScreenState::OFF:
+    case ash::ScreenBacklightState::OFF:
       return mojom::ScreenState::OFF;
-    case ash::ScreenState::OFF_AUTO:
+    case ash::ScreenBacklightState::OFF_AUTO:
       return mojom::ScreenState::OFF_AUTO;
+    default:
+      NOTREACHED();
+  }
+}
+
+mojom::FileMonitorResult ToMojoFileMonitorResult(
+    CameraAppUIDelegate::FileMonitorResult result) {
+  switch (result) {
+    case CameraAppUIDelegate::FileMonitorResult::DELETED:
+      return mojom::FileMonitorResult::DELETED;
+    case CameraAppUIDelegate::FileMonitorResult::CANCELED:
+      return mojom::FileMonitorResult::CANCELED;
+    case CameraAppUIDelegate::FileMonitorResult::ERROR:
+      return mojom::FileMonitorResult::ERROR;
     default:
       NOTREACHED();
   }
@@ -39,15 +54,15 @@ bool HasExternalScreen() {
   return false;
 }
 
-base::Optional<uint32_t> ParseIntentIdFromUrl(const GURL& url) {
+absl::optional<uint32_t> ParseIntentIdFromUrl(const GURL& url) {
   std::string id_str;
   if (!net::GetValueForKeyInQuery(url, "intentId", &id_str)) {
-    return base::nullopt;
+    return absl::nullopt;
   }
 
   uint32_t intent_id;
   if (!base::StringToUint(id_str, &intent_id)) {
-    return base::nullopt;
+    return absl::nullopt;
   }
   return intent_id;
 }
@@ -63,8 +78,9 @@ CameraAppHelperImpl::CameraAppHelperImpl(
       camera_result_callback_(std::move(camera_result_callback)),
       send_broadcast_callback_(std::move(send_broadcast_callback)),
       has_external_screen_(HasExternalScreen()),
-      pending_intent_id_(base::nullopt),
+      pending_intent_id_(absl::nullopt),
       window_(window) {
+  DCHECK(camera_app_ui);
   DCHECK(window);
   window->SetProperty(ash::kCanConsumeSystemKeysKey, true);
   ash::TabletMode::Get()->AddObserver(this);
@@ -88,10 +104,7 @@ void CameraAppHelperImpl::Bind(
     mojo::PendingReceiver<mojom::CameraAppHelper> receiver) {
   receiver_.reset();
   receiver_.Bind(std::move(receiver));
-
-  if (camera_app_ui_) {
-    pending_intent_id_ = ParseIntentIdFromUrl(camera_app_ui_->url());
-  }
+  pending_intent_id_ = ParseIntentIdFromUrl(camera_app_ui_->url());
 }
 
 void CameraAppHelperImpl::HandleCameraResult(
@@ -102,7 +115,7 @@ void CameraAppHelperImpl::HandleCameraResult(
   if (pending_intent_id_.has_value() && *pending_intent_id_ == intent_id &&
       (action == arc::mojom::CameraIntentAction::FINISH ||
        action == arc::mojom::CameraIntentAction::CANCEL)) {
-    pending_intent_id_ = base::nullopt;
+    pending_intent_id_ = absl::nullopt;
   }
   camera_result_callback_.Run(intent_id, action, data, std::move(callback));
 }
@@ -131,13 +144,12 @@ void CameraAppHelperImpl::SetScreenStateMonitor(
     SetScreenStateMonitorCallback callback) {
   screen_state_monitor_ = mojo::Remote<ScreenStateMonitor>(std::move(monitor));
   auto&& mojo_state =
-      ToMojoScreenState(ash::ScreenBacklight::Get()->GetScreenState());
+      ToMojoScreenState(ash::ScreenBacklight::Get()->GetScreenBacklightState());
   std::move(callback).Run(mojo_state);
 }
 
 void CameraAppHelperImpl::IsMetricsAndCrashReportingEnabled(
     IsMetricsAndCrashReportingEnabledCallback callback) {
-  DCHECK_NE(camera_app_ui_, nullptr);
   std::move(callback).Run(
       camera_app_ui_->delegate()->IsMetricsAndCrashReportingEnabled());
 }
@@ -160,27 +172,22 @@ void CameraAppHelperImpl::CheckExternalScreenState() {
 }
 
 void CameraAppHelperImpl::OpenFileInGallery(const std::string& name) {
-  DCHECK_NE(camera_app_ui_, nullptr);
   camera_app_ui_->delegate()->OpenFileInGallery(name);
 }
 
 void CameraAppHelperImpl::OpenFeedbackDialog(const std::string& placeholder) {
-  DCHECK_NE(camera_app_ui_, nullptr);
   camera_app_ui_->delegate()->OpenFeedbackDialog(placeholder);
 }
 
 void CameraAppHelperImpl::SetCameraUsageMonitor(
     mojo::PendingRemote<CameraUsageOwnershipMonitor> usage_monitor,
     SetCameraUsageMonitorCallback callback) {
-  DCHECK_NE(camera_app_ui_, nullptr);
   camera_app_ui_->app_window_manager()->SetCameraUsageMonitor(
       window_, std::move(usage_monitor), std::move(callback));
 }
 
 void CameraAppHelperImpl::GetWindowStateController(
     GetWindowStateControllerCallback callback) {
-  DCHECK_NE(camera_app_ui_, nullptr);
-
   if (!window_state_controller_) {
     window_state_controller_ =
         std::make_unique<chromeos::CameraAppWindowStateController>(
@@ -195,10 +202,6 @@ void CameraAppHelperImpl::GetWindowStateController(
 
 void CameraAppHelperImpl::SendNewCaptureBroadcast(bool is_video,
                                                   const std::string& name) {
-  // This function is only supported on SWA.
-  if (camera_app_ui_ == nullptr) {
-    return;
-  }
   auto file_path = camera_app_ui_->delegate()->GetFilePathInArcByName(name);
   if (file_path.empty()) {
     LOG(ERROR) << "Drop the broadcast request due to invalid file path in ARC "
@@ -207,6 +210,18 @@ void CameraAppHelperImpl::SendNewCaptureBroadcast(bool is_video,
     return;
   }
   send_broadcast_callback_.Run(is_video, file_path);
+}
+
+void CameraAppHelperImpl::MonitorFileDeletion(
+    const std::string& name,
+    MonitorFileDeletionCallback callback) {
+  camera_app_ui_->delegate()->MonitorFileDeletion(
+      name, base::BindOnce(
+                [](MonitorFileDeletionCallback callback,
+                   CameraAppUIDelegate::FileMonitorResult result) {
+                  std::move(callback).Run(ToMojoFileMonitorResult(result));
+                },
+                std::move(callback)));
 }
 
 void CameraAppHelperImpl::OnTabletModeStarted() {
@@ -219,9 +234,10 @@ void CameraAppHelperImpl::OnTabletModeEnded() {
     tablet_mode_monitor_->Update(false);
 }
 
-void CameraAppHelperImpl::OnScreenStateChanged(ash::ScreenState screen_state) {
+void CameraAppHelperImpl::OnScreenBacklightStateChanged(
+    ash::ScreenBacklightState screen_backlight_state) {
   if (screen_state_monitor_.is_bound())
-    screen_state_monitor_->Update(ToMojoScreenState(screen_state));
+    screen_state_monitor_->Update(ToMojoScreenState(screen_backlight_state));
 }
 
 void CameraAppHelperImpl::OnDisplayAdded(const display::Display& new_display) {

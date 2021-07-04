@@ -12,8 +12,8 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/autofill/autofill_popup_view_delegate.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/focus/widget_focus_manager.h"
-#include "ui/views/metadata/metadata_header_macros.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/widget/widget_observer.h"
@@ -63,8 +63,9 @@ class AutofillPopupBaseView : public views::WidgetDelegateView,
                                  views::Widget* parent_widget);
   ~AutofillPopupBaseView() override;
 
-  // Show this popup. Idempotent.
-  void DoShow();
+  // Show this popup. Idempotent. Returns |true| if popup is shown, |false|
+  // otherwise.
+  bool DoShow();
 
   // Hide the widget and delete |this|.
   void DoHide();

@@ -21,7 +21,7 @@ namespace ownership {
 class OwnerSettingsService;
 }
 
-namespace chromeos {
+namespace ash {
 
 // An extra layer on top of CrosSettings / OwnerSettingsService that allows for
 // writing a setting before ownership is taken, for one setting only:
@@ -82,6 +82,9 @@ class StatsReportingController
   // setting.
   void SetOnDeviceSettingsStoredCallBack(base::OnceClosure callback);
 
+  // Clears any value waiting to be written (from storage in local state).
+  void ClearPendingValue();
+
  private:
   friend class StatsReportingControllerTest;
 
@@ -107,7 +110,7 @@ class StatsReportingController
   void NotifyObservers();
 
   // Gets the current ownership status - owned, unowned, or unknown.
-  DeviceSettingsService::OwnershipStatus GetOwnershipStatus();
+  DeviceSettingsService::OwnershipStatus GetOwnershipStatus() const;
 
   // Get the owner-settings service for a particular profile. A variety of
   // different results can be returned, depending on the profile.
@@ -125,8 +128,9 @@ class StatsReportingController
   // exists. Returns false if there is no such value.
   bool GetSignedStoredValue(bool* value);
 
-  // Clears any value waiting to be written (from storage in local state).
-  void ClearPendingValue();
+  // Returns whether pending value should be used when determining the value
+  // of `IsEnabled`.
+  bool ShouldReadFromPendingValue() const;
 
   base::WeakPtr<StatsReportingController> as_weak_ptr() {
     return weak_factory_.GetWeakPtr();
@@ -136,7 +140,7 @@ class StatsReportingController
 
   PrefService* local_state_;
   bool value_notified_to_observers_;
-  base::CallbackList<void(void)> callback_list_;
+  base::RepeatingClosureList callback_list_;
   base::CallbackListSubscription setting_subscription_;
 
   // Indicates if the setting value is in the process of being set with the
@@ -157,11 +161,12 @@ class StatsReportingController
   DISALLOW_COPY_AND_ASSIGN(StatsReportingController);
 };
 
-}  // namespace chromeos
+}  // namespace ash
 
-// TODO(https://crbug.com/1164001): remove when moved to ash.
-namespace ash {
-using ::chromeos::StatsReportingController;
-}
+// TODO(https://crbug.com/1164001): remove when Chrome OS code migration is
+// done.
+namespace chromeos {
+using ::ash::StatsReportingController;
+}  // namespace chromeos
 
 #endif  // CHROME_BROWSER_ASH_SETTINGS_STATS_REPORTING_CONTROLLER_H_

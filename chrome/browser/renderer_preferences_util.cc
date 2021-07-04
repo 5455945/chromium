@@ -4,7 +4,10 @@
 
 #include "chrome/browser/renderer_preferences_util.h"
 
+#include <stdint.h>
+
 #include <string>
+#include <vector>
 
 #include "base/macros.h"
 #include "base/strings/string_number_conversions.h"
@@ -12,6 +15,7 @@
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/net/convert_explicitly_allowed_network_ports_pref.h"
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #include "chrome/browser/ash/login/demo_mode/demo_session.h"
 #endif
@@ -102,9 +106,8 @@ std::string GetLanguageListForProfile(Profile* profile,
   }
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   // On Chrome OS, if in demo mode, add the demo mode private language list.
-  if (chromeos::DemoSession::IsDeviceInDemoMode()) {
-    return language_list + "," +
-           chromeos::DemoSession::GetAdditionalLanguageList();
+  if (ash::DemoSession::IsDeviceInDemoMode()) {
+    return language_list + "," + ash::DemoSession::GetAdditionalLanguageList();
   }
 #endif
   return language_list;
@@ -200,15 +203,16 @@ void UpdateFromSystemSettings(blink::RendererPreferences* prefs,
   if (local_state) {
     prefs->allow_cross_origin_auth_prompt =
         local_state->GetBoolean(prefs::kAllowCrossOriginAuthPrompt);
+
+    prefs->explicitly_allowed_network_ports =
+        ConvertExplicitlyAllowedNetworkPortsPref(local_state);
   }
 
-  if (::features::IsFormControlsRefreshEnabled()) {
 #if defined(OS_MAC)
-    prefs->focus_ring_color = SkColorSetRGB(0x00, 0x5F, 0xCC);
+  prefs->focus_ring_color = SkColorSetRGB(0x00, 0x5F, 0xCC);
 #else
-    prefs->focus_ring_color = SkColorSetRGB(0x10, 0x10, 0x10);
+  prefs->focus_ring_color = SkColorSetRGB(0x10, 0x10, 0x10);
 #endif
-  }
 }
 
 }  // namespace renderer_preferences_util

@@ -10,9 +10,15 @@
 #include "chrome/browser/ui/views/frame/browser_desktop_window_tree_host_linux.h"
 #include "chrome/browser/ui/views/frame/browser_frame.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/frame/native_browser_frame_factory.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "ui/views/widget/widget.h"
+
+#if defined(USE_OZONE)
+#include "ui/base/ui_base_features.h"
+#include "ui/ozone/public/ozone_platform.h"
+#endif
 
 DesktopBrowserFrameAuraLinux::DesktopBrowserFrameAuraLinux(
     BrowserFrame* browser_frame,
@@ -26,7 +32,7 @@ DesktopBrowserFrameAuraLinux::DesktopBrowserFrameAuraLinux(
           base::Unretained(this)));
 }
 
-DesktopBrowserFrameAuraLinux::~DesktopBrowserFrameAuraLinux() {}
+DesktopBrowserFrameAuraLinux::~DesktopBrowserFrameAuraLinux() = default;
 
 views::Widget::InitParams DesktopBrowserFrameAuraLinux::GetWidgetParams() {
   views::Widget::InitParams params;
@@ -50,6 +56,7 @@ views::Widget::InitParams DesktopBrowserFrameAuraLinux::GetWidgetParams() {
                             ? std::string(kX11WindowRoleBrowser)
                             : std::string(kX11WindowRolePopup);
   params.remove_standard_frame = UseCustomFrame();
+  params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
 
   return params;
 }
@@ -59,6 +66,14 @@ bool DesktopBrowserFrameAuraLinux::UseCustomFrame() const {
   if (use_custom_frame_pref_.GetValue() && browser_view()->GetIsNormalType()) {
     return true;
   }
+
+#if defined(USE_OZONE)
+  if (features::IsUsingOzonePlatform() &&
+      ui::OzonePlatform::GetInstance()->ShouldUseCustomFrame() &&
+      !browser_view()->browser()->is_type_normal()) {
+    return true;
+  }
+#endif
 
   // Hosted app windows get a custom frame (if the desktop PWA experimental
   // feature is enabled).
@@ -70,10 +85,21 @@ void DesktopBrowserFrameAuraLinux::TabDraggingKindChanged(
   host_->TabDraggingKindChanged(tab_drag_kind);
 }
 
+bool DesktopBrowserFrameAuraLinux::ShouldDrawRestoredFrameShadow() const {
+  return host_->SupportsClientFrameShadow() && UseCustomFrame();
+}
+
 void DesktopBrowserFrameAuraLinux::OnUseCustomChromeFrameChanged() {
   // Tell the window manager to add or remove system borders.
   browser_frame()->set_frame_type(UseCustomFrame()
                                       ? views::Widget::FrameType::kForceCustom
                                       : views::Widget::FrameType::kForceNative);
   browser_frame()->FrameTypeChanged();
+  host_->UpdateFrameHints();
+}
+
+NativeBrowserFrame* NativeBrowserFrameFactory::Create(
+    BrowserFrame* browser_frame,
+    BrowserView* browser_view) {
+  return new DesktopBrowserFrameAuraLinux(browser_frame, browser_view);
 }

@@ -14,6 +14,7 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "components/viz/service/display_embedder/skia_output_device.h"
+#include "gpu/command_buffer/service/shared_image_representation.h"
 
 namespace gl {
 class GLImage;
@@ -52,12 +53,12 @@ class SkiaOutputDeviceGL final : public SkiaOutputDevice {
                gfx::BufferFormat format,
                gfx::OverlayTransform transform) override;
   void SwapBuffers(BufferPresentedCallback feedback,
-                   std::vector<ui::LatencyInfo> latency_info) override;
+                   OutputSurfaceFrame frame) override;
   void PostSubBuffer(const gfx::Rect& rect,
                      BufferPresentedCallback feedback,
-                     std::vector<ui::LatencyInfo> latency_info) override;
+                     OutputSurfaceFrame frame) override;
   void CommitOverlayPlanes(BufferPresentedCallback feedback,
-                           std::vector<ui::LatencyInfo> latency_info) override;
+                           OutputSurfaceFrame frame) override;
   bool SetDrawRectangle(const gfx::Rect& draw_rectangle) override;
   void SetGpuVSyncEnabled(bool enabled) override;
   void SetEnableDCLayers(bool enable) override;
@@ -65,6 +66,7 @@ class SkiaOutputDeviceGL final : public SkiaOutputDevice {
   void EnsureBackbuffer() override;
   void DiscardBackbuffer() override;
   SkSurface* BeginPaint(
+      bool allocate_frame_buffer,
       std::vector<GrBackendSemaphore>* end_semaphores) override;
   void EndPaint() override;
 
@@ -74,15 +76,23 @@ class SkiaOutputDeviceGL final : public SkiaOutputDevice {
   // Use instead of calling FinishSwapBuffers() directly. On Windows this cleans
   // up old entries in |overlays_|.
   void DoFinishSwapBuffers(const gfx::Size& size,
-                           std::vector<ui::LatencyInfo> latency_info,
+                           OutputSurfaceFrame frame,
                            gfx::SwapCompletionResult result);
   // Used as callback for SwapBuffersAsync and PostSubBufferAsync to finish
   // operation
   void DoFinishSwapBuffersAsync(const gfx::Size& size,
-                                std::vector<ui::LatencyInfo> latency_info,
+                                OutputSurfaceFrame frame,
                                 gfx::SwapCompletionResult result);
 
-  scoped_refptr<gl::GLImage> GetGLImageForMailbox(const gpu::Mailbox& mailbox);
+  using ScopedOverlayAccess =
+      gpu::SharedImageRepresentationOverlay::ScopedReadAccess;
+
+  scoped_refptr<gl::GLImage> GetGLImageForMailbox(
+      const gpu::Mailbox& mailbox,
+      std::unique_ptr<ScopedOverlayAccess>* access);
+
+  static void EndOverlayAccess(
+      std::unique_ptr<ScopedOverlayAccess> overlay_access);
 
   gpu::MailboxManager* const mailbox_manager_;
 

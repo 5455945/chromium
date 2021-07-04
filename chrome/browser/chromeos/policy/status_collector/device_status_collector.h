@@ -27,7 +27,6 @@
 #include "base/timer/timer.h"
 #include "chrome/browser/chromeos/policy/status_collector/app_info_generator.h"
 #include "chrome/browser/chromeos/policy/status_collector/status_collector.h"
-#include "chromeos/dbus/cryptohome/cryptohome_client.h"
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "chromeos/dbus/tpm_manager/tpm_manager.pb.h"
 #include "chromeos/services/cros_healthd/public/mojom/cros_healthd.mojom.h"
@@ -212,8 +211,8 @@ class DeviceStatusCollector : public StatusCollector,
 
   static void RegisterPrefs(PrefRegistrySimple* registry);
 
-  AffiliatedSessionService* GetAffiliatedSessionServiceForTesting() {
-    return &affiliated_session_service_;
+  ManagedSessionService* GetManagedSessionServiceForTesting() {
+    return &managed_session_service_;
   }
 
   // How often to poll to see if the user is idle.
@@ -284,9 +283,9 @@ class DeviceStatusCollector : public StatusCollector,
       enterprise_management::DeviceStatusReportRequest* status);
   bool GetRunningKioskApp(
       enterprise_management::DeviceStatusReportRequest* status);
-  bool GetGraphicsStatus(scoped_refptr<DeviceStatusCollectorState>
+  void GetGraphicsStatus(scoped_refptr<DeviceStatusCollectorState>
                              state);  // Queues async queries!
-  bool GetCrashReportInfo(scoped_refptr<DeviceStatusCollectorState>
+  void GetCrashReportInfo(scoped_refptr<DeviceStatusCollectorState>
                               state);  // Queues async queries!
 
   // Helpers for the various portions of SESSION STATUS. Return true if they
@@ -481,7 +480,7 @@ class DeviceStatusCollector : public StatusCollector,
   base::CallbackListSubscription app_info_subscription_;
   base::CallbackListSubscription stats_reporting_pref_subscription_;
 
-  AffiliatedSessionService affiliated_session_service_;
+  ManagedSessionService managed_session_service_;
 
   AppInfoGenerator app_info_generator_;
 

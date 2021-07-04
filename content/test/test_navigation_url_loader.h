@@ -10,7 +10,6 @@
 #include "base/memory/weak_ptr.h"
 #include "content/browser/loader/navigation_url_loader.h"
 #include "content/browser/renderer_host/navigation_request_info.h"
-#include "content/common/navigation_params.h"
 #include "services/network/public/mojom/url_response_head.mojom-forward.h"
 
 namespace net {
@@ -46,6 +45,8 @@ class TestNavigationURLLoader
   void SimulateErrorWithStatus(
       const network::URLLoaderCompletionStatus& status);
 
+  void SimulateEarlyHintsPreloadLinkHeaderReceived();
+
   void CallOnRequestRedirected(
       const net::RedirectInfo& redirect_info,
       network::mojom::URLResponseHeadPtr response_head);
@@ -61,6 +62,8 @@ class TestNavigationURLLoader
   int redirect_count_;
 
   const NavigationURLLoader::LoaderType loader_type_;
+
+  bool was_early_hints_preload_link_header_received_ = false;
 };
 
 }  // namespace content

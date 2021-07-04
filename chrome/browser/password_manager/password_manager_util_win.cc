@@ -24,8 +24,8 @@
 
 #include "base/bind.h"
 #include "base/callback_helpers.h"
+#include "base/cxx17_backports.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/stl_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
@@ -361,8 +361,8 @@ bool AuthenticateUser(gfx::NativeWindow window,
   // Build the strings to display in the credential UI.  If these strings are
   // left empty on domain joined machines, CredUIPromptForWindowsCredentials()
   // fails to run.
-  base::string16 product_name = l10n_util::GetStringUTF16(IDS_PRODUCT_NAME);
-  base::string16 password_prompt;
+  std::u16string product_name = l10n_util::GetStringUTF16(IDS_PRODUCT_NAME);
+  std::u16string password_prompt;
   switch (purpose) {
     case password_manager::ReauthPurpose::VIEW_PASSWORD:
       password_prompt =
@@ -390,7 +390,7 @@ bool AuthenticateUser(gfx::NativeWindow window,
 
   // Disable hang watching until the end of the function since the user can take
   // unbounded time to answer the password prompt. (http://crbug.com/806174)
-  base::HangWatchScopeDisabled disabler;
+  base::IgnoreHangsInScope disabler;
 
   CredentialBufferValidator validator;
 

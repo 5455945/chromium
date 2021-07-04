@@ -17,7 +17,7 @@
 #include "chrome/services/mac_notifications/public/cpp/notification_constants_mac.h"
 #include "chrome/services/mac_notifications/public/cpp/notification_operation.h"
 #include "chrome/services/mac_notifications/public/cpp/notification_utils_mac.h"
-#include "mojo/public/cpp/bindings/remote.h"
+#include "mojo/public/cpp/bindings/shared_remote.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 #include "ui/gfx/image/image.h"
 
@@ -256,6 +256,25 @@ void MacNotificationServiceNS::CloseNotification(
   }
 }
 
+void MacNotificationServiceNS::CloseNotificationsForProfile(
+    mojom::ProfileIdentifierPtr profile) {
+  NSString* profile_id = base::SysUTF8ToNSString(profile->id);
+  bool incognito = profile->incognito;
+
+  for (NSUserNotification* toast in
+       [notification_center_ deliveredNotifications]) {
+    NSString* toast_profile_id = [toast.userInfo
+        objectForKey:notification_constants::kNotificationProfileId];
+    BOOL toast_incognito = [[toast.userInfo
+        objectForKey:notification_constants::kNotificationIncognito] boolValue];
+
+    if ([profile_id isEqualToString:toast_profile_id] &&
+        incognito == toast_incognito) {
+      [notification_center_ removeDeliveredNotification:toast];
+    }
+  }
+}
+
 void MacNotificationServiceNS::CloseAllNotifications() {
   [notification_center_ removeAllDeliveredNotifications];
 }
@@ -263,14 +282,17 @@ void MacNotificationServiceNS::CloseAllNotifications() {
 }  // namespace mac_notifications
 
 @implementation AlertNSNotificationCenterDelegate {
-  mojo::Remote<mac_notifications::mojom::MacNotificationActionHandler> _handler;
+  // We're using a SharedRemote here as we need to reply on the same sequence
+  // that created the mojo connection and the methods below get called by macOS.
+  mojo::SharedRemote<mac_notifications::mojom::MacNotificationActionHandler>
+      _handler;
 }
 
 - (instancetype)initWithActionHandler:
     (mojo::PendingRemote<
         mac_notifications::mojom::MacNotificationActionHandler>)handler {
   if ((self = [super init])) {
-    _handler.Bind(std::move(handler));
+    _handler.Bind(std::move(handler), /*bind_task_runner=*/nullptr);
   }
   return self;
 }
@@ -283,7 +305,7 @@ void MacNotificationServiceNS::CloseAllNotifications() {
       GetNotificationOperationFromNotification(notification);
   int buttonIndex = GetActionButtonIndexFromNotification(notification);
   auto actionInfo = mac_notifications::mojom::NotificationActionInfo::New(
-      std::move(meta), operation, buttonIndex, /*reply=*/base::nullopt);
+      std::move(meta), operation, buttonIndex, /*reply=*/absl::nullopt);
   _handler->OnNotificationAction(std::move(actionInfo));
 }
 
@@ -300,7 +322,7 @@ void MacNotificationServiceNS::CloseAllNotifications() {
   auto operation = NotificationOperation::NOTIFICATION_CLOSE;
   int buttonIndex = notification_constants::kNotificationInvalidButtonIndex;
   auto actionInfo = mac_notifications::mojom::NotificationActionInfo::New(
-      std::move(meta), operation, buttonIndex, /*reply=*/base::nullopt);
+      std::move(meta), operation, buttonIndex, /*reply=*/absl::nullopt);
   _handler->OnNotificationAction(std::move(actionInfo));
 }
 
@@ -317,7 +339,7 @@ void MacNotificationServiceNS::CloseAllNotifications() {
     auto operation = NotificationOperation::NOTIFICATION_CLOSE;
     int buttonIndex = notification_constants::kNotificationInvalidButtonIndex;
     auto actionInfo = mac_notifications::mojom::NotificationActionInfo::New(
-        std::move(meta), operation, buttonIndex, /*reply=*/base::nullopt);
+        std::move(meta), operation, buttonIndex, /*reply=*/absl::nullopt);
     _handler->OnNotificationAction(std::move(actionInfo));
   }
 }

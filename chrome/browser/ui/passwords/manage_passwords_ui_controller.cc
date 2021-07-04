@@ -93,7 +93,7 @@ std::vector<std::unique_ptr<password_manager::PasswordForm>> CopyFormVector(
 
 const password_manager::InteractionsStats* FindStatsByUsername(
     base::span<const password_manager::InteractionsStats> stats,
-    const base::string16& username) {
+    const std::u16string& username) {
   auto it = std::find_if(stats.begin(), stats.end(),
                          [&username](const auto& element) {
                            return username == element.username_value;
@@ -282,7 +282,7 @@ void ManagePasswordsUIController::OnCredentialLeak(
     ClearPopUpFlagForBubble();
 
   auto* raw_controller =
-      new CredentialLeakDialogControllerImpl(this, leak_type, origin);
+      new CredentialLeakDialogControllerImpl(this, leak_type);
   dialog_controller_.reset(raw_controller);
   raw_controller->ShowCredentialLeakPrompt(
       CreateCredentialLeakPrompt(raw_controller));
@@ -313,6 +313,7 @@ void ManagePasswordsUIController::NotifyUnsyncedCredentialsWillBeDeleted(
 }
 
 void ManagePasswordsUIController::OnLoginsChanged(
+    password_manager::PasswordStoreInterface* /*store*/,
     const password_manager::PasswordStoreChangeList& changes) {
   password_manager::ui::State current_state = GetState();
   passwords_data_.ProcessLoginsChanged(changes);
@@ -320,6 +321,11 @@ void ManagePasswordsUIController::OnLoginsChanged(
     ClearPopUpFlagForBubble();
     UpdateBubbleAndIconVisibility();
   }
+}
+
+void ManagePasswordsUIController::OnLoginsRetained(
+    password_manager::PasswordStoreInterface* /*store*/,
+    const std::vector<password_manager::PasswordForm>& /*retained_passwords*/) {
 }
 
 void ManagePasswordsUIController::UpdateIconAndBubbleState(
@@ -422,8 +428,7 @@ ManagePasswordsUIController::GetCurrentInteractionStats() const {
 
 size_t ManagePasswordsUIController::GetTotalNumberCompromisedPasswords() const {
   DCHECK(GetState() == password_manager::ui::PASSWORD_UPDATED_SAFE_STATE ||
-         GetState() == password_manager::ui::PASSWORD_UPDATED_MORE_TO_FIX ||
-         GetState() == password_manager::ui::PASSWORD_UPDATED_UNSAFE_STATE);
+         GetState() == password_manager::ui::PASSWORD_UPDATED_MORE_TO_FIX);
   return post_save_compromised_helper_->compromised_count();
 }
 
@@ -447,8 +452,7 @@ void ManagePasswordsUIController::OnBubbleHidden() {
   if (GetState() == password_manager::ui::CONFIRMATION_STATE ||
       GetState() == password_manager::ui::AUTO_SIGNIN_STATE ||
       GetState() == password_manager::ui::PASSWORD_UPDATED_SAFE_STATE ||
-      GetState() == password_manager::ui::PASSWORD_UPDATED_MORE_TO_FIX ||
-      GetState() == password_manager::ui::PASSWORD_UPDATED_UNSAFE_STATE) {
+      GetState() == password_manager::ui::PASSWORD_UPDATED_MORE_TO_FIX) {
     passwords_data_.TransitionToState(password_manager::ui::MANAGE_STATE);
     update_icon = true;
   }
@@ -494,8 +498,8 @@ void ManagePasswordsUIController::OnPasswordsRevealed() {
   passwords_data_.form_manager()->OnPasswordsRevealed();
 }
 
-void ManagePasswordsUIController::SavePassword(const base::string16& username,
-                                               const base::string16& password) {
+void ManagePasswordsUIController::SavePassword(const std::u16string& username,
+                                               const std::u16string& password) {
   UpdatePasswordFormUsernameAndPassword(username, password,
                                         passwords_data_.form_manager());
 
@@ -550,7 +554,7 @@ void ManagePasswordsUIController::SaveUnsyncedCredentialsInProfileStore(
     // similar to |form| actually contains the same essential information. This
     // means Save() can be safely called here, no password loss happens.
     profile_store_form_saver->Save(form, /*matches=*/{},
-                                   /*old_password=*/base::string16());
+                                   /*old_password=*/std::u16string());
   }
   ClearPopUpFlagForBubble();
   passwords_data_.OnInactive();
@@ -636,7 +640,8 @@ void ManagePasswordsUIController::OnDialogHidden() {
 
 void ManagePasswordsUIController::OnLeakDialogHidden() {
   dialog_controller_.reset();
-  if (GetState() == password_manager::ui::PENDING_PASSWORD_UPDATE_STATE) {
+  if (GetState() == password_manager::ui::PENDING_PASSWORD_UPDATE_STATE ||
+      GetState() == password_manager::ui::PENDING_PASSWORD_STATE) {
     bubble_status_ = BubbleStatus::SHOULD_POP_UP;
     UpdateBubbleAndIconVisibility();
   }
@@ -657,8 +662,8 @@ bool ManagePasswordsUIController::AuthenticateUser() {
 
 void ManagePasswordsUIController::
     AuthenticateUserForAccountStoreOptInAndSavePassword(
-        const base::string16& username,
-        const base::string16& password) {
+        const std::u16string& username,
+        const std::u16string& password) {
   password_manager::PasswordManagerClient* client = passwords_data_.client();
   client->TriggerReauthForPrimaryAccount(
       signin_metrics::ReauthAccessPoint::kPasswordSaveBubble,
@@ -727,7 +732,10 @@ bool ManagePasswordsUIController::HasBrowserWindow() const {
 
 void ManagePasswordsUIController::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
-  if (!navigation_handle->IsInMainFrame() ||
+  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
+  // frames. This caller was converted automatically to the primary main frame
+  // to preserve its semantics. Follow up to confirm correctness.
+  if (!navigation_handle->IsInPrimaryMainFrame() ||
       !navigation_handle->HasCommitted() ||
       // Don't react to same-document (fragment) navigations.
       navigation_handle->IsSameDocument()) {
@@ -832,8 +840,8 @@ void ManagePasswordsUIController::
     FinishSavingPasswordAfterAccountStoreOptInAuth(
         const url::Origin& origin,
         password_manager::PasswordFormManagerForUI* form_manager,
-        const base::string16& username,
-        const base::string16& password,
+        const std::u16string& username,
+        const std::u16string& password,
         password_manager::PasswordManagerClient::ReauthSucceeded
             reauth_succeeded) {
   if (reauth_succeeded) {
@@ -877,9 +885,6 @@ void ManagePasswordsUIController::OnTriggerPostSaveCompromisedBubble(
       break;
     case PostSaveCompromisedHelper::BubbleType::kPasswordUpdatedWithMoreToFix:
       state = password_manager::ui::PASSWORD_UPDATED_MORE_TO_FIX;
-      break;
-    case PostSaveCompromisedHelper::BubbleType::kUnsafeState:
-      state = password_manager::ui::PASSWORD_UPDATED_UNSAFE_STATE;
       break;
   }
   passwords_data_.TransitionToState(state);

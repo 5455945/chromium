@@ -10,7 +10,7 @@ import {getCddTemplate, getDefaultInitialSettings} from 'chrome://test/print_pre
 import {TestPluginProxy} from 'chrome://test/print_preview/test_plugin_proxy.js';
 import {TestPluralStringProxy} from 'chrome://test/test_plural_string_proxy.js';
 
-// <if expr="chromeos">
+// <if expr="chromeos or lacros">
 import {setNativeLayerCrosInstance} from './native_layer_cros_stub.js';
 // </if>
 
@@ -52,7 +52,7 @@ suite(policy_tests.suiteName, function() {
         [{deviceName: initialSettings.printerName, printerName: 'FooName'}]);
     nativeLayer.setPageCount(3);
     NativeLayerImpl.instance_ = nativeLayer;
-    // <if expr="chromeos">
+    // <if expr="chromeos or lacros">
     setNativeLayerCrosInstance();
     // </if>
     const pluginProxy = new TestPluginProxy();
@@ -275,7 +275,7 @@ suite(policy_tests.suiteName, function() {
 
   test(assert(policy_tests.TestNames.SheetsPolicy), async () => {
     const pluralString = new PolicyTestPluralStringProxy();
-    PrintPreviewPluralStringProxyImpl.instance_ = pluralString;
+    PrintPreviewPluralStringProxyImpl.setInstance(pluralString);
     pluralString.text = 'Exceeds limit of 1 sheet of paper';
 
     const tests = [

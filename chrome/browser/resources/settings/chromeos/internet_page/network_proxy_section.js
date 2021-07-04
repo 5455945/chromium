@@ -19,7 +19,12 @@ Polymer({
   ],
 
   properties: {
-    /** @private {!chromeos.networkConfig.mojom.ManagedProperties|undefined} */
+    disabled: {
+      type: Boolean,
+      value: false,
+    },
+
+    /** @type {!chromeos.networkConfig.mojom.ManagedProperties|undefined} */
     managedProperties: Object,
 
     /**

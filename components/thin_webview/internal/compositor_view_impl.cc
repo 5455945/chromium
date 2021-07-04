@@ -56,7 +56,7 @@ CompositorViewImpl::CompositorViewImpl(JNIEnv* env,
       current_surface_format_(kPixelFormatUnknown) {
   compositor_.reset(content::Compositor::Create(this, window_android));
   root_layer_->SetIsDrawable(true);
-  base::Optional<SkColor> background_color =
+  absl::optional<SkColor> background_color =
       ui::JavaColorToOptionalSkColor(java_background_color);
   root_layer_->SetBackgroundColor(background_color.value());
 }
@@ -76,6 +76,12 @@ void CompositorViewImpl::SurfaceCreated(JNIEnv* env,
 
 void CompositorViewImpl::SurfaceDestroyed(JNIEnv* env,
                                           const JavaParamRef<jobject>& object) {
+  // When we switch from Chrome to other app we can't detach child surface
+  // controls because it leads to a visible hole: b/157439199. To avoid this we
+  // don't detach surfaces if the surface is going to be destroyed, they will be
+  // detached and freed by OS.
+  compositor_->PreserveChildSurfaceControls();
+
   compositor_->SetSurface(nullptr, false);
   current_surface_format_ = kPixelFormatUnknown;
 }

@@ -60,10 +60,10 @@ void CSSAnimation::setTimeline(AnimationTimeline* timeline) {
   ignore_css_timeline_ = true;
 }
 
-void CSSAnimation::setStartTime(CSSNumberish start_time_ms,
+void CSSAnimation::setStartTime(const V8CSSNumberish* start_time,
                                 ExceptionState& exception_state) {
   PlayStateTransitionScope scope(*this);
-  Animation::setStartTime(start_time_ms, exception_state);
+  Animation::setStartTime(start_time, exception_state);
 }
 
 AnimationEffect::EventDelegate* CSSAnimation::CreateEventDelegate(

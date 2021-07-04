@@ -12,7 +12,6 @@
 #include "base/bind.h"
 #include "base/callback_helpers.h"
 #include "base/macros.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -165,6 +164,9 @@ void ImportDataHandler::HandleImportFromBookmarksFile(
     const base::ListValue* args) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
+  if (select_file_dialog_)
+    return;
+
   DCHECK(args && args->empty());
   select_file_dialog_ = ui::SelectFileDialog::Create(
       this,
@@ -178,7 +180,7 @@ void ImportDataHandler::HandleImportFromBookmarksFile(
       chrome::FindBrowserWithWebContents(web_ui()->GetWebContents());
 
   select_file_dialog_->SelectFile(
-      ui::SelectFileDialog::SELECT_OPEN_FILE, base::string16(),
+      ui::SelectFileDialog::SELECT_OPEN_FILE, std::u16string(),
       base::FilePath(), &file_type_info, 0, base::FilePath::StringType(),
       browser->window()->GetNativeWindow(), nullptr);
 }
@@ -249,11 +251,17 @@ void ImportDataHandler::FileSelected(const base::FilePath& path,
                                      void* /*params*/) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
+  select_file_dialog_ = nullptr;
+
   importer::SourceProfile source_profile;
   source_profile.importer_type = importer::TYPE_BOOKMARKS_FILE;
   source_profile.source_path = path;
 
   StartImport(source_profile, importer::FAVORITES);
+}
+
+void ImportDataHandler::FileSelectionCanceled(void* params) {
+  select_file_dialog_ = nullptr;
 }
 
 }  // namespace settings

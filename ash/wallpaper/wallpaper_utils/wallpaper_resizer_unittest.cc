@@ -8,10 +8,10 @@
 
 #include <memory>
 
-#include "ash/public/cpp/wallpaper_types.h"
+#include "ash/public/cpp/wallpaper/wallpaper_types.h"
 #include "ash/wallpaper/wallpaper_utils/wallpaper_resizer_observer.h"
+#include "base/cxx17_backports.h"
 #include "base/run_loop.h"
-#include "base/stl_util.h"
 #include "base/test/task_environment.h"
 #include "base/threading/thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -70,11 +70,10 @@ class WallpaperResizerTest : public testing::Test,
   gfx::ImageSkia Resize(const gfx::ImageSkia& image,
                         const gfx::Size& target_size,
                         WallpaperLayout layout) {
-    std::unique_ptr<WallpaperResizer> resizer;
-    resizer.reset(new WallpaperResizer(
+    auto resizer = std::make_unique<WallpaperResizer>(
         image, target_size,
         WallpaperInfo("", layout, DEFAULT, base::Time::Now().LocalMidnight()),
-        task_runner()));
+        task_runner());
     resizer->AddObserver(this);
     resizer->StartResize();
     WaitForResize();

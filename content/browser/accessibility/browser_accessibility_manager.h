@@ -11,7 +11,6 @@
 #include <memory>
 #include <set>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "base/callback_forward.h"
@@ -25,6 +24,7 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "third_party/blink/public/web/web_ax_enums.h"
 #include "ui/accessibility/ax_action_data.h"
+#include "ui/accessibility/ax_action_handler_registry.h"
 #include "ui/accessibility/ax_event_generator.h"
 #include "ui/accessibility/ax_node.h"
 #include "ui/accessibility/ax_node_data.h"
@@ -32,7 +32,6 @@
 #include "ui/accessibility/ax_range.h"
 #include "ui/accessibility/ax_serializable_tree.h"
 #include "ui/accessibility/ax_tree.h"
-#include "ui/accessibility/ax_tree_id_registry.h"
 #include "ui/accessibility/ax_tree_manager.h"
 #include "ui/accessibility/ax_tree_observer.h"
 #include "ui/accessibility/ax_tree_update.h"
@@ -74,7 +73,9 @@ CONTENT_EXPORT ui::AXTreeUpdate MakeAXTreeUpdate(
     const ui::AXNodeData& node9 = ui::AXNodeData(),
     const ui::AXNodeData& node10 = ui::AXNodeData(),
     const ui::AXNodeData& node11 = ui::AXNodeData(),
-    const ui::AXNodeData& node12 = ui::AXNodeData());
+    const ui::AXNodeData& node12 = ui::AXNodeData(),
+    const ui::AXNodeData& node13 = ui::AXNodeData(),
+    const ui::AXNodeData& node14 = ui::AXNodeData());
 
 // Class that can perform actions on behalf of the BrowserAccessibilityManager.
 // Note: BrowserAccessibilityManager should never cache any of the return
@@ -235,10 +236,6 @@ class CONTENT_EXPORT BrowserAccessibilityManager : public ui::AXTreeObserver,
     return hidden_by_interstitial_page_;
   }
 
-  // Pretend that the given node has focus, for testing only. Doesn't
-  // communicate with the renderer and doesn't fire any events.
-  void SetFocusLocallyForTesting(BrowserAccessibility* node);
-
   // For testing only, register a function to be called when focus changes
   // in any BrowserAccessibilityManager.
   static void SetFocusChangeCallbackForTesting(base::RepeatingClosure callback);
@@ -255,12 +252,6 @@ class CONTENT_EXPORT BrowserAccessibilityManager : public ui::AXTreeObserver,
   // this behavior and just fire all events with no delay as if the window
   // had focus.
   static void NeverSuppressOrDelayEventsForTesting();
-
-  // Extra mac nodes are temporarily disabled, except for in tests.
-  static void AllowExtraMacNodesForTesting();
-  // Are extra mac nodes allowed at all? Currently only allowed in tests.
-  // Even when returning true, platforms other than Mac OS do not enable them.
-  static bool GetExtraMacNodesAllowed();
 
   // Accessibility actions. All of these are implemented asynchronously
   // by sending a message to the renderer to perform the respective action
@@ -419,13 +410,13 @@ class CONTENT_EXPORT BrowserAccessibilityManager : public ui::AXTreeObserver,
       const BrowserAccessibility& start_object,
       const BrowserAccessibility& end_object);
 
-  static base::string16 GetTextForRange(
+  static std::u16string GetTextForRange(
       const BrowserAccessibility& start_object,
       const BrowserAccessibility& end_object);
 
   // If start and end offsets are greater than the text's length, returns all
   // the text.
-  static base::string16 GetTextForRange(
+  static std::u16string GetTextForRange(
       const BrowserAccessibility& start_object,
       int start_offset,
       const BrowserAccessibility& end_object,
@@ -445,6 +436,9 @@ class CONTENT_EXPORT BrowserAccessibilityManager : public ui::AXTreeObserver,
   ui::AXTree* ax_tree() const { return tree_.get(); }
 
   // AXTreeObserver implementation.
+  void OnTreeDataChanged(ui::AXTree* tree,
+                         const ui::AXTreeData& old_data,
+                         const ui::AXTreeData& new_data) override;
   void OnNodeWillBeDeleted(ui::AXTree* tree, ui::AXNode* node) override;
   void OnSubtreeWillBeDeleted(ui::AXTree* tree, ui::AXNode* node) override;
   void OnNodeCreated(ui::AXTree* tree, ui::AXNode* node) override;
@@ -594,9 +588,6 @@ class CONTENT_EXPORT BrowserAccessibilityManager : public ui::AXTreeObserver,
   // flakiness. See NeverSuppressOrDelayEventsForTesting() for details.
   static bool never_suppress_or_delay_events_for_testing_;
 
-  // Extra mac nodes are disabled even on mac currently, except for in tests.
-  static bool allow_extra_mac_nodes_for_testing_;
-
   const ui::AXEventGenerator& event_generator() const {
     return event_generator_;
   }
@@ -608,8 +599,8 @@ class CONTENT_EXPORT BrowserAccessibilityManager : public ui::AXTreeObserver,
   //
   // NOTE: Don't use or modify these properties directly, use the
   // SetLastFocusedNode and GetLastFocusedNode methods instead.
-  static base::Optional<int32_t> last_focused_node_id_;
-  static base::Optional<ui::AXTreeID> last_focused_node_tree_id_;
+  static absl::optional<int32_t> last_focused_node_id_;
+  static absl::optional<ui::AXTreeID> last_focused_node_tree_id_;
 
   // For debug only: True when handling OnAccessibilityEvents.
 #if DCHECK_IS_ON()

@@ -8,9 +8,10 @@
 
 #include "ash/shell.h"
 #include "ash/style/ash_color_provider.h"
+#include "ash/wm/desks/desk_mini_view.h"
+#include "ash/wm/desks/desks_bar_view.h"
 #include "ash/wm/overview/overview_controller.h"
 #include "ash/wm/overview/overview_grid.h"
-#include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/text_constants.h"
@@ -47,7 +48,7 @@ bool IsDesksBarWidget(const views::Widget* widget) {
 
 }  // namespace
 
-DeskNameView::DeskNameView() {
+DeskNameView::DeskNameView(DeskMiniView* mini_view) : mini_view_(mini_view) {
   auto border = std::make_unique<WmHighlightItemBorder>(
       /*corner_radius=*/4, gfx::Insets(0, kDeskNameViewHorizontalPadding));
   border_ptr_ = border.get();
@@ -73,7 +74,7 @@ void DeskNameView::CommitChanges(views::Widget* widget) {
   focus_manager->SetStoredFocusView(nullptr);
 }
 
-void DeskNameView::SetTextAndElideIfNeeded(const base::string16& text) {
+void DeskNameView::SetTextAndElideIfNeeded(const std::u16string& text) {
   // Use the potential max size of this to calculate elision, not its current
   // size to avoid eliding names that don't need to be.
   SetText(
@@ -165,6 +166,7 @@ void DeskNameView::MaybeSwapHighlightedView(bool right) {}
 
 void DeskNameView::OnViewHighlighted() {
   UpdateBorderState();
+  mini_view_->owner_bar()->ScrollToShowMiniViewIfNecessary(mini_view_);
 }
 
 void DeskNameView::OnViewUnhighlighted() {

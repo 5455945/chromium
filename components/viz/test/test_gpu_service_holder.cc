@@ -154,7 +154,7 @@ TestGpuServiceHolder::TestGpuServiceHolder(
   }
 #endif
 
-  CHECK(gpu_thread_.StartWithOptions(gpu_thread_options));
+  CHECK(gpu_thread_.StartWithOptions(std::move(gpu_thread_options)));
   CHECK(io_thread_.Start());
 
   base::WaitableEvent completion;
@@ -220,7 +220,7 @@ void TestGpuServiceHolder::InitializeOnGpuThread(
   gpu_feature_info.status_values[gpu::GPU_FEATURE_TYPE_OOP_RASTERIZATION] =
       gpu::kGpuFeatureStatusEnabled;
 
-  // TODO(sgilhuly): Investigate why creating a GPUInfo and GpuFeatureInfo from
+  // TODO(rivr): Investigate why creating a GPUInfo and GpuFeatureInfo from
   // the command line causes the test SkiaOutputSurfaceImplTest.SubmitPaint to
   // fail on Android.
   gpu_service_ = std::make_unique<GpuServiceImpl>(

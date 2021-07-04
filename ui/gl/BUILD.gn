@@ -10,6 +10,7 @@ import("//build/config/linux/pkg_config.gni")
 import("//build/config/ozone.gni")
 import("//build/config/ui.gni")
 import("//testing/test.gni")
+import("//third_party/angle/gni/angle.gni")
 import("//ui/gl/features.gni")
 
 declare_args() {
@@ -168,9 +169,11 @@ component("gl") {
     ":buildflags",
     "//base/third_party/dynamic_annotations",
     "//build:chromeos_buildflags",
+    "//mojo/public/cpp/bindings",
 
     # ANGLE includes are used cross-platform.
     "//third_party/angle:includes",
+    "//ui/gfx/mojom",
   ]
   public_deps = [
     "//base",
@@ -273,6 +276,9 @@ component("gl") {
       "//third_party/angle:libEGL",
       "//third_party/angle:libGLESv2",
     ]
+    if (angle_shared_libvulkan && !is_chromeos) {
+      data_deps += [ "//third_party/vulkan-deps/vulkan-loader/src:libvulkan" ]
+    }
   }
   if (use_glx) {
     sources += [
@@ -288,8 +294,6 @@ component("gl") {
       "gl_image_glx_native_pixmap.h",
       "gl_surface_glx.cc",
       "gl_surface_glx.h",
-      "gl_visual_picker_glx.cc",
-      "gl_visual_picker_glx.h",
       "glx_util.cc",
       "glx_util.h",
     ]
@@ -305,6 +309,9 @@ component("gl") {
       "child_window_win.h",
       "dc_layer_tree.cc",
       "dc_layer_tree.h",
+      "dcomp_surface_registry.cc",
+      "dcomp_surface_registry.h",
+      "delegated_ink_point_renderer_gpu.h",
       "direct_composition_child_surface_win.cc",
       "direct_composition_child_surface_win.h",
       "direct_composition_surface_win.cc",
@@ -315,6 +322,8 @@ component("gl") {
       "gl_fence_win.h",
       "gl_image_d3d.cc",
       "gl_image_d3d.h",
+      "gl_image_dcomp_surface.cc",
+      "gl_image_dcomp_surface.h",
       "gl_image_dxgi.cc",
       "gl_image_dxgi.h",
       "hdr_metadata_helper_win.cc",
@@ -336,6 +345,7 @@ component("gl") {
       "/DELAYLOAD:dwmapi.dll",
       "/DELAYLOAD:dxgi.dll",
     ]
+    deps += [ "//media/base/win:media_foundation_util" ]
 
     assert(use_egl)
     data_deps += [
@@ -343,6 +353,9 @@ component("gl") {
       "//third_party/angle:libGLESv2",
       "//third_party/swiftshader",
     ]
+    if (angle_shared_libvulkan && !is_chromeos) {
+      data_deps += [ "//third_party/vulkan-deps/vulkan-loader/src:libvulkan" ]
+    }
   }
   if (is_mac) {
     sources += [
@@ -578,6 +591,7 @@ test("gl_unittests") {
 
   if (is_win) {
     sources += [
+      "delegated_ink_point_renderer_gpu_unittest.cc",
       "direct_composition_surface_win_unittest.cc",
       "gl_fence_win_unittest.cc",
       "gl_image_d3d_unittest.cc",

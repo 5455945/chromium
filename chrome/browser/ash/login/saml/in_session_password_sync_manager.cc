@@ -4,13 +4,18 @@
 
 #include "chrome/browser/ash/login/saml/in_session_password_sync_manager.h"
 
+#include "ash/constants/ash_switches.h"
+#include "base/command_line.h"
 #include "base/time/default_clock.h"
 #include "chrome/browser/ash/login/auth/chrome_cryptohome_authenticator.h"
+#include "chrome/browser/ash/login/helper.h"
 #include "chrome/browser/ash/login/lock/screen_locker.h"
+#include "chrome/browser/ash/login/login_pref_names.h"
+#include "chrome/browser/ash/login/profile_auth_data.h"
 #include "chrome/browser/ash/login/saml/in_session_password_change_manager.h"
 #include "chrome/browser/ash/login/saml/password_sync_token_fetcher.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/chromeos/login/login_pref_names.h"
+#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chromeos/components/proximity_auth/screenlock_bridge.h"
 #include "chromeos/login/auth/extended_authenticator.h"
 #include "chromeos/login/auth/user_context.h"
@@ -48,8 +53,13 @@ InSessionPasswordSyncManager::~InSessionPasswordSyncManager() {
 }
 
 bool InSessionPasswordSyncManager::IsLockReauthEnabled() {
-  PrefService* prefs = primary_profile_->GetPrefs();
-  return prefs->GetBoolean(prefs::kLockScreenReauthenticationEnabled);
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kSamlLockScreenReauthenticationEnabledOverrideForTesting)) {
+    return true;
+  }
+
+  return primary_profile_->GetPrefs()->GetBoolean(
+      prefs::kLockScreenReauthenticationEnabled);
 }
 
 void InSessionPasswordSyncManager::MaybeForceReauthOnLockScreen(
@@ -77,7 +87,7 @@ void InSessionPasswordSyncManager::MaybeForceReauthOnLockScreen(
     // On the lock screen: need to update the UI.
     screenlock_bridge_->lock_handler()->SetAuthType(
         primary_user_->GetAccountId(),
-        proximity_auth::mojom::AuthType::ONLINE_SIGN_IN, base::string16());
+        proximity_auth::mojom::AuthType::ONLINE_SIGN_IN, std::u16string());
   }
   lock_screen_reauth_reason_ = reauth_reason;
 }
@@ -102,7 +112,7 @@ void InSessionPasswordSyncManager::OnSessionStateChanged() {
   // Request re-auth immediately after locking the screen.
   screenlock_bridge_->lock_handler()->SetAuthType(
       primary_user_->GetAccountId(),
-      proximity_auth::mojom::AuthType::ONLINE_SIGN_IN, base::string16());
+      proximity_auth::mojom::AuthType::ONLINE_SIGN_IN, std::u16string());
 }
 
 void InSessionPasswordSyncManager::UpdateOnlineAuth() {
@@ -123,6 +133,7 @@ void InSessionPasswordSyncManager::CreateTokenAsync() {
 }
 
 void InSessionPasswordSyncManager::OnTokenCreated(const std::string& token) {
+  password_sync_token_fetcher_.reset();
   PrefService* prefs = primary_profile_->GetPrefs();
 
   // Set token value in prefs for in-session operations and ephemeral users and
@@ -140,6 +151,7 @@ void InSessionPasswordSyncManager::FetchTokenAsync() {
 }
 
 void InSessionPasswordSyncManager::OnTokenFetched(const std::string& token) {
+  password_sync_token_fetcher_.reset();
   if (!token.empty()) {
     // Set token fetched from the endpoint in prefs and local settings.
     PrefService* prefs = primary_profile_->GetPrefs();
@@ -160,8 +172,16 @@ void InSessionPasswordSyncManager::OnTokenVerified(bool is_valid) {
 
 void InSessionPasswordSyncManager::OnApiCallFailed(
     PasswordSyncTokenFetcher::ErrorType error_type) {
-  // Ignore API errors since they are logged by TokenFetcher and will be
-  // re-tried after the next verify interval.
+  // If error_type == kGetNoList || kGetNoToken the token API is not
+  // initialized yet and we can fix it by creating a new token on lock
+  // screen re-authentication.
+  // All other API errors will be ignored since they are logged by
+  // TokenFetcher and will be re-tried.
+  password_sync_token_fetcher_.reset();
+  if (error_type == PasswordSyncTokenFetcher::ErrorType::kGetNoList ||
+      error_type == PasswordSyncTokenFetcher::ErrorType::kGetNoToken) {
+    CreateTokenAsync();
+  }
 }
 
 void InSessionPasswordSyncManager::CheckCredentials(
@@ -169,11 +189,36 @@ void InSessionPasswordSyncManager::CheckCredentials(
     PasswordChangedCallback callback) {
   user_context_ = user_context;
   password_changed_callback_ = std::move(callback);
+  content::StoragePartition* signin_partition = login::GetSigninPartition();
+  if (!signin_partition) {
+    LOG(ERROR) << "The sign-in partition is not available yet";
+    OnCookiesTransfered();
+    return;
+  }
+
+  bool transfer_saml_auth_cookies_on_subsequent_login = false;
+  const user_manager::User* user =
+      ProfileHelper::Get()->GetUserByProfile(primary_profile_);
+  if (user->IsAffiliated()) {
+    CrosSettings::Get()->GetBoolean(
+        kAccountsPrefTransferSAMLCookies,
+        &transfer_saml_auth_cookies_on_subsequent_login);
+  }
+
+  ProfileAuthData::Transfer(
+      signin_partition, primary_profile_->GetDefaultStoragePartition(),
+      false /*transfer_auth_cookies_on_first_login*/,
+      transfer_saml_auth_cookies_on_subsequent_login,
+      base::BindOnce(&InSessionPasswordSyncManager::OnCookiesTransfered,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void InSessionPasswordSyncManager::OnCookiesTransfered() {
   if (!extended_authenticator_) {
     extended_authenticator_ = ExtendedAuthenticator::Create(this);
   }
-  extended_authenticator_.get()->AuthenticateToCheck(user_context,
-                                                     base::Closure());
+  extended_authenticator_.get()->AuthenticateToCheck(user_context_,
+                                                     base::OnceClosure());
 }
 
 void InSessionPasswordSyncManager::UpdateUserPassword(
@@ -215,10 +260,11 @@ void InSessionPasswordSyncManager::OnAuthSuccess(
 }
 
 void InSessionPasswordSyncManager::CreateAndShowDialog() {
-  if (!lock_screen_start_reauth_dialog_) {
-    lock_screen_start_reauth_dialog_ =
-        std::make_unique<LockScreenStartReauthDialog>();
-  }
+  if (!IsLockReauthEnabled())
+    NOTREACHED();
+  DCHECK(!lock_screen_start_reauth_dialog_);
+  lock_screen_start_reauth_dialog_ =
+      std::make_unique<LockScreenStartReauthDialog>();
   lock_screen_start_reauth_dialog_->Show();
 }
 
@@ -226,6 +272,11 @@ void InSessionPasswordSyncManager::DismissDialog() {
   if (lock_screen_start_reauth_dialog_) {
     lock_screen_start_reauth_dialog_->Dismiss();
   }
+}
+
+void InSessionPasswordSyncManager::ResetDialog() {
+  DCHECK(lock_screen_start_reauth_dialog_);
+  lock_screen_start_reauth_dialog_.reset();
 }
 
 }  // namespace chromeos

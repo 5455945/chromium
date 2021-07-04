@@ -124,7 +124,7 @@ class ChromeDownloadManagerDelegate
       const content::WebContents::Getter& web_contents_getter,
       const GURL& url,
       const std::string& request_method,
-      base::Optional<url::Origin> request_initiator,
+      absl::optional<url::Origin> request_initiator,
       bool from_download_cross_origin_redirect,
       bool content_initiated,
       content::CheckDownloadAllowedCallback check_download_allowed_cb) override;
@@ -221,6 +221,7 @@ class ChromeDownloadManagerDelegate
   friend class base::RefCountedThreadSafe<ChromeDownloadManagerDelegate>;
   FRIEND_TEST_ALL_PREFIXES(ChromeDownloadManagerDelegateTest,
                            RequestConfirmation_Android);
+  FRIEND_TEST_ALL_PREFIXES(DownloadLaterTriggerTest, DownloadLaterTrigger);
 
   using IdCallbackVector = std::vector<content::DownloadIdCallback>;
 
@@ -279,13 +280,15 @@ class ChromeDownloadManagerDelegate
   // TARGET_CONFLICT and the new file name should be displayed to the user.
   void GenerateUniqueFileNameDone(
       gfx::NativeWindow native_window,
+      bool show_download_later_dialog,
       DownloadTargetDeterminerDelegate::ConfirmationCallback callback,
       download::PathValidationResult result,
       const base::FilePath& target_path);
-#endif
 
   // Returns whether to show download later dialog.
-  bool ShouldShowDownloadLaterDialog() const;
+  bool ShouldShowDownloadLaterDialog(
+      const download::DownloadItem* download) const;
+#endif
 
   Profile* profile_;
 

@@ -18,6 +18,7 @@ const char kEnableExperimentalAccessibilityAutoclick[] =
 const char kEnableExperimentalAccessibilityDictationExtension[] =
     "enable-experimental-accessibility-dictation-extension";
 
+// Enables dictation to use on-device speech recognition.
 const char kEnableExperimentalAccessibilityDictationOffline[] =
     "enable-experimental-accessibility-dictation-offline";
 
@@ -40,9 +41,9 @@ const char kEnableExperimentalAccessibilityLanguageDetectionDynamic[] =
 const char kEnableExperimentalAccessibilitySwitchAccessText[] =
     "enable-experimental-accessibility-switch-access-text";
 
-// Enables Switch Access point scanning. This feature hasn't launched yet.
-const char kEnableSwitchAccessPointScanning[] =
-    "enable-switch-access-point-scanning";
+// Enables debug feature for drawing rectangle around magnified region, without
+// zooming in.
+const char kEnableMagnifierDebugDrawRect[] = "enable-magnifier-debug-draw-rect";
 
 // Enables the Switch Access setup guide that hasn't launched yet.
 const char kEnableExperimentalAccessibilitySwitchAccessSetupGuide[] =
@@ -73,9 +74,9 @@ bool IsExperimentalAccessibilitySwitchAccessTextEnabled() {
       ::switches::kEnableExperimentalAccessibilitySwitchAccessText);
 }
 
-bool IsSwitchAccessPointScanningEnabled() {
+bool IsMagnifierDebugDrawRectEnabled() {
   return base::CommandLine::ForCurrentProcess()->HasSwitch(
-      ::switches::kEnableSwitchAccessPointScanning);
+      ::switches::kEnableMagnifierDebugDrawRect);
 }
 
 #if defined(OS_WIN)

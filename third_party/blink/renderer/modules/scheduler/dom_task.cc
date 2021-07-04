@@ -12,7 +12,6 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_scheduler_post_task_callback.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
-#include "third_party/blink/renderer/modules/scheduler/dom_scheduler.h"
 #include "third_party/blink/renderer/modules/scheduler/dom_task_signal.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 
@@ -31,13 +30,12 @@ namespace blink {
                              sample, base::TimeDelta::FromMilliseconds(1), \
                              base::TimeDelta::FromMinutes(1), 50)
 
-DOMTask::DOMTask(DOMScheduler* scheduler,
-                 ScriptPromiseResolver* resolver,
+DOMTask::DOMTask(ScriptPromiseResolver* resolver,
                  V8SchedulerPostTaskCallback* callback,
                  DOMTaskSignal* signal,
+                 base::SingleThreadTaskRunner* task_runner,
                  base::TimeDelta delay)
-    : scheduler_(scheduler),
-      callback_(callback),
+    : callback_(callback),
       resolver_(resolver),
       signal_(signal),
       // TODO(kdillon): Expose queuing time from base::sequence_manager so we
@@ -45,12 +43,12 @@ DOMTask::DOMTask(DOMScheduler* scheduler,
       queue_time_(delay.is_zero() ? base::TimeTicks::Now()
                                   : base::TimeTicks()) {
   DCHECK(signal_);
-  DCHECK(signal_->GetTaskRunner());
+  DCHECK(task_runner);
   DCHECK(callback_);
-  signal_->AddAlgorithm(WTF::Bind(&DOMTask::Abort, WrapWeakPersistent(this)));
+  signal_->AddAlgorithm(WTF::Bind(&DOMTask::OnAbort, WrapWeakPersistent(this)));
 
   task_handle_ = PostDelayedCancellableTask(
-      *signal_->GetTaskRunner(), FROM_HERE,
+      *task_runner, FROM_HERE,
       WTF::Bind(&DOMTask::Invoke, WrapPersistent(this)), delay);
 
   ScriptState* script_state =
@@ -61,7 +59,6 @@ DOMTask::DOMTask(DOMScheduler* scheduler,
 }
 
 void DOMTask::Trace(Visitor* visitor) const {
-  visitor->Trace(scheduler_);
   visitor->Trace(callback_);
   visitor->Trace(resolver_);
   visitor->Trace(signal_);
@@ -70,10 +67,30 @@ void DOMTask::Trace(Visitor* visitor) const {
 void DOMTask::Invoke() {
   DCHECK(callback_);
 
+  // Tasks are not runnable if the document associated with this task's
+  // scheduler's global is not fully active, which happens if the
+  // ExecutionContext is detached. Note that this context can be different
+  // from the the callback's relevant context.
+  ExecutionContext* scheduler_context = resolver_->GetExecutionContext();
+  if (!scheduler_context || scheduler_context->IsContextDestroyed())
+    return;
+
   ScriptState* script_state =
       callback_->CallbackRelevantScriptStateOrReportError("DOMTask", "Invoke");
-  if (!script_state || !script_state->ContextIsValid())
+  if (!script_state || !script_state->ContextIsValid()) {
+    DCHECK(resolver_->GetExecutionContext() &&
+           !resolver_->GetExecutionContext()->IsContextDestroyed());
+    // The scheduler's context is still attached, but the task's callback's
+    // relvant context is not. This happens, for example, if an attached main
+    // frame's scheduler schedules a task that runs a callback defined in a
+    // detached child frame. The callback's relvant context must be valid to run
+    // the callback (enforced in the bindings layer). Since we can't run this
+    // task, and therefore won't settle the associated promise, we need to clean
+    // up the ScriptPromiseResolver since it is associated with a different
+    // context.
+    resolver_->Detach();
     return;
+  }
 
   RecordTaskStartMetrics();
   InvokeInternal(script_state);
@@ -101,7 +118,7 @@ void DOMTask::InvokeInternal(ScriptState* script_state) {
   v8_context->SetContinuationPreservedEmbedderData(v8::Local<v8::Object>());
 }
 
-void DOMTask::Abort() {
+void DOMTask::OnAbort() {
   // If the task has already finished running, the promise is either resolved or
   // rejected, in which case abort will no longer have any effect.
   if (!callback_)

@@ -8,16 +8,17 @@
 #include <stddef.h>
 
 #include <algorithm>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "base/bind.h"
+#include "base/cxx17_backports.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/process/process.h"
 #include "base/single_thread_task_runner.h"
-#include "base/stl_util.h"
 #include "base/strings/string_util.h"
 #include "base/task/post_task.h"
 #include "base/task/task_traits.h"
@@ -39,9 +40,9 @@
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
+#include "components/safe_browsing/core/common/features.h"
+#include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
-#include "components/safe_browsing/core/features.h"
-#include "components/safe_browsing/core/proto/csd.pb.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_item_utils.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -361,7 +362,7 @@ IncidentReportingService::CreatePreferenceValidationDelegate(Profile* profile) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   if (profile->IsOffTheRecord())
-    return std::unique_ptr<prefs::mojom::TrackedPreferenceValidationDelegate>();
+    return nullptr;
   return std::make_unique<PreferenceValidationDelegate>(profile,
                                                         GetIncidentReceiver());
 }
@@ -617,7 +618,7 @@ void IncidentReportingService::BeginReportProcessing() {
 
   // Creates a new report if needed.
   if (!report_)
-    report_.reset(new ClientIncidentReport());
+    report_ = std::make_unique<ClientIncidentReport>();
 
   // Ensure that collection tasks are running (calls are idempotent).
   BeginIncidentCollation();

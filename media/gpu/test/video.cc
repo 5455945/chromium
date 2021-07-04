@@ -63,7 +63,6 @@ std::unique_ptr<Video> Video::Expand(const gfx::Size& resolution,
       << "An odd origin point is not supported";
   auto new_video = std::make_unique<Video>(file_path_, metadata_file_path_);
   new_video->frame_checksums_ = frame_checksums_;
-  new_video->thumbnail_checksums_ = thumbnail_checksums_;
   new_video->profile_ = profile_;
   new_video->codec_ = codec_;
   new_video->frame_rate_ = frame_rate_;
@@ -128,7 +127,6 @@ std::unique_ptr<Video> Video::ConvertToNV12() const {
       << "The pixel format of source video is not I420";
   auto new_video = std::make_unique<Video>(file_path_, metadata_file_path_);
   new_video->frame_checksums_ = frame_checksums_;
-  new_video->thumbnail_checksums_ = thumbnail_checksums_;
   new_video->profile_ = profile_;
   new_video->codec_ = codec_;
   new_video->bit_depth_ = bit_depth_;
@@ -177,7 +175,7 @@ bool Video::Load(const size_t max_frames) {
   DCHECK(!file_path_.empty());
   DCHECK(data_.empty());
 
-  base::Optional<base::FilePath> resolved_path = ResolveFilePath(file_path_);
+  absl::optional<base::FilePath> resolved_path = ResolveFilePath(file_path_);
   if (!resolved_path) {
     LOG(ERROR) << "Video file not found: " << file_path_;
     return false;
@@ -336,10 +334,6 @@ const std::vector<std::string>& Video::FrameChecksums() const {
   return frame_checksums_;
 }
 
-const std::vector<std::string>& Video::ThumbnailChecksums() const {
-  return thumbnail_checksums_;
-}
-
 // static
 void Video::SetTestDataPath(const base::FilePath& test_data_path) {
   test_data_path_ = test_data_path;
@@ -355,7 +349,7 @@ bool Video::LoadMetadata() {
   if (metadata_file_path_.empty())
     metadata_file_path_ = file_path_.AddExtension(kMetadataSuffix);
 
-  base::Optional<base::FilePath> resolved_path =
+  absl::optional<base::FilePath> resolved_path =
       ResolveFilePath(metadata_file_path_);
   if (!resolved_path) {
     LOG(ERROR) << "Video metadata file not found: " << metadata_file_path_;
@@ -376,7 +370,7 @@ bool Video::LoadMetadata() {
                << ": " << metadata_result.error_message;
     return false;
   }
-  base::Optional<base::Value> metadata = std::move(metadata_result.value);
+  absl::optional<base::Value> metadata = std::move(metadata_result.value);
 
   // Find the video's profile, only required for encoded video streams.
   profile_ = VIDEO_CODEC_PROFILE_UNKNOWN;
@@ -456,14 +450,15 @@ bool Video::LoadMetadata() {
   }
   num_frames_ = static_cast<uint32_t>(num_frames->GetInt());
 
-  // Find the number of fragments, only required for H.264 video streams.
+  // Find the number of fragments, only required for H.264/HEVC video streams.
   num_fragments_ = num_frames_;
-  if (profile_ >= H264PROFILE_MIN && profile_ <= H264PROFILE_MAX) {
+  if ((profile_ >= H264PROFILE_MIN && profile_ <= H264PROFILE_MAX) ||
+      (profile_ >= HEVCPROFILE_MIN && profile_ <= HEVCPROFILE_MAX)) {
     const base::Value* num_fragments =
         metadata->FindKeyOfType("num_fragments", base::Value::Type::INTEGER);
     if (!num_fragments) {
-      LOG(ERROR) << "Key \"num_fragments\" is required for H.264 video streams "
-                    "but could not be found in "
+      LOG(ERROR) << "Key \"num_fragments\" is required for H.264/HEVC video "
+                    "streams but could not be found in "
                  << metadata_file_path_;
       return false;
     }
@@ -498,18 +493,6 @@ bool Video::LoadMetadata() {
     }
   }
 
-  // Find optional thumbnail checksums. These are only required when using the
-  // thumbnail test on older platforms that don't support the frame validator.
-  const base::Value* thumbnail_checksums =
-      metadata->FindKeyOfType("thumbnail_checksums", base::Value::Type::LIST);
-  if (thumbnail_checksums) {
-    for (const base::Value& checksum : thumbnail_checksums->GetList()) {
-      const std::string& checksum_str = checksum.GetString();
-      if (checksum_str.size() > 0 && checksum_str[0] != '#')
-        thumbnail_checksums_.push_back(checksum_str);
-    }
-  }
-
   return true;
 }
 
@@ -517,7 +500,7 @@ bool Video::IsMetadataLoaded() const {
   return profile_ != VIDEO_CODEC_PROFILE_UNKNOWN || num_frames_ != 0;
 }
 
-base::Optional<base::FilePath> Video::ResolveFilePath(
+absl::optional<base::FilePath> Video::ResolveFilePath(
     const base::FilePath& file_path) {
   base::FilePath resolved_path = file_path;
 
@@ -530,8 +513,8 @@ base::Optional<base::FilePath> Video::ResolveFilePath(
   }
 
   return PathExists(resolved_path)
-             ? base::Optional<base::FilePath>(resolved_path)
-             : base::Optional<base::FilePath>();
+             ? absl::optional<base::FilePath>(resolved_path)
+             : absl::optional<base::FilePath>();
 }
 
 // static
@@ -636,7 +619,7 @@ void Video::OnFrameDecoded(const gfx::Size& resolution,
 }
 
 // static
-base::Optional<VideoCodecProfile> Video::ConvertStringtoProfile(
+absl::optional<VideoCodecProfile> Video::ConvertStringtoProfile(
     const std::string& profile) {
   if (profile == "H264PROFILE_BASELINE") {
     return H264PROFILE_BASELINE;
@@ -652,14 +635,18 @@ base::Optional<VideoCodecProfile> Video::ConvertStringtoProfile(
     return VP9PROFILE_PROFILE2;
   } else if (profile == "AV1PROFILE_PROFILE_MAIN") {
     return AV1PROFILE_PROFILE_MAIN;
+  } else if (profile == "HEVCPROFILE_MAIN") {
+    return HEVCPROFILE_MAIN;
+  } else if (profile == "HEVCPROFILE_MAIN10") {
+    return HEVCPROFILE_MAIN10;
   } else {
     VLOG(2) << profile << " is not supported";
-    return base::nullopt;
+    return absl::nullopt;
   }
 }
 
 // static
-base::Optional<VideoCodec> Video::ConvertProfileToCodec(
+absl::optional<VideoCodec> Video::ConvertProfileToCodec(
     VideoCodecProfile profile) {
   if (profile >= H264PROFILE_MIN && profile <= H264PROFILE_MAX) {
     return kCodecH264;
@@ -669,14 +656,16 @@ base::Optional<VideoCodec> Video::ConvertProfileToCodec(
     return kCodecVP9;
   } else if (profile >= AV1PROFILE_MIN && profile <= AV1PROFILE_MAX) {
     return kCodecAV1;
+  } else if (profile >= HEVCPROFILE_MIN && profile <= HEVCPROFILE_MAX) {
+    return kCodecHEVC;
   } else {
     VLOG(2) << GetProfileName(profile) << " is not supported";
-    return base::nullopt;
+    return absl::nullopt;
   }
 }
 
 // static
-base::Optional<VideoPixelFormat> Video::ConvertStringtoPixelFormat(
+absl::optional<VideoPixelFormat> Video::ConvertStringtoPixelFormat(
     const std::string& pixel_format) {
   if (pixel_format == "I420") {
     return VideoPixelFormat::PIXEL_FORMAT_I420;
@@ -684,7 +673,7 @@ base::Optional<VideoPixelFormat> Video::ConvertStringtoPixelFormat(
     return VideoPixelFormat::PIXEL_FORMAT_NV12;
   } else {
     VLOG(2) << pixel_format << " is not supported";
-    return base::nullopt;
+    return absl::nullopt;
   }
 }
 }  // namespace test

@@ -10,18 +10,15 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
-#include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/macros.h"
-#include "base/optional.h"
 #include "build/build_config.h"
 #include "content/browser/devtools/devtools_agent_host_impl.h"
 #include "content/common/content_export.h"
-#include "content/common/navigation_params.mojom.h"
 #include "content/public/browser/render_process_host_observer.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "net/base/net_errors.h"
-#include "services/network/public/mojom/url_loader_factory.mojom.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 #if defined(OS_ANDROID)
 #include "mojo/public/cpp/bindings/remote.h"
@@ -73,7 +70,7 @@ class CONTENT_EXPORT RenderFrameDevToolsAgentHost
   static scoped_refptr<DevToolsAgentHost> FindForDangling(
       FrameTreeNode* frame_tree_node);
 
-  static void WebContentsMainFrameCreated(WebContents* web_contents);
+  static void AttachToWebContents(WebContents* web_contents);
 
 #if defined(OS_ANDROID)
   static void SignalSynchronousSwapCompositorFrame(
@@ -106,9 +103,9 @@ class CONTENT_EXPORT RenderFrameDevToolsAgentHost
   bool Close() override;
   base::TimeTicks GetLastActivityTime() override;
 
-  base::Optional<network::CrossOriginEmbedderPolicy>
+  absl::optional<network::CrossOriginEmbedderPolicy>
   cross_origin_embedder_policy(const std::string& id) override;
-  base::Optional<network::CrossOriginOpenerPolicy> cross_origin_opener_policy(
+  absl::optional<network::CrossOriginOpenerPolicy> cross_origin_opener_policy(
       const std::string& id) override;
 
   RenderFrameHostImpl* GetFrameHostForTesting() { return frame_host_; }
@@ -133,7 +130,7 @@ class CONTENT_EXPORT RenderFrameDevToolsAgentHost
   void DidFinishNavigation(NavigationHandle* navigation_handle) override;
   void RenderFrameHostChanged(RenderFrameHost* old_host,
                               RenderFrameHost* new_host) override;
-  void FrameDeleted(RenderFrameHost* rfh) override;
+  void FrameDeleted(int frame_tree_node_id) override;
   void RenderFrameDeleted(RenderFrameHost* rfh) override;
   void OnVisibilityChanged(content::Visibility visibility) override;
   void OnPageScaleFactorChanged(float page_scale_factor) override;

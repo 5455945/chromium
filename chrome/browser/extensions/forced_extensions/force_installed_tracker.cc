@@ -25,7 +25,9 @@
 namespace extensions {
 
 namespace {
+constexpr int kHttpErrorCodeBadRequest = 400;
 constexpr int kHttpErrorCodeForbidden = 403;
+constexpr int kHttpErrorCodeNotFound = 404;
 }  // namespace
 
 ForceInstalledTracker::ForceInstalledTracker(ExtensionRegistry* registry,
@@ -101,18 +103,18 @@ void ForceInstalledTracker::OnForcedExtensionsPrefReady() {
 
   // Listen for extension loads and install failures.
   status_ = kWaitingForExtensionLoads;
-  registry_observer_.Add(registry_);
-  collector_observer_.Add(InstallStageTracker::Get(profile_));
+  registry_observation_.Observe(registry_);
+  collector_observation_.Observe(InstallStageTracker::Get(profile_));
 
   const base::DictionaryValue* value =
       pref_service_->GetDictionary(pref_names::kInstallForceList);
   if (value) {
     // Add each extension to |extensions_|.
-    for (const auto& entry : *value) {
+    for (auto entry : value->DictItems()) {
       const ExtensionId& extension_id = entry.first;
-      std::string* update_url = nullptr;
-      if (entry.second->is_dict()) {
-        update_url = entry.second->FindStringKey(
+      const std::string* update_url = nullptr;
+      if (entry.second.is_dict()) {
+        update_url = entry.second.FindStringKey(
             ExternalProviderImpl::kExternalUpdateUrl);
       }
       bool is_from_store =
@@ -133,7 +135,7 @@ void ForceInstalledTracker::OnForcedExtensionsPrefReady() {
 }
 
 void ForceInstalledTracker::OnShutdown(ExtensionRegistry*) {
-  registry_observer_.RemoveAll();
+  registry_observation_.Reset();
 }
 
 void ForceInstalledTracker::AddObserver(Observer* obs) {
@@ -264,10 +266,26 @@ bool ForceInstalledTracker::IsMisconfiguration(
   if (installation_data.failure_reason ==
       InstallStageTracker::FailureReason::MANIFEST_FETCH_FAILED) {
     auto extension = extensions_.find(id);
-    if (installation_data.response_code == kHttpErrorCodeForbidden &&
-        extension != extensions_.end() && !extension->second.is_from_store) {
+    if (extension != extensions_.end() && !extension->second.is_from_store) {
+      if (installation_data.response_code == kHttpErrorCodeBadRequest ||
+          installation_data.response_code == kHttpErrorCodeForbidden ||
+          installation_data.response_code == kHttpErrorCodeNotFound) {
+        return true;
+      }
+    }
+  }
+
+  if (installation_data.failure_reason ==
+      InstallStageTracker::FailureReason::MANIFEST_INVALID) {
+    auto extension = extensions_.find(id);
+    if (extension != extensions_.end() && !extension->second.is_from_store) {
       return true;
     }
+  }
+
+  if (installation_data.failure_reason ==
+      InstallStageTracker::FailureReason::OVERRIDDEN_BY_SETTINGS) {
+    return true;
   }
 
   return false;
@@ -275,7 +293,7 @@ bool ForceInstalledTracker::IsMisconfiguration(
 
 // static
 bool ForceInstalledTracker::IsExtensionFetchedFromCache(
-    const base::Optional<ExtensionDownloaderDelegate::CacheStatus>& status) {
+    const absl::optional<ExtensionDownloaderDelegate::CacheStatus>& status) {
   if (!status)
     return false;
   return status.value() == ExtensionDownloaderDelegate::CacheStatus::
@@ -298,8 +316,8 @@ void ForceInstalledTracker::MaybeNotifyObservers() {
     for (auto& obs : observers_)
       obs.OnForceInstalledExtensionsReady();
     status_ = kComplete;
-    registry_observer_.RemoveAll();
-    collector_observer_.RemoveAll();
+    registry_observation_.Reset();
+    collector_observation_.Reset();
     InstallStageTracker::Get(profile_)->Clear();
   }
 }

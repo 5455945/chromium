@@ -15,8 +15,6 @@
 #include "base/mac/foundation_util.h"
 #include "base/strings/sys_string_conversions.h"
 #import "components/autofill/ios/browser/autofill_agent.h"
-#import "components/autofill/ios/browser/js_autofill_manager.h"
-#import "components/autofill/ios/browser/js_suggestion_manager.h"
 #include "components/autofill/ios/form_util/unique_id_data_tab_helper.h"
 #include "components/language/ios/browser/ios_language_detection_tab_helper.h"
 #include "components/password_manager/core/browser/password_manager.h"
@@ -37,8 +35,6 @@
 #import "ios/web/public/ui/crw_web_view_scroll_view_proxy.h"
 #import "ios/web/public/web_client.h"
 #import "ios/web/public/web_state.h"
-#import "ios/web/public/web_state_delegate_bridge.h"
-#import "ios/web/public/web_state_observer_bridge.h"
 #import "ios/web/public/web_view_only/wk_web_view_configuration_util.h"
 #include "ios/web_view/internal/app/application_context.h"
 #import "ios/web_view/internal/autofill/cwv_autofill_controller_internal.h"
@@ -75,20 +71,19 @@ namespace {
 // A key used in NSCoder to store the session storage object.
 NSString* const kSessionStorageKey = @"sessionStorage";
 
-// Converts base::DictionaryValue to NSDictionary.
-NSDictionary* NSDictionaryFromDictionaryValue(
-    const base::DictionaryValue& value) {
+// Converts base::Value expected to be a dictionary to NSDictionary.
+NSDictionary* NSDictionaryFromDictionaryValue(const base::Value& value) {
+  DCHECK(value.is_dict()) << "Incorrect value type: " << value.type();
+
   std::string json;
-  if (!base::JSONWriter::Write(value, &json)) {
-    NOTREACHED() << "Failed to convert base::DictionaryValue to JSON";
-    return nil;
-  }
+  const bool success = base::JSONWriter::Write(value, &json);
+  DCHECK(success) << "Failed to convert base::Value to JSON";
 
   NSData* json_data = [NSData dataWithBytes:json.c_str() length:json.length()];
-  NSDictionary* ns_dictionary =
+  NSDictionary* ns_dictionary = base::mac::ObjCCastStrict<NSDictionary>(
       [NSJSONSerialization JSONObjectWithData:json_data
                                       options:kNilOptions
-                                        error:nil];
+                                        error:nil]);
   DCHECK(ns_dictionary) << "Failed to convert JSON to NSDictionary";
   return ns_dictionary;
 }
@@ -110,7 +105,7 @@ class WebViewHolder : public web::WebStateUserData<WebViewHolder> {
 WEB_STATE_USER_DATA_KEY_IMPL(WebViewHolder)
 }  // namespace
 
-@interface CWVWebView ()<CRWWebStateDelegate, CRWWebStateObserver> {
+@interface CWVWebView () {
   CWVWebViewConfiguration* _configuration;
   std::unique_ptr<web::WebState> _webState;
   std::unique_ptr<web::WebStateDelegateBridge> _webStateDelegate;
@@ -127,6 +122,10 @@ WEB_STATE_USER_DATA_KEY_IMPL(WebViewHolder)
                                base::CallbackListSubscription>>
       _scriptCommandCallbacks;
   CRWSessionStorage* _cachedSessionStorage;
+
+  // Stores the last NavigationContext::IsSameDocument() value from
+  // |webState:didFinishNavigation:|.
+  BOOL _lastDidFinishNavigationContextIsSameDocument;
 }
 
 // Redefine these properties as readwrite to define setters, which send KVO
@@ -158,6 +157,7 @@ WEB_STATE_USER_DATA_KEY_IMPL(WebViewHolder)
 @end
 
 namespace {
+NSString* gCustomUserAgent = nil;
 NSString* gUserAgentProduct = nil;
 BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
 }  // namespace
@@ -193,6 +193,14 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
 
 + (void)setChromeLongPressAndForceTouchHandlingEnabled:(BOOL)newValue {
   gChromeLongPressAndForceTouchHandlingEnabled = newValue;
+}
+
++ (NSString*)customUserAgent {
+  return gCustomUserAgent;
+}
+
++ (void)setCustomUserAgent:(NSString*)customUserAgent {
+  gCustomUserAgent = [customUserAgent copy];
 }
 
 + (NSString*)userAgentProduct {
@@ -338,6 +346,16 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
   _javaScriptDialogPresenter->SetUIDelegate(_UIDelegate);
 }
 
+#pragma mark - UIResponder
+
+- (BOOL)becomeFirstResponder {
+  if (_webState) {
+    return [_webState->GetWebViewProxy() becomeFirstResponder];
+  } else {
+    return [super becomeFirstResponder];
+  }
+}
+
 #pragma mark - UIView
 
 - (void)didMoveToSuperview {
@@ -377,6 +395,10 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
   // TODO(crbug.com/898357): Remove this once crbug.com/898357 is fixed.
   [self updateVisibleSSLStatus];
 
+  // Store NavigationContext::IsSameDocument() for later use in
+  // |webState:didLoadPageWithSuccess:|.
+  _lastDidFinishNavigationContextIsSameDocument = navigation->IsSameDocument();
+
   if (navigation->HasCommitted() && !navigation->IsSameDocument() &&
       [_navigationDelegate
           respondsToSelector:@selector(webViewDidCommitNavigation:)]) {
@@ -396,8 +418,19 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
     // Failure callbacks will be handled inside |webState:didFinishNavigation:|.
     return;
   }
+
+  // We do not want to call -[CWVNavigationDelegate webViewDidFinishNavigation:]
+  // for same document navigations because we also exclude them for others like
+  // -[CWVNavigationDelegate webViewDidStartNavigation:] and
+  // -[CWVNavigationDelegate webViewDidCommitNavigation:].
+  // It is guaranteed that |webState:didLoadPageWithSuccess:| is only called
+  // after |webState:didFinishNavigation:|, so we will always have an up to date
+  // value to use here.
+  // TODO(crbug.com/1196799): Remove this work around once a NavigationContext
+  // is passed in to this method.
   SEL selector = @selector(webViewDidFinishNavigation:);
-  if ([_navigationDelegate respondsToSelector:selector]) {
+  if (!_lastDidFinishNavigationContextIsSameDocument &&
+      [_navigationDelegate respondsToSelector:selector]) {
     [_navigationDelegate webViewDidFinishNavigation:self];
   }
 }
@@ -588,11 +621,20 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
   }
 }
 
+- (id<CRWResponderInputView>)webStateInputViewProvider:
+    (web::WebState*)webState {
+  if (self.inputAccessoryView != nil) {
+    return self;
+  } else {
+    return nil;
+  }
+}
+
 - (void)addScriptCommandHandler:(id<CWVScriptCommandHandler>)handler
                   commandPrefix:(NSString*)commandPrefix {
   CWVWebView* __weak weakSelf = self;
   const web::WebState::ScriptCommandCallback callback = base::BindRepeating(
-      ^(const base::DictionaryValue& content, const GURL& mainDocumentURL,
+      ^(const base::Value& content, const GURL& mainDocumentURL,
         bool userInteracting, web::WebFrame* senderFrame) {
         NSDictionary* nsContent = NSDictionaryFromDictionaryValue(content);
         CWVScriptCommand* command = [[CWVScriptCommand alloc]
@@ -657,7 +699,6 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
   AutofillAgent* autofillAgent = [[AutofillAgent alloc]
       initWithPrefService:_configuration.browserState->GetPrefs()
                  webState:_webState.get()];
-  JsAutofillManager* JSAutofillManager = [[JsAutofillManager alloc] init];
 
   auto passwordManagerClient =
       ios_web_view::WebViewPasswordManagerClient::Create(
@@ -682,7 +723,6 @@ BOOL gChromeLongPressAndForceTouchHandlingEnabled = YES;
            initWithWebState:_webState.get()
              autofillClient:std::move(autofillClient)
               autofillAgent:autofillAgent
-          JSAutofillManager:JSAutofillManager
             passwordManager:std::move(passwordManager)
       passwordManagerClient:std::move(passwordManagerClient)
       passwordManagerDriver:std::move(passwordManagerDriver)

@@ -108,8 +108,15 @@ IN_PROC_BROWSER_TEST_F(ContentBrowserTest, MANUAL_RendererCrash) {
 #define USE_EXTERNAL_SYMBOLIZER 0
 #endif
 
+// Flaky on Linux: crbug.com/1223763
+#if defined(OS_LINUX)
+#define MAYBE_RendererCrashCallStack DISABLED_RendererCrashCallStack
+#else
+#define MAYBE_RendererCrashCallStack RendererCrashCallStack
+#endif
+
 // Tests that browser tests print the callstack when a child process crashes.
-IN_PROC_BROWSER_TEST_F(ContentBrowserTest, RendererCrashCallStack) {
+IN_PROC_BROWSER_TEST_F(ContentBrowserTest, MAYBE_RendererCrashCallStack) {
   base::ScopedAllowBlockingForTesting allow_blocking;
   base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
@@ -134,7 +141,7 @@ IN_PROC_BROWSER_TEST_F(ContentBrowserTest, RendererCrashCallStack) {
   // "#0 0x0000007ea911 (...content_browsertests+0x7ea910)"
   std::string crash_string =
 #if !USE_EXTERNAL_SYMBOLIZER
-      "content::RenderFrameImpl::HandleRendererDebugURL";
+      "blink::LocalFrame::HandleRendererDebugURL";
 #else
       "#0 ";
 #endif
@@ -213,6 +220,9 @@ IN_PROC_BROWSER_TEST_F(MockContentBrowserTest, DISABLED_CrashTest) {
 // This is disabled due to flakiness: https://crbug.com/1086372
 #if defined(OS_WIN)
 #define MAYBE_RunMockTests DISABLED_RunMockTests
+#elif defined(OS_LINUX) && defined(THREAD_SANITIZER)
+// This is disabled because it fails on bionic: https://crbug.com/1202220
+#define MAYBE_RunMockTests DISABLED_RunMockTests
 #else
 #define MAYBE_RunMockTests RunMockTests
 #endif
@@ -236,7 +246,7 @@ IN_PROC_BROWSER_TEST_F(ContentBrowserTest, MAYBE_RunMockTests) {
   base::GetAppOutputAndError(command_line, &output);
 
   // Validate the resulting JSON file is the expected output.
-  base::Optional<base::Value> root =
+  absl::optional<base::Value> root =
       base::test_launcher_utils::ReadSummary(path);
   ASSERT_TRUE(root);
 
@@ -277,10 +287,10 @@ class ContentBrowserTestSanityTest : public ContentBrowserTest {
   void Test() {
     GURL url = GetTestUrl(".", "simple_page.html");
 
-    base::string16 expected_title(base::ASCIIToUTF16("OK"));
+    std::u16string expected_title(u"OK");
     TitleWatcher title_watcher(shell()->web_contents(), expected_title);
     EXPECT_TRUE(NavigateToURL(shell(), url));
-    base::string16 title = title_watcher.WaitAndGetTitle();
+    std::u16string title = title_watcher.WaitAndGetTitle();
     EXPECT_EQ(expected_title, title);
   }
 };
@@ -357,7 +367,7 @@ IN_PROC_BROWSER_TEST_F(ContentBrowserTest, RunTimeoutInstalled) {
   EXPECT_FATAL_FAILURE(static_on_timeout_cb.Run(FROM_HERE),
                        "RunLoop::Run() timed out. Timeout set at "
                        // We don't test the line number but it would be present.
-                       "ProxyRunTestOnMainThreadLoop@../../content/public/test/"
+                       "ProxyRunTestOnMainThreadLoop@content/public/test/"
                        "browser_test_base.cc:");
 }
 

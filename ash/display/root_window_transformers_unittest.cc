@@ -6,10 +6,10 @@
 
 #include <memory>
 
+#include "ash/accessibility/magnifier/fullscreen_magnifier_controller.h"
 #include "ash/display/display_util.h"
 #include "ash/display/mirror_window_test_api.h"
 #include "ash/host/root_window_transformer.h"
-#include "ash/magnifier/magnification_controller.h"
 #include "ash/screen_util.h"
 #include "ash/shelf/shelf_widget.h"
 #include "ash/shell.h"
@@ -21,6 +21,7 @@
 #include "ui/aura/window_event_dispatcher.h"
 #include "ui/aura/window_tracker.h"
 #include "ui/aura/window_tree_host.h"
+#include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/display/display.h"
@@ -164,7 +165,8 @@ class UnfiedRootWindowTransformersTest : public RootWindowTransformersTest {
 }  // namespace
 
 TEST_F(RootWindowTransformersTest, RotateAndMagnify) {
-  MagnificationController* magnifier = Shell::Get()->magnification_controller();
+  FullscreenMagnifierController* magnifier =
+      Shell::Get()->fullscreen_magnifier_controller();
 
   TestEventHandler event_handler;
   Shell::Get()->AddPreTargetHandler(&event_handler);
@@ -276,7 +278,8 @@ TEST_F(RootWindowTransformersTest, ScaleAndMagnify) {
   display::test::DisplayManagerTestApi display_manager_test(display_manager());
   display::Display display2 = display_manager_test.GetSecondaryDisplay();
   aura::Window::Windows root_windows = Shell::GetAllRootWindows();
-  MagnificationController* magnifier = Shell::Get()->magnification_controller();
+  FullscreenMagnifierController* magnifier =
+      Shell::Get()->fullscreen_magnifier_controller();
 
   magnifier->SetEnabled(true);
   EXPECT_EQ(2.0f, magnifier->GetScale());
@@ -316,7 +319,8 @@ TEST_F(RootWindowTransformersTest, TouchScaleAndMagnify) {
   aura::Window::Windows root_windows = Shell::GetAllRootWindows();
   aura::Window* root_window = root_windows[0];
   ui::test::EventGenerator generator(root_window);
-  MagnificationController* magnifier = Shell::Get()->magnification_controller();
+  FullscreenMagnifierController* magnifier =
+      Shell::Get()->fullscreen_magnifier_controller();
 
   magnifier->SetEnabled(true);
   EXPECT_FLOAT_EQ(2.0f, magnifier->GetScale());
@@ -345,7 +349,8 @@ TEST_F(RootWindowTransformersTest, TouchScaleAndMagnify) {
 TEST_F(RootWindowTransformersTest, ConvertHostToRootCoords) {
   TestEventHandler event_handler;
   Shell::Get()->AddPreTargetHandler(&event_handler);
-  MagnificationController* magnifier = Shell::Get()->magnification_controller();
+  FullscreenMagnifierController* magnifier =
+      Shell::Get()->fullscreen_magnifier_controller();
 
   // Test 1
   UpdateDisplay("600x400*2/r@0.8");
@@ -430,7 +435,7 @@ TEST_F(RootWindowTransformersTest, ConvertHostToRootCoords) {
 TEST_F(RootWindowTransformersTest, LetterBoxPillarBox) {
   MirrorWindowTestApi test_api;
   UpdateDisplay("400x200,500x500");
-  display_manager()->SetMirrorMode(display::MirrorMode::kNormal, base::nullopt);
+  display_manager()->SetMirrorMode(display::MirrorMode::kNormal, absl::nullopt);
   std::unique_ptr<RootWindowTransformer> transformer(
       CreateCurrentRootWindowTransformerForMirroring());
   // Y margin must be margin is (500 - 500/400 * 200) / 2 = 125.
@@ -445,7 +450,7 @@ TEST_F(RootWindowTransformersTest, LetterBoxPillarBox) {
 TEST_F(RootWindowTransformersTest, MirrorWithRotation) {
   MirrorWindowTestApi test_api;
   UpdateDisplay("400x200,500x500");
-  display_manager()->SetMirrorMode(display::MirrorMode::kNormal, base::nullopt);
+  display_manager()->SetMirrorMode(display::MirrorMode::kNormal, absl::nullopt);
 
   for (auto rotation :
        {display::Display::ROTATE_0, display::Display::ROTATE_90,

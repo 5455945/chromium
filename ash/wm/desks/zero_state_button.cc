@@ -13,12 +13,15 @@
 #include "ash/wm/desks/desks_bar_view.h"
 #include "ash/wm/desks/desks_controller.h"
 #include "ash/wm/wm_highlight_item_border.h"
+#include "base/bind.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/compositor/layer.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/font_list.h"
 #include "ui/gfx/text_constants.h"
 #include "ui/gfx/text_elider.h"
 #include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/animation/ink_drop.h"
 #include "ui/views/animation/ink_drop_impl.h"
 #include "ui/views/controls/highlight_path_generator.h"
 
@@ -41,7 +44,10 @@ constexpr int kZeroStateDefaultDeskButtonMinWidth = 56;
 // -----------------------------------------------------------------------------
 // DeskButtonBase:
 
-DeskButtonBase::DeskButtonBase(const base::string16& text,
+DeskButtonBase::DeskButtonBase(const std::u16string& text)
+    : DeskButtonBase(text, kCornerRadius, kCornerRadius) {}
+
+DeskButtonBase::DeskButtonBase(const std::u16string& text,
                                int border_corder_radius,
                                int corner_radius)
     : LabelButton(base::BindRepeating(&DeskButtonBase::OnButtonPressed,
@@ -52,12 +58,37 @@ DeskButtonBase::DeskButtonBase(const base::string16& text,
   layer()->SetFillsBoundsOpaquely(false);
   SetHorizontalAlignment(gfx::ALIGN_CENTER);
 
-  SetInkDropMode(InkDropMode::ON);
+  // Do not show highlight on hover and focus. Since the button will be painted
+  // with a background, see `should_paint_background_` for more details.
+  views::InkDrop::UseInkDropForFloodFillRipple(views::InkDrop::Get(this),
+                                               /*highlight_on_hover=*/false,
+                                               /*highlight_on_focus=*/false);
+  views::InkDrop::Get(this)->SetCreateHighlightCallback(base::BindRepeating(
+      [](DeskButtonBase* host) {
+        auto highlight = std::make_unique<views::InkDropHighlight>(
+            gfx::SizeF(host->size()),
+            views::InkDrop::Get(host)->GetBaseColor());
+        highlight->set_visible_opacity(
+            AshColorProvider::Get()
+                ->GetRippleAttributes(host->background_color_)
+                .highlight_opacity);
+        return highlight;
+      },
+      this));
+  views::InkDrop::Get(this)->SetBaseColorCallback(base::BindRepeating(
+      [](DeskButtonBase* host) {
+        return AshColorProvider::Get()
+            ->GetRippleAttributes(host->background_color_)
+            .base_color;
+      },
+      this));
+
+  views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::ON);
   SetHasInkDropActionOnClick(true);
   SetFocusPainter(nullptr);
   SetFocusBehavior(views::View::FocusBehavior::ACCESSIBLE_ONLY);
 
-  const base::string16 tooltip_text =
+  const std::u16string tooltip_text =
       text.empty() ? l10n_util::GetStringUTF16(IDS_ASH_DESKS_NEW_DESK_BUTTON)
                    : text;
   SetAccessibleName(tooltip_text);
@@ -77,7 +108,7 @@ const char* DeskButtonBase::GetClassName() const {
 }
 
 void DeskButtonBase::OnPaintBackground(gfx::Canvas* canvas) {
-  if (highlight_on_hover_) {
+  if (should_paint_background_) {
     cc::PaintFlags flags;
     flags.setAntiAlias(true);
     flags.setStyle(cc::PaintFlags::kFill_Style);
@@ -86,31 +117,6 @@ void DeskButtonBase::OnPaintBackground(gfx::Canvas* canvas) {
                                                           : GetLocalBounds()),
                           corner_radius_, flags);
   }
-}
-
-std::unique_ptr<views::InkDrop> DeskButtonBase::CreateInkDrop() {
-  auto ink_drop = CreateDefaultFloodFillInkDropImpl();
-  // Do not show highlight on hover and focus. Since the button will be painted
-  // with a background, see |highlight_on_hover_| for more details.
-  ink_drop->SetShowHighlightOnHover(false);
-  ink_drop->SetShowHighlightOnFocus(false);
-  return std::move(ink_drop);
-}
-
-std::unique_ptr<views::InkDropHighlight>
-DeskButtonBase::CreateInkDropHighlight() const {
-  auto highlight = std::make_unique<views::InkDropHighlight>(
-      gfx::SizeF(size()), GetInkDropBaseColor());
-  highlight->set_visible_opacity(AshColorProvider::Get()
-                                     ->GetRippleAttributes(background_color_)
-                                     .highlight_opacity);
-  return highlight;
-}
-
-SkColor DeskButtonBase::GetInkDropBaseColor() const {
-  return AshColorProvider::Get()
-      ->GetRippleAttributes(background_color_)
-      .base_color;
 }
 
 void DeskButtonBase::OnThemeChanged() {
@@ -146,13 +152,19 @@ void DeskButtonBase::UpdateBorderState() {
   SchedulePaint();
 }
 
+void DeskButtonBase::SetShouldPaintBackground(bool should_paint_background) {
+  if (should_paint_background_ == should_paint_background)
+    return;
+
+  should_paint_background_ = should_paint_background;
+  SchedulePaint();
+}
+
 // -----------------------------------------------------------------------------
 // ZeroStateDefaultDeskButton:
 
 ZeroStateDefaultDeskButton::ZeroStateDefaultDeskButton(DesksBarView* bar_view)
-    : DeskButtonBase(DesksController::Get()->desks()[0]->name(),
-                     kCornerRadius,
-                     kCornerRadius),
+    : DeskButtonBase(DesksController::Get()->desks()[0]->name()),
       bar_view_(bar_view) {
   GetViewAccessibility().OverrideName(
       l10n_util::GetStringFUTF16(IDS_ASH_DESKS_DESK_ACCESSIBLE_NAME,
@@ -173,8 +185,7 @@ gfx::Size ZeroStateDefaultDeskButton::CalculatePreferredSize() const {
   auto* root_window =
       bar_view_->GetWidget()->GetNativeWindow()->GetRootWindow();
   const int preview_width = DeskMiniView::GetPreviewWidth(
-      root_window->bounds().size(),
-      DeskPreviewView::GetHeight(root_window, /*compact=*/false));
+      root_window->bounds().size(), DeskPreviewView::GetHeight(root_window));
   int label_width = 0, label_height = 0;
   gfx::Canvas::SizeStringInt(DesksController::Get()->desks()[0]->name(),
                              gfx::FontList(), &label_width, &label_height, 0,
@@ -186,6 +197,7 @@ gfx::Size ZeroStateDefaultDeskButton::CalculatePreferredSize() const {
 }
 
 void ZeroStateDefaultDeskButton::OnButtonPressed() {
+  bar_view_->set_should_name_nudge(true);
   bar_view_->UpdateNewMiniViews(/*initializing_bar_view=*/false,
                                 /*expanding_bar_view=*/true);
 }
@@ -200,9 +212,9 @@ void ZeroStateDefaultDeskButton::UpdateLabelText() {
 // -----------------------------------------------------------------------------
 // ZeroStateNewDeskButton:
 
-ZeroStateNewDeskButton::ZeroStateNewDeskButton()
-    : DeskButtonBase(base::string16(), kCornerRadius, kCornerRadius) {
-  highlight_on_hover_ = false;
+ZeroStateNewDeskButton::ZeroStateNewDeskButton(DesksBarView* bar_view)
+    : DeskButtonBase(std::u16string()), bar_view_(bar_view) {
+  should_paint_background_ = false;
 }
 
 const char* ZeroStateNewDeskButton::GetClassName() const {
@@ -219,18 +231,17 @@ gfx::Size ZeroStateNewDeskButton::CalculatePreferredSize() const {
 }
 
 void ZeroStateNewDeskButton::OnButtonPressed() {
+  bar_view_->set_should_name_nudge(true);
   DesksController::Get()->NewDesk(DesksCreationRemovalSource::kButton);
-  highlight_on_hover_ = false;
+  SetShouldPaintBackground(false);
 }
 
 void ZeroStateNewDeskButton::OnMouseEntered(const ui::MouseEvent& event) {
-  highlight_on_hover_ = true;
-  SchedulePaint();
+  SetShouldPaintBackground(true);
 }
 
 void ZeroStateNewDeskButton::OnMouseExited(const ui::MouseEvent& event) {
-  highlight_on_hover_ = false;
-  SchedulePaint();
+  SetShouldPaintBackground(false);
 }
 
 }  // namespace ash

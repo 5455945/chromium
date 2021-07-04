@@ -41,6 +41,7 @@ enum LoadStartType {
 enum SameDocumentNavigationSource {
   kSameDocumentNavigationDefault,
   kSameDocumentNavigationHistoryApi,
+  kSameDocumentNavigationAppHistoryRespondWith,
 };
 
 enum class SavePreviousDocumentResources {
@@ -58,6 +59,7 @@ enum SinglePageAppNavigationType {
   kSPANavTypeHistoryPushStateOrReplaceState = 0,
   kSPANavTypeSameDocumentBackwardOrForward = 1,
   kSPANavTypeOtherFragmentNavigation = 2,
+  kSPANavTypeAppHistoryRespondWith = 3,
   kSPANavTypeCount
 };
 
@@ -86,4 +88,4 @@ enum class CommitReason {
 
 }  // namespace blink
 
-#endif
+#endif  // THIRD_PARTY_BLINK_RENDERER_CORE_LOADER_FRAME_LOADER_TYPES_H_

@@ -14,8 +14,6 @@
 #include "base/files/file_util.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/weak_ptr.h"
-#include "base/stl_util.h"
-#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
 #include "chrome/browser/extensions/component_loader.h"
 #include "chrome/browser/extensions/extension_service.h"
@@ -26,7 +24,8 @@
 #include "chrome/browser/extensions/test_blocklist.h"
 #include "chrome/browser/extensions/updater/extension_updater.h"
 #include "chrome/browser/profiles/profile_key.h"
-#include "chrome/browser/sync/profile_sync_service_factory.h"
+#include "chrome/browser/sync/sync_service_factory.h"
+#include "chrome/browser/themes/test/theme_service_changed_waiter.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/common/chrome_constants.h"
@@ -54,6 +53,7 @@
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/extension_urls.h"
 #include "extensions/common/manifest_url_handlers.h"
+#include "extensions/common/mojom/manifest.mojom-shared.h"
 #include "extensions/common/permissions/permission_set.h"
 
 using extensions::AppSorting;
@@ -64,6 +64,7 @@ using extensions::ExtensionSyncData;
 using extensions::ExtensionSystem;
 using extensions::Manifest;
 using extensions::PermissionSet;
+using extensions::mojom::ManifestLocation;
 using syncer::SyncChange;
 using syncer::SyncChangeList;
 using testing::Mock;
@@ -123,7 +124,7 @@ class StatefulChangeProcessor : public syncer::FakeSyncChangeProcessor {
   // changes for us, but in addition we "apply" these changes by treating
   // the FakeSyncChangeProcessor's SyncDataList as a map keyed by extension
   // id.
-  base::Optional<syncer::ModelError> ProcessSyncChanges(
+  absl::optional<syncer::ModelError> ProcessSyncChanges(
       const base::Location& from_here,
       const syncer::SyncChangeList& change_list) override {
     syncer::FakeSyncChangeProcessor::ProcessSyncChanges(from_here, change_list);
@@ -153,7 +154,7 @@ class StatefulChangeProcessor : public syncer::FakeSyncChangeProcessor {
         ADD_FAILURE() << "Unexpected change type " << change.change_type();
       }
     }
-    return base::nullopt;
+    return absl::nullopt;
   }
 
   // We override this to help catch the error of trying to use a single
@@ -328,7 +329,7 @@ TEST_F(ExtensionServiceSyncTest, DisableExtensionFromSync) {
 
   // The user has enabled sync.
   syncer::SyncService* sync_service =
-      ProfileSyncServiceFactory::GetForProfile(profile());
+      SyncServiceFactory::GetForProfile(profile());
   sync_service->GetUserSettings()->SetFirstSetupComplete(kSetSourceFromTest);
 
   service()->Init();
@@ -364,7 +365,7 @@ TEST_F(ExtensionServiceSyncTest, ReenableDisabledExtensionFromSync) {
 
   // Enable sync.
   syncer::SyncService* sync_service =
-      ProfileSyncServiceFactory::GetForProfile(profile());
+      SyncServiceFactory::GetForProfile(profile());
   sync_service->GetUserSettings()->SetFirstSetupComplete(kSetSourceFromTest);
 
   service()->Init();
@@ -446,7 +447,7 @@ TEST_F(ExtensionServiceSyncTest,
 
   // Enable sync.
   syncer::SyncService* sync_service =
-      ProfileSyncServiceFactory::GetForProfile(profile());
+      SyncServiceFactory::GetForProfile(profile());
   sync_service->GetUserSettings()->SetFirstSetupComplete(kSetSourceFromTest);
 
   service()->Init();
@@ -512,7 +513,7 @@ TEST_F(ExtensionServiceSyncTest, IgnoreSyncChangesWhenLocalStateIsMoreRecent) {
 
   // The user has enabled sync.
   syncer::SyncService* sync_service =
-      ProfileSyncServiceFactory::GetForProfile(profile());
+      SyncServiceFactory::GetForProfile(profile());
   sync_service->GetUserSettings()->SetFirstSetupComplete(kSetSourceFromTest);
   // Make sure ExtensionSyncService is created, so it'll be notified of changes.
   extension_sync_service();
@@ -573,7 +574,7 @@ TEST_F(ExtensionServiceSyncTest, DontSelfNotify) {
   InitializeInstalledExtensionService(pref_path, source_install_dir);
 
   // The user has enabled sync.
-  ProfileSyncServiceFactory::GetForProfile(profile())
+  SyncServiceFactory::GetForProfile(profile())
       ->GetUserSettings()
       ->SetFirstSetupComplete(kSetSourceFromTest);
   // Make sure ExtensionSyncService is created, so it'll be notified of changes.
@@ -877,8 +878,8 @@ TEST_F(ExtensionServiceSyncTest, GetSyncExtensionDataUserSettings) {
 
 TEST_F(ExtensionServiceSyncTest, SyncForUninstalledExternalExtension) {
   InitializeEmptyExtensionService();
-  InstallCRX(data_dir().AppendASCII("good.crx"), Manifest::EXTERNAL_PREF,
-             INSTALL_NEW, Extension::NO_FLAGS);
+  InstallCRX(data_dir().AppendASCII("good.crx"),
+             ManifestLocation::kExternalPref, INSTALL_NEW, Extension::NO_FLAGS);
   const Extension* extension = registry()->GetInstalledExtension(good_crx);
   ASSERT_TRUE(extension);
 
@@ -1403,7 +1404,7 @@ TEST_F(ExtensionServiceSyncTest, ProcessSyncDataNotInstalled) {
       (info = service()->pending_extension_manager()->GetById(good_crx)));
   EXPECT_EQ(ext_specifics->update_url(), info->update_url().spec());
   EXPECT_TRUE(info->is_from_sync());
-  EXPECT_EQ(Manifest::INTERNAL, info->install_source());
+  EXPECT_EQ(ManifestLocation::kInternal, info->install_source());
   // TODO(akalin): Figure out a way to test |info.ShouldAllowInstall()|.
 }
 
@@ -1702,7 +1703,7 @@ TEST_F(ExtensionServiceSyncTest, DontSyncThemes) {
   InitializeEmptyExtensionService();
 
   // The user has enabled sync.
-  ProfileSyncServiceFactory::GetForProfile(profile())
+  SyncServiceFactory::GetForProfile(profile())
       ->GetUserSettings()
       ->SetFirstSetupComplete(kSetSourceFromTest);
   // Make sure ExtensionSyncService is created, so it'll be notified of changes.
@@ -1727,12 +1728,10 @@ TEST_F(ExtensionServiceSyncTest, DontSyncThemes) {
 
   // Installing a theme should not result in a sync change (themes are handled
   // separately by ThemeSyncableService).
+  test::ThemeServiceChangedWaiter waiter(
+      ThemeServiceFactory::GetForProfile(profile()));
   InstallCRX(data_dir().AppendASCII("theme.crx"), INSTALL_NEW);
-  content::WindowedNotificationObserver theme_change_observer(
-      chrome::NOTIFICATION_BROWSER_THEME_CHANGED,
-      content::Source<ThemeService>(
-          ThemeServiceFactory::GetForProfile(profile())));
-  theme_change_observer.Wait();
+  waiter.WaitForThemeChanged();
   EXPECT_TRUE(processor->changes().empty());
 }
 
@@ -1840,7 +1839,7 @@ class BlocklistedExtensionSyncServiceTest : public ExtensionServiceSyncTest {
 
     // Enable sync.
     syncer::SyncService* sync_service =
-        ProfileSyncServiceFactory::GetForProfile(profile());
+        SyncServiceFactory::GetForProfile(profile());
     sync_service->GetUserSettings()->SetFirstSetupComplete(kSetSourceFromTest);
 
     test_blocklist_.Attach(service()->blocklist_);

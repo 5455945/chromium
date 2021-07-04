@@ -10,11 +10,12 @@
 #include <utility>
 
 #include "base/memory/weak_ptr.h"
-#include "base/optional.h"
 #include "base/time/time.h"
 #include "chrome/browser/metrics/power/battery_level_provider.h"
+#include "chrome/browser/metrics/power/power_details_provider.h"
 #include "chrome/browser/metrics/usage_scenario/usage_scenario_data_store.h"
 #include "chrome/browser/performance_monitor/process_monitor.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 // Reports metrics related to power (battery discharge, cpu time, etc.) to
 // understand what impacts Chrome's power consumption over an interval of time.
@@ -37,6 +38,24 @@ class PowerMetricsReporter
     return battery_state_;
   }
 
+  // Ensures |callback| is called once the next battery state is available.
+  void OnNextSampleForTesting(base::OnceClosure callback) {
+    on_battery_sampled_for_testing_ = std::move(callback);
+  }
+  // Ensures |callback| is called once the first battery state is available.
+  // |callback| is called synchronously if the first battery state is already
+  // available.
+  void OnFirstSampleForTesting(base::OnceClosure callback);
+
+  static int64_t GetBucketForSampleForTesting(base::TimeDelta value);
+  static std::vector<const char*> GetSuffixesForTesting(
+      const UsageScenarioDataStore::IntervalData& interval_data);
+
+  void set_power_details_provider_for_testing(
+      std::unique_ptr<PowerDetailsProvider> provider) {
+    power_details_provider_ = std::move(provider);
+  }
+
  protected:
   // Any change to this enum should be reflected in the corresponding enums.xml
   // and ukm.xml
@@ -54,29 +73,54 @@ class PowerMetricsReporter
   // Report the histograms for the past interval, with |sampling_interval| the
   // expected sampling interval, and |interval_duration| the actual duration
   // since the beginning of the interval.
-  static void ReportHistograms(
+  static void ReportBatteryHistograms(
+      const UsageScenarioDataStore::IntervalData& interval_data,
       base::TimeDelta sampling_interval,
       base::TimeDelta interval_duration,
       BatteryDischargeMode discharge_mode,
-      base::Optional<int64_t> discharge_rate_during_interval);
+      absl::optional<int64_t> discharge_rate_during_interval,
+      const std::vector<const char*>& suffixes);
+
+  // Report CPU histograms based on data in |metrics| and suffixed based on
+  // scenarios inferred from |interval_data|.
+  static void ReportCPUHistograms(
+      const UsageScenarioDataStore::IntervalData& interval_data,
+      const performance_monitor::ProcessMonitor::Metrics& metrics,
+      const std::vector<const char*>& suffixes);
 
  private:
   // performance_monitor::ProcessMonitor::Observer:
   void OnAggregatedMetricsSampled(
       const performance_monitor::ProcessMonitor::Metrics& metrics) override;
 
+  void OnFirstBatteryStateSampled(
+      const BatteryLevelProvider::BatteryState& battery_state);
+  void OnBatteryStateAndMetricsSampled(
+      const performance_monitor::ProcessMonitor::Metrics& metrics,
+      base::TimeTicks scheduled_time,
+      const BatteryLevelProvider::BatteryState& battery_state);
+
   // Report the UKMs for the past interval.
-  void ReportUKMs(const performance_monitor::ProcessMonitor::Metrics& metrics,
+  void ReportUKMs(const UsageScenarioDataStore::IntervalData& interval_data,
+                  const performance_monitor::ProcessMonitor::Metrics& metrics,
                   base::TimeDelta interval_duration,
                   BatteryDischargeMode discharge_mode,
-                  base::Optional<int64_t> discharge_rate_during_interval) const;
+                  absl::optional<int64_t> discharge_rate_during_interval) const;
+
+  void ReportUKMsAndHistograms(
+      const performance_monitor::ProcessMonitor::Metrics& metrics,
+      base::TimeDelta interval_duration,
+      BatteryDischargeMode discharge_mode,
+      absl::optional<int64_t> discharge_rate_during_interval) const;
 
   // Computes and returns the battery discharge mode and rate during the
   // interval, and reset |battery_state_| to the current state. If the discharge
   // rate isn't valid, the returned value is nullopt and the reason is indicated
   // per BatteryDischargeMode.
-  std::pair<BatteryDischargeMode, base::Optional<int64_t>>
-  GetBatteryDischargeRateDuringInterval(base::TimeDelta interval_duration);
+  std::pair<BatteryDischargeMode, absl::optional<int64_t>>
+  GetBatteryDischargeRateDuringInterval(
+      const BatteryLevelProvider::BatteryState& new_battery_state,
+      base::TimeDelta interval_duration);
 
   // The data store used to get the usage scenario data, it needs to outlive
   // this class.
@@ -84,16 +128,21 @@ class PowerMetricsReporter
 
   std::unique_ptr<BatteryLevelProvider> battery_level_provider_;
 
+  std::unique_ptr<PowerDetailsProvider> power_details_provider_;
+
   // Time that should elapse between calls to OnAggregatedMetricsSampled.
   base::TimeDelta desired_reporting_interval_;
 
-  BatteryLevelProvider::BatteryState battery_state_{0, 0, base::nullopt, false,
+  BatteryLevelProvider::BatteryState battery_state_{0, 0, absl::nullopt, false,
                                                     base::TimeTicks::Now()};
 
-  // The first interval will start when this class gets created.
-  base::TimeTicks interval_begin_ = base::TimeTicks::Now();
+  base::TimeTicks interval_begin_;
+
+  base::OnceClosure on_battery_sampled_for_testing_;
 
   SEQUENCE_CHECKER(sequence_checker_);
+
+  base::WeakPtrFactory<PowerMetricsReporter> weak_factory_{this};
 };
 
 #endif  // CHROME_BROWSER_METRICS_POWER_POWER_METRICS_REPORTER_H_

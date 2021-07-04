@@ -8,7 +8,7 @@
 #include <memory>
 
 #include "base/observer_list.h"
-#include "base/scoped_observer.h"
+#include "base/scoped_multi_source_observation.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
 #include "components/content_settings/core/common/content_settings.h"
@@ -64,11 +64,11 @@ class CookieControlsService : public KeyedService,
 
   Profile* profile_;
   std::unique_ptr<policy::PolicyChangeRegistrar> policy_registrar_;
-  scoped_refptr<content_settings::CookieSettings> incongito_cookie_settings_;
+  scoped_refptr<content_settings::CookieSettings> incognito_cookie_settings_;
   scoped_refptr<content_settings::CookieSettings> regular_cookie_settings_;
-  ScopedObserver<content_settings::CookieSettings,
-                 content_settings::CookieSettings::Observer>
-      cookie_observer_{this};
+  base::ScopedMultiSourceObservation<content_settings::CookieSettings,
+                                     content_settings::CookieSettings::Observer>
+      cookie_observations_{this};
 
   base::ObserverList<Observer> observers_;
 

@@ -26,10 +26,8 @@ class CastContentWindowAndroid : public CastContentWindow {
   ~CastContentWindowAndroid() override;
 
   // CastContentWindow implementation:
-  void CreateWindowForWebContents(
-      CastWebContents* cast_web_contents,
-      mojom::ZOrder z_order,
-      VisibilityPriority visibility_priority) override;
+  void CreateWindow(mojom::ZOrder z_order,
+                    VisibilityPriority visibility_priority) override;
   void GrantScreenAccess() override;
   void RevokeScreenAccess() override;
   void EnableTouchInput(bool enabled) override;
@@ -50,12 +48,8 @@ class CastContentWindowAndroid : public CastContentWindow {
   void OnVisibilityChange(JNIEnv* env,
                           const base::android::JavaParamRef<jobject>& jcaller,
                           int visibility_type);
-  base::android::ScopedJavaLocalRef<jstring> GetId(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jcaller);
 
  private:
-  const std::string activity_id_;
   bool web_contents_attached_;
   base::android::ScopedJavaGlobalRef<jobject> java_window_;
 

@@ -11,14 +11,17 @@
 #import "ios/chrome/browser/ui/incognito_reauth/incognito_reauth_consumer.h"
 #import "ios/chrome/browser/ui/tab_switcher/tab_grid/grid/grid_consumer.h"
 #import "ios/chrome/browser/ui/tab_switcher/tab_grid/grid/grid_theme.h"
+#import "ios/chrome/browser/ui/tab_switcher/tab_grid/tab_grid_paging.h"
 #import "ios/chrome/browser/ui/thumb_strip/thumb_strip_supporting.h"
 
-@protocol IncognitoReauthCommands;
 @protocol GridDragDropHandler;
 @protocol GridEmptyView;
 @protocol GridImageDataSource;
 @class GridTransitionLayout;
 @class GridViewController;
+@protocol IncognitoReauthCommands;
+@protocol ThumbStripCommands;
+@protocol GridContextMenuProvider;
 
 // Protocol used to relay relevant user interactions from a grid UI.
 @protocol GridViewControllerDelegate
@@ -73,8 +76,12 @@
 @property(nonatomic, readonly, getter=isGridEmpty) BOOL gridEmpty;
 // The visual look of the grid.
 @property(nonatomic, assign) GridTheme theme;
+// The current mode (normal, selection) for the grid.
+@property(nonatomic, assign) TabGridMode mode;
 // Handler for reauth commands.
-@property(nonatomic, weak) id<IncognitoReauthCommands> handler;
+@property(nonatomic, weak) id<IncognitoReauthCommands> reauthHandler;
+// Handler for thumbstrip commands.
+@property(nonatomic, weak) id<ThumbStripCommands> thumbStripHandler;
 // Delegate is informed of user interactions in the grid UI.
 @property(nonatomic, weak) id<GridViewControllerDelegate> delegate;
 // Handles drag and drop interactions that involved the model layer.
@@ -92,6 +99,12 @@
 // YES when the current contents are hidden from the user before a successful
 // biometric authentication.
 @property(nonatomic, assign) BOOL contentNeedsAuthentication;
+// Provider of context menu configurations for the tabs in the grid.
+@property(nonatomic, weak) id<GridContextMenuProvider> menuProvider
+    API_AVAILABLE(ios(13.0));
+
+// The item IDs of selected items for editing.
+@property(nonatomic, readonly) NSArray<NSString*>* selectedItemIDsForEditing;
 
 // Returns the layout of the grid for use in an animated transition.
 - (GridTransitionLayout*)transitionLayout;
@@ -102,6 +115,10 @@
 
 // Notifies the grid that it is about to be dismissed.
 - (void)prepareForDismissal;
+
+// Selects all items in the grid for editing. No-op if |mode| is not
+// TabGridModeSelection.
+- (void)selectAllItemsForEditing;
 
 @end
 

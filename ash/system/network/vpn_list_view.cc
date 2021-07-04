@@ -27,6 +27,7 @@
 #include "ash/system/tray/tri_view.h"
 #include "ash/system/tray/view_click_listener.h"
 #include "ash/system/unified/unified_system_tray_view.h"
+#include "base/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chromeos/network/network_connect.h"
 #include "chromeos/services/network_config/public/cpp/cros_network_config_util.h"
@@ -276,7 +277,7 @@ void VPNListNetworkEntry::UpdateFromNetworkState(
 
   gfx::ImageSkia image =
       network_icon::GetImageForVPN(vpn, network_icon::ICON_TYPE_LIST);
-  base::string16 label = network_icon::GetLabelForNetworkList(vpn);
+  std::u16string label = network_icon::GetLabelForNetworkList(vpn);
   AddIconAndLabel(image, label);
   if (chromeos::network_config::StateIsConnected(vpn->connection_state)) {
     owner_->SetupConnectedScrollListItem(this);

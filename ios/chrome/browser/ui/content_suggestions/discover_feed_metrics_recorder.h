@@ -8,6 +8,7 @@
 #import <UIKit/UIKit.h>
 
 // Records different metrics for the NTP's Discover feed.
+// TODO(crbug.com/1200303): Move this file to */ui/ntp.
 @interface DiscoverFeedMetricsRecorder : NSObject
 
 // Record metrics for when the user has scrolled |scrollDistance| in the Feed.
@@ -16,6 +17,10 @@
 // Record metrics for when the user has reached the bottom of their current
 // feed.
 - (void)recordInfiniteFeedTriggered;
+
+// Record metrics for when the user changes the device orientation with the feed
+// visible.
+- (void)recordDeviceOrientationChanged:(UIDeviceOrientation)orientation;
 
 // Record metrics for when the user selects the 'Learn More' item in the feed
 // header menu.
@@ -42,7 +47,7 @@
 // Records metrics for when a user opens an article in an incognito tab.
 - (void)recordOpenURLInIncognitoTab;
 
-// Records metrics for when a user adds an article to Read Later.
+// Records metrics for when a user adds an article to the Reading List.
 - (void)recordAddURLToReadLater;
 
 // Records metrics for when a user opens the Send Feedback form.

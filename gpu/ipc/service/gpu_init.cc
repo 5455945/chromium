@@ -8,6 +8,7 @@
 
 #include "base/command_line.h"
 #include "base/logging.h"
+#include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/pattern.h"
 #include "base/strings/string_number_conversions.h"
@@ -99,6 +100,16 @@ void InitializePlatformOverlaySettings(GPUInfo* gpu_info,
   if (gpu_feature_info.IsWorkaroundEnabled(gpu::FORCE_NV12_OVERLAY_SUPPORT)) {
     gl::DirectCompositionSurfaceWin::ForceNV12OverlaySupport();
   }
+  if (gpu_feature_info.IsWorkaroundEnabled(
+          gpu::FORCE_RGB10A2_OVERLAY_SUPPORT_FLAGS)) {
+    gl::DirectCompositionSurfaceWin::ForceRgb10a2OverlaySupport();
+  }
+  if (gpu_feature_info.IsWorkaroundEnabled(
+          gpu::CHECK_YCBCR_STUDIO_G22_LEFT_P709_FOR_NV12_SUPPORT)) {
+    gl::DirectCompositionSurfaceWin::
+        SetCheckYCbCrStudioG22LeftP709ForNv12Support();
+  }
+
   DCHECK(gpu_info);
   CollectHardwareOverlayInfo(&gpu_info->overlay_info);
 #elif defined(OS_ANDROID)
@@ -320,6 +331,10 @@ bool GpuInit::InitializeAndStartSandbox(base::CommandLine* command_line,
     params.single_process = false;
     params.enable_native_gpu_memory_buffers =
         gpu_preferences.enable_native_gpu_memory_buffers;
+
+    // Page flip testing will only happen in ash-chrome, not in lacros-chrome.
+    // Therefore, we only allow or disallow sync and real buffer page flip
+    // testing for ash-chrome.
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #if BUILDFLAG(USE_CHROMEOS_MEDIA_ACCELERATION)
     params.allow_sync_and_real_buffer_page_flip_testing =
@@ -426,7 +441,7 @@ bool GpuInit::InitializeAndStartSandbox(base::CommandLine* command_line,
     LOG_IF(ERROR, !gpu_info_.passthrough_cmd_decoder)
 #endif
         << "Passthrough is not supported, GL is "
-        << gl::GetGLImplementationName(gl::GetGLImplementation());
+        << gl::GetGLImplementationGLName(gl::GetGLImplementationParts());
   } else {
     gpu_info_.passthrough_cmd_decoder = false;
   }
@@ -576,13 +591,18 @@ bool GpuInit::InitializeAndStartSandbox(base::CommandLine* command_line,
   // In SwiftShader case, the implementation is actually EGLGLES2.
   if (!gl_use_swiftshader_ && command_line->HasSwitch(switches::kUseGL)) {
     std::string use_gl = command_line->GetSwitchValueASCII(switches::kUseGL);
+    std::string use_angle =
+        command_line->GetSwitchValueASCII(switches::kUseANGLE);
     if (use_gl == gl::kGLImplementationSwiftShaderName ||
-        use_gl == gl::kGLImplementationSwiftShaderForWebGLName) {
+        use_gl == gl::kGLImplementationSwiftShaderForWebGLName ||
+        (use_gl == gl::kGLImplementationANGLEName &&
+         (use_angle == gl::kANGLEImplementationSwiftShaderName ||
+          use_angle == gl::kANGLEImplementationSwiftShaderForWebGLName))) {
       gl_use_swiftshader_ = true;
     }
   }
   if (gl_use_swiftshader_ ||
-      gl::GetGLImplementation() == gl::GetSoftwareGLImplementation()) {
+      gl::IsSoftwareGLImplementation(gl::GetGLImplementationParts())) {
     gpu_info_.software_rendering = true;
     watchdog_thread_ = nullptr;
     watchdog_init.SetGpuWatchdogPtr(nullptr);
@@ -661,6 +681,10 @@ void GpuInit::InitializeInProcess(base::CommandLine* command_line,
   if (features::IsUsingOzonePlatform()) {
     ui::OzonePlatform::InitParams params;
     params.single_process = true;
+
+    // Page flip testing will only happen in ash-chrome, not in lacros-chrome.
+    // Therefore, we only allow or disallow sync and real buffer page flip
+    // testing for ash-chrome.
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #if BUILDFLAG(USE_CHROMEOS_MEDIA_ACCELERATION)
     params.allow_sync_and_real_buffer_page_flip_testing =
@@ -692,6 +716,26 @@ void GpuInit::InitializeInProcess(base::CommandLine* command_line,
         gpu_feature_info_.enabled_gpu_driver_bug_workarounds);
   }
 #endif  // !BUILDFLAG(IS_CHROMECAST)
+
+  // On MacOS, the default texture target for native GpuMemoryBuffers is
+  // GL_TEXTURE_RECTANGLE_ARB. This is due to CGL's requirements for creating
+  // a GL surface. However, when ANGLE is used on top of SwiftShader or Metal,
+  // it's necessary to use GL_TEXTURE_2D instead.
+  // TODO(crbug.com/1056312): The proper behavior is to check the config
+  // parameter set by the EGL_ANGLE_iosurface_client_buffer extension
+#if defined(OS_MAC)
+  if (command_line->HasSwitch(switches::kUseGL)) {
+    std::string use_gl = command_line->GetSwitchValueASCII(switches::kUseGL);
+    std::string use_angle =
+        command_line->GetSwitchValueASCII(switches::kUseANGLE);
+    if (use_gl == gl::kGLImplementationANGLEName &&
+        (use_angle == gl::kANGLEImplementationSwiftShaderName ||
+         use_angle == gl::kANGLEImplementationSwiftShaderForWebGLName ||
+         use_angle == gl::kANGLEImplementationMetalName)) {
+      SetMacOSSpecificTextureTarget(GL_TEXTURE_2D);
+    }
+  }
+#endif  // defined(OS_MAC)
 
   gl_use_swiftshader_ = EnableSwiftShaderIfNeeded(
       command_line, gpu_feature_info_,
@@ -815,13 +859,8 @@ bool GpuInit::InitializeVulkan() {
       gpu_preferences_.use_vulkan == VulkanImplementationName::kForcedNative;
   bool use_swiftshader = gl_use_swiftshader_ || vulkan_use_swiftshader;
 
-  // If |enforce_vulkan_protected_memory| is true, then we expect
-  // |enable_vulkan_protected_memory| to be true.
-  DCHECK(!gpu_preferences_.enforce_vulkan_protected_memory ||
-         gpu_preferences_.enable_vulkan_protected_memory);
   vulkan_implementation_ = CreateVulkanImplementation(
-      vulkan_use_swiftshader, gpu_preferences_.enable_vulkan_protected_memory,
-      gpu_preferences_.enforce_vulkan_protected_memory);
+      vulkan_use_swiftshader, gpu_preferences_.enable_vulkan_protected_memory);
   if (!vulkan_implementation_ ||
       !vulkan_implementation_->InitializeVulkanInstance(
           !gpu_preferences_.disable_vulkan_surface)) {
@@ -847,9 +886,10 @@ bool GpuInit::InitializeVulkan() {
   if (!vulkan_implementation_)
     return false;
 
-  auto disable_patterns = base::GetFieldTrialParamValueByFeature(
-      features::kVulkan, "disable_by_gl_renderer");
-  if (MatchGLRenderer(gpu_info_, disable_patterns))
+  const base::FeatureParam<std::string> disable_patterns(
+      &features::kVulkan, "disable_by_gl_renderer",
+      "*Mali-G?? M*" /* https://crbug.com/1183702 */);
+  if (MatchGLRenderer(gpu_info_, disable_patterns.Get()))
     return false;
 
   auto enable_patterns = base::GetFieldTrialParamValueByFeature(

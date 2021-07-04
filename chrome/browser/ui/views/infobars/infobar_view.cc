@@ -22,7 +22,9 @@
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/class_property.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/theme_provider.h"
+#include "ui/compositor/layer.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/image/image.h"
@@ -39,7 +41,6 @@
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/link.h"
 #include "ui/views/controls/menu/menu_runner.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/non_client_view.h"
@@ -220,9 +221,9 @@ void InfoBarView::OnPaint(gfx::Canvas* canvas) {
   if (GetDrawSeparator()) {
     const SkColor color =
         GetColor(ThemeProperties::COLOR_TOOLBAR_CONTENT_AREA_SEPARATOR);
-    const gfx::Rect local_bounds = GetLocalBounds();
-    canvas->DrawSharpLine({local_bounds.x(), local_bounds.y()},
-                          {local_bounds.right(), local_bounds.y()}, color);
+    const gfx::RectF local_bounds(GetLocalBounds());
+    canvas->DrawSharpLine(local_bounds.origin(), local_bounds.top_right(),
+                          color);
   }
 }
 
@@ -262,7 +263,7 @@ void InfoBarView::OnWillChangeFocus(View* focused_before, View* focused_now) {
   }
 }
 
-views::Label* InfoBarView::CreateLabel(const base::string16& text) const {
+views::Label* InfoBarView::CreateLabel(const std::u16string& text) const {
   views::Label* label =
       new views::Label(text, views::style::CONTEXT_DIALOG_BODY_TEXT);
   SetLabelDetails(label);
@@ -271,7 +272,7 @@ views::Label* InfoBarView::CreateLabel(const base::string16& text) const {
   return label;
 }
 
-views::Link* InfoBarView::CreateLink(const base::string16& text) {
+views::Link* InfoBarView::CreateLink(const std::u16string& text) {
   views::Link* link =
       new views::Link(text, views::style::CONTEXT_DIALOG_BODY_TEXT);
   SetLabelDetails(link);

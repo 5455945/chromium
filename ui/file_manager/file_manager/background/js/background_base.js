@@ -2,20 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// clang-format off
-// #import {BackgroundBase, LaunchHandler} from '../../../externs/background/background_base.m.js';
-// #import {VolumeManager} from '../../../externs/volume_manager.m.js';
-// #import * as wrappedVolumeManagerFactory from './volume_manager_factory.m.js'; const {volumeManagerFactory} = wrappedVolumeManagerFactory;
-// #import * as wrappedUtil from '../../common/js/util.m.js'; const {util} = wrappedUtil;
-// #import {assert} from 'chrome://resources/js/assert.m.js';
-// #import {loadTimeData} from 'chrome://resources/js/load_time_data.m.js';
-// clang-format on
+import {assert} from 'chrome://resources/js/assert.m.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.m.js';
+
+import {util} from '../../common/js/util.js';
+import {BackgroundBase, LaunchHandler} from '../../externs/background/background_base.js';
+import {VolumeManager} from '../../externs/volume_manager.js';
+
+import {volumeManagerFactory} from './volume_manager_factory.js';
 
 /**
  * Root class of the background page.
  * @implements {BackgroundBase}
  */
-/* #export */ class BackgroundBaseImpl {
+export class BackgroundBaseImpl {
   constructor() {
     /**
      * Map of all currently open file dialogs. The key is an app ID.
@@ -24,30 +24,16 @@
     this.dialogs = {};
 
     // Initializes the strings. This needs for the volume manager.
-    if (!window.isSWA) {
-      this.initializationPromise_ = new Promise((fulfill, reject) => {
-        chrome.fileManagerPrivate.getStrings(stringData => {
-          if (chrome.runtime.lastError) {
-            console.error(chrome.runtime.lastError.message);
-            return;
-          }
-          loadTimeData.data = assert(stringData);
-          fulfill(stringData);
-        });
+    this.initializationPromise_ = new Promise((fulfill, reject) => {
+      chrome.fileManagerPrivate.getStrings(stringData => {
+        if (chrome.runtime.lastError) {
+          console.error(chrome.runtime.lastError.message);
+          return;
+        }
+        loadTimeData.data = assert(stringData);
+        fulfill(stringData);
       });
-    } else {
-      this.initializationPromise_ = new Promise((fulfill, reject) => {
-        const script = document.createElement('script');
-
-        script.onload = () => {
-          // window.loadTimeData.data_ = null; // Gambiarra!
-          fulfill(window.loadTimeData.data_);
-        };
-
-        document.head.append(script);
-        script.src = 'strings.js';
-      });
-    }
+    });
 
     /** @private {?LaunchHandler} */
     this.launchHandler_ = null;

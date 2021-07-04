@@ -143,9 +143,10 @@ public class OverviewAppMenuTest {
                 int itemId = item.getItemId();
                 assertTrue(itemId == R.id.new_tab_menu_id
                         || itemId == R.id.new_incognito_tab_menu_id
-                        || itemId == R.id.all_bookmarks_menu_id
-                        || itemId == R.id.recent_tabs_menu_id || itemId == R.id.open_history_menu_id
-                        || itemId == R.id.downloads_menu_id || itemId == R.id.close_all_tabs_menu_id
+                        || itemId == R.id.divider_line_id || itemId == R.id.open_history_menu_id
+                        || itemId == R.id.downloads_menu_id || itemId == R.id.all_bookmarks_menu_id
+                        || itemId == R.id.recent_tabs_menu_id
+                        || itemId == R.id.close_all_tabs_menu_id
                         || itemId == R.id.close_all_incognito_tabs_menu_id
                         || itemId == R.id.menu_group_tabs || itemId == R.id.track_prices_row_menu_id
                         || itemId == R.id.preferences_id);
@@ -158,7 +159,7 @@ public class OverviewAppMenuTest {
                 checkedMenuItems++;
             }
         }
-        assertThat(checkedMenuItems, equalTo(11));
+        assertThat(checkedMenuItems, equalTo(13));
     }
 
     @Test
@@ -181,9 +182,10 @@ public class OverviewAppMenuTest {
                 int itemId = item.getItemId();
                 assertTrue(itemId == R.id.new_tab_menu_id
                         || itemId == R.id.new_incognito_tab_menu_id
-                        || itemId == R.id.all_bookmarks_menu_id
-                        || itemId == R.id.recent_tabs_menu_id || itemId == R.id.open_history_menu_id
-                        || itemId == R.id.downloads_menu_id || itemId == R.id.close_all_tabs_menu_id
+                        || itemId == R.id.divider_line_id || itemId == R.id.open_history_menu_id
+                        || itemId == R.id.downloads_menu_id || itemId == R.id.all_bookmarks_menu_id
+                        || itemId == R.id.recent_tabs_menu_id
+                        || itemId == R.id.close_all_tabs_menu_id
                         || itemId == R.id.close_all_incognito_tabs_menu_id
                         || itemId == R.id.menu_group_tabs || itemId == R.id.track_prices_row_menu_id
                         || itemId == R.id.preferences_id);
@@ -196,7 +198,7 @@ public class OverviewAppMenuTest {
                 checkedMenuItems++;
             }
         }
-        assertThat(checkedMenuItems, equalTo(11));
+        assertThat(checkedMenuItems, equalTo(13));
     }
 
     @Test
@@ -302,7 +304,7 @@ public class OverviewAppMenuTest {
     @Test
     @SmallTest
     @Feature({"Browser", "Main"})
-    @Features.EnableFeatures({ChromeFeatureList.TAB_GRID_LAYOUT_ANDROID + "<Study"})
+    @Features.EnableFeatures({ChromeFeatureList.COMMERCE_PRICE_TRACKING + "<Study"})
     @Features.DisableFeatures({ChromeFeatureList.START_SURFACE_ANDROID})
     @CommandLineFlags.Add({"force-fieldtrials=Study/Group",
             "force-fieldtrial-params=Study.Group:enable_price_tracking/false"})
@@ -328,7 +330,7 @@ public class OverviewAppMenuTest {
     @Test
     @SmallTest
     @Feature({"Browser", "Main"})
-    @Features.EnableFeatures({ChromeFeatureList.TAB_GRID_LAYOUT_ANDROID + "<Study"})
+    @Features.EnableFeatures({ChromeFeatureList.COMMERCE_PRICE_TRACKING + "<Study"})
     @Features.DisableFeatures({ChromeFeatureList.START_SURFACE_ANDROID})
     @CommandLineFlags.Add({"force-fieldtrials=Study/Group",
             "force-fieldtrial-params=Study.Group:enable_price_tracking/true"})
@@ -345,11 +347,10 @@ public class OverviewAppMenuTest {
             MenuItem item = menu.getItem(i);
             if (item.getItemId() == R.id.track_prices_row_menu_id) {
                 int itemGroupId = item.getGroupId();
+                // When StartSurface is disabled, we just care about OVERVIEW_MODE_MENU and the
+                // whole START_SURFACE_MODE_MENU group is invisible.
                 if (itemGroupId == R.id.OVERVIEW_MODE_MENU) {
                     assertTrue(item.isVisible());
-                }
-                if (itemGroupId == R.id.START_SURFACE_MODE_MENU) {
-                    assertFalse(item.isVisible());
                 }
                 checkedMenuItems++;
             }
@@ -360,7 +361,7 @@ public class OverviewAppMenuTest {
     @Test
     @SmallTest
     @Feature({"Browser", "Main"})
-    @Features.EnableFeatures({ChromeFeatureList.TAB_GRID_LAYOUT_ANDROID + "<Study"})
+    @Features.EnableFeatures({ChromeFeatureList.COMMERCE_PRICE_TRACKING + "<Study"})
     @Features.DisableFeatures({ChromeFeatureList.START_SURFACE_ANDROID})
     @CommandLineFlags.Add({"force-fieldtrials=Study/Group",
             "force-fieldtrial-params=Study.Group:enable_price_tracking/true"})
@@ -387,7 +388,7 @@ public class OverviewAppMenuTest {
     @Test
     @SmallTest
     @Feature({"Browser", "Main"})
-    @Features.EnableFeatures({ChromeFeatureList.TAB_GRID_LAYOUT_ANDROID + "<Study"})
+    @Features.EnableFeatures({ChromeFeatureList.COMMERCE_PRICE_TRACKING + "<Study"})
     @Features.DisableFeatures({ChromeFeatureList.START_SURFACE_ANDROID})
     @CommandLineFlags.Add({"force-fieldtrials=Study/Group",
             "force-fieldtrial-params=Study.Group:enable_price_tracking/true"})
@@ -414,7 +415,7 @@ public class OverviewAppMenuTest {
     @SmallTest
     @Feature({"Browser", "Main"})
     @Features.EnableFeatures({ChromeFeatureList.START_SURFACE_ANDROID,
-            ChromeFeatureList.TAB_GRID_LAYOUT_ANDROID + "<Study"})
+            ChromeFeatureList.COMMERCE_PRICE_TRACKING + "<Study"})
     @CommandLineFlags.Add({"force-fieldtrials=Study/Group",
             "force-fieldtrial-params=Study.Group:enable_price_tracking/false"})
     public void
@@ -440,10 +441,9 @@ public class OverviewAppMenuTest {
     @SmallTest
     @Feature({"Browser", "Main"})
     @Features.EnableFeatures({ChromeFeatureList.START_SURFACE_ANDROID,
-            ChromeFeatureList.TAB_GRID_LAYOUT_ANDROID + "<Study"})
+            ChromeFeatureList.COMMERCE_PRICE_TRACKING + "<Study"})
     @CommandLineFlags.Add({"force-fieldtrials=Study/Group",
             "force-fieldtrial-params=Study.Group:enable_price_tracking/true"})
-    // TODO(crbug.com/1152925): Re-add the test when the bug is fixed.
     public void
     testTrackPriceOnTabsIsEnabledWithStartSurface() throws Exception {
         TestThreadUtils.runOnUiThreadBlocking(() -> {
@@ -456,7 +456,12 @@ public class OverviewAppMenuTest {
         for (int i = 0; i < menu.size(); ++i) {
             MenuItem item = menu.getItem(i);
             if (item.getItemId() == R.id.track_prices_row_menu_id) {
-                assertFalse(item.isVisible());
+                int itemGroupId = item.getGroupId();
+                // When StartSurface is enabled, we just care about START_SURFACE_MODE_MENU and the
+                // whole OVERVIEW_MODE_MENU group is invisible.
+                if (itemGroupId == R.id.START_SURFACE_MODE_MENU) {
+                    assertTrue(item.isVisible());
+                }
                 checkedMenuItems++;
             }
         }

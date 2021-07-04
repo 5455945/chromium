@@ -4,6 +4,7 @@
 
 #include "ash/utility/layer_util.h"
 
+#include "base/bind.h"
 #include "components/viz/common/frame_sinks/copy_output_request.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "third_party/khronos/GLES2/gl2.h"
@@ -19,16 +20,14 @@ void CopyCopyOutputResultToLayer(
   DCHECK(!copy_result->IsEmpty());
   DCHECK_EQ(copy_result->format(), viz::CopyOutputResult::Format::RGBA_TEXTURE);
 
-  const gfx::Size layer_size = target_layer->size();
   viz::TransferableResource transferable_resource =
       viz::TransferableResource::MakeGL(
           copy_result->GetTextureResult()->mailbox, GL_LINEAR, GL_TEXTURE_2D,
-          copy_result->GetTextureResult()->sync_token, layer_size,
+          copy_result->GetTextureResult()->sync_token, copy_result->size(),
           /*is_overlay_candidate=*/false);
-  std::unique_ptr<viz::SingleReleaseCallback> release_callback =
-      copy_result->TakeTextureOwnership();
+  viz::ReleaseCallback release_callback = copy_result->TakeTextureOwnership();
   target_layer->SetTransferableResource(
-      transferable_resource, std::move(release_callback), layer_size);
+      transferable_resource, std::move(release_callback), target_layer->size());
 }
 
 void CopyToNewLayerOnCopyRequestFinished(
@@ -36,6 +35,8 @@ void CopyToNewLayerOnCopyRequestFinished(
     const gfx::Size& layer_size,
     std::unique_ptr<viz::CopyOutputResult> copy_result) {
   if (!copy_result || copy_result->IsEmpty()) {
+    if (!layer_copy_callback.MaybeValid())
+      return;
     std::move(layer_copy_callback).Run(nullptr);
     return;
   }
@@ -67,7 +68,7 @@ void CopyToLayerOnCopyRequestFinished(
 std::unique_ptr<ui::Layer> CreateLayerFromCopyOutputResult(
     std::unique_ptr<viz::CopyOutputResult> copy_result,
     const gfx::Size& layer_size) {
-  auto copy_layer = std::make_unique<ui::Layer>();
+  auto copy_layer = std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
   copy_layer->SetBounds(gfx::Rect(layer_size));
   CopyCopyOutputResultToLayer(std::move(copy_result), copy_layer.get());
   return copy_layer;

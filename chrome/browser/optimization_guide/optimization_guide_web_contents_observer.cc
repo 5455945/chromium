@@ -4,24 +4,27 @@
 
 #include "chrome/browser/optimization_guide/optimization_guide_web_contents_observer.h"
 
+#include "chrome/browser/optimization_guide/optimization_guide_hints_manager.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
-#include "chrome/browser/optimization_guide/optimization_guide_top_host_provider.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/optimization_guide/core/hints_fetcher.h"
 #include "components/optimization_guide/core/hints_processing_util.h"
 #include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/proto/hints.pb.h"
-#include "components/page_load_metrics/common/page_load_metrics.mojom.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/web_contents.h"
 
 namespace {
 
 bool IsValidOptimizationGuideNavigation(
     content::NavigationHandle* navigation_handle) {
-  return navigation_handle->IsInMainFrame() &&
+  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
+  // frames. This caller was converted automatically to the primary main frame
+  // to preserve its semantics. Follow up to confirm correctness.
+  return navigation_handle->IsInPrimaryMainFrame() &&
          navigation_handle->GetURL().SchemeIsHTTPOrHTTPS();
 }
 
@@ -62,26 +65,23 @@ OptimizationGuideNavigationData* OptimizationGuideWebContentsObserver::
 void OptimizationGuideWebContentsObserver::DidStartNavigation(
     content::NavigationHandle* navigation_handle) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  // Clear any leftover hint requests from a previous navigation.
+  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
+  // frames. This caller was converted automatically to the primary main frame
+  // to preserve its semantics. Follow up to confirm correctness.
+  if (navigation_handle->IsInPrimaryMainFrame()) {
+    ClearHintsToFetchBasedOnPredictions(navigation_handle);
+  }
+
   if (!IsValidOptimizationGuideNavigation(navigation_handle))
     return;
-
-  content::WebContents* web_contents = navigation_handle->GetWebContents();
-  bool is_same_origin =
-      web_contents &&
-      web_contents->GetLastCommittedURL().SchemeIsHTTPOrHTTPS() &&
-      url::IsSameOriginWith(navigation_handle->GetURL(),
-                            web_contents->GetLastCommittedURL());
-  OptimizationGuideTopHostProvider::MaybeUpdateTopHostBlocklist(
-      navigation_handle);
 
   if (!optimization_guide_keyed_service_)
     return;
 
   optimization_guide_keyed_service_->OnNavigationStartOrRedirect(
       navigation_handle);
-  OptimizationGuideNavigationData* nav_data =
-      GetOrCreateOptimizationGuideNavigationData(navigation_handle);
-  nav_data->set_is_same_origin_navigation(is_same_origin);
 }
 
 void OptimizationGuideWebContentsObserver::DidRedirectNavigation(
@@ -98,12 +98,27 @@ void OptimizationGuideWebContentsObserver::DidRedirectNavigation(
       navigation_handle);
 }
 
+void OptimizationGuideWebContentsObserver::ClearHintsToFetchBasedOnPredictions(
+    content::NavigationHandle* navigation_handle) {
+  hints_target_urls_.clear();
+  sent_batched_hints_request_ = false;
+}
+
 void OptimizationGuideWebContentsObserver::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  if (!IsValidOptimizationGuideNavigation(navigation_handle))
+  // Clear any leftover hint requests from a previous navigation.
+  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
+  // frames. This caller was converted automatically to the primary main frame
+  // to preserve its semantics. Follow up to confirm correctness.
+  if (navigation_handle->IsInPrimaryMainFrame()) {
+    ClearHintsToFetchBasedOnPredictions(navigation_handle);
+  }
+
+  if (!IsValidOptimizationGuideNavigation(navigation_handle)) {
     return;
+  }
 
   // Delete Optimization Guide information later, so that other
   // DidFinishNavigation methods can reliably use
@@ -118,6 +133,52 @@ void OptimizationGuideWebContentsObserver::DidFinishNavigation(
           &OptimizationGuideWebContentsObserver::NotifyNavigationFinish,
           weak_factory_.GetWeakPtr(), navigation_handle->GetNavigationId(),
           navigation_handle->GetRedirectChain()));
+}
+
+void OptimizationGuideWebContentsObserver::DocumentOnLoadCompletedInMainFrame(
+    content::RenderFrameHost* render_frame_host) {
+  if (!render_frame_host->GetLastCommittedURL().SchemeIsHTTPOrHTTPS()) {
+    return;
+  }
+  if (web_contents() !=
+      content::WebContents::FromRenderFrameHost(render_frame_host)) {
+    // The current web contents isn't for the main frame that reached onload.
+    return;
+  }
+
+  if (!optimization_guide_keyed_service_) {
+    return;
+  }
+
+  // Give the renderer some time to send us predictions that might have come
+  // at onload.
+  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(&OptimizationGuideWebContentsObserver::FetchHints,
+                     weak_factory_.GetWeakPtr()),
+      optimization_guide::features::GetOnloadDelayForHintsFetching());
+}
+
+void OptimizationGuideWebContentsObserver::FetchHintsUsingManagerForTesting(
+    OptimizationGuideHintsManager* hints_manager) {
+  DCHECK(hints_manager);
+  sent_batched_hints_request_ = true;
+  hints_manager->FetchHintsForPredictions(
+      std::move(hints_target_urls_.vector()));
+  hints_target_urls_.clear();
+}
+
+void OptimizationGuideWebContentsObserver::FetchHints() {
+  if (!optimization_guide_keyed_service_) {
+    return;
+  }
+
+  OptimizationGuideHintsManager* hints_manager =
+      optimization_guide_keyed_service_->GetHintsManager();
+  sent_batched_hints_request_ = true;
+  hints_manager->FetchHintsForPredictions(
+      std::move(hints_target_urls_.vector()));
+  hints_target_urls_.clear();
 }
 
 void OptimizationGuideWebContentsObserver::NotifyNavigationFinish(
@@ -141,19 +202,24 @@ void OptimizationGuideWebContentsObserver::NotifyNavigationFinish(
   inflight_optimization_guide_navigation_datas_.erase(navigation_id);
 }
 
-void OptimizationGuideWebContentsObserver::UpdateSessionTimingStatistics(
-    const page_load_metrics::mojom::PageLoadTiming& timing) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (!optimization_guide_keyed_service_)
-    return;
-
-  optimization_guide_keyed_service_->UpdateSessionFCP(
-      timing.paint_timing->first_contentful_paint.value());
-}
-
 void OptimizationGuideWebContentsObserver::FlushLastNavigationData() {
   if (last_navigation_data_)
     last_navigation_data_.reset();
+}
+
+void OptimizationGuideWebContentsObserver::AddURLsToBatchFetchBasedOnPrediction(
+    std::vector<GURL> urls,
+    content::WebContents* web_contents) {
+  if (!this->web_contents()) {
+    return;
+  }
+  DCHECK_EQ(this->web_contents(), web_contents);
+  if (sent_batched_hints_request_) {
+    return;
+  }
+  for (const GURL& url : urls) {
+    hints_target_urls_.insert(url);
+  }
 }
 
 WEB_CONTENTS_USER_DATA_KEY_IMPL(OptimizationGuideWebContentsObserver)

@@ -5,8 +5,6 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_TESTING_MOCK_CLIPBOARD_HOST_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_TESTING_MOCK_CLIPBOARD_HOST_H_
 
-#include <map>
-
 #include "build/build_config.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "third_party/blink/public/common/common_export.h"
@@ -18,6 +16,8 @@ namespace blink {
 class MockClipboardHost : public mojom::blink::ClipboardHost {
  public:
   MockClipboardHost();
+  MockClipboardHost(const MockClipboardHost&) = delete;
+  MockClipboardHost& operator=(const MockClipboardHost&) = delete;
   ~MockClipboardHost() override;
 
   void Bind(mojo::PendingReceiver<mojom::blink::ClipboardHost> receiver);
@@ -41,6 +41,8 @@ class MockClipboardHost : public mojom::blink::ClipboardHost {
                ReadSvgCallback callback) override;
   void ReadRtf(mojom::ClipboardBuffer clipboard_buffer,
                ReadRtfCallback callback) override;
+  void ReadPng(mojom::ClipboardBuffer clipboard_buffer,
+               ReadPngCallback callback) override;
   void ReadImage(mojom::ClipboardBuffer clipboard_buffer,
                  ReadImageCallback callback) override;
   void ReadFiles(mojom::ClipboardBuffer clipboard_buffer,
@@ -66,12 +68,12 @@ class MockClipboardHost : public mojom::blink::ClipboardHost {
   String html_text_ = g_empty_string;
   String svg_text_ = g_empty_string;
   KURL url_;
+  Vector<uint8_t> png_;
+  // TODO(asully): Remove `image_` once ReadImage() path is removed.
   SkBitmap image_;
   HashMap<String, String> custom_data_;
   bool write_smart_paste_ = false;
   bool needs_reset_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(MockClipboardHost);
 };
 
 }  // namespace blink

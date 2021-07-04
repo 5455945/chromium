@@ -4,6 +4,7 @@
 
 #include "chromeos/services/libassistant/speaker_id_enrollment_controller.h"
 
+#include "chromeos/services/libassistant/grpc/assistant_client.h"
 #include "chromeos/services/libassistant/public/mojom/audio_input_controller.mojom.h"
 #include "libassistant/shared/internal_api/assistant_manager_internal.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -20,16 +21,13 @@ using SpeakerIdEnrollmentState =
 
 // Helper class that will wait for the result of the
 // |GetSpeakerIdEnrollmentStatus| call, and send it to the callback.
-class SpeakerIdEnrollmentController::GetStatusWaiter {
+class SpeakerIdEnrollmentController::GetStatusWaiter : public AbortableTask {
  public:
   using Callback =
       SpeakerIdEnrollmentController::GetSpeakerIdEnrollmentStatusCallback;
 
   GetStatusWaiter() : task_runner_(base::SequencedTaskRunnerHandle::Get()) {}
-  ~GetStatusWaiter() {
-    if (callback_)
-      SendErrorResponse();
-  }
+  ~GetStatusWaiter() override { DCHECK(!callback_); }
   GetStatusWaiter(const GetStatusWaiter&) = delete;
   GetStatusWaiter& operator=(const GetStatusWaiter&) = delete;
 
@@ -55,6 +53,10 @@ class SpeakerIdEnrollmentController::GetStatusWaiter {
                                                 status.user_model_exists));
         });
   }
+
+  // AbortableTask implementation:
+  bool IsFinished() override { return callback_.is_null(); }
+  void Abort() override { SendErrorResponse(); }
 
  private:
   void SendErrorResponse() { SendResponse(false); }
@@ -206,22 +208,21 @@ void SpeakerIdEnrollmentController::StopSpeakerIdEnrollment() {
 void SpeakerIdEnrollmentController::GetSpeakerIdEnrollmentStatus(
     const std::string& user_gaia_id,
     GetSpeakerIdEnrollmentStatusCallback callback) {
-  get_status_waiter_ = std::make_unique<GetStatusWaiter>();
-  get_status_waiter_->Start(assistant_manager_internal_, user_gaia_id,
-                            std::move(callback));
+  auto* waiter =
+      pending_response_waiters_.Add(std::make_unique<GetStatusWaiter>());
+  waiter->Start(assistant_manager_internal_, user_gaia_id, std::move(callback));
 }
 
-void SpeakerIdEnrollmentController::OnAssistantManagerStarted(
-    assistant_client::AssistantManager* assistant_manager,
-    assistant_client::AssistantManagerInternal* assistant_manager_internal) {
-  assistant_manager_internal_ = assistant_manager_internal;
+void SpeakerIdEnrollmentController::OnAssistantClientStarted(
+    AssistantClient* assistant_client) {
+  assistant_manager_internal_ = assistant_client->assistant_manager_internal();
 }
 
-void SpeakerIdEnrollmentController::OnDestroyingAssistantManager(
-    assistant_client::AssistantManager* assistant_manager,
-    assistant_client::AssistantManagerInternal* assistant_manager_internal) {
+void SpeakerIdEnrollmentController::OnDestroyingAssistantClient(
+    AssistantClient* assistant_client) {
   active_enrollment_session_ = nullptr;
   assistant_manager_internal_ = nullptr;
+  pending_response_waiters_.AbortAll();
 }
 
 }  // namespace libassistant

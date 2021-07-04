@@ -40,35 +40,25 @@ class IOSSSLBlockingPage
       const GURL& request_url,
       int options_mask,
       const base::Time& time_triggered,
-      base::OnceCallback<void(bool)> callback,
       std::unique_ptr<security_interstitials::IOSBlockingPageControllerClient>
           client);
 
  protected:
-  // InterstitialPageDelegate implementation.
-  void CommandReceived(const std::string& command) override;
-  void OnProceed() override;
-  void OnDontProceed() override;
-  void OverrideItem(web::NavigationItem* item) override;
-
   // SecurityInterstitialPage implementation:
   bool ShouldCreateNewNavigation() const override;
-  void PopulateInterstitialStrings(
-      base::DictionaryValue* load_time_data) const override;
-  void AfterShow() override;
+  void PopulateInterstitialStrings(base::Value* load_time_data) const override;
 
  private:
-  void NotifyDenyCertificate();
-  void HandleScriptCommand(const base::DictionaryValue& message,
-                           const GURL& origin_url,
-                           bool user_is_interacting,
-                           web::WebFrame* sender_frame) override;
+  void HandleCommand(
+      security_interstitials::SecurityInterstitialCommand command,
+      const GURL& origin_url,
+      bool user_is_interacting,
+      web::WebFrame* sender_frame) override;
 
   // Returns true if |options_mask| refers to a soft-overridable SSL error.
   static bool IsOverridable(int options_mask);
 
   web::WebState* web_state_ = nullptr;
-  base::OnceCallback<void(bool)> callback_;
   const net::SSLInfo ssl_info_;
   const bool overridable_;  // The UI allows the user to override the error.
 

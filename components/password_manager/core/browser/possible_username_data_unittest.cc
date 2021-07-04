@@ -6,7 +6,7 @@
 
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/task_environment.h"
-#include "components/autofill/core/common/renderer_id.h"
+#include "components/autofill/core/common/unique_ids.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using base::Time;
@@ -16,7 +16,7 @@ namespace password_manager {
 
 namespace {
 
-constexpr base::char16 kUser[] = STRING16_LITERAL("user");
+constexpr char16_t kUser[] = u"user";
 
 class IsPossibleUsernameValidTest : public testing::Test {
  protected:
@@ -24,8 +24,11 @@ class IsPossibleUsernameValidTest : public testing::Test {
       base::test::SingleThreadTaskEnvironment::TimeSource::MOCK_TIME};
   PossibleUsernameData possible_username_data_{
       "https://example.com/" /* submitted_signon_realm */,
-      autofill::FieldRendererId(1u), kUser /* value */,
-      base::Time::Now() /* last_change */, 10 /* driver_id */};
+      autofill::FieldRendererId(1u),
+      u"username_field" /* field name */,
+      kUser /* value */,
+      base::Time::Now() /* last_change */,
+      10 /* driver_id */};
 };
 
 TEST_F(IsPossibleUsernameValidTest, Valid) {
@@ -56,25 +59,32 @@ TEST_F(IsPossibleUsernameValidTest, PossibleUsernameValue) {
   // Different capitalization is okay.
   EXPECT_TRUE(IsPossibleUsernameValid(possible_username_data_,
                                       possible_username_data_.signon_realm,
-                                      {STRING16_LITERAL("USER")}));
+                                      {u"USER"}));
   // Different email hosts are okay.
   EXPECT_TRUE(IsPossibleUsernameValid(possible_username_data_,
                                       possible_username_data_.signon_realm,
-                                      {STRING16_LITERAL("user@gmail.com")}));
+                                      {u"user@gmail.com"}));
 
   // Other usernames are okay.
   EXPECT_TRUE(IsPossibleUsernameValid(possible_username_data_,
                                       possible_username_data_.signon_realm,
-                                      {kUser, STRING16_LITERAL("alice")}));
+                                      {kUser, u"alice"}));
 
   // No usernames are not okay.
   EXPECT_FALSE(IsPossibleUsernameValid(
       possible_username_data_, possible_username_data_.signon_realm, {}));
 
   // Completely different usernames are not okay.
-  EXPECT_FALSE(IsPossibleUsernameValid(
-      possible_username_data_, possible_username_data_.signon_realm,
-      {STRING16_LITERAL("alice"), STRING16_LITERAL("bob")}));
+  EXPECT_FALSE(IsPossibleUsernameValid(possible_username_data_,
+                                       possible_username_data_.signon_realm,
+                                       {u"alice", u"bob"}));
+
+  // Empty usernames are not okay, even if credentials with empty usernames
+  // exist.
+  possible_username_data_.value = u"";
+  EXPECT_FALSE(IsPossibleUsernameValid(possible_username_data_,
+                                       possible_username_data_.signon_realm,
+                                       {u"alice", u""}));
 }
 
 }  // namespace

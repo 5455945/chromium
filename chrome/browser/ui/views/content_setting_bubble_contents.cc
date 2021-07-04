@@ -25,6 +25,8 @@
 #include "content/public/browser/web_contents.h"
 #include "ui/base/cursor/cursor.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/combobox_model.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/color_utils.h"
@@ -46,8 +48,6 @@
 #include "ui/views/controls/separator.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/grid_layout.h"
-#include "ui/views/metadata/metadata_header_macros.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/native_cursor.h"
 
 namespace {
@@ -78,7 +78,7 @@ class MediaComboboxModel : public ui::ComboboxModel {
 
   // ui::ComboboxModel:
   int GetItemCount() const override;
-  base::string16 GetItemAt(int index) const override;
+  std::u16string GetItemAt(int index) const override;
 
  private:
   blink::mojom::MediaStreamType type_;
@@ -188,7 +188,7 @@ int MediaComboboxModel::GetItemCount() const {
   return std::max(1, static_cast<int>(GetDevices().size()));
 }
 
-base::string16 MediaComboboxModel::GetItemAt(int index) const {
+std::u16string MediaComboboxModel::GetItemAt(int index) const {
   return GetDevices().empty()
              ? l10n_util::GetStringUTF16(IDS_MEDIA_MENU_NO_DEVICE_TITLE)
              : base::UTF8ToUTF16(GetDevices()[index].name);
@@ -271,7 +271,7 @@ void ContentSettingBubbleContents::ListItemContainer::AddItem(
         views::CreateEmptyBorder(kTitleDescriptionListItemInset));
     item_contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical));
-    const auto add_label = [&item_contents](const base::string16& string,
+    const auto add_label = [&item_contents](const std::u16string& string,
                                             int style) {
       if (!string.empty()) {
         auto label = std::make_unique<views::Label>(
@@ -385,9 +385,9 @@ ContentSettingBubbleContents::ContentSettingBubbleContents(
   // WebContentsDestroyed() is called, which can't happen until the constructor
   // has run - so it is never null here.
   DCHECK(content_setting_bubble_model_);
-  const base::string16& done_text =
+  const std::u16string& done_text =
       content_setting_bubble_model_->bubble_content().done_button_text;
-  const base::string16& cancel_text =
+  const std::u16string& cancel_text =
       content_setting_bubble_model_->bubble_content().cancel_button_text;
   SetButtons(cancel_text.empty()
                  ? ui::DIALOG_BUTTON_OK
@@ -451,9 +451,9 @@ void ContentSettingBubbleContents::OnThemeChanged() {
     StyleLearnMoreButton();
 }
 
-base::string16 ContentSettingBubbleContents::GetWindowTitle() const {
+std::u16string ContentSettingBubbleContents::GetWindowTitle() const {
   if (!content_setting_bubble_model_)
-    return base::string16();
+    return std::u16string();
   return content_setting_bubble_model_->bubble_content().title;
 }
 
@@ -606,14 +606,13 @@ ContentSettingBubbleContents::CreateHelpAndManageView() {
     learn_more_button->SetTooltipText(
         l10n_util::GetStringUTF16(IDS_LEARN_MORE));
     learn_more_button_ = learn_more_button.get();
-    StyleLearnMoreButton();
     extra_views.push_back(std::move(learn_more_button));
   }
   // Optionally add a "Manage" button if the view wants to use a button to
   // invoke a separate management UI related to the dialog content.
   if (bubble_content.manage_text_style ==
       ContentSettingBubbleModel::ManageTextStyle::kButton) {
-    base::string16 title = bubble_content.manage_text;
+    std::u16string title = bubble_content.manage_text;
     if (title.empty())
       title = l10n_util::GetStringUTF16(IDS_MANAGE);
     auto manage_button = std::make_unique<views::MdTextButton>(
@@ -658,7 +657,11 @@ void ContentSettingBubbleContents::CustomLinkClicked() {
 
 void ContentSettingBubbleContents::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
-  if (!navigation_handle->IsInMainFrame() || !navigation_handle->HasCommitted())
+  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
+  // frames. This caller was converted automatically to the primary main frame
+  // to preserve its semantics. Follow up to confirm correctness.
+  if (!navigation_handle->IsInPrimaryMainFrame() ||
+      !navigation_handle->HasCommitted())
     return;
 
   // Content settings are based on the main frame, so if it switches then

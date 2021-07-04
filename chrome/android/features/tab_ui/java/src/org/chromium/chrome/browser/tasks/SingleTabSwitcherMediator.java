@@ -9,6 +9,7 @@ import static org.chromium.chrome.browser.tasks.SingleTabViewProperties.FAVICON;
 import static org.chromium.chrome.browser.tasks.SingleTabViewProperties.IS_VISIBLE;
 import static org.chromium.chrome.browser.tasks.SingleTabViewProperties.TITLE;
 
+import android.content.Context;
 import android.graphics.drawable.Drawable;
 import android.os.SystemClock;
 
@@ -51,12 +52,14 @@ public class SingleTabSwitcherMediator implements TabSwitcher.Controller {
     private boolean mAddNormalTabModelObserverPending;
     private Long mTabTitleAvailableTime;
     private boolean mFaviconInitialized;
+    private Context mContext;
 
-    SingleTabSwitcherMediator(PropertyModel propertyModel, TabModelSelector tabModelSelector,
-            TabListFaviconProvider tabListFaviconProvider) {
+    SingleTabSwitcherMediator(Context context, PropertyModel propertyModel,
+            TabModelSelector tabModelSelector, TabListFaviconProvider tabListFaviconProvider) {
         mTabModelSelector = tabModelSelector;
         mPropertyModel = propertyModel;
         mTabListFaviconProvider = tabListFaviconProvider;
+        mContext = context;
 
         mPropertyModel.set(FAVICON, mTabListFaviconProvider.getDefaultFaviconDrawable(false));
         mPropertyModel.set(CLICK_LISTENER, v -> {
@@ -69,6 +72,8 @@ public class SingleTabSwitcherMediator implements TabSwitcher.Controller {
         mNormalTabModelObserver = new TabModelObserver() {
             @Override
             public void didSelectTab(Tab tab, int type, int lastId) {
+                if (mTabModelSelector.isIncognitoSelected()) return;
+
                 assert overviewVisible();
 
                 mSelectedTabDidNotChangedAfterShown = false;
@@ -131,7 +136,7 @@ public class SingleTabSwitcherMediator implements TabSwitcher.Controller {
 
     private void updateFavicon(Tab tab) {
         assert mTabListFaviconProvider.isInitialized();
-        mTabListFaviconProvider.getFaviconForUrlAsync(tab.getUrlString(), false,
+        mTabListFaviconProvider.getFaviconForUrlAsync(tab.getUrl(), false,
                 (Drawable favicon) -> { mPropertyModel.set(FAVICON, favicon); });
     }
 
@@ -185,7 +190,7 @@ public class SingleTabSwitcherMediator implements TabSwitcher.Controller {
 
             PseudoTab activeTab;
             try (StrictModeContext ignored = StrictModeContext.allowDiskReads()) {
-                activeTab = PseudoTab.getActiveTabFromStateFile();
+                activeTab = PseudoTab.getActiveTabFromStateFile(mContext);
             }
             if (activeTab != null) {
                 mPropertyModel.set(TITLE, activeTab.getTitle());
@@ -219,6 +224,10 @@ public class SingleTabSwitcherMediator implements TabSwitcher.Controller {
 
     @Override
     public boolean onBackPressed(boolean isOnHomepage) {
+        // If currently on the Start surface, we will stop here. The back button will be handled by
+        // the ChromeTabbedActivity. See https://crbug.com/1187714.
+        if (isOnHomepage) return false;
+
         if (overviewVisible() && !mTabModelSelector.isIncognitoSelected()
                 && mTabModelSelector.getCurrentTabId() != TabList.INVALID_TAB_INDEX) {
             selectTheCurrentTab();
@@ -239,9 +248,14 @@ public class SingleTabSwitcherMediator implements TabSwitcher.Controller {
                 TabUiFeatureUtilities.supportInstantStart(false));
     }
 
+    @Override
+    public boolean isDialogVisible() {
+        return false;
+    }
+
     private void updateSelectedTab(Tab tab) {
         mPropertyModel.set(TITLE, tab.getTitle());
-        mTabListFaviconProvider.getFaviconForUrlAsync(tab.getUrlString(), false,
+        mTabListFaviconProvider.getFaviconForUrlAsync(tab.getUrl(), false,
                 (Drawable favicon) -> { mPropertyModel.set(FAVICON, favicon); });
     }
 

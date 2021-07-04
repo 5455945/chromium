@@ -11,7 +11,6 @@
 #include "ash/wm/desks/desks_histogram_enums.h"
 #include "ash/wm/desks/root_window_desk_switch_animator.h"
 #include "base/callback.h"
-#include "base/callback_forward.h"
 #include "base/check.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_observer.h"
@@ -153,7 +152,7 @@ bool AutotestDesksApi::ActivateDeskAtIndex(int index,
     return false;
 
   auto* controller = DesksController::Get();
-  if (index >= int{controller->desks().size()})
+  if (index >= static_cast<int>(controller->desks().size()))
     return false;
 
   const Desk* target_desk = controller->desks()[index].get();
@@ -187,7 +186,7 @@ bool AutotestDesksApi::ActivateAdjacentDesksToTargetIndex(
     return false;
 
   auto* controller = DesksController::Get();
-  if (index >= int{controller->desks().size()})
+  if (index >= static_cast<int>(controller->desks().size()))
     return false;
 
   const Desk* target_desk = controller->desks()[index].get();

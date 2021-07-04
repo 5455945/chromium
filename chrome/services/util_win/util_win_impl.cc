@@ -8,6 +8,7 @@
 #include <shldisp.h>
 #include <wrl/client.h>
 
+#include <string>
 #include <utility>
 
 #include "base/bind.h"
@@ -15,7 +16,6 @@
 #include "base/files/file_path.h"
 #include "base/path_service.h"
 #include "base/scoped_native_library.h"
-#include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/win/scoped_bstr.h"
 #include "base/win/scoped_com_initializer.h"
@@ -25,7 +25,6 @@
 #include "chrome/browser/win/conflicts/module_info_util.h"
 #include "chrome/installer/util/install_util.h"
 #include "chrome/services/util_win/av_products.h"
-#include "chrome/services/util_win/processor_metrics.h"
 #include "third_party/metrics_proto/system_profile.pb.h"
 #include "ui/shell_dialogs/execute_select_file_win.h"
 
@@ -247,11 +246,11 @@ void UtilWinImpl::IsPinnedToTaskbar(IsPinnedToTaskbarCallback callback) {
 void UtilWinImpl::CallExecuteSelectFile(
     ui::SelectFileDialog::Type type,
     uint32_t owner,
-    const base::string16& title,
+    const std::u16string& title,
     const base::FilePath& default_path,
     const std::vector<ui::FileFilterSpec>& filter,
     int32_t file_type_index,
-    const base::string16& default_extension,
+    const std::u16string& default_extension,
     CallExecuteSelectFileCallback callback) {
   base::win::ScopedCOMInitializer scoped_com_initializer;
 
@@ -275,11 +274,3 @@ void UtilWinImpl::GetAntiVirusProducts(bool report_full_names,
   std::move(callback).Run(::GetAntiVirusProducts(report_full_names));
 }
 
-void UtilWinImpl::RecordProcessorMetrics(
-    RecordProcessorMetricsCallback callback) {
-  // TODO(sebmarchand): Check if we should move the ScopedCOMInitializer to the
-  // UtilWinImpl class.
-  base::win::ScopedCOMInitializer scoped_com_initializer;
-  ::RecordProcessorMetrics();
-  std::move(callback).Run();
-}

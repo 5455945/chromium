@@ -102,14 +102,14 @@ class ModemMessagingProxy {
   // Handles responses of List method calls.
   void OnList(ListCallback callback, dbus::Response* response) {
     if (!response) {
-      std::move(callback).Run(base::nullopt);
+      std::move(callback).Run(absl::nullopt);
       return;
     }
     dbus::MessageReader reader(response);
     std::vector<dbus::ObjectPath> sms_paths;
     if (!reader.PopArrayOfObjectPaths(&sms_paths)) {
       LOG(WARNING) << "Invalid response: " << response->ToString();
-      std::move(callback).Run(base::nullopt);
+      std::move(callback).Run(absl::nullopt);
       return;
     }
     std::move(callback).Run(std::move(sms_paths));
@@ -163,6 +163,8 @@ class COMPONENT_EXPORT(CHROMEOS_DBUS) ModemMessagingClientImpl
             ListCallback callback) override {
     GetProxy(service_name, object_path)->List(std::move(callback));
   }
+
+  TestInterface* GetTestInterface() override { return nullptr; }
 
  private:
   using ProxyMap = std::map<std::pair<std::string, std::string>,

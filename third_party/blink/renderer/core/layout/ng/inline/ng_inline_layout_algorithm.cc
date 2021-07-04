@@ -8,7 +8,9 @@
 
 #include "base/compiler_specific.h"
 #include "base/containers/adapters.h"
+#include "third_party/blink/renderer/core/css/resolver/style_resolver.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
+#include "third_party/blink/renderer/core/layout/ng/inline/layout_ng_text_combine.h"
 #include "third_party/blink/renderer/core/layout/ng/inline/ng_bidi_paragraph.h"
 #include "third_party/blink/renderer/core/layout/ng/inline/ng_inline_box_state.h"
 #include "third_party/blink/renderer/core/layout/ng/inline/ng_inline_break_token.h"
@@ -17,6 +19,7 @@
 #include "third_party/blink/renderer/core/layout/ng/inline/ng_inline_node.h"
 #include "third_party/blink/renderer/core/layout/ng/inline/ng_line_box_fragment_builder.h"
 #include "third_party/blink/renderer/core/layout/ng/inline/ng_line_breaker.h"
+#include "third_party/blink/renderer/core/layout/ng/inline/ng_line_info.h"
 #include "third_party/blink/renderer/core/layout/ng/inline/ng_line_truncator.h"
 #include "third_party/blink/renderer/core/layout/ng/inline/ng_ruby_utils.h"
 #include "third_party/blink/renderer/core/layout/ng/list/layout_ng_outside_list_marker.h"
@@ -32,6 +35,7 @@
 #include "third_party/blink/renderer/core/layout/ng/ng_relative_utils.h"
 #include "third_party/blink/renderer/core/layout/ng/ng_space_utils.h"
 #include "third_party/blink/renderer/core/layout/ng/ng_unpositioned_float.h"
+#include "third_party/blink/renderer/core/layout/svg/layout_svg_inline_text.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/platform/fonts/shaping/shape_result_spacing.h"
 #include "third_party/blink/renderer/platform/fonts/shaping/shape_result_view.h"
@@ -56,8 +60,10 @@ NGInlineLayoutAlgorithm::NGInlineLayoutAlgorithm(
     NGInlineChildLayoutContext* context)
     : NGLayoutAlgorithm(
           inline_node,
-          ComputedStyle::CreateAnonymousStyleWithDisplay(inline_node.Style(),
-                                                         EDisplay::kBlock),
+          inline_node.GetDocument()
+              .GetStyleResolver()
+              .CreateAnonymousStyleWithDisplay(inline_node.Style(),
+                                               EDisplay::kBlock),
           space,
           // Use LTR direction since inline layout handles bidi by itself and
           // lays out in visual order.
@@ -86,7 +92,7 @@ NGInlineBoxState* NGInlineLayoutAlgorithm::HandleOpenTag(
   // for the purpose of empty block calculation.
   // https://drafts.csswg.org/css2/visudet.html#line-height
   if (!quirks_mode_ || !item.IsEmptyItem())
-    box->ComputeTextMetrics(*item.Style(), baseline_type_);
+    box->ComputeTextMetrics(*item.Style(), *box->font);
 
   if (item.Style()->HasMask()) {
     // Layout may change the bounding box, which affects MaskClip.
@@ -103,7 +109,7 @@ NGInlineBoxState* NGInlineLayoutAlgorithm::HandleCloseTag(
     NGLogicalLineItems* line_box,
     NGInlineBoxState* box) {
   if (UNLIKELY(quirks_mode_ && !item.IsEmptyItem()))
-    box->EnsureTextMetrics(*item.Style(), baseline_type_);
+    box->EnsureTextMetrics(*item.Style(), *box->font);
   box = box_states_->OnCloseTag(ConstraintSpace(), line_box, box,
                                 baseline_type_, item.HasEndEdge());
   // Just clear |NeedsLayout| flags. Culled inline boxes do not need paint
@@ -157,7 +163,7 @@ void NGInlineLayoutAlgorithm::RebuildBoxStates(
 
   // Create box states for tags that are not closed yet.
   NGLogicalLineItems line_box;
-  box_states->OnBeginPlaceItems(line_info.LineStyle(), baseline_type_,
+  box_states->OnBeginPlaceItems(Node(), line_info.LineStyle(), baseline_type_,
                                 quirks_mode_, &line_box);
   for (const NGInlineItem* item : open_items) {
     NGInlineItemResult item_result;
@@ -173,8 +179,8 @@ void NGInlineLayoutAlgorithm::CheckBoxStates(
   NGInlineLayoutStateStack rebuilt;
   RebuildBoxStates(line_info, break_token, &rebuilt);
   NGLogicalLineItems line_box;
-  rebuilt.OnBeginPlaceItems(line_info.LineStyle(), baseline_type_, quirks_mode_,
-                            &line_box);
+  rebuilt.OnBeginPlaceItems(Node(), line_info.LineStyle(), baseline_type_,
+                            quirks_mode_, &line_box);
   DCHECK(box_states_);
   box_states_->CheckSame(rebuilt);
 }
@@ -199,7 +205,7 @@ void NGInlineLayoutAlgorithm::CreateLine(
   const ComputedStyle& line_style = line_info->LineStyle();
   box_states_->SetIsEmptyLine(line_info->IsEmptyLine());
   NGInlineBoxState* box = box_states_->OnBeginPlaceItems(
-      line_style, baseline_type_, quirks_mode_, line_box);
+      Node(), line_style, baseline_type_, quirks_mode_, line_box);
 #if DCHECK_IS_ON()
   if (is_box_states_from_context_)
     CheckBoxStates(*line_info, BreakToken());
@@ -214,7 +220,7 @@ void NGInlineLayoutAlgorithm::CreateLine(
   // have been to make sure that there's always room for the list item marker,
   // but that doesn't explain why it's done for every line...
   if (quirks_mode_ && line_style.Display() == EDisplay::kListItem)
-    box->ComputeTextMetrics(line_style, baseline_type_);
+    box->ComputeTextMetrics(line_style, *box->font);
 
   bool has_logical_text_items = false;
   for (NGInlineItemResult& item_result : *line_items) {
@@ -227,13 +233,11 @@ void NGInlineLayoutAlgorithm::CreateLine(
       DCHECK(item_result.shape_result);
 
       if (UNLIKELY(quirks_mode_))
-        box->EnsureTextMetrics(*item.Style(), baseline_type_);
+        box->EnsureTextMetrics(*item.Style(), *box->font);
 
       // Take all used fonts into account if 'line-height: normal'.
-      if (box->include_used_fonts) {
-        box->AccumulateUsedFonts(item_result.shape_result.get(),
-                                 baseline_type_);
-      }
+      if (box->include_used_fonts)
+        box->AccumulateUsedFonts(item_result.shape_result.get());
 
       DCHECK(item.TextType() == NGTextType::kNormal ||
              item.TextType() == NGTextType::kSymbolMarker);
@@ -246,6 +250,15 @@ void NGInlineLayoutAlgorithm::CreateLine(
                            item_result.inline_size - hyphen_inline_size,
                            box->text_height, item.BidiLevel());
         PlaceHyphen(item_result, hyphen_inline_size, line_box, box);
+      } else if (UNLIKELY(Node().IsTextCombine())) {
+        // We make combined text at block offset 0 with 1em height.
+        // Painter paints text at block offset + |font.internal_leading / 2|.
+        const auto one_em = item.Style()->ComputedFontSizeAsFixed();
+        const auto text_height = one_em;
+        const auto text_top = LayoutUnit();
+        line_box->AddChild(item, item_result, item_result.TextOffset(),
+                           text_top, item_result.inline_size, text_height,
+                           item.BidiLevel());
       } else {
         line_box->AddChild(item, item_result, item_result.TextOffset(),
                            box->text_top, item_result.inline_size,
@@ -413,7 +426,15 @@ void NGInlineLayoutAlgorithm::CreateLine(
   // Up until this point, children are placed so that the dominant baseline is
   // at 0. Move them to the final baseline position, and set the logical top of
   // the line box to the line top.
-  line_box->MoveInBlockDirection(line_box_metrics.ascent);
+  //
+  // For SVG <text>, the block offset of the initial 'current text position'
+  // should be 0. As for the inline offset, see
+  // NGSvgTextLayoutAttributesBuilder::Build().
+  //
+  // For text-combine-upright:all, the block offset should be zero to make
+  // combined text in 1em x 1em box.
+  if (LIKELY(!Node().IsSvgText() && !Node().IsTextCombine()))
+    line_box->MoveInBlockDirection(line_box_metrics.ascent);
 
   LayoutUnit block_offset = line_info->BfcOffset().block_offset;
   if (Node().HasRuby()) {
@@ -465,6 +486,12 @@ void NGInlineLayoutAlgorithm::CreateLine(
   if (line_info->UseFirstLineStyle())
     container_builder_.SetStyleVariant(NGStyleVariant::kFirstLine);
   container_builder_.SetBaseDirection(line_info->BaseDirection());
+  if (UNLIKELY(Node().IsTextCombine())) {
+    // The effective size of combined text is 1em square[1]
+    // [1] https://drafts.csswg.org/css-writing-modes-3/#text-combine-layout
+    const auto one_em = Node().Style().ComputedFontSizeAsFixed();
+    inline_size = std::min(inline_size, one_em);
+  }
   container_builder_.SetInlineSize(inline_size);
   container_builder_.SetMetrics(line_box_metrics);
   container_builder_.SetBfcBlockOffset(block_offset);
@@ -508,7 +535,7 @@ void NGInlineLayoutAlgorithm::PlaceControlItem(const NGInlineItem& item,
   ClearNeedsLayoutIfNeeded(item.GetLayoutObject());
 
   if (UNLIKELY(quirks_mode_ && !box->HasMetrics()))
-    box->EnsureTextMetrics(*item.Style(), baseline_type_);
+    box->EnsureTextMetrics(*item.Style(), *box->font);
 
   line_box->AddChild(item, std::move(item_result->shape_result),
                      item_result->TextOffset(), box->text_top,
@@ -539,15 +566,34 @@ NGInlineBoxState* NGInlineLayoutAlgorithm::PlaceAtomicInline(
     NGLogicalLineItems* line_box) {
   DCHECK(item_result->layout_result);
 
-  // The input |position| is the line-left edge of the margin box.
-  // Adjust it to the border box by adding the line-left margin.
-  // const ComputedStyle& style = *item.Style();
-  // position += item_result->margins.LineLeft(style.Direction());
+  // Reset the ellipsizing state. Atomic inline is monolithic.
+  LayoutObject* layout_object = item.GetLayoutObject();
+  DCHECK(layout_object);
+  DCHECK(layout_object->IsAtomicInlineLevel());
+  DCHECK_EQ(To<LayoutBox>(layout_object)->GetNGPaginationBreakability(),
+            LayoutBox::kForbidBreaks);
+  layout_object->SetIsTruncated(false);
 
   item_result->has_edge = true;
   NGInlineBoxState* box =
       box_states_->OnOpenTag(item, *item_result, baseline_type_, *line_box);
-  PlaceLayoutResult(item_result, line_box, box, box->margin_inline_start);
+
+  if (LIKELY(!IsA<LayoutNGTextCombine>(layout_object))) {
+    PlaceLayoutResult(item_result, line_box, box, box->margin_inline_start);
+  } else {
+    // The metrics should be as text instead of atomic inline box.
+    const auto& style = layout_object->Parent()->StyleRef();
+    box->ComputeTextMetrics(style, style.GetFont());
+    // Note: |item_result->spacing_before| is non-zero if this |item_result|
+    // is |LayoutNGTextCombine| and after CJK character.
+    // See "text-combine-justify.html".
+    const LayoutUnit inline_offset =
+        box->margin_inline_start + item_result->spacing_before;
+    line_box->AddChild(std::move(item_result->layout_result),
+                       LogicalOffset{inline_offset, box->text_top},
+                       item_result->inline_size, /* children_count */ 0,
+                       item.BidiLevel());
+  }
   return box_states_->OnCloseTag(ConstraintSpace(), line_box, box,
                                  baseline_type_);
 }
@@ -755,6 +801,8 @@ void NGInlineLayoutAlgorithm::PlaceRelativePositionedItems(
     const auto* physical_fragment = child.PhysicalFragment();
     if (!physical_fragment)
       continue;
+    // TODO(almaher): Handle inline relative positioning correctly for OOF
+    // fragmentation.
     child.rect.offset += ComputeRelativeOffsetForInline(
         ConstraintSpace(), physical_fragment->Style());
   }
@@ -766,38 +814,57 @@ void NGInlineLayoutAlgorithm::PlaceListMarker(const NGInlineItem& item,
                                               const NGLineInfo& line_info) {
   if (UNLIKELY(quirks_mode_)) {
     box_states_->LineBoxState().EnsureTextMetrics(*item.Style(),
-                                                  baseline_type_);
+                                                  item.Style()->GetFont());
   }
-
-  container_builder_.SetUnpositionedListMarker(NGUnpositionedListMarker(
-      To<LayoutNGOutsideListMarker>(item.GetLayoutObject())));
 }
 
 // Justify the line. This changes the size of items by adding spacing.
 // Returns false if justification failed and should fall back to start-aligned.
-base::Optional<LayoutUnit> NGInlineLayoutAlgorithm::ApplyJustify(
+absl::optional<LayoutUnit> NGInlineLayoutAlgorithm::ApplyJustify(
     LayoutUnit space,
     NGLineInfo* line_info) {
   // Empty lines should align to start.
   if (line_info->IsEmptyLine())
-    return base::nullopt;
+    return absl::nullopt;
 
   // Justify the end of visible text, ignoring preserved trailing spaces.
   unsigned end_offset = line_info->EndOffsetForJustify();
 
   // If this line overflows, fallback to 'text-align: start'.
   if (space <= 0)
-    return base::nullopt;
+    return absl::nullopt;
 
   // Can't justify an empty string.
   if (end_offset == line_info->StartOffset())
-    return base::nullopt;
+    return absl::nullopt;
+
+  const UChar kTextCombineItemMarker = 0x3042;  // U+3042 Hiragana Letter A
 
   // Construct the line text to compute spacing for.
   StringBuilder line_text_builder;
-  line_text_builder.Append(StringView(line_info->ItemsData().text_content,
-                                      line_info->StartOffset(),
-                                      end_offset - line_info->StartOffset()));
+  if (UNLIKELY(line_info->MayHaveTextCombineItem())) {
+    for (const NGInlineItemResult& item_result : line_info->Results()) {
+      if (item_result.StartOffset() >= end_offset)
+        break;
+      if (item_result.item->IsTextCombine()) {
+        // To apply justification before and after the combined text, we put
+        // ideographic character to increment |ShapeResultSpacing::
+        // expansion_opportunity_count_| for legacy layout compatibility.
+        // See "fast/writing-mode/text-combine-justify.html".
+        // Note: The spec[1] says we should treat combined text as U+FFFC.
+        // [1] https://drafts.csswg.org/css-writing-modes-3/#text-combine-layout
+        line_text_builder.Append(kTextCombineItemMarker);
+        continue;
+      }
+      line_text_builder.Append(StringView(line_info->ItemsData().text_content,
+                                          item_result.StartOffset(),
+                                          item_result.Length()));
+    }
+  } else {
+    line_text_builder.Append(StringView(line_info->ItemsData().text_content,
+                                        line_info->StartOffset(),
+                                        end_offset - line_info->StartOffset()));
+  }
 
   // Append a hyphen if the last word is hyphenated. The hyphen is in
   // |ShapeResult|, but not in text. |ShapeResultSpacing| needs the text that
@@ -811,7 +878,7 @@ base::Optional<LayoutUnit> NGInlineLayoutAlgorithm::ApplyJustify(
   String line_text = line_text_builder.ToString();
   DCHECK_GT(line_text.length(), 0u);
 
-  ShapeResultSpacing<String> spacing(line_text);
+  ShapeResultSpacing<String> spacing(line_text, Node().IsSvgText());
   spacing.SetExpansion(space, line_info->BaseDirection(),
                        line_info->LineStyle().GetTextJustify());
   const LayoutObject* box = Node().GetLayoutBox();
@@ -820,7 +887,7 @@ base::Optional<LayoutUnit> NGInlineLayoutAlgorithm::ApplyJustify(
     // LayoutRubyText.
     if (box && (box->IsRubyText() || box->IsRubyBase()))
       return space / 2;
-    return base::nullopt;
+    return absl::nullopt;
   }
 
   LayoutUnit inset;
@@ -857,15 +924,24 @@ base::Optional<LayoutUnit> NGInlineLayoutAlgorithm::ApplyJustify(
         item_result.inline_size += item_result.HyphenInlineSize();
       item_result.shape_result = ShapeResultView::Create(shape_result.get());
     } else if (item_result.item->Type() == NGInlineItem::kAtomicInline) {
-      float offset = 0.f;
+      float spacing_before = 0.0f;
       DCHECK_LE(line_info->StartOffset(), item_result.StartOffset());
-      unsigned line_text_offset =
+      const unsigned line_text_offset =
           item_result.StartOffset() - line_info->StartOffset();
-      DCHECK_EQ(kObjectReplacementCharacter, line_text[line_text_offset]);
-      item_result.inline_size +=
-          spacing.ComputeSpacing(line_text_offset, offset);
-      // |offset| is non-zero only before CJK characters.
-      DCHECK_EQ(offset, 0.f);
+      const float spacing_after =
+          spacing.ComputeSpacing(line_text_offset, spacing_before);
+      if (UNLIKELY(item_result.item->IsTextCombine())) {
+        // |spacing_before| is non-zero if this |item_result| is after
+        // non-CJK character. See "text-combine-justify.html".
+        DCHECK_EQ(kTextCombineItemMarker, line_text[line_text_offset]);
+        item_result.inline_size += spacing_after;
+        item_result.spacing_before = LayoutUnit(spacing_before);
+      } else {
+        DCHECK_EQ(kObjectReplacementCharacter, line_text[line_text_offset]);
+        item_result.inline_size += spacing_after;
+        // |spacing_before| is non-zero only before CJK characters.
+        DCHECK_EQ(spacing_before, 0.0f);
+      }
     }
   }
   return inset / 2;
@@ -882,7 +958,7 @@ LayoutUnit NGInlineLayoutAlgorithm::ApplyTextAlign(NGLineInfo* line_info) {
 
   ETextAlign text_align = line_info->TextAlign();
   if (text_align == ETextAlign::kJustify) {
-    base::Optional<LayoutUnit> offset = ApplyJustify(space, line_info);
+    absl::optional<LayoutUnit> offset = ApplyJustify(space, line_info);
     if (offset)
       return *offset;
 

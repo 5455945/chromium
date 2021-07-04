@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "base/no_destructor.h"
+#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
@@ -79,7 +80,7 @@ int GetValidatorOptions(Extension* extension) {
   return options;
 }
 
-base::string16 GetInvalidManifestKeyError(base::StringPiece key) {
+std::u16string GetInvalidManifestKeyError(base::StringPiece key) {
   return ErrorUtils::FormatErrorMessageUTF16(errors::kInvalidManifestKey, key);
 }
 
@@ -115,6 +116,24 @@ const std::string& CSPInfo::GetExtensionPagesCSP(const Extension* extension) {
   CSPInfo* csp_info = static_cast<CSPInfo*>(
           extension->GetManifestData(keys::kContentSecurityPolicy));
   return csp_info ? csp_info->extension_pages_csp : base::EmptyString();
+}
+
+// static
+const std::string* CSPInfo::GetDefaultCSPToAppend(
+    const Extension& extension,
+    const std::string& relative_path) {
+  if (!extension.is_extension() || extension.manifest_version() < 3)
+    return nullptr;
+
+  // TODO(karandeepb): Extend this to Sandboxed pages as well in the future to
+  // ensure an extension can't use its Service worker to modify the sandboxed
+  // page CSP and get around the corresponding CSP restrictions.
+  if (SandboxedPageInfo::IsSandboxedPage(&extension, relative_path))
+    return nullptr;
+
+  // We only enforce a default CSP currently for MV3 extension pages.
+  static const base::NoDestructor<std::string> default_csp(kDefaultSecureCSP);
+  return default_csp.get();
 }
 
 // static
@@ -161,7 +180,7 @@ CSPHandler::CSPHandler() = default;
 
 CSPHandler::~CSPHandler() = default;
 
-bool CSPHandler::Parse(Extension* extension, base::string16* error) {
+bool CSPHandler::Parse(Extension* extension, std::u16string* error) {
   const char* key = extension->GetType() == Manifest::TYPE_PLATFORM_APP
                         ? keys::kPlatformAppContentSecurityPolicy
                         : keys::kContentSecurityPolicy;
@@ -198,7 +217,7 @@ bool CSPHandler::Parse(Extension* extension, base::string16* error) {
 }
 
 bool CSPHandler::ParseCSPDictionary(Extension* extension,
-                                    base::string16* error) {
+                                    std::u16string* error) {
   // keys::kSandboxedPagesCSP shouldn't be used when using
   // keys::kContentSecurityPolicy as a dictionary.
   if (extension->manifest()->HasPath(keys::kSandboxedPagesCSP)) {
@@ -219,7 +238,7 @@ bool CSPHandler::ParseCSPDictionary(Extension* extension,
 
 bool CSPHandler::ParseExtensionPagesCSP(
     Extension* extension,
-    base::string16* error,
+    std::u16string* error,
     base::StringPiece manifest_key,
     bool secure_only,
     const base::Value* content_security_policy) {
@@ -253,7 +272,7 @@ bool CSPHandler::ParseExtensionPagesCSP(
 
   std::vector<InstallWarning> warnings;
   std::string sanitized_content_security_policy = SanitizeContentSecurityPolicy(
-      content_security_policy_str, manifest_key.as_string(),
+      content_security_policy_str, std::string(manifest_key),
       GetValidatorOptions(extension), &warnings);
   extension->AddInstallWarnings(std::move(warnings));
 
@@ -263,7 +282,7 @@ bool CSPHandler::ParseExtensionPagesCSP(
 }
 
 bool CSPHandler::ParseSandboxCSP(Extension* extension,
-                                 base::string16* error,
+                                 std::u16string* error,
                                  base::StringPiece manifest_key,
                                  const base::Value* sandbox_csp) {
   if (!sandbox_csp) {
@@ -287,7 +306,7 @@ bool CSPHandler::ParseSandboxCSP(Extension* extension,
   std::vector<InstallWarning> warnings;
   std::string effective_sandbox_csp =
       csp_validator::GetEffectiveSandoxedPageCSP(
-          sandbox_csp_str, manifest_key.as_string(), &warnings);
+          sandbox_csp_str, std::string(manifest_key), &warnings);
   SetSandboxCSP(extension, std::move(effective_sandbox_csp));
   extension->AddInstallWarnings(std::move(warnings));
   return true;
@@ -298,13 +317,13 @@ bool CSPHandler::SetExtensionPagesCSP(Extension* extension,
                                       bool secure_only,
                                       std::string content_security_policy) {
   if (secure_only) {
-    base::string16 error;
+    std::u16string error;
     DCHECK(csp_validator::DoesCSPDisallowRemoteCode(content_security_policy,
                                                     manifest_key, &error));
   } else {
     DCHECK_EQ(content_security_policy,
               SanitizeContentSecurityPolicy(
-                  content_security_policy, manifest_key.as_string(),
+                  content_security_policy, std::string(manifest_key),
                   GetValidatorOptions(extension), nullptr));
   }
 

@@ -22,19 +22,20 @@
 #include "build/build_config.h"
 #include "chrome/browser/ash/login/demo_mode/demo_session.h"
 #include "chrome/browser/ash/login/demo_mode/demo_setup_test_utils.h"
-#include "chrome/browser/chromeos/login/mock_network_state_helper.h"
-#include "chrome/browser/chromeos/login/oobe_screen.h"
-#include "chrome/browser/chromeos/login/screens/demo_setup_screen.h"
-#include "chrome/browser/chromeos/login/screens/network_screen.h"
-#include "chrome/browser/chromeos/login/startup_utils.h"
-#include "chrome/browser/chromeos/login/test/enrollment_helper_mixin.h"
-#include "chrome/browser/chromeos/login/test/js_checker.h"
-#include "chrome/browser/chromeos/login/test/oobe_base_test.h"
-#include "chrome/browser/chromeos/login/test/oobe_screen_waiter.h"
-#include "chrome/browser/chromeos/login/test/oobe_screens_utils.h"
-#include "chrome/browser/chromeos/login/test/test_condition_waiter.h"
-#include "chrome/browser/chromeos/login/ui/login_display_host.h"
-#include "chrome/browser/chromeos/login/wizard_controller.h"
+#include "chrome/browser/ash/login/mock_network_state_helper.h"
+#include "chrome/browser/ash/login/oobe_screen.h"
+#include "chrome/browser/ash/login/screens/demo_setup_screen.h"
+#include "chrome/browser/ash/login/screens/network_screen.h"
+#include "chrome/browser/ash/login/startup_utils.h"
+#include "chrome/browser/ash/login/test/enrollment_helper_mixin.h"
+#include "chrome/browser/ash/login/test/js_checker.h"
+#include "chrome/browser/ash/login/test/oobe_base_test.h"
+#include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
+#include "chrome/browser/ash/login/test/oobe_screens_utils.h"
+#include "chrome/browser/ash/login/test/test_condition_waiter.h"
+#include "chrome/browser/ash/login/test/test_predicate_waiter.h"
+#include "chrome/browser/ash/login/ui/login_display_host.h"
+#include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/component_updater/cros_component_installer_chromeos.h"
 #include "chrome/browser/ui/webui/chromeos/login/demo_preferences_screen_handler.h"
 #include "chrome/browser/ui/webui/chromeos/login/demo_setup_screen_handler.h"
@@ -60,12 +61,11 @@
 #include "third_party/cros_system_api/dbus/service_constants.h"
 #include "ui/base/l10n/l10n_util.h"
 
-using chromeos::test::DemoModeSetupResult;
-using chromeos::test::SetupDummyOfflinePolicyDir;
-
-namespace chromeos {
-
+namespace ash {
 namespace {
+
+using test::DemoModeSetupResult;
+using test::SetupDummyOfflinePolicyDir;
 
 const test::UIPath kDemoConfirmationDialog = {"connect",
                                               "demoModeConfirmationDialog"};
@@ -103,8 +103,6 @@ constexpr char kDefaultNetworkName[] = "eth1";
 
 constexpr int kInvokeDemoModeGestureTapsCount = 10;
 
-}  // namespace
-
 // Basic tests for demo mode setup flow.
 class DemoSetupTestBase : public OobeBaseTest {
  public:
@@ -115,7 +113,6 @@ class DemoSetupTestBase : public OobeBaseTest {
     OobeBaseTest::SetUpOnMainThread();
     update_engine_client()->set_update_check_result(
         UpdateEngineClient::UPDATE_RESULT_FAILED);
-    DisableConfirmationDialogAnimations();
     branded_build_override_ =
         WizardController::ForceBrandedBuildForTesting(true);
     DisconnectAllNetworks();
@@ -164,7 +161,7 @@ class DemoSetupTestBase : public OobeBaseTest {
 
   void InvokeDemoModeWithAccelerator() {
     WizardController::default_controller()->HandleAccelerator(
-        ash::LoginAcceleratorAction::kStartDemoMode);
+        LoginAcceleratorAction::kStartDemoMode);
   }
 
   void InvokeDemoModeWithTaps() {
@@ -180,16 +177,18 @@ class DemoSetupTestBase : public OobeBaseTest {
     test::ExecuteOobeJS(query);
   }
 
-  // Returns whether a custom item with `custom_item_name` is shown as a first
-  // element on the network list.
-  bool IsCustomNetworkListElementShown(const std::string& custom_item_name) {
+  // Returns whether a custom offline item is shown as a first element on the
+  // network list.
+  static bool IsOfflineNetworkListElementShown() {
+    const char kOfflineNetworkElement[] = "offlineDemoSetupListItemName";
+
     const std::string element_selector = base::StrCat(
         {test::GetOobeElementPath(kNetworkScreen),
          ".getNetworkListItemWithQueryForTest('network-list-item')"});
     const std::string query =
         base::StrCat({"!!", element_selector, " && ", element_selector,
-                      ".item.customItemName == '", custom_item_name, "' && !",
-                      element_selector, ".hidden"});
+                      ".item.customItemName == '", kOfflineNetworkElement,
+                      "' && !", element_selector, ".hidden"});
     return test::OobeJS().GetBool(query);
   }
 
@@ -299,11 +298,6 @@ class DemoSetupTestBase : public OobeBaseTest {
   test::EnrollmentHelperMixin enrollment_helper_{&mixin_host_};
 
  private:
-  void DisableConfirmationDialogAnimations() {
-    test::ExecuteOobeJS(
-        "cr.ui.dialogs.BaseDialog.ANIMATE_STABLE_DURATION = 0;");
-  }
-
   // TODO(agawronska): Maybe create a separate test fixture for offline setup.
   base::ScopedTempDir fake_demo_resources_dir_;
   policy::MockCloudPolicyStore mock_policy_store_;
@@ -642,7 +636,7 @@ IN_PROC_BROWSER_TEST_F(DemoSetupArcSupportedTest, OfflineDemoModeUnavailable) {
 
   // Offline Demo Mode is not available when there are no preinstalled demo
   // resources.
-  EXPECT_FALSE(IsCustomNetworkListElementShown("offlineDemoSetupListItemName"));
+  EXPECT_FALSE(IsOfflineNetworkListElementShown());
 }
 
 IN_PROC_BROWSER_TEST_F(DemoSetupArcSupportedTest, OfflineSetupFlowSuccess) {
@@ -914,9 +908,8 @@ IN_PROC_BROWSER_TEST_F(DemoSetupArcSupportedTest, MAYBE_RetryOnErrorScreen) {
   EXPECT_TRUE(StartupUtils::IsDeviceRegistered());
 }
 
-// Test is flaky: crbug.com/1099402
 IN_PROC_BROWSER_TEST_F(DemoSetupArcSupportedTest,
-                       DISABLED_ShowOfflineSetupOptionOnNetworkList) {
+                       ShowOfflineSetupOptionOnNetworkList) {
   TriggerDemoModeOnWelcomeScreen();
 
   SimulateOfflineEnvironment();
@@ -924,7 +917,9 @@ IN_PROC_BROWSER_TEST_F(DemoSetupArcSupportedTest,
 
   test::WaitForNetworkSelectionScreen();
 
-  EXPECT_TRUE(IsCustomNetworkListElementShown("offlineDemoSetupListItemName"));
+  test::TestPredicateWaiter waiter(
+      base::BindRepeating([]() { return IsOfflineNetworkListElementShown(); }));
+  waiter.Wait();
 }
 
 IN_PROC_BROWSER_TEST_F(DemoSetupArcSupportedTest,
@@ -932,7 +927,7 @@ IN_PROC_BROWSER_TEST_F(DemoSetupArcSupportedTest,
   test::WaitForWelcomeScreen();
   test::TapWelcomeNext();
   test::WaitForNetworkSelectionScreen();
-  EXPECT_FALSE(IsCustomNetworkListElementShown("offlineDemoSetupListItemName"));
+  EXPECT_FALSE(IsOfflineNetworkListElementShown());
 }
 
 class DemoSetupProgressStepsTest : public DemoSetupArcSupportedTest {
@@ -1037,7 +1032,7 @@ class DemoSetupFRETest : public DemoSetupArcSupportedTest {
 
     command_line->AppendSwitchASCII(
         switches::kEnterpriseEnableForcedReEnrollment,
-        chromeos::AutoEnrollmentController::kForcedReEnrollmentAlways);
+        AutoEnrollmentController::kForcedReEnrollmentAlways);
   }
 
   system::ScopedFakeStatisticsProvider statistics_provider_;
@@ -1152,4 +1147,5 @@ IN_PROC_BROWSER_TEST_F(DemoSetupFRETest, DeviceWithFRE) {
   EXPECT_FALSE(StartupUtils::IsDeviceRegistered());
 }
 
-}  // namespace chromeos
+}  // namespace
+}  // namespace ash

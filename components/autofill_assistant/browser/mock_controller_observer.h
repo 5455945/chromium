@@ -43,9 +43,8 @@ class MockControllerObserver : public ControllerObserver {
                void(const ShowProgressBarProto::StepProgressBarConfiguration&
                         configuration));
   MOCK_METHOD1(OnProgressBarErrorStateChanged, void(bool error));
-  MOCK_METHOD3(OnTouchableAreaChanged,
-               void(const RectF&,
-                    const std::vector<RectF>& touchable_areas,
+  MOCK_METHOD2(OnTouchableAreaChanged,
+               void(const std::vector<RectF>& touchable_areas,
                     const std::vector<RectF>& restricted_areas));
   MOCK_CONST_METHOD0(Terminate, bool());
   MOCK_CONST_METHOD0(GetDropOutReason, Metrics::DropOutReason());
@@ -60,6 +59,8 @@ class MockControllerObserver : public ControllerObserver {
                void(const FormProto* form, const FormProto::Result* result));
   MOCK_METHOD1(OnClientSettingsChanged, void(const ClientSettings& settings));
   MOCK_METHOD1(OnGenericUserInterfaceChanged,
+               void(const GenericUserInterfaceProto* generic_ui));
+  MOCK_METHOD1(OnPersistentGenericUserInterfaceChanged,
                void(const GenericUserInterfaceProto* generic_ui));
   MOCK_METHOD1(OnShouldShowOverlayChanged, void(bool should_show));
   MOCK_METHOD0(OnFeedbackFormRequested, void());

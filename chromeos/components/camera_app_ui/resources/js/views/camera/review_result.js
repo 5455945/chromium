@@ -3,10 +3,12 @@
 // found in the LICENSE file.
 
 import * as dom from '../../dom.js';
+import {reportError} from '../../error.js';
 import {pictureURL} from '../../models/file_system.js';
 // eslint-disable-next-line no-unused-vars
-import {AbstractFileEntry} from '../../models/file_system_entry.js';
+import {FileAccessEntry} from '../../models/file_system_access_entry.js';
 import * as state from '../../state.js';
+import {ErrorLevel, ErrorType} from '../../type.js';
 import * as util from '../../util.js';
 
 /**
@@ -92,7 +94,9 @@ export class ReviewResult {
    */
   close_(confirmed) {
     if (this.resolveOpen_ === null) {
-      console.error('Close review result with no unresolved open.');
+      reportError(
+          ErrorType.INVALID_REVIEW_UI_STATE, ErrorLevel.ERROR,
+          new Error('Close review result with no unresolved open.'));
       return;
     }
     const resolve = this.resolveOpen_;
@@ -132,7 +136,7 @@ export class ReviewResult {
 
   /**
    * Opens video result file and shows video on review result UI.
-   * @param {!AbstractFileEntry} fileEntry Video result file.
+   * @param {!FileAccessEntry} fileEntry Video result file.
    * @return {!Promise<boolean>} Promise resolved with whether user confirms
    *     with the video result.
    */

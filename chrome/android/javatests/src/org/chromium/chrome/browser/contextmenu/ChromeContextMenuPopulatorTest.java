@@ -5,14 +5,17 @@
 package org.chromium.chrome.browser.contextmenu;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.when;
 
-import static org.chromium.chrome.browser.contextmenu.RevampedContextMenuItemProperties.MENU_ID;
-import static org.chromium.chrome.browser.contextmenu.RevampedContextMenuItemProperties.TEXT;
+import static org.chromium.chrome.browser.contextmenu.ContextMenuItemProperties.MENU_ID;
+import static org.chromium.chrome.browser.contextmenu.ContextMenuItemProperties.TEXT;
+import static org.chromium.chrome.browser.preferences.ChromePreferenceKeys.CONTEXT_MENU_OPEN_NEW_TAB_IN_GROUP_ITEM_FIRST;
 
 import android.app.Activity;
+import android.net.Uri;
 import android.util.Pair;
 
 import androidx.test.filters.SmallTest;
@@ -37,7 +40,11 @@ import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.contextmenu.ChromeContextMenuPopulator.ContextMenuMode;
 import org.chromium.chrome.browser.firstrun.FirstRunStatus;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.lens.LensEntryPoint;
+import org.chromium.chrome.browser.lens.LensIntentParams;
+import org.chromium.chrome.browser.preferences.SharedPreferencesManager;
 import org.chromium.chrome.browser.share.ShareDelegate;
+import org.chromium.chrome.browser.tasks.tab_management.TabUiFeatureUtilities;
 import org.chromium.components.embedder_support.contextmenu.ContextMenuParams;
 import org.chromium.components.externalauth.ExternalAuthUtils;
 import org.chromium.components.search_engines.TemplateUrlService;
@@ -57,11 +64,12 @@ import java.util.List;
 @RunWith(BaseJUnit4ClassRunner.class)
 @Batch(Batch.UNIT_TESTS)
 public class ChromeContextMenuPopulatorTest {
-    private static final String PAGE_URL = "http://www.blah.com";
+    private static final String PAGE_URL = "http://www.blah.com/page_url";
     private static final String LINK_URL = "http://www.blah.com/other_blah";
     private static final String LINK_TEXT = "BLAH!";
     private static final String IMAGE_SRC_URL = "http://www.blah.com/image.jpg";
     private static final String IMAGE_TITLE_TEXT = "IMAGE!";
+    private static final String RETRIEVED_IMAGE_URL = "http://www.blah.com/retrieved_image.jpg";
 
     @Mock
     private Activity mActivity;
@@ -81,8 +89,6 @@ public class ChromeContextMenuPopulatorTest {
     @Mock
     private ChromeContextMenuPopulator mPopulator;
 
-    private boolean mSupportsOpenInChromeFromCct = true;
-
     @Before
     public void setUp() {
         MockitoAnnotations.initMocks(this);
@@ -92,17 +98,13 @@ public class ChromeContextMenuPopulatorTest {
         GURL pageUrl = new GURL(PAGE_URL);
         when(mItemDelegate.getPageUrl()).thenReturn(pageUrl);
         when(mItemDelegate.isIncognitoSupported()).thenReturn(true);
-        when(mItemDelegate.isOpenInOtherWindowSupported()).thenReturn(true);
         when(mItemDelegate.supportsCall()).thenReturn(true);
         when(mItemDelegate.supportsSendEmailMessage()).thenReturn(true);
         when(mItemDelegate.supportsSendTextMessage()).thenReturn(true);
         when(mItemDelegate.supportsAddToContacts()).thenReturn(true);
-        when(mItemDelegate.supportsOpenInChromeFromCct())
-                .thenAnswer((mock) -> mSupportsOpenInChromeFromCct);
 
         HashMap<String, Boolean> features = new HashMap<String, Boolean>();
         features.put(ChromeFeatureList.CONTEXT_MENU_SEARCH_WITH_GOOGLE_LENS, false);
-        features.put(ChromeFeatureList.EPHEMERAL_TAB_USING_BOTTOM_SHEET, false);
         features.put(ChromeFeatureList.READ_LATER, false);
 
         ChromeFeatureList.setTestFeatures(features);
@@ -161,7 +163,7 @@ public class ChromeContextMenuPopulatorTest {
         FirstRunStatus.setFirstRunFlowComplete(false);
         ContextMenuParams params = new ContextMenuParams(0, 0, new GURL(PAGE_URL),
                 new GURL(LINK_URL), LINK_TEXT, GURL.emptyGURL(), GURL.emptyGURL(), "", null, false,
-                0, 0, MenuSourceType.MENU_SOURCE_TOUCH);
+                0, 0, MenuSourceType.MENU_SOURCE_TOUCH, false);
 
         int[] expected = {R.id.contextmenu_copy_link_address, R.id.contextmenu_copy_link_text};
 
@@ -178,13 +180,14 @@ public class ChromeContextMenuPopulatorTest {
 
         initializePopulator(ChromeContextMenuPopulator.ContextMenuMode.NORMAL, params);
         int[] expected2 = {R.id.contextmenu_open_in_new_tab, R.id.contextmenu_open_in_incognito_tab,
-                R.id.contextmenu_open_in_other_window, R.id.contextmenu_copy_link_address,
+                R.id.contextmenu_open_in_ephemeral_tab, R.id.contextmenu_copy_link_address,
                 R.id.contextmenu_copy_link_text, R.id.contextmenu_save_link_as,
                 R.id.contextmenu_share_link};
         checkMenuOptions(expected2);
 
         initializePopulator(ChromeContextMenuPopulator.ContextMenuMode.CUSTOM_TAB, params);
-        int[] expected3 = {R.id.contextmenu_open_in_browser_id, R.id.contextmenu_copy_link_address,
+        int[] expected3 = {R.id.contextmenu_open_in_browser_id,
+                R.id.contextmenu_open_in_ephemeral_tab, R.id.contextmenu_copy_link_address,
                 R.id.contextmenu_copy_link_text, R.id.contextmenu_save_link_as,
                 R.id.contextmenu_share_link};
         checkMenuOptions(expected3);
@@ -199,41 +202,22 @@ public class ChromeContextMenuPopulatorTest {
     @Test
     @SmallTest
     @UiThreadTest
-    public void testShouldShowOpenInChromeMenuItemInContextMenu() {
-        FirstRunStatus.setFirstRunFlowComplete(true);
-        ContextMenuParams params = new ContextMenuParams(0, 0, new GURL(PAGE_URL),
-                new GURL(LINK_URL), LINK_TEXT, GURL.emptyGURL(), GURL.emptyGURL(), "", null, false,
-                0, 0, MenuSourceType.MENU_SOURCE_TOUCH);
-
-        // If the delegate returns false from supportsOpenInChromeFromCct() then open_in_chrome item
-        // should not be present.
-        mSupportsOpenInChromeFromCct = false;
-        initializePopulator(ChromeContextMenuPopulator.ContextMenuMode.CUSTOM_TAB, params);
-        int[] expected = {R.id.contextmenu_copy_link_address, R.id.contextmenu_copy_link_text,
-                R.id.contextmenu_save_link_as, R.id.contextmenu_share_link};
-        checkMenuOptions(expected);
-    }
-
-    @Test
-    @SmallTest
-    @UiThreadTest
     public void testHttpLinkWithPreviewTabEnabled() {
         ContextMenuParams params = new ContextMenuParams(0, 0, new GURL(PAGE_URL),
                 new GURL(LINK_URL), LINK_TEXT, GURL.emptyGURL(), GURL.emptyGURL(), "", null, false,
-                0, 0, MenuSourceType.MENU_SOURCE_TOUCH);
+                0, 0, MenuSourceType.MENU_SOURCE_TOUCH, false);
 
         FirstRunStatus.setFirstRunFlowComplete(true);
 
         HashMap<String, Boolean> features = new HashMap<String, Boolean>();
-        features.put(ChromeFeatureList.EPHEMERAL_TAB_USING_BOTTOM_SHEET, true);
         features.put(ChromeFeatureList.READ_LATER, false);
         ChromeFeatureList.setTestFeatures(features);
 
         initializePopulator(ChromeContextMenuPopulator.ContextMenuMode.NORMAL, params);
         int[] expected1 = {R.id.contextmenu_open_in_new_tab, R.id.contextmenu_open_in_incognito_tab,
-                R.id.contextmenu_open_in_other_window, R.id.contextmenu_open_in_ephemeral_tab,
-                R.id.contextmenu_copy_link_address, R.id.contextmenu_copy_link_text,
-                R.id.contextmenu_save_link_as, R.id.contextmenu_share_link};
+                R.id.contextmenu_open_in_ephemeral_tab, R.id.contextmenu_copy_link_address,
+                R.id.contextmenu_copy_link_text, R.id.contextmenu_save_link_as,
+                R.id.contextmenu_share_link};
         checkMenuOptions(expected1);
 
         initializePopulator(ChromeContextMenuPopulator.ContextMenuMode.CUSTOM_TAB, params);
@@ -259,7 +243,7 @@ public class ChromeContextMenuPopulatorTest {
         GURL mailto = new GURL("mailto:fake@email.com");
         ContextMenuParams params = new ContextMenuParams(0, 0, new GURL(PAGE_URL), mailto, "MAIL!",
                 GURL.emptyGURL(), new GURL(PAGE_URL), "", null, false, 0, 0,
-                MenuSourceType.MENU_SOURCE_TOUCH);
+                MenuSourceType.MENU_SOURCE_TOUCH, false);
 
         int[] expected = {R.id.contextmenu_copy};
 
@@ -300,7 +284,7 @@ public class ChromeContextMenuPopulatorTest {
         GURL tel = new GURL("tel:0048221234567");
         ContextMenuParams params = new ContextMenuParams(0, 0, new GURL(PAGE_URL), tel, "PHONE!",
                 GURL.emptyGURL(), new GURL(PAGE_URL), "", null, false, 0, 0,
-                MenuSourceType.MENU_SOURCE_TOUCH);
+                MenuSourceType.MENU_SOURCE_TOUCH, false);
 
         int[] expected = {R.id.contextmenu_copy};
 
@@ -343,7 +327,7 @@ public class ChromeContextMenuPopulatorTest {
         GURL url = new GURL(sourceUrl.getSpec() + "I_love_mouse_video.avi");
         ContextMenuParams params = new ContextMenuParams(0, ContextMenuDataMediaType.VIDEO,
                 new GURL(PAGE_URL), url, "VIDEO!", GURL.emptyGURL(), sourceUrl, "", null, true, 0,
-                0, MenuSourceType.MENU_SOURCE_TOUCH);
+                0, MenuSourceType.MENU_SOURCE_TOUCH, false);
 
         int[] expectedTab1 = {R.id.contextmenu_copy_link_address, R.id.contextmenu_copy_link_text};
 
@@ -360,7 +344,7 @@ public class ChromeContextMenuPopulatorTest {
 
         initializePopulator(ChromeContextMenuPopulator.ContextMenuMode.NORMAL, params);
         int[] expected2Tab1 = {R.id.contextmenu_open_in_new_tab,
-                R.id.contextmenu_open_in_incognito_tab, R.id.contextmenu_open_in_other_window,
+                R.id.contextmenu_open_in_incognito_tab, R.id.contextmenu_open_in_ephemeral_tab,
                 R.id.contextmenu_copy_link_address, R.id.contextmenu_copy_link_text,
                 R.id.contextmenu_save_link_as, R.id.contextmenu_share_link};
         int[] expected2Tab2 = {R.id.contextmenu_save_video};
@@ -368,8 +352,9 @@ public class ChromeContextMenuPopulatorTest {
 
         initializePopulator(ChromeContextMenuPopulator.ContextMenuMode.CUSTOM_TAB, params);
         int[] expected3Tab1 = {R.id.contextmenu_open_in_browser_id,
-                R.id.contextmenu_copy_link_address, R.id.contextmenu_copy_link_text,
-                R.id.contextmenu_save_link_as, R.id.contextmenu_share_link};
+                R.id.contextmenu_open_in_ephemeral_tab, R.id.contextmenu_copy_link_address,
+                R.id.contextmenu_copy_link_text, R.id.contextmenu_save_link_as,
+                R.id.contextmenu_share_link};
         checkMenuOptions(expected3Tab1, expected2Tab2);
 
         initializePopulator(ChromeContextMenuPopulator.ContextMenuMode.WEB_APP, params);
@@ -386,7 +371,7 @@ public class ChromeContextMenuPopulatorTest {
         FirstRunStatus.setFirstRunFlowComplete(false);
         ContextMenuParams params = new ContextMenuParams(0, ContextMenuDataMediaType.IMAGE,
                 new GURL(PAGE_URL), GURL.emptyGURL(), "", GURL.emptyGURL(), new GURL(IMAGE_SRC_URL),
-                IMAGE_TITLE_TEXT, null, true, 0, 0, MenuSourceType.MENU_SOURCE_TOUCH);
+                IMAGE_TITLE_TEXT, null, true, 0, 0, MenuSourceType.MENU_SOURCE_TOUCH, false);
 
         int[] expected = null;
         checkMenuOptions(expected);
@@ -400,14 +385,15 @@ public class ChromeContextMenuPopulatorTest {
         FirstRunStatus.setFirstRunFlowComplete(true);
 
         initializePopulator(ChromeContextMenuPopulator.ContextMenuMode.NORMAL, params);
-        int[] expected2 = {R.id.contextmenu_open_image_in_new_tab, R.id.contextmenu_copy_image,
+        int[] expected2 = {R.id.contextmenu_open_image_in_new_tab,
+                R.id.contextmenu_open_image_in_ephemeral_tab, R.id.contextmenu_copy_image,
                 R.id.contextmenu_save_image, R.id.contextmenu_share_image};
         checkMenuOptions(expected2);
 
         initializePopulator(ChromeContextMenuPopulator.ContextMenuMode.CUSTOM_TAB, params);
         int[] expected3 = {R.id.contextmenu_open_in_browser_id, R.id.contextmenu_open_image,
-                R.id.contextmenu_copy_image, R.id.contextmenu_save_image,
-                R.id.contextmenu_share_image};
+                R.id.contextmenu_open_image_in_ephemeral_tab, R.id.contextmenu_copy_image,
+                R.id.contextmenu_save_image, R.id.contextmenu_share_image};
         checkMenuOptions(expected3);
 
         initializePopulator(ChromeContextMenuPopulator.ContextMenuMode.WEB_APP, params);
@@ -421,10 +407,10 @@ public class ChromeContextMenuPopulatorTest {
     @UiThreadTest
     public void testHttpLinkWithImageHiFi() {
         FirstRunStatus.setFirstRunFlowComplete(false);
-        ContextMenuParams params =
-                new ContextMenuParams(0, ContextMenuDataMediaType.IMAGE, new GURL(PAGE_URL),
-                        new GURL(LINK_URL), LINK_TEXT, GURL.emptyGURL(), new GURL(IMAGE_SRC_URL),
-                        IMAGE_TITLE_TEXT, null, true, 0, 0, MenuSourceType.MENU_SOURCE_TOUCH);
+        ContextMenuParams params = new ContextMenuParams(0, ContextMenuDataMediaType.IMAGE,
+                new GURL(PAGE_URL), new GURL(LINK_URL), LINK_TEXT, GURL.emptyGURL(),
+                new GURL(IMAGE_SRC_URL), IMAGE_TITLE_TEXT, null, true, 0, 0,
+                MenuSourceType.MENU_SOURCE_TOUCH, false);
 
         int[] expected = {R.id.contextmenu_copy_link_address};
 
@@ -441,18 +427,20 @@ public class ChromeContextMenuPopulatorTest {
 
         initializePopulator(ChromeContextMenuPopulator.ContextMenuMode.NORMAL, params);
         int[] expected2Tab1 = {R.id.contextmenu_open_in_new_tab,
-                R.id.contextmenu_open_in_incognito_tab, R.id.contextmenu_open_in_other_window,
+                R.id.contextmenu_open_in_incognito_tab, R.id.contextmenu_open_in_ephemeral_tab,
                 R.id.contextmenu_copy_link_address, R.id.contextmenu_save_link_as,
                 R.id.contextmenu_share_link};
-        int[] expected2Tab2 = {R.id.contextmenu_open_image_in_new_tab, R.id.contextmenu_copy_image,
+        int[] expected2Tab2 = {R.id.contextmenu_open_image_in_new_tab,
+                R.id.contextmenu_open_image_in_ephemeral_tab, R.id.contextmenu_copy_image,
                 R.id.contextmenu_save_image, R.id.contextmenu_share_image};
         checkMenuOptions(expected2Tab1, expected2Tab2);
 
         initializePopulator(ChromeContextMenuPopulator.ContextMenuMode.CUSTOM_TAB, params);
         int[] expected3Tab1 = {R.id.contextmenu_open_in_browser_id,
-                R.id.contextmenu_copy_link_address, R.id.contextmenu_save_link_as,
-                R.id.contextmenu_share_link};
-        int[] expected3Tab2 = {R.id.contextmenu_open_image, R.id.contextmenu_copy_image,
+                R.id.contextmenu_open_in_ephemeral_tab, R.id.contextmenu_copy_link_address,
+                R.id.contextmenu_save_link_as, R.id.contextmenu_share_link};
+        int[] expected3Tab2 = {R.id.contextmenu_open_image,
+                R.id.contextmenu_open_image_in_ephemeral_tab, R.id.contextmenu_copy_image,
                 R.id.contextmenu_save_image, R.id.contextmenu_share_image};
         checkMenuOptions(expected3Tab1, expected3Tab2);
 
@@ -471,24 +459,25 @@ public class ChromeContextMenuPopulatorTest {
         FirstRunStatus.setFirstRunFlowComplete(true);
 
         HashMap<String, Boolean> features = new HashMap<String, Boolean>();
-        features.put(ChromeFeatureList.EPHEMERAL_TAB_USING_BOTTOM_SHEET, false);
         features.put(ChromeFeatureList.READ_LATER, true);
         ChromeFeatureList.setTestFeatures(features);
 
         ContextMenuParams params = new ContextMenuParams(0, 0, new GURL(PAGE_URL),
                 new GURL(LINK_URL), LINK_TEXT, GURL.emptyGURL(), GURL.emptyGURL(), "", null, false,
-                0, 0, MenuSourceType.MENU_SOURCE_TOUCH);
+                0, 0, MenuSourceType.MENU_SOURCE_TOUCH, false);
 
         // HTTP scheme should include read later context menu item.
         initializePopulator(ChromeContextMenuPopulator.ContextMenuMode.NORMAL, params);
         int[] expected = {R.id.contextmenu_open_in_new_tab, R.id.contextmenu_open_in_incognito_tab,
-                R.id.contextmenu_open_in_other_window, R.id.contextmenu_copy_link_address,
+                R.id.contextmenu_open_in_ephemeral_tab, R.id.contextmenu_copy_link_address,
                 R.id.contextmenu_copy_link_text, R.id.contextmenu_save_link_as,
                 R.id.contextmenu_read_later, R.id.contextmenu_share_link};
         checkMenuOptions(expected);
 
+        // Custom tab should include read later.
         initializePopulator(ChromeContextMenuPopulator.ContextMenuMode.CUSTOM_TAB, params);
-        int[] expected2 = {R.id.contextmenu_open_in_browser_id, R.id.contextmenu_copy_link_address,
+        int[] expected2 = {R.id.contextmenu_open_in_browser_id,
+                R.id.contextmenu_open_in_ephemeral_tab, R.id.contextmenu_copy_link_address,
                 R.id.contextmenu_copy_link_text, R.id.contextmenu_save_link_as,
                 R.id.contextmenu_read_later, R.id.contextmenu_share_link};
         checkMenuOptions(expected2);
@@ -502,12 +491,147 @@ public class ChromeContextMenuPopulatorTest {
         // Non-http scheme should not include read later context menu item.
         params = new ContextMenuParams(0, 0, new GURL("chrome://flags"), new GURL(LINK_URL),
                 LINK_TEXT, GURL.emptyGURL(), GURL.emptyGURL(), "", null, false, 0, 0,
-                MenuSourceType.MENU_SOURCE_TOUCH);
+                MenuSourceType.MENU_SOURCE_TOUCH, false);
         initializePopulator(ChromeContextMenuPopulator.ContextMenuMode.NORMAL, params);
         int[] expected4 = {R.id.contextmenu_open_in_new_tab, R.id.contextmenu_open_in_incognito_tab,
-                R.id.contextmenu_open_in_other_window, R.id.contextmenu_copy_link_address,
+                R.id.contextmenu_copy_link_address, R.id.contextmenu_copy_link_text,
+                R.id.contextmenu_save_link_as, R.id.contextmenu_share_link};
+        checkMenuOptions(expected);
+    }
+
+    @Test
+    @SmallTest
+    @UiThreadTest
+    public void testIncognito() {
+        FirstRunStatus.setFirstRunFlowComplete(true);
+
+        HashMap<String, Boolean> features = new HashMap<String, Boolean>();
+        features.put(ChromeFeatureList.READ_LATER, true);
+        ChromeFeatureList.setTestFeatures(features);
+
+        ContextMenuParams params = new ContextMenuParams(0, 0, new GURL(PAGE_URL),
+                new GURL(LINK_URL), LINK_TEXT, GURL.emptyGURL(), GURL.emptyGURL(), "", null, false,
+                0, 0, MenuSourceType.MENU_SOURCE_TOUCH, false);
+
+        when(mItemDelegate.isIncognito()).thenReturn(true);
+        initializePopulator(ChromeContextMenuPopulator.ContextMenuMode.NORMAL, params);
+        int[] expectedIncognito = {R.id.contextmenu_open_in_new_tab,
+                R.id.contextmenu_open_in_ephemeral_tab, R.id.contextmenu_copy_link_address,
+                R.id.contextmenu_copy_link_text, R.id.contextmenu_read_later,
+                R.id.contextmenu_share_link};
+        checkMenuOptions(expectedIncognito);
+    }
+
+    @Test
+    @SmallTest
+    @UiThreadTest
+    public void testOpenInOtherWindow() {
+        FirstRunStatus.setFirstRunFlowComplete(true);
+
+        HashMap<String, Boolean> features = new HashMap<String, Boolean>();
+        features.put(ChromeFeatureList.READ_LATER, false);
+        ChromeFeatureList.setTestFeatures(features);
+
+        ContextMenuParams params = new ContextMenuParams(0, 0, new GURL(PAGE_URL),
+                new GURL(LINK_URL), LINK_TEXT, GURL.emptyGURL(), GURL.emptyGURL(), "", null, false,
+                0, 0, MenuSourceType.MENU_SOURCE_TOUCH, false);
+
+        when(mItemDelegate.isOpenInOtherWindowSupported()).thenReturn(true);
+        initializePopulator(ChromeContextMenuPopulator.ContextMenuMode.NORMAL, params);
+        int[] expectedMultiWindow = {R.id.contextmenu_open_in_new_tab,
+                R.id.contextmenu_open_in_incognito_tab, R.id.contextmenu_open_in_other_window,
+                R.id.contextmenu_open_in_ephemeral_tab, R.id.contextmenu_copy_link_address,
+                R.id.contextmenu_copy_link_text, R.id.contextmenu_save_link_as,
+                R.id.contextmenu_share_link};
+        checkMenuOptions(expectedMultiWindow);
+    }
+
+    @Test
+    @SmallTest
+    @UiThreadTest
+    public void testOpenInNewWindow() {
+        FirstRunStatus.setFirstRunFlowComplete(true);
+
+        HashMap<String, Boolean> features = new HashMap<String, Boolean>();
+        features.put(ChromeFeatureList.READ_LATER, false);
+        ChromeFeatureList.setTestFeatures(features);
+
+        ContextMenuParams params = new ContextMenuParams(0, 0, new GURL(PAGE_URL),
+                new GURL(LINK_URL), LINK_TEXT, GURL.emptyGURL(), GURL.emptyGURL(), "", null, false,
+                0, 0, MenuSourceType.MENU_SOURCE_TOUCH, false);
+
+        when(mItemDelegate.canEnterMultiWindowMode()).thenReturn(true);
+        initializePopulator(ChromeContextMenuPopulator.ContextMenuMode.NORMAL, params);
+        doReturn(true).when(mPopulator).isTabletScreen();
+        int[] expectedMultiWindow = {R.id.contextmenu_open_in_new_tab,
+                R.id.contextmenu_open_in_incognito_tab, R.id.contextmenu_open_in_new_window,
+                R.id.contextmenu_open_in_ephemeral_tab, R.id.contextmenu_copy_link_address,
+                R.id.contextmenu_copy_link_text, R.id.contextmenu_save_link_as,
+                R.id.contextmenu_share_link};
+        checkMenuOptions(expectedMultiWindow);
+    }
+
+    @Test
+    @SmallTest
+    @UiThreadTest
+    public void testHttpLink_WithoutAutoGroupCreation() {
+        TabUiFeatureUtilities.ENABLE_TAB_GROUP_AUTO_CREATION.setForTesting(false);
+
+        FirstRunStatus.setFirstRunFlowComplete(true);
+
+        ContextMenuParams params = new ContextMenuParams(0, 0, new GURL(PAGE_URL),
+                new GURL(LINK_URL), LINK_TEXT, GURL.emptyGURL(), GURL.emptyGURL(), "", null, false,
+                0, 0, MenuSourceType.MENU_SOURCE_TOUCH, false);
+
+        // Show "open in new tab" item first
+        SharedPreferencesManager.getInstance().writeBoolean(
+                CONTEXT_MENU_OPEN_NEW_TAB_IN_GROUP_ITEM_FIRST, false);
+        initializePopulator(ChromeContextMenuPopulator.ContextMenuMode.NORMAL, params);
+        int[] expected = {R.id.contextmenu_open_in_new_tab,
+                R.id.contextmenu_open_in_new_tab_in_group, R.id.contextmenu_open_in_incognito_tab,
+                R.id.contextmenu_open_in_ephemeral_tab, R.id.contextmenu_copy_link_address,
                 R.id.contextmenu_copy_link_text, R.id.contextmenu_save_link_as,
                 R.id.contextmenu_share_link};
         checkMenuOptions(expected);
+
+        // Show "open in new tab in group" item first
+        SharedPreferencesManager.getInstance().writeBoolean(
+                CONTEXT_MENU_OPEN_NEW_TAB_IN_GROUP_ITEM_FIRST, true);
+        initializePopulator(ChromeContextMenuPopulator.ContextMenuMode.NORMAL, params);
+        int[] expected2 = {R.id.contextmenu_open_in_new_tab_in_group,
+                R.id.contextmenu_open_in_new_tab, R.id.contextmenu_open_in_incognito_tab,
+                R.id.contextmenu_open_in_ephemeral_tab, R.id.contextmenu_copy_link_address,
+                R.id.contextmenu_copy_link_text, R.id.contextmenu_save_link_as,
+                R.id.contextmenu_share_link};
+        checkMenuOptions(expected2);
+
+        // Clean up
+        SharedPreferencesManager.getInstance().removeKey(
+                CONTEXT_MENU_OPEN_NEW_TAB_IN_GROUP_ITEM_FIRST);
+        TabUiFeatureUtilities.ENABLE_TAB_GROUP_AUTO_CREATION.setForTesting(true);
+    }
+
+    @Test
+    @SmallTest
+    @UiThreadTest
+    public void testGetLensIntentParams() {
+        when(mItemDelegate.isIncognito()).thenReturn(true);
+        ContextMenuParams params = new ContextMenuParams(0, 0, new GURL(PAGE_URL),
+                new GURL(LINK_URL), LINK_TEXT, GURL.emptyGURL(), new GURL(IMAGE_SRC_URL),
+                IMAGE_TITLE_TEXT, null, false, 0, 0, MenuSourceType.MENU_SOURCE_TOUCH, false);
+        initializePopulator(ChromeContextMenuPopulator.ContextMenuMode.NORMAL, params);
+
+        LensIntentParams lensIntentParams = mPopulator.getLensIntentParams(
+                LensEntryPoint.CONTEXT_MENU_SEARCH_MENU_ITEM, Uri.parse(RETRIEVED_IMAGE_URL));
+        assertEquals("Lens intent parameters has incorrect image URI.", RETRIEVED_IMAGE_URL,
+                lensIntentParams.getImageUri().toString());
+        assertTrue("Lens intent parameters has incorrect incognito value.",
+                lensIntentParams.getIsIncognito());
+        assertEquals("Lens intent parameters has incorrect src URL.", IMAGE_SRC_URL,
+                lensIntentParams.getSrcUrl());
+        assertEquals("Lens intent parameters has incorrect title or alt text.", IMAGE_TITLE_TEXT,
+                lensIntentParams.getImageTitleOrAltText());
+        assertEquals("Lens intent parameters has incorrect page URL.", PAGE_URL,
+                lensIntentParams.getPageUrl());
     }
 }

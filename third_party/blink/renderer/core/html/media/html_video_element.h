@@ -97,6 +97,11 @@ class CORE_EXPORT HTMLVideoElement final
 
   KURL PosterImageURL() const override;
 
+  // Returns whether the current poster image URL is the default for the
+  // document.
+  // TODO(1190335): Remove this once default poster image URL is removed.
+  bool IsDefaultPosterImageURL() const;
+
   // Helper for GetSourceImageForCanvas() and other external callers who want a
   // StaticBitmapImage of the current VideoFrame. If |allow_accelerated_images|
   // is set to false a software backed CanvasResourceProvider will be used to
@@ -105,8 +110,10 @@ class CORE_EXPORT HTMLVideoElement final
       bool allow_accelerated_images = true);
 
   // CanvasImageSource implementation
-  scoped_refptr<Image> GetSourceImageForCanvas(SourceImageStatus*,
-                                               const FloatSize&) override;
+  scoped_refptr<Image> GetSourceImageForCanvas(
+      SourceImageStatus*,
+      const FloatSize&,
+      const AlphaDisposition alpha_disposition = kPremultiplyAlpha) override;
   bool IsVideoElement() const override { return true; }
   bool WouldTaintOrigin() const override;
   FloatSize ElementSize(const FloatSize&,
@@ -120,12 +127,11 @@ class CORE_EXPORT HTMLVideoElement final
   // ImageBitmapSource implementation
   IntSize BitmapSourceSize() const override;
   ScriptPromise CreateImageBitmap(ScriptState*,
-                                  base::Optional<IntRect> crop_rect,
+                                  absl::optional<IntRect> crop_rect,
                                   const ImageBitmapOptions*,
                                   ExceptionState&) override;
 
   // WebMediaPlayerClient implementation.
-  void OnBecamePersistentVideo(bool) final;
   void OnRequestVideoFrameCallback() final;
 
   bool IsPersistent() const;
@@ -138,6 +144,7 @@ class CORE_EXPORT HTMLVideoElement final
   DisplayType GetDisplayType() const final;
   bool IsInAutoPIP() const final;
   void OnPictureInPictureStateChange() final;
+  void SetPersistentState(bool persistent) final;
 
   // Used by the PictureInPictureController as callback when the video element
   // enters or exits Picture-in-Picture state.
@@ -196,6 +203,8 @@ class CORE_EXPORT HTMLVideoElement final
 
   void OnIntersectionChangedForLazyLoad(
       const HeapVector<Member<IntersectionObserverEntry>>& entries);
+
+  void SetPersistentStateInternal(bool persistent);
 
   Member<HTMLImageLoader> image_loader_;
   Member<MediaCustomControlsFullscreenDetector>

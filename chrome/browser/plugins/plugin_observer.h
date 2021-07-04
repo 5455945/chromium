@@ -11,15 +11,21 @@
 
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "base/strings/string16.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/common/plugin.mojom.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_receiver_set.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "ppapi/buildflags/buildflags.h"
 
-class InfoBarService;
+#if !BUILDFLAG(ENABLE_PLUGINS)
+#error "Plugins should be enabled"
+#endif
+
+namespace infobars {
+class ContentInfoBarManager;
+}
 
 namespace content {
 class WebContents;
@@ -36,8 +42,9 @@ class PluginObserver : public content::WebContentsObserver,
                      base::ProcessId plugin_pid) override;
 
   // Public for tests only.
-  static void CreatePluginObserverInfoBar(InfoBarService* infobar_service,
-                                          const base::string16& plugin_name);
+  static void CreatePluginObserverInfoBar(
+      infobars::ContentInfoBarManager* infobar_manager,
+      const std::u16string& plugin_name);
 
  private:
   class PluginPlaceholderHost;

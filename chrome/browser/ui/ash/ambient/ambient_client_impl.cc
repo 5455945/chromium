@@ -61,8 +61,7 @@ bool HasPrimaryAccount(const Profile* profile) {
   if (!identity_manager)
     return false;
 
-  return identity_manager->HasPrimaryAccount(
-      signin::ConsentLevel::kNotRequired);
+  return identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin);
 }
 
 bool IsEmailDomainSupported(const user_manager::User* user) {
@@ -85,7 +84,7 @@ AmbientClientImpl::~AmbientClientImpl() = default;
 bool AmbientClientImpl::IsAmbientModeAllowed() {
   DCHECK(chromeos::features::IsAmbientModeEnabled());
 
-  if (chromeos::DemoSession::IsDeviceInDemoMode())
+  if (ash::DemoSession::IsDeviceInDemoMode())
     return false;
 
   const user_manager::User* const active_user = GetActiveUser();
@@ -106,7 +105,7 @@ bool AmbientClientImpl::IsAmbientModeAllowed() {
   if (!HasPrimaryAccount(profile))
     return false;
 
-  if (!profile->IsRegularProfile())
+  if (profile->IsOffTheRecord())
     return false;
 
   return true;
@@ -120,8 +119,8 @@ void AmbientClientImpl::RequestAccessToken(GetAccessTokenCallback callback) {
       IdentityManagerFactory::GetForProfile(profile);
   DCHECK(identity_manager);
 
-  CoreAccountInfo account_info = identity_manager->GetPrimaryAccountInfo(
-      signin::ConsentLevel::kNotRequired);
+  CoreAccountInfo account_info =
+      identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin);
   const signin::ScopeSet scopes{kPhotosOAuthScope, kBackdropOAuthScope};
   // TODO(b/148463064): Handle retry refresh token and multiple requests.
   // Currently only one request is allowed.

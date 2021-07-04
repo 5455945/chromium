@@ -18,6 +18,7 @@
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/callback_helpers.h"
+#include "base/cxx17_backports.h"
 #include "base/enterprise_util.h"
 #include "base/files/file_util.h"
 #include "base/json/json_reader.h"
@@ -30,8 +31,6 @@
 #include "base/path_service.h"
 #include "base/scoped_native_library.h"
 #include "base/sequenced_task_runner.h"
-#include "base/stl_util.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_util.h"
 #include "base/threading/scoped_thread_priority.h"
 #include "base/values.h"
@@ -187,6 +186,8 @@ void CollectEnterpriseUMAs() {
                             base::win::IsDeviceRegisteredWithManagement());
   base::UmaHistogramBoolean("EnterpriseCheck.IsEnterpriseUser",
                             base::IsMachineExternallyManaged());
+  base::UmaHistogramBoolean("EnterpriseCheck.IsJoinedToAzureAD",
+                            base::win::IsJoinedToAzureAD());
 
   std::wstring machine_name;
   if (GetName(
@@ -224,7 +225,7 @@ void CollectEnterpriseUMAs() {
 PolicyLoaderWin::PolicyLoaderWin(
     scoped_refptr<base::SequencedTaskRunner> task_runner,
     const std::wstring& chrome_policy_key)
-    : AsyncPolicyLoader(task_runner),
+    : AsyncPolicyLoader(task_runner, /*periodic_updates=*/true),
       is_initialized_(false),
       chrome_policy_key_(chrome_policy_key),
       user_policy_changed_event_(

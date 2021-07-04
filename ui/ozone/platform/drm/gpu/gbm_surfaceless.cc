@@ -13,7 +13,7 @@
 #include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
 #include "base/trace_event/trace_event.h"
-#include "ui/gfx/gpu_fence.h"
+#include "ui/gfx/gpu_fence_handle.h"
 #include "ui/gfx/presentation_feedback.h"
 #include "ui/gl/gl_bindings.h"
 #include "ui/ozone/common/egl_util.h"
@@ -268,7 +268,8 @@ void GbmSurfaceless::SubmitFrame() {
         submitted_frame_->ScheduleOverlayPlanes(widget_);
 
     if (!schedule_planes_succeeded) {
-      OnSubmission(gfx::SwapResult::SWAP_FAILED, nullptr);
+      OnSubmission(gfx::SwapResult::SWAP_FAILED,
+                   /*release_fence=*/gfx::GpuFenceHandle());
       OnPresentation(gfx::PresentationFeedback::Failure());
       return;
     }
@@ -296,8 +297,12 @@ void GbmSurfaceless::FenceRetired(PendingFrame* frame) {
 }
 
 void GbmSurfaceless::OnSubmission(gfx::SwapResult result,
-                                  std::unique_ptr<gfx::GpuFence> out_fence) {
+                                  gfx::GpuFenceHandle release_fence) {
   submitted_frame_->swap_result = result;
+  if (!release_fence.is_null()) {
+    std::move(submitted_frame_->completion_callback)
+        .Run(gfx::SwapCompletionResult(result, std::move(release_fence)));
+  }
 }
 
 void GbmSurfaceless::OnPresentation(const gfx::PresentationFeedback& feedback) {
@@ -311,8 +316,9 @@ void GbmSurfaceless::OnPresentation(const gfx::PresentationFeedback& feedback) {
   submitted_frame_->overlays.clear();
 
   gfx::SwapResult result = submitted_frame_->swap_result;
-  std::move(submitted_frame_->completion_callback)
-      .Run(gfx::SwapCompletionResult(result));
+  if (submitted_frame_->completion_callback)
+    std::move(submitted_frame_->completion_callback)
+        .Run(gfx::SwapCompletionResult(result));
   std::move(submitted_frame_->presentation_callback).Run(feedback_copy);
   submitted_frame_.reset();
 

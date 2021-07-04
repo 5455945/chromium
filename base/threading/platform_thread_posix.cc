@@ -15,10 +15,10 @@
 
 #include <memory>
 
+#include "base/allocator/buildflags.h"
 #include "base/debug/activity_tracker.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
-#include "base/no_destructor.h"
 #include "base/threading/platform_thread_internal_posix.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "base/threading/thread_id_name_manager.h"
@@ -36,6 +36,11 @@
 #include <zircon/process.h>
 #else
 #include <sys/resource.h>
+#endif
+
+#if BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+#include "base/allocator/partition_allocator/starscan/pcscan.h"
+#include "base/allocator/partition_allocator/starscan/stack/stack.h"
 #endif
 
 namespace base {
@@ -67,6 +72,9 @@ void* ThreadFunc(void* params) {
       base::ThreadRestrictions::SetSingletonAllowed(false);
 
 #if !defined(OS_NACL)
+#if BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+    internal::PCScan::NotifyThreadCreated(internal::GetStackPointer());
+#endif
 
 #if defined(OS_APPLE)
     PlatformThread::SetCurrentThreadRealtimePeriodValue(
@@ -89,6 +97,10 @@ void* ThreadFunc(void* params) {
   ThreadIdNameManager::GetInstance()->RemoveName(
       PlatformThread::CurrentHandle().platform_handle(),
       PlatformThread::CurrentId());
+
+#if !defined(OS_NACL) && BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+  internal::PCScan::NotifyThreadDestroyed();
+#endif
 
   base::TerminateOnThread();
   return nullptr;
@@ -182,7 +194,7 @@ PlatformThreadId PlatformThread::CurrentId() {
 #if defined(OS_APPLE)
   return pthread_mach_thread_np(pthread_self());
 #elif defined(OS_LINUX) || defined(OS_CHROMEOS)
-  static NoDestructor<InitAtFork> init_at_fork;
+  static InitAtFork init_at_fork;
   if (g_thread_id == -1) {
     g_thread_id = syscall(__NR_gettid);
   } else {

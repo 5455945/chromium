@@ -327,6 +327,11 @@ namespace http://www.w3.org/1999/xhtml
     property webkitRequestFullScreen
     property webkitRequestFullscreen
 html element a
+    property attributionDestination
+    property attributionExpiry
+    property attributionReportTo
+    property attributionSourceEventId
+    property attributionSourcePriority
     property charset
     property coords
     property download
@@ -344,6 +349,7 @@ html element a
     property port
     property protocol
     property referrerPolicy
+    property registerAttributionSource
     property rel
     property relList
     property rev
@@ -551,6 +557,8 @@ html element embed
     property src
     property type
     property width
+html element fencedframe
+    property src
 html element fieldset
     property checkValidity
     property disabled
@@ -650,7 +658,6 @@ html element iframe
     property contentDocument
     property contentWindow
     property csp
-    property disallowDocumentAccess
     property featurePolicy
     property frameBorder
     property getSVGDocument
@@ -666,7 +673,6 @@ html element iframe
     property scrolling
     property src
     property srcdoc
-    property trustToken
     property width
 html element img
     property align
@@ -816,6 +822,7 @@ html element menu
 html element meta
     property content
     property httpEquiv
+    property media
     property name
     property scheme
 html element meter
@@ -900,7 +907,9 @@ html element param
 html element picture
 html element plaintext
 html element popup
+    property anchor
     property hide
+    property initiallyOpen
     property open
     property show
 html element pre
@@ -959,6 +968,7 @@ html element select
     property value
     property willValidate
 html element selectmenu
+    property open
     property value
 html element slot
     property assign

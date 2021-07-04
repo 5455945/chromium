@@ -6,7 +6,9 @@ package org.chromium.chrome.browser.webauth.authenticator;
 
 import android.Manifest.permission;
 import android.annotation.SuppressLint;
+import android.annotation.TargetApi;
 import android.app.Activity;
+import android.app.KeyguardManager;
 import android.bluetooth.BluetoothAdapter;
 import android.content.Context;
 import android.content.DialogInterface;
@@ -15,6 +17,7 @@ import android.content.pm.PackageManager;
 import android.graphics.drawable.Drawable;
 import android.hardware.usb.UsbAccessory;
 import android.hardware.usb.UsbManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.ContextThemeWrapper;
 import android.view.LayoutInflater;
@@ -33,6 +36,8 @@ import androidx.vectordrawable.graphics.drawable.AnimatedVectorDrawableCompat;
 
 import org.chromium.base.Log;
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.task.PostTask;
+import org.chromium.content_public.browser.UiThreadTaskTraits;
 import org.chromium.ui.base.ActivityAndroidPermissionDelegate;
 import org.chromium.ui.base.AndroidPermissionDelegate;
 import org.chromium.ui.widget.Toast;
@@ -50,25 +55,41 @@ public class CableAuthenticatorUI
     // to a request to enable Bluetooth. (Request codes can only be 16-bit.)
     private static final int ENABLE_BLUETOOTH_REQUEST_CODE = 64907;
 
+    // BLE_SCREEN_DELAY_SECS is the number of seconds that the screen for BLE
+    // enabling will show before the request to actually enable BLE (which
+    // causes Android to draw on top of it) is made.
+    private static final int BLE_SCREEN_DELAY_SECS = 2;
+
     // USB_PROMPT_TIMEOUT_SECS is the number of seconds the spinner will show
     // for before being replaced with a prompt to connect via USB cable.
     private static final int USB_PROMPT_TIMEOUT_SECS = 20;
 
-    private static final String ACTIVITY_CLASS_NAME_EXTRA =
-            "org.chromium.chrome.modules.cablev2_authenticator.ActivityClassName";
     private static final String FCM_EXTRA = "org.chromium.chrome.modules.cablev2_authenticator.FCM";
+    private static final String EVENT_EXTRA =
+            "org.chromium.chrome.modules.cablev2_authenticator.EVENT";
     private static final String NETWORK_CONTEXT_EXTRA =
             "org.chromium.chrome.modules.cablev2_authenticator.NetworkContext";
     private static final String REGISTRATION_EXTRA =
             "org.chromium.chrome.modules.cablev2_authenticator.Registration";
+    private static final String SECRET_EXTRA =
+            "org.chromium.chrome.modules.cablev2_authenticator.Secret";
     private static final String SERVER_LINK_EXTRA =
             "org.chromium.chrome.browser.webauth.authenticator.ServerLink";
+
+    // These entries duplicate some of the enum values from
+    // device::cablev2::authenticator::Platform::Error. They must be kept in
+    // sync with the C++ side because C++ communicates these values to this
+    // code.
+    private static final int ERROR_NONE = 0;
+    private static final int ERROR_UNEXPECTED_EOF = 100;
+    private static final int ERROR_NO_SCREENLOCK = 110;
 
     private enum Mode {
         QR, // Triggered from Settings; can scan QR code to start handshake.
         FCM, // Triggered by user selecting notification; handshake already running.
         USB, // Triggered by connecting via USB.
         SERVER_LINK, // Triggered by GMSCore forwarding from GAIA.
+        ERROR, // An invalid request. Error in |mErrorCode|.
     }
     private Mode mMode;
     private AndroidPermissionDelegate mPermissionDelegate;
@@ -77,14 +98,29 @@ public class CableAuthenticatorUI
     private LinearLayout mUnlinkButton;
     private ImageView mHeader;
     private TextView mStatusText;
+    private View mErrorView;
+    private View mErrorCloseButton;
+    private View mSpinnerView;
+
+    // mErrorCode contains a value of the authenticator::Platform::Error
+    // enumeration when |mMode| is |ERROR|.
+    private int mErrorCode;
 
     // The following two members store a pending QR-scan result while Bluetooth
     // is enabled.
     private String mPendingQRCode;
     private boolean mPendingShouldLink;
 
+    // mNeedToSignalBluetoothReady is true if a cloud message is pending
+    // Bluetooth enabling and this class should prompt the user to enable
+    // Bluetooth once the UI is showing.
+    private boolean mNeedToSignalBluetoothReady;
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        // This code should not be reachable on older Android versions.
+        assert Build.VERSION.SDK_INT >= Build.VERSION_CODES.N;
+
         super.onCreate(savedInstanceState);
         final Context context = getContext();
 
@@ -92,26 +128,85 @@ public class CableAuthenticatorUI
         final UsbAccessory accessory =
                 (UsbAccessory) arguments.getParcelable(UsbManager.EXTRA_ACCESSORY);
         final byte[] serverLink = arguments.getByteArray(SERVER_LINK_EXTRA);
+        final byte[] fcmEvent = arguments.getByteArray(EVENT_EXTRA);
         if (accessory != null) {
             mMode = Mode.USB;
         } else if (arguments.getBoolean(FCM_EXTRA)) {
             mMode = Mode.FCM;
         } else if (serverLink != null) {
             mMode = Mode.SERVER_LINK;
+
+            mErrorCode = CableAuthenticator.validateServerLinkData(serverLink);
+            if (mErrorCode != ERROR_NONE) {
+                mMode = Mode.ERROR;
+                return;
+            }
         } else {
             mMode = Mode.QR;
         }
 
+        // GMSCore will immediately fail all requests if a screenlock isn't
+        // configured, except for server-link because PaaSK is specific.
+        // Outside of server-link, the device shouldn't have advertised itself
+        // via Sync, but it's possible for a request to come in soon after a
+        // screen lock was removed.
+        if (mMode != Mode.SERVER_LINK && !hasScreenLockConfigured(context)) {
+            mMode = Mode.ERROR;
+            mErrorCode = ERROR_NO_SCREENLOCK;
+        }
+
         Log.i(TAG, "Starting in mode " + mMode.toString());
+
+        if (mMode == Mode.ERROR) {
+            return;
+        }
 
         final long networkContext = arguments.getLong(NETWORK_CONTEXT_EXTRA);
         final long registration = arguments.getLong(REGISTRATION_EXTRA);
-        final String activityClassName = arguments.getString(ACTIVITY_CLASS_NAME_EXTRA);
+        final byte[] secret = arguments.getByteArray(SECRET_EXTRA);
 
         mPermissionDelegate = new ActivityAndroidPermissionDelegate(
                 new WeakReference<Activity>((Activity) context));
         mAuthenticator = new CableAuthenticator(getContext(), this, networkContext, registration,
-                activityClassName, mMode == Mode.FCM, accessory, serverLink);
+                secret, mMode == Mode.FCM, accessory, serverLink, fcmEvent);
+
+        if (mMode == Mode.FCM) {
+            BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+            if (adapter.isEnabled()) {
+                mAuthenticator.onBluetoothReadyForCloudMessage(/*needToDisable=*/false);
+            } else {
+                mNeedToSignalBluetoothReady = true;
+            }
+        }
+    }
+
+    // This class should not be reachable on Android versions < N (API level 24).
+    @TargetApi(24)
+    private static boolean hasScreenLockConfigured(Context context) {
+        KeyguardManager km = (KeyguardManager) context.getSystemService(Context.KEYGUARD_SERVICE);
+        return km.isDeviceSecure();
+    }
+
+    private View createSpinnerScreen(LayoutInflater inflater, ViewGroup container) {
+        View v = inflater.inflate(R.layout.cablev2_serverlink, container, false);
+        mStatusText = v.findViewById(R.id.status_text);
+
+        final AnimatedVectorDrawableCompat anim = AnimatedVectorDrawableCompat.create(
+                getContext(), R.drawable.circle_loader_animation);
+        // There is no way to make an animation loop. Instead it must be
+        // manually started each time it completes.
+        anim.registerAnimationCallback(new Animatable2Compat.AnimationCallback() {
+            @Override
+            public void onAnimationEnd(Drawable drawable) {
+                if (drawable != null) {
+                    anim.start();
+                }
+            }
+        });
+        ((ImageView) v.findViewById(R.id.spinner)).setImageDrawable(anim);
+        anim.start();
+
+        return v;
     }
 
     @Override
@@ -119,61 +214,68 @@ public class CableAuthenticatorUI
             LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
         getActivity().setTitle(R.string.cablev2_activity_title);
         ViewGroup top = new LinearLayout(getContext());
+
+        // Inflate the error view in case it's needed later.
+        mErrorView = inflater.inflate(R.layout.cablev2_error, container, false);
+
         View v = null;
 
-        switch (mMode) {
-            case USB:
-                v = inflater.inflate(R.layout.cablev2_usb_attached, container, false);
-                break;
+        if (mNeedToSignalBluetoothReady) {
+            v = inflater.inflate(R.layout.cablev2_ble_enable, container, false);
+            mSpinnerView = createSpinnerScreen(inflater, container);
+        } else {
+            switch (mMode) {
+                case USB:
+                    v = inflater.inflate(R.layout.cablev2_usb_attached, container, false);
+                    break;
 
-            case FCM:
-                v = inflater.inflate(R.layout.cablev2_fcm, container, false);
-                break;
+                case FCM:
+                case SERVER_LINK:
+                    v = createSpinnerScreen(inflater, container);
+                    break;
 
-            case SERVER_LINK:
-                v = inflater.inflate(R.layout.cablev2_serverlink, container, false);
-                mStatusText = v.findViewById(R.id.status_text);
+                case QR:
+                    // TODO: should check FEATURE_BLUETOOTH with
+                    // https://developer.android.com/reference/android/content/pm/PackageManager.html#hasSystemFeature(java.lang.String)
+                    // TODO: strings should be translated but this will be replaced during
+                    // the UI process.
 
-                ImageView spinner = (ImageView) v.findViewById(R.id.spinner);
-                final AnimatedVectorDrawableCompat anim = AnimatedVectorDrawableCompat.create(
-                        getContext(), R.drawable.circle_loader_animation);
-                // There is no way to make an animation loop. Instead it must be
-                // manually started each time it completes.
-                anim.registerAnimationCallback(new Animatable2Compat.AnimationCallback() {
-                    @Override
-                    public void onAnimationEnd(Drawable drawable) {
-                        if (drawable != null && drawable.isVisible()) {
-                            anim.start();
-                        }
-                    }
-                });
-                spinner.setImageDrawable(anim);
-                anim.start();
-                break;
+                    v = inflater.inflate(R.layout.cablev2_qr_scan, container, false);
+                    mQRButton = v.findViewById(R.id.qr_scan);
+                    mQRButton.setOnClickListener(this);
 
-            case QR:
-                // TODO: should check FEATURE_BLUETOOTH with
-                // https://developer.android.com/reference/android/content/pm/PackageManager.html#hasSystemFeature(java.lang.String)
-                // TODO: strings should be translated but this will be replaced during
-                // the UI process.
+                    mHeader = v.findViewById(R.id.qr_image);
+                    setHeader(R.style.idle);
 
-                v = inflater.inflate(R.layout.cablev2_qr_scan, container, false);
-                mQRButton = v.findViewById(R.id.qr_scan);
-                mQRButton.setOnClickListener(this);
+                    mUnlinkButton = v.findViewById(R.id.unlink);
+                    mUnlinkButton.setOnClickListener(this);
+                    break;
 
-                mHeader = v.findViewById(R.id.qr_image);
-                setHeader(R.style.idle);
-
-                mUnlinkButton = v.findViewById(R.id.unlink);
-                mUnlinkButton.setOnClickListener(this);
-                break;
-
-            default:
-                assert false;
+                case ERROR:
+                    fillOutErrorUI(mErrorCode);
+                    v = mErrorView;
+                    break;
+            }
         }
 
         top.addView(v);
         return top;
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        if (!mNeedToSignalBluetoothReady) {
+            return;
+        }
+
+        mNeedToSignalBluetoothReady = false;
+        PostTask.postDelayedTask(UiThreadTaskTraits.DEFAULT, () -> {
+            if (mAuthenticator != null) {
+                startActivityForResult(new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE),
+                        ENABLE_BLUETOOTH_REQUEST_CODE);
+            }
+        }, BLE_SCREEN_DELAY_SECS * 1000);
     }
 
     /**
@@ -212,6 +314,9 @@ public class CableAuthenticatorUI
                             })
                     .setNegativeButton(android.R.string.cancel, null)
                     .show();
+            return;
+        } else if (v == mErrorCloseButton) {
+            getActivity().finish();
             return;
         }
 
@@ -272,10 +377,15 @@ public class CableAuthenticatorUI
                 break;
 
             case SERVER_LINK:
+            case FCM:
                 // These values must match up with the Status enum in v2_authenticator.h
                 int id = -1;
                 if (code == 1) {
-                    id = R.string.cablev2_serverlink_status_connecting;
+                    if (mMode == Mode.SERVER_LINK) {
+                        id = R.string.cablev2_serverlink_status_connecting;
+                    } else {
+                        id = R.string.cablev2_fcm_status_connecting;
+                    }
                 } else if (code == 2) {
                     id = R.string.cablev2_serverlink_status_connected;
                 } else if (code == 3) {
@@ -287,10 +397,13 @@ public class CableAuthenticatorUI
                 mStatusText.setText(getResources().getString(id));
                 break;
 
-            case FCM:
             case USB:
-                // In FCM mode, the handshake is done before the UI appears. For
-                // USB everything should happen immediately.
+                // In USB mode everything should happen immediately.
+                break;
+
+            case ERROR:
+                // There shouldn't be any status updates in an error condition.
+                assert false;
         }
     }
 
@@ -307,22 +420,54 @@ public class CableAuthenticatorUI
     }
 
     @Override
-    public void onStop() {
-        super.onStop();
-        mAuthenticator.close();
+    public void onDestroy() {
+        super.onDestroy();
+
+        // Closing mAuthenticator is not done in |onStop| because Android can
+        // generate spurious |onStop| calls when the activity is started from
+        // a lock-screen notification.
+        if (mAuthenticator != null) {
+            mAuthenticator.close();
+            mAuthenticator = null;
+        }
     }
 
     @Override
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == ENABLE_BLUETOOTH_REQUEST_CODE) {
-            String qrCode = mPendingQRCode;
-            mPendingQRCode = null;
-            mAuthenticator.onQRCode(qrCode, mPendingShouldLink);
+
+        if (mAuthenticator == null) {
             return;
         }
 
-        mAuthenticator.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != ENABLE_BLUETOOTH_REQUEST_CODE) {
+            mAuthenticator.onActivityResult(requestCode, resultCode, data);
+            return;
+        }
+
+        if (resultCode != Activity.RESULT_OK) {
+            getActivity().finish();
+            return;
+        }
+
+        switch (mMode) {
+            case QR:
+                String qrCode = mPendingQRCode;
+                mPendingQRCode = null;
+                mAuthenticator.onQRCode(qrCode, mPendingShouldLink);
+                break;
+
+            case FCM:
+                ViewGroup top = (ViewGroup) getView();
+                top.removeAllViews();
+                top.addView(mSpinnerView);
+
+                mAuthenticator.onBluetoothReadyForCloudMessage(/*needToDisable=*/true);
+                break;
+
+            default:
+                assert false;
+        }
     }
 
     void onAuthenticatorConnected() {}
@@ -346,6 +491,13 @@ public class CableAuthenticatorUI
                     break;
             }
             Toast.makeText(getActivity(), getResources().getString(id), Toast.LENGTH_SHORT).show();
+
+            // Finish the Activity unless we're connected via USB. In that case
+            // we continue to show a message advising the user to disconnect
+            // the cable because the USB connection is in AOA mode.
+            if (mMode != Mode.USB) {
+                getActivity().finish();
+            }
         });
     }
 
@@ -355,29 +507,43 @@ public class CableAuthenticatorUI
      * @param ok true if the transaction completed successfully. Otherwise it
      *           indicates some form of error that could include tunnel server
      *           errors, handshake failures, etc.
+     * @param errorCode a value from cablev2::authenticator::Platform::Error.
      */
-    void onComplete(boolean ok) {
+    void onComplete(boolean ok, int errorCode) {
         ThreadUtils.assertOnUiThread();
 
-        // TODO: if !ok then show an error screen rather than ending the
-        // activity.
-        getActivity().finish();
-    }
-
-    /**
-     * onCloudMessage is called by {@link CableAuthenticatorModuleProvider} when a GCM message is
-     * received.
-     */
-    public static void onCloudMessage(
-            long event, long systemNetworkContext, long registration, String activityClassName) {
-        BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
-        if (adapter.isEnabled()) {
-            CableAuthenticator.onCloudMessage(event, systemNetworkContext, registration,
-                    activityClassName, /*needToDisableBluetooth=*/false);
+        if (ok) {
+            getActivity().finish();
             return;
         }
 
-        new PendingCloudMessage(
-                adapter, event, systemNetworkContext, registration, activityClassName);
+        fillOutErrorUI(errorCode);
+        ViewGroup top = (ViewGroup) getView();
+        top.removeAllViews();
+        top.addView(mErrorView);
+    }
+
+    /**
+     * Fills out the elements of |mErrorView| for the given error code.
+     *
+     * @param errorCode a value from cablev2::authenticator::Platform::Error.
+     */
+    void fillOutErrorUI(int errorCode) {
+        mErrorCloseButton = mErrorView.findViewById(R.id.error_close);
+        mErrorCloseButton.setOnClickListener(this);
+
+        String desc;
+        if (errorCode == ERROR_UNEXPECTED_EOF) {
+            desc = getResources().getString(R.string.cablev2_error_timeout);
+        } else {
+            TextView errorCodeTextView = (TextView) mErrorView.findViewById(R.id.error_code);
+            errorCodeTextView.setText(
+                    getResources().getString(R.string.cablev2_error_code, errorCode));
+
+            desc = getResources().getString(R.string.cablev2_error_generic);
+        }
+
+        TextView descriptionTextView = (TextView) mErrorView.findViewById(R.id.error_description);
+        descriptionTextView.setText(desc);
     }
 }

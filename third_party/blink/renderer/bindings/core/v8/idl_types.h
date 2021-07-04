@@ -7,9 +7,9 @@
 
 #include <type_traits>
 
-#include "base/optional.h"
 #include "base/template_util.h"
 #include "base/time/time.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/renderer/bindings/core/v8/idl_types_base.h"
 #include "third_party/blink/renderer/bindings/core/v8/native_value_traits.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_string_resource.h"
@@ -266,7 +266,10 @@ struct IDLSequence final : public IDLBase {
 
 // Frozen array types
 template <typename T>
-using IDLArray = IDLSequence<T>;
+struct IDLArray final : public IDLBase {
+  using ImplType =
+      VectorOf<std::remove_pointer_t<typename NativeValueTraits<T>::ImplType>>;
+};
 
 // Record types
 template <typename Key, typename Value>
@@ -288,7 +291,7 @@ struct IDLNullable final : public IDLBase {
   using ImplType = std::conditional_t<
       NativeValueTraits<T>::has_null_value,
       typename NativeValueTraits<T>::ImplType,
-      base::Optional<typename NativeValueTraits<T>::ImplType>>;
+      absl::optional<typename NativeValueTraits<T>::ImplType>>;
 };
 
 // Union types
@@ -325,14 +328,14 @@ struct IDLOnErrorEventHandler final : public IDLBaseHelper<EventListener*> {};
 //
 // IDLOptional represents an optional argument and supports a conversion from
 // ES undefined to "missing" special value.  The "missing" value might be
-// represented in Blink as base::nullopt, nullptr, 0, etc. depending on a Blink
+// represented in Blink as absl::nullopt, nullptr, 0, etc. depending on a Blink
 // type.
 //
 // Note that IDLOptional is not meant to represent an optional dictionary
 // member.
 template <typename T>
 struct IDLOptional final : public IDLBase {
-  using ImplType = void;
+  using ImplType = typename NativeValueTraits<T>::ImplType;
 };
 
 }  // namespace blink

@@ -15,16 +15,20 @@
 #include "chrome/browser/ash/app_mode/kiosk_app_launch_error.h"
 #include "chrome/browser/ash/app_mode/kiosk_app_manager.h"
 #include "chrome/browser/ash/login/app_mode/kiosk_launch_controller.h"
+#include "chrome/browser/ash/login/test/device_state_mixin.h"
+#include "chrome/browser/ash/login/test/kiosk_apps_mixin.h"
+#include "chrome/browser/ash/login/test/local_state_mixin.h"
+#include "chrome/browser/ash/login/test/login_manager_mixin.h"
+#include "chrome/browser/ash/login/test/oobe_base_test.h"
+#include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
+#include "chrome/browser/ash/policy/core/device_local_account.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_notification_types.h"
-#include "chrome/browser/chromeos/login/test/device_state_mixin.h"
-#include "chrome/browser/chromeos/login/test/embedded_test_server_mixin.h"
-#include "chrome/browser/chromeos/login/test/login_manager_mixin.h"
-#include "chrome/browser/chromeos/policy/device_local_account.h"
 #include "chrome/browser/extensions/browsertest_util.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/webui/chromeos/login/reset_screen_handler.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/session_manager/fake_session_manager_client.h"
 #include "chromeos/dbus/shill/shill_manager_client.h"
@@ -48,12 +52,6 @@ namespace em = enterprise_management;
 namespace chromeos {
 
 namespace {
-
-// This is a simple test app that creates an app window and immediately closes
-// it again. Webstore data json is in
-//   chrome/test/data/chromeos/app_mode/webstore/inlineinstall/
-//       detail/ggaeimfdpnmlhdhpcikgoblffmkckdmn
-constexpr char kTestKioskApp[] = "ggaeimfdpnmlhdhpcikgoblffmkckdmn";
 
 // This is a simple test that only sends an extension message when app launch is
 // requested. Webstore data json is in
@@ -85,8 +83,6 @@ constexpr char kTestManagementApiKioskApp[] =
 constexpr char kTestManagementApiSecondaryApp[] =
     "kajpgkhinciaiihghpdamekpjpldgpfi";
 
-constexpr char kTestAccountId[] = "enterprise-kiosk-app@localhost";
-
 // Used to listen for app termination notification.
 class TerminationObserver : public content::NotificationObserver {
  public:
@@ -116,7 +112,7 @@ class TerminationObserver : public content::NotificationObserver {
 
 }  // namespace
 
-class AutoLaunchedKioskTest : public MixinBasedInProcessBrowserTest {
+class AutoLaunchedKioskTest : public OobeBaseTest {
  public:
   AutoLaunchedKioskTest()
       : verifier_format_override_(crx_file::VerifierFormat::CRX3) {
@@ -125,7 +121,9 @@ class AutoLaunchedKioskTest : public MixinBasedInProcessBrowserTest {
 
   ~AutoLaunchedKioskTest() override = default;
 
-  virtual std::string GetTestAppId() const { return kTestKioskApp; }
+  virtual std::string GetTestAppId() const {
+    return KioskAppsMixin::kKioskAppId;
+  }
   virtual std::vector<std::string> GetTestSecondaryAppIds() const {
     return std::vector<std::string>();
   }
@@ -162,18 +160,20 @@ class AutoLaunchedKioskTest : public MixinBasedInProcessBrowserTest {
         device_state_.RequestDevicePolicyUpdate();
     em::DeviceLocalAccountsProto* const device_local_accounts =
         device_policy_update->policy_payload()->mutable_device_local_accounts();
-    device_local_accounts->set_auto_login_id(kTestAccountId);
+    device_local_accounts->set_auto_login_id(
+        KioskAppsMixin::kEnterpriseKioskAccountId);
 
     em::DeviceLocalAccountInfoProto* const account =
         device_local_accounts->add_account();
-    account->set_account_id(kTestAccountId);
+    account->set_account_id(KioskAppsMixin::kEnterpriseKioskAccountId);
     account->set_type(em::DeviceLocalAccountInfoProto::ACCOUNT_TYPE_KIOSK_APP);
     account->mutable_kiosk_app()->set_app_id(GetTestAppId());
 
     device_policy_update.reset();
 
     std::unique_ptr<ScopedUserPolicyUpdate> device_local_account_policy_update =
-        device_state_.RequestDeviceLocalAccountPolicyUpdate(kTestAccountId);
+        device_state_.RequestDeviceLocalAccountPolicyUpdate(
+            KioskAppsMixin::kEnterpriseKioskAccountId);
     device_local_account_policy_update.reset();
 
     MixinBasedInProcessBrowserTest::SetUpInProcessBrowserTestFixture();
@@ -205,7 +205,8 @@ class AutoLaunchedKioskTest : public MixinBasedInProcessBrowserTest {
 
   const std::string GetTestAppUserId() const {
     return policy::GenerateDeviceLocalAccountUserId(
-        kTestAccountId, policy::DeviceLocalAccount::TYPE_KIOSK_APP);
+        KioskAppsMixin::kEnterpriseKioskAccountId,
+        policy::DeviceLocalAccount::TYPE_KIOSK_APP);
   }
 
   bool CloseAppWindow(const std::string& app_id) {
@@ -254,18 +255,16 @@ class AutoLaunchedKioskTest : public MixinBasedInProcessBrowserTest {
   std::unique_ptr<ExtensionTestMessageListener> app_window_loaded_listener_;
   std::unique_ptr<TerminationObserver> termination_observer_;
 
+  DeviceStateMixin device_state_{
+      &mixin_host_, DeviceStateMixin::State::OOBE_COMPLETED_CLOUD_ENROLLED};
+
  private:
   FakeCWS fake_cws_;
   extensions::SandboxedUnpacker::ScopedVerifierFormatOverrideForTest
       verifier_format_override_;
   std::unique_ptr<base::AutoReset<bool>> skip_splash_wait_override_;
 
-  EmbeddedTestServerSetupMixin embedded_test_server_setup_{
-      &mixin_host_, embedded_test_server()};
   LoginManagerMixin login_manager_{&mixin_host_, {}};
-
-  DeviceStateMixin device_state_{
-      &mixin_host_, DeviceStateMixin::State::OOBE_COMPLETED_CLOUD_ENROLLED};
 
   DISALLOW_COPY_AND_ASSIGN(AutoLaunchedKioskTest);
 };
@@ -275,21 +274,15 @@ IN_PROC_BROWSER_TEST_F(AutoLaunchedKioskTest, PRE_CrashRestore) {
   // session flags.
   ASSERT_FALSE(termination_observer_->terminated());
 
-  // Set up default network connections, so tests think the device is online.
-  DBusThreadManager::Get()
-      ->GetShillManagerClient()
-      ->GetTestInterface()
-      ->SetupDefaultEnvironment();
-
   // Check that policy flags have not been lost.
   ExpectCommandLineHasDefaultPolicySwitches(
       *base::CommandLine::ForCurrentProcess());
 
   EXPECT_TRUE(app_window_loaded_listener_->WaitUntilSatisfied());
 
-  EXPECT_TRUE(IsKioskAppAutoLaunched(kTestKioskApp));
+  EXPECT_TRUE(IsKioskAppAutoLaunched(KioskAppsMixin::kKioskAppId));
 
-  ASSERT_TRUE(CloseAppWindow(kTestKioskApp));
+  ASSERT_TRUE(CloseAppWindow(KioskAppsMixin::kKioskAppId));
 }
 
 IN_PROC_BROWSER_TEST_F(AutoLaunchedKioskTest, CrashRestore) {
@@ -302,9 +295,54 @@ IN_PROC_BROWSER_TEST_F(AutoLaunchedKioskTest, CrashRestore) {
 
   EXPECT_TRUE(app_window_loaded_listener_->WaitUntilSatisfied());
 
-  EXPECT_TRUE(IsKioskAppAutoLaunched(kTestKioskApp));
+  EXPECT_TRUE(IsKioskAppAutoLaunched(KioskAppsMixin::kKioskAppId));
 
-  ASSERT_TRUE(CloseAppWindow(kTestKioskApp));
+  ASSERT_TRUE(CloseAppWindow(KioskAppsMixin::kKioskAppId));
+}
+
+class AutoLaunchedKioskPowerWashRequestedTest
+    : public OobeBaseTest,
+      public LocalStateMixin::Delegate {
+ public:
+  AutoLaunchedKioskPowerWashRequestedTest() = default;
+  ~AutoLaunchedKioskPowerWashRequestedTest() override = default;
+
+  void SetUpLocalState() override {
+    g_browser_process->local_state()->SetBoolean(prefs::kFactoryResetRequested,
+                                                 true);
+  }
+
+  LocalStateMixin local_state_mixin_{&mixin_host_, this};
+};
+
+IN_PROC_BROWSER_TEST_F(AutoLaunchedKioskPowerWashRequestedTest, DoesNotLaunch) {
+  OobeScreenWaiter(ResetView::kScreenId).Wait();
+}
+
+class AutoLaunchedKioskEphemeralUsersTest : public AutoLaunchedKioskTest {
+ public:
+  AutoLaunchedKioskEphemeralUsersTest() = default;
+  ~AutoLaunchedKioskEphemeralUsersTest() override = default;
+
+  // AutoLaunchedKioskTest:
+  void SetUpInProcessBrowserTestFixture() override {
+    AutoLaunchedKioskTest::SetUpInProcessBrowserTestFixture();
+    std::unique_ptr<chromeos::ScopedDevicePolicyUpdate> device_policy_update =
+        device_state_.RequestDevicePolicyUpdate();
+    device_policy_update->policy_payload()
+        ->mutable_ephemeral_users_enabled()
+        ->set_ephemeral_users_enabled(true);
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(AutoLaunchedKioskEphemeralUsersTest, Launches) {
+  // Check that policy flags have not been lost.
+  ExpectCommandLineHasDefaultPolicySwitches(
+      *base::CommandLine::ForCurrentProcess());
+
+  EXPECT_TRUE(app_window_loaded_listener_->WaitUntilSatisfied());
+
+  EXPECT_TRUE(IsKioskAppAutoLaunched(KioskAppsMixin::kKioskAppId));
 }
 
 // Used to test app auto-launch flow when the launched app is not kiosk enabled.
@@ -331,12 +369,6 @@ IN_PROC_BROWSER_TEST_F(AutoLaunchedNonKioskEnabledAppTest, NotLaunched) {
   content::WindowedNotificationObserver termination_waiter(
       chrome::NOTIFICATION_APP_TERMINATING,
       content::NotificationService::AllSources());
-
-  // Set up default network connections, so tests think the device is online.
-  DBusThreadManager::Get()
-      ->GetShillManagerClient()
-      ->GetTestInterface()
-      ->SetupDefaultEnvironment();
 
   // App launch should be canceled, and user session stopped.
   termination_waiter.Wait();
@@ -365,12 +397,6 @@ class ManagementApiKioskTest : public AutoLaunchedKioskTest {
 };
 
 IN_PROC_BROWSER_TEST_F(ManagementApiKioskTest, ManagementApi) {
-  // Set up default network connections, so tests think the device is online.
-  DBusThreadManager::Get()
-      ->GetShillManagerClient()
-      ->GetTestInterface()
-      ->SetupDefaultEnvironment();
-
   // The tests expects to recieve two test result messages:
   //  * result for tests run by the secondary kiosk app.
   //  * result for tests run by the primary kiosk app.

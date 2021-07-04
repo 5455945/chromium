@@ -119,13 +119,11 @@ class CacheTestResponseProvider : public web::DataResponseProvider {
   // ensureAppLaunchedWithConfiguration for each test.
   if ([self isRunningTest:@selector
             (testCachingBehaviorOnSelectOmniboxSuggestion)]) {
-    // Explicitly disable delay for feature OnDeviceHeadProviderNonIncognito,
-    // which will otherwise cause flakiness for this test in build iphone-device
-    // (crbug.com/1153136).
-    config.additional_args.push_back(
-        std::string("--enable-features=") +
-        std::string(omnibox::kOnDeviceHeadProviderNonIncognito.name) +
-        std::string(":DelayOnDeviceHeadSuggestRequestMs/0"));
+    // Explicitly disable feature OnDeviceHeadProviderNonIncognito, whose delay
+    // (i.e. http://shortn/_o7kPJvU8ac) will otherwise cause flakiness for this
+    // test in build iphone-device (crbug.com/1153136).
+    config.features_disabled.push_back(
+        omnibox::kOnDeviceHeadProviderNonIncognito);
   }
   return config;
 }
@@ -225,7 +223,9 @@ class CacheTestResponseProvider : public web::DataResponseProvider {
   // Type a search into omnnibox and select the first suggestion (second row)
   [ChromeEarlGreyUI focusOmniboxAndType:@"cachetestfirstpage"];
   [[EarlGrey
-      selectElementWithMatcher:grey_accessibilityID(@"omnibox suggestion 1")]
+      selectElementWithMatcher:grey_allOf(grey_accessibilityID(
+                                              @"omnibox suggestion 1"),
+                                          grey_sufficientlyVisible(), nil)]
       performAction:grey_tap()];
 
   // Verify title and hitCount. Cache should not be used.

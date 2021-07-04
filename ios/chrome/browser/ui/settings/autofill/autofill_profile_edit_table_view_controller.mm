@@ -39,39 +39,6 @@ typedef NS_ENUM(NSInteger, ItemType) {
   ItemTypeField = kItemTypeEnumZero,
 };
 
-struct AutofillFieldDisplayInfo {
-  autofill::ServerFieldType autofillType;
-  int displayStringID;
-  UIReturnKeyType returnKeyType;
-  UIKeyboardType keyboardType;
-  UITextAutocapitalizationType autoCapitalizationType;
-};
-
-static const AutofillFieldDisplayInfo kFieldsToDisplay[] = {
-    {autofill::NAME_HONORIFIC_PREFIX, IDS_IOS_AUTOFILL_HONORIFIC_PREFIX,
-     UIReturnKeyNext, UIKeyboardTypeDefault,
-     UITextAutocapitalizationTypeSentences},
-    {autofill::NAME_FULL, IDS_IOS_AUTOFILL_FULLNAME, UIReturnKeyNext,
-     UIKeyboardTypeDefault, UITextAutocapitalizationTypeSentences},
-    {autofill::COMPANY_NAME, IDS_IOS_AUTOFILL_COMPANY_NAME, UIReturnKeyNext,
-     UIKeyboardTypeDefault, UITextAutocapitalizationTypeSentences},
-    {autofill::ADDRESS_HOME_LINE1, IDS_IOS_AUTOFILL_ADDRESS1, UIReturnKeyNext,
-     UIKeyboardTypeDefault, UITextAutocapitalizationTypeSentences},
-    {autofill::ADDRESS_HOME_LINE2, IDS_IOS_AUTOFILL_ADDRESS2, UIReturnKeyNext,
-     UIKeyboardTypeDefault, UITextAutocapitalizationTypeSentences},
-    {autofill::ADDRESS_HOME_CITY, IDS_IOS_AUTOFILL_CITY, UIReturnKeyNext,
-     UIKeyboardTypeDefault, UITextAutocapitalizationTypeSentences},
-    {autofill::ADDRESS_HOME_STATE, IDS_IOS_AUTOFILL_STATE, UIReturnKeyNext,
-     UIKeyboardTypeDefault, UITextAutocapitalizationTypeSentences},
-    {autofill::ADDRESS_HOME_ZIP, IDS_IOS_AUTOFILL_ZIP, UIReturnKeyNext,
-     UIKeyboardTypeDefault, UITextAutocapitalizationTypeAllCharacters},
-    {autofill::ADDRESS_HOME_COUNTRY, IDS_IOS_AUTOFILL_COUNTRY, UIReturnKeyNext,
-     UIKeyboardTypeDefault, UITextAutocapitalizationTypeSentences},
-    {autofill::PHONE_HOME_WHOLE_NUMBER, IDS_IOS_AUTOFILL_PHONE, UIReturnKeyNext,
-     UIKeyboardTypePhonePad, UITextAutocapitalizationTypeSentences},
-    {autofill::EMAIL_ADDRESS, IDS_IOS_AUTOFILL_EMAIL, UIReturnKeyDone,
-     UIKeyboardTypeEmailAddress, UITextAutocapitalizationTypeNone}};
-
 }  // namespace
 
 @interface AutofillProfileEditTableViewController ()
@@ -142,14 +109,22 @@ static const AutofillFieldDisplayInfo kFieldsToDisplay[] = {
           [model itemAtIndexPath:path]);
       autofill::ServerFieldType serverFieldType =
           AutofillTypeFromAutofillUIType(item.autofillUIType);
-      if (item.autofillUIType == AutofillUITypeProfileHomeAddressCountry) {
-        _autofillProfile.SetInfo(
+
+      // Since the country field is a text field, we should use SetInfo() to
+      // make sure they get converted to country codes.
+      // Use SetInfo for fullname to propogate the change to the name_first,
+      // name_middle and name_last subcomponents.
+      if (item.autofillUIType == AutofillUITypeProfileHomeAddressCountry ||
+          item.autofillUIType == AutofillUITypeProfileFullName) {
+        _autofillProfile.SetInfoWithVerificationStatus(
             autofill::AutofillType(serverFieldType),
             base::SysNSStringToUTF16(item.textFieldValue),
-            GetApplicationContext()->GetApplicationLocale());
+            GetApplicationContext()->GetApplicationLocale(),
+            autofill::structured_address::VerificationStatus::kUserVerified);
       } else {
-        _autofillProfile.SetRawInfo(
-            serverFieldType, base::SysNSStringToUTF16(item.textFieldValue));
+        _autofillProfile.SetRawInfoWithVerificationStatus(
+            serverFieldType, base::SysNSStringToUTF16(item.textFieldValue),
+            autofill::structured_address::VerificationStatus::kUserVerified);
       }
     }
 
@@ -170,8 +145,8 @@ static const AutofillFieldDisplayInfo kFieldsToDisplay[] = {
 
   std::string locale = GetApplicationContext()->GetApplicationLocale();
   [model addSectionWithIdentifier:SectionIdentifierFields];
-  for (size_t i = 0; i < base::size(kFieldsToDisplay); ++i) {
-    const AutofillFieldDisplayInfo& field = kFieldsToDisplay[i];
+  for (size_t i = 0; i < base::size(kProfileFieldsToDisplay); ++i) {
+    const AutofillProfileFieldDisplayInfo& field = kProfileFieldsToDisplay[i];
 
     if (field.autofillType == autofill::NAME_HONORIFIC_PREFIX &&
         !base::FeatureList::IsEnabled(

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <utility>
 
+#include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
 #include "build/chromeos_buildflags.h"
@@ -14,8 +15,8 @@
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/views/frame/browser_frame.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/frame/caption_button_placeholder_container.h"
 #include "chrome/browser/ui/views/frame/opaque_browser_frame_view_layout.h"
-#include "chrome/browser/ui/views/frame/opaque_browser_frame_view_platform_specific.h"
 #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
 #include "chrome/browser/ui/views/tab_icon_view.h"
 #include "chrome/browser/ui/views/tabs/new_tab_button.h"
@@ -32,6 +33,8 @@
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/hit_test.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/models/image_model.h"
 #include "ui/base/theme_provider.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/font_list.h"
@@ -43,7 +46,6 @@
 #include "ui/gfx/scoped_canvas.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/label.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/resources/grit/views_resources.h"
 #include "ui/views/views_delegate.h"
 #include "ui/views/window/frame_background.h"
@@ -121,15 +123,25 @@ OpaqueBrowserFrameView::OpaqueBrowserFrameView(
       window_title_(nullptr),
       frame_background_(new views::FrameBackground()) {
   layout_->set_delegate(this);
-  SetLayoutManager(std::unique_ptr<views::LayoutManager>(layout_));
 
-  platform_observer_ =
-      OpaqueBrowserFrameViewPlatformSpecific::Create(this, layout_);
+  if (browser_view->AppUsesWindowControlsOverlay()) {
+    layout_->SetWindowControlsOverlayEnabled(
+        browser_view->IsWindowControlsOverlayEnabled(), this);
+  }
+  SetLayoutManager(std::unique_ptr<views::LayoutManager>(layout_));
 }
 
 OpaqueBrowserFrameView::~OpaqueBrowserFrameView() {}
 
 void OpaqueBrowserFrameView::InitViews() {
+  web_app::AppBrowserController* controller =
+      browser_view()->browser()->app_controller();
+
+  if (controller && controller->IsWindowControlsOverlayEnabled()) {
+    caption_button_placeholder_container_ =
+        AddChildView(std::make_unique<CaptionButtonPlaceholderContainer>());
+  }
+
   if (GetFrameButtonStyle() == FrameButtonStyle::kMdButton) {
     minimize_button_ = CreateFrameCaptionButton(
         views::CAPTION_BUTTON_ICON_MINIMIZE, HTMINBUTTON,
@@ -188,8 +200,6 @@ void OpaqueBrowserFrameView::InitViews() {
                      .Build());
   }
 
-  web_app::AppBrowserController* controller =
-      browser_view()->browser()->app_controller();
   if (controller) {
     set_web_app_frame_toolbar(AddChildView(
         std::make_unique<WebAppFrameToolbarView>(frame(), browser_view())));
@@ -229,10 +239,40 @@ void OpaqueBrowserFrameView::UpdateThrobber(bool running) {
     window_icon_->Update();
 }
 
+void OpaqueBrowserFrameView::WindowControlsOverlayEnabledChanged() {
+  bool enabled = browser_view()->IsWindowControlsOverlayEnabled();
+  if (enabled) {
+    caption_button_placeholder_container_ =
+        AddChildView(std::make_unique<CaptionButtonPlaceholderContainer>());
+    UpdateCaptionButtonPlaceholderContainerBackground();
+  } else {
+    RemoveChildViewT(caption_button_placeholder_container_);
+    caption_button_placeholder_container_ = nullptr;
+  }
+
+  web_app_frame_toolbar()->OnWindowControlsOverlayEnabledChanged();
+  layout_->SetWindowControlsOverlayEnabled(enabled, this);
+  InvalidateLayout();
+}
+
 gfx::Size OpaqueBrowserFrameView::GetMinimumSize() const {
   return layout_->GetMinimumSize(this);
 }
 
+void OpaqueBrowserFrameView::PaintAsActiveChanged() {
+  UpdateCaptionButtonPlaceholderContainerBackground();
+  BrowserNonClientFrameView::PaintAsActiveChanged();
+}
+
+void OpaqueBrowserFrameView::UpdateFrameColor() {
+  UpdateCaptionButtonPlaceholderContainerBackground();
+  BrowserNonClientFrameView::PaintAsActiveChanged();
+}
+
+void OpaqueBrowserFrameView::OnThemeChanged() {
+  UpdateCaptionButtonPlaceholderContainerBackground();
+  BrowserNonClientFrameView::OnThemeChanged();
+}
 ///////////////////////////////////////////////////////////////////////////////
 // OpaqueBrowserFrameView, views::NonClientFrameView implementation:
 
@@ -285,6 +325,13 @@ int OpaqueBrowserFrameView::NonClientHitTest(const gfx::Point& point) {
       minimize_button_->GetMirroredBounds().Contains(point))
     return HTMINBUTTON;
 
+  if (browser_view()->IsWindowControlsOverlayEnabled() &&
+      caption_button_placeholder_container_ &&
+      caption_button_placeholder_container_->GetMirroredBounds().Contains(
+          point)) {
+    return HTCAPTION;
+  }
+
   views::WidgetDelegate* delegate = frame()->widget_delegate();
   if (!delegate) {
     LOG(WARNING) << "delegate is null, returning safe default.";
@@ -294,9 +341,16 @@ int OpaqueBrowserFrameView::NonClientHitTest(const gfx::Point& point) {
   // In the window corners, the resize areas don't actually expand bigger, but
   // the 16 px at the end of each edge triggers diagonal resizing.
   constexpr int kResizeAreaCornerSize = 16;
-  int window_component = GetHTComponentForFrame(
-      point, FrameTopBorderThickness(false), FrameBorderThickness(false),
-      kResizeAreaCornerSize, kResizeAreaCornerSize, delegate->CanResize());
+  auto resize_border = FrameBorderInsets(false);
+  if (base::i18n::IsRTL()) {
+    resize_border = gfx::Insets(resize_border.top(), resize_border.right(),
+                                resize_border.bottom(), resize_border.left());
+  }
+  // The top resize border has extra thickness.
+  resize_border.set_top(FrameTopBorderThickness(false));
+  int window_component =
+      GetHTComponentForFrame(point, resize_border, kResizeAreaCornerSize,
+                             kResizeAreaCornerSize, delegate->CanResize());
   // Fall back to the caption if no other component matches.
   return (window_component == HTNOWHERE) ? HTCAPTION : window_component;
 }
@@ -351,11 +405,11 @@ bool OpaqueBrowserFrameView::ShouldTabIconViewAnimate() const {
   return current_tab ? current_tab->IsLoading() : false;
 }
 
-gfx::ImageSkia OpaqueBrowserFrameView::GetFaviconForTabIconView() {
+ui::ImageModel OpaqueBrowserFrameView::GetFaviconForTabIconView() {
   views::WidgetDelegate* delegate = frame()->widget_delegate();
   if (!delegate) {
     LOG(WARNING) << "delegate is null, returning safe default.";
-    return gfx::ImageSkia();
+    return ui::ImageModel();
   }
   return delegate->GetWindowIcon();
 }
@@ -378,7 +432,7 @@ bool OpaqueBrowserFrameView::ShouldShowWindowTitle() const {
          delegate->ShouldShowWindowTitle();
 }
 
-base::string16 OpaqueBrowserFrameView::GetWindowTitle() const {
+std::u16string OpaqueBrowserFrameView::GetWindowTitle() const {
   return frame()->widget_delegate()->GetWindowTitle();
 }
 
@@ -469,6 +523,22 @@ OpaqueBrowserFrameView::GetFrameButtonStyle() const {
 #endif
 }
 
+void OpaqueBrowserFrameView::UpdateWindowControlsOverlay(
+    const gfx::Rect& bounding_rect) const {
+  content::WebContents* web_contents = browser_view()->GetActiveWebContents();
+  if (web_contents) {
+    web_contents->UpdateWindowControlsOverlay(bounding_rect);
+  }
+}
+
+bool OpaqueBrowserFrameView::IsTranslucentWindowOpacitySupported() const {
+  return frame()->IsTranslucentWindowOpacitySupported();
+}
+
+bool OpaqueBrowserFrameView::ShouldDrawRestoredFrameShadow() const {
+  return false;
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // OpaqueBrowserFrameView, protected:
 
@@ -502,7 +572,7 @@ void OpaqueBrowserFrameView::OnPaint(gfx::Canvas* canvas) {
                 button->GetClassName());
       views::FrameCaptionButton* frame_caption_button =
           static_cast<views::FrameCaptionButton*>(button);
-      frame_caption_button->set_paint_as_active(active);
+      frame_caption_button->SetPaintAsActive(active);
       frame_caption_button->SetBackgroundColor(frame_color);
     }
   }
@@ -535,7 +605,7 @@ views::Button* OpaqueBrowserFrameView::CreateFrameCaptionButton(
     const gfx::VectorIcon& icon_image) {
   views::FrameCaptionButton* button = new views::FrameCaptionButton(
       views::Button::PressedCallback(), icon_type, ht_component);
-  button->SetImage(button->GetIcon(), views::FrameCaptionButton::ANIMATE_NO,
+  button->SetImage(button->GetIcon(), views::FrameCaptionButton::Animate::kNo,
                    icon_image);
   return button;
 }
@@ -643,8 +713,8 @@ OpaqueBrowserFrameView::GetProcessedBackgroundImageForCaptionButon(
   return gfx::ImageSkia(std::move(source), desired_size);
 }
 
-int OpaqueBrowserFrameView::FrameBorderThickness(bool restored) const {
-  return layout_->FrameBorderThickness(restored);
+gfx::Insets OpaqueBrowserFrameView::FrameBorderInsets(bool restored) const {
+  return layout_->FrameBorderInsets(restored);
 }
 
 int OpaqueBrowserFrameView::FrameTopBorderThickness(bool restored) const {
@@ -732,6 +802,14 @@ void OpaqueBrowserFrameView::PaintClientEdge(gfx::Canvas* canvas) const {
     canvas->FillRect(side, location_bar_border_color);
     side.Offset(client_bounds.width() + kClientEdgeThickness, 0);
     canvas->FillRect(side, location_bar_border_color);
+  }
+}
+
+void OpaqueBrowserFrameView::
+    UpdateCaptionButtonPlaceholderContainerBackground() {
+  if (caption_button_placeholder_container_) {
+    caption_button_placeholder_container_->SetBackground(
+        views::CreateSolidBackground(GetFrameColor()));
   }
 }
 

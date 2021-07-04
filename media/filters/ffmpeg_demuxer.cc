@@ -50,6 +50,7 @@
 #include "media/formats/webm/webm_crypto_helpers.h"
 #include "media/media_buildflags.h"
 #include "third_party/ffmpeg/ffmpeg_features.h"
+#include "third_party/ffmpeg/libavcodec/packet.h"
 
 #if BUILDFLAG(ENABLE_PLATFORM_HEVC)
 #include "media/filters/ffmpeg_h265_to_annex_b_bitstream_converter.h"
@@ -65,6 +66,11 @@ void SetAVStreamDiscard(AVStream* stream, AVDiscard discard) {
 }
 
 }  // namespace
+
+ScopedAVPacket MakeScopedAVPacket() {
+  ScopedAVPacket packet(av_packet_alloc());
+  return packet;
+}
 
 static base::Time ExtractTimelineOffset(
     container_names::MediaContainerName container,
@@ -216,7 +222,7 @@ std::unique_ptr<FFmpegDemuxerStream> FFmpegDemuxerStream::Create(
   std::unique_ptr<AudioDecoderConfig> audio_config;
   std::unique_ptr<VideoDecoderConfig> video_config;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if defined(OS_CHROMEOS)
   if (base::FeatureList::IsEnabled(kDeprecateLowUsageCodecs)) {
     const auto codec_id = stream->codecpar->codec_id;
     if (codec_id == AV_CODEC_ID_AMR_NB || codec_id == AV_CODEC_ID_AMR_WB ||
@@ -421,11 +427,11 @@ void FFmpegDemuxerStream::EnqueuePacket(ScopedAVPacket packet) {
   scoped_refptr<DecoderBuffer> buffer;
 
   if (type() == DemuxerStream::TEXT) {
-    int id_size = 0;
+    size_t id_size = 0;
     uint8_t* id_data = av_packet_get_side_data(
         packet.get(), AV_PKT_DATA_WEBVTT_IDENTIFIER, &id_size);
 
-    int settings_size = 0;
+    size_t settings_size = 0;
     uint8_t* settings_data = av_packet_get_side_data(
         packet.get(), AV_PKT_DATA_WEBVTT_SETTINGS, &settings_size);
 
@@ -437,7 +443,7 @@ void FFmpegDemuxerStream::EnqueuePacket(ScopedAVPacket packet) {
     buffer = DecoderBuffer::CopyFrom(packet->data, packet->size,
                                      side_data.data(), side_data.size());
   } else {
-    int side_data_size = 0;
+    size_t side_data_size = 0;
     uint8_t* side_data = av_packet_get_side_data(
         packet.get(), AV_PKT_DATA_MATROSKA_BLOCKADDITIONAL, &side_data_size);
 
@@ -498,7 +504,7 @@ void FFmpegDemuxerStream::EnqueuePacket(ScopedAVPacket packet) {
                                        packet->size - data_offset);
     }
 
-    int skip_samples_size = 0;
+    size_t skip_samples_size = 0;
     const uint32_t* skip_samples_ptr =
         reinterpret_cast<const uint32_t*>(av_packet_get_side_data(
             packet.get(), AV_PKT_DATA_SKIP_SAMPLES, &skip_samples_size));
@@ -583,6 +589,20 @@ void FFmpegDemuxerStream::EnqueuePacket(ScopedAVPacket packet) {
                               ? base::TimeDelta()
                               : last_packet_timestamp_ +
                                     base::TimeDelta::FromMicroseconds(1));
+  }
+
+  // Fixup negative timestamps where the before-zero portion is completely
+  // discarded after decoding.
+  if (buffer->timestamp() < base::TimeDelta()) {
+    // Discard padding may also remove samples after zero.
+    auto fixed_ts = buffer->discard_padding().first + buffer->timestamp();
+
+    // Allow for rounding error in the discard padding calculations.
+    if (fixed_ts == base::TimeDelta::FromMicroseconds(-1))
+      fixed_ts = base::TimeDelta();
+
+    if (fixed_ts >= base::TimeDelta())
+      buffer->set_timestamp(fixed_ts);
   }
 
   // Only allow negative timestamps past if we know they'll be fixed up by the
@@ -1173,7 +1193,7 @@ int64_t FFmpegDemuxer::GetMemoryUsage() const {
   return allocation_size;
 }
 
-base::Optional<container_names::MediaContainerName>
+absl::optional<container_names::MediaContainerName>
 FFmpegDemuxer::GetContainerForMetrics() const {
   return container();
 }
@@ -1774,9 +1794,9 @@ void FFmpegDemuxer::ReadFrameIfNeeded() {
   }
 
   // Allocate and read an AVPacket from the media. Save |packet_ptr| since
-  // evaluation order of packet.get() and base::Passed(&packet) is
+  // evaluation order of packet.get() and std::move(&packet) is
   // undefined.
-  ScopedAVPacket packet(new AVPacket());
+  ScopedAVPacket packet = MakeScopedAVPacket();
   AVPacket* packet_ptr = packet.get();
 
   pending_read_ = true;

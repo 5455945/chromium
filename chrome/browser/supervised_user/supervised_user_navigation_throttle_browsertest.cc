@@ -5,18 +5,18 @@
 #include <memory>
 
 #include "base/command_line.h"
+#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
-#include "chrome/browser/chromeos/login/test/logged_in_user_mixin.h"
+#include "chrome/browser/ash/login/test/logged_in_user_mixin.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
 #include "chrome/browser/supervised_user/navigation_finished_waiter.h"
 #include "chrome/browser/supervised_user/permission_request_creator_mock.h"
 #include "chrome/browser/supervised_user/supervised_user_constants.h"
-#include "chrome/browser/supervised_user/supervised_user_features.h"
 #include "chrome/browser/supervised_user/supervised_user_interstitial.h"
 #include "chrome/browser/supervised_user/supervised_user_navigation_observer.h"
 #include "chrome/browser/supervised_user/supervised_user_service.h"
@@ -51,6 +51,8 @@ static const char* kIframeHost1 = "www.iframe1.com";
 static const char* kIframeHost2 = "www.iframe2.com";
 
 // Class to keep track of iframes created and destroyed.
+// TODO(https://crbug.com/1188721): Can be replaced with
+// WebContents::UnsafeFindFrameByFrameTreeNodeId.
 class RenderFrameTracker : public content::WebContentsObserver {
  public:
   explicit RenderFrameTracker(content::WebContents* web_contents)
@@ -60,7 +62,7 @@ class RenderFrameTracker : public content::WebContentsObserver {
   // content::WebContentsObserver:
   void RenderFrameHostChanged(content::RenderFrameHost* old_host,
                               content::RenderFrameHost* new_host) override;
-  void FrameDeleted(content::RenderFrameHost* host) override;
+  void FrameDeleted(int frame_tree_node_id) override;
 
   content::RenderFrameHost* GetHost(int frame_id) {
     if (!base::Contains(render_frame_hosts_, frame_id))
@@ -78,11 +80,11 @@ void RenderFrameTracker::RenderFrameHostChanged(
   render_frame_hosts_[new_host->GetFrameTreeNodeId()] = new_host;
 }
 
-void RenderFrameTracker::FrameDeleted(content::RenderFrameHost* host) {
-  if (!base::Contains(render_frame_hosts_, host->GetFrameTreeNodeId()))
+void RenderFrameTracker::FrameDeleted(int frame_tree_node_id) {
+  if (!base::Contains(render_frame_hosts_, frame_tree_node_id))
     return;
 
-  render_frame_hosts_.erase(host->GetFrameTreeNodeId());
+  render_frame_hosts_.erase(frame_tree_node_id);
 }
 
 class InnerWebContentsAttachedWaiter : public content::WebContentsObserver {
@@ -182,11 +184,11 @@ class SupervisedUserNavigationThrottleTest
 bool SupervisedUserNavigationThrottleTest::IsInterstitialBeingShownInMainFrame(
     Browser* browser) {
   WebContents* tab = browser->tab_strip_model()->GetActiveWebContents();
-  base::string16 title;
+  std::u16string title;
   ui_test_utils::GetCurrentTabTitle(browser, &title);
   return tab->GetController().GetLastCommittedEntry()->GetPageType() ==
              content::PAGE_TYPE_ERROR &&
-         title == base::ASCIIToUTF16("Site blocked");
+         title == u"Site blocked";
 }
 
 void SupervisedUserNavigationThrottleTest::SetUp() {
@@ -213,8 +215,7 @@ IN_PROC_BROWSER_TEST_F(SupervisedUserNavigationThrottleTest,
       SupervisedUserSettingsServiceFactory::GetForKey(profile->GetProfileKey());
   supervised_user_settings_service->SetLocalSetting(
       supervised_users::kContentPackDefaultFilteringBehavior,
-      std::unique_ptr<base::Value>(
-          new base::Value(SupervisedUserURLFilter::BLOCK)));
+      std::make_unique<base::Value>(SupervisedUserURLFilter::BLOCK));
 
   std::unique_ptr<WebContents> web_contents(
       WebContents::Create(WebContents::CreateParams(profile)));
@@ -295,7 +296,6 @@ class SupervisedUserIframeFilterTest
   SupervisedUserIframeFilterTest() = default;
   ~SupervisedUserIframeFilterTest() override = default;
 
-  void SetUp() override;
   void SetUpOnMainThread() override;
   void TearDownOnMainThread() override;
 
@@ -318,15 +318,7 @@ class SupervisedUserIframeFilterTest
 
   std::unique_ptr<RenderFrameTracker> tracker_;
   PermissionRequestCreatorMock* permission_creator_;
-
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
-
-void SupervisedUserIframeFilterTest::SetUp() {
-  scoped_feature_list_.InitAndEnableFeature(
-      supervised_users::kSupervisedUserIframeFilter);
-  SupervisedUserNavigationThrottleTest::SetUp();
-}
 
 void SupervisedUserIframeFilterTest::SetUpOnMainThread() {
   SupervisedUserNavigationThrottleTest::SetUpOnMainThread();

@@ -48,7 +48,7 @@ GetSortedMetadataWithoutFavicons(const sync_sessions::SyncedSession* session) {
       if (!tab_url.is_valid())
         continue;
 
-      const base::string16& title = current_navigation.title();
+      const std::u16string& title = current_navigation.title();
       const base::Time last_accessed_timestamp = tab->timestamp;
       browser_tab_metadata.emplace_back(tab_url, title, last_accessed_timestamp,
                                         gfx::Image());
@@ -78,10 +78,10 @@ BrowserTabsMetadataFetcherImpl::~BrowserTabsMetadataFetcherImpl() = default;
 void BrowserTabsMetadataFetcherImpl::Fetch(
     const sync_sessions::SyncedSession* session,
     base::OnceCallback<void(BrowserTabsMetadataResponse)> callback) {
-  // A new fetch was made, return a base::nullopt to the previous |callback_|.
+  // A new fetch was made, return a absl::nullopt to the previous |callback_|.
   if (!callback_.is_null()) {
     weak_ptr_factory_.InvalidateWeakPtrs();
-    std::move(callback_).Run(base::nullopt);
+    std::move(callback_).Run(absl::nullopt);
   }
 
   results_ = GetSortedMetadataWithoutFavicons(session);

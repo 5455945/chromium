@@ -5,11 +5,14 @@
 #include "third_party/blink/renderer/modules/canvas/canvas2d/canvas_rendering_context_2d.h"
 
 #include <memory>
+
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/privacy_budget/identifiability_study_settings.h"
 #include "third_party/blink/public/common/privacy_budget/identifiability_study_settings_provider.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_union_float32array_uint16array_uint8clampedarray.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_hit_region_options.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_union_csscolorvalue_canvasgradient_canvaspattern_string.h"
 #include "third_party/blink/renderer/core/accessibility/ax_context.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
@@ -23,6 +26,7 @@
 #include "third_party/blink/renderer/modules/canvas/canvas2d/canvas_gradient.h"
 #include "third_party/blink/renderer/modules/canvas/canvas2d/canvas_pattern.h"
 #include "third_party/blink/renderer/modules/webgl/webgl_rendering_context.h"
+#include "ui/accessibility/ax_mode.h"
 
 using testing::Mock;
 
@@ -32,6 +36,7 @@ class CanvasRenderingContext2DAPITest : public PageTestBase {
  protected:
   CanvasRenderingContext2DAPITest();
   void SetUp() override;
+  void TearDown() override;
 
   HTMLCanvasElement& CanvasElement() const { return *canvas_element_; }
   CanvasRenderingContext2D* Context2D() const;
@@ -67,6 +72,11 @@ void CanvasRenderingContext2DAPITest::SetUp() {
       "<body><canvas id='c'></canvas></body>");
   UpdateAllLifecyclePhasesForTest();
   canvas_element_ = To<HTMLCanvasElement>(GetDocument().getElementById("c"));
+}
+
+void CanvasRenderingContext2DAPITest::TearDown() {
+  PageTestBase::TearDown();
+  CanvasRenderingContext::GetCanvasPerformanceMonitor().ResetForTesting();
 }
 
 TEST_F(CanvasRenderingContext2DAPITest, SetShadowColor_Clamping) {
@@ -136,25 +146,27 @@ TEST_F(CanvasRenderingContext2DAPITest, SetShadowColor_Clamping) {
 
 String TrySettingStrokeStyle(CanvasRenderingContext2D* ctx,
                              const String& value) {
-  StringOrCanvasGradientOrCanvasPattern arg1, arg2, arg3;
-  arg1.SetString("#666");
-  ctx->setStrokeStyle(arg1);
-  arg2.SetString(value);
-  ctx->setStrokeStyle(arg2);
-  ctx->strokeStyle(arg3);
-  EXPECT_TRUE(arg3.IsString());
-  return arg3.GetAsString();
+  ctx->setStrokeStyle(
+      MakeGarbageCollected<
+          V8UnionCSSColorValueOrCanvasGradientOrCanvasPatternOrString>("#666"));
+  ctx->setStrokeStyle(
+      MakeGarbageCollected<
+          V8UnionCSSColorValueOrCanvasGradientOrCanvasPatternOrString>(value));
+  auto* style = ctx->strokeStyle();
+  EXPECT_TRUE(style->IsString());
+  return style->GetAsString();
 }
 
 String TrySettingFillStyle(CanvasRenderingContext2D* ctx, const String& value) {
-  StringOrCanvasGradientOrCanvasPattern arg1, arg2, arg3;
-  arg1.SetString("#666");
-  ctx->setFillStyle(arg1);
-  arg2.SetString(value);
-  ctx->setFillStyle(arg2);
-  ctx->fillStyle(arg3);
-  EXPECT_TRUE(arg3.IsString());
-  return arg3.GetAsString();
+  ctx->setFillStyle(
+      MakeGarbageCollected<
+          V8UnionCSSColorValueOrCanvasGradientOrCanvasPatternOrString>("#666"));
+  ctx->setFillStyle(
+      MakeGarbageCollected<
+          V8UnionCSSColorValueOrCanvasGradientOrCanvasPatternOrString>(value));
+  auto* style = ctx->fillStyle();
+  EXPECT_TRUE(style->IsString());
+  return style->GetAsString();
 }
 
 String TrySettingShadowColor(CanvasRenderingContext2D* ctx,
@@ -190,17 +202,15 @@ TEST_F(CanvasRenderingContext2DAPITest, DefaultAttributeValues) {
   CreateContext(kNonOpaque);
 
   {
-    StringOrCanvasGradientOrCanvasPattern value;
-    Context2D()->strokeStyle(value);
-    EXPECT_TRUE(value.IsString());
-    EXPECT_EQ(String("#000000"), value.GetAsString());
+    auto* style = Context2D()->strokeStyle();
+    EXPECT_TRUE(style->IsString());
+    EXPECT_EQ(String("#000000"), style->GetAsString());
   }
 
   {
-    StringOrCanvasGradientOrCanvasPattern value;
-    Context2D()->fillStyle(value);
-    EXPECT_TRUE(value.IsString());
-    EXPECT_EQ(String("#000000"), value.GetAsString());
+    auto* style = Context2D()->fillStyle();
+    EXPECT_TRUE(style->IsString());
+    EXPECT_EQ(String("#000000"), style->GetAsString());
   }
 
   EXPECT_EQ(String("rgba(0, 0, 0, 0)"), Context2D()->shadowColor());
@@ -229,18 +239,19 @@ TEST_F(CanvasRenderingContext2DAPITest, CreateImageData) {
   NonThrowableExceptionState exception_state;
 
   // create a 100x50 imagedata and fill it with white pixels
+  ImageDataSettings* settings = ImageDataSettings::Create();
   ImageData* image_data =
-      Context2D()->createImageData(100, 50, exception_state);
+      Context2D()->createImageData(100, 50, settings, exception_state);
   EXPECT_FALSE(exception_state.HadException());
   EXPECT_EQ(100, image_data->width());
   EXPECT_EQ(50, image_data->height());
 
-  for (size_t i = 0; i < image_data->data().GetAsUint8ClampedArray()->length();
+  for (size_t i = 0; i < image_data->data()->GetAsUint8ClampedArray()->length();
        ++i) {
-    image_data->data().GetAsUint8ClampedArray()->Data()[i] = 255;
+    image_data->data()->GetAsUint8ClampedArray()->Data()[i] = 255;
   }
 
-  EXPECT_EQ(255, image_data->data().GetAsUint8ClampedArray()->Data()[32]);
+  EXPECT_EQ(255, image_data->data()->GetAsUint8ClampedArray()->Data()[32]);
 
   // createImageData(imageData) should create a new ImageData of the same size
   // as 'imageData' but filled with transparent black
@@ -251,31 +262,36 @@ TEST_F(CanvasRenderingContext2DAPITest, CreateImageData) {
   EXPECT_EQ(100, same_size_image_data->width());
   EXPECT_EQ(50, same_size_image_data->height());
   EXPECT_EQ(0,
-            same_size_image_data->data().GetAsUint8ClampedArray()->Data()[32]);
+            same_size_image_data->data()->GetAsUint8ClampedArray()->Data()[32]);
 
   // createImageData(width, height) takes the absolute magnitude of the size
   // arguments
 
-  ImageData* imgdata1 = Context2D()->createImageData(10, 20, exception_state);
+  ImageData* imgdata1 =
+      Context2D()->createImageData(10, 20, settings, exception_state);
   EXPECT_FALSE(exception_state.HadException());
-  ImageData* imgdata2 = Context2D()->createImageData(-10, 20, exception_state);
+  ImageData* imgdata2 =
+      Context2D()->createImageData(-10, 20, settings, exception_state);
   EXPECT_FALSE(exception_state.HadException());
-  ImageData* imgdata3 = Context2D()->createImageData(10, -20, exception_state);
+  ImageData* imgdata3 =
+      Context2D()->createImageData(10, -20, settings, exception_state);
   EXPECT_FALSE(exception_state.HadException());
-  ImageData* imgdata4 = Context2D()->createImageData(-10, -20, exception_state);
+  ImageData* imgdata4 =
+      Context2D()->createImageData(-10, -20, settings, exception_state);
   EXPECT_FALSE(exception_state.HadException());
 
-  EXPECT_EQ(800u, imgdata1->data().GetAsUint8ClampedArray()->length());
-  EXPECT_EQ(800u, imgdata2->data().GetAsUint8ClampedArray()->length());
-  EXPECT_EQ(800u, imgdata3->data().GetAsUint8ClampedArray()->length());
-  EXPECT_EQ(800u, imgdata4->data().GetAsUint8ClampedArray()->length());
+  EXPECT_EQ(800u, imgdata1->data()->GetAsUint8ClampedArray()->length());
+  EXPECT_EQ(800u, imgdata2->data()->GetAsUint8ClampedArray()->length());
+  EXPECT_EQ(800u, imgdata3->data()->GetAsUint8ClampedArray()->length());
+  EXPECT_EQ(800u, imgdata4->data()->GetAsUint8ClampedArray()->length());
 }
 
 TEST_F(CanvasRenderingContext2DAPITest, CreateImageDataTooBig) {
   CreateContext(kNonOpaque);
   DummyExceptionStateForTesting exception_state;
+  ImageDataSettings* settings = ImageDataSettings::Create();
   ImageData* too_big_image_data =
-      Context2D()->createImageData(1000000, 1000000, exception_state);
+      Context2D()->createImageData(1000000, 1000000, settings, exception_state);
   EXPECT_EQ(nullptr, too_big_image_data);
   EXPECT_TRUE(exception_state.HadException());
   EXPECT_EQ(ESErrorType::kRangeError, exception_state.CodeAs<ESErrorType>());
@@ -284,8 +300,9 @@ TEST_F(CanvasRenderingContext2DAPITest, CreateImageDataTooBig) {
 TEST_F(CanvasRenderingContext2DAPITest, GetImageDataTooBig) {
   CreateContext(kNonOpaque);
   DummyExceptionStateForTesting exception_state;
-  ImageData* image_data =
-      Context2D()->getImageData(0, 0, 1000000, 1000000, exception_state);
+  ImageDataSettings* settings = ImageDataSettings::Create();
+  ImageData* image_data = Context2D()->getImageData(0, 0, 1000000, 1000000,
+                                                    settings, exception_state);
   EXPECT_EQ(nullptr, image_data);
   EXPECT_TRUE(exception_state.HadException());
   EXPECT_EQ(ESErrorType::kRangeError, exception_state.CodeAs<ESErrorType>());
@@ -295,15 +312,16 @@ TEST_F(CanvasRenderingContext2DAPITest,
        GetImageDataIntegerOverflowNegativeParams) {
   CreateContext(kNonOpaque);
   DummyExceptionStateForTesting exception_state;
+  ImageDataSettings* settings = ImageDataSettings::Create();
   ImageData* image_data = Context2D()->getImageData(
-      1, -2147483647, 1, -2147483647, exception_state);
+      1, -2147483647, 1, -2147483647, settings, exception_state);
   EXPECT_EQ(nullptr, image_data);
   EXPECT_TRUE(exception_state.HadException());
   EXPECT_EQ(ESErrorType::kRangeError, exception_state.CodeAs<ESErrorType>());
 
   exception_state.ClearException();
   image_data = Context2D()->getImageData(-2147483647, 1, -2147483647, 1,
-                                         exception_state);
+                                         settings, exception_state);
   EXPECT_EQ(nullptr, image_data);
   EXPECT_TRUE(exception_state.HadException());
   EXPECT_EQ(ESErrorType::kRangeError, exception_state.CodeAs<ESErrorType>());
@@ -328,7 +346,7 @@ void ResetCanvasForAccessibilityRectTest(Document& document) {
 
 TEST_F(CanvasRenderingContext2DAPITest, AccessibilityRectTestForAddHitRegion) {
   ResetCanvasForAccessibilityRectTest(GetDocument());
-  AXContext ax_context(GetDocument());
+  AXContext ax_context(GetDocument(), ui::kAXModeComplete);
 
   Element* button_element = GetDocument().getElementById("button");
   auto* canvas = To<HTMLCanvasElement>(GetDocument().getElementById("canvas"));
@@ -357,7 +375,7 @@ TEST_F(CanvasRenderingContext2DAPITest, AccessibilityRectTestForAddHitRegion) {
 TEST_F(CanvasRenderingContext2DAPITest,
        AccessibilityRectTestForDrawFocusIfNeeded) {
   ResetCanvasForAccessibilityRectTest(GetDocument());
-  AXContext ax_context(GetDocument());
+  AXContext ax_context(GetDocument(), ui::kAXModeComplete);
 
   Element* button_element = GetDocument().getElementById("button");
   auto* canvas = To<HTMLCanvasElement>(GetDocument().getElementById("canvas"));
@@ -393,8 +411,6 @@ class ActiveSettingsProvider : public IdentifiabilityStudySettingsProvider {
   bool IsTypeAllowed(IdentifiableSurface::Type type) const override {
     return true;
   }
-  int SampleRate(IdentifiableSurface surface) const override { return 1; }
-  int SampleRate(IdentifiableSurface::Type type) const override { return 1; }
 };
 
 // An RAII class that opts into study participation using
@@ -500,8 +516,8 @@ TEST_F(CanvasRenderingContext2DAPITest,
   StudyParticipationRaii study_participation_raii;
   CreateContext(kNonOpaque);
 
-  StringOrCanvasGradientOrCanvasPattern style;
-  style.SetString("blue");
+  auto* style = MakeGarbageCollected<
+      V8UnionCSSColorValueOrCanvasGradientOrCanvasPatternOrString>("blue");
   Context2D()->setStrokeStyle(style);
   EXPECT_EQ(INT64_C(2059186787917525779),
             Context2D()->IdentifiableTextToken().ToUkmMetricValue());
@@ -514,8 +530,8 @@ TEST_F(CanvasRenderingContext2DAPITest, IdentifiabilityStudyDigest_FillStyle) {
   StudyParticipationRaii study_participation_raii;
   CreateContext(kNonOpaque);
 
-  StringOrCanvasGradientOrCanvasPattern style;
-  style.SetString("blue");
+  auto* style = MakeGarbageCollected<
+      V8UnionCSSColorValueOrCanvasGradientOrCanvasPatternOrString>("blue");
   Context2D()->setFillStyle(style);
   EXPECT_EQ(INT64_C(-6322980727372024031),
             Context2D()->IdentifiableTextToken().ToUkmMetricValue());
@@ -534,8 +550,8 @@ TEST_F(CanvasRenderingContext2DAPITest, IdentifiabilityStudyDigest_Combo) {
   Context2D()->setFont("Helvetica");
   Context2D()->setTextBaseline("bottom");
   Context2D()->setTextAlign("right");
-  StringOrCanvasGradientOrCanvasPattern style;
-  style.SetString("red");
+  auto* style = MakeGarbageCollected<
+      V8UnionCSSColorValueOrCanvasGradientOrCanvasPatternOrString>("red");
   Context2D()->setFillStyle(style);
   Context2D()->fillText("Bye", 4.0, 3.0);
   EXPECT_EQ(INT64_C(2368400155273386771),

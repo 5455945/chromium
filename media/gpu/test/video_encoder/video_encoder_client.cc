@@ -15,6 +15,7 @@
 #include "gpu/config/gpu_preferences.h"
 #include "gpu/ipc/service/gpu_memory_buffer_factory.h"
 #include "media/base/bind_to_current_loop.h"
+#include "media/base/bitrate.h"
 #include "media/gpu/gpu_video_encode_accelerator_factory.h"
 #include "media/gpu/macros.h"
 #include "media/gpu/test/bitstream_helpers.h"
@@ -34,7 +35,7 @@ namespace {
 // only dereferenced after rescheduling the task on the specified task runner.
 template <typename CallbackFunc, typename... CallbackArgs>
 void CallbackThunk(
-    base::Optional<base::WeakPtr<VideoEncoderClient>> encoder_client,
+    absl::optional<base::WeakPtr<VideoEncoderClient>> encoder_client,
     scoped_refptr<base::SequencedTaskRunner> task_runner,
     CallbackFunc func,
     CallbackArgs... args) {
@@ -92,7 +93,7 @@ VideoEncoderStats::VideoEncoderStats(uint32_t framerate,
 uint32_t VideoEncoderStats::Bitrate() const {
   auto compute_bitrate = [](double framerate, size_t num_frames,
                             size_t total_size,
-                            base::Optional<size_t> layer_index) {
+                            absl::optional<size_t> layer_index) {
     const size_t average_frame_size_in_bits = total_size * 8 / num_frames;
     const uint32_t average_bitrate = average_frame_size_in_bits * framerate;
     const std::string prefix =
@@ -108,7 +109,7 @@ uint32_t VideoEncoderStats::Bitrate() const {
   const size_t num_layers = num_encoded_frames_per_layer.size();
   if (num_layers == 1) {
     return compute_bitrate(framerate, total_num_encoded_frames,
-                           total_encoded_frames_size, base::nullopt);
+                           total_encoded_frames_size, absl::nullopt);
   }
 
   for (size_t i = 0; i < num_layers; ++i) {
@@ -128,7 +129,7 @@ uint32_t VideoEncoderStats::Bitrate() const {
     compute_bitrate(layer_framerate, num_frames, frames_size, i);
   }
   return compute_bitrate(framerate, total_num_encoded_frames,
-                         total_encoded_frames_size, base::nullopt);
+                         total_encoded_frames_size, absl::nullopt);
 }
 
 void VideoEncoderStats::Reset() {
@@ -439,9 +440,10 @@ void VideoEncoderClient::CreateEncoderTask(const Video* video,
 
   const VideoEncodeAccelerator::Config config(
       video_->PixelFormat(), encoder_client_config_.output_resolution,
-      encoder_client_config_.output_profile, encoder_client_config_.bitrate,
-      encoder_client_config_.framerate, base::nullopt /* gop_length */,
-      base::nullopt /* h264_output_level*/, false /* is_constrained_h264 */,
+      encoder_client_config_.output_profile,
+      Bitrate::ConstantBitrate(encoder_client_config_.bitrate),
+      encoder_client_config_.framerate, absl::nullopt /* gop_length */,
+      absl::nullopt /* h264_output_level*/, false /* is_constrained_h264 */,
       encoder_client_config_.input_storage_type,
       VideoEncodeAccelerator::Config::ContentType::kCamera,
       CreateSpatialLayersConfig(video_->Resolution(), encoder_client_config_));

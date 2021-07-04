@@ -12,6 +12,7 @@
 #include "base/guid.h"
 #include "base/macros.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/time/time.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_node.h"
@@ -25,6 +26,7 @@
 
 using testing::_;
 using testing::Eq;
+using testing::Ge;
 using testing::NotNull;
 
 namespace sync_bookmarks {
@@ -118,7 +120,7 @@ TEST(BookmarkSpecificsConversionsTest,
       bookmarks::TestBookmarkClient::CreateModel();
   const bookmarks::BookmarkNode* bookmark_bar_node = model->bookmark_bar_node();
   const bookmarks::BookmarkNode* node = model->AddFolder(
-      /*parent=*/bookmark_bar_node, /*index=*/0, base::UTF8ToUTF16("Title"));
+      /*parent=*/bookmark_bar_node, /*index=*/0, u"Title");
   ASSERT_THAT(node, NotNull());
 
   sync_pb::EntitySpecifics specifics = CreateSpecificsFromBookmarkNode(
@@ -138,7 +140,7 @@ TEST(BookmarkSpecificsConversionsTest,
 
   const bookmarks::BookmarkNode* bookmark_bar_node = model->bookmark_bar_node();
   const bookmarks::BookmarkNode* node = model->AddURL(
-      /*parent=*/bookmark_bar_node, /*index=*/0, base::UTF8ToUTF16("Title"),
+      /*parent=*/bookmark_bar_node, /*index=*/0, u"Title",
       GURL("http://www.url.com"));
   ASSERT_THAT(node, NotNull());
   ASSERT_FALSE(node->is_favicon_loaded());
@@ -159,7 +161,7 @@ TEST(BookmarkSpecificsConversionsTest,
 
   const bookmarks::BookmarkNode* bookmark_bar_node = model->bookmark_bar_node();
   const bookmarks::BookmarkNode* node = model->AddURL(
-      /*parent=*/bookmark_bar_node, /*index=*/0, base::UTF8ToUTF16("Title"),
+      /*parent=*/bookmark_bar_node, /*index=*/0, u"Title",
       GURL("http://www.url.com"));
   ASSERT_THAT(node, NotNull());
   ASSERT_FALSE(node->is_favicon_loaded());
@@ -169,7 +171,8 @@ TEST(BookmarkSpecificsConversionsTest,
   EXPECT_THAT(client_ptr->GetLoadFaviconRequestsForTest(), Eq(0));
 }
 
-TEST(BookmarkSpecificsConversionsTest, ShouldCreateBookmarkNodeFromSpecifics) {
+TEST(BookmarkSpecificsConversionsTest,
+     ShouldCreateNonFolderBookmarkNodeFromSpecifics) {
   const GURL kUrl("http://www.url.com");
   const base::GUID kGuid = base::GUID::GenerateRandomV4();
   const std::string kTitle = "Title";
@@ -203,6 +206,7 @@ TEST(BookmarkSpecificsConversionsTest, ShouldCreateBookmarkNodeFromSpecifics) {
   EXPECT_CALL(favicon_service,
               AddPageNoVisitForBookmark(kUrl, base::UTF8ToUTF16(kTitle)));
   EXPECT_CALL(favicon_service, MergeFavicon(kUrl, kIconUrl, _, _, _));
+  base::HistogramTester histogram_tester;
   const bookmarks::BookmarkNode* node = CreateBookmarkNodeFromSpecifics(
       *bm_specifics,
       /*parent=*/model->bookmark_bar_node(), /*index=*/0,
@@ -210,6 +214,7 @@ TEST(BookmarkSpecificsConversionsTest, ShouldCreateBookmarkNodeFromSpecifics) {
   ASSERT_THAT(node, NotNull());
   EXPECT_THAT(node->guid(), Eq(kGuid));
   EXPECT_THAT(node->GetTitle(), Eq(base::UTF8ToUTF16(kTitle)));
+  EXPECT_FALSE(node->is_folder());
   EXPECT_THAT(node->url(), Eq(kUrl));
   EXPECT_THAT(node->date_added(), Eq(kTime));
   std::string value1;
@@ -218,6 +223,64 @@ TEST(BookmarkSpecificsConversionsTest, ShouldCreateBookmarkNodeFromSpecifics) {
   std::string value2;
   node->GetMetaInfo(kKey2, &value2);
   EXPECT_THAT(value2, Eq(kValue2));
+
+  histogram_tester.ExpectUniqueSample(
+      "Sync.BookmarkSpecificsExcludingFoldersContainFavicon",
+      /*sample=*/true,
+      /*expected_bucket_count=*/1);
+}
+
+TEST(BookmarkSpecificsConversionsTest, ShouldCreateFolderFromSpecifics) {
+  const base::GUID kGuid = base::GUID::GenerateRandomV4();
+  const std::string kTitle = "Title";
+  const base::Time kTime = base::Time::Now();
+  const std::string kKey1 = "key1";
+  const std::string kValue1 = "value1";
+  const std::string kKey2 = "key2";
+  const std::string kValue2 = "value2";
+
+  sync_pb::EntitySpecifics specifics;
+  sync_pb::BookmarkSpecifics* bm_specifics = specifics.mutable_bookmark();
+  bm_specifics->set_guid(kGuid.AsLowercaseString());
+  bm_specifics->set_legacy_canonicalized_title(kTitle);
+  bm_specifics->set_creation_time_us(
+      kTime.ToDeltaSinceWindowsEpoch().InMicroseconds());
+  sync_pb::MetaInfo* meta_info1 = bm_specifics->add_meta_info();
+  meta_info1->set_key(kKey1);
+  meta_info1->set_value(kValue1);
+
+  sync_pb::MetaInfo* meta_info2 = bm_specifics->add_meta_info();
+  meta_info2->set_key(kKey2);
+  meta_info2->set_value(kValue2);
+
+  std::unique_ptr<bookmarks::BookmarkModel> model =
+      bookmarks::TestBookmarkClient::CreateModel();
+  testing::NiceMock<favicon::MockFaviconService> favicon_service;
+  EXPECT_CALL(favicon_service, AddPageNoVisitForBookmark(_, _)).Times(0);
+  EXPECT_CALL(favicon_service, MergeFavicon(_, _, _, _, _)).Times(0);
+  EXPECT_CALL(favicon_service, DeleteFaviconMappings(_, _)).Times(0);
+  base::HistogramTester histogram_tester;
+  const bookmarks::BookmarkNode* node = CreateBookmarkNodeFromSpecifics(
+      *bm_specifics,
+      /*parent=*/model->bookmark_bar_node(), /*index=*/0,
+      /*is_folder=*/true, model.get(), &favicon_service);
+  ASSERT_THAT(node, NotNull());
+  EXPECT_THAT(node->guid(), Eq(kGuid));
+  EXPECT_THAT(node->GetTitle(), Eq(base::UTF8ToUTF16(kTitle)));
+  EXPECT_TRUE(node->is_folder());
+  // TODO(crbug.com/1214840): Folders should propagate the creation time into
+  // BookmarkModel, just like non-folders.
+  EXPECT_THAT(node->date_added(), Ge(kTime));
+  std::string value1;
+  node->GetMetaInfo(kKey1, &value1);
+  EXPECT_THAT(value1, Eq(kValue1));
+  std::string value2;
+  node->GetMetaInfo(kKey2, &value2);
+  EXPECT_THAT(value2, Eq(kValue2));
+
+  // The histogram should not be recorded for folders.
+  histogram_tester.ExpectTotalCount(
+      "Sync.BookmarkSpecificsExcludingFoldersContainFavicon", 0);
 }
 
 TEST(BookmarkSpecificsConversionsTest,
@@ -563,7 +626,7 @@ TEST(BookmarkSpecificsConversionsTest, ReplaceUrlNodeWithUpdatedGUID) {
       bookmarks::TestBookmarkClient::CreateModel();
   const bookmarks::BookmarkNode* bookmark_bar_node = model->bookmark_bar_node();
   const base::GUID kGuid = base::GUID::GenerateRandomV4();
-  const base::string16 kTitle = base::ASCIIToUTF16("bar");
+  const std::u16string kTitle = u"bar";
   const GURL kUrl = GURL("http://foo.com");
   const base::Time kCreationTime = base::Time::Now();
 
@@ -597,7 +660,7 @@ TEST(BookmarkSpecificsConversionsTest, ReplaceFolderNodeWithUpdatedGUID) {
       bookmarks::TestBookmarkClient::CreateModel();
   const bookmarks::BookmarkNode* bookmark_bar_node = model->bookmark_bar_node();
   const base::GUID kGuid = base::GUID::GenerateRandomV4();
-  const base::string16 kTitle = base::ASCIIToUTF16("foobar");
+  const std::u16string kTitle = u"foobar";
 
   auto meta_info_map = std::make_unique<bookmarks::BookmarkNode::MetaInfoMap>();
   const std::string kKey = "key";
@@ -607,10 +670,10 @@ TEST(BookmarkSpecificsConversionsTest, ReplaceFolderNodeWithUpdatedGUID) {
   // Add a folder with child URLs.
   const bookmarks::BookmarkNode* original_folder =
       model->AddFolder(bookmark_bar_node, 0, kTitle, meta_info_map.get());
-  const bookmarks::BookmarkNode* url1 = model->AddURL(
-      original_folder, 0, base::ASCIIToUTF16("bar"), GURL("http://bar.com"));
-  const bookmarks::BookmarkNode* url2 = model->AddURL(
-      original_folder, 1, base::ASCIIToUTF16("foo"), GURL("http://foo.com"));
+  const bookmarks::BookmarkNode* url1 =
+      model->AddURL(original_folder, 0, u"bar", GURL("http://bar.com"));
+  const bookmarks::BookmarkNode* url2 =
+      model->AddURL(original_folder, 1, u"foo", GURL("http://foo.com"));
 
   // Replace folder1.
   const bookmarks::BookmarkNode* new_folder =

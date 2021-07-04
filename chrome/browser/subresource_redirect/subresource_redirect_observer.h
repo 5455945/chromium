@@ -78,6 +78,8 @@ class SubresourceRedirectObserver
   explicit SubresourceRedirectObserver(content::WebContents* web_contents);
 
   // content::WebContentsObserver.
+  void ReadyToCommitNavigation(
+      content::NavigationHandle* navigation_handle) override;
   void DidFinishNavigation(
       content::NavigationHandle* navigation_handle) override;
 
@@ -93,7 +95,7 @@ class SubresourceRedirectObserver
   // |optimization_metadata| will be sent to the render frame host as specified
   // by |render_frame_host_routing_id| to later be compressed.
   void OnResourceLoadingImageHintsReceived(
-      content::GlobalFrameRoutingId render_frame_host_routing_id,
+      content::GlobalRenderFrameHostId render_frame_host_routing_id,
       optimization_guide::OptimizationGuideDecision decision,
       const optimization_guide::OptimizationMetadata& optimization_metadata);
 
@@ -111,6 +113,10 @@ class SubresourceRedirectObserver
   // present in this page. This is not an issue since most pages tend to have at
   // least one public image even though they are fully private.
   bool is_mainframe_https_image_compression_applied_ = false;
+
+  // Whether login is allowed for the current navigation. Updated when the
+  // navigation is ready to be committed.
+  bool is_allowed_by_login_state_ = false;
 
   content::WebContentsFrameReceiverSet<mojom::SubresourceRedirectService>
       receivers_;

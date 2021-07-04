@@ -4,6 +4,8 @@
 
 #include "content/public/test/unittest_test_suite.h"
 
+#include <memory>
+
 #include "base/base_switches.h"
 #include "base/check.h"
 #include "base/command_line.h"
@@ -14,6 +16,7 @@
 #include "content/browser/network_service_instance_impl.h"
 #include "content/browser/storage_partition_impl.h"
 #include "content/public/browser/network_service_instance.h"
+#include "content/public/test/scoped_web_ui_controller_factory_registration.h"
 #include "content/public/test/test_host_resolver.h"
 #include "content/test/test_blink_web_unit_test_support.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -72,6 +75,7 @@ UnitTestTestSuite::UnitTestTestSuite(base::TestSuite* test_suite)
   testing::TestEventListeners& listeners =
       testing::UnitTest::GetInstance()->listeners();
   listeners.Append(new ResetNetworkServiceBetweenTests);
+  listeners.Append(new CheckForLeakedWebUIControllerFactoryRegistrations);
 
   // The ThreadPool created by the test launcher is never destroyed.
   // Similarly, the FeatureList created here is never destroyed so it
@@ -89,7 +93,7 @@ UnitTestTestSuite::UnitTestTestSuite(base::TestSuite* test_suite)
 #endif
 
   DCHECK(test_suite);
-  blink_test_support_.reset(new TestBlinkWebUnitTestSupport);
+  blink_test_support_ = std::make_unique<TestBlinkWebUnitTestSupport>();
   test_host_resolver_ = std::make_unique<TestHostResolver>();
 }
 

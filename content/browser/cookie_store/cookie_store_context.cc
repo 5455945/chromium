@@ -5,22 +5,24 @@
 #include "content/browser/cookie_store/cookie_store_context.h"
 
 #include "base/bind.h"
+#include "base/bind_post_task.h"
 #include "base/sequence_checker.h"
-#include "base/task/post_task.h"
+#include "base/threading/sequenced_task_runner_handle.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "content/browser/storage_partition_impl.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/service_worker_context.h"
+#include "content/public/browser/service_worker_version_base_info.h"
 #include "content/public/browser/storage_partition.h"
 
 namespace content {
 
 CookieStoreContext::CookieStoreContext()
     : base::RefCountedDeleteOnSequence<CookieStoreContext>(
-          base::CreateSingleThreadTaskRunner(
-              {ServiceWorkerContext::GetCoreThreadId()})) {
+          BrowserThread::GetTaskRunnerForThread(
+              ServiceWorkerContext::GetCoreThreadId())) {
   DETACH_FROM_SEQUENCE(core_sequence_checker_);
 }
 
@@ -42,17 +44,10 @@ void CookieStoreContext::Initialize(
 
   RunOrPostTaskOnThread(
       FROM_HERE, ServiceWorkerContext::GetCoreThreadId(),
-      base::BindOnce(
-          &CookieStoreContext::InitializeOnCoreThread, this,
-          std::move(service_worker_context),
-          base::BindOnce(
-              [](scoped_refptr<base::SequencedTaskRunner> task_runner,
-                 base::OnceCallback<void(bool)> callback, bool result) {
-                task_runner->PostTask(
-                    FROM_HERE, base::BindOnce(std::move(callback), result));
-              },
-              base::SequencedTaskRunnerHandle::Get(),
-              std::move(success_callback))));
+      base::BindOnce(&CookieStoreContext::InitializeOnCoreThread, this,
+                     std::move(service_worker_context),
+                     base::BindPostTask(base::SequencedTaskRunnerHandle::Get(),
+                                        std::move(success_callback))));
 }
 
 void CookieStoreContext::ListenToCookieChanges(
@@ -69,17 +64,10 @@ void CookieStoreContext::ListenToCookieChanges(
 
   RunOrPostTaskOnThread(
       FROM_HERE, ServiceWorkerContext::GetCoreThreadId(),
-      base::BindOnce(
-          &CookieStoreContext::ListenToCookieChangesOnCoreThread, this,
-          std::move(cookie_manager_remote),
-          base::BindOnce(
-              [](scoped_refptr<base::SequencedTaskRunner> task_runner,
-                 base::OnceCallback<void(bool)> callback, bool result) {
-                task_runner->PostTask(
-                    FROM_HERE, base::BindOnce(std::move(callback), result));
-              },
-              base::SequencedTaskRunnerHandle::Get(),
-              std::move(success_callback))));
+      base::BindOnce(&CookieStoreContext::ListenToCookieChangesOnCoreThread,
+                     this, std::move(cookie_manager_remote),
+                     base::BindPostTask(base::SequencedTaskRunnerHandle::Get(),
+                                        std::move(success_callback))));
 }
 
 // static
@@ -99,7 +87,7 @@ void CookieStoreContext::CreateServiceForFrame(
 
 // static
 void CookieStoreContext::CreateServiceForWorker(
-    const ServiceWorkerVersionInfo& info,
+    const ServiceWorkerVersionBaseInfo& info,
     mojo::PendingReceiver<blink::mojom::CookieStore> receiver) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   RenderProcessHost* render_process_host =
@@ -110,7 +98,7 @@ void CookieStoreContext::CreateServiceForWorker(
   StoragePartitionImpl* storage_partition = static_cast<StoragePartitionImpl*>(
       render_process_host->GetStoragePartition());
   storage_partition->GetCookieStoreContext()->CreateServiceForTesting(
-      info.origin, std::move(receiver));
+      info.storage_key.origin(), std::move(receiver));
 }
 
 void CookieStoreContext::CreateServiceForTesting(

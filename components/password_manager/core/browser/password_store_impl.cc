@@ -10,7 +10,6 @@
 
 #include "base/bind.h"
 #include "base/logging.h"
-#include "base/stl_util.h"
 #include "components/password_manager/core/browser/password_store_change.h"
 #include "components/prefs/pref_service.h"
 
@@ -34,7 +33,9 @@ PasswordStoreChangeList BuildPasswordChangeListForInsecureCredentialsUpdate(
 }  // namespace
 
 PasswordStoreImpl::PasswordStoreImpl(std::unique_ptr<LoginDatabase> login_db)
-    : login_db_(std::move(login_db)) {}
+    : login_db_(std::move(login_db)) {
+  backend_ = this;
+}
 
 PasswordStoreImpl::~PasswordStoreImpl() = default;
 
@@ -43,8 +44,7 @@ void PasswordStoreImpl::ShutdownOnUIThread() {
   ScheduleTask(base::BindOnce(&PasswordStoreImpl::ResetLoginDB, this));
 }
 
-bool PasswordStoreImpl::InitOnBackgroundSequence(
-    bool upload_phished_credentials_to_sync) {
+bool PasswordStoreImpl::InitOnBackgroundSequence() {
   DCHECK(background_task_runner()->RunsTasksInCurrentSequence());
   DCHECK(login_db_);
   bool success = true;
@@ -59,9 +59,7 @@ bool PasswordStoreImpl::InitOnBackgroundSequence(
     login_db_->SetDeletionsHaveSyncedCallback(base::BindRepeating(
         &PasswordStoreImpl::NotifyDeletionsHaveSynced, base::Unretained(this)));
   }
-  return PasswordStore::InitOnBackgroundSequence(
-             upload_phished_credentials_to_sync) &&
-         success;
+  return PasswordStore::InitOnBackgroundSequence() && success;
 }
 
 void PasswordStoreImpl::ReportMetricsImpl(const std::string& sync_username,
@@ -180,7 +178,7 @@ bool PasswordStoreImpl::RemoveStatisticsByOriginAndTimeImpl(
 }
 
 std::vector<std::unique_ptr<PasswordForm>>
-PasswordStoreImpl::FillMatchingLogins(const FormDigest& form) {
+PasswordStoreImpl::FillMatchingLogins(const PasswordFormDigest& form) {
   std::vector<std::unique_ptr<PasswordForm>> matched_forms;
   if (login_db_ && !login_db_->GetLogins(form, &matched_forms))
     return std::vector<std::unique_ptr<PasswordForm>>();
@@ -189,24 +187,12 @@ PasswordStoreImpl::FillMatchingLogins(const FormDigest& form) {
 
 std::vector<std::unique_ptr<PasswordForm>>
 PasswordStoreImpl::FillMatchingLoginsByPassword(
-    const base::string16& plain_text_password) {
+    const std::u16string& plain_text_password) {
   std::vector<std::unique_ptr<PasswordForm>> matched_forms;
   if (login_db_ &&
       !login_db_->GetLoginsByPassword(plain_text_password, &matched_forms))
     return std::vector<std::unique_ptr<PasswordForm>>();
   return matched_forms;
-}
-
-bool PasswordStoreImpl::FillAutofillableLogins(
-    std::vector<std::unique_ptr<PasswordForm>>* forms) {
-  DCHECK(background_task_runner()->RunsTasksInCurrentSequence());
-  return login_db_ && login_db_->GetAutofillableLogins(forms);
-}
-
-bool PasswordStoreImpl::FillBlocklistLogins(
-    std::vector<std::unique_ptr<PasswordForm>>* forms) {
-  DCHECK(background_task_runner()->RunsTasksInCurrentSequence());
-  return login_db_ && login_db_->GetBlocklistLogins(forms);
 }
 
 DatabaseCleanupResult PasswordStoreImpl::DeleteUndecryptableLogins() {
@@ -226,12 +212,6 @@ void PasswordStoreImpl::RemoveSiteStatsImpl(const GURL& origin_domain) {
   DCHECK(background_task_runner()->RunsTasksInCurrentSequence());
   if (login_db_)
     login_db_->stats_table().RemoveRow(origin_domain);
-}
-
-std::vector<InteractionsStats> PasswordStoreImpl::GetAllSiteStatsImpl() {
-  DCHECK(background_task_runner()->RunsTasksInCurrentSequence());
-  return login_db_ ? login_db_->stats_table().GetAllRows()
-                   : std::vector<InteractionsStats>();
 }
 
 std::vector<InteractionsStats> PasswordStoreImpl::GetSiteStatsImpl(
@@ -262,10 +242,10 @@ PasswordStoreChangeList PasswordStoreImpl::AddInsecureCredentialImpl(
 
 PasswordStoreChangeList PasswordStoreImpl::RemoveInsecureCredentialsImpl(
     const std::string& signon_realm,
-    const base::string16& username,
+    const std::u16string& username,
     RemoveInsecureCredentialsReason reason) {
   DCHECK(background_task_runner()->RunsTasksInCurrentSequence());
-  if (!login_db_ || !login_db_->insecure_credentials_table().RemoveRow(
+  if (!login_db_ || !login_db_->insecure_credentials_table().RemoveRows(
                         signon_realm, username, reason)) {
     return {};
   }
@@ -386,9 +366,75 @@ bool PasswordStoreImpl::DeleteAndRecreateDatabaseFile() {
   return login_db_ && login_db_->DeleteAndRecreateDatabaseFile();
 }
 
+void PasswordStoreImpl::GetAllLoginsAsync(LoginsReply callback) {
+  background_task_runner()->PostTaskAndReplyWithResult(
+      FROM_HERE, base::BindOnce(&PasswordStoreImpl::GetAllLoginsInternal, this),
+      std::move(callback));
+}
+
+void PasswordStoreImpl::GetAutofillableLoginsAsync(LoginsReply callback) {
+  background_task_runner()->PostTaskAndReplyWithResult(
+      FROM_HERE,
+      base::BindOnce(&PasswordStoreImpl::GetAutofillableLoginsInternal, this),
+      std::move(callback));
+}
+
+void PasswordStoreImpl::FillMatchingLoginsAsync(
+    LoginsReply callback,
+    const std::vector<PasswordFormDigest>& forms) {
+  if (forms.empty()) {
+    std::move(callback).Run({});
+    return;
+  }
+
+  background_task_runner()->PostTaskAndReplyWithResult(
+      FROM_HERE,
+      base::BindOnce(&PasswordStoreImpl::FillMatchingLoginsInternal, this,
+                     forms),
+      std::move(callback));
+}
+
 void PasswordStoreImpl::ResetLoginDB() {
   DCHECK(background_task_runner()->RunsTasksInCurrentSequence());
   login_db_.reset();
+}
+
+LoginsResult PasswordStoreImpl::GetAllLoginsInternal() {
+  DCHECK(background_task_runner()->RunsTasksInCurrentSequence());
+  PrimaryKeyToFormMap key_to_form_map;
+
+  if (!login_db_ || login_db_->GetAllLogins(&key_to_form_map) !=
+                        FormRetrievalResult::kSuccess)
+    return {};
+
+  std::vector<std::unique_ptr<PasswordForm>> obtained_forms;
+  for (auto& pair : key_to_form_map) {
+    obtained_forms.push_back(std::move(pair.second));
+  }
+  return obtained_forms;
+}
+
+LoginsResult PasswordStoreImpl::GetAutofillableLoginsInternal() {
+  std::vector<std::unique_ptr<PasswordForm>> results;
+  if (!login_db_ || !login_db_->GetAutofillableLogins(&results))
+    return {};
+  return results;
+}
+
+LoginsResult PasswordStoreImpl::FillMatchingLoginsInternal(
+    const std::vector<PasswordFormDigest>& forms) {
+  DCHECK(background_task_runner()->RunsTasksInCurrentSequence());
+
+  std::vector<std::unique_ptr<PasswordForm>> results;
+  for (const auto& form : forms) {
+    std::vector<std::unique_ptr<PasswordForm>> matched_forms;
+    if (login_db_ && !login_db_->GetLogins(form, &matched_forms))
+      continue;
+    results.insert(results.end(),
+                   std::make_move_iterator(matched_forms.begin()),
+                   std::make_move_iterator(matched_forms.end()));
+  }
+  return results;
 }
 
 }  // namespace password_manager

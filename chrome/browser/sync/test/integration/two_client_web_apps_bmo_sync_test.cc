@@ -3,9 +3,11 @@
 // found in the LICENSE file.
 
 #include "base/bind.h"
+#include "base/callback_helpers.h"
 #include "base/macros.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/app/chrome_command_ids.h"
@@ -16,17 +18,17 @@
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/web_applications/components/app_registry_controller.h"
 #include "chrome/browser/web_applications/components/app_shortcut_manager.h"
-#include "chrome/browser/web_applications/components/install_finalizer.h"
 #include "chrome/browser/web_applications/components/install_manager.h"
 #include "chrome/browser/web_applications/components/os_integration_manager.h"
 #include "chrome/browser/web_applications/components/web_application_info.h"
 #include "chrome/browser/web_applications/test/test_os_integration_manager.h"
 #include "chrome/browser/web_applications/test/test_web_app_provider.h"
 #include "chrome/browser/web_applications/test/web_app_install_observer.h"
-#include "chrome/browser/web_applications/test/web_app_test.h"
+#include "chrome/browser/web_applications/test/web_app_test_utils.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
 #include "content/public/test/browser_test.h"
@@ -51,7 +53,12 @@ class TwoClientWebAppsBMOSyncTest : public SyncTest {
   TwoClientWebAppsBMOSyncTest()
       : SyncTest(TWO_CLIENT),
         test_web_app_provider_creator_(
-            base::BindRepeating(&CreateTestWebAppProvider)) {}
+            base::BindRepeating(&CreateTestWebAppProvider)) {
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+    // Disable WebAppsCrosapi, so that Web Apps get synced in the Ash browser.
+    scoped_feature_list_.InitAndDisableFeature(features::kWebAppsCrosapi);
+#endif
+  }
   ~TwoClientWebAppsBMOSyncTest() override = default;
 
   bool SetupClients() override {
@@ -60,8 +67,6 @@ class TwoClientWebAppsBMOSyncTest : public SyncTest {
       return result;
     for (Profile* profile : GetAllProfiles()) {
       auto* web_app_provider = WebAppProvider::Get(profile);
-      web_app_provider->install_finalizer()
-          .RemoveLegacyInstallFinalizerForTesting();
       base::RunLoop loop;
       web_app_provider->on_registry_ready().Post(FROM_HERE, loop.QuitClosure());
       loop.Run();
@@ -111,7 +116,7 @@ class TwoClientWebAppsBMOSyncTest : public SyncTest {
         .InstallWebAppFromManifestWithFallback(
             browser->tab_strip_model()->GetActiveWebContents(),
             /*force_shortcut_app=*/false, source,
-            base::BindOnce(TestAcceptDialogCallback),
+            base::BindOnce(test::TestAcceptDialogCallback),
             base::BindLambdaForTesting(
                 [&](const AppId& new_app_id, InstallResultCode code) {
                   EXPECT_EQ(code, InstallResultCode::kSuccessNewInstall);
@@ -171,7 +176,7 @@ class TwoClientWebAppsBMOSyncTest : public SyncTest {
   }
 
   bool AllProfilesHaveSameWebAppIds() {
-    base::Optional<base::flat_set<AppId>> app_ids;
+    absl::optional<base::flat_set<AppId>> app_ids;
     for (Profile* profile : GetAllProfiles()) {
       base::flat_set<AppId> profile_app_ids(GetRegistrar(profile).GetAppIds());
       if (!app_ids) {
@@ -186,6 +191,7 @@ class TwoClientWebAppsBMOSyncTest : public SyncTest {
 
  private:
   TestWebAppProviderCreator test_web_app_provider_creator_;
+  base::test::ScopedFeatureList scoped_feature_list_;
 
   DISALLOW_COPY_AND_ASSIGN(TwoClientWebAppsBMOSyncTest);
 };
@@ -217,13 +223,13 @@ IN_PROC_BROWSER_TEST_F(TwoClientWebAppsBMOSyncTest,
                        SyncDoubleInstallationDifferentNames) {
   ASSERT_TRUE(SetupClients());
   WebApplicationInfo info;
-  info.title = base::UTF8ToUTF16("Test name");
+  info.title = u"Test name";
   info.start_url = GURL("http://www.chromium.org/path");
 
   // Install web app to both profiles.
   AppId app_id = InstallApp(info, GetProfile(0));
   // The web app has a different title on the second profile.
-  info.title = base::UTF8ToUTF16("Test name 2");
+  info.title = u"Test name 2";
   AppId app_id2 = InstallApp(info, GetProfile(1));
 
   EXPECT_EQ(app_id, app_id2);
@@ -258,7 +264,7 @@ IN_PROC_BROWSER_TEST_F(TwoClientWebAppsBMOSyncTest,
   ASSERT_TRUE(AllProfilesHaveSameWebAppIds());
 
   WebApplicationInfo info;
-  info.title = base::UTF8ToUTF16("Test name");
+  info.title = u"Test name";
   info.start_url = GURL("http://www.chromium.org/path");
   info.open_as_window = true;
 
@@ -633,7 +639,7 @@ IN_PROC_BROWSER_TEST_F(TwoClientWebAppsBMOSyncTest, NoShortcutsCreatedOnSync) {
   }
   EXPECT_EQ(
       1u, GetOsIntegrationManager(GetProfile(0)).num_create_shortcuts_calls());
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
   auto last_options =
       GetOsIntegrationManager(GetProfile(1)).get_last_install_options();
   EXPECT_TRUE(last_options.has_value());

@@ -4,9 +4,11 @@
 
 #include "chrome/browser/ui/ash/holding_space/holding_space_browsertest_base.h"
 
+#include <set>
+#include <unordered_map>
 #include <vector>
 
-#include "ash/public/cpp/ash_features.h"
+#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/capture_mode_test_api.h"
 #include "ash/public/cpp/holding_space/holding_space_client.h"
 #include "ash/public/cpp/holding_space/holding_space_constants.h"
@@ -16,24 +18,37 @@
 #include "ash/public/cpp/holding_space/holding_space_model.h"
 #include "ash/public/cpp/holding_space/holding_space_model_observer.h"
 #include "ash/public/cpp/holding_space/holding_space_prefs.h"
+#include "ash/public/cpp/holding_space/holding_space_progress.h"
 #include "ash/public/cpp/holding_space/holding_space_test_api.h"
+#include "ash/public/cpp/holding_space/mock_holding_space_client.h"
+#include "ash/public/cpp/holding_space/mock_holding_space_model_observer.h"
+#include "base/callback_helpers.h"
+#include "base/containers/contains.h"
+#include "base/files/file_util.h"
 #include "base/scoped_observation.h"
-#include "base/scoped_observer.h"
 #include "base/test/bind.h"
+#include "base/test/scoped_locale.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/ash/holding_space/holding_space_downloads_delegate.h"
+#include "chrome/browser/ui/ash/holding_space/holding_space_util.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "components/download/public/common/mock_download_item.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/mock_download_manager.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "ui/aura/window.h"
+#include "ui/base/clipboard/custom_data_helper.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/base/dragdrop/os_exchange_data_provider_factory.h"
+#include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/gfx/image/image_unittest_util.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/controls/menu/menu_controller.h"
 #include "ui/views/controls/menu/menu_item_view.h"
 #include "ui/views/drag_controller.h"
@@ -82,9 +97,13 @@ void DoubleClick(const views::View* view) {
   event_generator.DoubleClickLeftButton();
 }
 
+using DragUpdateCallback =
+    base::RepeatingCallback<void(const gfx::Point& screen_location)>;
+
 // Performs a gesture drag between `from` and `to`.
 void GestureDrag(const views::View* from,
                  const views::View* to,
+                 DragUpdateCallback drag_update_callback = base::DoNothing(),
                  base::OnceClosure before_release_callback = base::DoNothing(),
                  base::OnceClosure after_release_callback = base::DoNothing()) {
   auto* root_window = HoldingSpaceBrowserTestBase::GetRootWindowForNewWindows();
@@ -99,11 +118,21 @@ void GestureDrag(const views::View* from,
       ui::GestureEventDetails(ui::ET_GESTURE_LONG_PRESS));
   event_generator.Dispatch(&long_press);
 
+  // Generate multiple interpolated touch move events.
   // NOTE: The `ash::DragDropController` applies a vertical offset when
   // determining the target view for touch initiated dragging so that needs to
   // be compensated for here.
-  event_generator.MoveTouch(
-      gfx::Point(to->GetBoundsInScreen().CenterPoint() + gfx::Vector2d(0, 25)));
+  constexpr int kNumberOfTouchMoveEvents = 25;
+  constexpr gfx::Vector2d offset(0, 25);
+  const gfx::Point endpoint = to->GetBoundsInScreen().CenterPoint() + offset;
+  const gfx::Point origin = event_generator.current_screen_location();
+  const gfx::Vector2dF diff(endpoint - origin);
+  for (int i = 1; i <= kNumberOfTouchMoveEvents; ++i) {
+    gfx::Vector2dF step(diff);
+    step.Scale(i / static_cast<float>(kNumberOfTouchMoveEvents));
+    event_generator.MoveTouch(origin + gfx::ToRoundedVector2d(step));
+    drag_update_callback.Run(event_generator.current_screen_location());
+  }
 
   std::move(before_release_callback).Run();
   event_generator.ReleaseTouch();
@@ -120,6 +149,7 @@ void GestureTap(const views::View* view) {
 // Performs a mouse drag between `from` and `to`.
 void MouseDrag(const views::View* from,
                const views::View* to,
+               DragUpdateCallback drag_update_callback = base::DoNothing(),
                base::OnceClosure before_release_callback = base::DoNothing(),
                base::OnceClosure after_release_callback = base::DoNothing()) {
   auto* root_window = HoldingSpaceBrowserTestBase::GetRootWindowForNewWindows();
@@ -129,8 +159,15 @@ void MouseDrag(const views::View* from,
 
   // Generate multiple interpolated mouse move events so that views are notified
   // of mouse enter/exit as they would be in production.
-  event_generator.MoveMouseTo(to->GetBoundsInScreen().CenterPoint(),
-                              /*count=*/10);
+  constexpr int kNumberOfMouseMoveEvents = 25;
+  const gfx::Point origin = event_generator.current_screen_location();
+  const gfx::Vector2dF diff(to->GetBoundsInScreen().CenterPoint() - origin);
+  for (int i = 1; i <= kNumberOfMouseMoveEvents; ++i) {
+    gfx::Vector2dF step(diff);
+    step.Scale(i / static_cast<float>(kNumberOfMouseMoveEvents));
+    event_generator.MoveMouseTo(origin + gfx::ToRoundedVector2d(step));
+    drag_update_callback.Run(event_generator.current_screen_location());
+  }
 
   std::move(before_release_callback).Run();
   event_generator.ReleaseLeftButton();
@@ -152,11 +189,12 @@ void PressAndReleaseKey(ui::KeyboardCode key_code, int flags = ui::EF_NONE) {
   event_generator.ReleaseKey(key_code, flags);
 }
 
-// Performs a right click on `view`.
-void RightClick(const views::View* view) {
+// Performs a right click on `view` with the specified `flags`.
+void RightClick(const views::View* view, int flags = ui::EF_NONE) {
   auto* root_window = view->GetWidget()->GetNativeWindow()->GetRootWindow();
   ui::test::EventGenerator event_generator(root_window);
   event_generator.MoveMouseTo(view->GetBoundsInScreen().CenterPoint());
+  event_generator.set_flags(flags);
   event_generator.ClickRightButton();
 }
 
@@ -203,61 +241,6 @@ class MockActivationChangeObserver : public wm::ActivationChangeObserver {
               (override));
 };
 
-class MockHoldingSpaceClient : public HoldingSpaceClient {
- public:
-  MOCK_METHOD(void,
-              AddScreenshot,
-              (const base::FilePath& file_path),
-              (override));
-  MOCK_METHOD(void,
-              AddScreenRecording,
-              (const base::FilePath& file_path),
-              (override));
-  MOCK_METHOD(void,
-              CopyImageToClipboard,
-              (const HoldingSpaceItem& item, SuccessCallback callback),
-              (override));
-  MOCK_METHOD(void, OpenDownloads, (SuccessCallback callback), (override));
-  MOCK_METHOD(void, OpenMyFiles, (SuccessCallback callback), (override));
-  MOCK_METHOD(void,
-              OpenItems,
-              (const std::vector<const HoldingSpaceItem*>& items,
-               SuccessCallback callback),
-              (override));
-  MOCK_METHOD(void,
-              ShowItemInFolder,
-              (const HoldingSpaceItem& item, SuccessCallback callback),
-              (override));
-  MOCK_METHOD(void,
-              PinFiles,
-              (const std::vector<base::FilePath>& file_paths),
-              (override));
-  MOCK_METHOD(void,
-              PinItems,
-              (const std::vector<const HoldingSpaceItem*>& items),
-              (override));
-  MOCK_METHOD(void,
-              UnpinItems,
-              (const std::vector<const HoldingSpaceItem*>& items),
-              (override));
-};
-
-class MockHoldingSpaceModelObserver : public HoldingSpaceModelObserver {
- public:
-  MOCK_METHOD(void,
-              OnHoldingSpaceItemsAdded,
-              (const std::vector<const HoldingSpaceItem*>& items),
-              (override));
-  MOCK_METHOD(void,
-              OnHoldingSpaceItemsRemoved,
-              (const std::vector<const HoldingSpaceItem*>& items),
-              (override));
-  MOCK_METHOD(void,
-              OnHoldingSpaceItemFinalized,
-              (const HoldingSpaceItem* item),
-              (override));
-};
-
 // DropSenderView --------------------------------------------------------------
 
 class DropSenderView : public views::WidgetDelegateView,
@@ -271,24 +254,38 @@ class DropSenderView : public views::WidgetDelegateView,
     return new DropSenderView(context);
   }
 
-  void SetData(const std::vector<base::FilePath> file_paths) {
+  void ClearFilenamesData() { filenames_data_.reset(); }
+
+  void SetFilenamesData(const std::vector<base::FilePath> file_paths) {
     std::vector<ui::FileInfo> filenames;
     for (const base::FilePath& file_path : file_paths)
       filenames.emplace_back(file_path, /*display_name=*/base::FilePath());
-    data_provider_->SetFilenames(filenames);
+    filenames_data_.emplace(std::move(filenames));
+  }
+
+  void ClearFileSystemSourcesData() { file_system_sources_data_.reset(); }
+
+  void SetFileSystemSourcesData(const std::vector<GURL>& file_system_urls) {
+    constexpr char16_t kFileSystemSourcesType[] = u"fs/sources";
+
+    std::stringstream file_system_sources;
+    for (const GURL& file_system_url : file_system_urls)
+      file_system_sources << file_system_url.spec() << "\n";
+
+    base::Pickle pickle;
+    ui::WriteCustomDataToPickle(
+        std::unordered_map<std::u16string, std::u16string>(
+            {{kFileSystemSourcesType,
+              base::UTF8ToUTF16(file_system_sources.str())}}),
+        &pickle);
+
+    file_system_sources_data_.emplace(std::move(pickle));
   }
 
  private:
   explicit DropSenderView(aura::Window* context) {
     InitWidget(context);
-
     set_drag_controller(this);
-    data_provider_ = ui::OSExchangeDataProviderFactory::CreateProvider();
-
-    // NOTE: Gesture drag is only enabled if a drag image is specified.
-    data_provider_->SetDragImage(
-        /*image=*/gfx::test::CreateImageSkia(/*width=*/10, /*height=*/10),
-        /*cursor_offset=*/gfx::Vector2d());
   }
 
   // views::DragController:
@@ -309,19 +306,25 @@ class DropSenderView : public views::WidgetDelegateView,
                             const gfx::Point& press_pt,
                             ui::OSExchangeData* data) override {
     // Drag image.
-    data->provider().SetDragImage(data_provider_->GetDragImage(),
-                                  data_provider_->GetDragImageOffset());
+    // NOTE: Gesture drag is only enabled if a drag image is specified.
+    data->provider().SetDragImage(
+        /*image=*/gfx::test::CreateImageSkia(/*width=*/10, /*height=*/10),
+        /*cursor_offset=*/gfx::Vector2d());
 
     // Payload.
-    std::vector<ui::FileInfo> filenames;
-    ASSERT_TRUE(data_provider_->GetFilenames(&filenames));
-    data->provider().SetFilenames(filenames);
+    if (filenames_data_)
+      data->provider().SetFilenames(filenames_data_.value());
+    if (file_system_sources_data_) {
+      data->provider().SetPickledData(
+          ui::ClipboardFormatType::GetWebCustomDataType(),
+          file_system_sources_data_.value());
+    }
   }
 
   void InitWidget(aura::Window* context) {
     views::Widget::InitParams params;
     params.accept_events = true;
-    params.activatable = views::Widget::InitParams::ACTIVATABLE_NO;
+    params.activatable = views::Widget::InitParams::Activatable::kNo;
     params.context = context;
     params.delegate = this;
     params.type = views::Widget::InitParams::TYPE_WINDOW_FRAMELESS;
@@ -331,7 +334,8 @@ class DropSenderView : public views::WidgetDelegateView,
     widget->Init(std::move(params));
   }
 
-  std::unique_ptr<ui::OSExchangeDataProvider> data_provider_;
+  absl::optional<std::vector<ui::FileInfo>> filenames_data_;
+  absl::optional<base::Pickle> file_system_sources_data_;
 };
 
 // DropTargetView --------------------------------------------------------------
@@ -374,7 +378,7 @@ class DropTargetView : public views::WidgetDelegateView {
   void InitWidget(aura::Window* context) {
     views::Widget::InitParams params;
     params.accept_events = true;
-    params.activatable = views::Widget::InitParams::ACTIVATABLE_NO;
+    params.activatable = views::Widget::InitParams::Activatable::kNo;
     params.context = context;
     params.delegate = this;
     params.type = views::Widget::InitParams::TYPE_WINDOW_FRAMELESS;
@@ -451,9 +455,9 @@ class HoldingSpaceUiBrowserTest : public HoldingSpaceBrowserTestBase {
     // behavior since it is already asserted in ash_unittests. As a convenience,
     // add and remove a holding space item so that the holding space tray will
     // already be showing during test execution.
-    ASSERT_FALSE(IsShowingInShelf());
+    ASSERT_FALSE(test_api().IsShowingInShelf());
     RemoveItem(AddDownloadFile());
-    ASSERT_TRUE(IsShowingInShelf());
+    ASSERT_TRUE(test_api().IsShowingInShelf());
 
     // Confirm that holding space model has been emptied for test execution.
     ASSERT_TRUE(HoldingSpaceController::Get()->model()->items().empty());
@@ -464,34 +468,107 @@ class HoldingSpaceUiBrowserTest : public HoldingSpaceBrowserTestBase {
 
 // Tests -----------------------------------------------------------------------
 
+using PerformDragAndDropCallback =
+    base::RepeatingCallback<void(const views::View* from,
+                                 const views::View* to,
+                                 DragUpdateCallback drag_update_callback,
+                                 base::OnceClosure before_release_callback,
+                                 base::OnceClosure after_release_callback)>;
+
+enum StorageLocationFlag : uint32_t {
+  kFilenames = 1 << 0,
+  kFileSystemSources = 1 << 1,
+};
+
+using StorageLocationFlags = uint32_t;
+
 // Base class for holding space UI browser tests that test drag-and-drop.
-// Parameterized by a callback to invoke to perform a drag-and-drop.
+// Parameterized by:
+//   [0] - callback to invoke to perform a drag-and-drop.
+//   [1] - storage location(s) on `ui::OSExchangeData` at which to store files.
 class HoldingSpaceUiDragAndDropBrowserTest
     : public HoldingSpaceUiBrowserTest,
-      public testing::WithParamInterface<base::RepeatingCallback<void(
-          const views::View* from,
-          const views::View* to,
-          base::OnceClosure before_release_callback,
-          base::OnceClosure after_release_callback)>> {
+      public testing::WithParamInterface<
+          std::tuple<PerformDragAndDropCallback, StorageLocationFlags>> {
  public:
   // Asserts expectations that the holding space tray is or isn't a drop target.
   void ExpectTrayIsDropTarget(bool is_drop_target) {
-    EXPECT_EQ(GetTrayDropTargetOverlay()->layer()->GetTargetOpacity(),
-              is_drop_target ? 1.f : 0.f);
-    EXPECT_EQ(GetDefaultTrayIcon()->layer()->GetTargetOpacity(),
+    EXPECT_EQ(
+        test_api().GetTrayDropTargetOverlay()->layer()->GetTargetOpacity(),
+        is_drop_target ? 1.f : 0.f);
+    EXPECT_EQ(test_api().GetDefaultTrayIcon()->layer()->GetTargetOpacity(),
               is_drop_target ? 0.f : 1.f);
-    EXPECT_EQ(GetPreviewsTrayIcon()->layer()->GetTargetOpacity(),
+    EXPECT_EQ(test_api().GetPreviewsTrayIcon()->layer()->GetTargetOpacity(),
               is_drop_target ? 0.f : 1.f);
+
+    // Cache a reference to preview layers.
+    const ui::Layer* previews_container_layer =
+        test_api().GetPreviewsTrayIcon()->layer()->children()[0];
+    const std::vector<ui::Layer*>& preview_layers =
+        previews_container_layer->children();
+
+    // Iterate over the layers for each preview.
+    for (size_t i = 0; i < preview_layers.size(); ++i) {
+      const ui::Layer* preview_layer = preview_layers[i];
+      const float preview_width = preview_layer->size().width();
+
+      // Previews layers are expected to be translated w/ incremental offset.
+      gfx::Vector2dF expected_translation(i * preview_width / 2.f, 0.f);
+
+      // When the holding space tray is a drop target, preview layers are
+      // expected to be translated by a fixed amount in addition to the standard
+      // incremental offset.
+      if (is_drop_target) {
+        constexpr int kPreviewIndexOffsetForDropTarget = 3;
+        expected_translation += gfx::Vector2dF(
+            kPreviewIndexOffsetForDropTarget * preview_width / 2.f, 0.f);
+      }
+
+      EXPECT_EQ(preview_layer->transform().To2dTranslation(),
+                expected_translation);
+    }
+  }
+
+  // Returns true if `screen_location` is within sufficient range of the holding
+  // space tray so as to make it present itself as a drop target.
+  bool IsWithinTrayDropTargetRange(const gfx::Point& screen_location) {
+    constexpr int kProximityThreshold = 20;
+    gfx::Rect screen_bounds(test_api().GetTray()->GetBoundsInScreen());
+    screen_bounds.Inset(gfx::Insets(-kProximityThreshold));
+    return screen_bounds.Contains(screen_location);
   }
 
   // Performs a drag-and-drop between `from` and `to`.
   void PerformDragAndDrop(
       const views::View* from,
       const views::View* to,
+      DragUpdateCallback drag_update_callback = base::DoNothing(),
       base::OnceClosure before_release_callback = base::DoNothing(),
       base::OnceClosure after_release_callback = base::DoNothing()) {
-    GetParam().Run(from, to, std::move(before_release_callback),
-                   std::move(after_release_callback));
+    GetPerformDragAndDropCallback().Run(
+        from, to, std::move(drag_update_callback),
+        std::move(before_release_callback), std::move(after_release_callback));
+  }
+
+  // Sets data on `sender()` at the storage location specified by test params.
+  void SetSenderData(const std::vector<base::FilePath>& file_paths) {
+    if (ShouldStoreDataIn(StorageLocationFlag::kFilenames))
+      sender()->SetFilenamesData(file_paths);
+    else
+      sender()->ClearFilenamesData();
+
+    if (!ShouldStoreDataIn(StorageLocationFlag::kFileSystemSources)) {
+      sender()->ClearFileSystemSourcesData();
+      return;
+    }
+
+    std::vector<GURL> file_system_urls;
+    for (const base::FilePath& file_path : file_paths) {
+      file_system_urls.push_back(
+          holding_space_util::ResolveFileSystemUrl(GetProfile(), file_path));
+    }
+
+    sender()->SetFileSystemSourcesData(file_system_urls);
   }
 
   // Returns the view serving as the drop sender for tests.
@@ -522,6 +599,18 @@ class HoldingSpaceUiDragAndDropBrowserTest
     HoldingSpaceUiBrowserTest::TearDownOnMainThread();
   }
 
+  PerformDragAndDropCallback GetPerformDragAndDropCallback() {
+    return std::get<0>(GetParam());
+  }
+
+  StorageLocationFlags GetStorageLocationFlags() const {
+    return std::get<1>(GetParam());
+  }
+
+  bool ShouldStoreDataIn(StorageLocationFlag flag) const {
+    return GetStorageLocationFlags() & flag;
+  }
+
   DropSenderView* drop_sender_view_ = nullptr;
   DropTargetView* drop_target_view_ = nullptr;
 };
@@ -534,10 +623,13 @@ IN_PROC_BROWSER_TEST_P(HoldingSpaceUiDragAndDropBrowserTest, DragAndDrop) {
   // Verify drag-and-drop of download items.
   HoldingSpaceItem* const download_file = AddDownloadFile();
 
-  Show();
-  ASSERT_TRUE(IsShowing());
+  test_api().Show();
+  ASSERT_TRUE(test_api().IsShowing());
 
-  std::vector<views::View*> download_chips = GetDownloadChips();
+  // Let the message loop run so that resize of status tray takes effect.
+  base::RunLoop().RunUntilIdle();
+
+  std::vector<views::View*> download_chips = test_api().GetDownloadChips();
   ASSERT_EQ(1u, download_chips.size());
 
   PerformDragAndDrop(/*from=*/download_chips[0], /*to=*/target());
@@ -545,7 +637,7 @@ IN_PROC_BROWSER_TEST_P(HoldingSpaceUiDragAndDropBrowserTest, DragAndDrop) {
 
   // Drag-and-drop should close holding space UI.
   FlushMessageLoop();
-  ASSERT_FALSE(IsShowing());
+  ASSERT_FALSE(test_api().IsShowing());
 
   // Verify drag-and-drop of pinned file items.
   // NOTE: Dragging a pinned file from a non-top row of the pinned files
@@ -555,10 +647,10 @@ IN_PROC_BROWSER_TEST_P(HoldingSpaceUiDragAndDropBrowserTest, DragAndDrop) {
   AddPinnedFile();
   AddPinnedFile();
 
-  Show();
-  ASSERT_TRUE(IsShowing());
+  test_api().Show();
+  ASSERT_TRUE(test_api().IsShowing());
 
-  std::vector<views::View*> pinned_file_chips = GetPinnedFileChips();
+  std::vector<views::View*> pinned_file_chips = test_api().GetPinnedFileChips();
   ASSERT_EQ(3u, pinned_file_chips.size());
 
   PerformDragAndDrop(/*from=*/pinned_file_chips.back(), /*to=*/target());
@@ -566,15 +658,16 @@ IN_PROC_BROWSER_TEST_P(HoldingSpaceUiDragAndDropBrowserTest, DragAndDrop) {
 
   // Drag-and-drop should close holding space UI.
   FlushMessageLoop();
-  ASSERT_FALSE(IsShowing());
+  ASSERT_FALSE(test_api().IsShowing());
 
   // Verify drag-and-drop of screenshot items.
   HoldingSpaceItem* const screenshot_file = AddScreenshotFile();
 
-  Show();
-  ASSERT_TRUE(IsShowing());
+  test_api().Show();
+  ASSERT_TRUE(test_api().IsShowing());
 
-  std::vector<views::View*> screen_capture_views = GetScreenCaptureViews();
+  std::vector<views::View*> screen_capture_views =
+      test_api().GetScreenCaptureViews();
   ASSERT_EQ(1u, screen_capture_views.size());
 
   PerformDragAndDrop(/*from=*/screen_capture_views[0], /*to=*/target());
@@ -582,7 +675,7 @@ IN_PROC_BROWSER_TEST_P(HoldingSpaceUiDragAndDropBrowserTest, DragAndDrop) {
 
   // Drag-and-drop should close holding space UI.
   FlushMessageLoop();
-  ASSERT_FALSE(IsShowing());
+  ASSERT_FALSE(test_api().IsShowing());
 }
 
 // Verifies that drag-and-drop to pin holding space items works.
@@ -592,7 +685,10 @@ IN_PROC_BROWSER_TEST_P(HoldingSpaceUiDragAndDropBrowserTest, DragAndDropToPin) {
 
   // Add an item to holding space to cause the holding space tray to appear.
   AddDownloadFile();
-  ASSERT_TRUE(IsShowingInShelf());
+  ASSERT_TRUE(test_api().IsShowingInShelf());
+
+  // Let the message loop run so that resize of status tray takes effect.
+  base::RunLoop().RunUntilIdle();
 
   // Bind an observer to watch for updates to the holding space model.
   testing::NiceMock<MockHoldingSpaceModelObserver> mock;
@@ -603,7 +699,7 @@ IN_PROC_BROWSER_TEST_P(HoldingSpaceUiDragAndDropBrowserTest, DragAndDropToPin) {
   // Create a file to be dragged into the holding space.
   std::vector<base::FilePath> file_paths;
   file_paths.push_back(CreateFile());
-  sender()->SetData(file_paths);
+  SetSenderData(file_paths);
 
   // Expect no events have been recorded to histograms.
   base::HistogramTester histogram_tester;
@@ -624,7 +720,14 @@ IN_PROC_BROWSER_TEST_P(HoldingSpaceUiDragAndDropBrowserTest, DragAndDropToPin) {
     // Perform and verify the ability to pin a file via drag-and-drop.
     ExpectTrayIsDropTarget(false);
     PerformDragAndDrop(
-        /*from=*/sender(), /*to=*/GetTray(),
+        /*from=*/sender(), /*to=*/test_api().GetTray(),
+        /*drag_update_callback=*/
+        base::BindRepeating(
+            &HoldingSpaceUiDragAndDropBrowserTest::IsWithinTrayDropTargetRange,
+            base::Unretained(this))
+            .Then(base::BindRepeating(
+                &HoldingSpaceUiDragAndDropBrowserTest::ExpectTrayIsDropTarget,
+                base::Unretained(this))),
         /*before_release_callback=*/
         base::BindOnce(
             &HoldingSpaceUiDragAndDropBrowserTest::ExpectTrayIsDropTarget,
@@ -644,7 +747,7 @@ IN_PROC_BROWSER_TEST_P(HoldingSpaceUiDragAndDropBrowserTest, DragAndDropToPin) {
   // Create a few more files to be dragged into the holding space.
   file_paths.push_back(CreateFile());
   file_paths.push_back(CreateFile());
-  sender()->SetData(file_paths);
+  SetSenderData(file_paths);
 
   {
     base::RunLoop run_loop;
@@ -662,7 +765,14 @@ IN_PROC_BROWSER_TEST_P(HoldingSpaceUiDragAndDropBrowserTest, DragAndDropToPin) {
     // Note that any already pinned files in the drop payload are ignored.
     ExpectTrayIsDropTarget(false);
     PerformDragAndDrop(
-        /*from=*/sender(), /*to=*/GetTray(),
+        /*from=*/sender(), /*to=*/test_api().GetTray(),
+        /*drag_update_callback=*/
+        base::BindRepeating(
+            &HoldingSpaceUiDragAndDropBrowserTest::IsWithinTrayDropTargetRange,
+            base::Unretained(this))
+            .Then(base::BindRepeating(
+                &HoldingSpaceUiDragAndDropBrowserTest::ExpectTrayIsDropTarget,
+                base::Unretained(this))),
         /*before_release_callback=*/
         base::BindOnce(
             &HoldingSpaceUiDragAndDropBrowserTest::ExpectTrayIsDropTarget,
@@ -692,7 +802,17 @@ IN_PROC_BROWSER_TEST_P(HoldingSpaceUiDragAndDropBrowserTest, DragAndDropToPin) {
     EXPECT_CALL(client, PinFiles).Times(0);
     ExpectTrayIsDropTarget(false);
     PerformDragAndDrop(
-        /*from=*/sender(), /*to=*/GetTray(),
+        /*from=*/sender(), /*to=*/test_api().GetTray(),
+        /*drag_update_callback=*/
+        base::BindRepeating(
+            [](HoldingSpaceUiDragAndDropBrowserTest* test,
+               const gfx::Point& screen_location) {
+              // The drag payload cannot be handled by holding space so the tray
+              // should never indicate it is a drop target regardless of drag
+              // update `screen_location`.
+              test->ExpectTrayIsDropTarget(false);
+            },
+            base::Unretained(this)),
         /*before_release_callback=*/
         base::BindOnce(
             &HoldingSpaceUiDragAndDropBrowserTest::ExpectTrayIsDropTarget,
@@ -710,22 +830,114 @@ IN_PROC_BROWSER_TEST_P(HoldingSpaceUiDragAndDropBrowserTest, DragAndDropToPin) {
   }
 }
 
-INSTANTIATE_TEST_SUITE_P(All,
-                         HoldingSpaceUiDragAndDropBrowserTest,
-                         testing::ValuesIn({
-                             base::BindRepeating(&MouseDrag),
-                             base::BindRepeating(&GestureDrag),
-                         }));
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    HoldingSpaceUiDragAndDropBrowserTest,
+    testing::Combine(testing::ValuesIn({
+                         base::BindRepeating(&MouseDrag),
+                         base::BindRepeating(&GestureDrag),
+                     }),
+                     testing::ValuesIn(std::vector<StorageLocationFlags>({
+                         StorageLocationFlag::kFilenames,
+                         StorageLocationFlag::kFileSystemSources,
+                         StorageLocationFlag::kFilenames |
+                             StorageLocationFlag::kFileSystemSources,
+                     }))));
 
 // Verifies that the holding space tray does not appear on the lock screen.
 IN_PROC_BROWSER_TEST_F(HoldingSpaceUiBrowserTest, LockScreen) {
-  ASSERT_TRUE(IsShowingInShelf());
+  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+
+  ASSERT_TRUE(test_api().IsShowingInShelf());
   RequestAndAwaitLockScreen();
-  ASSERT_FALSE(IsShowingInShelf());
+  ASSERT_FALSE(test_api().IsShowingInShelf());
+}
+
+// Verifies that pinning and unpinning holding space items works as intended.
+IN_PROC_BROWSER_TEST_F(HoldingSpaceUiBrowserTest, PinAndUnpinItems) {
+  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+
+  // Add an item of every type. For downloads, also add an in-progress item.
+  for (HoldingSpaceItem::Type type : GetHoldingSpaceItemTypes())
+    AddItem(GetProfile(), type, CreateFile());
+  AddItem(GetProfile(), HoldingSpaceItem::Type::kDownload, CreateFile(),
+          HoldingSpaceProgress(/*current_bytes=*/0, /*total_bytes=*/100));
+
+  // Show holding space UI.
+  test_api().Show();
+  ASSERT_TRUE(test_api().IsShowing());
+
+  // Verify existence of views for pinned files, screen captures, and downloads.
+  using ViewList = std::vector<views::View*>;
+  ViewList pinned_file_chips = test_api().GetPinnedFileChips();
+  ASSERT_EQ(pinned_file_chips.size(), 1u);
+  ViewList screen_capture_views = test_api().GetScreenCaptureViews();
+  ASSERT_GE(screen_capture_views.size(), 1u);
+  ViewList download_chips = test_api().GetDownloadChips();
+  ASSERT_GE(download_chips.size(), 2u);
+
+  // Attempt to pin a screen capture via context menu.
+  RightClick(screen_capture_views.front());
+  ASSERT_TRUE(SelectMenuItemWithCommandId(HoldingSpaceCommandId::kPinItem));
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_RETURN);
+  pinned_file_chips = test_api().GetPinnedFileChips();
+  ASSERT_EQ(pinned_file_chips.size(), 2u);
+  ASSERT_EQ(
+      test_api().GetHoldingSpaceItemFilePath(pinned_file_chips.front()),
+      test_api().GetHoldingSpaceItemFilePath(screen_capture_views.front()));
+
+  // Attempt to pin a completed download via context menu. Note that the first
+  // download is the in-progress download, so don't select that one.
+  RightClick(download_chips.at(1));
+  ASSERT_TRUE(SelectMenuItemWithCommandId(HoldingSpaceCommandId::kPinItem));
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_RETURN);
+  pinned_file_chips = test_api().GetPinnedFileChips();
+  ASSERT_EQ(pinned_file_chips.size(), 3u);
+  ASSERT_EQ(test_api().GetHoldingSpaceItemFilePath(pinned_file_chips.front()),
+            test_api().GetHoldingSpaceItemFilePath(download_chips.at(1)));
+
+  // Attempt to pin an in-progress download via context menu. Because the
+  // download is in-progress, it should neither be pin- or unpin-able.
+  RightClick(download_chips.front());
+  ASSERT_TRUE(views::MenuController::GetActiveInstance());
+  ASSERT_FALSE(SelectMenuItemWithCommandId(HoldingSpaceCommandId::kPinItem));
+  ASSERT_FALSE(SelectMenuItemWithCommandId(HoldingSpaceCommandId::kUnpinItem));
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_ESCAPE);
+
+  // Attempt to unpin the pinned download via context menu without de-selecting
+  // the in-progress download. Because the selection contains items which are
+  // not in-progress and all of those items are pinned, the selection should be
+  // unpin-able.
+  RightClick(download_chips.at(1), ui::EF_CONTROL_DOWN);
+  ASSERT_TRUE(SelectMenuItemWithCommandId(HoldingSpaceCommandId::kUnpinItem));
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_RETURN);
+  pinned_file_chips = test_api().GetPinnedFileChips();
+  ASSERT_EQ(pinned_file_chips.size(), 2u);
+  ASSERT_EQ(
+      test_api().GetHoldingSpaceItemFilePath(pinned_file_chips.front()),
+      test_api().GetHoldingSpaceItemFilePath(screen_capture_views.front()));
+
+  // Select the pinned file and again attempt to pin the completed download via
+  // context menu, still without de-selecting the in-progress download. Because
+  // the selection contains items which are not in-progress and at least one of
+  // those items are unpinned, the selection should be pin-able.
+  Click(pinned_file_chips.front(), ui::EF_CONTROL_DOWN);
+  RightClick(download_chips.front());
+  ASSERT_TRUE(SelectMenuItemWithCommandId(HoldingSpaceCommandId::kPinItem));
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_RETURN);
+  pinned_file_chips = test_api().GetPinnedFileChips();
+  ASSERT_EQ(pinned_file_chips.size(), 3u);
+  ASSERT_EQ(test_api().GetHoldingSpaceItemFilePath(pinned_file_chips.front()),
+            test_api().GetHoldingSpaceItemFilePath(download_chips.at(1)));
 }
 
 // Verifies that opening holding space items works.
 IN_PROC_BROWSER_TEST_F(HoldingSpaceUiBrowserTest, OpenItem) {
+  // Install the Media App, which we expect to open holding space items.
+  WaitForTestSystemAppInstall();
+
   ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
       ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
 
@@ -735,8 +947,9 @@ IN_PROC_BROWSER_TEST_F(HoldingSpaceUiBrowserTest, OpenItem) {
   // Observe the `activation_client` so we can detect windows becoming active as
   // a result of opening holding space items.
   testing::NiceMock<MockActivationChangeObserver> mock;
-  ScopedObserver<wm::ActivationClient, wm::ActivationChangeObserver> obs{&mock};
-  obs.Add(activation_client);
+  base::ScopedObservation<wm::ActivationClient, wm::ActivationChangeObserver>
+      obs{&mock};
+  obs.Observe(activation_client);
 
   // Create a holding space item.
   AddScreenshotFile();
@@ -754,9 +967,10 @@ IN_PROC_BROWSER_TEST_F(HoldingSpaceUiBrowserTest, OpenItem) {
 
   for (auto& user_interaction : user_interactions) {
     // Show holding space UI and verify a holding space item view exists.
-    Show();
-    ASSERT_TRUE(IsShowing());
-    std::vector<views::View*> screen_capture_views = GetScreenCaptureViews();
+    test_api().Show();
+    ASSERT_TRUE(test_api().IsShowing());
+    std::vector<views::View*> screen_capture_views =
+        test_api().GetScreenCaptureViews();
     ASSERT_EQ(1u, screen_capture_views.size());
 
     // Attempt to open the holding space item via user interaction on its view.
@@ -788,14 +1002,15 @@ IN_PROC_BROWSER_TEST_F(HoldingSpaceUiBrowserTest, RemoveItem) {
   for (HoldingSpaceItem::Type type : GetHoldingSpaceItemTypes())
     AddItem(GetProfile(), type, CreateFile());
 
-  Show();
-  ASSERT_TRUE(IsShowing());
+  test_api().Show();
+  ASSERT_TRUE(test_api().IsShowing());
 
-  std::vector<views::View*> pinned_file_chips = GetPinnedFileChips();
+  std::vector<views::View*> pinned_file_chips = test_api().GetPinnedFileChips();
   ASSERT_EQ(1u, pinned_file_chips.size());
 
   // Right clicking a pinned item should cause a context menu to show.
   ASSERT_FALSE(views::MenuController::GetActiveInstance());
+  ViewDrawnWaiter().Wait(pinned_file_chips.front());
   RightClick(pinned_file_chips.front());
   ASSERT_TRUE(views::MenuController::GetActiveInstance());
 
@@ -806,10 +1021,11 @@ IN_PROC_BROWSER_TEST_F(HoldingSpaceUiBrowserTest, RemoveItem) {
   PressAndReleaseKey(ui::KeyboardCode::VKEY_ESCAPE);
   ASSERT_FALSE(views::MenuController::GetActiveInstance());
 
-  std::vector<views::View*> download_chips = GetDownloadChips();
+  std::vector<views::View*> download_chips = test_api().GetDownloadChips();
   ASSERT_GT(download_chips.size(), 1u);
 
   // Add a download item to the selection and show the context menu.
+  ViewDrawnWaiter().Wait(download_chips.front());
   Click(download_chips.front(), ui::EF_CONTROL_DOWN);
   RightClick(download_chips.front());
   ASSERT_TRUE(views::MenuController::GetActiveInstance());
@@ -836,28 +1052,35 @@ IN_PROC_BROWSER_TEST_F(HoldingSpaceUiBrowserTest, RemoveItem) {
   observer.Observe(HoldingSpaceController::Get()->model());
 
   {
+    // Cache `item_id` of the download item to be removed.
+    const std::string item_id =
+        test_api().GetHoldingSpaceItemId(download_chips.front());
+    EXPECT_EQ(test_api().GetHoldingSpaceItemView(download_chips, item_id),
+              download_chips.front());
+
     base::RunLoop run_loop;
     EXPECT_CALL(mock, OnHoldingSpaceItemsRemoved)
         .WillOnce([&](const std::vector<const HoldingSpaceItem*>& items) {
           ASSERT_EQ(items.size(), 1u);
+          EXPECT_EQ(items[0]->id(), item_id);
           run_loop.Quit();
         });
-
-    const size_t download_chips_size = download_chips.size();
 
     // Press `ENTER` to remove the selected download item.
     PressAndReleaseKey(ui::KeyboardCode::VKEY_RETURN);
     run_loop.Run();
 
-    // Verify a download chip has been removed.
-    download_chips = GetDownloadChips();
-    ASSERT_EQ(download_chips.size(), download_chips_size - 1);
+    // Verify the download chip has been removed.
+    download_chips = test_api().GetDownloadChips();
+    EXPECT_FALSE(test_api().GetHoldingSpaceItemView(download_chips, item_id));
   }
 
-  std::vector<views::View*> screen_capture_views = GetScreenCaptureViews();
+  std::vector<views::View*> screen_capture_views =
+      test_api().GetScreenCaptureViews();
   ASSERT_GT(screen_capture_views.size(), 1u);
 
   // Select a screen capture item and show the context menu.
+  ViewDrawnWaiter().Wait(screen_capture_views.front());
   Click(screen_capture_views.front());
   RightClick(screen_capture_views.front());
   ASSERT_TRUE(views::MenuController::GetActiveInstance());
@@ -866,59 +1089,98 @@ IN_PROC_BROWSER_TEST_F(HoldingSpaceUiBrowserTest, RemoveItem) {
   ASSERT_TRUE(SelectMenuItemWithCommandId(HoldingSpaceCommandId::kRemoveItem));
 
   {
+    // Cache `item_id` of the screen capture item to be removed.
+    const std::string item_id =
+        test_api().GetHoldingSpaceItemId(screen_capture_views.front());
+    EXPECT_EQ(test_api().GetHoldingSpaceItemView(screen_capture_views, item_id),
+              screen_capture_views.front());
+
     base::RunLoop run_loop;
     EXPECT_CALL(mock, OnHoldingSpaceItemsRemoved)
         .WillOnce([&](const std::vector<const HoldingSpaceItem*>& items) {
           ASSERT_EQ(items.size(), 1u);
+          EXPECT_EQ(items[0]->id(), item_id);
           run_loop.Quit();
         });
-
-    const size_t screen_capture_views_size = screen_capture_views.size();
 
     // Press `ENTER` to remove the selected screen capture item.
     PressAndReleaseKey(ui::KeyboardCode::VKEY_RETURN);
     run_loop.Run();
 
-    // Verify a screen capture view has been removed.
-    screen_capture_views = GetScreenCaptureViews();
-    ASSERT_EQ(screen_capture_views.size(), screen_capture_views_size - 1);
+    // Verify the screen capture view has been removed.
+    screen_capture_views = test_api().GetScreenCaptureViews();
+    EXPECT_FALSE(
+        test_api().GetHoldingSpaceItemView(screen_capture_views, item_id));
   }
 
-  // Select all download items.
-  for (views::View* download_chip : download_chips)
-    Click(download_chip, ui::EF_SHIFT_DOWN);
+  // Remove all items in the recent files bubble. Note that not all download
+  // items or screen capture items that exist may be visible at the same time
+  // due to max visibility count restrictions.
+  while (!download_chips.empty() || !screen_capture_views.empty()) {
+    // Select all visible download items.
+    for (views::View* download_chip : download_chips) {
+      ViewDrawnWaiter().Wait(download_chip);
+      Click(download_chip, ui::EF_CONTROL_DOWN);
+    }
 
-  // Select all screen capture items.
-  for (views::View* screen_capture_view : screen_capture_views)
-    Click(screen_capture_view, ui::EF_SHIFT_DOWN);
+    // Select all visible screen capture items.
+    for (views::View* screen_capture_view : screen_capture_views) {
+      ViewDrawnWaiter().Wait(screen_capture_view);
+      Click(screen_capture_view, ui::EF_CONTROL_DOWN);
+    }
 
-  // Show the context menu. There should be a `kRemoveItem` command.
-  RightClick(download_chips.front());
-  ASSERT_TRUE(views::MenuController::GetActiveInstance());
-  ASSERT_TRUE(SelectMenuItemWithCommandId(HoldingSpaceCommandId::kRemoveItem));
+    // Show the context menu. There should be a `kRemoveItem` command.
+    RightClick(download_chips.size() ? download_chips.front()
+                                     : screen_capture_views.front());
+    ASSERT_TRUE(views::MenuController::GetActiveInstance());
+    ASSERT_TRUE(
+        SelectMenuItemWithCommandId(HoldingSpaceCommandId::kRemoveItem));
 
-  {
-    const size_t recent_files_size =
-        download_chips.size() + screen_capture_views.size();
+    {
+      // Cache `item_ids` of download and screen capture items to be removed.
+      std::set<std::string> item_ids;
+      for (const views::View* download_chip : download_chips) {
+        auto it =
+            item_ids.insert(test_api().GetHoldingSpaceItemId(download_chip));
+        EXPECT_EQ(test_api().GetHoldingSpaceItemView(download_chips, *it.first),
+                  download_chip);
+      }
+      for (const views::View* screen_capture_view : screen_capture_views) {
+        auto it = item_ids.insert(
+            test_api().GetHoldingSpaceItemId(screen_capture_view));
+        EXPECT_EQ(
+            test_api().GetHoldingSpaceItemView(screen_capture_views, *it.first),
+            screen_capture_view);
+      }
 
-    base::RunLoop run_loop;
-    EXPECT_CALL(mock, OnHoldingSpaceItemsRemoved)
-        .WillOnce([&](const std::vector<const HoldingSpaceItem*>& items) {
-          ASSERT_EQ(items.size(), recent_files_size);
-          run_loop.Quit();
-        });
+      base::RunLoop run_loop;
+      EXPECT_CALL(mock, OnHoldingSpaceItemsRemoved)
+          .WillOnce([&](const std::vector<const HoldingSpaceItem*>& items) {
+            ASSERT_EQ(items.size(), item_ids.size());
+            for (const HoldingSpaceItem* item : items)
+              ASSERT_TRUE(base::Contains(item_ids, item->id()));
+            run_loop.Quit();
+          });
 
-    // Press `ENTER` to remove the selected items.
-    PressAndReleaseKey(ui::KeyboardCode::VKEY_RETURN);
-    run_loop.Run();
+      // Press `ENTER` to remove the selected items.
+      PressAndReleaseKey(ui::KeyboardCode::VKEY_RETURN);
+      run_loop.Run();
 
-    // Verify all download chips and screen capture views have been removed.
-    ASSERT_EQ(GetDownloadChips().size(), 0u);
-    ASSERT_EQ(GetScreenCaptureViews().size(), 0u);
+      // Verify all previously visible download chips and screen capture views
+      // have been removed.
+      download_chips = test_api().GetDownloadChips();
+      screen_capture_views = test_api().GetScreenCaptureViews();
+      for (const std::string& item_id : item_ids) {
+        EXPECT_FALSE(
+            test_api().GetHoldingSpaceItemView(download_chips, item_id));
+        EXPECT_FALSE(
+            test_api().GetHoldingSpaceItemView(screen_capture_views, item_id));
+      }
+    }
   }
 
   // The recent files bubble should be empty and therefore hidden.
-  ASSERT_FALSE(RecentFilesBubbleShown());
+  ASSERT_FALSE(test_api().RecentFilesBubbleShown());
 }
 
 // Verifies that unpinning a pinned holding space item works as intended.
@@ -931,10 +1193,10 @@ IN_PROC_BROWSER_TEST_F(HoldingSpaceUiBrowserTest, UnpinItem) {
   for (size_t i = 0; i < kNumPinnedItems; ++i)
     AddPinnedFile();
 
-  Show();
-  ASSERT_TRUE(IsShowing());
+  test_api().Show();
+  ASSERT_TRUE(test_api().IsShowing());
 
-  std::vector<views::View*> pinned_file_chips = GetPinnedFileChips();
+  std::vector<views::View*> pinned_file_chips = test_api().GetPinnedFileChips();
   ASSERT_EQ(kNumPinnedItems, pinned_file_chips.size());
 
   // Operate on the last `pinned_file_chip` as there was an easy to reproduce
@@ -952,37 +1214,23 @@ IN_PROC_BROWSER_TEST_F(HoldingSpaceUiBrowserTest, UnpinItem) {
 
   Click(pin_btn);
 
-  pinned_file_chips = GetPinnedFileChips();
+  pinned_file_chips = test_api().GetPinnedFileChips();
   ASSERT_EQ(kNumPinnedItems - 1, pinned_file_chips.size());
 }
 
-// Base class for holding space UI browser tests that test previews.
-class HoldingSpaceUiPreviewsBrowserTest : public HoldingSpaceUiBrowserTest {
- public:
-  HoldingSpaceUiPreviewsBrowserTest() {
-    scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{features::kTemporaryHoldingSpace,
-                              features::kTemporaryHoldingSpacePreviews},
-        /*disabled_features=*/{});
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
 // Verifies that previews can be toggled via context menu.
-IN_PROC_BROWSER_TEST_F(HoldingSpaceUiPreviewsBrowserTest, TogglePreviews) {
+IN_PROC_BROWSER_TEST_F(HoldingSpaceUiBrowserTest, TogglePreviews) {
   ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
       ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
 
-  ASSERT_TRUE(IsShowingInShelf());
+  ASSERT_TRUE(test_api().IsShowingInShelf());
 
   // Initially, the default icon should be shown.
-  auto* default_tray_icon = GetDefaultTrayIcon();
+  auto* default_tray_icon = test_api().GetDefaultTrayIcon();
   ASSERT_TRUE(default_tray_icon);
   EXPECT_TRUE(default_tray_icon->GetVisible());
 
-  auto* previews_tray_icon = GetPreviewsTrayIcon();
+  auto* previews_tray_icon = test_api().GetPreviewsTrayIcon();
   ASSERT_TRUE(previews_tray_icon);
   ASSERT_TRUE(previews_tray_icon->layer());
   ASSERT_EQ(1u, previews_tray_icon->layer()->children().size());
@@ -1019,6 +1267,7 @@ IN_PROC_BROWSER_TEST_F(HoldingSpaceUiPreviewsBrowserTest, TogglePreviews) {
 
   // Right click the tray icon, and expect a context menu to be shown which will
   // allow the user to hide previews.
+  ViewDrawnWaiter().Wait(previews_tray_icon);
   RightClick(previews_tray_icon);
   ASSERT_TRUE(views::MenuController::GetActiveInstance());
 
@@ -1038,6 +1287,7 @@ IN_PROC_BROWSER_TEST_F(HoldingSpaceUiPreviewsBrowserTest, TogglePreviews) {
 
   // Right click the tray icon, and expect a context menu to be shown which will
   // allow the user to show previews.
+  ViewDrawnWaiter().Wait(default_tray_icon);
   RightClick(default_tray_icon);
   ASSERT_TRUE(views::MenuController::GetActiveInstance());
 
@@ -1054,6 +1304,906 @@ IN_PROC_BROWSER_TEST_F(HoldingSpaceUiPreviewsBrowserTest, TogglePreviews) {
 
   EXPECT_EQ(3u, previews_container_layer->children().size());
   EXPECT_EQ(gfx::Size(64, 32), previews_tray_icon->size());
+}
+
+// Base class for holding space UI browser tests that require in-progress
+// downloads integration. NOTE: This test suite will swap out the production
+// download manager with a mock instance.
+class HoldingSpaceUiInProgressDownloadsBrowserTest
+    : public HoldingSpaceUiBrowserTest {
+ public:
+  HoldingSpaceUiInProgressDownloadsBrowserTest() {
+    // Enable in-progress downloads integration.
+    scoped_feature_list_.InitAndEnableFeature(
+        features::kHoldingSpaceInProgressDownloadsIntegration);
+
+    // Mock `content::DownloadManager::IsManagerInitialized()`.
+    ON_CALL(download_manager_, IsManagerInitialized())
+        .WillByDefault(testing::Return(true));
+
+    // Mock `content::DownloadManager::AddObserver()`.
+    ON_CALL(download_manager_, AddObserver)
+        .WillByDefault(testing::Invoke(
+            &download_manager_observers_,
+            &base::ObserverList<
+                content::DownloadManager::Observer>::Unchecked::AddObserver));
+
+    // Mock `content::DownloadManager::RemoveObserver()`.
+    ON_CALL(download_manager_, RemoveObserver)
+        .WillByDefault(testing::Invoke(
+            &download_manager_observers_,
+            &base::ObserverList<content::DownloadManager::Observer>::Unchecked::
+                RemoveObserver));
+
+    // Swap out the production download manager with the mock.
+    HoldingSpaceDownloadsDelegate::SetDownloadManagerForTesting(
+        &download_manager_);
+  }
+
+  ~HoldingSpaceUiInProgressDownloadsBrowserTest() override {
+    for (auto& observer : download_manager_observers_)
+      observer.ManagerGoingDown(&download_manager_);
+  }
+
+  // Creates and returns a mock download item with the specified `state`,
+  // `file_path`, `target_file_path`, `received_bytes`, and `total_bytes`.
+  std::unique_ptr<testing::NiceMock<download::MockDownloadItem>>
+  CreateMockDownloadItem(download::DownloadItem::DownloadState state,
+                         const base::FilePath& file_path,
+                         const base::FilePath& target_file_path,
+                         int64_t received_bytes,
+                         int64_t total_bytes) {
+    auto mock_download_item =
+        std::make_unique<testing::NiceMock<download::MockDownloadItem>>();
+
+    // Mock `download::DownloadItem::Cancel()`.
+    ON_CALL(*mock_download_item, Cancel(/*from_user=*/testing::Eq(true)))
+        .WillByDefault(testing::InvokeWithoutArgs(
+            [mock_download_item = mock_download_item.get()]() {
+              // When a download is cancelled, the underlying file is deleted.
+              const auto& file_path = mock_download_item->GetFullPath();
+              if (!file_path.empty()) {
+                base::ScopedAllowBlockingForTesting allow_blocking;
+                ASSERT_TRUE(base::DeleteFile(file_path));
+              }
+              // Any subsequent calls to `download::DownloadItem::GetState()`
+              // should indicate that the `mock_download_item` is cancelled.
+              ON_CALL(*mock_download_item, GetState)
+                  .WillByDefault(
+                      testing::Return(download::DownloadItem::CANCELLED));
+              // Calling `download::DownloadItem::Cancel()` results in updates.
+              mock_download_item->NotifyObserversDownloadUpdated();
+            }));
+
+    // Mock `download::DownloadItem::GetFullPath()`.
+    ON_CALL(*mock_download_item, GetFullPath)
+        .WillByDefault(testing::Invoke(
+            [mock_download_item = mock_download_item.get(),
+             file_path = base::FilePath(file_path)]() -> const base::FilePath& {
+              return mock_download_item->GetState() ==
+                             download::DownloadItem::COMPLETE
+                         ? mock_download_item->GetTargetFilePath()
+                         : file_path;
+            }));
+
+    // Mock `download::DownloadItem::GetOpenWhenComplete()`.
+    auto open_when_complete = std::make_unique<bool>(false);
+    ON_CALL(*mock_download_item, GetOpenWhenComplete)
+        .WillByDefault(testing::ReturnPointee(open_when_complete.get()));
+
+    // Mock `download::DownloadItem::GetReceivedBytes()`.
+    ON_CALL(*mock_download_item, GetReceivedBytes)
+        .WillByDefault(testing::Return(received_bytes));
+
+    // Mock `download::DownloadItem::GetState()`.
+    ON_CALL(*mock_download_item, GetState)
+        .WillByDefault(testing::Return(state));
+
+    // Mock `download::DownloadItem::GetTargetFilePath()`.
+    ON_CALL(*mock_download_item, GetTargetFilePath)
+        .WillByDefault(testing::ReturnRefOfCopy(target_file_path));
+
+    // Mock `download::DownloadItem::GetTotalBytes()`.
+    ON_CALL(*mock_download_item, GetTotalBytes)
+        .WillByDefault(testing::Return(total_bytes));
+
+    // Mock `download::DownloadItem::IsPaused()`.
+    auto paused = std::make_unique<bool>(false);
+    ON_CALL(*mock_download_item, IsPaused)
+        .WillByDefault(testing::ReturnPointee(paused.get()));
+
+    // Create a callback which can be run to set `paused` state and which
+    // mirrors production behavior by notifying observers on change.
+    auto set_paused = base::BindRepeating(
+        [](download::MockDownloadItem* mock_download_item, bool* paused,
+           bool new_paused) {
+          if (*paused != new_paused) {
+            *paused = new_paused;
+            mock_download_item->NotifyObserversDownloadUpdated();
+          }
+        },
+        base::Unretained(mock_download_item.get()),
+        base::Owned(std::move(paused)));
+
+    // Mock `download::DownloadItem::Pause()`.
+    ON_CALL(*mock_download_item, Pause).WillByDefault([set_paused]() {
+      set_paused.Run(true);
+    });
+
+    // Mock `download::DownloadItem::Resume()`.
+    ON_CALL(*mock_download_item, Resume(/*from_user=*/testing::Eq(true)))
+        .WillByDefault([set_paused]() { set_paused.Run(false); });
+
+    // Mock `download::DownloadItem::SetOpenWhenComplete()`.
+    ON_CALL(*mock_download_item, SetOpenWhenComplete)
+        .WillByDefault(
+            [callback = base::BindRepeating(
+                 [](download::MockDownloadItem* mock_download_item,
+                    bool* open_when_complete, bool new_open_when_complete) {
+                   if (*open_when_complete != new_open_when_complete) {
+                     *open_when_complete = new_open_when_complete;
+                     mock_download_item->NotifyObserversDownloadUpdated();
+                   }
+                 },
+                 base::Unretained(mock_download_item.get()),
+                 base::Owned(std::move(open_when_complete)))](
+                bool new_open_when_complete) {
+              callback.Run(new_open_when_complete);
+            });
+
+    // Notify observers of the created download.
+    for (auto& observer : download_manager_observers_)
+      observer.OnDownloadCreated(&download_manager_, mock_download_item.get());
+
+    return mock_download_item;
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+  testing::NiceMock<content::MockDownloadManager> download_manager_;
+  base::ObserverList<content::DownloadManager::Observer>::Unchecked
+      download_manager_observers_;
+};
+
+// Verifies that primary and secondary text are displayed as intended.
+IN_PROC_BROWSER_TEST_F(HoldingSpaceUiInProgressDownloadsBrowserTest,
+                       PrimaryAndSecondaryText) {
+  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+
+  // Force locale since strings are being verified.
+  base::ScopedLocale scoped_locale("en_US.UTF-8");
+
+  // Create an in-progress download.
+  const base::FilePath target_file_path(CreateFile());
+  auto in_progress_download = CreateMockDownloadItem(
+      download::DownloadItem::IN_PROGRESS, /*file_path=*/CreateFile(),
+      target_file_path, /*received_bytes=*/0, /*total_bytes=*/-1);
+  in_progress_download->NotifyObserversDownloadUpdated();
+
+  // Show holding space UI.
+  test_api().Show();
+  ASSERT_TRUE(test_api().IsShowing());
+
+  // Verify the existence of a single download chip.
+  std::vector<views::View*> download_chips = test_api().GetDownloadChips();
+  ASSERT_EQ(download_chips.size(), 1u);
+
+  // Cache pointers to the `primary_label` and `secondary_label`.
+  auto* primary_label = static_cast<views::Label*>(
+      download_chips[0]->GetViewByID(kHoldingSpaceItemPrimaryChipLabelId));
+  auto* secondary_label = static_cast<views::Label*>(
+      download_chips[0]->GetViewByID(kHoldingSpaceItemSecondaryChipLabelId));
+
+  // The `primary_label` should always be visible and should always show the
+  // lossy display name of the download's target file path.
+  const auto target_file_name = target_file_path.BaseName().LossyDisplayName();
+  EXPECT_TRUE(primary_label->GetVisible());
+  EXPECT_EQ(primary_label->GetText(), target_file_name);
+
+  // Initially, no bytes have been received so `secondary_label` should display
+  // `0 B` as there is no knowledge of the total number of bytes expected.
+  EXPECT_TRUE(secondary_label->GetVisible());
+  EXPECT_EQ(secondary_label->GetText(), u"0 B");
+
+  // Pause the download.
+  RightClick(download_chips.at(0));
+  EXPECT_TRUE(SelectMenuItemWithCommandId(HoldingSpaceCommandId::kPauseItem));
+  PressAndReleaseKey(ui::VKEY_RETURN);
+
+  // When paused with no bytes received, the `secondary_label` should display
+  // "Paused, 0 B" as there is still no knowledge of the total number of
+  // bytes expected.
+  EXPECT_TRUE(primary_label->GetVisible());
+  EXPECT_EQ(primary_label->GetText(), target_file_name);
+  EXPECT_TRUE(secondary_label->GetVisible());
+  EXPECT_EQ(secondary_label->GetText(), u"Paused, 0 B");
+
+  // Mock `download::DownloadItem::GetReceivedBytes()`.
+  ON_CALL(*in_progress_download, GetReceivedBytes)
+      .WillByDefault(testing::Return(1024 * 1024));
+  in_progress_download->NotifyObserversDownloadUpdated();
+
+  // When paused with bytes received, the `secondary_label` should display both
+  // the paused state and the number of bytes received with appropriate units.
+  EXPECT_TRUE(primary_label->GetVisible());
+  EXPECT_EQ(primary_label->GetText(), target_file_name);
+  EXPECT_TRUE(secondary_label->GetVisible());
+  EXPECT_EQ(secondary_label->GetText(), u"Paused, 1,024 KB");
+
+  // Resume the download.
+  RightClick(download_chips.at(0));
+  EXPECT_TRUE(SelectMenuItemWithCommandId(HoldingSpaceCommandId::kResumeItem));
+  PressAndReleaseKey(ui::VKEY_RETURN);
+
+  // If resumed with bytes received, the `secondary_label` should display only
+  // the number of bytes received with appropriate units.
+  EXPECT_TRUE(primary_label->GetVisible());
+  EXPECT_EQ(primary_label->GetText(), target_file_name);
+  EXPECT_TRUE(secondary_label->GetVisible());
+  EXPECT_EQ(secondary_label->GetText(), u"1,024 KB");
+
+  // Mock `download::DownloadItem::GetTotalBytes()`.
+  ON_CALL(*in_progress_download, GetTotalBytes)
+      .WillByDefault(testing::Return(2 * 1024 * 1024));
+  in_progress_download->NotifyObserversDownloadUpdated();
+
+  // If both the number of bytes received and the total number of bytes expected
+  // are known, the `secondary_label` should display both with appropriate
+  // units.
+  EXPECT_TRUE(primary_label->GetVisible());
+  EXPECT_EQ(primary_label->GetText(), target_file_name);
+  EXPECT_TRUE(secondary_label->GetVisible());
+  EXPECT_EQ(secondary_label->GetText(), u"1.0/2.0 MB");
+
+  // Pause the download.
+  RightClick(download_chips.at(0));
+  EXPECT_TRUE(SelectMenuItemWithCommandId(HoldingSpaceCommandId::kPauseItem));
+  PressAndReleaseKey(ui::VKEY_RETURN);
+
+  // If paused with both the number of bytes received and the total number of
+  // bytes expected known, the `secondary_label` should display the paused state
+  // and both received and total bytes with appropriate units.
+  EXPECT_TRUE(primary_label->GetVisible());
+  EXPECT_EQ(primary_label->GetText(), target_file_name);
+  EXPECT_TRUE(secondary_label->GetVisible());
+  EXPECT_EQ(secondary_label->GetText(), u"Paused, 1.0/2.0 MB");
+
+  // Mock `download::DownloadItem::GetReceivedBytes()` to indicate that all
+  // bytes have been received.
+  ON_CALL(*in_progress_download, GetReceivedBytes)
+      .WillByDefault(testing::Return(in_progress_download->GetTotalBytes()));
+  in_progress_download->NotifyObserversDownloadUpdated();
+
+  // Because the download has not yet been marked complete, the number of bytes
+  // received will not equal the total number of expected bytes but in most
+  // cases that will be imperceivable to the user due to rounding. This is to
+  // prevent giving the impression of completion before download progress is
+  // truly complete (which does not occur until after renaming, etc).
+  EXPECT_TRUE(primary_label->GetVisible());
+  EXPECT_EQ(primary_label->GetText(), target_file_name);
+  EXPECT_TRUE(secondary_label->GetVisible());
+  EXPECT_EQ(secondary_label->GetText(), u"Paused, 2.0/2.0 MB");
+
+  // Complete the download.
+  ON_CALL(*in_progress_download, GetState())
+      .WillByDefault(testing::Return(download::DownloadItem::COMPLETE));
+  in_progress_download->NotifyObserversDownloadUpdated();
+
+  // When no longer in progress, the `secondary_label` should be hidden.
+  EXPECT_TRUE(primary_label->GetVisible());
+  EXPECT_EQ(primary_label->GetText(), target_file_name);
+  EXPECT_FALSE(secondary_label->GetVisible());
+}
+
+// Verifies that canceling holding space items works as intended.
+IN_PROC_BROWSER_TEST_F(HoldingSpaceUiInProgressDownloadsBrowserTest,
+                       CancelItem) {
+  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+
+  // Create an in-progress download.
+  auto in_progress_download = CreateMockDownloadItem(
+      download::DownloadItem::IN_PROGRESS, /*file_path=*/CreateFile(),
+      /*target_file_path=*/CreateFile(),
+      /*received_bytes=*/0, /*total_bytes=*/100);
+  in_progress_download->NotifyObserversDownloadUpdated();
+
+  // Create a completed download.
+  // NOTE: In production, the download manager will create COMPLETE download
+  // items from previous sessions during initialization, so we ignore them. To
+  // match production behavior, create an IN_PROGRESS download item and only
+  // then update it to COMPLETE state.
+  auto completed_download = CreateMockDownloadItem(
+      download::DownloadItem::IN_PROGRESS, /*file_path=*/CreateFile(),
+      /*target_file_path=*/CreateFile(), /*received_bytes=*/0,
+      /*total_bytes=*/100);
+  ON_CALL(*completed_download, GetState())
+      .WillByDefault(testing::Return(download::DownloadItem::COMPLETE));
+  ON_CALL(*completed_download, GetReceivedBytes())
+      .WillByDefault(testing::Return(100));
+  completed_download->NotifyObserversDownloadUpdated();
+
+  // Show holding space UI.
+  test_api().Show();
+  ASSERT_TRUE(test_api().IsShowing());
+
+  // Expect two download chips, one for each created download item.
+  std::vector<views::View*> download_chips = test_api().GetDownloadChips();
+  ASSERT_EQ(download_chips.size(), 2u);
+
+  // Cache download chips. NOTE: Chips are displayed in reverse order of their
+  // underlying holding space item creation.
+  views::View* const completed_download_chip = download_chips.at(0);
+  views::View* const in_progress_download_chip = download_chips.at(1);
+
+  // Right click the `completed_download_chip`. Because the underlying download
+  // is completed, the context menu should *not* contain a "Cancel" command.
+  RightClick(completed_download_chip);
+  ASSERT_FALSE(SelectMenuItemWithCommandId(HoldingSpaceCommandId::kCancelItem));
+
+  // Close the context menu and control-right click the
+  // `in_progress_download_chip`. Because the `completed_download_chip` is still
+  // selected and its underlying download is completed, the context menu should
+  // *not* contain a "Cancel" command.
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_ESCAPE);
+  RightClick(in_progress_download_chip, ui::EF_CONTROL_DOWN);
+  ASSERT_FALSE(SelectMenuItemWithCommandId(HoldingSpaceCommandId::kCancelItem));
+
+  // Close the context menu, press the `in_progress_download_chip` and then
+  // right click it. Because the `in_progress_download_chip` is the only chip
+  // selected and its underlying download is in-progress, the context menu
+  // should contain a "Cancel" command.
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_ESCAPE);
+  Click(in_progress_download_chip);
+  RightClick(in_progress_download_chip);
+  ASSERT_TRUE(SelectMenuItemWithCommandId(HoldingSpaceCommandId::kCancelItem));
+
+  // Cache the holding space item IDs associated with the two download chips.
+  const std::string completed_download_id =
+      test_api().GetHoldingSpaceItemId(completed_download_chip);
+  const std::string in_progress_download_id =
+      test_api().GetHoldingSpaceItemId(in_progress_download_chip);
+
+  // Bind an observer to watch for updates to the holding space model.
+  testing::NiceMock<MockHoldingSpaceModelObserver> mock;
+  base::ScopedObservation<HoldingSpaceModel, HoldingSpaceModelObserver>
+      observer{&mock};
+  observer.Observe(HoldingSpaceController::Get()->model());
+
+  // Press ENTER to execute the "Cancel" command, expecting and waiting for
+  // the in-progress download item to be removed from the holding space model.
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock, OnHoldingSpaceItemsRemoved)
+      .WillOnce([&](const std::vector<const HoldingSpaceItem*>& items) {
+        ASSERT_EQ(items.size(), 1u);
+        ASSERT_EQ(items[0]->id(), in_progress_download_id);
+        run_loop.Quit();
+      });
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_RETURN);
+  run_loop.Run();
+
+  // Verify that there is now only a single download chip.
+  download_chips = test_api().GetDownloadChips();
+  EXPECT_EQ(download_chips.size(), 1u);
+
+  // Because the in-progress download was canceled, only the completed download
+  // chip should still be present in the UI.
+  EXPECT_TRUE(test_api().GetHoldingSpaceItemView(download_chips,
+                                                 completed_download_id));
+  EXPECT_FALSE(test_api().GetHoldingSpaceItemView(download_chips,
+                                                  in_progress_download_id));
+}
+
+// Verifies that canceling holding space items via primary action is WAI.
+IN_PROC_BROWSER_TEST_F(HoldingSpaceUiInProgressDownloadsBrowserTest,
+                       CancelItemViaPrimaryAction) {
+  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+
+  // Create an in-progress download.
+  auto in_progress_download = CreateMockDownloadItem(
+      download::DownloadItem::IN_PROGRESS, /*file_path=*/CreateFile(),
+      /*target_file_path=*/CreateFile(), /*received_bytes=*/0,
+      /*total_bytes=*/100);
+  in_progress_download->NotifyObserversDownloadUpdated();
+
+  // Create a completed download.
+  // NOTE: In production, the download manager will create COMPLETE download
+  // items from previous sessions during initialization, so we ignore them. To
+  // match production behavior, create an IN_PROGRESS download item and only
+  // then update it to COMPLETE state.
+  auto completed_download = CreateMockDownloadItem(
+      download::DownloadItem::IN_PROGRESS, /*file_path=*/CreateFile(),
+      /*target_file_path=*/CreateFile(), /*received_bytes=*/0,
+      /*total_bytes=*/100);
+  ON_CALL(*completed_download, GetState())
+      .WillByDefault(testing::Return(download::DownloadItem::COMPLETE));
+  ON_CALL(*completed_download, GetReceivedBytes())
+      .WillByDefault(testing::Return(100));
+  completed_download->NotifyObserversDownloadUpdated();
+
+  // Show holding space UI.
+  test_api().Show();
+  ASSERT_TRUE(test_api().IsShowing());
+
+  // Expect two download chips, one for each created download item.
+  std::vector<views::View*> download_chips = test_api().GetDownloadChips();
+  ASSERT_EQ(download_chips.size(), 2u);
+
+  // Cache download chips. NOTE: Chips are displayed in reverse order of their
+  // underlying holding space item creation.
+  views::View* const completed_download_chip = download_chips.at(0);
+  views::View* const in_progress_download_chip = download_chips.at(1);
+
+  // Hover over the `completed_download_chip`. Because the underlying download
+  // is completed, the chip should contain a visible primary action for "Pin".
+  MoveMouseTo(completed_download_chip, /*count=*/10);
+  auto* primary_action_container = completed_download_chip->GetViewByID(
+      kHoldingSpaceItemPrimaryActionContainerId);
+  auto* primary_action_cancel =
+      primary_action_container->GetViewByID(kHoldingSpaceItemCancelButtonId);
+  auto* primary_action_pin =
+      primary_action_container->GetViewByID(kHoldingSpaceItemPinButtonId);
+  ViewDrawnWaiter().Wait(primary_action_container);
+  EXPECT_FALSE(primary_action_cancel->GetVisible());
+  EXPECT_TRUE(primary_action_pin->GetVisible());
+
+  // Hover over the `in_progress_download_chip`. Because the underlying download
+  // is in-progress, the chip should contain a visible primary action for
+  // "Cancel".
+  MoveMouseTo(in_progress_download_chip, /*count=*/10);
+  primary_action_container = in_progress_download_chip->GetViewByID(
+      kHoldingSpaceItemPrimaryActionContainerId);
+  primary_action_cancel =
+      primary_action_container->GetViewByID(kHoldingSpaceItemCancelButtonId);
+  primary_action_pin =
+      primary_action_container->GetViewByID(kHoldingSpaceItemPinButtonId);
+  ViewDrawnWaiter().Wait(primary_action_container);
+  EXPECT_TRUE(primary_action_cancel->GetVisible());
+  EXPECT_FALSE(primary_action_pin->GetVisible());
+
+  // Cache the holding space item IDs associated with the two download chips.
+  const std::string completed_download_id =
+      test_api().GetHoldingSpaceItemId(completed_download_chip);
+  const std::string in_progress_download_id =
+      test_api().GetHoldingSpaceItemId(in_progress_download_chip);
+
+  // Bind an observer to watch for updates to the holding space model.
+  testing::NiceMock<MockHoldingSpaceModelObserver> mock;
+  base::ScopedObservation<HoldingSpaceModel, HoldingSpaceModelObserver>
+      observer{&mock};
+  observer.Observe(HoldingSpaceController::Get()->model());
+
+  // Press the `primary_action_container` to execute "Cancel", expecting and
+  // waiting for the in-progress download item to be removed from the holding
+  // space model.
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock, OnHoldingSpaceItemsRemoved)
+      .WillOnce([&](const std::vector<const HoldingSpaceItem*>& items) {
+        ASSERT_EQ(items.size(), 1u);
+        ASSERT_EQ(items[0]->id(), in_progress_download_id);
+        run_loop.Quit();
+      });
+  Click(primary_action_container);
+  run_loop.Run();
+
+  // Verify that there is now only a single download chip.
+  download_chips = test_api().GetDownloadChips();
+  EXPECT_EQ(download_chips.size(), 1u);
+
+  // Because the in-progress download was canceled, only the completed download
+  // chip should still be present in the UI.
+  EXPECT_TRUE(test_api().GetHoldingSpaceItemView(download_chips,
+                                                 completed_download_id));
+  EXPECT_FALSE(test_api().GetHoldingSpaceItemView(download_chips,
+                                                  in_progress_download_id));
+}
+
+// Verifies that opening in-progress download items works as intended.
+IN_PROC_BROWSER_TEST_F(HoldingSpaceUiInProgressDownloadsBrowserTest,
+                       OpenItemWhenComplete) {
+  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+
+  // Force locale since strings are being verified.
+  base::ScopedLocale scoped_locale("en_US.UTF-8");
+
+  // Create an in-progress download.
+  const base::FilePath target_file_path(CreateFile());
+  auto in_progress_download =
+      CreateMockDownloadItem(download::DownloadItem::IN_PROGRESS,
+                             /*file_path=*/CreateFile(), target_file_path,
+                             /*received_bytes=*/0, /*total_bytes=*/100);
+  in_progress_download->NotifyObserversDownloadUpdated();
+
+  // Verify the item is not set to open on complete.
+  EXPECT_FALSE(in_progress_download->GetOpenWhenComplete());
+
+  // Show holding space UI.
+  test_api().Show();
+  ASSERT_TRUE(test_api().IsShowing());
+
+  // Expect a single download chip.
+  std::vector<views::View*> download_chips = test_api().GetDownloadChips();
+  ASSERT_EQ(download_chips.size(), 1u);
+
+  // Cache pointers to the `primary_label` and `secondary_label`.
+  const auto* primary_label = static_cast<views::Label*>(
+      download_chips.front()->GetViewByID(kHoldingSpaceItemPrimaryChipLabelId));
+  const auto* secondary_label =
+      static_cast<views::Label*>(download_chips.front()->GetViewByID(
+          kHoldingSpaceItemSecondaryChipLabelId));
+
+  // The `primary_label` should be visible and should show the lossy display
+  // name of the download's target file path.
+  const auto target_file_name = target_file_path.BaseName().LossyDisplayName();
+  EXPECT_TRUE(primary_label->GetVisible());
+  EXPECT_EQ(primary_label->GetText(), target_file_name);
+
+  // The `secondary_label` should also be visible and should show `0/100 B` as
+  // no bytes have been received but the total number of bytes is known.
+  EXPECT_TRUE(secondary_label->GetVisible());
+  EXPECT_EQ(secondary_label->GetText(), u"0/100 B");
+
+  // Double click the download chip to open the item. Because the underlying
+  // item is in-progress, opening should not occur immediately but should
+  // instead be queued up until download completion.
+  DoubleClick(download_chips.front());
+  EXPECT_TRUE(in_progress_download->GetOpenWhenComplete());
+
+  // The `primary_label` should still be visible and should still show the
+  // lossy display name of the download's target file path.
+  EXPECT_TRUE(primary_label->GetVisible());
+  EXPECT_EQ(primary_label->GetText(), target_file_name);
+
+  // The `secondary_label` should still be visible but should have been updated
+  // to reflect that the underlying download will be opened when complete.
+  EXPECT_TRUE(secondary_label->GetVisible());
+  EXPECT_EQ(secondary_label->GetText(), u"Open when complete");
+
+  // Complete the download.
+  ON_CALL(*in_progress_download, GetState())
+      .WillByDefault(testing::Return(download::DownloadItem::COMPLETE));
+  in_progress_download->NotifyObserversDownloadUpdated();
+
+  // When no longer in progress, the `secondary_label` should be hidden.
+  EXPECT_TRUE(primary_label->GetVisible());
+  EXPECT_EQ(primary_label->GetText(), target_file_name);
+  EXPECT_FALSE(secondary_label->GetVisible());
+}
+
+// Verifies that removing holding space items works as intended.
+IN_PROC_BROWSER_TEST_F(HoldingSpaceUiInProgressDownloadsBrowserTest,
+                       RemoveItem) {
+  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+
+  // Create an in-progress download.
+  auto in_progress_download = CreateMockDownloadItem(
+      download::DownloadItem::IN_PROGRESS, /*file_path=*/CreateFile(),
+      /*target_file_path=*/CreateFile(),
+      /*received_bytes=*/0, /*total_bytes=*/100);
+  in_progress_download->NotifyObserversDownloadUpdated();
+
+  // Create a completed download.
+  // NOTE: In production, the download manager will create COMPLETE download
+  // items from previous sessions during initialization, so we ignore them. To
+  // match production behavior, create an IN_PROGRESS download item and only
+  // then update it to COMPLETE state.
+  auto completed_download = CreateMockDownloadItem(
+      download::DownloadItem::IN_PROGRESS, /*file_path=*/CreateFile(),
+      /*target_file_path=*/CreateFile(), /*bytes_received=*/0,
+      /*total_bytes=*/100);
+  ON_CALL(*completed_download, GetState())
+      .WillByDefault(testing::Return(download::DownloadItem::COMPLETE));
+  ON_CALL(*completed_download, GetReceivedBytes())
+      .WillByDefault(testing::Return(100));
+  completed_download->NotifyObserversDownloadUpdated();
+
+  // Show holding space UI.
+  test_api().Show();
+  ASSERT_TRUE(test_api().IsShowing());
+
+  // Expect two download chips, one for each created download item.
+  std::vector<views::View*> download_chips = test_api().GetDownloadChips();
+  ASSERT_EQ(download_chips.size(), 2u);
+
+  // Cache download chips. NOTE: Chips are displayed in reverse order of their
+  // underlying holding space item creation.
+  views::View* const completed_download_chip = download_chips.at(0);
+  views::View* const in_progress_download_chip = download_chips.at(1);
+
+  // Right click the `in_progress_download_chip`. Because the underlying
+  // download is in-progress, the context menu should *not* contain a "Remove"
+  // command.
+  RightClick(in_progress_download_chip);
+  ASSERT_FALSE(SelectMenuItemWithCommandId(HoldingSpaceCommandId::kRemoveItem));
+
+  // Close the context menu and control-right click the
+  // `completed_download_chip`. Because the `in_progress_download_chip` is still
+  // selected and its underlying download is in-progress, the context menu
+  // should *not* contain a "Remove" command.
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_ESCAPE);
+  RightClick(completed_download_chip, ui::EF_CONTROL_DOWN);
+  ASSERT_FALSE(SelectMenuItemWithCommandId(HoldingSpaceCommandId::kRemoveItem));
+
+  // Close the context menu, press the `completed_download_chip` and then
+  // right click it. Because the `completed_download_chip` is the only chip
+  // selected and its underlying download is completed, the context menu should
+  // contain a "Remove" command.
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_ESCAPE);
+  Click(completed_download_chip);
+  RightClick(completed_download_chip);
+  ASSERT_TRUE(SelectMenuItemWithCommandId(HoldingSpaceCommandId::kRemoveItem));
+
+  // Cache the holding space item IDs associated with the two download chips.
+  const std::string completed_download_id =
+      test_api().GetHoldingSpaceItemId(completed_download_chip);
+  const std::string in_progress_download_id =
+      test_api().GetHoldingSpaceItemId(in_progress_download_chip);
+
+  // Bind an observer to watch for updates to the holding space model.
+  testing::NiceMock<MockHoldingSpaceModelObserver> mock;
+  base::ScopedObservation<HoldingSpaceModel, HoldingSpaceModelObserver>
+      observer{&mock};
+  observer.Observe(HoldingSpaceController::Get()->model());
+
+  // Press ENTER to execute the "Remove" command, expecting and waiting for
+  // the completed download item to be removed from the holding space model.
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock, OnHoldingSpaceItemsRemoved)
+      .WillOnce([&](const std::vector<const HoldingSpaceItem*>& items) {
+        ASSERT_EQ(items.size(), 1u);
+        ASSERT_EQ(items[0]->id(), completed_download_id);
+        run_loop.Quit();
+      });
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_RETURN);
+  run_loop.Run();
+
+  // Verify that there is now only a single download chip.
+  download_chips = test_api().GetDownloadChips();
+  EXPECT_EQ(download_chips.size(), 1u);
+
+  // Because the completed download was canceled, only the in-progress download
+  // chip should still be present in the UI.
+  EXPECT_FALSE(test_api().GetHoldingSpaceItemView(download_chips,
+                                                  completed_download_id));
+  EXPECT_TRUE(test_api().GetHoldingSpaceItemView(download_chips,
+                                                 in_progress_download_id));
+
+  // Complete the in-progress download.
+  ON_CALL(*in_progress_download, GetState())
+      .WillByDefault(testing::Return(download::DownloadItem::COMPLETE));
+  ON_CALL(*in_progress_download, GetReceivedBytes())
+      .WillByDefault(testing::Return(100));
+  in_progress_download->NotifyObserversDownloadUpdated();
+
+  // Because the in-progress download has been completed, right clicking it
+  // should now surface the "Remove" command.
+  RightClick(download_chips.front());
+  ASSERT_TRUE(SelectMenuItemWithCommandId(HoldingSpaceCommandId::kRemoveItem));
+}
+
+// Base class for tests of the pause or resume commands, parameterized by which
+// command to use. This will either be `kPauseItem` or `kResumeItem`.
+class HoldingSpaceUiPauseOrResumeBrowserTest
+    : public HoldingSpaceUiInProgressDownloadsBrowserTest,
+      public testing::WithParamInterface<HoldingSpaceCommandId> {
+ public:
+  HoldingSpaceUiPauseOrResumeBrowserTest() {
+    const HoldingSpaceCommandId command_id(GetPauseOrResumeCommandId());
+    EXPECT_TRUE(command_id == HoldingSpaceCommandId::kPauseItem ||
+                command_id == HoldingSpaceCommandId::kResumeItem);
+  }
+
+  // Returns either `kPauseItem` or `kResumeItem` depending on parameterization.
+  HoldingSpaceCommandId GetPauseOrResumeCommandId() const { return GetParam(); }
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    HoldingSpaceUiPauseOrResumeBrowserTest,
+    testing::ValuesIn({HoldingSpaceCommandId::kPauseItem,
+                       HoldingSpaceCommandId::kResumeItem}));
+
+// Verifies that pausing or resuming holding space items works as intended.
+IN_PROC_BROWSER_TEST_P(HoldingSpaceUiPauseOrResumeBrowserTest,
+                       PauseOrResumeItem) {
+  // Use zero animation duration so that UI updates are immediate.
+  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+
+  // Create an in-progress download which may or may not be paused depending
+  // on parameterization.
+  auto in_progress_download = CreateMockDownloadItem(
+      download::DownloadItem::IN_PROGRESS, /*file_path=*/CreateFile(),
+      /*target_file_path=*/CreateFile(), /*received_bytes=*/0,
+      /*total_bytes=*/100);
+  if (GetPauseOrResumeCommandId() == HoldingSpaceCommandId::kResumeItem)
+    in_progress_download->Pause();
+  in_progress_download->NotifyObserversDownloadUpdated();
+
+  // Create a completed download.
+  // NOTE: In production, the download manager will create COMPLETE download
+  // items from previous sessions during initialization, so we ignore them. To
+  // match production behavior, create an IN_PROGRESS download item and only
+  // then update it to COMPLETE state.
+  auto completed_download = CreateMockDownloadItem(
+      download::DownloadItem::IN_PROGRESS, /*file_path=*/CreateFile(),
+      /*target_file_path=*/CreateFile(), /*received_bytes=*/0,
+      /*total_bytes=*/100);
+  ON_CALL(*completed_download, GetState())
+      .WillByDefault(testing::Return(download::DownloadItem::COMPLETE));
+  ON_CALL(*completed_download, GetReceivedBytes())
+      .WillByDefault(testing::Return(100));
+  completed_download->NotifyObserversDownloadUpdated();
+
+  // Show holding space UI.
+  test_api().Show();
+  ASSERT_TRUE(test_api().IsShowing());
+
+  // Expect two download chips, one for each created download item.
+  std::vector<views::View*> download_chips = test_api().GetDownloadChips();
+  ASSERT_EQ(download_chips.size(), 2u);
+
+  // Cache download chips. NOTE: Chips are displayed in reverse order of their
+  // underlying holding space item creation.
+  views::View* const completed_download_chip = download_chips.at(0);
+  views::View* const in_progress_download_chip = download_chips.at(1);
+
+  // Right click the `completed_download_chip`. Because the underlying download
+  // is completed, the context menu should *not* contain a "Pause" or "Resume"
+  // command.
+  RightClick(completed_download_chip);
+  ASSERT_FALSE(SelectMenuItemWithCommandId(GetPauseOrResumeCommandId()));
+
+  // Close the context menu and control-right click the
+  // `in_progress_download_chip`. Because the `completed_download_chip` is still
+  // selected and its underlying download is completed, the context menu should
+  // *not* contain a "Pause" or "Resume" command.
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_ESCAPE);
+  RightClick(in_progress_download_chip, ui::EF_CONTROL_DOWN);
+  ASSERT_FALSE(SelectMenuItemWithCommandId(GetPauseOrResumeCommandId()));
+
+  // Close the context menu, press the `in_progress_download_chip` and then
+  // right click it. Because the `in_progress_download_chip` is the only chip
+  // selected and its underlying download is in-progress, the context menu
+  // should contain a "Pause" or "Resume" command.
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_ESCAPE);
+  Click(in_progress_download_chip);
+  RightClick(in_progress_download_chip);
+  ASSERT_TRUE(SelectMenuItemWithCommandId(GetPauseOrResumeCommandId()));
+
+  // Bind an observer to watch for updates to the holding space model.
+  testing::NiceMock<MockHoldingSpaceModelObserver> mock;
+  base::ScopedObservation<HoldingSpaceModel, HoldingSpaceModelObserver>
+      observer{&mock};
+  observer.Observe(HoldingSpaceController::Get()->model());
+
+  // Press ENTER to execute the "Pause" or "Resume" command, expecting and
+  // waiting for the in-progress download item to be updated in the holding
+  // space model.
+  base::RunLoop run_loop;
+  const bool was_paused = in_progress_download->IsPaused();
+  EXPECT_CALL(mock, OnHoldingSpaceItemUpdated)
+      .WillOnce([&](const HoldingSpaceItem* item) {
+        EXPECT_EQ(item->id(),
+                  test_api().GetHoldingSpaceItemId(in_progress_download_chip));
+        EXPECT_EQ(item->IsPaused(), !was_paused);
+        run_loop.Quit();
+      });
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_RETURN);
+  run_loop.Run();
+
+  // Verify that there are still two download chips.
+  download_chips = test_api().GetDownloadChips();
+  ASSERT_EQ(download_chips.size(), 2u);
+
+  // The two download chips present should still be the original chips for the
+  // completed download and the (now paused or resumed) in-progress download.
+  EXPECT_EQ(download_chips.at(0), completed_download_chip);
+  EXPECT_EQ(download_chips.at(1), in_progress_download_chip);
+}
+
+// Verifies that pausing or resuming holding space items via secondary action is
+// working as intended.
+IN_PROC_BROWSER_TEST_P(HoldingSpaceUiPauseOrResumeBrowserTest,
+                       PauseOrResumeItemViaSecondaryAction) {
+  // Use zero animation duration so that UI updates are immediate.
+  ui::ScopedAnimationDurationScaleMode scoped_animation_duration_scale_mode(
+      ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+
+  // Create an in-progress download which may or may not be paused depending
+  // on parameterization.
+  auto in_progress_download = CreateMockDownloadItem(
+      download::DownloadItem::IN_PROGRESS, /*file_path=*/CreateFile(),
+      /*target_file_path=*/CreateFile(),
+      /*received_bytes=*/0, /*total_bytes=*/100);
+  if (GetPauseOrResumeCommandId() == HoldingSpaceCommandId::kResumeItem)
+    in_progress_download->Pause();
+  in_progress_download->NotifyObserversDownloadUpdated();
+
+  // Create a completed download.
+  // NOTE: In production, the download manager will create COMPLETE download
+  // items from previous sessions during initialization, so we ignore them. To
+  // match production behavior, create an IN_PROGRESS download item and only
+  // then update it to COMPLETE state.
+  auto completed_download = CreateMockDownloadItem(
+      download::DownloadItem::IN_PROGRESS, /*file_path=*/CreateFile(),
+      /*target_file_path=*/CreateFile(), /*received_bytes=*/0,
+      /*total_bytes=*/100);
+  ON_CALL(*completed_download, GetState())
+      .WillByDefault(testing::Return(download::DownloadItem::COMPLETE));
+  ON_CALL(*completed_download, GetReceivedBytes())
+      .WillByDefault(testing::Return(100));
+  completed_download->NotifyObserversDownloadUpdated();
+
+  // Show holding space UI.
+  test_api().Show();
+  ASSERT_TRUE(test_api().IsShowing());
+
+  // Expect two download chips, one for each created download item.
+  std::vector<views::View*> download_chips = test_api().GetDownloadChips();
+  ASSERT_EQ(download_chips.size(), 2u);
+
+  // Cache download chips. NOTE: Chips are displayed in reverse order of their
+  // underlying holding space item creation.
+  views::View* const completed_download_chip = download_chips.at(0);
+  views::View* const in_progress_download_chip = download_chips.at(1);
+
+  // Hover over the `completed_download_chip`. Because the underlying download
+  // is completed, the chip should not contain a visible secondary action.
+  MoveMouseTo(completed_download_chip, /*count=*/10);
+  ASSERT_FALSE(completed_download_chip
+                   ->GetViewByID(kHoldingSpaceItemSecondaryActionContainerId)
+                   ->GetVisible());
+
+  // Hover over the `in_progress_download_chip`. Because the underlying download
+  // is in-progress, the chip should contain a visible secondary action for
+  // either "Pause" or "Resume", depending on test parameterization.
+  MoveMouseTo(in_progress_download_chip, /*count=*/10);
+  auto* secondary_action_container = in_progress_download_chip->GetViewByID(
+      kHoldingSpaceItemSecondaryActionContainerId);
+  auto* secondary_action_pause =
+      secondary_action_container->GetViewByID(kHoldingSpaceItemPauseButtonId);
+  auto* secondary_action_resume =
+      secondary_action_container->GetViewByID(kHoldingSpaceItemResumeButtonId);
+  ViewDrawnWaiter().Wait(secondary_action_container);
+  EXPECT_EQ(secondary_action_pause->GetVisible(),
+            GetPauseOrResumeCommandId() == HoldingSpaceCommandId::kPauseItem);
+  EXPECT_EQ(secondary_action_resume->GetVisible(),
+            GetPauseOrResumeCommandId() == HoldingSpaceCommandId::kResumeItem);
+
+  // Bind an observer to watch for updates to the holding space model.
+  testing::NiceMock<MockHoldingSpaceModelObserver> mock;
+  base::ScopedObservation<HoldingSpaceModel, HoldingSpaceModelObserver>
+      observer{&mock};
+  observer.Observe(HoldingSpaceController::Get()->model());
+
+  // Press the `secondary_action_container` to execute the "Pause" or "Resume"
+  // command, expecting and waiting for the in-progress download item to be
+  // updated in the holding space model.
+  base::RunLoop run_loop;
+  const bool was_paused = in_progress_download->IsPaused();
+  EXPECT_CALL(mock, OnHoldingSpaceItemUpdated)
+      .WillOnce([&](const HoldingSpaceItem* item) {
+        EXPECT_EQ(item->id(),
+                  test_api().GetHoldingSpaceItemId(in_progress_download_chip));
+        EXPECT_EQ(item->IsPaused(), !was_paused);
+        run_loop.Quit();
+      });
+  Click(secondary_action_container);
+  run_loop.Run();
+
+  // Verify that there are still two download chips.
+  download_chips = test_api().GetDownloadChips();
+  ASSERT_EQ(download_chips.size(), 2u);
+
+  // The two download chips present should still be the original chips for the
+  // completed download and the (now paused or resumed) in-progress download.
+  EXPECT_EQ(download_chips.at(0), completed_download_chip);
+  EXPECT_EQ(download_chips.at(1), in_progress_download_chip);
 }
 
 // Base class for holding space UI browser tests that take screenshots.
@@ -1074,12 +2224,12 @@ class HoldingSpaceUiScreenshotBrowserTest
 // Verifies that taking a screenshot adds a screenshot holding space item.
 IN_PROC_BROWSER_TEST_P(HoldingSpaceUiScreenshotBrowserTest, AddScreenshot) {
   // Verify that no screenshots exist in holding space UI.
-  Show();
-  ASSERT_TRUE(IsShowing());
-  EXPECT_TRUE(GetScreenCaptureViews().empty());
+  test_api().Show();
+  ASSERT_TRUE(test_api().IsShowing());
+  EXPECT_TRUE(test_api().GetScreenCaptureViews().empty());
 
-  Close();
-  ASSERT_FALSE(IsShowing());
+  test_api().Close();
+  ASSERT_FALSE(test_api().IsShowing());
 
   // Take a screenshot using the keyboard. If `features::kCaptureMode` is
   // enabled, the screenshot will be taken using the `CaptureModeController`.
@@ -1098,8 +2248,9 @@ IN_PROC_BROWSER_TEST_P(HoldingSpaceUiScreenshotBrowserTest, AddScreenshot) {
 
   // Bind an observer to watch for updates to the holding space model.
   testing::NiceMock<MockHoldingSpaceModelObserver> mock;
-  ScopedObserver<HoldingSpaceModel, HoldingSpaceModelObserver> observer{&mock};
-  observer.Add(HoldingSpaceController::Get()->model());
+  base::ScopedObservation<HoldingSpaceModel, HoldingSpaceModelObserver>
+      observer{&mock};
+  observer.Observe(HoldingSpaceController::Get()->model());
 
   // Expect and wait for a screenshot item to be added to holding space.
   base::RunLoop run_loop;
@@ -1112,9 +2263,9 @@ IN_PROC_BROWSER_TEST_P(HoldingSpaceUiScreenshotBrowserTest, AddScreenshot) {
   run_loop.Run();
 
   // Verify that the screenshot appears in holding space UI.
-  Show();
-  ASSERT_TRUE(IsShowing());
-  EXPECT_EQ(1u, GetScreenCaptureViews().size());
+  test_api().Show();
+  ASSERT_TRUE(test_api().IsShowing());
+  EXPECT_EQ(1u, test_api().GetScreenCaptureViews().size());
 }
 
 // Base class for holding space UI browser tests that take screen recordings.
@@ -1134,12 +2285,12 @@ class HoldingSpaceUiScreenCaptureBrowserTest
 IN_PROC_BROWSER_TEST_F(HoldingSpaceUiScreenCaptureBrowserTest,
                        AddScreenRecording) {
   // Verify that no screen recordings exist in holding space UI.
-  Show();
-  ASSERT_TRUE(IsShowing());
-  EXPECT_TRUE(GetScreenCaptureViews().empty());
+  test_api().Show();
+  ASSERT_TRUE(test_api().IsShowing());
+  EXPECT_TRUE(test_api().GetScreenCaptureViews().empty());
 
-  Close();
-  ASSERT_FALSE(IsShowing());
+  test_api().Close();
+  ASSERT_FALSE(test_api().IsShowing());
   ash::CaptureModeTestApi capture_mode_test_api;
   capture_mode_test_api.StartForFullscreen(/*for_video=*/true);
   capture_mode_test_api.PerformCapture();
@@ -1153,8 +2304,9 @@ IN_PROC_BROWSER_TEST_F(HoldingSpaceUiScreenCaptureBrowserTest,
 
   // Bind an observer to watch for updates to the holding space model.
   testing::NiceMock<MockHoldingSpaceModelObserver> mock;
-  ScopedObserver<HoldingSpaceModel, HoldingSpaceModelObserver> observer{&mock};
-  observer.Add(HoldingSpaceController::Get()->model());
+  base::ScopedObservation<HoldingSpaceModel, HoldingSpaceModelObserver>
+      observer{&mock};
+  observer.Observe(HoldingSpaceController::Get()->model());
 
   base::RunLoop wait_for_item;
   // Expect and wait for a screen recording item to be added to holding space.
@@ -1167,9 +2319,9 @@ IN_PROC_BROWSER_TEST_F(HoldingSpaceUiScreenCaptureBrowserTest,
   wait_for_item.Run();
 
   // Verify that the screen recording appears in holding space UI.
-  Show();
-  ASSERT_TRUE(IsShowing());
-  EXPECT_EQ(1u, GetScreenCaptureViews().size());
+  test_api().Show();
+  ASSERT_TRUE(test_api().IsShowing());
+  EXPECT_EQ(1u, test_api().GetScreenCaptureViews().size());
 }
 
 INSTANTIATE_TEST_SUITE_P(All,

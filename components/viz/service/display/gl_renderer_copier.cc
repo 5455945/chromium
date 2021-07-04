@@ -8,8 +8,8 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "base/containers/cxx20_erase.h"
 #include "base/process/memory.h"
-#include "base/stl_util.h"
 #include "base/threading/sequenced_task_runner_handle.h"
 #include "components/viz/common/frame_sinks/copy_output_request.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
@@ -396,7 +396,9 @@ class GLPixelBufferRGBAResult final : public CopyOutputResult {
                           GLuint transfer_buffer,
                           bool is_upside_down,
                           bool swap_red_and_blue)
-      : CopyOutputResult(CopyOutputResult::Format::RGBA_BITMAP, result_rect),
+      : CopyOutputResult(CopyOutputResult::Format::RGBA_BITMAP,
+                         result_rect,
+                         /*needs_lock_for_bitmap=*/false),
         color_space_(color_space),
         copier_weak_ptr_(std::move(copier_weak_ptr)),
         context_provider_(std::move(context_provider)),
@@ -557,7 +559,8 @@ void GLRendererCopier::FinishReadPixelsWorkflow(ReadPixelsWorkflow* workflow) {
   if (!workflow->copy_request->SendsResultsInCurrentSequence()) {
     // Force readback into a SkBitmap now, because after PostTask we don't
     // have access to |context_provider_|.
-    result->AsSkBitmap();
+    auto scoped_bitmap = result->ScopedAccessSkBitmap();
+    auto bitmap = scoped_bitmap.bitmap();
   }
   workflow->copy_request->SendResult(std::move(result));
   const auto it =
@@ -645,7 +648,9 @@ class GLPixelBufferI420Result final : public CopyOutputResult {
                           base::WeakPtr<GLRendererCopier> copier_weak_ptr,
                           ContextProvider* context_provider,
                           GLuint transfer_buffer)
-      : CopyOutputResult(CopyOutputResult::Format::I420_PLANES, result_rect),
+      : CopyOutputResult(CopyOutputResult::Format::I420_PLANES,
+                         result_rect,
+                         /*needs_lock_for_bitmap=*/false),
         aligned_rect_(aligned_rect),
         copier_weak_ptr_(copier_weak_ptr),
         context_provider_(context_provider),

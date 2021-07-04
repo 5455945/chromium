@@ -22,9 +22,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 <histograms>
 
 <histogram name="Memory.AudioService.PrivateMemoryFootprint" units="MB"
-    expires_after="never">
-<!-- expires-never: "heartbeat" metric (internal: go/uma-heartbeats) -->
-
+    expires_after="2022-03-16">
   <owner>marinaciocea@chromium.org</owner>
   <owner>maxmorin@chromium.org</owner>
   <owner>olka@chromium.org</owner>
@@ -34,6 +32,13 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
     Recorded at Poisson sampled time intervals with a mean of 5 minutes on
     Android and 30 minutes on other platforms.
+
+    This memory footprint metric cannot be compared across platforms because
+    each platform relies on platform-level APIs for accounting. As such, though
+    this attempts to measure private memory footprint as best as possible, it
+    does not measure the same thing on each platform. We have not found a good
+    way to compare any system level memory metric across platforms due to the
+    different nature of memory management on each platform.
   </summary>
 </histogram>
 
@@ -64,6 +69,13 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
     Recorded at Poisson sampled time intervals with a mean of 5 minutes on
     Android and 30 minutes on other platforms.
+
+    This resident memory metric cannot be compared across platforms because each
+    platform relies on platform-level APIs for accounting. As such, though this
+    attempts to measure private memory footprint as best as possible, it does
+    not measure the same thing on each platform. We have not found a good way to
+    compare any system level memory metric across platforms due to the different
+    nature of memory management on each platform.
   </summary>
 </histogram>
 
@@ -83,6 +95,9 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 <histogram base="true"
     name="Memory.BackgroundTask.Browser.PrivateMemoryFootprint" units="MiB"
     expires_after="2021-08-01">
+  <obsolete>
+    Removed in M91.
+  </obsolete>
 <!-- Name completed by histogram_suffixes name="BrowserRunningMode" -->
 
   <owner>hanxi@chromium.org</owner>
@@ -98,6 +113,9 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 <histogram base="true"
     name="Memory.BackgroundTask.Browser.PrivateSwapFootprint" units="MiB"
     expires_after="2021-09-15">
+  <obsolete>
+    Removed in M91.
+  </obsolete>
 <!-- Name completed by histogram_suffixes name="BrowserRunningMode" -->
 
   <owner>hanxi@chromium.org</owner>
@@ -112,6 +130,9 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram base="true" name="Memory.BackgroundTask.Browser.ResidentSet"
     units="MiB" expires_after="2021-08-01">
+  <obsolete>
+    Removed in M91.
+  </obsolete>
 <!-- Name completed by histogram_suffixes name="BrowserRunningMode" -->
 
   <owner>hanxi@chromium.org</owner>
@@ -126,6 +147,9 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 <histogram base="true"
     name="Memory.BackgroundTask.Browser.SharedMemoryFootprint" units="MiB"
     expires_after="2021-09-15">
+  <obsolete>
+    Removed in M91.
+  </obsolete>
 <!-- Name completed by histogram_suffixes name="BrowserRunningMode" -->
 
   <owner>hanxi@chromium.org</owner>
@@ -140,6 +164,9 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 <histogram base="true"
     name="Memory.BackgroundTask.OfflinePrefetch.Browser.PrivateMemoryFootprint"
     units="MiB" expires_after="2021-03-28">
+  <obsolete>
+    Removed in M91.
+  </obsolete>
 <!-- Name completed by histogram_suffixes name="BrowserRunningMode" -->
 
   <owner>hanxi@chromium.org</owner>
@@ -157,6 +184,9 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 <histogram base="true"
     name="Memory.BackgroundTask.OfflinePrefetch.Browser.PrivateSwapFootprint"
     units="MiB" expires_after="2021-09-15">
+  <obsolete>
+    Removed in M91.
+  </obsolete>
 <!-- Name completed by histogram_suffixes name="BrowserRunningMode" -->
 
   <owner>hanxi@chromium.org</owner>
@@ -174,6 +204,9 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 <histogram base="true"
     name="Memory.BackgroundTask.OfflinePrefetch.Browser.ResidentSet"
     units="MiB" expires_after="2021-09-15">
+  <obsolete>
+    Removed in M91.
+  </obsolete>
 <!-- Name completed by histogram_suffixes name="BrowserRunningMode" -->
 
   <owner>hanxi@chromium.org</owner>
@@ -190,6 +223,9 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 <histogram base="true"
     name="Memory.BackgroundTask.OfflinePrefetch.Browser.SharedMemoryFootprint"
     units="MiB" expires_after="2021-09-15">
+  <obsolete>
+    Removed in M91.
+  </obsolete>
 <!-- Name completed by histogram_suffixes name="BrowserRunningMode" -->
 
   <owner>hanxi@chromium.org</owner>
@@ -215,11 +251,29 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 <!-- expires-never: guiding metric (internal: go/chrome-browser-guiding-metrics) -->
 
   <owner>erikchen@chromium.org</owner>
+  <owner>ajuma@chromium.org</owner>
   <owner>chrome-analysis-team@google.com</owner>
   <summary>
     This metric is only recorded on iOS. This measures the sum of
     PrivateMemoryFootprint and SharedMemoryFootprint, which is possible because
-    iOS is single-process.
+    Chromium on iOS is single-process. Note that this does not include memory
+    consumed by WebKit-launched processes, such as the WebContent and Network
+    processes.
+
+    Emitted when closing a log in order to upload it. This happens shortly after
+    startup and again at regular intervals (usually 5 minutes, regardless of the
+    type of network connection). Not emitted in logs that are closed when Chrome
+    loses focus or closes. Yet, it is emitted on logs that are constructed from
+    data persisted from a previous session, i.e., persisted from an unclean
+    shutdown.
+
+    Many changes in memory usage on iOS come from changes to WebKit, rather than
+    changes within Chromium code. To assess whether a change in this metric is
+    caused by a WebKit change, split by OS version. WebKit changes always come
+    with an OS version change.
+
+    As with other memory metrics, memory use tends to increase over time.
+    Restarts due to OS or Chrome updates tend to make this metric drop.
 
     This histogram is of special interest to the chrome-analysis-team@. Do not
     change its semantics or retire it without talking to them first.
@@ -227,7 +281,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.Browser.MemoryFootprint.Active" units="MB"
-    expires_after="2021-08-27">
+    expires_after="2021-10-31">
   <owner>justincohen@chromium.org</owner>
   <owner>olivierrobin@chromium.org</owner>
   <summary>
@@ -283,7 +337,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.Browser.MemoryFootprint.NumLiveOverscroll" units="tabs"
-    expires_after="2021-07-11">
+    expires_after="2021-09-12">
   <owner>ajuma@chromium.org</owner>
   <owner>rkgibson@google.com</owner>
   <summary>
@@ -298,7 +352,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.Browser.MemoryFootprint.NumOpenTabs" units="tabs"
-    expires_after="2021-07-11">
+    expires_after="2021-11-14">
   <owner>ajuma@chromium.org</owner>
   <owner>rkgibson@google.com</owner>
   <summary>
@@ -313,7 +367,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.Browser.MemoryFootprint.OnBackground" units="MiB"
-    expires_after="2021-08-27">
+    expires_after="2021-10-31">
   <owner>justincohen@chromium.org</owner>
   <owner>olivierrobin@chromium.org</owner>
   <summary>
@@ -335,6 +389,13 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
     Recorded at Poisson sampled time intervals with a mean of 5 minutes on
     Android and 30 minutes on other platforms.
+
+    This memory footprint metric cannot be compared across platforms because
+    each platform relies on platform-level APIs for accounting. As such, though
+    this attempts to measure private memory footprint as best as possible, it
+    does not measure the same thing on each platform. We have not found a good
+    way to compare any system level memory metric across platforms due to the
+    different nature of memory management on each platform.
 
     This histogram is of special interest to the chrome-analysis-team@. Do not
     change its semantics or retire it without talking to them first.
@@ -367,6 +428,13 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
     Recorded at Poisson sampled time intervals with a mean of 5 minutes on
     Android and 30 minutes on other platforms.
+
+    This resident memory metric cannot be compared across platforms because each
+    platform relies on platform-level APIs for accounting. As such, though this
+    attempts to measure private memory footprint as best as possible, it does
+    not measure the same thing on each platform. We have not found a good way to
+    compare any system level memory metric across platforms due to the different
+    nature of memory management on each platform.
   </summary>
 </histogram>
 
@@ -388,18 +456,31 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
   <summary>TBD.</summary>
 </histogram>
 
-<histogram name="Memory.Discardable.FreeListReleaseTime" units="ms"
+<histogram name="Memory.Discardable.FreeListReleaseTime" units="microseconds"
     expires_after="2021-08-01">
   <owner>thiabaud@google.com</owner>
   <owner>lizeb@chromium.org</owner>
   <summary>
     Records how long it takes for memory to be released from the freelist of the
     discardable shared memory allocator with |madvise|.
+
+    Note that clients without high-resolution clocks will report 0 for very
+    short times.
+  </summary>
+</histogram>
+
+<histogram name="Memory.Discardable.FreelistSize.Dirty" units="KiB"
+    expires_after="2021-12-04">
+  <owner>thiabaud@google.com</owner>
+  <owner>lizeb@chromium.org</owner>
+  <summary>
+    Amount of resident memory that was in use but has now been moved to the
+    freelist. Recorded during |OnMemoryDump|.
   </summary>
 </histogram>
 
 <histogram name="Memory.Discardable.FreelistSize.Foreground" units="KiB"
-    expires_after="2021-08-01">
+    expires_after="2021-12-05">
   <owner>thiabaud@google.com</owner>
   <owner>lizeb@chromium.org</owner>
   <summary>
@@ -409,7 +490,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.Discardable.LargeAllocationFromFreelist"
-    enum="BooleanLargeAllocationFromFreelist" expires_after="2021-07-11">
+    enum="BooleanLargeAllocationFromFreelist" expires_after="2021-09-12">
   <owner>thiabaud@google.com</owner>
   <owner>lizeb@chromium.org</owner>
   <summary>
@@ -419,7 +500,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.Discardable.LockingSuccess"
-    enum="BooleanLockingSuccess" expires_after="2021-07-11">
+    enum="BooleanLockingSuccess" expires_after="2021-11-14">
   <owner>thiabaud@google.com</owner>
   <owner>lizeb@chromium.org</owner>
   <summary>
@@ -429,7 +510,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.Discardable.Size.Foreground" units="KiB"
-    expires_after="2021-08-01">
+    expires_after="2021-12-05">
   <owner>thiabaud@google.com</owner>
   <owner>lizeb@chromium.org</owner>
   <summary>
@@ -439,7 +520,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.Discardable.VirtualSize.Foreground" units="KiB"
-    expires_after="2021-08-01">
+    expires_after="2021-12-05">
   <owner>thiabaud@google.com</owner>
   <owner>lizeb@chromium.org</owner>
   <summary>
@@ -449,7 +530,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.DiscardableAllocationSize" units="KB"
-    expires_after="2021-08-09">
+    expires_after="2021-10-10">
   <owner>reveman@chromium.org</owner>
   <owner>thiabaud@google.com</owner>
   <summary>
@@ -716,6 +797,9 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 <histogram base="true"
     name="Memory.Experimental.GpuChannelManagerPressureHandlerDuration"
     units="ms" expires_after="2021-08-22">
+  <obsolete>
+    Removed 03/2021.
+  </obsolete>
 <!-- Name completed by histogram_suffixes name="GpuChannelManagerPressureHandlerDetails" -->
 
   <owner>sebmarchand@chromium.org</owner>
@@ -1016,7 +1100,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.Experimental.Renderer.HighestPrivateMemoryFootprint"
-    units="MB" expires_after="2021-07-11">
+    units="MB" expires_after="2021-11-14">
   <owner>tasak@google.com</owner>
   <owner>bartekn@google.com</owner>
   <summary>
@@ -1024,11 +1108,21 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
     the first page navigation, Y mins after the first page navigation]. (X, Y]
     is (0, 2], (2, 4], (4, 8], and (8, 16]. The metric is recorded at the Y's
     timing.
+
+    This memory footprint metric cannot be compared across platforms because
+    each platform relies on platform-level APIs for accounting. As such, though
+    this attempts to measure private memory footprint as best as possible, it
+    does not measure the same thing on each platform. We have not found a good
+    way to compare any system level memory metric across platforms due to the
+    different nature of memory management on each platform.
   </summary>
 </histogram>
 
 <histogram name="Memory.Experimental.Renderer.LoadsInMainFrameDuringUptime"
     units="loads" expires_after="M77">
+  <obsolete>
+    Removed in May 2021.
+  </obsolete>
   <owner>keishi@chromium.org</owner>
   <summary>
     The number of loads in a main frame during the lifetime of a render process
@@ -1044,11 +1138,21 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
   <summary>
     The peak RSS size(VmHMW) of a render process when the highest private memory
     footprint is observed after the first navigation start.
+
+    This resident memory metric cannot be compared across platforms because each
+    platform relies on platform-level APIs for accounting. As such, though this
+    attempts to measure private memory footprint as best as possible, it does
+    not measure the same thing on each platform. We have not found a good way to
+    compare any system level memory metric across platforms due to the different
+    nature of memory management on each platform.
   </summary>
 </histogram>
 
 <histogram name="Memory.Experimental.Renderer.Uptime" units="ms"
-    expires_after="2021-08-22">
+    expires_after="2021-10-25">
+  <obsolete>
+    Removed in May 2021.
+  </obsolete>
   <owner>keishi@chromium.org</owner>
   <summary>
     The uptime of a render process in time ticks (excludes extensions). Emitted
@@ -1140,6 +1244,13 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
     Recorded at Poisson sampled time intervals with a mean of 5 minutes on
     Android and 30 minutes on other platforms.
+
+    This memory footprint metric cannot be compared across platforms because
+    each platform relies on platform-level APIs for accounting. As such, though
+    this attempts to measure private memory footprint as best as possible, it
+    does not measure the same thing on each platform. We have not found a good
+    way to compare any system level memory metric across platforms due to the
+    different nature of memory management on each platform.
   </summary>
 </histogram>
 
@@ -1156,12 +1267,19 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram
     name="Memory.Experimental.UserLevelMemoryPressureSignal.RendererPrivateMemoryFootprintBefore"
-    units="MB" expires_after="2021-08-22">
+    units="MB" expires_after="2021-12-26">
   <owner>keishi@chromium.org</owner>
   <owner>tasak@chromium.org</owner>
   <summary>
     The renderer process' private memory footprint right before a memory
     pressure signal is generated.
+
+    This memory footprint metric cannot be compared across platforms because
+    each platform relies on platform-level APIs for accounting. As such, though
+    this attempts to measure private memory footprint as best as possible, it
+    does not measure the same thing on each platform. We have not found a good
+    way to compare any system level memory metric across platforms due to the
+    different nature of memory management on each platform.
   </summary>
 </histogram>
 
@@ -1230,9 +1348,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.Extension.PrivateMemoryFootprint" units="MB"
-    expires_after="never">
-<!-- expires-never: "heartbeat" metric (internal: go/uma-heartbeats) -->
-
+    expires_after="2022-03-16">
   <owner>erikchen@chromium.org</owner>
   <owner>ssid@chromium.org</owner>
   <summary>
@@ -1240,6 +1356,13 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
     Recorded at Poisson sampled time intervals with a mean of 5 minutes on
     Android and 30 minutes on other platforms.
+
+    This memory footprint metric cannot be compared across platforms because
+    each platform relies on platform-level APIs for accounting. As such, though
+    this attempts to measure private memory footprint as best as possible, it
+    does not measure the same thing on each platform. We have not found a good
+    way to compare any system level memory metric across platforms due to the
+    different nature of memory management on each platform.
   </summary>
 </histogram>
 
@@ -1257,6 +1380,13 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
     Recorded at Poisson sampled time intervals with a mean of 5 minutes on
     Android and 30 minutes on other platforms.
+
+    This resident memory metric cannot be compared across platforms because each
+    platform relies on platform-level APIs for accounting. As such, though this
+    attempts to measure private memory footprint as best as possible, it does
+    not measure the same thing on each platform. We have not found a good way to
+    compare any system level memory metric across platforms due to the different
+    nature of memory management on each platform.
   </summary>
 </histogram>
 
@@ -1294,6 +1424,29 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram base="true" name="Memory.GPU.PeakMemoryAllocationSource" units="KB"
     expires_after="2021-08-22">
+  <obsolete>
+    Removed in M92. Replaced by Memory.GPU.PeakMemoryAllocationSource2.
+  </obsolete>
+<!-- Name completed by a combination of the following two histogram_suffixes: -->
+
+<!-- histogram_suffixes name="GPU.PeakMemoryAllocationSourceBase" -->
+
+<!-- and histogram_suffixes name="GPU.PeakMemoryAllocationSource" -->
+
+  <owner>jonross@chromium.org</owner>
+  <owner>graphics-dev@chromium.org</owner>
+  <owner>sadrul@chromium.org</owner>
+  <summary>
+    Replaced by Memory.GPU.PeakMemoryAllocationSource2.
+
+    The maximum amount of memory of the GPU process allocated by a particular
+    source during a user interaction (e.g. tab-switch, page-load, scroll etc.).
+    See Memory.GPU.PeakMemoryUsage.
+  </summary>
+</histogram>
+
+<histogram base="true" name="Memory.GPU.PeakMemoryAllocationSource2" units="MB"
+    expires_after="2022-08-22">
 <!-- Name completed by a combination of the following two histogram_suffixes: -->
 
 <!-- histogram_suffixes name="GPU.PeakMemoryAllocationSourceBase" -->
@@ -1306,13 +1459,31 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
   <summary>
     The maximum amount of memory of the GPU process allocated by a particular
     source during a user interaction (e.g. tab-switch, page-load, scroll etc.).
-    See Memory.GPU.PeakMemoryUsage.
+    See Memory.GPU.PeakMemoryUsage2.
   </summary>
 </histogram>
 
 <histogram base="true" name="Memory.GPU.PeakMemoryUsage" units="KB"
     expires_after="2021-08-22">
-<!-- Name completed by histogram_suffixes name="GPU.PeakMemoryUsage" -->
+  <obsolete>
+    Removed in M92. Replaced by Memory.GPU.PeakMemoryUsage2.
+  </obsolete>
+<!-- Name completed by histogram_suffixes name="GPU_PeakMemoryUsage" -->
+
+  <owner>jonross@chromium.org</owner>
+  <owner>sadrul@chromium.org</owner>
+  <owner>graphics-dev@chromium.org</owner>
+  <summary>
+    Replaced by Memory.GPU.PeakMemoryUsage2.
+
+    The maximum amount of memory of the GPU process during a particular
+    interaction (e.g. tab-switch, page-load, scroll etc.).
+  </summary>
+</histogram>
+
+<histogram base="true" name="Memory.GPU.PeakMemoryUsage2" units="MB"
+    expires_after="2022-08-22">
+<!-- Name completed by histogram_suffixes name="GPU_PeakMemoryUsage" -->
 
   <owner>jonross@chromium.org</owner>
   <owner>sadrul@chromium.org</owner>
@@ -1335,6 +1506,13 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
     Recorded at Poisson sampled time intervals with a mean of 5 minutes on
     Android and 30 minutes on other platforms.
+
+    This memory footprint metric cannot be compared across platforms because
+    each platform relies on platform-level APIs for accounting. As such, though
+    this attempts to measure private memory footprint as best as possible, it
+    does not measure the same thing on each platform. We have not found a good
+    way to compare any system level memory metric across platforms due to the
+    different nature of memory management on each platform.
 
     This histogram is of special interest to the chrome-analysis-team@. Do not
     change its semantics or retire it without talking to them first.
@@ -1364,6 +1542,13 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
     Recorded at Poisson sampled time intervals with a mean of 5 minutes on
     Android and 30 minutes on other platforms.
+
+    This resident memory metric cannot be compared across platforms because each
+    platform relies on platform-level APIs for accounting. As such, though this
+    attempts to measure private memory footprint as best as possible, it does
+    not measure the same thing on each platform. We have not found a good way to
+    compare any system level memory metric across platforms due to the different
+    nature of memory management on each platform.
   </summary>
 </histogram>
 
@@ -1401,7 +1586,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.LowMemoryKiller.Count" units="low-memory kills"
-    expires_after="2021-10-21">
+    expires_after="2021-12-26">
   <owner>vovoy@google.com</owner>
   <owner>wvk@google.com</owner>
   <summary>
@@ -1411,7 +1596,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.LowMemoryKiller.FirstKillLatency" units="ms"
-    expires_after="2021-10-21">
+    expires_after="2021-12-26">
   <owner>vovoy@google.com</owner>
   <owner>wvk@google.com</owner>
   <summary>
@@ -1422,7 +1607,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.LowMemoryKiller.FreedSize" units="KB"
-    expires_after="2021-10-21">
+    expires_after="2021-12-26">
   <owner>vovoy@google.com</owner>
   <owner>wvk@google.com</owner>
   <summary>The memory size freed by each low memory kill event.</summary>
@@ -1439,7 +1624,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.NativeLibrary.MappedAndResidentMemoryFootprint3"
-    units="KB" expires_after="2021-09-27">
+    units="KB" expires_after="2021-11-28">
   <owner>lizeb@chromium.org</owner>
   <owner>pasko@chromium.org</owner>
   <summary>
@@ -1511,6 +1696,13 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
     Recorded at Poisson sampled time intervals with a mean of 5 minutes on
     Android and 30 minutes on other platforms.
+
+    This memory footprint metric cannot be compared across platforms because
+    each platform relies on platform-level APIs for accounting. As such, though
+    this attempts to measure private memory footprint as best as possible, it
+    does not measure the same thing on each platform. We have not found a good
+    way to compare any system level memory metric across platforms due to the
+    different nature of memory management on each platform.
   </summary>
 </histogram>
 
@@ -1546,6 +1738,13 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
     Recorded at Poisson sampled time intervals with a mean of 5 minutes on
     Android and 30 minutes on other platforms.
+
+    This resident memory metric cannot be compared across platforms because each
+    platform relies on platform-level APIs for accounting. As such, though this
+    attempts to measure private memory footprint as best as possible, it does
+    not measure the same thing on each platform. We have not found a good way to
+    compare any system level memory metric across platforms due to the different
+    nature of memory management on each platform.
   </summary>
 </histogram>
 
@@ -1567,7 +1766,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.OOMKill.Contents.MemAllocatedMB" units="MB"
-    expires_after="2021-07-04">
+    expires_after="2021-11-07">
   <owner>oshima@chromium.org</owner>
   <owner>alemate@chromium.org</owner>
   <summary>
@@ -1578,7 +1777,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.OOMKill.Contents.MemAvailableMB" units="MB"
-    expires_after="2021-07-04">
+    expires_after="2021-11-07">
   <owner>oshima@chromium.org</owner>
   <owner>alemate@chromium.org</owner>
   <summary>
@@ -1591,7 +1790,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.OOMKill.Contents.MemGraphicsMB" units="MB"
-    expires_after="2021-07-04">
+    expires_after="2021-11-07">
   <owner>oshima@chromium.org</owner>
   <owner>alemate@chromium.org</owner>
   <summary>
@@ -1612,7 +1811,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.OOMKill.Extensions.MemAllocatedMB" units="MB"
-    expires_after="2021-07-04">
+    expires_after="2021-11-07">
   <owner>oshima@chromium.org</owner>
   <owner>alemate@chromium.org</owner>
   <summary>
@@ -1636,7 +1835,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.OOMKill.Extensions.MemGraphicsMB" units="MB"
-    expires_after="2021-07-04">
+    expires_after="2021-11-07">
   <owner>oshima@chromium.org</owner>
   <owner>alemate@chromium.org</owner>
   <summary>
@@ -1657,7 +1856,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.OOMKills.Count" units="kills"
-    expires_after="2021-10-21">
+    expires_after="2021-12-26">
   <owner>vovoy@google.com</owner>
   <owner>wvk@google.com</owner>
   <summary>Cumulative count of OOM kills in one user session.</summary>
@@ -1687,7 +1886,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.PaintPreviewCompositor.PrivateMemoryFootprint"
-    units="MB" expires_after="2021-08-15">
+    units="MB" expires_after="2021-10-17">
   <owner>ckitagawa@chromium.org</owner>
   <owner>fredmello@chromium.org</owner>
   <owner>mahmoudi@chromium.org</owner>
@@ -1697,11 +1896,18 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
     Recorded at Poisson sampled time intervals with a mean of 5 minutes on
     Android and 30 minutes on other platforms.
+
+    This memory footprint metric cannot be compared across platforms because
+    each platform relies on platform-level APIs for accounting. As such, though
+    this attempts to measure private memory footprint as best as possible, it
+    does not measure the same thing on each platform. We have not found a good
+    way to compare any system level memory metric across platforms due to the
+    different nature of memory management on each platform.
   </summary>
 </histogram>
 
 <histogram name="Memory.PaintPreviewCompositor.PrivateSwapFootprint" units="MB"
-    expires_after="2021-08-15">
+    expires_after="2021-10-17">
   <owner>ckitagawa@chromium.org</owner>
   <owner>fredmello@chromium.org</owner>
   <owner>mahmoudi@chromium.org</owner>
@@ -1715,7 +1921,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.PaintPreviewCompositor.ResidentSet" units="MiB"
-    expires_after="2021-04-10">
+    expires_after="2021-08-15">
   <owner>ckitagawa@chromium.org</owner>
   <owner>fredmello@chromium.org</owner>
   <owner>mahmoudi@chromium.org</owner>
@@ -1728,11 +1934,18 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
     Recorded at Poisson sampled time intervals with a mean of 5 minutes on
     Android and 30 minutes on other platforms.
+
+    This resident memory metric cannot be compared across platforms because each
+    platform relies on platform-level APIs for accounting. As such, though this
+    attempts to measure private memory footprint as best as possible, it does
+    not measure the same thing on each platform. We have not found a good way to
+    compare any system level memory metric across platforms due to the different
+    nature of memory management on each platform.
   </summary>
 </histogram>
 
 <histogram name="Memory.PaintPreviewCompositor.SharedMemoryFootprint"
-    units="MB" expires_after="2021-08-15">
+    units="MB" expires_after="2021-10-17">
   <owner>ckitagawa@chromium.org</owner>
   <owner>fredmello@chromium.org</owner>
   <owner>mahmoudi@chromium.org</owner>
@@ -1758,7 +1971,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.ParkableImage.OnDiskSize.5min" units="KiB"
-    expires_after="M95">
+    expires_after="2021-12-12">
   <owner>thiabaud@google.com</owner>
   <owner>lizeb@chromium.org</owner>
   <summary>
@@ -1768,7 +1981,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.ParkableImage.Read.Latency" units="microseconds"
-    expires_after="M95">
+    expires_after="2021-12-12">
   <owner>thiabaud@google.com</owner>
   <owner>lizeb@chromium.org</owner>
   <summary>
@@ -1781,7 +1994,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.ParkableImage.Read.Size" units="KiB"
-    expires_after="M95">
+    expires_after="2021-12-12">
   <owner>thiabaud@google.com</owner>
   <owner>lizeb@chromium.org</owner>
   <summary>
@@ -1791,7 +2004,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.ParkableImage.Read.Throughput" units="MiBps"
-    expires_after="M95">
+    expires_after="2021-12-12">
   <owner>thiabaud@google.com</owner>
   <owner>lizeb@chromium.org</owner>
   <summary>
@@ -1801,7 +2014,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.ParkableImage.TotalReadTime.5min" units="ms"
-    expires_after="M95">
+    expires_after="2021-12-12">
   <owner>thiabaud@google.com</owner>
   <owner>lizeb@chromium.org</owner>
   <summary>
@@ -1811,7 +2024,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.ParkableImage.TotalSize.5min" units="KiB"
-    expires_after="M95">
+    expires_after="2021-12-12">
   <owner>thiabaud@google.com</owner>
   <owner>lizeb@chromium.org</owner>
   <summary>
@@ -1821,7 +2034,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.ParkableImage.TotalWriteTime.5min" units="ms"
-    expires_after="M95">
+    expires_after="2021-12-12">
   <owner>thiabaud@google.com</owner>
   <owner>lizeb@chromium.org</owner>
   <summary>
@@ -1831,7 +2044,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.ParkableImage.UnparkedSize.5min" units="KiB"
-    expires_after="M95">
+    expires_after="2021-12-12">
   <owner>thiabaud@google.com</owner>
   <owner>lizeb@chromium.org</owner>
   <summary>
@@ -1841,7 +2054,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.ParkableImage.Write.Latency" units="microseconds"
-    expires_after="M95">
+    expires_after="2021-12-12">
   <owner>thiabaud@google.com</owner>
   <owner>lizeb@chromium.org</owner>
   <summary>
@@ -1854,7 +2067,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.ParkableImage.Write.Size" units="KiB"
-    expires_after="M95">
+    expires_after="2021-12-12">
   <owner>thiabaud@google.com</owner>
   <owner>lizeb@chromium.org</owner>
   <summary>
@@ -1864,7 +2077,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.ParkableImage.Write.Throughput" units="MiBps"
-    expires_after="M95">
+    expires_after="2021-12-12">
   <owner>thiabaud@google.com</owner>
   <owner>lizeb@chromium.org</owner>
   <summary>
@@ -2155,12 +2368,32 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.PressureLevel" enum="MemoryPressureLevel"
-    expires_after="2021-08-22">
+    expires_after="2021-10-24">
+  <obsolete>
+    Replaced by Memory.PressureLevel2 in M93.
+  </obsolete>
   <owner>chrisha@chromium.org</owner>
   <summary>
     The memory pressure level, which is recorded periodically. This shows the
     cumulative number of seconds that systems spend in each of the memory
     pressure states.
+  </summary>
+</histogram>
+
+<histogram name="Memory.PressureLevel2" enum="MemoryPressureLevel"
+    expires_after="never">
+<!-- expires-never: Generic system health metric used to diagnose various performance issues. -->
+
+  <owner>sebmarchand@chromium.org</owner>
+  <owner>catan-team@chromium.org</owner>
+  <summary>
+    The time spent in each memory pressure state, in seconds. Recorded when the
+    memory pressure state changes, at shutdown, or when it hasn't been recorded
+    in the last 5 minutes.
+
+    The values from this histogram shouldn't be used directly, users of this
+    metric should look at the percentage of samples in each bucket to understand
+    the average time that Chrome spend in each pressure state.
   </summary>
 </histogram>
 
@@ -2174,7 +2407,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram base="true" name="Memory.PressureWindowDuration" units="ms"
-    expires_after="2021-08-22">
+    expires_after="2021-12-26">
 <!-- Name completed by histogram_suffixes name="Memory.Pressure.TransitionType" -->
 
   <owner>sebmarchand@chromium.org</owner>
@@ -2233,6 +2466,13 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
     Recorded at Poisson sampled time intervals with a mean of 5 minutes on
     Android and 30 minutes on other platforms.
 
+    This memory footprint metric cannot be compared across platforms because
+    each platform relies on platform-level APIs for accounting. As such, though
+    this attempts to measure private memory footprint as best as possible, it
+    does not measure the same thing on each platform. We have not found a good
+    way to compare any system level memory metric across platforms due to the
+    different nature of memory management on each platform.
+
     Do not modify this metric in any way without contacting
     speed-metrics-dev@chromium.org AND chrome-analysis-team@google.com.
   </summary>
@@ -2251,6 +2491,13 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
     Recorded at Poisson sampled time intervals with a mean of 5 minutes on
     Android and 30 minutes on other platforms.
+
+    This resident memory metric cannot be compared across platforms because each
+    platform relies on platform-level APIs for accounting. As such, though this
+    attempts to measure private memory footprint as best as possible, it does
+    not measure the same thing on each platform. We have not found a good way to
+    compare any system level memory metric across platforms due to the different
+    nature of memory management on each platform.
   </summary>
 </histogram>
 
@@ -2267,7 +2514,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.RendererProcessCount" units="processes"
-    expires_after="2021-08-22">
+    expires_after="2021-12-26">
   <owner>creis@chromium.org</owner>
   <owner>nasko@chromium.org</owner>
   <summary>
@@ -2306,7 +2553,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.RenderProcessHost.Count.InitializedAndNotDead"
-    units="processes" expires_after="2021-08-22">
+    units="processes" expires_after="2021-12-26">
   <owner>alexmos@chromium.org</owner>
   <owner>creis@chromium.org</owner>
   <owner>lukasza@chromium.org</owner>
@@ -2357,6 +2604,13 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
     Recorded at Poisson sampled time intervals with a mean of 5 minutes on
     Android and 30 minutes on other platforms.
 
+    This memory footprint metric cannot be compared across platforms because
+    each platform relies on platform-level APIs for accounting. As such, though
+    this attempts to measure private memory footprint as best as possible, it
+    does not measure the same thing on each platform. We have not found a good
+    way to compare any system level memory metric across platforms due to the
+    different nature of memory management on each platform.
+
     This histogram is of special interest to the chrome-analysis-team@. Do not
     change its semantics or retire it without talking to them first.
   </summary>
@@ -2370,6 +2624,13 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
     Recorded at Poisson sampled time intervals with a mean of 5 minutes on
     Android and 30 minutes on other platforms.
+
+    This memory footprint metric cannot be compared across platforms because
+    each platform relies on platform-level APIs for accounting. As such, though
+    this attempts to measure private memory footprint as best as possible, it
+    does not measure the same thing on each platform. We have not found a good
+    way to compare any system level memory metric across platforms due to the
+    different nature of memory management on each platform.
   </summary>
 </histogram>
 
@@ -2391,6 +2652,13 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
     this cause some double accounting for the shared portion of the working set.
     As a result this metric doesn't give an exact representation of how much
     physical memory is used by Chrome.
+
+    This resident memory metric cannot be compared across platforms because each
+    platform relies on platform-level APIs for accounting. As such, though this
+    attempts to measure private memory footprint as best as possible, it does
+    not measure the same thing on each platform. We have not found a good way to
+    compare any system level memory metric across platforms due to the different
+    nature of memory management on each platform.
   </summary>
 </histogram>
 
@@ -2407,7 +2675,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Memory.Total.SystemCommitLimit" units="GB"
-    expires_after="2021-07-27">
+    expires_after="2021-12-12">
   <owner>sadrul@chromium.org</owner>
   <owner>zmo@chromium.org</owner>
   <summary>
@@ -2427,6 +2695,13 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
     Recorded at Poisson sampled time intervals with a mean of 5 minutes on
     Android and 30 minutes on other platforms.
+
+    This memory footprint metric cannot be compared across platforms because
+    each platform relies on platform-level APIs for accounting. As such, though
+    this attempts to measure private memory footprint as best as possible, it
+    does not measure the same thing on each platform. We have not found a good
+    way to compare any system level memory metric across platforms due to the
+    different nature of memory management on each platform.
   </summary>
 </histogram>
 
@@ -2457,6 +2732,13 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
     Recorded at Poisson sampled time intervals with a mean of 5 minutes on
     Android and 30 minutes on other platforms.
+
+    This resident memory metric cannot be compared across platforms because each
+    platform relies on platform-level APIs for accounting. As such, though this
+    attempts to measure private memory footprint as best as possible, it does
+    not measure the same thing on each platform. We have not found a good way to
+    compare any system level memory metric across platforms due to the different
+    nature of memory management on each platform.
   </summary>
 </histogram>
 
@@ -2492,6 +2774,20 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
   <summary>
     Cumulative number of ARC processes trimmed during a user's session, recorded
     each time an ARC process is trimmed. Available on ChromeOS.
+  </summary>
+</histogram>
+
+<histogram name="Memory.WorkingSetTrim.ArcVmTrimCountPer30Mins"
+    units="VMsTrimmed" expires_after="M99">
+  <owner>yusukes@chromium.org</owner>
+  <owner>bgeffon@chromium.org</owner>
+  <summary>
+    Number of ARCVM's crosvm trimmed in the last 30 minutes. Recorded every 30
+    minutes as long as ARCVM trimming is enabled. Available on ChromeOS. Also,
+    one last report is emitted for the &lt;= 30 minute period since the last
+    report, at browser exit, and that the sample is scaled. For example, when 1
+    trim was done since the last report and the browser exits 15 minutes after
+    the last report, 2 is recorded on the browser exit.
   </summary>
 </histogram>
 

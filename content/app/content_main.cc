@@ -15,18 +15,17 @@
 #include "base/logging.h"
 #include "base/memory/shared_memory_hooks.h"
 #include "base/message_loop/message_pump_type.h"
-#include "base/optional.h"
 #include "base/process/launch.h"
 #include "base/process/memory.h"
 #include "base/process/process.h"
 #include "base/run_loop.h"
-#include "base/stl_util.h"
 #include "base/task/single_thread_task_executor.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/threading/thread.h"
 #include "base/trace_event/trace_config.h"
 #include "base/trace_event/trace_log.h"
 #include "build/build_config.h"
+#include "build/chromeos_buildflags.h"
 #include "components/tracing/common/trace_to_console.h"
 #include "components/tracing/common/tracing_switches.h"
 #include "content/app/content_main_runner_impl.h"
@@ -42,6 +41,7 @@
 #include "mojo/public/cpp/platform/platform_channel.h"
 #include "mojo/public/cpp/system/dynamic_library_support.h"
 #include "sandbox/policy/sandbox_type.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/base/ui_base_paths.h"
 #include "ui/base/ui_base_switches.h"
 
@@ -60,6 +60,10 @@
 
 #include "base/file_descriptor_store.h"
 #include "base/posix/global_descriptors.h"
+#endif
+
+#if defined(OS_CHROMEOS) || defined(OS_LINUX)
+#include "base/files/scoped_file.h"
 #endif
 
 #if defined(OS_MAC)
@@ -115,7 +119,7 @@ void PopulateFDsFromCommandLine() {
   if (shared_file_param.empty())
     return;
 
-  base::Optional<std::map<int, std::string>> shared_file_descriptors =
+  absl::optional<std::map<int, std::string>> shared_file_descriptors =
       ParseSharedFileSwitchValue(shared_file_param);
   if (!shared_file_descriptors)
     return;
@@ -164,12 +168,18 @@ void InitializeMojo(mojo::core::Configuration* config) {
   const auto& command_line = *base::CommandLine::ForCurrentProcess();
   const bool is_browser = !command_line.HasSwitch(switches::kProcessType);
   if (is_browser) {
-    if (mojo::PlatformChannel::CommandLineHasPassedEndpoint(command_line)) {
-      config->is_broker_process = false;
+    // On Lacros, Chrome is not always the broker, because ash-chrome is.
+    // Otherwise, look at the command line flag to decide whether it is
+    // a broker.
+    config->is_broker_process =
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+        false
+#else
+        !mojo::PlatformChannel::CommandLineHasPassedEndpoint(command_line)
+#endif
+        ;
+    if (!config->is_broker_process)
       config->force_direct_shared_memory_allocation = true;
-    } else {
-      config->is_broker_process = true;
-    }
   } else {
 #if defined(OS_WIN)
     if (base::win::GetVersion() >= base::win::Version::WIN8_1) {
@@ -302,6 +312,10 @@ int RunContentProcess(const ContentMainParams& params,
     autorelease_pool = std::make_unique<base::mac::ScopedNSAutoreleasePool>();
     content_main_params.autorelease_pool = autorelease_pool.get();
     InitializeMac();
+#endif
+
+#if defined(OS_CHROMEOS) || defined(OS_LINUX)
+    base::subtle::EnableFDOwnershipEnforcement(true);
 #endif
 
     mojo::core::Configuration mojo_config;

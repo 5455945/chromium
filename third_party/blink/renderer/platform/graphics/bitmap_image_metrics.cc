@@ -8,6 +8,7 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "media/media_buildflags.h"
+#include "third_party/blink/public/common/buildflags.h"
 #include "third_party/blink/public/mojom/web_feature/web_feature.mojom-blink.h"
 #include "third_party/blink/renderer/platform/geometry/int_size.h"
 #include "third_party/blink/renderer/platform/graphics/color_space_gamut.h"
@@ -18,10 +19,8 @@
 
 namespace blink {
 
-namespace {
-
-BitmapImageMetrics::DecodedImageType StringToDecodedImageType(
-    const String& type) {
+BitmapImageMetrics::DecodedImageType
+BitmapImageMetrics::StringToDecodedImageType(const String& type) {
   if (type == "jpg")
     return BitmapImageMetrics::DecodedImageType::kJPEG;
   if (type == "png")
@@ -38,10 +37,12 @@ BitmapImageMetrics::DecodedImageType StringToDecodedImageType(
   if (type == "avif")
     return BitmapImageMetrics::DecodedImageType::kAVIF;
 #endif
+#if BUILDFLAG(ENABLE_JXL_DECODER)
+  if (type == "jxl")
+    return BitmapImageMetrics::DecodedImageType::kJXL;
+#endif
   return BitmapImageMetrics::DecodedImageType::kUnknown;
 }
-
-}  // namespace
 
 void BitmapImageMetrics::CountDecodedImageType(const String& type) {
   UMA_HISTOGRAM_ENUMERATION("Blink.DecodedImageType",

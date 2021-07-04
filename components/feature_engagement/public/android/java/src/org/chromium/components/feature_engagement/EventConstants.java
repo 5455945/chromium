@@ -71,6 +71,11 @@ public final class EventConstants {
     public static final String PREVIEWS_PAGE_LOADED = "preview_page_load";
 
     /**
+     * Add to homescreen events.
+     */
+    public static final String ADD_TO_HOMESCREEN_DIALOG_SHOWN = "add_to_homescreen_dialog_shown";
+
+    /**
      * Contextual Search panel was opened.
      */
     public static final String CONTEXTUAL_SEARCH_PANEL_OPENED = "contextual_search_panel_opened";
@@ -120,6 +125,12 @@ public final class EventConstants {
      */
     public static final String CONTEXTUAL_SEARCH_TAPPED_BUT_SHOULD_LONGPRESS =
             "contextual_search_tapped_but_should_longpress";
+
+    /**
+     * Contextual Search acknowledged the suggestion that they should longpress instead of tap.
+     */
+    public static final String CONTEXTUAL_SEARCH_ACKNOWLEDGED_IN_PANEL_HELP =
+            "contextual_search_acknowledged_in_panel_help";
 
     /**
      * Contextual Search user fully enabled access to page content through the opt-in.
@@ -223,6 +234,28 @@ public final class EventConstants {
 
     /** Screenshot events */
     public static final String SHARE_SCREENSHOT_SELECTED = "share_screenshot_clicked";
+
+    /** Mic toolbar IPH event */
+    public static final String SUCCESSFUL_VOICE_SEARCH = "successful_voice_search";
+
+    /** AdaptiveButtonInTopToolbarCustomization new tab events. */
+    public static final String ADAPTIVE_TOOLBAR_CUSTOMIZATION_NEW_TAB_OPENED =
+            "adaptive_toolbar_customization_new_tab_opened";
+
+    /** AdaptiveButtonInTopToolbarCustomization share events. */
+    public static final String ADAPTIVE_TOOLBAR_CUSTOMIZATION_SHARE_OPENED =
+            "adaptive_toolbar_customization_share_opened";
+
+    /** AdaptiveButtonInTopToolbarCustomization voice search events. */
+    public static final String ADAPTIVE_TOOLBAR_CUSTOMIZATION_VOICE_SEARCH_OPENED =
+            "adaptive_toolbar_customization_voice_search_opened";
+
+    /** WebFeed events. */
+    public static final String WEB_FEED_FOLLOW_INTRO_CLICKED = "web_feed_follow_intro_clicked";
+
+    /** Tab switcher home button events. */
+    public static final String START_SURFACE_TAB_SWITCHER_HOME_BUTTON_CLICKED =
+            "start_surface_tab_switcher_home_button_clicked";
 
     /**
      * Do not instantiate.

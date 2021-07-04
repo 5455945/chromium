@@ -6,6 +6,7 @@
 
 #include "base/bind.h"
 #include "base/cancelable_callback.h"
+#include "base/containers/span.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/rand_util.h"
@@ -20,11 +21,11 @@
 #include "chrome/browser/safe_browsing/download_protection/ppapi_download_request.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "components/prefs/pref_service.h"
-#include "components/safe_browsing/content/web_ui/safe_browsing_ui.h"
+#include "components/safe_browsing/content/browser/web_ui/safe_browsing_ui.h"
+#include "components/safe_browsing/content/common/file_type_policies.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/safe_browsing/core/common/utils.h"
-#include "components/safe_browsing/core/features.h"
-#include "components/safe_browsing/core/file_type_policies.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -40,8 +41,6 @@ using content::BrowserThread;
 namespace {
 
 const char kDownloadExtensionUmaName[] = "SBClientDownload.DownloadExtensions";
-
-constexpr char kAuthHeaderBearer[] = "Bearer ";
 
 void RecordFileExtensionType(const std::string& metric_name,
                              const base::FilePath& file) {
@@ -72,8 +71,7 @@ bool IsCertificateChainAllowlisted(
   }
   scoped_refptr<net::X509Certificate> cert =
       net::X509Certificate::CreateFromBytes(
-          chain.element(0).certificate().data(),
-          chain.element(0).certificate().size());
+          base::as_bytes(base::make_span(chain.element(0).certificate())));
   if (!cert.get()) {
     return false;
   }
@@ -81,8 +79,7 @@ bool IsCertificateChainAllowlisted(
   for (int i = 1; i < chain.element_size(); ++i) {
     scoped_refptr<net::X509Certificate> issuer =
         net::X509Certificate::CreateFromBytes(
-            chain.element(i).certificate().data(),
-            chain.element(i).certificate().size());
+            base::as_bytes(base::make_span(chain.element(i).certificate())));
     if (!issuer.get()) {
       return false;
     }
@@ -195,11 +192,6 @@ void CheckClientDownloadRequestBase::FinishRequest(
                               reason, REASON_MAX);
   }
 
-  if (ShouldPromptForDeepScanning(reason)) {
-    result = DownloadCheckResult::PROMPT_FOR_SCANNING;
-    reason = DownloadCheckResultReason::REASON_ADVANCED_PROTECTION_PROMPT;
-  }
-
   auto settings = ShouldUploadBinary(reason);
   if (settings.has_value()) {
     UploadBinary(reason, std::move(settings.value()));
@@ -259,7 +251,6 @@ void CheckClientDownloadRequestBase::OnUrlAllowlistCheckDone(
   // extraction and download ping are skipped.
   if (is_allowlisted) {
     DVLOG(2) << source_url_ << " is on the download allowlist.";
-    RecordCountOfAllowlistedDownload(URL_ALLOWLIST);
     if (ShouldSampleAllowlistedDownload()) {
       skipped_url_whitelist_ = true;
     } else {
@@ -299,7 +290,6 @@ void CheckClientDownloadRequestBase::OnUrlAllowlistCheckDone(
     }
   }
   RecordFileExtensionType(kDownloadExtensionUmaName, target_file_path_);
-
   download_request_maker_->Start(base::BindOnce(
       &CheckClientDownloadRequestBase::OnRequestBuilt, GetWeakPtr()));
 }
@@ -380,9 +370,7 @@ void CheckClientDownloadRequestBase::StartTimeout() {
 void CheckClientDownloadRequestBase::OnCertificateAllowlistCheckDone(
     bool is_allowlisted) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-
   if (!skipped_url_whitelist_ && is_allowlisted) {
-    RecordCountOfAllowlistedDownload(SIGNATURE_ALLOWLIST);
     if (ShouldSampleAllowlistedDownload()) {
       skipped_certificate_whitelist_ = true;
     } else {
@@ -394,18 +382,14 @@ void CheckClientDownloadRequestBase::OnCertificateAllowlistCheckDone(
     }
   }
 
-  RecordCountOfAllowlistedDownload(NO_ALLOWLIST_MATCH);
-
   if (!pingback_enabled_) {
     FinishRequest(DownloadCheckResult::UNKNOWN, REASON_PING_DISABLED);
     return;
   }
 
-  if (is_enhanced_protection_ && token_fetcher_ &&
-      base::FeatureList::IsEnabled(kDownloadRequestWithToken)) {
-    token_fetcher_->Start(
-        base::BindOnce(&CheckClientDownloadRequestBase::OnGotAccessToken,
-                       GetWeakPtr()));
+  if (is_enhanced_protection_ && token_fetcher_) {
+    token_fetcher_->Start(base::BindOnce(
+        &CheckClientDownloadRequestBase::OnGotAccessToken, GetWeakPtr()));
     return;
   }
 
@@ -420,7 +404,6 @@ void CheckClientDownloadRequestBase::OnGotAccessToken(
 
 void CheckClientDownloadRequestBase::SendRequest() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-
   if (IsCancelled()) {
     FinishRequest(DownloadCheckResult::UNKNOWN, REASON_DOWNLOAD_DESTROYED);
     return;
@@ -514,8 +497,6 @@ void CheckClientDownloadRequestBase::SendRequest() {
       base::BindOnce(&CheckClientDownloadRequestBase::OnURLLoaderComplete,
                      GetWeakPtr()));
   request_start_time_ = base::TimeTicks::Now();
-  UMA_HISTOGRAM_COUNTS_1M("SBClientDownload.DownloadRequestPayloadSize",
-                          client_download_request_data_.size());
 
   // Add the access token to the proto for display on chrome://safe-browsing
   client_download_request_->set_access_token(access_token_);
@@ -587,6 +568,11 @@ void CheckClientDownloadRequestBase::OnURLLoaderComplete(
           reason = REASON_VERDICT_UNKNOWN;
           result = DownloadCheckResult::UNKNOWN;
           break;
+        case ClientDownloadResponse::DANGEROUS_ACCOUNT_COMPROMISE:
+          reason = REASON_DOWNLOAD_DANGEROUS_ACCOUNT_COMPROMISE;
+          result = DownloadCheckResult::DANGEROUS_ACCOUNT_COMPROMISE;
+          token = response.token();
+          break;
         default:
           LOG(DFATAL) << "Unknown download response verdict: "
                       << response.verdict();
@@ -609,6 +595,10 @@ void CheckClientDownloadRequestBase::OnURLLoaderComplete(
     MaybeStorePingsForDownload(result, upload_requested,
                                client_download_request_data_,
                                *response_body.get());
+    if (ShouldPromptForDeepScanning(response.request_deep_scan())) {
+      result = DownloadCheckResult::PROMPT_FOR_SCANNING;
+      reason = DownloadCheckResultReason::REASON_ADVANCED_PROTECTION_PROMPT;
+    }
   }
 
   // We don't need the loader anymore.

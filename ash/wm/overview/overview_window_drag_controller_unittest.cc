@@ -6,7 +6,6 @@
 
 #include "ash/display/screen_orientation_controller.h"
 #include "ash/display/screen_orientation_controller_test_api.h"
-#include "ash/public/cpp/ash_features.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/wm/desks/desk.h"
@@ -110,7 +109,7 @@ TEST_F(OverviewWindowDragControllerTest, NoDragToCloseUsingMouse) {
   base::RunLoop().RunUntilIdle();
   Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
   auto* overview_controller = Shell::Get()->overview_controller();
-  overview_controller->StartOverview();
+  EnterOverview();
   EXPECT_TRUE(overview_controller->InOverviewSession());
   auto* overview_session = overview_controller->overview_session();
   auto* overview_item =
@@ -145,7 +144,7 @@ TEST_F(OverviewWindowDragControllerTest,
   EXPECT_EQ(window.get(), window_util::GetActiveWindow());
 
   auto* overview_controller = Shell::Get()->overview_controller();
-  overview_controller->StartOverview();
+  EnterOverview();
   EXPECT_TRUE(overview_controller->InOverviewSession());
   auto* overview_session = overview_controller->overview_session();
   const auto* overview_grid =
@@ -189,6 +188,32 @@ TEST_F(OverviewWindowDragControllerTest,
   const Desk* desk_2 = controller->desks()[1].get();
   EXPECT_TRUE(base::Contains(desk_2->windows(), window.get()));
   EXPECT_TRUE(overview_session->no_windows_widget_for_testing());
+}
+
+// Test that if window is destroyed during dragging, no crash should happen and
+// drag should be reset.
+TEST_F(OverviewWindowDragControllerTest, WindowDestroyedDuringDragging) {
+  std::unique_ptr<aura::Window> window =
+      CreateAppWindow(gfx::Rect(0, 0, 250, 100));
+  auto* overview_controller = Shell::Get()->overview_controller();
+  EnterOverview();
+  EXPECT_TRUE(overview_controller->InOverviewSession());
+  auto* overview_session = overview_controller->overview_session();
+  auto* overview_item =
+      overview_session->GetOverviewItemForWindow(window.get());
+  ASSERT_TRUE(overview_item);
+
+  auto* event_generator = GetEventGenerator();
+  StartDraggingItemBy(overview_item, 30, 200, /*by_touch_gestures=*/false,
+                      event_generator);
+  OverviewWindowDragController* drag_controller =
+      overview_session->window_drag_controller();
+  EXPECT_EQ(OverviewWindowDragController::DragBehavior::kNormalDrag,
+            drag_controller->current_drag_behavior());
+
+  window.reset();
+  EXPECT_EQ(OverviewWindowDragController::DragBehavior::kNoDrag,
+            drag_controller->current_drag_behavior());
 }
 
 // Tests the behavior of dragging a window in portrait tablet mode with virtual
@@ -269,7 +294,7 @@ class OverviewWindowDragControllerDesksPortraitTabletTest : public AshTestBase {
   void StartDraggingAndValidateDesksBarShifted(aura::Window* window) {
     // Enter overview mode, and start dragging the window. Validate that the
     // desks bar widget is shifted down to make room for the indicators.
-    overview_controller()->StartOverview();
+    EnterOverview();
     EXPECT_TRUE(overview_controller()->InOverviewSession());
     auto* overview_item = GetOverviewItemForWindow(window);
     ASSERT_TRUE(overview_item);

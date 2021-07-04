@@ -10,6 +10,8 @@
 #include "ash/system/media/unified_media_controls_controller.h"
 #include "ash/system/tray/tray_constants.h"
 #include "ash/system/tray/tray_popup_utils.h"
+#include "base/bind.h"
+#include "base/containers/contains.h"
 #include "components/media_message_center/media_notification_util.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -19,6 +21,7 @@
 #include "ui/views/animation/ink_drop_impl.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
+#include "ui/views/controls/focus_ring.h"
 #include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
@@ -83,6 +86,10 @@ const gfx::VectorIcon& GetVectorIconForMediaAction(MediaSessionAction action) {
     case MediaSessionAction::kEnterPictureInPicture:
     case MediaSessionAction::kExitPictureInPicture:
     case MediaSessionAction::kSwitchAudioDevice:
+    case MediaSessionAction::kToggleMicrophone:
+    case MediaSessionAction::kToggleCamera:
+    case MediaSessionAction::kHangUp:
+    case MediaSessionAction::kRaise:
       NOTREACHED();
       break;
   }
@@ -101,7 +108,7 @@ SkColor GetBackgroundColor() {
 UnifiedMediaControlsView::MediaActionButton::MediaActionButton(
     UnifiedMediaControlsController* controller,
     MediaSessionAction action,
-    const base::string16& accessible_name)
+    const std::u16string& accessible_name)
     : views::ImageButton(base::BindRepeating(
           // Handle dynamically-updated button tags without rebinding.
           [](UnifiedMediaControlsController* controller,
@@ -117,43 +124,26 @@ UnifiedMediaControlsView::MediaActionButton::MediaActionButton(
   SetPreferredSize(kMediaButtonSize);
   SetAction(action, accessible_name);
 
-  TrayPopupUtils::ConfigureTrayPopupButton(this);
+  TrayPopupUtils::ConfigureTrayPopupButton(
+      this, TrayPopupInkDropStyle::FILL_BOUNDS, /*highlight_on_hover=*/true);
   views::InstallCircleHighlightPathGenerator(this);
 }
 
 void UnifiedMediaControlsView::MediaActionButton::SetAction(
     MediaSessionAction action,
-    const base::string16& accessible_name) {
+    const std::u16string& accessible_name) {
   action_ = action;
   set_tag(static_cast<int>(action));
   SetTooltipText(accessible_name);
   UpdateVectorIcon();
 }
 
-std::unique_ptr<views::InkDrop>
-UnifiedMediaControlsView::MediaActionButton::CreateInkDrop() {
-  auto ink_drop = TrayPopupUtils::CreateInkDrop(this);
-  ink_drop->SetShowHighlightOnHover(true);
-  return ink_drop;
-}
-
-std::unique_ptr<views::InkDropHighlight>
-UnifiedMediaControlsView::MediaActionButton::CreateInkDropHighlight() const {
-  return TrayPopupUtils::CreateInkDropHighlight(this);
-}
-
-std::unique_ptr<views::InkDropRipple>
-UnifiedMediaControlsView::MediaActionButton::CreateInkDropRipple() const {
-  return TrayPopupUtils::CreateInkDropRipple(
-      TrayPopupInkDropStyle::FILL_BOUNDS, this,
-      GetInkDropCenterBasedOnLastEvent());
-}
-
 void UnifiedMediaControlsView::MediaActionButton::OnThemeChanged() {
   views::ImageButton::OnThemeChanged();
   UpdateVectorIcon();
-  focus_ring()->SetColor(AshColorProvider::Get()->GetControlsLayerColor(
-      AshColorProvider::ControlsLayerType::kFocusRingColor));
+  views::FocusRing::Get(this)->SetColor(
+      AshColorProvider::Get()->GetControlsLayerColor(
+          AshColorProvider::ControlsLayerType::kFocusRingColor));
 }
 
 void UnifiedMediaControlsView::MediaActionButton::UpdateVectorIcon() {
@@ -258,7 +248,7 @@ void UnifiedMediaControlsView::SetIsPlaying(bool playing) {
 }
 
 void UnifiedMediaControlsView::SetArtwork(
-    base::Optional<gfx::ImageSkia> artwork) {
+    absl::optional<gfx::ImageSkia> artwork) {
   if (!artwork.has_value()) {
     artwork_view_->SetImage(nullptr);
     artwork_view_->SetVisible(false);
@@ -275,7 +265,7 @@ void UnifiedMediaControlsView::SetArtwork(
   artwork_view_->SetClipPath(GetArtworkClipPath());
 }
 
-void UnifiedMediaControlsView::SetTitle(const base::string16& title) {
+void UnifiedMediaControlsView::SetTitle(const std::u16string& title) {
   if (title_label_->GetText() == title)
     return;
 
@@ -285,7 +275,7 @@ void UnifiedMediaControlsView::SetTitle(const base::string16& title) {
       title));
 }
 
-void UnifiedMediaControlsView::SetArtist(const base::string16& artist) {
+void UnifiedMediaControlsView::SetArtist(const std::u16string& artist) {
   artist_label_->SetText(artist);
 
   if (artist_label_->GetVisible() != artist.empty())
@@ -314,7 +304,7 @@ void UnifiedMediaControlsView::UpdateActionButtonAvailability(
 void UnifiedMediaControlsView::OnThemeChanged() {
   views::Button::OnThemeChanged();
   auto* color_provider = AshColorProvider::Get();
-  focus_ring()->SetColor(color_provider->GetControlsLayerColor(
+  views::FocusRing::Get(this)->SetColor(color_provider->GetControlsLayerColor(
       AshColorProvider::ControlsLayerType::kFocusRingColor));
   background()->SetNativeControlColor(GetBackgroundColor());
   title_label_->SetEnabledColor(color_provider->GetContentLayerColor(

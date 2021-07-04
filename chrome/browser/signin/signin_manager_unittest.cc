@@ -81,7 +81,7 @@ class SigninManagerTest : public testing::Test {
     EXPECT_EQ(1U, observer().events().size());
     auto event = observer().events()[0];
     EXPECT_EQ(PrimaryAccountChangeEvent::Type::kSet,
-              event.GetEventTypeFor(ConsentLevel::kNotRequired));
+              event.GetEventTypeFor(ConsentLevel::kSignin));
     EXPECT_TRUE(event.GetPreviousState().primary_account.IsEmpty());
     EXPECT_EQ(expected_primary_account,
               event.GetCurrentState().primary_account);
@@ -93,7 +93,7 @@ class SigninManagerTest : public testing::Test {
     EXPECT_EQ(1U, observer().events().size());
     auto event = observer().events()[0];
     EXPECT_EQ(PrimaryAccountChangeEvent::Type::kCleared,
-              event.GetEventTypeFor(ConsentLevel::kNotRequired));
+              event.GetEventTypeFor(ConsentLevel::kSignin));
     EXPECT_EQ(expected_cleared_account,
               event.GetPreviousState().primary_account);
     EXPECT_TRUE(event.GetCurrentState().primary_account.IsEmpty());
@@ -105,7 +105,7 @@ class SigninManagerTest : public testing::Test {
     EXPECT_EQ(1U, observer().events().size());
     auto event = observer().events()[0];
     EXPECT_EQ(PrimaryAccountChangeEvent::Type::kSet,
-              event.GetEventTypeFor(ConsentLevel::kNotRequired));
+              event.GetEventTypeFor(ConsentLevel::kSignin));
     EXPECT_EQ(PrimaryAccountChangeEvent::Type::kSet,
               event.GetEventTypeFor(ConsentLevel::kSync));
     EXPECT_TRUE(event.GetPreviousState().primary_account.IsEmpty());
@@ -125,19 +125,19 @@ class SigninManagerTest : public testing::Test {
     identity_test_env_.MakeAccountAvailableWithCookies(account.email,
                                                        account.gaia);
     EXPECT_FALSE(account.IsEmpty());
-    EXPECT_TRUE(
-        identity_manager()->HasPrimaryAccount(ConsentLevel::kNotRequired));
-    EXPECT_EQ(account, identity_manager()->GetPrimaryAccountInfo(
-                           ConsentLevel::kNotRequired));
+    EXPECT_TRUE(identity_manager()->HasPrimaryAccount(ConsentLevel::kSignin));
+    EXPECT_EQ(account,
+              identity_manager()->GetPrimaryAccountInfo(ConsentLevel::kSignin));
     EXPECT_FALSE(identity_manager()->HasPrimaryAccount(ConsentLevel::kSync));
     return account;
   }
 
   AccountInfo MakeSyncAccountAvailableWithCookies(const std::string& email) {
-    AccountInfo account = identity_test_env_.MakePrimaryAccountAvailable(email);
+    AccountInfo account = identity_test_env_.MakePrimaryAccountAvailable(
+        email, signin::ConsentLevel::kSync);
     identity_test_env_.SetCookieAccounts({{account.email, account.gaia}});
-    EXPECT_EQ(account, identity_manager()->GetPrimaryAccountInfo(
-                           ConsentLevel::kNotRequired));
+    EXPECT_EQ(account,
+              identity_manager()->GetPrimaryAccountInfo(ConsentLevel::kSignin));
     EXPECT_EQ(account,
               identity_manager()->GetPrimaryAccountInfo(ConsentLevel::kSync));
     EXPECT_TRUE(identity_manager()->HasPrimaryAccountWithRefreshToken(
@@ -161,8 +161,8 @@ TEST_F(
   // Add an unconsented primary account, incl. proper cookies.
   AccountInfo account = MakeAccountAvailableWithCookies(kTestEmail);
   ExpectUnconsentedPrimaryAccountSetEvent(account);
-  EXPECT_EQ(account, identity_manager()->GetPrimaryAccountInfo(
-                         ConsentLevel::kNotRequired));
+  EXPECT_EQ(account,
+            identity_manager()->GetPrimaryAccountInfo(ConsentLevel::kSignin));
 }
 
 TEST_F(
@@ -175,17 +175,13 @@ TEST_F(
   // Invalid token.
   SetInvalidRefreshTokenForAccount(identity_manager(), account.account_id);
   ExpectUnconsentedPrimaryAccountClearedEvent(account);
-  EXPECT_FALSE(
-      identity_manager()->HasPrimaryAccount(ConsentLevel::kNotRequired));
+  EXPECT_FALSE(identity_manager()->HasPrimaryAccount(ConsentLevel::kSignin));
 
   // Update with a valid token.
-  UpdatePersistentErrorOfRefreshTokenForAccount(
-      identity_manager(), account.account_id,
-      GoogleServiceAuthError::AuthErrorNone());
+  SetRefreshTokenForAccount(identity_manager(), account.account_id, "");
   ExpectUnconsentedPrimaryAccountSetEvent(account);
-  EXPECT_EQ(
-      identity_manager()->GetPrimaryAccountInfo(ConsentLevel::kNotRequired),
-      account);
+  EXPECT_EQ(identity_manager()->GetPrimaryAccountInfo(ConsentLevel::kSignin),
+            account);
 }
 
 TEST_F(
@@ -198,15 +194,14 @@ TEST_F(
   // With no refresh token, there is no unconsented primary account any more.
   identity_test_env()->RemoveRefreshTokenForAccount(account.account_id);
   ExpectUnconsentedPrimaryAccountClearedEvent(account);
-  EXPECT_FALSE(
-      identity_manager()->HasPrimaryAccount(ConsentLevel::kNotRequired));
+  EXPECT_FALSE(identity_manager()->HasPrimaryAccount(ConsentLevel::kSignin));
 }
 
 TEST_F(SigninManagerTest, UnconsentedPrimaryAccountNotChangedOnSignout) {
   // Set a primary account at sync consent level.
   AccountInfo account = MakeSyncAccountAvailableWithCookies(kTestEmail);
-  EXPECT_EQ(account, identity_manager()->GetPrimaryAccountInfo(
-                         ConsentLevel::kNotRequired));
+  EXPECT_EQ(account,
+            identity_manager()->GetPrimaryAccountInfo(ConsentLevel::kSignin));
   EXPECT_EQ(account,
             identity_manager()->GetPrimaryAccountInfo(ConsentLevel::kSync));
   EXPECT_TRUE(identity_manager()->HasPrimaryAccountWithRefreshToken(
@@ -219,14 +214,14 @@ TEST_F(SigninManagerTest, UnconsentedPrimaryAccountNotChangedOnSignout) {
   identity_test_env()->RevokeSyncConsent();
   base::RunLoop().RunUntilIdle();
 
-  EXPECT_EQ(account, identity_manager()->GetPrimaryAccountInfo(
-                         ConsentLevel::kNotRequired));
+  EXPECT_EQ(account,
+            identity_manager()->GetPrimaryAccountInfo(ConsentLevel::kSignin));
   EXPECT_FALSE(identity_manager()->HasPrimaryAccount(ConsentLevel::kSync));
 
   EXPECT_EQ(1U, observer().events().size());
   auto event = observer().events()[0];
   EXPECT_EQ(PrimaryAccountChangeEvent::Type::kNone,
-            event.GetEventTypeFor(ConsentLevel::kNotRequired));
+            event.GetEventTypeFor(ConsentLevel::kSignin));
   EXPECT_EQ(PrimaryAccountChangeEvent::Type::kCleared,
             event.GetEventTypeFor(ConsentLevel::kSync));
   EXPECT_EQ(account, event.GetPreviousState().primary_account);
@@ -247,8 +242,7 @@ TEST_F(SigninManagerTest,
   ASSERT_FALSE(identity_manager()->GetAccountsInCookieJar().accounts_are_fresh);
 
   // Unconsented account was removed.
-  EXPECT_FALSE(
-      identity_manager()->HasPrimaryAccount(ConsentLevel::kNotRequired));
+  EXPECT_FALSE(identity_manager()->HasPrimaryAccount(ConsentLevel::kSignin));
   ExpectUnconsentedPrimaryAccountClearedEvent(account);
 }
 
@@ -263,11 +257,10 @@ TEST_F(SigninManagerTest,
       {{main_account.email, main_account.gaia},
        {secondary_account.email, secondary_account.gaia}});
 
-  EXPECT_TRUE(
-      identity_manager()->HasPrimaryAccount(ConsentLevel::kNotRequired));
+  EXPECT_TRUE(identity_manager()->HasPrimaryAccount(ConsentLevel::kSignin));
   EXPECT_FALSE(identity_manager()->HasPrimaryAccount(ConsentLevel::kSync));
-  EXPECT_EQ(main_account, identity_manager()->GetPrimaryAccountInfo(
-                              ConsentLevel::kNotRequired));
+  EXPECT_EQ(main_account,
+            identity_manager()->GetPrimaryAccountInfo(ConsentLevel::kSignin));
   ExpectUnconsentedPrimaryAccountSetEvent(main_account);
 
   // Make the cookies stale and remove the main account.
@@ -276,8 +269,7 @@ TEST_F(SigninManagerTest,
   ASSERT_FALSE(identity_manager()->GetAccountsInCookieJar().accounts_are_fresh);
 
   // Unconsented account was removed.
-  EXPECT_FALSE(
-      identity_manager()->HasPrimaryAccount(ConsentLevel::kNotRequired));
+  EXPECT_FALSE(identity_manager()->HasPrimaryAccount(ConsentLevel::kSignin));
   ExpectUnconsentedPrimaryAccountClearedEvent(main_account);
 }
 
@@ -290,8 +282,8 @@ TEST_F(SigninManagerTest, UnconsentedPrimaryAccountDuringLoad) {
   identity_test_env()->SetCookieAccounts(
       {{main_account.email, main_account.gaia},
        {secondary_account.email, secondary_account.gaia}});
-  ASSERT_EQ(main_account, identity_manager()->GetPrimaryAccountInfo(
-                              ConsentLevel::kNotRequired));
+  ASSERT_EQ(main_account,
+            identity_manager()->GetPrimaryAccountInfo(ConsentLevel::kSignin));
   ASSERT_FALSE(identity_manager()->HasPrimaryAccount(ConsentLevel::kSync));
   ExpectUnconsentedPrimaryAccountSetEvent(main_account);
 
@@ -300,28 +292,29 @@ TEST_F(SigninManagerTest, UnconsentedPrimaryAccountDuringLoad) {
   RecreateSigninManager();
 
   // Unconsented primary account is available while tokens are not loaded.
-  EXPECT_EQ(main_account, identity_manager()->GetPrimaryAccountInfo(
-                              ConsentLevel::kNotRequired));
+  EXPECT_EQ(main_account,
+            identity_manager()->GetPrimaryAccountInfo(ConsentLevel::kSignin));
   EXPECT_TRUE(observer().events().empty());
 
   // Revoking an unrelated token doesn't change the unconsented primary account.
   identity_test_env()->RemoveRefreshTokenForAccount(
       secondary_account.account_id);
-  EXPECT_EQ(main_account, identity_manager()->GetPrimaryAccountInfo(
-                              ConsentLevel::kNotRequired));
+  EXPECT_EQ(main_account,
+            identity_manager()->GetPrimaryAccountInfo(ConsentLevel::kSignin));
   EXPECT_TRUE(observer().events().empty());
 
-  // Revoke the unconsented primary account while tokens are not loaded.
+  // Revoking the token of the unconsented primary account while the tokens
+  // are still loading does not change the unconsented primary account.
   identity_test_env()->RemoveRefreshTokenForAccount(main_account.account_id);
-  EXPECT_FALSE(
-      identity_manager()->HasPrimaryAccount(ConsentLevel::kNotRequired));
-  ExpectUnconsentedPrimaryAccountClearedEvent(main_account);
-
-  // Finish the token load.
-  identity_test_env()->ReloadAccountsFromDisk();
-  EXPECT_FALSE(
-      identity_manager()->HasPrimaryAccount(ConsentLevel::kNotRequired));
+  EXPECT_EQ(main_account,
+            identity_manager()->GetPrimaryAccountInfo(ConsentLevel::kSignin));
   EXPECT_TRUE(observer().events().empty());
+
+  // Finish the token load should clear the primary account as the token of the
+  // primary account was revoked.
+  identity_test_env()->ReloadAccountsFromDisk();
+  EXPECT_FALSE(identity_manager()->HasPrimaryAccount(ConsentLevel::kSignin));
+  ExpectUnconsentedPrimaryAccountClearedEvent(main_account);
 }
 
 TEST_F(SigninManagerTest,
@@ -333,13 +326,14 @@ TEST_F(SigninManagerTest,
   identity_test_env()->SetCookieAccounts(
       {{first_account.email, first_account.gaia},
        {second_account.email, second_account.gaia}});
-  ASSERT_EQ(first_account, identity_manager()->GetPrimaryAccountInfo(
-                               ConsentLevel::kNotRequired));
+  ASSERT_EQ(first_account,
+            identity_manager()->GetPrimaryAccountInfo(ConsentLevel::kSignin));
   ExpectUnconsentedPrimaryAccountSetEvent(first_account);
 
   // Set the sync primary account to the second account in cookies.
   // The unconsented primary account should be updated.
-  identity_test_env()->SetPrimaryAccount(second_account.email);
+  identity_test_env()->SetPrimaryAccount(second_account.email,
+                                         signin::ConsentLevel::kSync);
   EXPECT_EQ(second_account,
             identity_manager()->GetPrimaryAccountInfo(ConsentLevel::kSync));
   EXPECT_EQ(1U, observer().events().size());
@@ -359,17 +353,16 @@ TEST_F(SigninManagerTest,
   EXPECT_FALSE(
       identity_manager()->HasPrimaryAccount(signin::ConsentLevel::kSync));
   EXPECT_FALSE(identity_manager()->HasPrimaryAccount(ConsentLevel::kSync));
-  EXPECT_TRUE(
-      identity_manager()->HasPrimaryAccount(ConsentLevel::kNotRequired));
-  EXPECT_EQ(first_account, identity_manager()->GetPrimaryAccountInfo(
-                               ConsentLevel::kNotRequired));
+  EXPECT_TRUE(identity_manager()->HasPrimaryAccount(ConsentLevel::kSignin));
+  EXPECT_EQ(first_account,
+            identity_manager()->GetPrimaryAccountInfo(ConsentLevel::kSignin));
 
   EXPECT_EQ(2U, observer().events().size());
   event = observer().events()[0];
   EXPECT_EQ(PrimaryAccountChangeEvent::Type::kCleared,
             event.GetEventTypeFor(ConsentLevel::kSync));
   EXPECT_EQ(PrimaryAccountChangeEvent::Type::kNone,
-            event.GetEventTypeFor(ConsentLevel::kNotRequired));
+            event.GetEventTypeFor(ConsentLevel::kSignin));
   EXPECT_EQ(second_account, event.GetPreviousState().primary_account);
   EXPECT_EQ(second_account, event.GetCurrentState().primary_account);
 
@@ -377,7 +370,7 @@ TEST_F(SigninManagerTest,
   EXPECT_EQ(PrimaryAccountChangeEvent::Type::kNone,
             event.GetEventTypeFor(ConsentLevel::kSync));
   EXPECT_EQ(PrimaryAccountChangeEvent::Type::kSet,
-            event.GetEventTypeFor(ConsentLevel::kNotRequired));
+            event.GetEventTypeFor(ConsentLevel::kSignin));
   EXPECT_EQ(second_account, event.GetPreviousState().primary_account);
   EXPECT_EQ(first_account, event.GetCurrentState().primary_account);
 }
@@ -392,7 +385,7 @@ TEST_F(SigninManagerTest, ClearPrimaryAccountAndSignOut) {
   EXPECT_EQ(1U, observer().events().size());
   auto event = observer().events()[0];
   EXPECT_EQ(PrimaryAccountChangeEvent::Type::kCleared,
-            event.GetEventTypeFor(ConsentLevel::kNotRequired));
+            event.GetEventTypeFor(ConsentLevel::kSignin));
   EXPECT_EQ(PrimaryAccountChangeEvent::Type::kCleared,
             event.GetEventTypeFor(ConsentLevel::kSync));
   EXPECT_EQ(account, event.GetPreviousState().primary_account);

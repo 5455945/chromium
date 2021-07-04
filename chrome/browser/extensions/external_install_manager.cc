@@ -7,6 +7,7 @@
 #include <string>
 
 #include "base/check_op.h"
+#include "base/containers/contains.h"
 #include "base/metrics/histogram_macros.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/chrome_notification_types.h"
@@ -67,7 +68,8 @@ ExternalInstallManager::ExternalInstallManager(
       extension_prefs_(ExtensionPrefs::Get(browser_context_)),
       currently_visible_install_alert_(nullptr) {
   DCHECK(browser_context_);
-  extension_registry_observer_.Add(ExtensionRegistry::Get(browser_context_));
+  extension_registry_observation_.Observe(
+      ExtensionRegistry::Get(browser_context_));
   Profile* profile = Profile::FromBrowserContext(browser_context_);
   registrar_.Add(this, extensions::NOTIFICATION_EXTENSION_REMOVED,
                  content::Source<Profile>(profile));
@@ -246,7 +248,7 @@ void ExternalInstallManager::OnExtensionInstalled(
   // auto-acknowledge any extension that came from one of them.
   // Extensions recommended by policy can also be auto-acknowledged.
   if (Manifest::IsPolicyLocation(extension->location()) ||
-      extension->location() == Manifest::EXTERNAL_COMPONENT ||
+      extension->location() == mojom::ManifestLocation::kExternalComponent ||
       is_recommended_by_policy) {
     AcknowledgeExternalExtension(extension->id());
     return;

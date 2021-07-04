@@ -13,6 +13,7 @@
 #include "content/browser/service_worker/service_worker_version.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/storage_partition.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 
 namespace content {
 
@@ -28,7 +29,7 @@ ServiceWorkerHostInterceptor::InterceptServiceWorkerHostWithScope(
   base::RunLoop run_loop;
   scoped_refptr<ServiceWorkerContextWrapper> context =
       static_cast<ServiceWorkerContextWrapper*>(
-          BrowserContext::GetDefaultStoragePartition(browser_context)
+          browser_context->GetDefaultStoragePartition()
               ->GetServiceWorkerContext());
   BrowserThread::ID run_done_thread;
   bool is_known_thread =
@@ -70,7 +71,7 @@ void ServiceWorkerHostInterceptor::FindRegistrationOnServiceWorkerCoreThread(
     BrowserThread::ID run_done_thread,
     base::OnceClosure done) {
   context->FindRegistrationForScope(
-      scope,
+      scope, blink::StorageKey(url::Origin::Create(scope)),
       base::BindOnce(&ServiceWorkerHostInterceptor::
                          OnFoundRegistrationOnServiceWorkerCoreThread,
                      base::Unretained(this), run_done_thread, std::move(done)));

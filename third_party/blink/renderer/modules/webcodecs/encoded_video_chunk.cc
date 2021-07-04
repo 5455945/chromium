@@ -9,42 +9,65 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_encoded_video_chunk_init.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_piece.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
 
 EncodedVideoChunk* EncodedVideoChunk::Create(EncodedVideoChunkInit* init) {
-  EncodedVideoMetadata metadata;
-  metadata.timestamp = base::TimeDelta::FromMicroseconds(init->timestamp());
-  metadata.key_frame = (init->type() == "key");
-  if (init->hasDuration()) {
-    metadata.duration = base::TimeDelta::FromMicroseconds(init->duration());
-  }
+  auto timestamp = base::TimeDelta::FromMicroseconds(init->timestamp());
+  bool key_frame = (init->type() == "key");
   DOMArrayPiece piece(init->data());
 
   // A full copy of the data happens here.
   auto* buffer = piece.IsNull()
                      ? nullptr
                      : DOMArrayBuffer::Create(piece.Data(), piece.ByteLength());
-  return MakeGarbageCollected<EncodedVideoChunk>(metadata, buffer);
+  auto* result =
+      MakeGarbageCollected<EncodedVideoChunk>(timestamp, key_frame, buffer);
+  if (init->hasDuration())
+    result->duration_ = base::TimeDelta::FromMicroseconds(init->duration());
+  return result;
 }
 
-EncodedVideoChunk::EncodedVideoChunk(EncodedVideoMetadata metadata,
+EncodedVideoChunk::EncodedVideoChunk(base::TimeDelta timestamp,
+                                     bool key_frame,
                                      DOMArrayBuffer* buffer)
-    : metadata_(metadata), buffer_(buffer) {}
+    : timestamp_(timestamp), key_frame_(key_frame), buffer_(buffer) {}
 
 String EncodedVideoChunk::type() const {
-  return metadata_.key_frame ? "key" : "delta";
+  return key_frame_ ? "key" : "delta";
 }
 
-uint64_t EncodedVideoChunk::timestamp() const {
-  return metadata_.timestamp.InMicroseconds();
+int64_t EncodedVideoChunk::timestamp() const {
+  return timestamp_.InMicroseconds();
 }
 
-base::Optional<uint64_t> EncodedVideoChunk::duration() const {
-  if (!metadata_.duration)
-    return base::nullopt;
-  return metadata_.duration->InMicroseconds();
+absl::optional<uint64_t> EncodedVideoChunk::duration() const {
+  if (!duration_.has_value())
+    return absl::nullopt;
+  return duration_->InMicroseconds();
+}
+
+uint64_t EncodedVideoChunk::byteLength() const {
+  return buffer_->ByteLength();
+}
+
+void EncodedVideoChunk::copyTo(const V8BufferSource* destination,
+                               ExceptionState& exception_state) {
+  // Validate destination buffer.
+  DOMArrayPiece dest_wrapper(destination);
+  if (dest_wrapper.IsDetached()) {
+    exception_state.ThrowTypeError("destination is detached.");
+    return;
+  }
+  if (dest_wrapper.ByteLength() < buffer_->ByteLength()) {
+    exception_state.ThrowTypeError("destination is not large enough.");
+    return;
+  }
+
+  // Copy data.
+  memcpy(dest_wrapper.Bytes(), buffer_->Data(), buffer_->ByteLength());
 }
 
 DOMArrayBuffer* EncodedVideoChunk::data() const {

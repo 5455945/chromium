@@ -7,17 +7,19 @@
 #include "ash/services/recording/public/mojom/recording_service.mojom.h"
 #include "base/check.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/i18n/time_formatting.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/launch_utils.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_content_manager.h"
+#include "chrome/browser/chromeos/service_sandbox_type.h"
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/service_sandbox_type.h"
 #include "chrome/browser/ui/ash/screenshot_area.h"
+#include "chrome/browser/ui/web_applications/system_web_app_ui_utils.h"
 #include "chrome/browser/web_applications/components/web_app_id_constants.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/login/login_state/login_state.h"
@@ -72,11 +74,22 @@ void ChromeCaptureModeDelegate::InterruptVideoRecordingIfAny() {
     std::move(interrupt_video_recording_callback_).Run();
 }
 
-base::FilePath ChromeCaptureModeDelegate::GetActiveUserDownloadsDir() const {
-  DCHECK(chromeos::LoginState::Get()->IsUserLoggedIn());
-  DownloadPrefs* download_prefs =
-      DownloadPrefs::FromBrowserContext(ProfileManager::GetActiveUserProfile());
-  return download_prefs->DownloadPath();
+base::FilePath ChromeCaptureModeDelegate::GetScreenCaptureDir() const {
+  if (chromeos::LoginState::Get()->IsUserLoggedIn()) {
+    DownloadPrefs* download_prefs = DownloadPrefs::FromBrowserContext(
+        ProfileManager::GetActiveUserProfile());
+    // We use the default downloads directory instead of the one that can be
+    // configured from the browser's settings, since it can point to an invalid
+    // location, which the browser handles by prompting the user to select
+    // another one when accessed, but Capture Mode doesn't have this capability.
+    // We also decided that this browser setting should not affect when the OS
+    // saves the captured files. https://crbug.com/1192406.
+    return download_prefs->GetDefaultDownloadDirectoryForProfile();
+  }
+  base::FilePath tmp_dir;
+  if (!base::GetTempDir(&tmp_dir))
+    LOG(ERROR) << "Failed to find temporary directory.";
+  return tmp_dir;
 }
 
 void ChromeCaptureModeDelegate::ShowScreenCaptureItemInFolder(
@@ -91,19 +104,11 @@ void ChromeCaptureModeDelegate::OpenScreenshotInImageEditor(
   if (!profile)
     return;
 
-  apps::AppServiceProxy* proxy = apps::AppServiceProxyFactory::GetForProfile(
-      profile->GetOriginalProfile());
-  apps::mojom::FilePathsPtr file_paths_ptr =
-      apps::mojom::FilePaths::New(std::vector<base::FilePath>({file_path}));
-
-  // open the image with Essential App: Backlight.
-  proxy->LaunchAppWithFiles(
-      web_app::kMediaAppId,
-      apps::mojom::LaunchContainer::kLaunchContainerWindow,
-      apps::GetEventFlags(apps::mojom::LaunchContainer::kLaunchContainerWindow,
-                          WindowOpenDisposition::NEW_WINDOW,
-                          /*preferred_container=*/true),
-      apps::mojom::LaunchSource::kFromFileManager, std::move(file_paths_ptr));
+  web_app::SystemAppLaunchParams params;
+  params.launch_paths = {file_path};
+  params.launch_source = apps::mojom::LaunchSource::kFromFileManager;
+  web_app::LaunchSystemWebAppAsync(profile, web_app::SystemAppType::MEDIA,
+                                   params);
 }
 
 bool ChromeCaptureModeDelegate::Uses24HourFormat() const {
@@ -161,10 +166,12 @@ ChromeCaptureModeDelegate::LaunchRecordingService() {
 }
 
 void ChromeCaptureModeDelegate::BindAudioStreamFactory(
-    mojo::PendingReceiver<audio::mojom::StreamFactory> receiver) {
+    mojo::PendingReceiver<media::mojom::AudioStreamFactory> receiver) {
   content::GetAudioService().BindStreamFactory(std::move(receiver));
 }
 
 void ChromeCaptureModeDelegate::OnSessionStateChanged(bool started) {
   is_session_active_ = started;
 }
+
+void ChromeCaptureModeDelegate::OnServiceRemoteReset() {}

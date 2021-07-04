@@ -18,9 +18,13 @@ class FakeUrlHandlerManager : public UrlHandlerManager {
   explicit FakeUrlHandlerManager(Profile* profile);
   ~FakeUrlHandlerManager() override;
 
-  bool RegisterUrlHandlers(const AppId& app_id) override;
+  void RegisterUrlHandlers(
+      const AppId& app_id,
+      base::OnceCallback<void(bool success)> callback) override;
   bool UnregisterUrlHandlers(const AppId& app_id) override;
-  bool UpdateUrlHandlers(const AppId& app_id) override;
+  void UpdateUrlHandlers(
+      const AppId& app_id,
+      base::OnceCallback<void(bool success)> callback) override;
 };
 
 }  // namespace web_app

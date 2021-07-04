@@ -30,6 +30,12 @@ const char kFakeCredential[] = "FAKE_CREDENTIAL_VPaJDV9x";
 
 namespace {
 
+std::string GetString(const base::Value& dict, const char* key) {
+  DCHECK(dict.is_dict());
+  const std::string* value = dict.FindStringKey(key);
+  return value ? *value : std::string();
+}
+
 // Removes all kFakeCredential values from sensitive fields (determined by
 // onc::FieldIsCredential) of |onc_object|.
 void RemoveFakeCredentials(const onc::OncValueSignature& signature,
@@ -37,11 +43,10 @@ void RemoveFakeCredentials(const onc::OncValueSignature& signature,
   std::vector<std::string> entries_to_remove;
   for (base::DictionaryValue::Iterator it(*onc_object); !it.IsAtEnd();
        it.Advance()) {
-    base::Value* value = nullptr;
     std::string field_name = it.key();
     // We need the non-const entry to remove nested values but DictionaryValue
     // has no non-const iterator.
-    onc_object->GetWithoutPathExpansion(field_name, &value);
+    base::Value* value = onc_object->FindKey(field_name);
 
     // If |value| is a dictionary, recurse.
     base::DictionaryValue* nested_object = nullptr;
@@ -79,12 +84,9 @@ void RemoveFakeCredentials(const onc::OncValueSignature& signature,
 // matching behavior.
 bool IsPolicyMatching(const base::DictionaryValue& policy,
                       const base::DictionaryValue& actual_network) {
-  std::string policy_type;
-  policy.GetStringWithoutPathExpansion(::onc::network_config::kType,
-                                       &policy_type);
-  std::string actual_network_type;
-  actual_network.GetStringWithoutPathExpansion(::onc::network_config::kType,
-                                               &actual_network_type);
+  std::string policy_type = GetString(policy, ::onc::network_config::kType);
+  std::string actual_network_type =
+      GetString(actual_network, ::onc::network_config::kType);
   if (policy_type != actual_network_type)
     return false;
 
@@ -98,12 +100,10 @@ bool IsPolicyMatching(const base::DictionaryValue& policy,
     if (!policy_ethernet || !actual_ethernet)
       return false;
 
-    std::string policy_auth;
-    policy_ethernet->GetStringWithoutPathExpansion(
-        ::onc::ethernet::kAuthentication, &policy_auth);
-    std::string actual_auth;
-    actual_ethernet->GetStringWithoutPathExpansion(
-        ::onc::ethernet::kAuthentication, &actual_auth);
+    std::string policy_auth =
+        GetString(*policy_ethernet, ::onc::ethernet::kAuthentication);
+    std::string actual_auth =
+        GetString(*actual_ethernet, ::onc::ethernet::kAuthentication);
     return policy_auth == actual_auth;
   } else if (actual_network_type == ::onc::network_type::kWiFi) {
     const base::DictionaryValue* policy_wifi = nullptr;
@@ -115,12 +115,8 @@ bool IsPolicyMatching(const base::DictionaryValue& policy,
     if (!policy_wifi || !actual_wifi)
       return false;
 
-    std::string policy_ssid;
-    policy_wifi->GetStringWithoutPathExpansion(::onc::wifi::kHexSSID,
-                                               &policy_ssid);
-    std::string actual_ssid;
-    actual_wifi->GetStringWithoutPathExpansion(::onc::wifi::kHexSSID,
-                                               &actual_ssid);
+    std::string policy_ssid = GetString(*policy_wifi, ::onc::wifi::kHexSSID);
+    std::string actual_ssid = GetString(*actual_wifi, ::onc::wifi::kHexSSID);
     return (policy_ssid == actual_ssid);
   }
   return false;
@@ -129,8 +125,7 @@ bool IsPolicyMatching(const base::DictionaryValue& policy,
 // Returns true if AutoConnect is enabled by |policy| (as mandatory or
 // recommended setting). Otherwise and on error returns false.
 bool IsAutoConnectEnabledInPolicy(const base::DictionaryValue& policy) {
-  std::string type;
-  policy.GetStringWithoutPathExpansion(::onc::network_config::kType, &type);
+  std::string type = GetString(policy, ::onc::network_config::kType);
 
   std::string autoconnect_key;
   std::string network_dict_key;
@@ -153,9 +148,7 @@ bool IsAutoConnectEnabledInPolicy(const base::DictionaryValue& policy) {
     return false;
   }
 
-  bool autoconnect = false;
-  network_dict->GetBooleanWithoutPathExpansion(autoconnect_key, &autoconnect);
-  return autoconnect;
+  return network_dict->FindBoolKey(autoconnect_key).value_or(false);
 }
 
 base::Value* GetOrCreateNestedDictionary(const std::string& key1,
@@ -172,9 +165,8 @@ base::Value* GetOrCreateNestedDictionary(const std::string& key1,
 void ApplyGlobalAutoconnectPolicy(
     NetworkProfile::Type profile_type,
     base::DictionaryValue* augmented_onc_network) {
-  std::string type;
-  augmented_onc_network->GetStringWithoutPathExpansion(
-      ::onc::network_config::kType, &type);
+  std::string type =
+      GetString(*augmented_onc_network, ::onc::network_config::kType);
   if (type.empty()) {
     LOG(ERROR) << "ONC dictionary with no Type.";
     return;
@@ -246,10 +238,11 @@ std::unique_ptr<base::DictionaryValue> CreateManagedONC(
   // If present, apply the Autoconnect policy only to networks that are not
   // managed by policy.
   if (!network_policy && global_policy && profile) {
-    bool allow_only_policy_autoconnect = false;
-    global_policy->GetBooleanWithoutPathExpansion(
-        ::onc::global_network_config::kAllowOnlyPolicyNetworksToAutoconnect,
-        &allow_only_policy_autoconnect);
+    bool allow_only_policy_autoconnect =
+        global_policy
+            ->FindBoolKey(::onc::global_network_config::
+                              kAllowOnlyPolicyNetworksToAutoconnect)
+            .value_or(false);
     if (allow_only_policy_autoconnect) {
       ApplyGlobalAutoconnectPolicy(profile->type(),
                                    augmented_onc_network.get());
@@ -265,23 +258,22 @@ void SetShillPropertiesForGlobalPolicy(
     base::DictionaryValue* shill_properties_to_update) {
   // kAllowOnlyPolicyNetworksToAutoconnect is currently the only global config.
 
-  std::string type;
-  shill_dictionary.GetStringWithoutPathExpansion(shill::kTypeProperty, &type);
+  std::string type = GetString(shill_dictionary, shill::kTypeProperty);
   if (NetworkTypePattern::Ethernet().MatchesType(type))
     return;  // Autoconnect for Ethernet cannot be configured.
 
   // By default all networks are allowed to autoconnect.
-  bool only_policy_autoconnect = false;
-  global_network_policy.GetBooleanWithoutPathExpansion(
-      ::onc::global_network_config::kAllowOnlyPolicyNetworksToAutoconnect,
-      &only_policy_autoconnect);
+  bool only_policy_autoconnect =
+      global_network_policy
+          .FindBoolKey(::onc::global_network_config::
+                           kAllowOnlyPolicyNetworksToAutoconnect)
+          .value_or(false);
   if (!only_policy_autoconnect)
     return;
 
-  bool old_autoconnect = false;
-  if (shill_dictionary.GetBooleanWithoutPathExpansion(
-          shill::kAutoConnectProperty, &old_autoconnect) &&
-      !old_autoconnect) {
+  bool old_autoconnect =
+      shill_dictionary.FindBoolKey(shill::kAutoConnectProperty).value_or(false);
+  if (!old_autoconnect) {
     // Autoconnect is already explicitly disabled. No need to set it again.
     return;
   }
@@ -392,7 +384,7 @@ std::unique_ptr<base::DictionaryValue> CreateShillConfiguration(
     ui_data->SetUserSettingsDictionary(std::move(sanitized_user_settings));
   }
 
-  shill_property_util::SetUIData(*ui_data, shill_dictionary.get());
+  shill_property_util::SetUIDataAndSource(*ui_data, shill_dictionary.get());
 
   VLOG(2) << "Created Shill properties: " << *shill_dictionary;
 

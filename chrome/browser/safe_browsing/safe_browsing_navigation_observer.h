@@ -5,12 +5,14 @@
 #ifndef CHROME_BROWSER_SAFE_BROWSING_SAFE_BROWSING_NAVIGATION_OBSERVER_H_
 #define CHROME_BROWSER_SAFE_BROWSING_SAFE_BROWSING_NAVIGATION_OBSERVER_H_
 
-#include "base/scoped_observer.h"
+#include <unordered_map>
+
+#include "base/scoped_observation.h"
 #include "base/supports_user_data.h"
 #include "components/content_settings/core/browser/content_settings_observer.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings.h"
-#include "components/safe_browsing/core/proto/csd.pb.h"
+#include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "components/sessions/core/session_id.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "url/gurl.h"
@@ -28,6 +30,7 @@ class SafeBrowsingNavigationObserverManager;
 struct NavigationEvent {
   NavigationEvent();
   NavigationEvent(NavigationEvent&& nav_event);
+  NavigationEvent(const NavigationEvent& nav_event);
   NavigationEvent& operator=(NavigationEvent&& nav_event);
   ~NavigationEvent();
 
@@ -105,11 +108,12 @@ class SafeBrowsingNavigationObserver : public base::SupportsUserData::Data,
   static SafeBrowsingNavigationObserver* FromWebContents(
       content::WebContents* web_contents);
 
-  SafeBrowsingNavigationObserver(
-      content::WebContents* contents,
-      const scoped_refptr<SafeBrowsingNavigationObserverManager>& manager);
+  explicit SafeBrowsingNavigationObserver(content::WebContents* contents);
 
   ~SafeBrowsingNavigationObserver() override;
+
+  void SetObserverManagerForTesting(
+      SafeBrowsingNavigationObserverManager* observer_manager);
 
  private:
   FRIEND_TEST_ALL_PREFIXES(SBNavigationObserverTest, TestContentSettingChange);
@@ -118,6 +122,8 @@ class SafeBrowsingNavigationObserver : public base::SupportsUserData::Data,
       NavigationHandleMap;
 
   void OnUserInteraction();
+
+  SafeBrowsingNavigationObserverManager* GetObserverManager();
 
   // content::WebContentsObserver:
   void DidStartNavigation(
@@ -150,10 +156,11 @@ class SafeBrowsingNavigationObserver : public base::SupportsUserData::Data,
   // SafeBrowsingNavigationObserverManager::navigation_map_.
   NavigationHandleMap navigation_handle_map_;
 
-  scoped_refptr<SafeBrowsingNavigationObserverManager> manager_;
+  base::ScopedObservation<HostContentSettingsMap, content_settings::Observer>
+      content_settings_observation_{this};
 
-  ScopedObserver<HostContentSettingsMap, content_settings::Observer>
-      content_settings_observer_{this};
+  SafeBrowsingNavigationObserverManager* observer_manager_for_testing_ =
+      nullptr;
 
   DISALLOW_COPY_AND_ASSIGN(SafeBrowsingNavigationObserver);
 };

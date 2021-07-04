@@ -12,6 +12,7 @@
 #include "ash/system/tray/system_tray_notifier.h"
 #include "ash/test_screenshot_delegate.h"
 #include "ash/wm/gestures/back_gesture/test_back_gesture_contextual_nudge_delegate.h"
+#include "components/full_restore/app_launch_info.h"
 #include "ui/gfx/image/image.h"
 
 namespace ash {
@@ -84,6 +85,19 @@ bool TestShellDelegate::IsSessionRestoreInProgress() const {
 
 void TestShellDelegate::SetSessionRestoreInProgress(bool in_progress) {
   session_restore_in_progress_ = in_progress;
+}
+
+bool TestShellDelegate::IsLoggingRedirectDisabled() const {
+  return false;
+}
+
+base::FilePath TestShellDelegate::GetPrimaryUserDownloadsFolder() const {
+  return base::FilePath();
+}
+
+std::unique_ptr<full_restore::AppLaunchInfo>
+TestShellDelegate::GetAppLaunchDataForDeskTemplate(aura::Window* window) const {
+  return nullptr;
 }
 
 }  // namespace ash

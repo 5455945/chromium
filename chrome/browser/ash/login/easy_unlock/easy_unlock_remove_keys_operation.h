@@ -10,12 +10,12 @@
 #include "base/callback.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
+#include "chromeos/dbus/cryptohome/UserDataAuth.pb.h"
 #include "chromeos/login/auth/user_context.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
-namespace chromeos {
-
-class UserContext;
+namespace ash {
 
 // A class to remove existing Easy unlock cryptohome keys starting at given
 // index.
@@ -33,7 +33,7 @@ class EasyUnlockRemoveKeysOperation {
   void OnGetSystemSalt(const std::string& system_salt);
 
   void RemoveKey();
-  void OnKeyRemoved(bool success, cryptohome::MountError return_code);
+  void OnKeyRemoved(absl::optional<::user_data_auth::RemoveKeyReply> reply);
 
   UserContext user_context_;
   RemoveKeysCallback callback_;
@@ -43,6 +43,6 @@ class EasyUnlockRemoveKeysOperation {
   DISALLOW_COPY_AND_ASSIGN(EasyUnlockRemoveKeysOperation);
 };
 
-}  // namespace chromeos
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_EASY_UNLOCK_EASY_UNLOCK_REMOVE_KEYS_OPERATION_H_

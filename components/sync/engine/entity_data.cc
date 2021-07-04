@@ -21,51 +21,19 @@ namespace syncer {
 
 namespace {
 
-std::string UniquePositionToString(
-    const sync_pb::UniquePosition& unique_position) {
-  return UniquePosition::FromProto(unique_position).ToDebugString();
+std::string UniquePositionToString(const UniquePosition& unique_position) {
+  return unique_position.ToDebugString();
 }
 
 }  // namespace
 
 EntityData::EntityData() = default;
 
-EntityData::EntityData(EntityData&& other)
-    : id(std::move(other.id)),
-      client_tag_hash(std::move(other.client_tag_hash)),
-      originator_cache_guid(std::move(other.originator_cache_guid)),
-      originator_client_item_id(std::move(other.originator_client_item_id)),
-      server_defined_unique_tag(std::move(other.server_defined_unique_tag)),
-      name(std::move(other.name)),
-      creation_time(other.creation_time),
-      modification_time(other.modification_time),
-      parent_id(std::move(other.parent_id)),
-      is_folder(other.is_folder),
-      is_bookmark_guid_in_specifics_preprocessed(
-          other.is_bookmark_guid_in_specifics_preprocessed) {
-  specifics.Swap(&other.specifics);
-  unique_position.Swap(&other.unique_position);
-}
+EntityData::EntityData(EntityData&& other) = default;
 
 EntityData::~EntityData() = default;
 
-EntityData& EntityData::operator=(EntityData&& other) {
-  id = std::move(other.id);
-  client_tag_hash = std::move(other.client_tag_hash);
-  originator_cache_guid = std::move(other.originator_cache_guid);
-  originator_client_item_id = std::move(other.originator_client_item_id);
-  server_defined_unique_tag = std::move(other.server_defined_unique_tag);
-  name = std::move(other.name);
-  creation_time = other.creation_time;
-  modification_time = other.modification_time;
-  parent_id = std::move(other.parent_id);
-  is_folder = other.is_folder;
-  is_bookmark_guid_in_specifics_preprocessed =
-      other.is_bookmark_guid_in_specifics_preprocessed;
-  specifics.Swap(&other.specifics);
-  unique_position.Swap(&other.unique_position);
-  return *this;
-}
+EntityData& EntityData::operator=(EntityData&& other) = default;
 
 #define ADD_TO_DICT(dict, value) \
   dict->SetString(base::ToUpperASCII(#value), value);
@@ -81,7 +49,8 @@ std::unique_ptr<base::DictionaryValue> EntityData::ToDictionaryValue() {
   base::Time mtime = modification_time;
   std::unique_ptr<base::DictionaryValue> dict =
       std::make_unique<base::DictionaryValue>();
-  dict->Set("SPECIFICS", EntitySpecificsToValue(specifics));
+  dict->SetKey("SPECIFICS", base::Value::FromUniquePtrValue(
+                                EntitySpecificsToValue(specifics)));
   ADD_TO_DICT(dict, id);
   ADD_TO_DICT(dict, client_tag_hash.value());
   ADD_TO_DICT(dict, originator_cache_guid);

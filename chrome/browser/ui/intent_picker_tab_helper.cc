@@ -16,6 +16,7 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/common/chrome_features.h"
 #include "content/public/browser/navigation_handle.h"
+#include "ui/base/models/image_model.h"
 #include "ui/gfx/favicon_size.h"
 #include "ui/gfx/image/image.h"
 
@@ -79,7 +80,8 @@ void IntentPickerTabHelper::OnAppIconLoaded(
     IntentPickerIconLoaderCallback callback,
     size_t index,
     apps::mojom::IconValuePtr icon_value) {
-  apps[index].icon = gfx::Image(icon_value->uncompressed);
+  apps[index].icon_model =
+      ui::ImageModel::FromImage(gfx::Image(icon_value->uncompressed));
 
   if (index == apps.size() - 1)
     std::move(callback).Run(std::move(apps));
@@ -102,19 +104,16 @@ void IntentPickerTabHelper::LoadAppIcon(
   Profile* profile =
       Profile::FromBrowserContext(web_contents()->GetBrowserContext());
 
-  apps::AppServiceProxy* proxy =
-      apps::AppServiceProxyFactory::GetForProfile(profile);
-
   constexpr bool allow_placeholder_icon = false;
   auto icon_type =
       (base::FeatureList::IsEnabled(features::kAppServiceAdaptiveIcon))
           ? apps::mojom::IconType::kStandard
           : apps::mojom::IconType::kUncompressed;
-  proxy->LoadIcon(app_type, app_id, icon_type, gfx::kFaviconSize,
-                  allow_placeholder_icon,
-                  base::BindOnce(&IntentPickerTabHelper::OnAppIconLoaded,
-                                 weak_factory_.GetWeakPtr(), std::move(apps),
-                                 std::move(callback), index));
+  apps::AppServiceProxyFactory::GetForProfile(profile)->LoadIcon(
+      app_type, app_id, icon_type, gfx::kFaviconSize, allow_placeholder_icon,
+      base::BindOnce(&IntentPickerTabHelper::OnAppIconLoaded,
+                     weak_factory_.GetWeakPtr(), std::move(apps),
+                     std::move(callback), index));
 }
 
 void IntentPickerTabHelper::DidFinishNavigation(
@@ -127,7 +126,11 @@ void IntentPickerTabHelper::DidFinishNavigation(
   // TODO(crbug.com/826982): Check is not error page here. Adding this check
   // will break the browser test, given this is a refactor CL, will add check in
   // follow up CL.
-  if (navigation_handle->IsInMainFrame() && navigation_handle->HasCommitted() &&
+  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
+  // frames. This caller was converted automatically to the primary main frame
+  // to preserve its semantics. Follow up to confirm correctness.
+  if (navigation_handle->IsInPrimaryMainFrame() &&
+      navigation_handle->HasCommitted() &&
       (!navigation_handle->IsSameDocument() ||
        navigation_handle->GetURL() !=
            navigation_handle->GetPreviousMainFrameURL()) &&

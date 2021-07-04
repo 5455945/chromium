@@ -12,14 +12,15 @@
 #include "ash/app_list/app_list_util.h"
 #include "ash/app_list/model/app_list_folder_item.h"
 #include "ash/app_list/model/app_list_model.h"
+#include "ash/app_list/views/app_list_a11y_announcer.h"
 #include "ash/app_list/views/app_list_item_view.h"
 #include "ash/app_list/views/app_list_view.h"
 #include "ash/app_list/views/apps_container_view.h"
-#include "ash/app_list/views/apps_grid_view.h"
 #include "ash/app_list/views/contents_view.h"
 #include "ash/app_list/views/folder_background_view.h"
 #include "ash/app_list/views/folder_header_view.h"
 #include "ash/app_list/views/page_switcher.h"
+#include "ash/app_list/views/paged_apps_grid_view.h"
 #include "ash/app_list/views/search_box_view.h"
 #include "ash/app_list/views/top_icon_animation_view.h"
 #include "ash/keyboard/ui/keyboard_ui_controller.h"
@@ -28,8 +29,12 @@
 #include "ash/public/cpp/app_list/app_list_features.h"
 #include "ash/public/cpp/metrics_util.h"
 #include "ash/public/cpp/pagination/pagination_model.h"
+#include "base/bind.h"
+#include "base/check.h"
 #include "base/strings/utf_string_conversions.h"
 #include "ui/accessibility/ax_node_data.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_observer.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/events/event.h"
@@ -41,7 +46,6 @@
 #include "ui/views/animation/animation_delegate_views.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/textfield/textfield.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/painter.h"
 #include "ui/views/view_model.h"
 #include "ui/views/view_model_utils.h"
@@ -52,7 +56,6 @@ namespace {
 
 constexpr int kFolderHeaderPadding = 12;
 constexpr int kOnscreenKeyboardTopPadding = 16;
-constexpr int kFolderHorizontalMargin = 8;
 
 // Indexes of interesting views in ViewModel of AppListFolderView.
 constexpr int kIndexBackground = 0;
@@ -449,11 +452,15 @@ class ContentsContainerAnimation : public AppListFolderView::Animation,
 
 AppListFolderView::AppListFolderView(AppsContainerView* container_view,
                                      AppListModel* model,
-                                     ContentsView* contents_view)
+                                     ContentsView* contents_view,
+                                     AppListA11yAnnouncer* a11y_announcer,
+                                     AppListViewDelegate* view_delegate)
     : container_view_(container_view),
-      contents_view_(contents_view),
+      a11y_announcer_(a11y_announcer),
       view_model_(new views::ViewModel),
       model_(model) {
+  DCHECK(a11y_announcer_);
+  DCHECK(view_delegate);
   // The background's corner radius cannot be changed in the same layer of the
   // contents container using layer animation, so use another layer to perform
   // such changes.
@@ -468,7 +475,8 @@ AppListFolderView::AppListFolderView(AppsContainerView* container_view,
   view_model_->Add(contents_container_, kIndexContentsContainer);
 
   items_grid_view_ = contents_container_->AddChildView(
-      std::make_unique<AppsGridView>(contents_view_, this));
+      std::make_unique<PagedAppsGridView>(contents_view, a11y_announcer, this));
+  items_grid_view_->Init();
   items_grid_view_->SetModel(model);
   view_model_->Add(items_grid_view_, kIndexChildItems);
 
@@ -479,7 +487,7 @@ AppListFolderView::AppListFolderView(AppsContainerView* container_view,
   page_switcher_ =
       contents_container_->AddChildView(std::make_unique<PageSwitcher>(
           items_grid_view_->pagination_model(), false /* vertical */,
-          contents_view_->app_list_view()->is_tablet_mode(),
+          view_delegate->IsInTabletMode(),
           AppListColorProvider::Get()->GetFolderBackgroundColor(
               items_grid_view_->GetAppListConfig().folder_background_color())));
   view_model_->Add(page_switcher_, kIndexPageSwitcher);
@@ -509,13 +517,17 @@ void AppListFolderView::SetAppListFolderItem(AppListFolderItem* folder) {
 
 void AppListFolderView::ScheduleShowHideAnimation(bool show,
                                                   bool hide_for_reparent) {
-  CreateOpenOrCloseFolderAccessibilityEvent(show);
+  if (show)
+    a11y_announcer_->AnnounceFolderOpened();
+  else
+    a11y_announcer_->AnnounceFolderClosed();
+
   show_hide_metrics_tracker_ =
       GetWidget()->GetCompositor()->RequestNewThroughputTracker();
   show_hide_metrics_tracker_->Start(
       metrics_util::ForSmoothness(base::BindRepeating([](int smoothness) {
-        UMA_HISTOGRAM_PERCENTAGE(kFolderShowHideAnimationSmoothness,
-                                 smoothness);
+        UMA_HISTOGRAM_PERCENTAGE(
+            "Apps.AppListFolder.ShowHide.AnimationSmoothness", smoothness);
       })));
 
   hide_for_reparent_ = hide_for_reparent;
@@ -555,6 +567,7 @@ gfx::Size AppListFolderView::CalculatePreferredSize() const {
 void AppListFolderView::Layout() {
   CalculateIdealBounds();
   views::ViewModelUtils::SetViewBoundsToIdealBounds(*view_model_);
+  background_view_->layer()->SetClipRect(background_view_->GetLocalBounds());
 }
 
 bool AppListFolderView::OnKeyPressed(const ui::KeyEvent& event) {
@@ -607,23 +620,8 @@ void AppListFolderView::UpdatePreferredBounds() {
   preferred_bounds_ += (icon_bounds_in_container.CenterPoint() -
                         preferred_bounds_.CenterPoint());
 
-  gfx::Rect container_bounds = container_view_->GetContentsBounds();
-  const gfx::Size search_box_size =
-      contents_view_->GetSearchBoxSize(AppListState::kStateApps);
-  // Adjust for apps container margins.
-  gfx::Insets adjusted_margins =
-      container_view_->CalculateMarginsForAvailableBounds(container_bounds,
-                                                          search_box_size);
-  // App list folders can open past the app list bounds and within
-  // |kFolderHorizontalMargin| px of the screen.
-  adjusted_margins.set_left(kFolderHorizontalMargin);
-  adjusted_margins.set_right(kFolderHorizontalMargin);
-  container_bounds.Inset(adjusted_margins);
-
-  // Avoid overlap with the search box widget.
-  container_bounds.Inset(
-      0, search_box_size.height() + SearchBoxView::GetFocusRingSpacing(), 0, 0);
-  preferred_bounds_.AdjustToFit(container_bounds);
+  if (!bounding_box_.IsEmpty())
+    preferred_bounds_.AdjustToFit(bounding_box_);
 
   // Calculate the folder icon's bounds relative to this view.
   folder_item_icon_bounds_ =
@@ -668,8 +666,8 @@ bool AppListFolderView::IsAnimationRunning() const {
   return top_icon_animation_ && top_icon_animation_->IsAnimationRunning();
 }
 
-const AppListConfig& AppListFolderView::GetAppListConfig() const {
-  return items_grid_view_->GetAppListConfig();
+void AppListFolderView::SetBoundingBox(const gfx::Rect& bounding_box) {
+  bounding_box_ = bounding_box;
 }
 
 AppListItemView* AppListFolderView::GetActivatedFolderItemView() {
@@ -688,60 +686,6 @@ void AppListFolderView::RecordAnimationSmoothness() {
 void AppListFolderView::OnTabletModeChanged(bool started) {
   folder_header_view()->set_tablet_mode(started);
   page_switcher_->set_is_tablet_mode(started);
-}
-
-void AppListFolderView::CalculateIdealBounds() {
-  gfx::Rect rect(GetContentsBounds());
-  if (rect.IsEmpty())
-    return;
-
-  view_model_->set_ideal_bounds(kIndexBackground, GetContentsBounds());
-  view_model_->set_ideal_bounds(kIndexContentsContainer, GetContentsBounds());
-
-  const int folder_padding = GetAppListConfig().grid_tile_spacing_in_folder();
-  rect.Inset(folder_padding, folder_padding);
-
-  // Calculate bounds for items grid view.
-  gfx::Rect grid_frame(rect);
-  grid_frame.set_height(items_grid_view_->GetPreferredSize().height());
-  view_model_->set_ideal_bounds(kIndexChildItems, grid_frame);
-
-  // Calculate bounds for folder header view.
-  gfx::Rect header_frame(rect);
-  header_frame.set_y(GetContentsBounds().bottom() - kFolderHeaderPadding -
-                     folder_header_view_->GetPreferredSize().height());
-  header_frame.set_height(folder_header_view_->GetPreferredSize().height());
-  view_model_->set_ideal_bounds(kIndexFolderHeader, header_frame);
-
-  // Calculate bounds for page_switcher.
-  gfx::Rect page_switcher_frame(rect);
-  gfx::Size page_switcher_size = page_switcher_->GetPreferredSize();
-  page_switcher_frame.set_x(page_switcher_frame.right() -
-                            page_switcher_size.width());
-  // The page switcher has a different height than the folder header, but it
-  // still needs to be aligned with it.
-  page_switcher_frame.set_y(
-      header_frame.y() -
-      (page_switcher_size.height() - header_frame.height()) / 2);
-  page_switcher_frame.set_size(page_switcher_size);
-  view_model_->set_ideal_bounds(kIndexPageSwitcher, page_switcher_frame);
-}
-
-void AppListFolderView::StartSetupDragInRootLevelAppsGridView(
-    AppListItemView* original_drag_view,
-    const gfx::Point& drag_point_in_root_grid,
-    bool has_native_drag) {
-  // Converts the original_drag_view's bounds to the coordinate system of
-  // root level grid view.
-  gfx::RectF rect_f(original_drag_view->bounds());
-  views::View::ConvertRectToTarget(items_grid_view_,
-                                   container_view_->apps_grid_view(), &rect_f);
-  gfx::Rect rect_in_root_grid_view = gfx::ToEnclosingRect(rect_f);
-
-  container_view_->apps_grid_view()
-      ->InitiateDragFromReparentItemInRootLevelGridView(
-          original_drag_view, rect_in_root_grid_view, drag_point_in_root_grid,
-          has_native_drag);
 }
 
 bool AppListFolderView::IsViewOutsideOfFolder(AppListItemView* view) {
@@ -826,9 +770,9 @@ void AppListFolderView::HideViewImmediately() {
 }
 
 void AppListFolderView::ResetItemsGridForClose() {
-  if (items_grid_view()->dragging())
+  if (items_grid_view()->IsDragging())
     items_grid_view()->EndDrag(true);
-  items_grid_view()->ClearAnySelectedView();
+  items_grid_view()->ClearSelectedView();
 }
 
 void AppListFolderView::CloseFolderPage() {
@@ -860,21 +804,18 @@ void AppListFolderView::HandleKeyboardReparent(AppListItemView* reparented_view,
                                                             key_code);
 }
 
+void AppListFolderView::UpdateFolderBounds() {
+  if (!GetActivatedFolderItemView())
+    return;
+
+  // Update the bounds of the folder view and mark the layout invalidated for
+  // relayout. Note that there is no animation when the folder view shrinks.
+  UpdatePreferredBounds();
+  PreferredSizeChanged();
+}
+
 void AppListFolderView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
   node_data->role = ax::mojom::Role::kGenericContainer;
-}
-
-void AppListFolderView::NavigateBack(AppListFolderItem* item,
-                                     const ui::Event& event_flags) {
-  contents_view_->Back();
-}
-
-void AppListFolderView::GiveBackFocusToSearchBox() {
-  // Avoid announcing search box focus since it is overlapped with closing
-  // folder alert.
-  auto* search_box = contents_view_->GetSearchBoxView()->search_box();
-  search_box->GetViewAccessibility().OverrideIsIgnored(true);
-  search_box->RequestFocus();
 }
 
 void AppListFolderView::SetItemName(AppListFolderItem* item,
@@ -882,18 +823,66 @@ void AppListFolderView::SetItemName(AppListFolderItem* item,
   model_->SetItemName(item, name);
 }
 
-ui::Compositor* AppListFolderView::GetCompositor() {
-  return GetWidget()->GetCompositor();
+const AppListConfig& AppListFolderView::GetAppListConfig() const {
+  return items_grid_view_->GetAppListConfig();
 }
 
-void AppListFolderView::CreateOpenOrCloseFolderAccessibilityEvent(bool open) {
-  auto* announcement_view =
-      contents_view_->app_list_view()->announcement_view();
-  announcement_view->GetViewAccessibility().OverrideName(
-      ui::ResourceBundle::GetSharedInstance().GetLocalizedString(
-          open ? IDS_APP_LIST_FOLDER_OPEN_FOLDER_ACCESSIBILE_NAME
-               : IDS_APP_LIST_FOLDER_CLOSE_FOLDER_ACCESSIBILE_NAME));
-  announcement_view->NotifyAccessibilityEvent(ax::mojom::Event::kAlert, true);
+void AppListFolderView::CalculateIdealBounds() {
+  gfx::Rect rect(GetContentsBounds());
+  if (rect.IsEmpty())
+    return;
+
+  view_model_->set_ideal_bounds(kIndexBackground, GetContentsBounds());
+  view_model_->set_ideal_bounds(kIndexContentsContainer, GetContentsBounds());
+
+  const int folder_padding = GetAppListConfig().grid_tile_spacing_in_folder();
+  rect.Inset(folder_padding, folder_padding);
+
+  // Calculate bounds for items grid view.
+  gfx::Rect grid_frame(rect);
+  grid_frame.set_height(items_grid_view_->GetPreferredSize().height());
+  view_model_->set_ideal_bounds(kIndexChildItems, grid_frame);
+
+  // Calculate bounds for folder header view.
+  gfx::Rect header_frame(rect);
+  header_frame.set_y(GetContentsBounds().bottom() - kFolderHeaderPadding -
+                     folder_header_view_->GetPreferredSize().height());
+  header_frame.set_height(folder_header_view_->GetPreferredSize().height());
+  view_model_->set_ideal_bounds(kIndexFolderHeader, header_frame);
+
+  // Calculate bounds for page_switcher.
+  gfx::Rect page_switcher_frame(rect);
+  gfx::Size page_switcher_size = page_switcher_->GetPreferredSize();
+  page_switcher_frame.set_x(page_switcher_frame.right() -
+                            page_switcher_size.width());
+  // The page switcher has a different height than the folder header, but it
+  // still needs to be aligned with it.
+  page_switcher_frame.set_y(
+      header_frame.y() -
+      (page_switcher_size.height() - header_frame.height()) / 2);
+  page_switcher_frame.set_size(page_switcher_size);
+  view_model_->set_ideal_bounds(kIndexPageSwitcher, page_switcher_frame);
+}
+
+void AppListFolderView::StartSetupDragInRootLevelAppsGridView(
+    AppListItemView* original_drag_view,
+    const gfx::Point& drag_point_in_root_grid,
+    bool has_native_drag) {
+  // Converts the original_drag_view's bounds to the coordinate system of
+  // root level grid view.
+  gfx::RectF rect_f(original_drag_view->GetLocalBounds());
+  views::View::ConvertRectToTarget(original_drag_view,
+                                   container_view_->apps_grid_view(), &rect_f);
+  gfx::Rect rect_in_root_grid_view = gfx::ToEnclosingRect(rect_f);
+
+  container_view_->apps_grid_view()
+      ->InitiateDragFromReparentItemInRootLevelGridView(
+          original_drag_view, rect_in_root_grid_view, drag_point_in_root_grid,
+          has_native_drag);
+}
+
+ui::Compositor* AppListFolderView::GetCompositor() {
+  return GetWidget()->GetCompositor();
 }
 
 BEGIN_METADATA(AppListFolderView, views::View)

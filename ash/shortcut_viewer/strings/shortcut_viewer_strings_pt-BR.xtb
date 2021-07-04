@@ -5,7 +5,6 @@
 <translation id="104962181688258143">Abrir o app Arquivos</translation>
 <translation id="1122869341872663659">Exibindo <ph name="N" /> resultados da pesquisa para <ph name="QUERY" /></translation>
 <translation id="1195667586424773550">Arrastar o link até a barra de endereço da guia</translation>
-<translation id="1204450209689312104">Abrir uma nova janela no modo de navegação anônima</translation>
 <translation id="1251638888133819822">Ativar ou desativar a lupa de tela cheia</translation>
 <translation id="1290373024480130896"><ph name="MODIFIER1" /><ph name="SEPARATOR1" /><ph name="MODIFIER2" /><ph name="SEPARATOR2" /><ph name="MODIFIER3" /><ph name="SEPARATOR3" /><ph name="KEY" /></translation>
 <translation id="1293699935367580298">Esc</translation>
@@ -15,8 +14,10 @@
 <translation id="1477442857810932985">Ir para o fim da linha</translation>
 <translation id="1499072997694708844">Fechar janelas abertas ou interromper carregamento da página atual</translation>
 <translation id="1510238584712386396">Iniciador</translation>
+<translation id="1516966594427080024">Abrir uma nova janela no modo de navegação anônima</translation>
 <translation id="152892567002884378">Aumentar volume</translation>
 <translation id="1560480564179555003"><ph name="SHIFT" /><ph name="SEPARATOR1" /><ph name="ALT" /><ph name="SEPARATOR2" /><ph name="L" /> e depois <ph name="ESC" /></translation>
+<translation id="1633761758045565086">Mover o foco para uma caixa de diálogo de ajuda</translation>
 <translation id="1652741121070700329">Mover para o início da palavra anterior</translation>
 <translation id="1679841710523778799">Aumentar o brilho</translation>
 <translation id="168356808214100546">Pressione <ph name="ALT" /> e mantenha a tecla pressionada, toque em <ph name="TAB" /> até chegar à janela que você quer abrir e depois solte.</translation>
@@ -29,6 +30,7 @@
 <translation id="1996162290124031907">Ir para a próxima guia</translation>
 <translation id="2010818616644390445">Ir para a última guia da janela</translation>
 <translation id="2040706009561734834">Abrir/fechar o acesso rápido</translation>
+<translation id="2086334242442703436">Abrir seletor de emojis</translation>
 <translation id="2088054208777350526">Procurar atalhos do teclado</translation>
 <translation id="2125211348069077981"><ph name="ALT" /><ph name="SEPARATOR" /><ph name="E" /> ou <ph name="F" /></translation>
 <translation id="2145908266289632567">Edição de texto</translation>
@@ -72,6 +74,7 @@
 <translation id="3256109297135787951">Remover o destaque de um item na estante</translation>
 <translation id="3288816184963444640">Fechar a janela atual</translation>
 <translation id="3407560819924487926">Abrir o gerenciador de tarefas</translation>
+<translation id="3417835166382867856">Pesquisar guias</translation>
 <translation id="3422679037938588196">Ir para a correspondência anterior da sua pesquisa</translation>
 <translation id="353037708190149633">Salvar todas as páginas abertas na janela atual nos favoritos em uma nova pasta</translation>
 <translation id="355103131818127604">Abrir o link em uma nova guia no plano de fundo</translation>
@@ -146,6 +149,7 @@
 <translation id="6276708887952587684">Ver código-fonte da página</translation>
 <translation id="6321940490215594447">Abrir Histórico</translation>
 <translation id="6340769215862220182">Aumentar zoom da tela</translation>
+<translation id="634687982629734605">Alternar foco entre: a área de status (onde a imagem da sua conta é exibida), o acesso rápido, a barra de endereço, a barra de favoritos (se estiver visível), a página da Web que está aberta e a barra de downloads (se estiver visível). Se uma caixa de diálogo focalizável for exibida, mova o foco para ela.</translation>
 <translation id="6359811074279051077"><ph name="MODIFIER" /><ph name="SEPARATOR" /><ph name="KEY" /></translation>
 <translation id="6395172954772765143">Selecionar o texto até o fim da linha</translation>
 <translation id="6425378783626925378">Clicar nos ícones de 1 a 8 na estante</translation>
@@ -189,7 +193,6 @@
 <translation id="8026334261755873520">Limpar dados de navegação</translation>
 <translation id="8130528849632411619">Ir para o início do documento</translation>
 <translation id="8147954207400281792"><ph name="CTRL" /><ph name="SEPARATOR" /><ph name="K" /> ou <ph name="E" /></translation>
-<translation id="8232835244134740473">Alternar foco entre: a área de status (onde a imagem da sua conta é exibida), o acesso rápido, a barra de endereço, a barra de favoritos (se estiver visível), a página da Web que está aberta e a barra de downloads (se estiver visível).</translation>
 <translation id="8234414138295101081">Girar a tela em 90 graus</translation>
 <translation id="8241665785394195545">colchete direito</translation>
 <translation id="8264941229485248811">Mostrar ou ocultar o inspetor de Ferramentas para Desenvolvedores</translation>

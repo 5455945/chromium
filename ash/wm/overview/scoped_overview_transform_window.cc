@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <utility>
 
-#include "ash/public/cpp/ash_features.h"
+#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/window_properties.h"
 #include "ash/shell.h"
 #include "ash/wm/overview/delayed_animation_observer_impl.h"
@@ -352,7 +352,7 @@ int ScopedOverviewTransformWindow::GetTopInset() const {
     // If there are regular windows in the transient ancestor tree, all those
     // windows are shown in the same overview item and the header is not masked.
     if (window != window_ &&
-        window->type() == aura::client::WINDOW_TYPE_NORMAL) {
+        window->GetType() == aura::client::WINDOW_TYPE_NORMAL) {
       return 0;
     }
   }
@@ -430,7 +430,7 @@ gfx::RectF ScopedOverviewTransformWindow::ShrinkRectToFitPreservingAspectRatio(
       const gfx::Rect window_bounds =
           ::wm::GetTransientRoot(window_)->GetBoundsInScreen();
       const float window_ratio =
-          float{window_bounds.width()} / window_bounds.height();
+          static_cast<float>(window_bounds.width()) / window_bounds.height();
       if (is_pillar) {
         const float new_x = height * window_ratio;
         new_bounds.set_width(new_x);
@@ -508,8 +508,8 @@ void ScopedOverviewTransformWindow::UpdateRoundedCorners(bool show) {
 
   ui::Layer* layer = window_->layer();
   const float scale = layer->transform().Scale2d().x();
-  const int radius =
-      views::LayoutProvider::Get()->GetCornerRadiusMetric(views::EMPHASIS_LOW);
+  const int radius = views::LayoutProvider::Get()->GetCornerRadiusMetric(
+      views::Emphasis::kLow);
   const gfx::RoundedCornersF radii(show ? (radius / scale) : 0.0f);
   layer->SetRoundedCornerRadius(radii);
   layer->SetIsFastRoundedCorner(true);
@@ -595,7 +595,7 @@ void ScopedOverviewTransformWindow::SetImmediateCloseForTests(bool immediate) {
 }
 
 void ScopedOverviewTransformWindow::CloseWidget() {
-  aura::Window* parent_window = ::wm::GetTransientRoot(window_);
+  aura::Window* parent_window = wm::GetTransientRoot(window_);
   if (parent_window)
     window_util::CloseWidgetForWindow(parent_window);
 }

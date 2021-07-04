@@ -18,8 +18,7 @@
 #include "ui/chromeos/devicetype_utils.h"
 #include "ui/message_center/public/cpp/notification_types.h"
 
-namespace chromeos {
-
+namespace ash {
 namespace {
 
 const char kEasyUnlockChromebookAddedNotifierId[] =
@@ -34,14 +33,14 @@ const char kEasyUnlockPairingChangeAppliedNotifierId[] =
 // Convenience function for creating a Notification.
 std::unique_ptr<message_center::Notification> CreateNotification(
     const std::string& id,
-    const base::string16& title,
-    const base::string16& message,
+    const std::u16string& title,
+    const std::u16string& message,
     const gfx::Image& icon,
     const message_center::RichNotificationData& rich_notification_data,
     message_center::NotificationDelegate* delegate) {
   return std::make_unique<message_center::Notification>(
       message_center::NotificationType::NOTIFICATION_TYPE_SIMPLE, id, title,
-      message, icon, base::string16() /* display_source */,
+      message, icon, std::u16string() /* display_source */,
       GURL() /* origin_url */,
       message_center::NotifierId(message_center::NotifierType::SYSTEM_COMPONENT,
                                  id),
@@ -152,8 +151,8 @@ EasyUnlockNotificationController::NotificationDelegate::
     ~NotificationDelegate() {}
 
 void EasyUnlockNotificationController::NotificationDelegate::Click(
-    const base::Optional<int>& button_index,
-    const base::Optional<base::string16>& reply) {
+    const absl::optional<int>& button_index,
+    const absl::optional<std::u16string>& reply) {
   if (!notification_controller_)
     return;
 
@@ -172,4 +171,4 @@ void EasyUnlockNotificationController::NotificationDelegate::Click(
   notification_controller_->LaunchEasyUnlockSettings();
 }
 
-}  // namespace chromeos
+}  // namespace ash

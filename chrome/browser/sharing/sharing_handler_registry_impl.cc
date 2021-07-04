@@ -14,9 +14,7 @@
 #include "chrome/browser/sharing/sharing_message_sender.h"
 
 #if defined(OS_ANDROID)
-#include "base/feature_list.h"
 #include "chrome/browser/sharing/click_to_call/click_to_call_message_handler_android.h"
-#include "chrome/browser/sharing/click_to_call/feature.h"
 #include "chrome/browser/sharing/shared_clipboard/shared_clipboard_message_handler_android.h"
 #include "chrome/browser/sharing/sms/sms_fetch_request_handler.h"
 #else
@@ -43,15 +41,13 @@ SharingHandlerRegistryImpl::SharingHandlerRegistryImpl(
 
 #if defined(OS_ANDROID)
   // Note: IsClickToCallSupported() is not used as it requires JNI call.
-  if (base::FeatureList::IsEnabled(kClickToCallReceiver)) {
-    AddSharingHandler(
-        std::make_unique<ClickToCallMessageHandler>(),
-        {chrome_browser_sharing::SharingMessage::kClickToCallMessage});
-  }
+  AddSharingHandler(
+      std::make_unique<ClickToCallMessageHandler>(),
+      {chrome_browser_sharing::SharingMessage::kClickToCallMessage});
 
   if (sharing_device_registration->IsSmsFetcherSupported()) {
     AddSharingHandler(
-        std::make_unique<SmsFetchRequestHandler>(sms_fetcher),
+        std::make_unique<SmsFetchRequestHandler>(device_source, sms_fetcher),
         {chrome_browser_sharing::SharingMessage::kSmsFetchRequest});
   }
 #endif  // defined(OS_ANDROID)

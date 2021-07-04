@@ -5,16 +5,16 @@
 #ifndef CHROMEOS_SERVICES_MULTIDEVICE_SETUP_WIFI_SYNC_FEATURE_MANAGER_IMPL_H_
 #define CHROMEOS_SERVICES_MULTIDEVICE_SETUP_WIFI_SYNC_FEATURE_MANAGER_IMPL_H_
 
-#include "base/callback_forward.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "base/optional.h"
+#include "base/power_monitor/power_observer.h"
 #include "base/timer/timer.h"
 #include "chromeos/components/multidevice/remote_device_ref.h"
 #include "chromeos/services/device_sync/public/cpp/device_sync_client.h"
 #include "chromeos/services/multidevice_setup/account_status_change_delegate_notifier.h"
 #include "chromeos/services/multidevice_setup/wifi_sync_feature_manager.h"
 #include "components/session_manager/core/session_manager_observer.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class PrefRegistrySimple;
 class PrefService;
@@ -35,6 +35,7 @@ class WifiSyncFeatureManagerImpl
     : public WifiSyncFeatureManager,
       public HostStatusProvider::Observer,
       public device_sync::DeviceSyncClient::Observer,
+      public base::PowerSuspendObserver,
       public session_manager::SessionManagerObserver {
  public:
   class Factory {
@@ -85,6 +86,9 @@ class WifiSyncFeatureManagerImpl
 
   // SessionManagerObserver:
   void OnSessionStateChanged() override;
+
+  // PowerSuspendObserver:
+  void OnResume() override;
 
   // WifiSyncFeatureManager:
 
@@ -143,6 +147,7 @@ class WifiSyncFeatureManagerImpl
   AccountStatusChangeDelegateNotifier* delegate_notifier_;
   std::unique_ptr<base::OneShotTimer> timer_;
 
+  bool did_register_session_observers_ = false;
   bool network_request_in_flight_ = false;
 
   base::WeakPtrFactory<WifiSyncFeatureManagerImpl> weak_ptr_factory_{this};

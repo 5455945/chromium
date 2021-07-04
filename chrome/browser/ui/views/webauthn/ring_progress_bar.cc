@@ -8,12 +8,12 @@
 #include "third_party/skia/include/core/SkPath.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/animation/linear_animation.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/skia_util.h"
 #include "ui/native_theme/native_theme.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 
 namespace {
 constexpr float kStrokeWidth = 4;
@@ -42,7 +42,7 @@ void RingProgressBar::OnPaint(gfx::Canvas* canvas) {
   gfx::Rect content_bounds = GetContentsBounds();
   // Draw the background ring that gets progressively filled.
   gfx::PointF center(content_bounds.width() / 2, content_bounds.height() / 2);
-  const double radius =
+  const float radius =
       (std::min(content_bounds.width(), content_bounds.height()) -
        kStrokeWidth) /
       2;

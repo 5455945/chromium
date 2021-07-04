@@ -12,9 +12,9 @@
 
 #include "ash/app_list/app_list_metrics.h"
 #include "ash/assistant/ui/assistant_view_delegate.h"
+#include "ash/public/cpp/app_list/app_list_types.h"
 #include "ash/public/cpp/ash_public_export.h"
 #include "base/callback_forward.h"
-#include "base/strings/string16.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/ui_base_types.h"
@@ -37,7 +37,8 @@ class SearchModel;
 
 class ASH_PUBLIC_EXPORT AppListViewDelegate {
  public:
-  virtual ~AppListViewDelegate() {}
+  virtual ~AppListViewDelegate() = default;
+
   // Gets the model associated with the view delegate. The model may be owned
   // by the delegate, or owned elsewhere (e.g. a profile keyed service).
   virtual AppListModel* GetModel() = 0;
@@ -57,7 +58,7 @@ class ASH_PUBLIC_EXPORT AppListViewDelegate {
   // Invoked to start a new search. This collects a list of search results
   // matching the raw query, which is an unhandled string typed into the search
   // box by the user.
-  virtual void StartSearch(const base::string16& raw_query) = 0;
+  virtual void StartSearch(const std::u16string& raw_query) = 0;
 
   // Invoked to open the search result and log a click. If the result is
   // represented by a SuggestedChipView or is a zero state result,
@@ -69,14 +70,12 @@ class ASH_PUBLIC_EXPORT AppListViewDelegate {
   // |launch_as_default|: True if the result is launched as the default result
   // by user pressing ENTER key.
   virtual void OpenSearchResult(const std::string& result_id,
+                                AppListSearchResultType result_type,
                                 int event_flags,
                                 AppListLaunchedFrom launched_from,
                                 AppListLaunchType launch_type,
                                 int suggestion_index,
                                 bool launch_as_default) = 0;
-
-  // Logs the UMA histogram metrics for user's abandonment of launcher search.
-  virtual void LogSearchAbandonHistogram() = 0;
 
   // Called to invoke a custom action on a result with |result_id|.
   // |action_index| corresponds to the index of an icon in
@@ -102,9 +101,6 @@ class ASH_PUBLIC_EXPORT AppListViewDelegate {
 
   // Invoked when the app list is closing.
   virtual void ViewClosing() = 0;
-
-  // Invoked when the app list is closed.
-  virtual void ViewClosed() = 0;
 
   // Gets the wallpaper prominent colors.
   virtual const std::vector<SkColor>& GetWallpaperProminentColors() = 0;
@@ -160,7 +156,7 @@ class ASH_PUBLIC_EXPORT AppListViewDelegate {
   // |position_index| is the position index of the clicked item (if no item got
   // clicked, |position_index| will be -1).
   virtual void NotifySearchResultsForLogging(
-      const base::string16& raw_query,
+      const std::u16string& raw_query,
       const SearchResultIdWithPositionIndices& results,
       int position_index) = 0;
 
@@ -202,6 +198,10 @@ class ASH_PUBLIC_EXPORT AppListViewDelegate {
 
   // Returns whether tablet mode is currently enabled.
   virtual bool IsInTabletMode() = 0;
+
+  // Adjust scrolls that happen in the view. This needs to be delegated because
+  // it depends on the active user's preferences.
+  virtual int AdjustAppListViewScrollOffset(int offset, ui::EventType type) = 0;
 };
 
 }  // namespace ash

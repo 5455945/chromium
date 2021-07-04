@@ -7,10 +7,9 @@
 
 #include <stddef.h>
 #include <map>
+#include <string>
 
 #include "base/memory/weak_ptr.h"
-#include "base/observer_list.h"
-#include "base/strings/string16.h"
 #include "build/build_config.h"
 #include "components/omnibox/browser/autocomplete_controller.h"
 #include "components/omnibox/browser/autocomplete_result.h"
@@ -18,7 +17,6 @@
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/image/image.h"
 
-class OmniboxPopupModelObserver;
 class OmniboxPopupView;
 class GURL;
 class PrefService;
@@ -70,9 +68,9 @@ class OmniboxPopupModel {
     // Pressing enter will switch to the tab match.
     FOCUSED_BUTTON_TAB_SWITCH = 3,
 
-    // FOCUSED_BUTTON_PEDAL state means a Pedal button is in focus. This is
-    // currently only used when dedicated button row and pedals are enabled.
-    FOCUSED_BUTTON_PEDAL = 4,
+    // FOCUSED_BUTTON_ACTION state means an Action button (such as a Pedal)
+    // is in focus.
+    FOCUSED_BUTTON_ACTION = 4,
 
     // FOCUSED_BUTTON_REMOVE_SUGGESTION state means the Remove Suggestion (X)
     // button is focused. Pressing enter will attempt to remove this suggestion.
@@ -119,28 +117,6 @@ class OmniboxPopupModel {
   ~OmniboxPopupModel();
   OmniboxPopupModel(const OmniboxPopupModel&) = delete;
   OmniboxPopupModel& operator=(const OmniboxPopupModel&) = delete;
-
-  // Computes the maximum width, in pixels, that can be allocated for the two
-  // parts of an autocomplete result, i.e. the contents and the description.
-  //
-  // When |description_on_separate_line| is true, the caller will be displaying
-  // two separate lines of text, so both contents and description can take up
-  // the full available width. Otherwise, the contents and description are
-  // assumed to be on the same line, with a separator between them.
-  //
-  // When |allow_shrinking_contents| is true, and the contents and description
-  // are together on a line without enough space for both, the code tries to
-  // divide the available space equally between the two, unless this would make
-  // one or both too narrow. Otherwise, the contents is given as much space as
-  // it wants and the description gets the remainder.
-  static void ComputeMatchMaxWidths(int contents_width,
-                                    int separator_width,
-                                    int description_width,
-                                    int available_width,
-                                    bool description_on_separate_line,
-                                    bool allow_shrinking_contents,
-                                    int* contents_max_width,
-                                    int* description_max_width);
 
   // Returns true if the popup is currently open.
   bool IsOpen() const;
@@ -199,10 +175,6 @@ class OmniboxPopupModel {
   // changes.
   void OnResultChanged();
 
-  // Add and remove observers.
-  void AddObserver(OmniboxPopupModelObserver* observer);
-  void RemoveObserver(OmniboxPopupModelObserver* observer);
-
   // Lookup the bitmap for |result_index|. Returns nullptr if not found.
   const SkBitmap* RichSuggestionBitmapAt(int result_index) const;
   // Stores the image in a local data member and schedules a repaint.
@@ -240,7 +212,7 @@ class OmniboxPopupModel {
   // If the popup model supports the action and performs it, this returns true.
   // This can't handle all actions currently, and returns false in those cases.
   // The timestamp parameter is currently only used by FOCUSED_BUTTON_TAB_SWITCH
-  // and FOCUSED_BUTTON_PEDAL, so is set by default for other use cases.
+  // and FOCUSED_BUTTON_ACTION, so is set by default for other use cases.
   bool TriggerSelectionAction(Selection selection,
                               base::TimeTicks timestamp = base::TimeTicks());
 
@@ -248,8 +220,8 @@ class OmniboxPopupModel {
   // extended version of AutocompleteMatchType::ToAccessibilityLabel() which
   // also returns narration about the any focused secondary button.
   // Never call this when the current selection is kNoMatch.
-  base::string16 GetAccessibilityLabelForCurrentSelection(
-      const base::string16& match_text,
+  std::u16string GetAccessibilityLabelForCurrentSelection(
+      const std::u16string& match_text,
       bool include_positional_info,
       int* label_prefix_length = nullptr);
 
@@ -271,9 +243,6 @@ class OmniboxPopupModel {
   // suggestion whose tab switch button was focused, so that we may compare
   // if equal.
   GURL old_focused_url_;
-
-  // Observers.
-  base::ObserverList<OmniboxPopupModelObserver>::Unchecked observers_;
 
   base::WeakPtrFactory<OmniboxPopupModel> weak_factory_{this};
 };

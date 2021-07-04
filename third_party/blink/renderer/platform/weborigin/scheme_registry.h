@@ -58,9 +58,9 @@ class PLATFORM_EXPORT SchemeRegistry {
 
   static bool ShouldLoadURLSchemeAsEmptyDocument(const String&);
 
-  static void SetDomainRelaxationForbiddenForURLScheme(bool forbidden,
-                                                       const String&);
-  static void ResetDomainRelaxation();
+  static void SetDomainRelaxationForbiddenForURLSchemeForTest(bool forbidden,
+                                                              const String&);
+  static void ResetDomainRelaxationForTest();
   static bool IsDomainRelaxationForbiddenForURLScheme(const String&);
 
   // Such schemes should delegate to SecurityOrigin::canRequest for any URL
@@ -122,6 +122,11 @@ class PLATFORM_EXPORT SchemeRegistry {
   static void RegisterURLSchemeAsError(const String&);
   static bool ShouldTreatURLSchemeAsError(const String& scheme);
 
+  // Schemes which should always allow access to SharedArrayBuffers.
+  // TODO(crbug.com/1184892): Remove once fixed.
+  static void RegisterURLSchemeAsAllowingSharedArrayBuffers(const String&);
+  static bool ShouldTreatURLSchemeAsAllowingSharedArrayBuffers(const String&);
+
   // Allow resources from some schemes to load on a page, regardless of its
   // Content Security Policy.
   enum PolicyAreas : uint32_t {
@@ -149,6 +154,22 @@ class PLATFORM_EXPORT SchemeRegistry {
   // Schemes that can use 'wasm-eval'.
   static void RegisterURLSchemeAsAllowingWasmEvalCSP(const String& scheme);
   static bool SchemeSupportsWasmEvalCSP(const String& scheme);
+
+  // Schemes that represent browser extensions.
+  // TODO(chromium:1197375) Reconsider usages of this category. Are there
+  // meaningful ways to define more abstract permissions or requirements that
+  // could be used instead?
+  static void RegisterURLSchemeAsExtension(const String& scheme);
+  static void RemoveURLSchemeAsExtension(const String& scheme);
+  static bool IsExtensionScheme(const String& scheme);
+
+  // Schemes that represent trusted browser UI.
+  // TODO(chromium:1197375) Reconsider usages of this category. Are there
+  // meaningful ways to define more abstract permissions or requirements that
+  // could be used instead?
+  static void RegisterURLSchemeAsWebUI(const String& scheme);
+  static void RemoveURLSchemeAsWebUI(const String& scheme);
+  static bool IsWebUIScheme(const String& scheme);
 
  private:
   static const URLSchemesSet& LocalSchemes();

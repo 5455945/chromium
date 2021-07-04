@@ -4,6 +4,7 @@
 
 package org.chromium.components.messages;
 
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import org.chromium.components.messages.MessageScopeChange.ChangeType;
@@ -18,7 +19,7 @@ import java.util.Map;
  * A class managing the queue of messages. Its primary role is to decide when to show/hide current
  * message and which message to show next.
  */
-class MessageQueueManager {
+class MessageQueueManager implements ScopeChangeController.Delegate {
     /**
      * mCurrentDisplayedMessage refers to the message which is currently visible on the screen
      * including situations in which the message is already dismissed and hide animation is running.
@@ -49,18 +50,20 @@ class MessageQueueManager {
      * A {@link Map} collection which contains {@code scopeKey} as the key and a boolean
      * value standing for whether this scope instance is active or not as the value.
      */
-    private final Map<Object, Boolean> mScopeStates = new HashMap<>();
+    private final Map<ScopeKey, Boolean> mScopeStates = new HashMap<>();
+
+    private ScopeChangeController mScopeChangeController = new ScopeChangeController(this);
 
     /**
      * Enqueues a message. Associates the message with its key; the key is used later to dismiss the
      * message. Displays the message if there is no other message shown.
      * @param message The message to enqueue
      * @param messageKey The key to associate with this message.
-     * @param scopeType The type of scope.
      * @param scopeKey The key of a scope instance.
+     * @param highPriority True if the message should be displayed ASAP.
      */
-    public void enqueueMessage(
-            MessageStateHandler message, Object messageKey, int scopeType, Object scopeKey) {
+    public void enqueueMessage(MessageStateHandler message, Object messageKey, ScopeKey scopeKey,
+            boolean highPriority) {
         if (mMessages.containsKey(messageKey)) {
             throw new IllegalStateException("Message with the given key has already been enqueued");
         }
@@ -69,13 +72,15 @@ class MessageQueueManager {
         if (messageQueue == null) {
             messageQueue = new ArrayList<>();
             mMessageQueues.put(scopeKey, messageQueue);
+            mScopeChangeController.firstMessageEnqueued(scopeKey);
         }
 
-        MessageState messageState = new MessageState(scopeKey, messageKey, message);
+        MessageState messageState = new MessageState(scopeKey, messageKey, message, highPriority);
         messageQueue.add(messageState);
         mMessages.put(messageKey, messageState);
 
         updateCurrentDisplayedMessage();
+        MessagesMetrics.recordMessageEnqueued(message.getMessageIdentifier());
     }
 
     /**
@@ -88,28 +93,34 @@ class MessageQueueManager {
     public void dismissMessage(Object messageKey, @DismissReason int dismissReason) {
         MessageState messageState = mMessages.get(messageKey);
         if (messageState == null) return;
-        MessageStateHandler message = messageState.handler;
-        Object scopeKey = messageState.scopeKey;
-
         mMessages.remove(messageKey);
+        dismissMessageInternal(messageState, dismissReason, true);
+    }
+
+    /**
+     * This method updates related structure and dismiss the queue, but does not remove the
+     * message state from the queue.
+     */
+    private void dismissMessageInternal(@NonNull MessageState messageState,
+            @DismissReason int dismissReason, boolean updateCurrentMessage) {
+        MessageStateHandler message = messageState.handler;
+        ScopeKey scopeKey = messageState.scopeKey;
 
         // Remove the scope from the map if the messageQueue is empty.
         List<MessageState> messageQueue = mMessageQueues.get(scopeKey);
         messageQueue.remove(messageState);
         if (messageQueue.isEmpty()) {
             mMessageQueues.remove(scopeKey);
+            mScopeChangeController.lastMessageDismissed(scopeKey);
         }
 
         if (mCurrentDisplayedMessage == messageState) {
-            mCurrentDisplayedMessage.handler.hide(true, () -> {
-                mMessageQueueDelegate.onFinishHiding();
-                mCurrentDisplayedMessage = null;
-                message.dismiss(dismissReason);
-                updateCurrentDisplayedMessage();
-            });
+            hideMessage(updateCurrentMessage,
+                    () -> message.dismiss(dismissReason), updateCurrentMessage);
         } else {
             message.dismiss(dismissReason);
         }
+        MessagesMetrics.recordDismissReason(message.getMessageIdentifier(), dismissReason);
     }
 
     public int suspend() {
@@ -122,6 +133,29 @@ class MessageQueueManager {
 
     public void setDelegate(MessageQueueDelegate delegate) {
         mMessageQueueDelegate = delegate;
+    }
+
+    // TODO(crbug.com/1163290): Handle the case in which the scope becomes inactive when the
+    //         message is already running the animation.
+    @Override
+    public void onScopeChange(MessageScopeChange change) {
+        ScopeKey scopeKey = change.scopeInstanceKey;
+        if (change.changeType == ChangeType.DESTROY) {
+            List<MessageState> messages = mMessageQueues.get(scopeKey);
+            mScopeStates.remove(scopeKey);
+            if (messages != null) {
+                while (!messages.isEmpty()) {
+                    // message will be removed from messages list.
+                    dismissMessage(messages.get(0).messageKey, DismissReason.SCOPE_DESTROYED);
+                }
+            }
+        } else if (change.changeType == ChangeType.INACTIVE) {
+            mScopeStates.put(scopeKey, false);
+            updateCurrentDisplayedMessage(change.animateTransition);
+        } else if (change.changeType == ChangeType.ACTIVE) {
+            mScopeStates.put(scopeKey, true);
+            updateCurrentDisplayedMessage();
+        }
     }
 
     private void updateCurrentDisplayedMessage() {
@@ -143,57 +177,37 @@ class MessageQueueManager {
                 mMessageQueueDelegate.onStartShowing(mCurrentDisplayedMessage.handler::show);
             }
         } else if (mCurrentDisplayedMessage != null) {
-            // Scope state may be removed if it has been destroyed.
-            boolean isScopeActive = mScopeStates.containsKey(mCurrentDisplayedMessage.scopeKey)
-                    && mScopeStates.get(mCurrentDisplayedMessage.scopeKey);
-            if (isQueueSuspended() || !isScopeActive) {
-                mCurrentDisplayedMessage.handler.hide(
-                        !isQueueSuspended() && animateTransition, () -> {
-                            mMessageQueueDelegate.onFinishHiding();
-                            mCurrentDisplayedMessage = null;
-                        });
+            MessageState candidate = getNextMessage();
+            // Another higher priority message has been enqueued.
+            if (candidate != mCurrentDisplayedMessage || isQueueSuspended()) {
+                hideMessage(!isQueueSuspended() && animateTransition, null, !isQueueSuspended());
             }
-        }
-    }
-
-    // TODO(crbug.com/1163290): Handle the case in which the scope becomes inactive when the
-    //         message is already running the animation.
-    void onScopeChange(MessageScopeChange change) {
-        Object scopeKey = change.scopeInstanceKey;
-        if (change.changeType == ChangeType.DESTROY) {
-            List<MessageState> messages = mMessageQueues.get(scopeKey);
-            mScopeStates.remove(scopeKey);
-            if (messages != null) {
-                while (!messages.isEmpty()) {
-                    // message will be removed from messages list.
-                    dismissMessage(messages.get(0).key, DismissReason.SCOPE_DESTROYED);
-                }
-            }
-        } else if (change.changeType == ChangeType.INACTIVE) {
-            mScopeStates.put(scopeKey, false);
-            updateCurrentDisplayedMessage(change.animateTransition);
-        } else if (change.changeType == ChangeType.ACTIVE) {
-            mScopeStates.put(scopeKey, true);
-            updateCurrentDisplayedMessage();
         }
     }
 
     void dismissAllMessages(@DismissReason int dismissReason) {
         for (MessageState m : mMessages.values()) {
-            MessageStateHandler handler = m.handler;
-            if (m == mCurrentDisplayedMessage) {
-                handler.hide(false, () -> {
-                    mMessageQueueDelegate.onFinishHiding();
-                    handler.dismiss(dismissReason);
-                    mCurrentDisplayedMessage = null;
-                });
-            } else {
-                handler.dismiss(dismissReason);
-            }
+            dismissMessageInternal(m, dismissReason, false);
         }
         mMessages.clear();
-        mMessageQueues.clear();
-        mScopeStates.clear();
+    }
+
+    void setScopeChangeControllerForTesting(ScopeChangeController controllerForTesting) {
+        mScopeChangeController = controllerForTesting;
+    }
+
+    Map<Object, MessageState> getMessagesForTesting() {
+        return mMessages;
+    }
+
+    private void hideMessage(
+            boolean animate, Runnable dismissAfterHiding, boolean updateCurrentMessage) {
+        mCurrentDisplayedMessage.handler.hide(animate, () -> {
+            mMessageQueueDelegate.onFinishHiding();
+            mCurrentDisplayedMessage = null;
+            if (dismissAfterHiding != null) dismissAfterHiding.run();
+            if (updateCurrentMessage) updateCurrentDisplayedMessage(true);
+        });
     }
 
     /**
@@ -205,27 +219,34 @@ class MessageQueueManager {
         MessageState nextMessage = null;
         for (List<MessageState> queue : mMessageQueues.values()) {
             if (queue.isEmpty()) continue;
-            MessageState candidate = queue.get(0);
-            Boolean isActive = mScopeStates.get(candidate.scopeKey);
+            Boolean isActive = mScopeStates.get(queue.get(0).scopeKey);
             if (isActive == null || !isActive) continue;
-            if (nextMessage == null || candidate.id < nextMessage.id) nextMessage = candidate;
+            for (MessageState candidate : queue) {
+                if (nextMessage == null || (candidate.highPriority && !nextMessage.highPriority)
+                        || candidate.id < nextMessage.id) {
+                    nextMessage = candidate;
+                }
+            }
         }
         return nextMessage;
     }
 
-    private static class MessageState {
+    static class MessageState {
         private static int sIdNext;
 
-        // TODO(crbug.com/1168693): add priority if necessary.
+        // TODO(crbug.com/1188980): add priority if necessary.
         public final int id;
-        public final Object scopeKey;
-        public final Object key;
+        public final ScopeKey scopeKey;
+        public final Object messageKey;
         public final MessageStateHandler handler;
+        public final boolean highPriority;
 
-        MessageState(Object scopeKey, Object key, MessageStateHandler handler) {
+        MessageState(ScopeKey scopeKey, Object messageKey, MessageStateHandler handler,
+                boolean highPriority) {
             this.scopeKey = scopeKey;
-            this.key = key;
+            this.messageKey = messageKey;
             this.handler = handler;
+            this.highPriority = highPriority;
             id = sIdNext++;
         }
     }

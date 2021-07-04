@@ -8,9 +8,9 @@
 #include <vector>
 
 #include "base/check.h"
+#include "base/cxx17_backports.h"
 #include "base/memory/singleton.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/stl_util.h"
 #include "ui/gfx/x/connection.h"
 #include "ui/gfx/x/future.h"
 
@@ -53,6 +53,7 @@ constexpr const char* kAtomsToCache[] = {
     "Enabled",
     "FAKE_SELECTION",
     "Full aspect",
+    "_GTK_FRAME_EXTENTS",
     "INCR",
     "KEYBOARD",
     "LOCK",
@@ -118,6 +119,7 @@ constexpr const char* kAtomsToCache[] = {
     "_NET_WM_ICON",
     "_NET_WM_MOVERESIZE",
     "_NET_WM_NAME",
+    "_NET_WM_OPAQUE_REGION",
     "_NET_WM_PID",
     "_NET_WM_PING",
     "_NET_WM_STATE",
@@ -134,6 +136,7 @@ constexpr const char* kAtomsToCache[] = {
     "_NET_WM_USER_TIME",
     "_NET_WM_WINDOW_OPACITY",
     "_NET_WM_WINDOW_TYPE",
+    "_NET_WM_WINDOW_TYPE_DIALOG",
     "_NET_WM_WINDOW_TYPE_DND",
     "_NET_WM_WINDOW_TYPE_MENU",
     "_NET_WM_WINDOW_TYPE_NORMAL",
@@ -163,6 +166,9 @@ constexpr const char* kAtomsToCache[] = {
     "text/rtf",
     "text/uri-list",
     "text/x-moz-url",
+    "xwayland-pointer",
+    "xwayland-keyboard",
+    "xwayland-touch",
 };
 
 constexpr int kCacheCount = base::size(kAtomsToCache);

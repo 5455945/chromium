@@ -32,11 +32,6 @@
 #include "third_party/blink/public/common/css/forced_colors.h"
 #include "third_party/blink/public/common/css/navigation_controls.h"
 #include "third_party/blink/renderer/core/css/media_values.h"
-
-#include "third_party/blink/public/common/privacy_budget/identifiability_metric_builder.h"
-#include "third_party/blink/public/common/privacy_budget/identifiability_study_settings.h"
-#include "third_party/blink/public/common/privacy_budget/identifiable_surface.h"
-#include "third_party/blink/public/common/privacy_budget/identifiable_token_builder.h"
 #include "third_party/blink/public/mojom/manifest/display_mode.mojom-shared.h"
 #include "third_party/blink/public/mojom/webpreferences/web_preferences.mojom-blink.h"
 #include "third_party/blink/renderer/core/css/css_primitive_value.h"
@@ -58,32 +53,12 @@
 #include "third_party/blink/renderer/platform/geometry/float_rect.h"
 #include "third_party/blink/renderer/platform/graphics/color_space_gamut.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
-#include "third_party/blink/renderer/platform/privacy_budget/identifiability_digest_helpers.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 
 namespace blink {
 
 using mojom::blink::HoverType;
 using mojom::blink::PointerType;
-
-namespace {
-
-void RecordMediaQueryResult(Document* doc,
-                            const MediaQueryExp& expr,
-                            bool result) {
-  IdentifiableTokenBuilder input_builder;
-  input_builder.AddToken(IdentifiabilityBenignStringToken(expr.MediaFeature()));
-  input_builder.AddToken(
-      IdentifiabilityBenignStringToken(expr.ExpValue().CssText()));
-  IdentifiableSurface surface = IdentifiableSurface::FromTypeAndToken(
-      IdentifiableSurface::Type::kMediaQuery, input_builder.GetToken());
-
-  IdentifiabilityMetricBuilder(doc->UkmSourceID())
-      .Set(surface, result)
-      .Record(doc->UkmRecorder());
-}
-
-}  // namespace
 
 enum MediaFeaturePrefix { kMinPrefix, kMaxPrefix, kNoPrefix };
 
@@ -878,6 +853,9 @@ static bool PrefersColorSchemeMediaFeatureEval(
     const MediaQueryExpValue& value,
     MediaFeaturePrefix,
     const MediaValues& media_values) {
+  UseCounter::Count(media_values.GetDocument(),
+                    WebFeature::kPrefersColorSchemeMediaFeature);
+
   auto preferred_scheme = media_values.GetPreferredColorScheme();
 
   if (!value.IsValid())
@@ -895,6 +873,9 @@ static bool PrefersColorSchemeMediaFeatureEval(
 static bool PrefersContrastMediaFeatureEval(const MediaQueryExpValue& value,
                                             MediaFeaturePrefix,
                                             const MediaValues& media_values) {
+  UseCounter::Count(media_values.GetDocument(),
+                    WebFeature::kPrefersContrastMediaFeature);
+
   auto preferred_contrast = media_values.GetPreferredContrast();
   ForcedColors forced_colors = media_values.GetForcedColors();
 
@@ -926,6 +907,9 @@ static bool PrefersContrastMediaFeatureEval(const MediaQueryExpValue& value,
 static bool ForcedColorsMediaFeatureEval(const MediaQueryExpValue& value,
                                          MediaFeaturePrefix,
                                          const MediaValues& media_values) {
+  UseCounter::Count(media_values.GetDocument(),
+                    WebFeature::kForcedColorsMediaFeature);
+
   ForcedColors forced_colors = media_values.GetForcedColors();
 
   if (!value.IsValid())
@@ -980,31 +964,31 @@ static bool ScreenSpanningMediaFeatureEval(const MediaQueryExpValue& value,
           value.id == CSSValueID::kSingleFoldHorizontal);
 }
 
-static bool ScreenFoldPostureMediaFeatureEval(const MediaQueryExpValue& value,
-                                              MediaFeaturePrefix,
-                                              const MediaValues& media_values) {
+static bool DevicePostureMediaFeatureEval(const MediaQueryExpValue& value,
+                                          MediaFeaturePrefix,
+                                          const MediaValues& media_values) {
   // isValid() is false if there is no parameter. Without parameter we should
-  // return true to indicate that screenFoldPosture is enabled in the
+  // return true to indicate that device posture is enabled in the
   // browser.
   if (!value.IsValid())
     return true;
 
   DCHECK(value.is_id);
 
-  ScreenFoldPosture screen_fold_posture = media_values.GetScreenFoldPosture();
+  DevicePosture device_posture = media_values.GetDevicePosture();
   switch (value.id) {
     case CSSValueID::kNoFold:
-      return screen_fold_posture == ScreenFoldPosture::kNoFold;
+      return device_posture == DevicePosture::kNoFold;
     case CSSValueID::kLaptop:
-      return screen_fold_posture == ScreenFoldPosture::kLaptop;
+      return device_posture == DevicePosture::kLaptop;
     case CSSValueID::kFlat:
-      return screen_fold_posture == ScreenFoldPosture::kFlat;
+      return device_posture == DevicePosture::kFlat;
     case CSSValueID::kTent:
-      return screen_fold_posture == ScreenFoldPosture::kTent;
+      return device_posture == DevicePosture::kTent;
     case CSSValueID::kTablet:
-      return screen_fold_posture == ScreenFoldPosture::kTablet;
+      return device_posture == DevicePosture::kTablet;
     case CSSValueID::kBook:
-      return screen_fold_posture == ScreenFoldPosture::kBook;
+      return device_posture == DevicePosture::kBook;
     default:
       NOTREACHED();
       return false;
@@ -1035,17 +1019,8 @@ bool MediaQueryEvaluator::Eval(const MediaQueryExp& expr) const {
   // Call the media feature evaluation function. Assume no prefix and let
   // trampoline functions override the prefix if prefix is used.
   EvalFunc func = g_function_map->at(expr.MediaFeature().Impl());
-  if (func) {
-    bool result = func(expr.ExpValue(), kNoPrefix, *media_values_);
-    Document* doc = nullptr;
-    if (!skip_ukm_reporting_ && (doc = media_values_->GetDocument()) &&
-        (IdentifiabilityStudySettings::Get()->ShouldSample(
-            IdentifiableSurface::Type::kMediaQuery))) {
-      RecordMediaQueryResult(doc, expr, result);
-    }
-
-    return result;
-  }
+  if (func)
+    return func(expr.ExpValue(), kNoPrefix, *media_values_);
 
   return false;
 }

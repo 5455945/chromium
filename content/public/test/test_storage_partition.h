@@ -8,8 +8,10 @@
 #include "base/callback_forward.h"
 #include "base/files/file_path.h"
 #include "build/build_config.h"
+#include "components/services/storage/public/cpp/constants.h"
 #include "components/services/storage/public/mojom/cache_storage_control.mojom.h"
 #include "components/services/storage/public/mojom/indexed_db_control.mojom.h"
+#include "components/services/storage/public/mojom/local_storage_control.mojom.h"
 #include "content/public/browser/storage_partition.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/network/public/mojom/network_context.mojom.h"
@@ -47,6 +49,8 @@ class TestStoragePartition : public StoragePartition {
   void set_path(base::FilePath file_path) { file_path_ = file_path; }
   base::FilePath GetPath() override;
 
+  base::FilePath GetBucketBasePath() override;
+
   void set_network_context(network::mojom::NetworkContext* context) {
     network_context_ = context;
   }
@@ -71,11 +75,13 @@ class TestStoragePartition : public StoragePartition {
       mojo::PendingReceiver<network::mojom::HasTrustTokensAnswerer> receiver,
       const url::Origin& top_frame_origin) override;
 
-  mojo::PendingRemote<network::mojom::AuthenticationAndCertificateObserver>
-  CreateAuthAndCertObserverForFrame(int process_id, int routing_id) override;
+  mojo::PendingRemote<network::mojom::URLLoaderNetworkServiceObserver>
+  CreateURLLoaderNetworkObserverForFrame(int process_id,
+                                         int routing_id) override;
 
-  mojo::PendingRemote<network::mojom::AuthenticationAndCertificateObserver>
-  CreateAuthAndCertObserverForNavigationRequest(int frame_tree_id) override;
+  mojo::PendingRemote<network::mojom::URLLoaderNetworkServiceObserver>
+  CreateURLLoaderNetworkObserverForNavigationRequest(
+      int frame_tree_id) override;
 
   void set_quota_manager(storage::QuotaManager* manager) {
     quota_manager_ = manager;
@@ -108,6 +114,8 @@ class TestStoragePartition : public StoragePartition {
     dom_storage_context_ = context;
   }
   DOMStorageContext* GetDOMStorageContext() override;
+
+  storage::mojom::LocalStorageControl* GetLocalStorageControl() override;
 
   storage::mojom::IndexedDBControl& GetIndexedDBControl() override;
 
@@ -155,6 +163,8 @@ class TestStoragePartition : public StoragePartition {
     content_index_context_ = context;
   }
   ContentIndexContext* GetContentIndexContext() override;
+
+  NativeIOContext* GetNativeIOContext() override;
 
 #if !defined(OS_ANDROID)
   void set_host_zoom_map(HostZoomMap* map) { host_zoom_map_ = map; }
@@ -224,6 +234,7 @@ class TestStoragePartition : public StoragePartition {
   storage::FileSystemContext* file_system_context_ = nullptr;
   storage::DatabaseTracker* database_tracker_ = nullptr;
   DOMStorageContext* dom_storage_context_ = nullptr;
+  mojo::Remote<storage::mojom::LocalStorageControl> local_storage_control_;
   mojo::Remote<storage::mojom::IndexedDBControl> indexed_db_control_;
   ServiceWorkerContext* service_worker_context_ = nullptr;
   DedicatedWorkerService* dedicated_worker_service_ = nullptr;
@@ -234,6 +245,7 @@ class TestStoragePartition : public StoragePartition {
   DevToolsBackgroundServicesContext* devtools_background_services_context_ =
       nullptr;
   ContentIndexContext* content_index_context_ = nullptr;
+  NativeIOContext* native_io_context_ = nullptr;
 #if !defined(OS_ANDROID)
   HostZoomMap* host_zoom_map_ = nullptr;
   HostZoomLevelContext* host_zoom_level_context_ = nullptr;

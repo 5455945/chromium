@@ -4,7 +4,7 @@
 
 #include "third_party/blink/renderer/core/layout/ng/exclusions/ng_exclusion_space.h"
 
-#include "base/optional.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/renderer/core/layout/ng/exclusions/ng_exclusion.h"
 
 namespace blink {
@@ -103,8 +103,8 @@ void CollectSolidEdges(
 bool Intersects(const NGLayoutOpportunity& opportunity,
                 const NGBfcOffset& offset,
                 const LayoutUnit inline_size) {
-  return opportunity.rect.LineEndOffset() > offset.line_offset &&
-         opportunity.rect.LineStartOffset() <
+  return opportunity.rect.LineEndOffset() >= offset.line_offset &&
+         opportunity.rect.LineStartOffset() <=
              offset.line_offset + inline_size &&
          opportunity.rect.BlockEndOffset() > offset.block_offset;
 }
@@ -157,10 +157,7 @@ NGLayoutOpportunity CreateLayoutOpportunity(
 }  // namespace
 
 NGExclusionSpaceInternal::NGExclusionSpaceInternal()
-    : exclusions_(base::MakeRefCounted<NGExclusionPtrArray>()),
-      num_exclusions_(0),
-      track_shape_exclusions_(false),
-      derived_geometry_(nullptr) {}
+    : exclusions_(base::MakeRefCounted<NGExclusionPtrArray>()) {}
 
 NGExclusionSpaceInternal::NGExclusionSpaceInternal(
     const NGExclusionSpaceInternal& other)
@@ -280,7 +277,7 @@ void NGExclusionSpaceInternal::DerivedGeometry::Add(
   for (wtf_size_t i = 0; i < shelves_.size(); ++i) {
     // We modify the current shelf in-place. However we need to keep a copy of
     // the shelf if we need to insert a new shelf later in the loop.
-    base::Optional<NGShelf> shelf_copy;
+    absl::optional<NGShelf> shelf_copy;
 
     bool is_between_shelves;
 
@@ -379,8 +376,8 @@ void NGExclusionSpaceInternal::DerivedGeometry::Add(
         // In the above example the "NEW" exclusion *doesn't* overlap with the
         // above drawn shelf, and a new opportunity hasn't been created.
         bool is_overlapping =
-            exclusion.rect.LineStartOffset() < shelf.line_right &&
-            exclusion.rect.LineEndOffset() > shelf.line_left;
+            exclusion.rect.LineStartOffset() <= shelf.line_right &&
+            exclusion.rect.LineEndOffset() >= shelf.line_left;
 
         // Insert a closed-off layout opportunity if needed.
         if (has_solid_edges && is_overlapping) {

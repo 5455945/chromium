@@ -17,6 +17,7 @@
 #include "base/task/thread_pool.h"
 #include "base/task_runner_util.h"
 #include "base/threading/thread_task_runner_handle.h"
+#include "base/unguessable_token.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "components/viz/common/features.h"
@@ -206,7 +207,10 @@ class LogMessageManager {
   }
 
   // Called when it's no longer safe to invoke |log_callback_|.
-  void ShutdownLogging() { logging::SetLogMessageHandler(nullptr); }
+  void ShutdownLogging() {
+    logging::SetLogMessageHandler(nullptr);
+    log_callback_.Reset();
+  }
 
  private:
   base::Lock message_lock_;
@@ -323,18 +327,20 @@ GpuServiceImpl::GpuServiceImpl(
     scoped_refptr<base::SingleThreadTaskRunner> io_runner,
     const gpu::GpuFeatureInfo& gpu_feature_info,
     const gpu::GpuPreferences& gpu_preferences,
-    const base::Optional<gpu::GPUInfo>& gpu_info_for_hardware_gpu,
-    const base::Optional<gpu::GpuFeatureInfo>&
+    const absl::optional<gpu::GPUInfo>& gpu_info_for_hardware_gpu,
+    const absl::optional<gpu::GpuFeatureInfo>&
         gpu_feature_info_for_hardware_gpu,
     const gfx::GpuExtraInfo& gpu_extra_info,
     gpu::VulkanImplementation* vulkan_implementation,
-    base::OnceCallback<void(base::Optional<ExitCode>)> exit_callback)
+    base::OnceCallback<void(ExitCode)> exit_callback)
     : main_runner_(base::ThreadTaskRunnerHandle::Get()),
       io_runner_(std::move(io_runner)),
       watchdog_thread_(std::move(watchdog_thread)),
       gpu_preferences_(gpu_preferences),
       gpu_info_(gpu_info),
       gpu_feature_info_(gpu_feature_info),
+      gpu_driver_bug_workarounds_(
+          gpu_feature_info.enabled_gpu_driver_bug_workarounds),
       gpu_info_for_hardware_gpu_(gpu_info_for_hardware_gpu),
       gpu_feature_info_for_hardware_gpu_(gpu_feature_info_for_hardware_gpu),
       gpu_extra_info_(gpu_extra_info),
@@ -428,7 +434,9 @@ GpuServiceImpl::~GpuServiceImpl() {
   is_exiting_.Set();
 
   bind_task_tracker_.TryCancelAll();
-  GetLogMessageManager()->ShutdownLogging();
+
+  if (!in_host_process())
+    GetLogMessageManager()->ShutdownLogging();
 
   // Destroy the receiver on the IO thread.
   {
@@ -447,6 +455,7 @@ GpuServiceImpl::~GpuServiceImpl() {
   if (watchdog_thread_)
     watchdog_thread_->OnGpuProcessTearDown();
 
+  compositor_gpu_thread_.reset();
   media_gpu_channel_manager_.reset();
   gpu_channel_manager_.reset();
 
@@ -546,14 +555,20 @@ void GpuServiceImpl::InitializeWithHost(
     // When using real buffers for testing overlay configurations, we need
     // access to SharedImageManager on the viz thread to obtain the buffer
     // corresponding to a mailbox.
-    bool thread_safe_manager = features::ShouldUseRealBuffersForPageFlipTest();
+    const bool display_context_on_another_thread = features::IsDrDcEnabled();
+    bool thread_safe_manager = display_context_on_another_thread;
+#if defined(USE_OZONE)
+    thread_safe_manager |= features::ShouldUseRealBuffersForPageFlipTest();
+#endif
     owned_shared_image_manager_ = std::make_unique<gpu::SharedImageManager>(
-        thread_safe_manager, false /* display_context_on_another_thread */);
+        thread_safe_manager, display_context_on_another_thread);
     shared_image_manager = owned_shared_image_manager_.get();
+#if defined(USE_OZONE)
   } else {
     // With this feature enabled, we don't expect to receive an external
     // SharedImageManager.
     DCHECK(!features::ShouldUseRealBuffersForPageFlipTest());
+#endif
   }
 
   shutdown_event_ = shutdown_event;
@@ -564,8 +579,8 @@ void GpuServiceImpl::InitializeWithHost(
     shutdown_event_ = owned_shutdown_event_.get();
   }
 
-  scheduler_ = std::make_unique<gpu::Scheduler>(
-      main_runner_, sync_point_manager, gpu_preferences_);
+  scheduler_ =
+      std::make_unique<gpu::Scheduler>(sync_point_manager, gpu_preferences_);
 
   // Defer creation of the render thread. This is to prevent it from handling
   // IPC messages before the sandbox has been enabled and all other necessary
@@ -578,10 +593,14 @@ void GpuServiceImpl::InitializeWithHost(
       image_decode_accelerator_worker_.get(), vulkan_context_provider(),
       metal_context_provider_.get(), dawn_context_provider());
 
-  media_gpu_channel_manager_.reset(
-      new media::MediaGpuChannelManager(gpu_channel_manager_.get()));
+  media_gpu_channel_manager_ = std::make_unique<media::MediaGpuChannelManager>(
+      gpu_channel_manager_.get());
   if (watchdog_thread())
     watchdog_thread()->AddPowerObserver();
+
+  // Create and Initialize compositor gpu thread.
+  compositor_gpu_thread_ =
+      CompositorGpuThread::Create(gpu_channel_manager_.get());
 }
 
 void GpuServiceImpl::Bind(
@@ -622,6 +641,12 @@ void GpuServiceImpl::InstallPreInitializeLogHandler() {
 // static
 void GpuServiceImpl::FlushPreInitializeLogMessages(mojom::GpuHost* gpu_host) {
   GetLogMessageManager()->FlushMessages(gpu_host);
+}
+
+void GpuServiceImpl::SetVisibilityChangedCallback(
+    VisibilityChangedCallback callback) {
+  DCHECK(main_runner_->BelongsToCurrentThread());
+  visibility_changed_callback_ = std::move(callback);
 }
 
 void GpuServiceImpl::RecordLogMessage(int severity,
@@ -759,7 +784,7 @@ void GpuServiceImpl::CreateGpuMemoryBuffer(
 void GpuServiceImpl::DestroyGpuMemoryBuffer(gfx::GpuMemoryBufferId id,
                                             int client_id,
                                             const gpu::SyncToken& sync_token) {
-  if (io_runner_->BelongsToCurrentThread()) {
+  if (!main_runner_->BelongsToCurrentThread()) {
     main_runner_->PostTask(
         FROM_HERE, base::BindOnce(&GpuServiceImpl::DestroyGpuMemoryBuffer,
                                   weak_ptr_, id, client_id, sync_token));
@@ -840,10 +865,8 @@ void GpuServiceImpl::UnregisterDisplayContext(
 
 void GpuServiceImpl::LoseAllContexts() {
   DCHECK(main_runner_->BelongsToCurrentThread());
-
   if (IsExiting())
     return;
-
   for (auto& display_context : display_contexts_)
     display_context.MarkContextLost();
   gpu_channel_manager_->LoseAllContexts();
@@ -901,7 +924,19 @@ void GpuServiceImpl::StoreShaderToDisk(int client_id,
 }
 
 void GpuServiceImpl::MaybeExitOnContextLost() {
-  MaybeExit(true);
+  DCHECK(main_runner_->BelongsToCurrentThread());
+
+  // We can't restart the GPU process when running in the host process.
+  if (in_host_process())
+    return;
+
+  if (IsExiting() || !exit_callback_)
+    return;
+
+  LOG(ERROR) << "Exiting GPU process because some drivers can't recover "
+                "from errors. GPU process will restart shortly.";
+  is_exiting_.Set();
+  std::move(exit_callback_).Run(ExitCode::RESULT_CODE_GPU_EXIT_ON_CONTEXT_LOST);
 }
 
 bool GpuServiceImpl::IsExiting() const {
@@ -933,16 +968,19 @@ void GpuServiceImpl::EstablishGpuChannel(int32_t client_id,
     if (gpu::IsReservedClientId(client_id)) {
       // This returns a null handle, which is treated by the client as a failure
       // case.
-      std::move(callback).Run(mojo::ScopedMessagePipeHandle());
+      std::move(callback).Run(mojo::ScopedMessagePipeHandle(), gpu::GPUInfo(),
+                              gpu::GpuFeatureInfo());
       return;
     }
 
     EstablishGpuChannelCallback wrap_callback = base::BindOnce(
         [](scoped_refptr<base::SingleThreadTaskRunner> runner,
-           EstablishGpuChannelCallback cb,
-           mojo::ScopedMessagePipeHandle handle) {
+           EstablishGpuChannelCallback cb, mojo::ScopedMessagePipeHandle handle,
+           const gpu::GPUInfo& gpu_info,
+           const gpu::GpuFeatureInfo& gpu_feature_info) {
           runner->PostTask(FROM_HERE,
-                           base::BindOnce(std::move(cb), std::move(handle)));
+                           base::BindOnce(std::move(cb), std::move(handle),
+                                          gpu_info, gpu_feature_info));
         },
         io_runner_, std::move(callback));
     main_runner_->PostTask(
@@ -953,25 +991,44 @@ void GpuServiceImpl::EstablishGpuChannel(int32_t client_id,
     return;
   }
 
+  auto channel_token = base::UnguessableToken::Create();
   gpu::GpuChannel* gpu_channel = gpu_channel_manager_->EstablishChannel(
-      client_id, client_tracing_id, is_gpu_host, cache_shaders_on_disk);
+      channel_token, client_id, client_tracing_id, is_gpu_host,
+      cache_shaders_on_disk);
 
   if (!gpu_channel) {
     // This returns a null handle, which is treated by the client as a failure
     // case.
-    std::move(callback).Run(mojo::ScopedMessagePipeHandle());
+    std::move(callback).Run(mojo::ScopedMessagePipeHandle(), gpu::GPUInfo(),
+                            gpu::GpuFeatureInfo());
     return;
   }
   mojo::MessagePipe pipe;
   gpu_channel->Init(pipe.handle0.release(), shutdown_event_);
 
-  media_gpu_channel_manager_->AddChannel(client_id);
+  media_gpu_channel_manager_->AddChannel(client_id, channel_token);
 
-  std::move(callback).Run(std::move(pipe.handle1));
+  std::move(callback).Run(std::move(pipe.handle1), gpu_info_,
+                          gpu_feature_info_);
+}
+
+void GpuServiceImpl::SetChannelClientPid(int32_t client_id,
+                                         base::ProcessId client_pid) {
+  if (io_runner_->BelongsToCurrentThread()) {
+    main_runner_->PostTask(FROM_HERE,
+                           base::BindOnce(&GpuServiceImpl::SetChannelClientPid,
+                                          weak_ptr_, client_id, client_pid));
+    return;
+  }
+
+  // Note that the GpuService client must be trusted by definition, so DCHECKing
+  // this condition is reasonable.
+  DCHECK_NE(client_pid, base::kNullProcessId);
+  gpu_channel_manager_->SetChannelClientPid(client_id, client_pid);
 }
 
 void GpuServiceImpl::CloseChannel(int32_t client_id) {
-  if (io_runner_->BelongsToCurrentThread()) {
+  if (!main_runner_->BelongsToCurrentThread()) {
     main_runner_->PostTask(
         FROM_HERE,
         base::BindOnce(&GpuServiceImpl::CloseChannel, weak_ptr_, client_id));
@@ -983,7 +1040,7 @@ void GpuServiceImpl::CloseChannel(int32_t client_id) {
 void GpuServiceImpl::LoadedShader(int32_t client_id,
                                   const std::string& key,
                                   const std::string& data) {
-  if (io_runner_->BelongsToCurrentThread()) {
+  if (!main_runner_->BelongsToCurrentThread()) {
     main_runner_->PostTask(
         FROM_HERE, base::BindOnce(&GpuServiceImpl::LoadedShader, weak_ptr_,
                                   client_id, key, data));
@@ -993,7 +1050,7 @@ void GpuServiceImpl::LoadedShader(int32_t client_id,
 }
 
 void GpuServiceImpl::WakeUpGpu() {
-  if (io_runner_->BelongsToCurrentThread()) {
+  if (!main_runner_->BelongsToCurrentThread()) {
     main_runner_->PostTask(
         FROM_HERE, base::BindOnce(&GpuServiceImpl::WakeUpGpu, weak_ptr_));
     return;
@@ -1006,21 +1063,23 @@ void GpuServiceImpl::WakeUpGpu() {
 }
 
 void GpuServiceImpl::GpuSwitched(gl::GpuPreference active_gpu_heuristic) {
+  if (!main_runner_->BelongsToCurrentThread()) {
+    main_runner_->PostTask(
+        FROM_HERE, base::BindOnce(&GpuServiceImpl::GpuSwitched, weak_ptr_,
+                                  active_gpu_heuristic));
+    return;
+  }
   DVLOG(1) << "GPU: GPU has switched";
+
   if (!in_host_process()) {
     ui::GpuSwitchingManager::GetInstance()->NotifyGpuSwitched(
         active_gpu_heuristic);
-  }
-  if (io_runner_->BelongsToCurrentThread()) {
-    main_runner_->PostTask(
-        FROM_HERE, base::BindOnce(&GpuServiceImpl::UpdateGPUInfoGL, weak_ptr_));
-    return;
   }
   GpuServiceImpl::UpdateGPUInfoGL();
 }
 
 void GpuServiceImpl::DisplayAdded() {
-  if (io_runner_->BelongsToCurrentThread()) {
+  if (!main_runner_->BelongsToCurrentThread()) {
     main_runner_->PostTask(
         FROM_HERE, base::BindOnce(&GpuServiceImpl::DisplayAdded, weak_ptr_));
     return;
@@ -1032,7 +1091,7 @@ void GpuServiceImpl::DisplayAdded() {
 }
 
 void GpuServiceImpl::DisplayRemoved() {
-  if (io_runner_->BelongsToCurrentThread()) {
+  if (!main_runner_->BelongsToCurrentThread()) {
     main_runner_->PostTask(
         FROM_HERE, base::BindOnce(&GpuServiceImpl::DisplayRemoved, weak_ptr_));
     return;
@@ -1044,7 +1103,7 @@ void GpuServiceImpl::DisplayRemoved() {
 }
 
 void GpuServiceImpl::DisplayMetricsChanged() {
-  if (io_runner_->BelongsToCurrentThread()) {
+  if (!main_runner_->BelongsToCurrentThread()) {
     main_runner_->PostTask(
         FROM_HERE,
         base::BindOnce(&GpuServiceImpl::DisplayMetricsChanged, weak_ptr_));
@@ -1057,7 +1116,7 @@ void GpuServiceImpl::DisplayMetricsChanged() {
 }
 
 void GpuServiceImpl::DestroyAllChannels() {
-  if (io_runner_->BelongsToCurrentThread()) {
+  if (!main_runner_->BelongsToCurrentThread()) {
     main_runner_->PostTask(
         FROM_HERE,
         base::BindOnce(&GpuServiceImpl::DestroyAllChannels, weak_ptr_));
@@ -1070,7 +1129,7 @@ void GpuServiceImpl::DestroyAllChannels() {
 void GpuServiceImpl::OnBackgroundCleanup() {
 // Currently only called on Android.
 #if defined(OS_ANDROID)
-  if (io_runner_->BelongsToCurrentThread()) {
+  if (!main_runner_->BelongsToCurrentThread()) {
     main_runner_->PostTask(
         FROM_HERE,
         base::BindOnce(&GpuServiceImpl::OnBackgroundCleanup, weak_ptr_));
@@ -1095,11 +1154,24 @@ void GpuServiceImpl::OnBackgrounded() {
 
 void GpuServiceImpl::OnBackgroundedOnMainThread() {
   gpu_channel_manager_->OnApplicationBackgrounded();
+
+  if (visibility_changed_callback_)
+    visibility_changed_callback_.Run(false);
 }
 
 void GpuServiceImpl::OnForegrounded() {
+  DCHECK(io_runner_->BelongsToCurrentThread());
   if (watchdog_thread_)
     watchdog_thread_->OnForegrounded();
+
+  main_runner_->PostTask(
+      FROM_HERE,
+      base::BindOnce(&GpuServiceImpl::OnForegroundedOnMainThread, weak_ptr_));
+}
+
+void GpuServiceImpl::OnForegroundedOnMainThread() {
+  if (visibility_changed_callback_)
+    visibility_changed_callback_.Run(true);
 }
 
 #if !defined(OS_ANDROID)
@@ -1151,13 +1223,6 @@ void GpuServiceImpl::ThrowJavaException() {
 #endif
 }
 
-void GpuServiceImpl::Stop(StopCallback callback) {
-  DCHECK(io_runner_->BelongsToCurrentThread());
-  main_runner_->PostTaskAndReply(
-      FROM_HERE, base::BindOnce(&GpuServiceImpl::MaybeExit, weak_ptr_, false),
-      std::move(callback));
-}
-
 void GpuServiceImpl::StartPeakMemoryMonitorOnMainThread(uint32_t sequence_num) {
   gpu_channel_manager_->StartPeakMemoryMonitor(sequence_num);
 }
@@ -1171,31 +1236,6 @@ void GpuServiceImpl::GetPeakMemoryUsageOnMainThread(
   io_runner_->PostTask(FROM_HERE,
                        base::BindOnce(std::move(callback), peak_memory,
                                       std::move(allocation_per_source)));
-}
-
-void GpuServiceImpl::MaybeExit(bool for_context_loss) {
-  DCHECK(main_runner_->BelongsToCurrentThread());
-
-  // We can't restart the GPU process when running in the host process.
-  if (in_host_process())
-    return;
-
-  if (IsExiting() || !exit_callback_)
-    return;
-
-  if (for_context_loss) {
-    LOG(ERROR) << "Exiting GPU process because some drivers can't recover "
-                  "from errors. GPU process will restart shortly.";
-  }
-  is_exiting_.Set();
-  // For the unsandboxed GPU info collection process used for info collection,
-  // if we exit immediately, then the reply message could be lost. That's why
-  // the |exit_callback_| takes the boolean argument.
-  if (for_context_loss)
-    std::move(exit_callback_)
-        .Run(ExitCode::RESULT_CODE_GPU_EXIT_ON_CONTEXT_LOST);
-  else
-    std::move(exit_callback_).Run(base::nullopt);
 }
 
 gpu::Scheduler* GpuServiceImpl::GetGpuScheduler() {
@@ -1219,5 +1259,23 @@ void GpuServiceImpl::UpdateOverlayAndHDRInfo() {
     DidUpdateHDRStatus(hdr_enabled_);
 }
 #endif
+
+void GpuServiceImpl::GetDawnInfo(GetDawnInfoCallback callback) {
+  DCHECK(io_runner_->BelongsToCurrentThread());
+
+  main_runner_->PostTask(
+      FROM_HERE, base::BindOnce(&GpuServiceImpl::GetDawnInfoOnMain,
+                                base::Unretained(this), std::move(callback)));
+}
+
+void GpuServiceImpl::GetDawnInfoOnMain(GetDawnInfoCallback callback) {
+  DCHECK(main_runner_->BelongsToCurrentThread());
+
+  std::vector<std::string> dawn_info_list;
+  gpu::CollectDawnInfo(gpu_preferences_, &dawn_info_list);
+
+  io_runner_->PostTask(FROM_HERE,
+                       base::BindOnce(std::move(callback), dawn_info_list));
+}
 
 }  // namespace viz

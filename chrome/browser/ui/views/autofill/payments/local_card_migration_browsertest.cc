@@ -20,8 +20,8 @@
 #include "chrome/browser/autofill/autofill_uitest_util.h"
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/sync/profile_sync_service_factory.h"
-#include "chrome/browser/sync/test/integration/profile_sync_service_harness.h"
+#include "chrome/browser/sync/sync_service_factory.h"
+#include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/ui/autofill/chrome_autofill_client.h"
 #include "chrome/browser/ui/autofill/payments/local_card_migration_bubble_controller_impl.h"
@@ -168,8 +168,7 @@ class LocalCardMigrationBrowserTest
         "components/test/data/autofill");
     embedded_test_server()->StartAcceptingConnections();
 
-    ProfileSyncServiceFactory::GetAsProfileSyncServiceForProfile(
-        browser()->profile())
+    SyncServiceFactory::GetAsSyncServiceImplForProfile(browser()->profile())
         ->OverrideNetworkForTest(
             fake_server::CreateFakeServerHttpPostProviderFactory(
                 GetFakeServer()->AsWeakPtr()));
@@ -185,9 +184,9 @@ class LocalCardMigrationBrowserTest
     if (username.empty())
       username = "user@gmail.com";
 
-    harness_ = ProfileSyncServiceHarness::Create(
+    harness_ = SyncServiceImplHarness::Create(
         browser()->profile(), username, "password",
-        ProfileSyncServiceHarness::SigninType::FAKE_SIGNIN);
+        SyncServiceImplHarness::SigninType::FAKE_SIGNIN);
 
     // Set up the URL loader factory for the payments client so we can intercept
     // those network requests too.
@@ -196,7 +195,7 @@ class LocalCardMigrationBrowserTest
             &test_url_loader_factory_);
     ContentAutofillDriver::GetForRenderFrameHost(
         GetActiveWebContents()->GetMainFrame())
-        ->autofill_manager()
+        ->browser_autofill_manager()
         ->client()
         ->GetPaymentsClient()
         ->set_url_loader_factory_for_testing(test_shared_loader_factory_);
@@ -205,7 +204,7 @@ class LocalCardMigrationBrowserTest
     local_card_migration_manager_ =
         ContentAutofillDriver::GetForRenderFrameHost(
             GetActiveWebContents()->GetMainFrame())
-            ->autofill_manager()
+            ->browser_autofill_manager()
             ->client()
             ->GetFormDataImporter()
             ->local_card_migration_manager_.get();
@@ -309,7 +308,7 @@ class LocalCardMigrationBrowserTest
     local_card.set_guid("00000000-0000-0000-0000-" + card_number.substr(0, 12));
     local_card.set_record_type(CreditCard::LOCAL_CARD);
     if (set_nickname)
-      local_card.SetNickname(base::ASCIIToUTF16("card nickname"));
+      local_card.SetNickname(u"card nickname");
 
     AddTestCreditCard(browser()->profile(), local_card);
     return local_card;
@@ -529,7 +528,7 @@ class LocalCardMigrationBrowserTest
   PersonalDataManager* personal_data_;
   PersonalDataLoadedObserverMock personal_data_observer_;
 
-  std::unique_ptr<ProfileSyncServiceHarness> harness_;
+  std::unique_ptr<SyncServiceImplHarness> harness_;
 
  private:
   std::unique_ptr<autofill::EventWaiter<DialogEvent>> event_waiter_;

@@ -58,6 +58,7 @@ class ASH_EXPORT LoginShelfView : public views::View,
     kApps,                  // Show list of available kiosk apps.
     kParentAccess,          // Unlock child device with Parent Access Code.
     kEnterpriseEnrollment,  // Start enterprise enrollment flow.
+    kOsInstall,             // Start OS Install flow.
   };
 
   // Stores and notifies UiUpdate test callbacks.
@@ -116,6 +117,7 @@ class ASH_EXPORT LoginShelfView : public views::View,
   void AboutToRequestFocusFromTabTraversal(bool reverse) override;
   void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
   void Layout() override;
+  void OnThemeChanged() override;
 
   gfx::Rect get_button_union_bounds() const { return button_union_bounds_; }
 
@@ -161,9 +163,9 @@ class ASH_EXPORT LoginShelfView : public views::View,
   // policy updates, session state changes etc.
   void UpdateUi();
 
-  // Updates the color of all buttons. Uses dark colors if |use_dark_colors| is
-  // true, light colors otherwise.
-  void UpdateButtonColors(bool use_dark_colors);
+  // Updates the colors of all buttons. Uses current theme colors and force
+  // light colors during OOBE.
+  void UpdateButtonsColors();
 
   // Updates the total bounds of all buttons.
   void UpdateButtonUnionBounds();
@@ -175,6 +177,12 @@ class ASH_EXPORT LoginShelfView : public views::View,
   bool ShouldShowAppsButton() const;
 
   bool ShouldShowGuestAndAppsButtons() const;
+
+  bool ShouldShowOsInstallButton() const;
+
+  // Helper function which calls `closure` when device display is on. Or if the
+  // number of dropped calls exceeds 'kMaxDroppedCallsWhenDisplaysOff'
+  void CallIfDisplayIsOn(const base::RepeatingClosure& closure);
 
   OobeDialogState dialog_state_ = OobeDialogState::HIDDEN;
   bool allow_guest_ = true;
@@ -217,6 +225,9 @@ class ASH_EXPORT LoginShelfView : public views::View,
 
   // Whether shelf buttons are temporarily disabled due to opened modal dialog.
   bool is_shelf_temp_disabled_ = false;
+
+  // Counter for dropped shutdown and signout calls due to turned off displays.
+  int dropped_calls_when_displays_off_ = 0;
 
   // Set of the tray buttons which are in disabled state. It is used to record
   // and recover the states of tray buttons after temporarily disable of the

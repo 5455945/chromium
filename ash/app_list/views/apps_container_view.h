@@ -7,31 +7,29 @@
 
 #include <stddef.h>
 
-#include <vector>
-
-#include "ash/app_list/app_list_export.h"
 #include "ash/app_list/model/app_list_folder_item.h"
 #include "ash/app_list/views/app_list_page.h"
+#include "ash/ash_export.h"
 #include "base/callback_helpers.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 
 namespace ash {
 
-class AppsGridView;
 class ApplicationDragAndDropHost;
 class AppListFolderItem;
 class AppListFolderView;
 class AppListModel;
 class ContentsView;
 class FolderBackgroundView;
+class PagedAppsGridView;
 class PageSwitcher;
 class SuggestionChipContainerView;
 
 // AppsContainerView contains a root level AppsGridView to render the root level
 // app items, and a AppListFolderView to render the app items inside the
 // active folder.
-class APP_LIST_EXPORT AppsContainerView : public AppListPage {
+class ASH_EXPORT AppsContainerView : public AppListPage {
  public:
   AppsContainerView(ContentsView* contents_view, AppListModel* model);
   ~AppsContainerView() override;
@@ -124,7 +122,7 @@ class APP_LIST_EXPORT AppsContainerView : public AppListPage {
   SuggestionChipContainerView* suggestion_chip_container_view_for_test() {
     return suggestion_chip_container_view_;
   }
-  AppsGridView* apps_grid_view() { return apps_grid_view_; }
+  PagedAppsGridView* apps_grid_view() { return apps_grid_view_; }
   FolderBackgroundView* folder_background_view() {
     return folder_background_view_;
   }
@@ -196,7 +194,7 @@ class APP_LIST_EXPORT AppsContainerView : public AppListPage {
 
   // The views below are owned by views hierarchy.
   SuggestionChipContainerView* suggestion_chip_container_view_ = nullptr;
-  AppsGridView* apps_grid_view_ = nullptr;
+  PagedAppsGridView* apps_grid_view_ = nullptr;
   AppListFolderView* app_list_folder_view_ = nullptr;
   PageSwitcher* page_switcher_ = nullptr;
   FolderBackgroundView* folder_background_view_ = nullptr;

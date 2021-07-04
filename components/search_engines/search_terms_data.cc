@@ -46,15 +46,15 @@ std::string SearchTermsData::GetApplicationLocale() const {
   return "en";
 }
 
-base::string16 SearchTermsData::GetRlzParameterValue(bool from_app_list) const {
-  return base::string16();
+std::u16string SearchTermsData::GetRlzParameterValue(bool from_app_list) const {
+  return std::u16string();
 }
 
 std::string SearchTermsData::GetSearchClient() const {
   return std::string();
 }
 
-std::string SearchTermsData::GetSuggestClient(bool from_ntp) const {
+std::string SearchTermsData::GetSuggestClient() const {
   return std::string();
 }
 

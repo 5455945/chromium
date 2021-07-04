@@ -28,6 +28,7 @@
 #include "extensions/common/constants.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host.h"
+#include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/display/screen.h"
 #include "ui/views/controls/native/native_view_host.h"
@@ -193,14 +194,18 @@ class TopControlsSlideTabObserver
 
   void DidFinishNavigation(
       content::NavigationHandle* navigation_handle) override {
-    if (navigation_handle->IsInMainFrame() && navigation_handle->HasCommitted())
+    // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
+    // frames. This caller was converted automatically to the primary main frame
+    // to preserve its semantics. Follow up to confirm correctness.
+    if (navigation_handle->IsInPrimaryMainFrame() &&
+        navigation_handle->HasCommitted())
       UpdateBrowserControlsStateShown(/*animate=*/true);
   }
 
   void DidFailLoad(content::RenderFrameHost* render_frame_host,
                    const GURL& validated_url,
                    int error_code) override {
-    if (render_frame_host->IsCurrent() &&
+    if (render_frame_host->IsActive() &&
         (render_frame_host == web_contents()->GetMainFrame())) {
       UpdateBrowserControlsStateShown(/*animate=*/true);
     }
@@ -223,7 +228,7 @@ class TopControlsSlideTabObserver
     UpdateBrowserControlsStateShown(/*animate=*/true);
   }
 
-  void OnBubbleRemoved() override {
+  void OnRequestsFinalized() override {
     // This will update the shown constraints.
     UpdateBrowserControlsStateShown(/*animate=*/false);
   }
@@ -297,7 +302,7 @@ TopControlsSlideControllerChromeOS::TopControlsSlideControllerChromeOS(
   }
 #endif
 
-  OnEnabledStateChanged(CanEnable(base::nullopt));
+  OnEnabledStateChanged(CanEnable(absl::nullopt));
 }
 
 TopControlsSlideControllerChromeOS::~TopControlsSlideControllerChromeOS() {
@@ -373,7 +378,7 @@ void TopControlsSlideControllerChromeOS::SetShownRatio(
     defer_disabling_ = false;
 
     // Don't just set |is_enabled_| to false. Make sure it's a correct value.
-    OnEnabledStateChanged(CanEnable(base::nullopt));
+    OnEnabledStateChanged(CanEnable(absl::nullopt));
   }
 }
 
@@ -387,13 +392,8 @@ bool TopControlsSlideControllerChromeOS::DoBrowserControlsShrinkRendererSize(
   if (!IsEnabled())
     return false;
 
-  auto iter = observed_tabs_.find(contents);
-  if (iter == observed_tabs_.end()) {
-    // this may be called for a new tab that hasn't attached yet to the tabstrip
-    return false;
-  }
-
-  return iter->second->shrink_renderer_size();
+  auto* tab_observer = GetTabSlideObserverForWebContents(contents);
+  return tab_observer && tab_observer->shrink_renderer_size();
 }
 
 void TopControlsSlideControllerChromeOS::SetTopControlsGestureScrollInProgress(
@@ -406,7 +406,7 @@ void TopControlsSlideControllerChromeOS::SetTopControlsGestureScrollInProgress(
   if (update_state_after_gesture_scrolling_ends_) {
     DCHECK(!is_gesture_scrolling_in_progress_);
     DCHECK(pause_updates_);
-    OnEnabledStateChanged(CanEnable(base::nullopt));
+    OnEnabledStateChanged(CanEnable(absl::nullopt));
     update_state_after_gesture_scrolling_ends_ = false;
     pause_updates_ = false;
   }
@@ -459,7 +459,7 @@ void TopControlsSlideControllerChromeOS::OnDisplayTabletStateChanged(
   switch (state) {
     case display::TabletState::kInTabletMode:
     case display::TabletState::kInClamshellMode:
-      OnEnabledStateChanged(CanEnable(base::nullopt));
+      OnEnabledStateChanged(CanEnable(absl::nullopt));
       return;
     case display::TabletState::kEnteringTabletMode:
     case display::TabletState::kExitingTabletMode:
@@ -601,7 +601,7 @@ void TopControlsSlideControllerChromeOS::UpdateBrowserControlsStateShown(
 }
 
 bool TopControlsSlideControllerChromeOS::CanEnable(
-    base::Optional<bool> fullscreen_state) const {
+    absl::optional<bool> fullscreen_state) const {
   return IsTabletModeEnabled() &&
          !(fullscreen_state.value_or(browser_view_->IsFullscreen()));
 }
@@ -850,7 +850,19 @@ void TopControlsSlideControllerChromeOS::
   if (!active_contents)
     return;
 
-  DCHECK(observed_tabs_.count(active_contents));
+  auto* tab_observer = GetTabSlideObserverForWebContents(active_contents);
+  if (tab_observer)
+    tab_observer->UpdateDoBrowserControlsShrinkRendererSize();
+}
 
-  observed_tabs_[active_contents]->UpdateDoBrowserControlsShrinkRendererSize();
+TopControlsSlideTabObserver*
+TopControlsSlideControllerChromeOS::GetTabSlideObserverForWebContents(
+    const content::WebContents* contents) const {
+  auto iter = observed_tabs_.find(contents);
+  if (iter == observed_tabs_.end()) {
+    // this may be called for a new tab that hasn't attached yet to the
+    // tabstrip.
+    return nullptr;
+  }
+  return iter->second.get();
 }

@@ -6,7 +6,7 @@
 
 #include "base/bind.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/web_applications/components/external_app_install_features.h"
+#include "chrome/browser/web_applications/components/preinstalled_app_install_features.h"
 #include "chrome/browser/web_applications/components/web_application_info.h"
 #include "chrome/browser/web_applications/preinstalled_web_apps/preinstalled_web_app_utils.h"
 #include "chrome/grit/preinstalled_web_apps_resources.h"
@@ -104,7 +104,11 @@ ExternalInstallOptions GetConfigForGoogleDrive() {
   ExternalInstallOptions options(
       /*install_url=*/GURL(
           "https://drive.google.com/drive/installwebapp?usp=chrome_default"),
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+      /*user_display_mode=*/DisplayMode::kStandalone,
+#else
       /*user_display_mode=*/DisplayMode::kBrowser,
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
       /*install_source=*/ExternalInstallSource::kExternalDefault);
 
   options.user_type_allowlist = {"unmanaged", "managed", "child"};
@@ -121,7 +125,7 @@ ExternalInstallOptions GetConfigForGoogleDrive() {
     info->start_url = GURL("https://drive.google.com/?lfhs=2");
     info->scope = GURL("https://drive.google.com/");
     info->display_mode = DisplayMode::kStandalone;
-    info->icon_bitmaps_any =
+    info->icon_bitmaps.any =
         LoadBundledIcons({IDR_PREINSTALLED_WEB_APPS_GOOGLE_DRIVE_ICON_192_PNG});
     return info;
   });

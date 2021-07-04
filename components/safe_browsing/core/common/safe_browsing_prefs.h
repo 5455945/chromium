@@ -216,9 +216,6 @@ bool IsExtendedReportingPolicyManaged(const PrefService& prefs);
 // SafeBrowsingProtectionLevel policy(new).
 bool IsSafeBrowsingPolicyManaged(const PrefService& prefs);
 
-// Returns whether enhanced protection message is enabled in interstitials.
-bool IsEnhancedProtectionMessageInInterstitialsEnabled();
-
 // Updates UMA metrics about Safe Browsing Extended Reporting states.
 void RecordExtendedReportingMetrics(const PrefService& prefs);
 
@@ -278,14 +275,12 @@ void CanonicalizeDomainList(
 
 // Helper function to determine if |url| matches Safe Browsing allowlist domains
 // (a.k. a prefs::kSafeBrowsingAllowlistDomains).
-// Called on IO thread.
-bool IsURLAllowlistedByPolicy(const GURL& url,
-                              StringListPrefMember* pref_member);
+bool IsURLAllowlistedByPolicy(const GURL& url, const PrefService& pref);
 
-// Helper function to determine if |url| matches Safe Browsing allowlist domains
+// Helper function to get a list of Safe Browsing allowlist domains
 // (a.k. a prefs::kSafeBrowsingAllowlistDomains).
 // Called on UI thread.
-bool IsURLAllowlistedByPolicy(const GURL& url, const PrefService& pref);
+std::vector<std::string> GetURLAllowlistByPolicy(PrefService* pref_service);
 
 // Helper function to determine if any entry on the |url_chain| matches Safe
 // Browsing allowlist domains.

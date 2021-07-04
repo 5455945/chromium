@@ -9,6 +9,7 @@
 #include <set>
 #include <vector>
 
+#include "chrome/browser/web_applications/components/web_app_constants.h"
 #include "url/gurl.h"
 
 struct WebApplicationInfo;
@@ -24,12 +25,10 @@ class WebContents;
 
 namespace webapps {
 enum class WebappInstallSource;
+enum class WebappUninstallSource;
 }
 
 namespace web_app {
-
-enum class ExternalInstallSource;
-enum class InstallResultCode;
 
 enum class ForInstallableSite {
   kYes,
@@ -67,6 +66,12 @@ void RecordAppBanner(content::WebContents* contents, const GURL& app_url);
 
 webapps::WebappInstallSource ConvertExternalInstallSourceToInstallSource(
     ExternalInstallSource external_install_source);
+
+webapps::WebappUninstallSource ConvertExternalInstallSourceToUninstallSource(
+    ExternalInstallSource external_install_source);
+
+Source::Type InferSourceFromMetricsInstallSource(
+    webapps::WebappInstallSource install_source);
 
 }  // namespace web_app
 

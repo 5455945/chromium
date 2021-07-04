@@ -11,6 +11,7 @@
 #include "base/command_line.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
+#include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/render_frame_host.h"
@@ -19,11 +20,12 @@
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "ppapi/buildflags/buildflags.h"
+#include "third_party/blink/public/mojom/context_menu/context_menu.mojom.h"
 #include "ui/base/models/image_model.h"
 #include "url/origin.h"
 
 using content::BrowserContext;
-using content::GlobalFrameRoutingId;
+using content::GlobalRenderFrameHostId;
 using content::OpenURLParams;
 using content::RenderFrameHost;
 using content::RenderViewHost;
@@ -167,6 +169,7 @@ RenderViewContextMenuBase::RenderViewContextMenuBase(
       render_frame_id_(render_frame_host->GetRoutingID()),
       render_frame_token_(render_frame_host->GetFrameToken()),
       render_process_id_(render_frame_host->GetProcess()->GetID()),
+      site_instance_(render_frame_host->GetSiteInstance()),
       command_executed_(false) {}
 
 RenderViewContextMenuBase::~RenderViewContextMenuBase() {
@@ -203,19 +206,19 @@ void RenderViewContextMenuBase::InitMenu() {
 }
 
 void RenderViewContextMenuBase::AddMenuItem(int command_id,
-                                            const base::string16& title) {
+                                            const std::u16string& title) {
   menu_model_.AddItem(command_id, title);
 }
 
 void RenderViewContextMenuBase::AddMenuItemWithIcon(
     int command_id,
-    const base::string16& title,
+    const std::u16string& title,
     const ui::ImageModel& icon) {
   menu_model_.AddItemWithIcon(command_id, title, icon);
 }
 
 void RenderViewContextMenuBase::AddCheckItem(int command_id,
-                                         const base::string16& title) {
+                                             const std::u16string& title) {
   menu_model_.AddCheckItem(command_id, title);
 }
 
@@ -224,8 +227,8 @@ void RenderViewContextMenuBase::AddSeparator() {
 }
 
 void RenderViewContextMenuBase::AddSubMenu(int command_id,
-                                       const base::string16& label,
-                                       ui::MenuModel* model) {
+                                           const std::u16string& label,
+                                           ui::MenuModel* model) {
   menu_model_.AddSubMenu(command_id, label, model);
 }
 
@@ -239,9 +242,9 @@ void RenderViewContextMenuBase::AddSubMenuWithStringIdAndIcon(
 }
 
 void RenderViewContextMenuBase::UpdateMenuItem(int command_id,
-                                           bool enabled,
-                                           bool hidden,
-                                           const base::string16& label) {
+                                               bool enabled,
+                                               bool hidden,
+                                               const std::u16string& label) {
   int index = menu_model_.GetIndexOfCommandId(command_id);
   if (index == -1)
     return;
@@ -249,8 +252,13 @@ void RenderViewContextMenuBase::UpdateMenuItem(int command_id,
   menu_model_.SetLabel(index, label);
   menu_model_.SetEnabledAt(index, enabled);
   menu_model_.SetVisibleAt(index, !hidden);
-  if (toolkit_delegate_)
+  if (toolkit_delegate_) {
+#if defined(OS_MAC)
+    toolkit_delegate_->UpdateMenuItem(command_id, enabled, hidden, label);
+#else
     toolkit_delegate_->RebuildMenu();
+#endif
+  }
 }
 
 void RenderViewContextMenuBase::UpdateMenuIcon(int command_id,
@@ -290,6 +298,22 @@ void RenderViewContextMenuBase::RemoveAdjacentSeparators() {
       menu_model_.RemoveItemAt(index);
     }
   }
+
+  if (toolkit_delegate_)
+    toolkit_delegate_->RebuildMenu();
+}
+
+void RenderViewContextMenuBase::RemoveSeparatorBeforeMenuItem(int command_id) {
+  int index = menu_model_.GetIndexOfCommandId(command_id);
+  // Ignore if command not found (index == -1) or if it's the first menu item.
+  if (index <= 0)
+    return;
+
+  ui::MenuModel::ItemType prev_type = menu_model_.GetTypeAt(index - 1);
+  if (prev_type != ui::MenuModel::ItemType::TYPE_SEPARATOR)
+    return;
+
+  menu_model_.RemoveItemAt(index - 1);
 
   if (toolkit_delegate_)
     toolkit_delegate_->RebuildMenu();
@@ -452,6 +476,8 @@ void RenderViewContextMenuBase::OpenURLWithExtraHeaders(
   open_url_params.initiator_frame_token = render_frame_token_;
   open_url_params.initiator_process_id = render_process_id_;
   open_url_params.initiator_origin = url::Origin::Create(referring_url);
+
+  open_url_params.source_site_instance = site_instance_;
 
   if (disposition != WindowOpenDisposition::OFF_THE_RECORD)
     open_url_params.impression = params_.impression;

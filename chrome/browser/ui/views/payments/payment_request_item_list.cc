@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <utility>
 
+#include "base/bind.h"
 #include "chrome/browser/ui/views/payments/payment_request_dialog_view.h"
 #include "chrome/browser/ui/views/payments/payment_request_dialog_view_ids.h"
 #include "chrome/browser/ui/views/payments/payment_request_views_util.h"
@@ -17,6 +18,7 @@
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/paint_vector_icon.h"
+#include "ui/views/animation/ink_drop.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/image_button_factory.h"
@@ -115,7 +117,7 @@ void PaymentRequestItemList::Item::Init() {
     edit_button->SetImage(views::Button::STATE_NORMAL,
                           gfx::CreateVectorIcon(vector_icons::kEditIcon,
                                                 kEditIconSize, icon_color));
-    edit_button->SetInkDropBaseColor(icon_color);
+    views::InkDrop::Get(edit_button.get())->SetBaseColor(icon_color);
     edit_button->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
     edit_button->SetID(static_cast<int>(DialogViewID::EDIT_ITEM_BUTTON));
     edit_button->SetAccessibleName(
@@ -159,7 +161,7 @@ std::unique_ptr<views::View> PaymentRequestItemList::Item::CreateExtraView() {
 }
 
 void PaymentRequestItemList::Item::UpdateAccessibleName() {
-  base::string16 accessible_content =
+  std::u16string accessible_content =
       selected_ ? l10n_util::GetStringFUTF16(
                       IDS_PAYMENTS_ROW_ACCESSIBLE_NAME_SELECTED_FORMAT,
                       GetNameForDataType(), accessible_item_description_)

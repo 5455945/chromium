@@ -7,6 +7,7 @@
 #import <UIKit/UIKit.h>
 
 #include <stdint.h>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -23,7 +24,6 @@
 #include "base/path_service.h"
 #include "base/process/process_metrics.h"
 #include "base/rand_util.h"
-#include "base/strings/string16.h"
 #include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/platform_thread.h"
@@ -74,7 +74,7 @@
 #include "ios/chrome/browser/metrics/mobile_session_shutdown_metrics_provider.h"
 #include "ios/chrome/browser/signin/ios_chrome_signin_status_metrics_provider_delegate.h"
 #include "ios/chrome/browser/sync/device_info_sync_service_factory.h"
-#include "ios/chrome/browser/sync/profile_sync_service_factory.h"
+#include "ios/chrome/browser/sync/sync_service_factory.h"
 #include "ios/chrome/browser/tabs/tab_parenting_global_observer.h"
 #include "ios/chrome/browser/translate/translate_ranker_metrics_provider.h"
 #import "ios/chrome/browser/ui/overscroll_actions/overscroll_actions_controller.h"
@@ -205,6 +205,10 @@ IOSChromeMetricsServiceClient::GetChannel() {
   return metrics::AsProtobufChannel(::GetChannel());
 }
 
+bool IOSChromeMetricsServiceClient::IsExtendedStableChannel() {
+  return false;  // Not supported on iOS.
+}
+
 std::string IOSChromeMetricsServiceClient::GetVersionString() {
   return metrics::GetVersionString();
 }
@@ -281,7 +285,8 @@ void IOSChromeMetricsServiceClient::RegisterMetricsServiceProviders() {
       std::move(stability_metrics_provider));
 
   metrics_service_->RegisterMetricsProvider(
-      std::make_unique<IOSChromeDefaultBrowserMetricsProvider>());
+      std::make_unique<IOSChromeDefaultBrowserMetricsProvider>(
+          metrics::MetricsLogUploader::MetricServiceType::UMA));
 
   // NOTE: metrics_state_manager_->IsMetricsReportingEnabled() returns false
   // during local testing. To test locally, modify
@@ -333,6 +338,10 @@ void IOSChromeMetricsServiceClient::RegisterUKMProviders() {
   ukm_service_->RegisterMetricsProvider(
       std::make_unique<variations::FieldTrialsProvider>(nullptr,
                                                         kUKMFieldTrialSuffix));
+
+  metrics_service_->RegisterMetricsProvider(
+      std::make_unique<IOSChromeDefaultBrowserMetricsProvider>(
+          metrics::MetricsLogUploader::MetricServiceType::UKM));
 }
 
 void IOSChromeMetricsServiceClient::CollectFinalHistograms() {
@@ -431,8 +440,7 @@ bool IOSChromeMetricsServiceClient::RegisterForBrowserStateEvents(
           browser_state, ServiceAccessType::IMPLICIT_ACCESS);
   ObserveServiceForDeletions(history_service);
   syncer::SyncService* sync =
-      ProfileSyncServiceFactory::GetInstance()->GetForBrowserState(
-          browser_state);
+      SyncServiceFactory::GetInstance()->GetForBrowserState(browser_state);
   StartObserving(sync, browser_state->GetPrefs());
   return (history_service != nullptr && sync != nullptr);
 }

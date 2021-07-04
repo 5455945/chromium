@@ -4,8 +4,10 @@
 
 #include "base/bind.h"
 #include "base/callback_helpers.h"
+#include "base/containers/contains.h"
 #include "base/memory/ref_counted.h"
 #include "base/strings/strcat.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/profiles/profile.h"
@@ -15,10 +17,9 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/prefs/testing_pref_service.h"
-#include "components/safe_browsing/content/triggers/ad_redirect_trigger.h"
-#include "components/safe_browsing/content/triggers/mock_trigger_manager.h"
+#include "components/safe_browsing/content/browser/triggers/ad_redirect_trigger.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
-#include "components/safe_browsing/core/features.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
@@ -155,9 +156,9 @@ IN_PROC_BROWSER_TEST_F(AdRedirectTriggerBrowserTest,
 
   // Create an ad subframe.
   GetWebContents()->GetMainFrame()->ExecuteJavaScriptForTests(
-      base::ASCIIToUTF16("f = document.createElement('google_ads_iframe');"
-                         "f.srcdoc = '<script>var x = 1</script>';"
-                         "document.body.appendChild(f);"),
+      u"f = document.createElement('google_ads_iframe');"
+      u"f.srcdoc = '<script>var x = 1</script>';"
+      u"document.body.appendChild(f);",
       base::NullCallback());
 
   // Cause blocked redirect

@@ -162,8 +162,7 @@ static SkBitmap AllocBitmap(int width, int height) {
 }
 
 static scoped_refptr<VideoFrame> CreateCroppedFrame() {
-  scoped_refptr<VideoFrame> cropped_frame;
-  cropped_frame = VideoFrame::CreateFrame(
+  scoped_refptr<VideoFrame> cropped_frame = VideoFrame::CreateFrame(
       PIXEL_FORMAT_I420, gfx::Size(16, 16), gfx::Rect(6, 6, 8, 6),
       gfx::Size(8, 6), base::TimeDelta::FromMilliseconds(4));
   // Make sure the cropped video frame's aspect ratio matches the output device.
@@ -1078,7 +1077,7 @@ class PaintCanvasVideoRendererWithGLTest : public testing::TestWithParam<bool> {
   scoped_refptr<VideoFrame> cropped_frame() { return cropped_frame_; }
 
  protected:
-  base::Optional<gl::DisableNullDrawGLBindings> enable_pixels_;
+  absl::optional<gl::DisableNullDrawGLBindings> enable_pixels_;
   scoped_refptr<viz::TestInProcessContextProvider> media_context_;
   scoped_refptr<viz::TestInProcessContextProvider> gles2_context_;
   scoped_refptr<viz::TestInProcessContextProvider> destination_context_;
@@ -1101,7 +1100,7 @@ TEST_P(PaintCanvasVideoRendererWithGLTest, CopyVideoFrameYUVDataToGLTexture) {
   destination_gl->BindTexture(target, texture);
 
   renderer_.CopyVideoFrameYUVDataToGLTexture(
-      media_context_.get(), destination_gl, *cropped_frame(), target, texture,
+      media_context_.get(), destination_gl, cropped_frame(), target, texture,
       GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE, 0, false /* premultiply_alpha */,
       false /* flip_y */);
 
@@ -1133,7 +1132,7 @@ TEST_P(PaintCanvasVideoRendererWithGLTest,
   destination_gl->BindTexture(target, texture);
 
   renderer_.CopyVideoFrameYUVDataToGLTexture(
-      media_context_.get(), destination_gl, *cropped_frame(), target, texture,
+      media_context_.get(), destination_gl, cropped_frame(), target, texture,
       GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE, 0, false /* premultiply_alpha */,
       true /* flip_y */);
 

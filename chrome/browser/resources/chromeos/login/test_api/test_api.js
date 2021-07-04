@@ -102,6 +102,18 @@ class TextFieldApi extends PolymerElementApi {
   }
 }
 
+class HIDDetectionScreen extends ScreenElementApi {
+  constructor() {
+    super('hid-detection');
+    this.nextButton = new PolymerElementApi(this, '#hid-continue-button');
+  }
+
+  // Must be called to enable the next button
+  emulateDevicesConnected() {
+    chrome.send('HIDDetectionScreen.emulateDevicesConnectedForTesting');
+  }
+}
+
 class WelcomeScreen extends ScreenElementApi {
   constructor() {
     super('connect');
@@ -143,6 +155,12 @@ class EulaScreen extends ScreenElementApi {
   shouldSkip() {
     // Eula screen should be skipped when it is non-branded build.
     return !loadTimeData.getBoolean('isBrandedBuild');
+  }
+}
+
+class UpdateScreen extends ScreenElementApi {
+  constructor() {
+    super('oobe-update');
   }
 }
 
@@ -219,9 +237,11 @@ class PinSetupScreen extends ScreenElementApi {
 class OobeApiProvider {
   constructor() {
     this.screens = {
+      HIDDetectionScreen: new HIDDetectionScreen(),
       WelcomeScreen: new WelcomeScreen(),
       NetworkScreen: new NetworkScreen(),
       EulaScreen: new EulaScreen(),
+      UpdateScreen: new UpdateScreen(),
       UserCreationScreen: new UserCreationScreen(),
       GaiaScreen: new GaiaScreen(),
       ConfirmSamlPasswordScreen: new ConfirmSamlPasswordScreen(),

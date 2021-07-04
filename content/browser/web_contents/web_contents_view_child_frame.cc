@@ -79,7 +79,7 @@ void WebContentsViewChildFrame::CreateView(gfx::NativeView context) {
 
 RenderWidgetHostViewBase* WebContentsViewChildFrame::CreateViewForWidget(
     RenderWidgetHost* render_widget_host) {
-  blink::ScreenInfo screen_info;
+  display::ScreenInfo screen_info;
   if (auto* view = web_contents_->GetRenderWidgetHostView())
     view->GetScreenInfo(&screen_info);
   else
@@ -93,7 +93,7 @@ RenderWidgetHostViewBase* WebContentsViewChildFrame::CreateViewForChildWidget(
   return GetOuterView()->CreateViewForChildWidget(render_widget_host);
 }
 
-void WebContentsViewChildFrame::SetPageTitle(const base::string16& title) {
+void WebContentsViewChildFrame::SetPageTitle(const std::u16string& title) {
   // The title is ignored for the WebContentsViewChildFrame.
 }
 

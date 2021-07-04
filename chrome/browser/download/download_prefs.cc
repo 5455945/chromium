@@ -12,12 +12,12 @@
 #include "base/bind.h"
 #include "base/callback_helpers.h"
 #include "base/check.h"
+#include "base/cxx17_backports.h"
 #include "base/feature_list.h"
 #include "base/files/file_util.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/path_service.h"
-#include "base/stl_util.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
@@ -42,14 +42,14 @@
 #include "components/policy/core/browser/url_blocklist_manager.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
-#include "components/safe_browsing/core/file_type_policies.h"
+#include "components/safe_browsing/content/common/file_type_policies.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/save_page_type.h"
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/chromeos/drive/drive_integration_service.h"
-#include "chrome/browser/chromeos/drive/file_system_util.h"
+#include "chrome/browser/ash/drive/drive_integration_service.h"
+#include "chrome/browser/ash/drive/file_system_util.h"
 #include "chrome/browser/chromeos/file_manager/path_util.h"
 #include "chromeos/dbus/cros_disks_client.h"
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
@@ -208,15 +208,6 @@ DownloadPrefs::DownloadPrefs(Profile* profile) : profile_(profile) {
         static_cast<DownloadLaterPromptStatus>(*prompt_for_download_later_));
   }
 
-  // If |kDownloadsLocationChange| is not enabled, always uses the default
-  // download location, in case that the feature is enabled and then disabled
-  // from finch config and the user may stuck at other download locations.
-  if (!base::FeatureList::IsEnabled(features::kDownloadsLocationChange)) {
-    prefs->SetFilePath(prefs::kDownloadDefaultDirectory,
-                       GetDefaultDownloadDirectoryForProfile());
-    prefs->SetFilePath(prefs::kSaveFileDefaultDirectory,
-                       GetDefaultDownloadDirectoryForProfile());
-  }
 #endif
   download_path_.Init(prefs::kDownloadDefaultDirectory, prefs);
   save_file_path_.Init(prefs::kSaveFileDefaultDirectory, prefs);
@@ -307,9 +298,8 @@ void DownloadPrefs::RegisterProfilePrefs(
 #endif
 #if defined(OS_ANDROID)
   DownloadPromptStatus download_prompt_status =
-      base::FeatureList::IsEnabled(features::kDownloadsLocationChange)
-          ? DownloadPromptStatus::SHOW_INITIAL
-          : DownloadPromptStatus::DONT_SHOW;
+      DownloadPromptStatus::SHOW_INITIAL;
+
   registry->RegisterIntegerPref(
       prefs::kPromptForDownloadAndroid,
       static_cast<int>(download_prompt_status),
@@ -322,9 +312,7 @@ void DownloadPrefs::RegisterProfilePrefs(
         user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
   }
 
-  registry->RegisterBooleanPref(
-      prefs::kShowMissingSdCardErrorAndroid,
-      base::FeatureList::IsEnabled(features::kDownloadsLocationChange));
+  registry->RegisterBooleanPref(prefs::kShowMissingSdCardErrorAndroid, true);
 #endif
 }
 
@@ -358,7 +346,7 @@ DownloadPrefs* DownloadPrefs::FromDownloadManager(
 // static
 DownloadPrefs* DownloadPrefs::FromBrowserContext(
     content::BrowserContext* context) {
-  return FromDownloadManager(BrowserContext::GetDownloadManager(context));
+  return FromDownloadManager(context->GetDownloadManager());
 }
 
 bool DownloadPrefs::IsFromTrustedSource(const download::DownloadItem& item) {
@@ -395,6 +383,10 @@ bool DownloadPrefs::PromptForDownload() const {
 
 // Return the Android prompt for download only.
 #if defined(OS_ANDROID)
+  // Use |prompt_for_download_| preference for enterprise policy.
+  if (prompt_for_download_.IsManaged())
+    return prompt_for_download_.GetValue();
+
   // As long as they haven't indicated in preferences they do not want the
   // dialog shown, show the dialog.
   return *prompt_for_download_android_ !=
@@ -406,6 +398,9 @@ bool DownloadPrefs::PromptForDownload() const {
 
 bool DownloadPrefs::PromptDownloadLater() const {
 #ifdef OS_ANDROID
+  if (prompt_for_download_.IsManaged())
+    return false;
+
   if (base::FeatureList::IsEnabled(download::features::kDownloadLater)) {
     return *prompt_for_download_later_ !=
            static_cast<int>(DownloadLaterPromptStatus::kDontShow);
@@ -466,8 +461,12 @@ bool DownloadPrefs::IsAutoOpenByPolicy(const GURL& url,
   DCHECK(extension[0] == base::FilePath::kExtensionSeparator);
   extension.erase(0, 1);
 
+  // if |url| is a blob scheme, use the originating URL for policy evaluation.
+  const GURL fixed_url =
+      url.SchemeIsBlob() ? url::Origin::Create(url).GetURL() : url;
+
   return auto_open_by_policy_.find(extension) != auto_open_by_policy_.end() &&
-         !auto_open_allowed_by_urls_->IsURLBlocked(url);
+         !auto_open_allowed_by_urls_->IsURLBlocked(fixed_url);
 }
 
 bool DownloadPrefs::EnableAutoOpenByUserBasedOnExtension(
@@ -641,7 +640,7 @@ void DownloadPrefs::UpdateAutoOpenByPolicy() {
 
   PrefService* prefs = profile_->GetPrefs();
   for (const auto& extension :
-       *prefs->GetList(prefs::kDownloadExtensionsToOpenByPolicy)) {
+       prefs->GetList(prefs::kDownloadExtensionsToOpenByPolicy)->GetList()) {
     base::FilePath::StringType extension_string =
         StringToFilePathString(extension.GetString());
     auto_open_by_policy_.insert(extension_string);

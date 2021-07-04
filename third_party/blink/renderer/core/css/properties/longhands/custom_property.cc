@@ -12,7 +12,6 @@
 #include "third_party/blink/renderer/core/css/property_registry.h"
 #include "third_party/blink/renderer/core/css/resolver/style_builder_converter.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -81,6 +80,10 @@ void CustomProperty::ApplyInherit(StyleResolverState& state) const {
 void CustomProperty::ApplyValue(StyleResolverState& state,
                                 const CSSValue& value) const {
   if (value.IsInvalidVariableValue()) {
+    if (!SupportsGuaranteedInvalid()) {
+      ApplyUnset(state);
+      return;
+    }
     state.Style()->SetVariableData(name_, nullptr, IsInherited());
     if (registration_)
       state.Style()->SetVariableValue(name_, nullptr, IsInherited());

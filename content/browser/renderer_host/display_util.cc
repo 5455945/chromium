@@ -13,7 +13,7 @@
 namespace content {
 
 // static
-void DisplayUtil::DisplayToScreenInfo(blink::ScreenInfo* screen_info,
+void DisplayUtil::DisplayToScreenInfo(display::ScreenInfo* screen_info,
                                       const display::Display& display) {
   screen_info->rect = display.bounds();
   // TODO(husky): Remove any Android system controls from availableRect.
@@ -48,23 +48,29 @@ void DisplayUtil::DisplayToScreenInfo(blink::ScreenInfo* screen_info,
   screen_info->orientation_type = GetOrientationTypeForDesktop(display);
 #endif
 
+  // TODO(crbug.com/1194700 and crbug.com/1182855): Use cross-process screen
+  // info caches, not local-process info, for child frames and Mac's shim.
   auto* screen = display::Screen::GetScreen();
   // Some tests are run with no Screen initialized.
   screen_info->is_extended = screen && screen->GetNumDisplays() > 1;
+  screen_info->is_primary =
+      screen && (screen->GetPrimaryDisplay().id() == display.id());
+  screen_info->is_internal = display.IsInternal();
+  screen_info->display_id = display.id();
 }
 
 // static
-void DisplayUtil::GetDefaultScreenInfo(blink::ScreenInfo* screen_info) {
+void DisplayUtil::GetDefaultScreenInfo(display::ScreenInfo* screen_info) {
   return GetNativeViewScreenInfo(screen_info, nullptr);
 }
 
 // static
-void DisplayUtil::GetNativeViewScreenInfo(blink::ScreenInfo* screen_info,
+void DisplayUtil::GetNativeViewScreenInfo(display::ScreenInfo* screen_info,
                                           gfx::NativeView native_view) {
   // Some tests are run with no Screen initialized.
   display::Screen* screen = display::Screen::GetScreen();
   if (!screen) {
-    *screen_info = blink::ScreenInfo();
+    *screen_info = display::ScreenInfo();
     return;
   }
   display::Display display = native_view
@@ -74,7 +80,7 @@ void DisplayUtil::GetNativeViewScreenInfo(blink::ScreenInfo* screen_info,
 }
 
 // static
-blink::mojom::ScreenOrientation DisplayUtil::GetOrientationTypeForMobile(
+display::mojom::ScreenOrientation DisplayUtil::GetOrientationTypeForMobile(
     const display::Display& display) {
   int angle = display.PanelRotationAsDegree();
   const gfx::Rect& bounds = display.bounds();
@@ -89,28 +95,28 @@ blink::mojom::ScreenOrientation DisplayUtil::GetOrientationTypeForMobile(
   switch (angle) {
     case 0:
       return natural_portrait
-                 ? blink::mojom::ScreenOrientation::kPortraitPrimary
-                 : blink::mojom::ScreenOrientation::kLandscapePrimary;
+                 ? display::mojom::ScreenOrientation::kPortraitPrimary
+                 : display::mojom::ScreenOrientation::kLandscapePrimary;
     case 90:
       return natural_portrait
-                 ? blink::mojom::ScreenOrientation::kLandscapePrimary
-                 : blink::mojom::ScreenOrientation::kPortraitSecondary;
+                 ? display::mojom::ScreenOrientation::kLandscapePrimary
+                 : display::mojom::ScreenOrientation::kPortraitSecondary;
     case 180:
       return natural_portrait
-                 ? blink::mojom::ScreenOrientation::kPortraitSecondary
-                 : blink::mojom::ScreenOrientation::kLandscapeSecondary;
+                 ? display::mojom::ScreenOrientation::kPortraitSecondary
+                 : display::mojom::ScreenOrientation::kLandscapeSecondary;
     case 270:
       return natural_portrait
-                 ? blink::mojom::ScreenOrientation::kLandscapeSecondary
-                 : blink::mojom::ScreenOrientation::kPortraitPrimary;
+                 ? display::mojom::ScreenOrientation::kLandscapeSecondary
+                 : display::mojom::ScreenOrientation::kPortraitPrimary;
     default:
       NOTREACHED();
-      return blink::mojom::ScreenOrientation::kPortraitPrimary;
+      return display::mojom::ScreenOrientation::kPortraitPrimary;
   }
 }
 
 // static
-blink::mojom::ScreenOrientation DisplayUtil::GetOrientationTypeForDesktop(
+display::mojom::ScreenOrientation DisplayUtil::GetOrientationTypeForDesktop(
     const display::Display& display) {
   static int primary_landscape_angle = -1;
   static int primary_portrait_angle = -1;
@@ -127,13 +133,13 @@ blink::mojom::ScreenOrientation DisplayUtil::GetOrientationTypeForDesktop(
 
   if (is_portrait) {
     return primary_portrait_angle == angle
-               ? blink::mojom::ScreenOrientation::kPortraitPrimary
-               : blink::mojom::ScreenOrientation::kPortraitSecondary;
+               ? display::mojom::ScreenOrientation::kPortraitPrimary
+               : display::mojom::ScreenOrientation::kPortraitSecondary;
   }
 
   return primary_landscape_angle == angle
-             ? blink::mojom::ScreenOrientation::kLandscapePrimary
-             : blink::mojom::ScreenOrientation::kLandscapeSecondary;
+             ? display::mojom::ScreenOrientation::kLandscapePrimary
+             : display::mojom::ScreenOrientation::kLandscapeSecondary;
 }
 
 }  // namespace content

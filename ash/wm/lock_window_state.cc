@@ -19,6 +19,7 @@
 #include "ash/wm/wm_event.h"
 #include "ash/wm/work_area_insets.h"
 #include "ui/aura/window.h"
+#include "ui/compositor/layer.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/wm/core/coordinate_conversion.h"
 
@@ -50,11 +51,11 @@ void LockWindowState::OnWMEvent(WindowState* window_state,
     case WM_EVENT_TOGGLE_VERTICAL_MAXIMIZE:
     case WM_EVENT_TOGGLE_HORIZONTAL_MAXIMIZE:
     case WM_EVENT_TOGGLE_MAXIMIZE:
-    case WM_EVENT_CYCLE_SNAP_LEFT:
-    case WM_EVENT_CYCLE_SNAP_RIGHT:
+    case WM_EVENT_CYCLE_SNAP_PRIMARY:
+    case WM_EVENT_CYCLE_SNAP_SECONDARY:
     case WM_EVENT_CENTER:
-    case WM_EVENT_SNAP_LEFT:
-    case WM_EVENT_SNAP_RIGHT:
+    case WM_EVENT_SNAP_PRIMARY:
+    case WM_EVENT_SNAP_SECONDARY:
     case WM_EVENT_NORMAL:
     case WM_EVENT_MAXIMIZE:
       UpdateWindow(window_state,

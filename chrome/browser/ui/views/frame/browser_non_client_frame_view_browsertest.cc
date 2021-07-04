@@ -17,6 +17,7 @@
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/web_applications/components/web_app_install_utils.h"
 #include "chrome/browser/web_applications/components/web_application_info.h"
+#include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/autofill/content/browser/content_autofill_driver.h"
@@ -50,7 +51,7 @@ class BrowserNonClientFrameViewBrowserTest
   // TODO: Add tests for non-bookmark hosted apps, as bookmark apps will no
   // longer be hosted apps when BMO ships.
   void InstallAndLaunchBookmarkApp(
-      base::Optional<GURL> app_url = base::nullopt) {
+      absl::optional<GURL> app_url = absl::nullopt) {
     blink::Manifest manifest;
     manifest.start_url = app_url.value_or(GetAppURL());
     manifest.scope = manifest.start_url.GetWithoutFilename();
@@ -62,7 +63,7 @@ class BrowserNonClientFrameViewBrowserTest
                                           web_app_info.get());
 
     web_app::AppId app_id =
-        web_app::InstallWebApp(profile(), std::move(web_app_info));
+        web_app::test::InstallWebApp(profile(), std::move(web_app_info));
     app_browser_ = web_app::LaunchWebAppBrowser(profile(), app_id);
     web_contents_ = app_browser_->tab_strip_model()->GetActiveWebContents();
     // Ensure the main page has loaded and is ready for ExecJs DOM manipulation.
@@ -73,7 +74,7 @@ class BrowserNonClientFrameViewBrowserTest
   }
 
  protected:
-  base::Optional<SkColor> app_theme_color_ = SK_ColorBLUE;
+  absl::optional<SkColor> app_theme_color_ = SK_ColorBLUE;
   Browser* app_browser_ = nullptr;
   BrowserView* app_browser_view_ = nullptr;
   content::WebContents* web_contents_ = nullptr;
@@ -212,22 +213,84 @@ IN_PROC_BROWSER_TEST_F(BrowserNonClientFrameViewBrowserTest,
   theme_service->UseDefaultTheme();
 
   InstallAndLaunchBookmarkApp();
+  ASSERT_EQ(*app_theme_color_, SK_ColorBLUE);
   EXPECT_EQ(app_frame_view_->GetFrameColor(), *app_theme_color_);
 
-  content::ThemeChangeWaiter waiter(web_contents_);
-  EXPECT_TRUE(content::ExecJs(web_contents_, R"(
-      document.documentElement.innerHTML =
-          '<meta name="theme-color" content="yellow">';
-  )"));
-  waiter.Wait();
+  {
+    // Add two meta theme color elements. The first element's color should be
+    // picked.
+    content::ThemeChangeWaiter waiter(web_contents_);
+    EXPECT_TRUE(content::ExecJs(
+        web_contents_,
+        "document.documentElement.innerHTML = '"
+        "<meta id=\"first\"  name=\"theme-color\" content=\"red\">"
+        "<meta id=\"second\" name=\"theme-color\" content=\"#00ff00\">'"));
+    waiter.Wait();
 
-  // Frame view may get reset after theme change.
-  // TODO(crbug.com/1020050): Make it not do this and only refresh the Widget.
-  BrowserNonClientFrameView* frame_view =
-      app_browser_view_->frame()->GetFrameView();
+    // Frame view may get reset after theme change.
+    // TODO(crbug.com/1020050): Make it not do this and only refresh the Widget.
+    EXPECT_EQ(app_browser_view_->frame()->GetFrameView()->GetFrameColor(),
+              SK_ColorRED);
+  }
+  {
+    // Change the color of the first element. The new color should be picked.
+    content::ThemeChangeWaiter waiter(web_contents_);
+    EXPECT_TRUE(content::ExecJs(
+        web_contents_,
+        "document.getElementById('first').setAttribute('content', 'yellow')"));
+    waiter.Wait();
 
-  EXPECT_EQ(frame_view->GetFrameColor(), SK_ColorYELLOW);
-  ASSERT_NE(*app_theme_color_, SK_ColorYELLOW);
+    EXPECT_EQ(app_browser_view_->frame()->GetFrameView()->GetFrameColor(),
+              SK_ColorYELLOW);
+  }
+  {
+    // Set a non matching media query to the first element. The second element's
+    // color should be picked.
+    content::ThemeChangeWaiter waiter(web_contents_);
+    EXPECT_TRUE(content::ExecJs(web_contents_,
+                                "document.getElementById('first')."
+                                "setAttribute('media', '(max-width: 0px)')"));
+    waiter.Wait();
+
+    EXPECT_EQ(app_browser_view_->frame()->GetFrameView()->GetFrameColor(),
+              SK_ColorGREEN);
+  }
+  {
+    // Remove the second element. The manifest color should be picked because
+    // the first element still does not match.
+    content::ThemeChangeWaiter waiter(web_contents_);
+    EXPECT_TRUE(content::ExecJs(web_contents_,
+                                "document.getElementById('second').remove()"));
+    waiter.Wait();
+
+    EXPECT_EQ(app_browser_view_->frame()->GetFrameView()->GetFrameColor(),
+              SK_ColorBLUE);
+  }
+  {
+    // Set a matching media query to the first element. The first element's
+    // color should be picked.
+    content::ThemeChangeWaiter waiter(web_contents_);
+    std::string width =
+        content::EvalJs(web_contents_, "outerWidth.toString()").ExtractString();
+    EXPECT_TRUE(content::ExecJs(web_contents_,
+                                "document.getElementById('first')."
+                                "setAttribute('media', '(max-width: " +
+                                    width + "px')"));
+    waiter.Wait();
+
+    EXPECT_EQ(app_browser_view_->frame()->GetFrameView()->GetFrameColor(),
+              SK_ColorYELLOW);
+  }
+  {
+    // Resize the window so that the media query on the first element does not
+    // match anymore. The manifest color should be picked.
+    content::ThemeChangeWaiter waiter(web_contents_);
+    EXPECT_TRUE(content::ExecJs(web_contents_, "window.resizeBy(24, 0)"));
+    waiter.Wait();
+
+    EXPECT_EQ(app_browser_view_->frame()->GetFrameView()->GetFrameColor(),
+              SK_ColorBLUE);
+  }
 }
 
 class SaveCardOfferObserver
@@ -236,7 +299,7 @@ class SaveCardOfferObserver
   explicit SaveCardOfferObserver(content::WebContents* web_contents) {
     manager_ = autofill::ContentAutofillDriver::GetForRenderFrameHost(
                    web_contents->GetMainFrame())
-                   ->autofill_manager()
+                   ->browser_autofill_manager()
                    ->client()
                    ->GetFormDataImporter()
                    ->credit_card_save_manager_.get();

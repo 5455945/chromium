@@ -11,9 +11,12 @@
 #include "ash/style/ash_color_provider.h"
 #include "ash/wm/mru_window_tracker.h"
 #include "ash/wm/window_cycle/window_cycle_controller.h"
+#include "base/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/prefs/pref_service.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/rect.h"
@@ -21,7 +24,6 @@
 #include "ui/views/background.h"
 #include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/layout/box_layout.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 
 namespace ash {
 
@@ -120,6 +122,7 @@ WindowCycleTabSlider::WindowCycleTabSlider()
       Shell::Get()->window_cycle_controller()->IsAltTabPerActiveDesk();
   all_desks_tab_slider_button_->SetToggled(!per_desk);
   current_desk_tab_slider_button_->SetToggled(per_desk);
+  active_button_selector_->SetFocusBehavior(View::FocusBehavior::ALWAYS);
 }
 
 void WindowCycleTabSlider::SetFocus(bool focus) {
@@ -137,19 +140,20 @@ void WindowCycleTabSlider::OnModePrefsChanged() {
   all_desks_tab_slider_button_->SetToggled(!per_desk);
   current_desk_tab_slider_button_->SetToggled(per_desk);
   UpdateActiveButtonSelector(per_desk);
+  active_button_selector_->RequestFocus();
 }
 
 void WindowCycleTabSlider::Layout() {
   const gfx::Size button_size = GetPreferredSizeForButtons();
-  buttons_container_->SetBounds(kTabSliderButtonFocusInsets,
-                                kTabSliderButtonFocusInsets,
-                                2 * button_size.width(), button_size.height());
+  buttons_container_->SetSize(
+      gfx::Size(2 * button_size.width(), button_size.height()));
 
   active_button_selector_->SetBounds(
       Shell::Get()->window_cycle_controller()->IsAltTabPerActiveDesk()
-          ? button_size.width()
-          : 0,
-      0, button_size.width() + 2 * kTabSliderButtonFocusInsets,
+          ? button_size.width() - kTabSliderButtonFocusInsets
+          : -kTabSliderButtonFocusInsets,
+      -kTabSliderButtonFocusInsets,
+      button_size.width() + 2 * kTabSliderButtonFocusInsets,
       button_size.height() + 2 * kTabSliderButtonFocusInsets);
 }
 
@@ -183,7 +187,9 @@ void WindowCycleTabSlider::UpdateActiveButtonSelector(bool per_desk) {
 
   const gfx::Size button_size = GetPreferredSizeForButtons();
   const gfx::Rect new_selector_bounds =
-      gfx::Rect(per_desk ? button_size.width() : 0, 0,
+      gfx::Rect(per_desk ? button_size.width() - kTabSliderButtonFocusInsets
+                         : -kTabSliderButtonFocusInsets,
+                -kTabSliderButtonFocusInsets,
                 button_size.width() + 2 * kTabSliderButtonFocusInsets,
                 button_size.height() + 2 * kTabSliderButtonFocusInsets);
   active_button_selector_layer->SetTransform(

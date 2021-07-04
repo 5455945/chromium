@@ -8,14 +8,18 @@
 #include <utility>
 
 #include "ash/accelerators/accelerator_commands.h"
+#include "ash/accelerators/accelerator_controller_impl.h"
 #include "ash/accelerometer/accelerometer_reader.h"
 #include "ash/app_list/app_list_controller_impl.h"
+#include "ash/app_list/app_list_presenter_impl.h"
 #include "ash/app_list/views/app_list_view.h"
+#include "ash/hud_display/hud_display.h"
 #include "ash/keyboard/keyboard_controller_impl.h"
 #include "ash/public/cpp/autotest_private_api_utils.h"
 #include "ash/public/cpp/tablet_mode_observer.h"
 #include "ash/root_window_controller.h"
 #include "ash/shell.h"
+#include "ash/system/message_center/session_state_notification_blocker.h"
 #include "ash/system/power/backlights_forced_off_setter.h"
 #include "ash/system/power/power_button_controller.h"
 #include "ash/wm/overview/overview_animation_state_waiter.h"
@@ -23,11 +27,13 @@
 #include "ash/wm/splitview/split_view_controller.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "ash/wm/workspace_controller.h"
+#include "base/bind.h"
 #include "base/run_loop.h"
 #include "components/prefs/testing_pref_service.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/compositor_observer.h"
+#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_observer.h"
 #include "ui/display/manager/display_manager.h"
 #include "ui/events/devices/device_data_manager_test_api.h"
@@ -112,6 +118,19 @@ ShellTestApi::~ShellTestApi() = default;
 void ShellTestApi::SetTabletControllerUseScreenshotForTest(
     bool use_screenshot) {
   TabletModeController::SetUseScreenshotForTest(use_screenshot);
+}
+
+// static
+void ShellTestApi::SetUseLoginNotificationDelayForTest(bool use_delay) {
+  SessionStateNotificationBlocker::SetUseLoginNotificationDelayForTest(
+      use_delay);
+}
+
+// static
+void ShellTestApi::SetShouldShowShortcutNotificationForTest(
+    bool show_notification) {
+  AcceleratorControllerImpl::SetShouldShowShortcutNotificationForTest(
+      show_notification);
 }
 
 MessageCenterController* ShellTestApi::message_center_controller() {
@@ -253,6 +272,21 @@ PaginationModel* ShellTestApi::GetAppListPaginationModel() {
 
 bool ShellTestApi::IsContextMenuShown() const {
   return Shell::GetPrimaryRootWindowController()->IsContextMenuShown();
+}
+
+bool ShellTestApi::IsActionForAcceleratorEnabled(
+    const ui::Accelerator& accelerator) const {
+  return Shell::Get()->accelerator_controller()->IsActionForAcceleratorEnabled(
+      accelerator);
+}
+
+bool ShellTestApi::PressAccelerator(const ui::Accelerator& accelerator) {
+  return Shell::Get()->accelerator_controller()->AcceleratorPressed(
+      accelerator);
+}
+
+bool ShellTestApi::IsHUDShown() {
+  return hud_display::HUDDisplayView::IsShown();
 }
 
 }  // namespace ash

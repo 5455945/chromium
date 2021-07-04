@@ -7,13 +7,17 @@
 #include <memory>
 
 #include "base/metrics/metrics_hashes.h"
-#include "base/optional.h"
 #include "base/test/simple_test_clock.h"
 #include "base/test/trace_event_analyzer.h"
 #include "base/time/time.h"
 #include "base/trace_event/traced_value.h"
+#include "build/build_config.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/content_settings/cookie_settings_factory.h"
+#include "chrome/browser/history/history_service_factory.h"
+#include "chrome/browser/history/history_tab_helper.h"
+#include "chrome/browser/history_clusters/history_clusters_service_factory.h"
+#include "chrome/browser/history_clusters/history_clusters_tab_helper.h"
 #include "chrome/browser/page_load_metrics/observers/page_load_metrics_observer_test_harness.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/common/pref_names.h"
@@ -24,6 +28,12 @@
 #include "components/content_settings/core/browser/cookie_settings.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/pref_names.h"
+#include "components/history/core/browser/history_service.h"
+#include "components/history/core/browser/history_types.h"
+#include "components/history/core/test/history_service_test_util.h"
+#include "components/history_clusters/core/history_clusters_service.h"
+#include "components/keyed_service/core/service_access_type.h"
+#include "components/ntp_tiles/custom_links_store.h"
 #include "components/page_load_metrics/browser/observers/core/largest_contentful_paint_handler.h"
 #include "components/page_load_metrics/browser/page_load_metrics_observer.h"
 #include "components/page_load_metrics/browser/page_load_tracker.h"
@@ -39,6 +49,7 @@
 #include "services/metrics/public/cpp/ukm_source.h"
 #include "services/network/public/cpp/network_quality_tracker.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/metrics_proto/system_profile.pb.h"
 
 using content::NavigationSimulator;
@@ -78,8 +89,11 @@ class UkmPageLoadMetricsObserverTest
     : public page_load_metrics::PageLoadMetricsObserverTestHarness {
  protected:
   void RegisterObservers(page_load_metrics::PageLoadTracker* tracker) override {
-    tracker->AddObserver(std::make_unique<UkmPageLoadMetricsObserver>(
-        &mock_network_quality_provider_));
+    std::unique_ptr<UkmPageLoadMetricsObserver> observer =
+        std::make_unique<UkmPageLoadMetricsObserver>(
+            &mock_network_quality_provider_);
+    observer_ = observer.get();
+    tracker->AddObserver(std::move(observer));
   }
 
   void SetUp() override {
@@ -101,15 +115,26 @@ class UkmPageLoadMetricsObserverTest
     EXPECT_CALL(mock_network_quality_provider_, GetDownstreamThroughputKbps())
         .Times(AnyNumber())
         .WillRepeatedly(Return(int32_t()));
-    TemplateURLServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-        profile(),
-        base::BindRepeating(&TemplateURLServiceFactory::BuildInstanceFor));
 
-    BookmarkModelFactory::GetInstance()->SetTestingFactory(
-        profile(), BookmarkModelFactory::GetDefaultFactory());
     bookmarks::BookmarkModel* bookmark_model =
         BookmarkModelFactory::GetForBrowserContext(profile());
     bookmarks::test::WaitForBookmarkModelToLoad(bookmark_model);
+
+    HistoryTabHelper::CreateForWebContents(web_contents());
+    HistoryTabHelper::FromWebContents(web_contents())
+        ->SetForceEligibleTabForTesting(true);
+
+    HistoryClustersTabHelper::CreateForWebContents(web_contents());
+  }
+
+  TestingProfile::TestingFactories GetTestingFactories() const override {
+    return {
+        {BookmarkModelFactory::GetInstance(),
+         BookmarkModelFactory::GetDefaultFactory()},
+        {HistoryServiceFactory::GetInstance(),
+         HistoryServiceFactory::GetDefaultFactory()},
+        {TemplateURLServiceFactory::GetInstance(),
+         base::BindRepeating(&TemplateURLServiceFactory::BuildInstanceFor)}};
   }
 
   MockNetworkQualityProvider& mock_network_quality_provider() {
@@ -226,7 +251,11 @@ class UkmPageLoadMetricsObserverTest
         static_cast<int>(state));
   }
 
+  UkmPageLoadMetricsObserver* observer() const { return observer_; }
+
  private:
+  UkmPageLoadMetricsObserver* observer_;  // Non-owning raw pointer.
+
   MockNetworkQualityProvider mock_network_quality_provider_;
 };
 
@@ -651,10 +680,10 @@ TEST_F(UkmPageLoadMetricsObserverTest, LargestContentfulPaint_Trace) {
   EXPECT_EQ(1u, events.size());
   EXPECT_EQ("loading", events[0]->category);
   EXPECT_TRUE(events[0]->HasArg("data"));
-  std::unique_ptr<base::Value> arg;
+  base::Value arg;
   EXPECT_TRUE(events[0]->GetArgAsValue("data", &arg));
   base::DictionaryValue* arg_dict;
-  EXPECT_TRUE(arg->GetAsDictionary(&arg_dict));
+  EXPECT_TRUE(arg.GetAsDictionary(&arg_dict));
   int time;
   EXPECT_TRUE(arg_dict->GetInteger("durationInMilliseconds", &time));
   EXPECT_EQ(600, time);
@@ -684,7 +713,7 @@ TEST_F(UkmPageLoadMetricsObserverTest,
     tester()->SimulateTimingUpdate(timing);
 
     timing.paint_timing->largest_contentful_paint->largest_text_paint =
-        base::Optional<base::TimeDelta>();
+        absl::optional<base::TimeDelta>();
     timing.paint_timing->largest_contentful_paint->largest_text_paint_size = 0;
     PopulateRequiredTimingFields(&timing);
 
@@ -1044,11 +1073,12 @@ TEST_F(UkmPageLoadMetricsObserverTest, InputTiming) {
 TEST_F(UkmPageLoadMetricsObserverTest, MobileFriendliness) {
   NavigateAndCommit(GURL(kTestUrl1));
   blink::MobileFriendliness mobile_friendliness;
+  mobile_friendliness.viewport_device_width = blink::mojom::ViewportStatus::kNo;
   mobile_friendliness.viewport_hardcoded_width = 533;
-  mobile_friendliness.viewport_initial_scale = 0.123456;
-  mobile_friendliness.allow_user_zoom = true;
+  mobile_friendliness.viewport_initial_scale_x10 = 10;
+  mobile_friendliness.allow_user_zoom = blink::mojom::ViewportStatus::kYes;
   const int expected_viewport_hardcoded_width = 520;
-  const double expected_viewport_initial_scale = 1;
+  const int expected_viewport_initial_scale = 10;
 
   tester()->SimulateMobileFriendlinessUpdate(mobile_friendliness);
 
@@ -1462,17 +1492,27 @@ TEST_F(UkmPageLoadMetricsObserverTest, CpuTimeMetrics) {
 
 TEST_F(UkmPageLoadMetricsObserverTest, LayoutInstability) {
   NavigateAndCommit(GURL(kTestUrl1));
-
+  base::TimeTicks time_origin = base::TimeTicks::Now();
   page_load_metrics::mojom::FrameRenderDataUpdate render_data(1.0, 1.0, 0, 0, 0,
-                                                              0, {});
+                                                              0, 0, 0, {});
+  render_data.new_layout_shifts.emplace_back(
+      page_load_metrics::mojom::LayoutShift::New(
+          time_origin - base::TimeDelta::FromMilliseconds(4000), 0.5));
+  render_data.new_layout_shifts.emplace_back(
+      page_load_metrics::mojom::LayoutShift::New(
+          time_origin - base::TimeDelta::FromMilliseconds(3500), 0.5));
+
   tester()->SimulateRenderDataUpdate(render_data);
 
   // Simulate hiding the tab (the report should include shifts after hide).
   web_contents()->WasHidden();
 
-  render_data.layout_shift_delta = 1.5;
-  render_data.layout_shift_delta_before_input_or_scroll = 0.0;
-  tester()->SimulateRenderDataUpdate(render_data);
+  page_load_metrics::mojom::FrameRenderDataUpdate render_data_2(1.5, 0.0, 0, 0,
+                                                                0, 0, 0, 0, {});
+  render_data_2.new_layout_shifts.emplace_back(
+      page_load_metrics::mojom::LayoutShift::New(
+          time_origin - base::TimeDelta::FromMilliseconds(2500), 1.5));
+  tester()->SimulateRenderDataUpdate(render_data_2);
 
   // Simulate closing the tab.
   DeleteContents();
@@ -1492,13 +1532,21 @@ TEST_F(UkmPageLoadMetricsObserverTest, LayoutInstability) {
         PageLoad::
             kLayoutInstability_CumulativeShiftScore_MainFrame_BeforeInputOrScrollName,
         100);
+    ukm_recorder.ExpectEntryMetric(
+        ukm_entry,
+        PageLoad::
+            kLayoutInstability_MaxCumulativeShiftScore_SessionWindow_Gap1000ms_Max5000msName,
+        250);
     ukm_recorder.ExpectEntryMetric(kv.second.get(),
                                    PageLoad::kNavigation_PageEndReason3Name,
                                    page_load_metrics::END_CLOSE);
   }
-
   EXPECT_THAT(tester()->histogram_tester().GetAllSamples(
                   "PageLoad.LayoutInstability.CumulativeShiftScore"),
+              testing::ElementsAre(base::Bucket(25, 1)));
+  EXPECT_THAT(tester()->histogram_tester().GetAllSamples(
+                  "PageLoad.LayoutInstability.MaxCumulativeShiftScore."
+                  "SessionWindow.Gap1000ms.Max5000ms"),
               testing::ElementsAre(base::Bucket(25, 1)));
 }
 
@@ -1585,7 +1633,7 @@ TEST_F(UkmPageLoadMetricsObserverTest, LayoutInstabilitySubframeAggregation) {
 
   // Simulate layout instability in the main frame.
   page_load_metrics::mojom::FrameRenderDataUpdate render_data(1.0, 1.0, 0, 0, 0,
-                                                              0, {});
+                                                              0, 0, 0, {});
   tester()->SimulateRenderDataUpdate(render_data);
 
   RenderFrameHost* subframe =
@@ -1755,7 +1803,7 @@ TEST_F(UkmPageLoadMetricsObserverTest, HomePageReported) {
 }
 
 TEST_F(UkmPageLoadMetricsObserverTest, DefaultSearchReported) {
-  static const char kShortName[] = "test";
+  static const char16_t kShortName[] = u"test";
   static const char kSearchURL[] =
       "https://www.searchurl.com/search?q={searchTerms}";
   static const char kSearchURLWithQuery[] =
@@ -1768,7 +1816,7 @@ TEST_F(UkmPageLoadMetricsObserverTest, DefaultSearchReported) {
   ASSERT_TRUE(model->loaded());
 
   TemplateURLData data;
-  data.SetShortName(base::ASCIIToUTF16(kShortName));
+  data.SetShortName(kShortName);
   data.SetKeyword(data.short_name());
   data.SetURL(kSearchURL);
 
@@ -1900,7 +1948,7 @@ TEST_F(UkmPageLoadMetricsObserverTest, IsExistingBookmark) {
       BookmarkModelFactory::GetForBrowserContext(browser_context());
   ASSERT_TRUE(model);
   ASSERT_TRUE(
-      model->AddURL(model->bookmark_bar_node(), 0, base::string16(), url));
+      model->AddURL(model->bookmark_bar_node(), 0, std::u16string(), url));
 
   NavigateAndCommit(url);
 
@@ -1921,13 +1969,21 @@ TEST_F(UkmPageLoadMetricsObserverTest, IsExistingBookmark) {
 TEST_F(UkmPageLoadMetricsObserverTest, IsNewBookmark) {
   GURL url(kTestUrl1);
 
+  history::HistoryService* history_service =
+      HistoryServiceFactory::GetForProfile(profile(),
+                                           ServiceAccessType::IMPLICIT_ACCESS);
+  ASSERT_TRUE(history_service);
+  history_service->AddPage(url, base::Time::Now(),
+                           history::VisitSource::SOURCE_BROWSED);
+
   NavigateAndCommit(url);
+  history::BlockUntilHistoryProcessesPendingRequests(history_service);
 
   bookmarks::BookmarkModel* model =
       BookmarkModelFactory::GetForBrowserContext(browser_context());
   ASSERT_TRUE(model);
   ASSERT_TRUE(
-      model->AddURL(model->bookmark_bar_node(), 0, base::string16(), url));
+      model->AddURL(model->bookmark_bar_node(), 0, std::u16string(), url));
 
   // Simulate closing the tab.
   DeleteContents();
@@ -1941,6 +1997,90 @@ TEST_F(UkmPageLoadMetricsObserverTest, IsNewBookmark) {
       entry, PageLoad::kIsExistingBookmarkName, 0);
   tester()->test_ukm_recorder().ExpectEntryMetric(
       entry, PageLoad::kIsNewBookmarkName, 1);
+}
+
+// Android does not have NTP Custom Links.
+#if !defined(OS_ANDROID)
+TEST_F(UkmPageLoadMetricsObserverTest, IsNTPCustomLink) {
+  GURL url(kTestUrl1);
+
+  history::HistoryService* history_service =
+      HistoryServiceFactory::GetForProfile(profile(),
+                                           ServiceAccessType::IMPLICIT_ACCESS);
+  ASSERT_TRUE(history_service);
+  history_service->AddPage(url, base::Time::Now(),
+                           history::VisitSource::SOURCE_BROWSED);
+
+  NavigateAndCommit(url);
+  history::BlockUntilHistoryProcessesPendingRequests(history_service);
+
+  ntp_tiles::CustomLinksStore custom_link_store(profile()->GetPrefs());
+  custom_link_store.StoreLinks({
+      {url, u"Test Title"},
+  });
+
+  // Simulate closing the tab.
+  DeleteContents();
+
+  const auto& ukm_recorder = tester()->test_ukm_recorder();
+  std::map<ukm::SourceId, ukm::mojom::UkmEntryPtr> merged_entries =
+      ukm_recorder.GetMergedEntriesByName(PageLoad::kEntryName);
+  EXPECT_EQ(1ul, merged_entries.size());
+  const ukm::mojom::UkmEntry* entry = merged_entries.begin()->second.get();
+  tester()->test_ukm_recorder().ExpectEntryMetric(
+      entry, PageLoad::kIsNTPCustomLinkName, 1);
+}
+#endif  // !defined(OS_ANDROID)
+
+TEST_F(UkmPageLoadMetricsObserverTest, DurationSinceLastVisitSeconds) {
+  // TODO(tommycli): Should we move this test to either HistoryClustersService
+  // or HistoryClustersTabHelper? On the one hand, the logic resides there. On
+  // the other hand this serves as a good integration test with UKM.
+  GURL url(kTestUrl1);
+
+  history::HistoryService* history_service =
+      HistoryServiceFactory::GetForProfile(profile(),
+                                           ServiceAccessType::IMPLICIT_ACCESS);
+  ASSERT_TRUE(history_service);
+  // Fake that we visited this site 45 days ago.
+  history_service->AddPage(url,
+                           base::Time::Now() - base::TimeDelta::FromDays(45),
+                           history::VisitSource::SOURCE_BROWSED);
+  NavigateAndCommit(url);
+  history::BlockUntilHistoryProcessesPendingRequests(history_service);
+
+  // Simulate closing the tab.
+  DeleteContents();
+
+  // Verify UKM records that we visited the page clamped to 30 days ago to
+  // respect the UKM retention period.
+  const auto& ukm_recorder = tester()->test_ukm_recorder();
+  std::map<ukm::SourceId, ukm::mojom::UkmEntryPtr> merged_entries =
+      ukm_recorder.GetMergedEntriesByName(PageLoad::kEntryName);
+  EXPECT_EQ(1ul, merged_entries.size());
+  const ukm::mojom::UkmEntry* entry = merged_entries.begin()->second.get();
+  tester()->test_ukm_recorder().ExpectEntryMetric(
+      entry, PageLoad::kDurationSinceLastVisitSecondsName,
+      base::TimeDelta::FromDays(30).InSeconds());
+}
+
+TEST_F(UkmPageLoadMetricsObserverTest,
+       DurationSinceLastVisitSecondsHistoryServiceLosesRace) {
+  GURL url(kTestUrl1);
+
+  // Simulate that we navigated, but HistoryService doesn't respond back to the
+  // UKM observer before it's destroyed.
+  NavigateAndCommit(url);
+  DeleteContents();
+
+  // Verify UKM records -1 in this case.
+  const auto& ukm_recorder = tester()->test_ukm_recorder();
+  std::map<ukm::SourceId, ukm::mojom::UkmEntryPtr> merged_entries =
+      ukm_recorder.GetMergedEntriesByName(PageLoad::kEntryName);
+  EXPECT_EQ(1ul, merged_entries.size());
+  const ukm::mojom::UkmEntry* entry = merged_entries.begin()->second.get();
+  tester()->test_ukm_recorder().ExpectEntryMetric(
+      entry, PageLoad::kDurationSinceLastVisitSecondsName, -1);
 }
 
 class TestOfflinePreviewsUkmPageLoadMetricsObserver
@@ -2026,6 +2166,30 @@ TEST_F(UkmPageLoadMetricsObserverTest, NavigationTiming) {
   }
 }
 
+TEST_F(UkmPageLoadMetricsObserverTest, CLSNeverForegroundedNoReport) {
+  web_contents()->WasHidden();
+  NavigateAndCommit(GURL(kTestUrl1));
+
+  page_load_metrics::mojom::FrameRenderDataUpdate render_data(1.0, 1.0, 0, 0, 0,
+                                                              0, 0, 0, {});
+  tester()->SimulateRenderDataUpdate(render_data);
+
+  // Simulate closing the tab.
+  DeleteContents();
+
+  const auto& ukm_recorder = tester()->test_ukm_recorder();
+  std::map<ukm::SourceId, ukm::mojom::UkmEntryPtr> merged_entries =
+      ukm_recorder.GetMergedEntriesByName(PageLoad::kEntryName);
+  EXPECT_EQ(1ul, merged_entries.size());
+
+  for (const auto& kv : merged_entries) {
+    const ukm::mojom::UkmEntry* ukm_entry = kv.second.get();
+    ukm_recorder.ExpectEntrySourceHasUrl(ukm_entry, GURL(kTestUrl1));
+    EXPECT_FALSE(ukm_recorder.EntryHasMetric(
+        ukm_entry, PageLoad::kLayoutInstability_CumulativeShiftScoreName));
+  }
+}
+
 class CLSUkmPageLoadMetricsObserverTest
     : public UkmPageLoadMetricsObserverTest {
  protected:
@@ -2041,8 +2205,8 @@ class CLSUkmPageLoadMetricsObserverTest
 void CLSUkmPageLoadMetricsObserverTest::SimulateShiftDelta(
     float delta,
     content::RenderFrameHost* frame) {
-  page_load_metrics::mojom::FrameRenderDataUpdate render_data(delta, delta, 0,
-                                                              0, 0, 0, {});
+  page_load_metrics::mojom::FrameRenderDataUpdate render_data(
+      delta, delta, 0, 0, 0, 0, 0, 0, {});
   tester()->SimulateRenderDataUpdate(render_data, frame);
 }
 
@@ -2116,4 +2280,71 @@ TEST_F(CLSUkmPageLoadMetricsObserverTest, BeforeInputOrScroll_Main) {
 
 TEST_F(CLSUkmPageLoadMetricsObserverTest, BeforeInputOrScroll_Sub) {
   RunBeforeInputOrScrollCase(true);
+}
+
+void TestViewportInitialScale(int expected, int input) {
+  blink::MobileFriendliness mf;
+  mf.viewport_initial_scale_x10 = input;
+  EXPECT_EQ(expected, page_load_metrics::GetBucketedViewportInitialScale(mf));
+}
+
+TEST_F(UkmPageLoadMetricsObserverTest, BucketingViewportInitialScale) {
+  // Default value to be ignored.
+  TestViewportInitialScale(-1, -1);
+
+  // Typical case initail-scale=1.0.
+  TestViewportInitialScale(10, 10);
+
+  // Bigger number cases.
+  TestViewportInitialScale(12, 12);
+  TestViewportInitialScale(14, 15);
+  TestViewportInitialScale(14, 15);
+  TestViewportInitialScale(14, 17);
+  TestViewportInitialScale(18, 18);
+  TestViewportInitialScale(18, 25);
+  TestViewportInitialScale(26, 26);
+
+  // Smaller number cases.
+  TestViewportInitialScale(10, 9);
+  TestViewportInitialScale(8, 8);
+  TestViewportInitialScale(8, 7);
+  TestViewportInitialScale(6, 6);
+  TestViewportInitialScale(6, 3);
+  TestViewportInitialScale(2, 1);
+  TestViewportInitialScale(2, 0);
+}
+
+void TestViewportHardcodedWidth(int expected, int input) {
+  blink::MobileFriendliness mf;
+  mf.viewport_hardcoded_width = input;
+  EXPECT_EQ(expected, page_load_metrics::GetBucketedViewportHardcodedWidth(mf));
+}
+
+TEST_F(UkmPageLoadMetricsObserverTest, BucketingViewportHardcodedWidth) {
+  // Default value to be ignored.
+  TestViewportHardcodedWidth(-1, -1);
+
+  // Middle case.
+  TestViewportHardcodedWidth(500, 500);
+
+  // Bigger number cases.
+  TestViewportHardcodedWidth(500, 509);
+
+  TestViewportHardcodedWidth(510, 510);
+  TestViewportHardcodedWidth(510, 519);
+  TestViewportHardcodedWidth(520, 520);
+  TestViewportHardcodedWidth(520, 539);
+  TestViewportHardcodedWidth(540, 540);
+  TestViewportHardcodedWidth(540, 579);
+  TestViewportHardcodedWidth(580, 580);
+  TestViewportHardcodedWidth(580, 640);
+  TestViewportHardcodedWidth(820, 1000);
+  TestViewportHardcodedWidth(1780, 2000);
+
+  // Smaller number cases.
+  TestViewportHardcodedWidth(500, 491);
+  TestViewportHardcodedWidth(490, 490);
+  TestViewportHardcodedWidth(480, 480);
+  TestViewportHardcodedWidth(460, 421);
+  TestViewportHardcodedWidth(180, 180);
 }

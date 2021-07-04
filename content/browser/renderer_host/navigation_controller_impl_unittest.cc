@@ -13,10 +13,11 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "base/cxx17_backports.h"
 #include "base/files/file_util.h"
 #include "base/memory/ptr_util.h"
-#include "base/stl_util.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/gtest_util.h"
@@ -33,7 +34,6 @@
 #include "content/browser/webui/web_ui_controller_factory_registry.h"
 #include "content/common/content_navigation_policy.h"
 #include "content/common/frame.mojom.h"
-#include "content/common/frame_messages.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -42,6 +42,7 @@
 #include "content/public/common/url_constants.h"
 #include "content/public/test/mock_render_process_host.h"
 #include "content/public/test/navigation_simulator.h"
+#include "content/public/test/scoped_web_ui_controller_factory_registration.h"
 #include "content/public/test/test_navigation_ui_data.h"
 #include "content/public/test/test_utils.h"
 #include "content/test/navigation_simulator_impl.h"
@@ -119,6 +120,10 @@ class MockPageBroadcast : public blink::mojom::PageBroadcast {
               SetHistoryOffsetAndLength,
               (int32_t offset, int32_t length),
               (override));
+  MOCK_METHOD(void,
+              SetPageBaseBackgroundColor,
+              (absl::optional<SkColor> color),
+              (override));
 
   mojo::PendingAssociatedRemote<blink::mojom::PageBroadcast> GetRemote() {
     return receiver_.BindNewEndpointAndPassDedicatedRemote();
@@ -193,7 +198,7 @@ TEST(TimeSmoother, ClockBackwardsJump) {
 class NavigationControllerTest : public RenderViewHostImplTestHarness,
                                  public WebContentsObserver {
  public:
-  NavigationControllerTest() {}
+  NavigationControllerTest() = default;
 
   void SetUp() override {
     RenderViewHostImplTestHarness::SetUp();
@@ -201,8 +206,9 @@ class NavigationControllerTest : public RenderViewHostImplTestHarness,
     ASSERT_TRUE(web_contents);  // The WebContents should be created by now.
     WebContentsObserver::Observe(web_contents);
 
-    WebUIControllerFactory::RegisterFactory(
-        ContentWebUIControllerFactory::GetInstance());
+    factory_registration_ =
+        std::make_unique<ScopedWebUIControllerFactoryRegistration>(
+            ContentWebUIControllerFactory::GetInstance());
   }
 
   // WebContentsObserver:
@@ -270,6 +276,10 @@ class NavigationControllerTest : public RenderViewHostImplTestHarness,
   size_t navigation_entries_deleted_counter_ = 0;
   PrunedDetails last_navigation_entry_pruned_details_;
   ReloadType last_reload_type_;
+
+ private:
+  std::unique_ptr<ScopedWebUIControllerFactoryRegistration>
+      factory_registration_;
 };
 
 class TestWebContentsDelegate : public WebContentsDelegate {
@@ -1348,6 +1358,7 @@ TEST_F(NavigationControllerTest, ResetEntryValuesAfterCommit) {
   const GURL url1("http://foo/1");
   auto navigation =
       NavigationSimulatorImpl::CreateBrowserInitiated(url1, contents());
+  navigation->set_should_replace_current_entry(true);
   navigation->Start();
 
   // Set up some sample values.
@@ -1359,15 +1370,12 @@ TEST_F(NavigationControllerTest, ResetEntryValuesAfterCommit) {
   pending_entry->SetPostData(
       network::ResourceRequestBody::CreateFromBytes(raw_data, length));
   pending_entry->set_is_renderer_initiated(true);
-  pending_entry->set_should_replace_entry(true);
   pending_entry->set_should_clear_history_list(true);
   EXPECT_TRUE(pending_entry->GetPostData());
   EXPECT_TRUE(pending_entry->is_renderer_initiated());
-  EXPECT_TRUE(pending_entry->should_replace_entry());
   EXPECT_TRUE(pending_entry->should_clear_history_list());
 
   // Fake a commit response.
-  navigation->set_should_replace_current_entry(true);
   navigation->Commit();
 
   // Certain values that are only used for pending entries get reset after
@@ -1375,7 +1383,6 @@ TEST_F(NavigationControllerTest, ResetEntryValuesAfterCommit) {
   NavigationEntryImpl* committed_entry = controller.GetLastCommittedEntry();
   EXPECT_FALSE(committed_entry->GetPostData());
   EXPECT_FALSE(committed_entry->is_renderer_initiated());
-  EXPECT_FALSE(committed_entry->should_replace_entry());
   EXPECT_FALSE(committed_entry->should_clear_history_list());
 }
 
@@ -1402,8 +1409,12 @@ TEST_F(NavigationControllerTest, RedirectsAreNotResetByCommit) {
   navigation->Redirect(url2);
   navigation->Commit();
   NavigationEntryImpl* committed_entry = controller.GetLastCommittedEntry();
-  ASSERT_EQ(1U, committed_entry->GetRedirectChain().size());
-  EXPECT_EQ(url2, committed_entry->GetRedirectChain()[0]);
+
+  // The navigation started out trying to get to |url1|, but got redirected to
+  // |url2|, so they're both in the redirect chain.
+  ASSERT_EQ(2U, committed_entry->GetRedirectChain().size());
+  EXPECT_EQ(url1, committed_entry->GetRedirectChain()[0]);
+  EXPECT_EQ(url2, committed_entry->GetRedirectChain()[1]);
 }
 
 // Tests that webkit preferences are updated when user agent override changes.
@@ -2290,6 +2301,7 @@ TEST_F(NavigationControllerTest, SameDocument_Replace) {
   params->did_create_new_entry = false;
   params->should_replace_current_entry = true;
   params->url = url2;
+  params->origin = url::Origin::Create(url2);
   params->referrer = blink::mojom::Referrer::New();
   params->transition = ui::PAGE_TRANSITION_LINK;
   params->should_update_history = true;
@@ -2297,7 +2309,6 @@ TEST_F(NavigationControllerTest, SameDocument_Replace) {
   params->method = "GET";
   params->page_state = blink::PageState::CreateFromURL(url2);
   params->post_id = -1;
-  params->redirects.push_back(url2);
 
   // This should NOT generate a new entry, nor prune the list.
   LoadCommittedDetailsObserver observer(contents());
@@ -2322,7 +2333,6 @@ TEST_F(NavigationControllerTest, PushStateWithoutPreviousEntry) {
   params->should_update_history = true;
   params->post_id = -1;
   params->gesture = NavigationGesture::NavigationGestureAuto;
-  params->redirects.push_back(url);
   main_test_rfh()->SendRendererInitiatedNavigationRequest(
       url, false /* has_user_gesture */);
   main_test_rfh()->PrepareForCommit();
@@ -2385,10 +2395,10 @@ TEST_F(NavigationControllerTest, RestoreNavigate) {
   std::vector<std::unique_ptr<NavigationEntry>> entries;
   std::unique_ptr<NavigationEntry> entry =
       NavigationController::CreateNavigationEntry(
-          url, Referrer(), base::nullopt, ui::PAGE_TRANSITION_RELOAD, false,
+          url, Referrer(), absl::nullopt, ui::PAGE_TRANSITION_RELOAD, false,
           std::string(), browser_context(),
           nullptr /* blob_url_loader_factory */);
-  entry->SetTitle(base::ASCIIToUTF16("Title"));
+  entry->SetTitle(u"Title");
   const base::Time timestamp = base::Time::Now();
   entry->SetTimestamp(timestamp);
   entries.push_back(std::move(entry));
@@ -2453,10 +2463,10 @@ TEST_F(NavigationControllerTest, RestoreNavigateAfterFailure) {
   std::vector<std::unique_ptr<NavigationEntry>> entries;
   std::unique_ptr<NavigationEntry> new_entry =
       NavigationController::CreateNavigationEntry(
-          url, Referrer(), base::nullopt, ui::PAGE_TRANSITION_RELOAD, false,
+          url, Referrer(), absl::nullopt, ui::PAGE_TRANSITION_RELOAD, false,
           std::string(), browser_context(),
           nullptr /* blob_url_loader_factory */);
-  new_entry->SetTitle(base::ASCIIToUTF16("Title"));
+  new_entry->SetTitle(u"Title");
   entries.push_back(std::move(new_entry));
   std::unique_ptr<WebContents> our_contents =
       WebContents::Create(WebContents::CreateParams(browser_context()));
@@ -2890,150 +2900,6 @@ TEST_F(NavigationControllerTest, DontShowRendererURLInNewTabAfterCommit) {
   }
 }
 
-// Tests that IsURLSameDocumentNavigation returns appropriate results.
-// Prevents regression for bug 1126349.
-TEST_F(NavigationControllerTest, IsSameDocumentNavigation) {
-  NavigationControllerImpl& controller = controller_impl();
-  const GURL url("http://www.google.com/home.html");
-
-  // If the renderer claims it performed an same-document navigation from
-  // about:blank, trust the renderer.
-  // This can happen when an iframe is created and populated via
-  // document.write(), then tries to perform a fragment navigation.
-  // TODO(japhet): We should only trust the renderer if the about:blank
-  // was the first document in the given frame, but we don't have enough
-  // information to identify that case currently.
-  // TODO(creis): Update this to verify that the origin of the about:blank page
-  // matches if the URL doesn't look same-origin.
-  const GURL blank_url(url::kAboutBlankURL);
-  const url::Origin blank_origin;
-  NavigationSimulator::NavigateAndCommitFromDocument(blank_url,
-                                                     main_test_rfh());
-  EXPECT_TRUE(controller.IsURLSameDocumentNavigation(
-      url, url::Origin::Create(url), true, main_test_rfh()));
-
-  // Navigate to URL with no refs.
-  NavigationSimulator::NavigateAndCommitFromDocument(url, main_test_rfh());
-
-  // Reloading the page is not a same-document navigation.
-  EXPECT_FALSE(controller.IsURLSameDocumentNavigation(
-      url, url::Origin::Create(url), false, main_test_rfh()));
-  const GURL other_url("http://www.google.com/add.html");
-  EXPECT_FALSE(controller.IsURLSameDocumentNavigation(
-      other_url, url::Origin::Create(other_url), false, main_test_rfh()));
-  const GURL url_with_ref("http://www.google.com/home.html#my_ref");
-  EXPECT_TRUE(controller.IsURLSameDocumentNavigation(
-      url_with_ref, url::Origin::Create(url_with_ref), true, main_test_rfh()));
-
-  // Navigate to URL with refs.
-  NavigationSimulator::NavigateAndCommitFromBrowser(contents(), url_with_ref);
-
-  // Reloading the page is not a same-document navigation.
-  EXPECT_FALSE(controller.IsURLSameDocumentNavigation(
-      url_with_ref, url::Origin::Create(url_with_ref), false, main_test_rfh()));
-  EXPECT_FALSE(controller.IsURLSameDocumentNavigation(
-      url, url::Origin::Create(url), false, main_test_rfh()));
-  EXPECT_FALSE(controller.IsURLSameDocumentNavigation(
-      other_url, url::Origin::Create(other_url), false, main_test_rfh()));
-  const GURL other_url_with_ref("http://www.google.com/home.html#my_other_ref");
-  EXPECT_TRUE(controller.IsURLSameDocumentNavigation(
-      other_url_with_ref, url::Origin::Create(other_url_with_ref), true,
-      main_test_rfh()));
-
-  // Going to the same url again will be considered same-document navigation
-  // if the renderer says it is even if the navigation type isn't SAME_DOCUMENT.
-  EXPECT_TRUE(controller.IsURLSameDocumentNavigation(
-      url_with_ref, url::Origin::Create(url_with_ref), true, main_test_rfh()));
-
-  // Going back to the non ref url will be considered same-document navigation
-  // if the navigation type is SAME_DOCUMENT.
-  EXPECT_TRUE(controller.IsURLSameDocumentNavigation(
-      url, url::Origin::Create(url), true, main_test_rfh()));
-
-  // If the renderer says this is a same-origin same-document navigation,
-  // believe it. This is the pushState/replaceState case.
-  EXPECT_TRUE(controller.IsURLSameDocumentNavigation(
-      other_url, url::Origin::Create(other_url), true, main_test_rfh()));
-
-  // Don't believe the renderer if it claims a cross-origin navigation is
-  // a same-document navigation.
-  const GURL different_origin_url("http://www.example.com");
-  MockRenderProcessHost* rph = main_test_rfh()->GetProcess();
-  EXPECT_EQ(0, rph->bad_msg_count());
-  EXPECT_FALSE(controller.IsURLSameDocumentNavigation(
-      different_origin_url, url::Origin::Create(different_origin_url), true,
-      main_test_rfh()));
-  EXPECT_EQ(1, rph->bad_msg_count());
-}
-
-// Tests that IsURLSameDocumentNavigation behaves properly with the
-// allow_universal_access_from_file_urls flag.
-TEST_F(NavigationControllerTest,
-       IsSameDocumentNavigationWithUniversalFileAccess) {
-  NavigationControllerImpl& controller = controller_impl();
-
-  // Test allow_universal_access_from_file_urls flag.
-  const GURL different_origin_url("http://www.example.com");
-  MockRenderProcessHost* rph = main_test_rfh()->GetProcess();
-  auto prefs = controller.GetWebContents()->GetOrCreateWebPreferences();
-  prefs.allow_universal_access_from_file_urls = true;
-  controller.GetWebContents()->SetWebPreferences(prefs);
-  prefs = controller.GetWebContents()->GetOrCreateWebPreferences();
-  EXPECT_TRUE(prefs.allow_universal_access_from_file_urls);
-
-  // Allow same-document navigation to be cross-origin if existing URL is file
-  // scheme.
-  const GURL file_url("file:///foo/index.html");
-  const url::Origin file_origin = url::Origin::Create(file_url);
-  NavigationSimulator::NavigateAndCommitFromDocument(file_url, main_test_rfh());
-  EXPECT_TRUE(
-      file_origin.IsSameOriginWith(main_test_rfh()->GetLastCommittedOrigin()));
-  EXPECT_EQ(0, rph->bad_msg_count());
-  EXPECT_TRUE(controller.IsURLSameDocumentNavigation(
-      different_origin_url, url::Origin::Create(different_origin_url), true,
-      main_test_rfh()));
-  EXPECT_EQ(0, rph->bad_msg_count());
-
-  // Doing a replaceState to a cross-origin URL is thus allowed.
-  auto params = mojom::DidCommitProvisionalLoadParams::New();
-  params->did_create_new_entry = false;
-  params->url = different_origin_url;
-  params->referrer = blink::mojom::Referrer::New();
-  params->origin = file_origin;
-  params->transition = ui::PAGE_TRANSITION_LINK;
-  params->gesture = NavigationGestureUser;
-  params->page_state = blink::PageState::CreateFromURL(different_origin_url);
-  params->method = "GET";
-  params->post_id = -1;
-  params->should_update_history = true;
-  params->redirects.push_back(different_origin_url);
-  main_test_rfh()->SendRendererInitiatedNavigationRequest(different_origin_url,
-                                                          false);
-  main_test_rfh()->PrepareForCommit();
-  contents()->GetMainFrame()->SendNavigateWithParams(
-      std::move(params), true /* was_within_same_document */);
-
-  // At this point, we should still consider the current origin to be file://,
-  // so that a file URL would still be a same-document navigation.  See
-  // https://crbug.com/553418.
-  EXPECT_TRUE(
-      file_origin.IsSameOriginWith(main_test_rfh()->GetLastCommittedOrigin()));
-  EXPECT_TRUE(controller.IsURLSameDocumentNavigation(
-      file_url, url::Origin::Create(file_url), true, main_test_rfh()));
-  EXPECT_EQ(0, rph->bad_msg_count());
-
-  // Don't honor allow_universal_access_from_file_urls if actual URL is
-  // not file scheme.
-  const GURL url("http://www.google.com/home.html");
-  TestRenderFrameHost* new_rfh = static_cast<TestRenderFrameHost*>(
-      NavigationSimulator::NavigateAndCommitFromDocument(url, main_test_rfh()));
-  rph = new_rfh->GetProcess();
-  EXPECT_FALSE(controller.IsURLSameDocumentNavigation(
-      different_origin_url, url::Origin::Create(different_origin_url), true,
-      new_rfh));
-  EXPECT_EQ(1, rph->bad_msg_count());
-}
-
 // This test verifies that a subframe navigation that would qualify as
 // same-document within the main frame, given its URL, has no impact on the
 // main frame.
@@ -3075,7 +2941,7 @@ TEST_F(NavigationControllerTest, CloneAndGoBack) {
   NavigationControllerImpl& controller = controller_impl();
   const GURL url1("http://foo1");
   const GURL url2("http://foo2");
-  const base::string16 title(base::ASCIIToUTF16("Title"));
+  const std::u16string title(u"Title");
 
   NavigateAndCommit(url1);
   controller.GetVisibleEntry()->SetTitle(title);
@@ -3100,7 +2966,7 @@ TEST_F(NavigationControllerTest, CloneAndReload) {
   NavigationControllerImpl& controller = controller_impl();
   const GURL url1("http://foo1");
   const GURL url2("http://foo2");
-  const base::string16 title(base::ASCIIToUTF16("Title"));
+  const std::u16string title(u"Title");
 
   NavigateAndCommit(url1);
   controller.GetVisibleEntry()->SetTitle(title);
@@ -3764,7 +3630,7 @@ TEST_F(NavigationControllerTest, CopyRestoredStateAndNavigate) {
   for (size_t i = 0; i < base::size(kRestoredUrls); ++i) {
     std::unique_ptr<NavigationEntry> entry =
         NavigationController::CreateNavigationEntry(
-            kRestoredUrls[i], Referrer(), base::nullopt,
+            kRestoredUrls[i], Referrer(), absl::nullopt,
             ui::PAGE_TRANSITION_RELOAD, false, std::string(), browser_context(),
             nullptr /* blob_url_loader_factory */);
     entries.push_back(std::move(entry));
@@ -4096,7 +3962,7 @@ TEST_F(NavigationControllerTest, PushStateUpdatesTitleAndFavicon) {
                                                      main_test_rfh());
 
   // Set title and favicon.
-  base::string16 title(base::ASCIIToUTF16("Title"));
+  std::u16string title(u"Title");
   FaviconStatus favicon;
   favicon.valid = true;
   favicon.url = GURL("http://foo/favicon.ico");
@@ -4113,11 +3979,10 @@ TEST_F(NavigationControllerTest, PushStateUpdatesTitleAndFavicon) {
   params->method = "GET";
   params->should_update_history = true;
   params->post_id = -1;
-  params->redirects.push_back(kUrl2);
   main_test_rfh()->SendNavigateWithParams(std::move(params), true);
 
   // The title should immediately be visible on the new NavigationEntry.
-  base::string16 new_title =
+  std::u16string new_title =
       controller().GetLastCommittedEntry()->GetTitleForDisplay();
   EXPECT_EQ(title, new_title);
   FaviconStatus new_favicon =
@@ -4414,8 +4279,8 @@ TEST_F(NavigationControllerTest, NoURLRewriteForSubframes) {
       url::Origin::Create(kUrl2), true /* is_renderer_initiated */,
       main_test_rfh()->GetSiteInstance(), Referrer(), ui::PAGE_TRANSITION_LINK,
       false /* should_replace_current_entry */,
-      blink::NavigationDownloadPolicy(), "GET", nullptr, "", nullptr,
-      base::nullopt);
+      blink::NavigationDownloadPolicy(), "GET", nullptr, "",
+      network::mojom::SourceLocation::New(), nullptr, absl::nullopt);
 
   // Clean up the handler.
   BrowserURLHandlerImpl::GetInstance()->RemoveHandlerForTesting(
@@ -4453,7 +4318,8 @@ TEST_F(NavigationControllerTest,
       url::Origin::Create(main_url), true /* is_renderer_initiated */,
       main_test_rfh()->GetSiteInstance(), Referrer(), ui::PAGE_TRANSITION_LINK,
       should_replace_current_entry, blink::NavigationDownloadPolicy(), "GET",
-      nullptr, "", nullptr, base::nullopt);
+      nullptr, "", network::mojom::SourceLocation::New(), nullptr,
+      absl::nullopt);
   NavigationRequest* request = node->navigation_request();
   ASSERT_TRUE(request);
 
@@ -4556,6 +4422,72 @@ TEST_F(NavigationControllerTest, PruneForwardEntriesAfterClone) {
   EXPECT_EQ(url2, clone->GetController().GetVisibleEntry()->GetURL());
   EXPECT_EQ(0U, navigation_list_pruned_counter_);
   EXPECT_EQ(1, delegate->navigation_state_change_count());
+}
+
+TEST_F(NavigationControllerTest,
+       NavigateToAppHistoryKey_DifferentSiteInstance) {
+  NavigationControllerImpl& controller = controller_impl();
+  const GURL url1("http://foo1");
+  const GURL url2("http://foo2");
+
+  // Navigate and set a key.
+  NavigateAndCommit(url1);
+  std::string first_key = "12345";
+  controller.GetLastCommittedEntry()
+      ->GetFrameEntry(root_ftn())
+      ->set_app_history_key(first_key);
+
+  // Navigate to a new site instance. The key should not be shared.
+  NavigateAndCommit(url2);
+  EXPECT_NE(controller.GetLastCommittedEntry()
+                ->GetFrameEntry(root_ftn())
+                ->app_history_key(),
+            first_key);
+  EXPECT_FALSE(controller.GetPendingEntry());
+
+  // Attempte to provide the cross-site-instance key to
+  // NavigateToAppHistoryKey(). No navigation should occur.
+  controller.NavigateToAppHistoryKey(root_ftn(), first_key);
+  EXPECT_FALSE(controller.GetPendingEntry());
+}
+
+TEST_F(NavigationControllerTest, NavigateToAppHistoryKey_KeyForWrongFrame) {
+  const GURL kUrl1("http://google.com");
+
+  // Simulate navigating to a page that has a same-origin subframe.
+  NavigationSimulator::NavigateAndCommitFromDocument(kUrl1, main_test_rfh());
+  TestRenderFrameHost* subframe = main_test_rfh()->AppendChild("subframe");
+  NavigationSimulator::NavigateAndCommitFromDocument(kUrl1, subframe);
+
+  // Set a main frame key
+  std::string first_main_key = "12345";
+  controller_impl()
+      .GetLastCommittedEntry()
+      ->GetFrameEntry(root_ftn())
+      ->set_app_history_key(first_main_key);
+
+  // Navigate both frames again.
+  const GURL kUrl2("http://google.com#bar");
+  auto same_document_navigation_main =
+      NavigationSimulator::CreateRendererInitiated(kUrl2, main_test_rfh());
+  same_document_navigation_main->CommitSameDocument();
+  auto same_document_navigation_subframe =
+      NavigationSimulator::CreateRendererInitiated(kUrl2, subframe);
+  same_document_navigation_subframe->CommitSameDocument();
+  ASSERT_EQ(3, controller_impl().GetEntryCount());
+
+  // Call NavigateToAppHistoryKey() on the subframe with the key from the main
+  // frame. No navigation should begin, because we should only match keys for
+  // the target frame.
+  FrameTreeNode* subframe_node =
+      main_test_rfh()->frame_tree_node()->child_at(0);
+  controller_impl().NavigateToAppHistoryKey(subframe_node, first_main_key);
+  EXPECT_FALSE(controller_impl().GetPendingEntry());
+
+  // Call NavigateToAppHistoryKey() on the main frame with the key from the main
+  // frame. This time a navigation should begin.
+  controller_impl().NavigateToAppHistoryKey(root_ftn(), first_main_key);
+  EXPECT_TRUE(controller_impl().GetPendingEntry());
 }
 
 }  // namespace content

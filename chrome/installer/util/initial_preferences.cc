@@ -6,13 +6,15 @@
 
 #include <stddef.h>
 
+#include <memory>
+
+#include "base/cxx17_backports.h"
 #include "base/environment.h"
 #include "base/files/file_util.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/notreached.h"
-#include "base/stl_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
@@ -113,7 +115,7 @@ void InitialPreferences::InitializeFromCommandLine(
         cmd_line.GetSwitchValuePath(installer::switches::kInstallerData));
     InitializeFromFilePath(prefs_path);
   } else {
-    initial_dictionary_.reset(new base::DictionaryValue());
+    initial_dictionary_ = std::make_unique<base::DictionaryValue>();
   }
 
   DCHECK(initial_dictionary_.get());
@@ -200,7 +202,7 @@ bool InitialPreferences::InitializeFromString(const std::string& json_data) {
 
   bool data_is_valid = true;
   if (!initial_dictionary_.get()) {
-    initial_dictionary_.reset(new base::DictionaryValue());
+    initial_dictionary_ = std::make_unique<base::DictionaryValue>();
     data_is_valid = false;
   } else {
     // Cache a pointer to the distribution dictionary.

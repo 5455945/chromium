@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "build/build_config.h"
+#include "components/password_manager/core/browser/android_affiliation/affiliated_match_helper.h"
 #include "components/password_manager/core/browser/browser_save_password_progress_logger.h"
 #include "components/password_manager/core/browser/credentials_filter.h"
 #include "components/password_manager/core/browser/multi_store_form_fetcher.h"
@@ -54,7 +55,7 @@ std::vector<std::unique_ptr<PasswordForm>> MakeCopies(
 
 // static
 std::unique_ptr<FormFetcherImpl> FormFetcherImpl::CreateFormFetcherImpl(
-    PasswordStore::FormDigest form_digest,
+    PasswordFormDigest form_digest,
     const PasswordManagerClient* client,
     bool should_migrate_http_passwords) {
   return base::FeatureList::IsEnabled(
@@ -66,7 +67,7 @@ std::unique_ptr<FormFetcherImpl> FormFetcherImpl::CreateFormFetcherImpl(
                                                  should_migrate_http_passwords);
 }
 
-FormFetcherImpl::FormFetcherImpl(PasswordStore::FormDigest form_digest,
+FormFetcherImpl::FormFetcherImpl(PasswordFormDigest form_digest,
                                  const PasswordManagerClient* client,
                                  bool should_migrate_http_passwords)
     : form_digest_(std::move(form_digest)),
@@ -125,6 +126,12 @@ void FormFetcherImpl::Fetch() {
   // The desktop bubble needs this information.
   password_store->GetMatchingInsecureCredentials(form_digest_.signon_realm,
                                                  this);
+#else
+  if (base::FeatureList::IsEnabled(features::kMutingCompromisedCredentials)) {
+    // We need this information to mute leak detection warming.
+    password_store->GetMatchingInsecureCredentials(form_digest_.signon_realm,
+                                                   this);
+  }
 #endif
 }
 
@@ -156,7 +163,7 @@ bool FormFetcherImpl::IsBlocklisted() const {
 }
 
 bool FormFetcherImpl::IsMovingBlocked(const autofill::GaiaIdHash& destination,
-                                      const base::string16& username) const {
+                                      const std::u16string& username) const {
   NOTREACHED();
   return false;
 }
@@ -204,6 +211,21 @@ std::unique_ptr<FormFetcher> FormFetcherImpl::Clone() {
 
 void FormFetcherImpl::ProcessPasswordStoreResults(
     std::vector<std::unique_ptr<PasswordForm>> results) {
+  if (client_->GetProfilePasswordStore()->affiliated_match_helper()) {
+    client_->GetProfilePasswordStore()
+        ->affiliated_match_helper()
+        ->InjectAffiliationAndBrandingInformation(
+            std::move(results),
+            AndroidAffiliationService::StrategyOnCacheMiss::FAIL,
+            base::BindOnce(&FormFetcherImpl::FindMatchesAndNotifyConsumers,
+                           weak_ptr_factory_.GetWeakPtr()));
+  } else {
+    FindMatchesAndNotifyConsumers(std::move(results));
+  }
+}
+
+void FormFetcherImpl::FindMatchesAndNotifyConsumers(
+    std::vector<std::unique_ptr<PasswordForm>> results) {
   DCHECK_EQ(State::WAITING, state_);
   state_ = State::NOT_WAITING;
   SplitResults(std::move(results));
@@ -224,7 +246,8 @@ void FormFetcherImpl::SplitResults(
   for (auto& form : forms) {
     if (form->blocked_by_user) {
       // Ignore PSL matches for blocklisted entries.
-      if (!form->is_public_suffix_match) {
+      if (!form->is_public_suffix_match &&
+          form->scheme == form_digest_.scheme) {
         is_blocklisted_ = true;
       }
     } else if (form->IsFederatedCredential()) {

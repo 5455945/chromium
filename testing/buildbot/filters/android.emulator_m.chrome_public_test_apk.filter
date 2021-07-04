@@ -6,7 +6,8 @@
 -org.chromium.chrome.browser.externalnav.UrlOverridingTest.testNavigationFromXHRCallback
 -org.chromium.chrome.browser.externalnav.UrlOverridingTest.testNavigationFromXHRCallbackAndShortTimeout
 -org.chromium.chrome.browser.externalnav.UrlOverridingTest.testNavigationFromXHRCallbackInSubFrame
--org.chromium.chrome.browser.externalnav.UrlOverridingTest.testRedirectionFromIntentCold
+-org.chromium.chrome.browser.externalnav.UrlOverridingTest.testRedirectionFromIntentColdNoTask
+-org.chromium.chrome.browser.externalnav.UrlOverridingTest.testRedirectionFromIntentColdWithTask
 -org.chromium.chrome.browser.externalnav.UrlOverridingTest.testRedirectionFromIntentWarm
 
 # vr tests do not apply to emulator
@@ -42,6 +43,9 @@
 
 # crbug.com/1061214
 -org.chromium.chrome.browser.customtabs.CustomTabActivityTest.testHiddenTabAndChangingFragmentDontWait
+
+# crbug.com/1202977
+-org.chromium.chrome.browser.settings.MainSettingsFragmentTest.testRenderDifferentSignedInStatesWithMobileIdentityConsistency
 
 # crbug.com/1036553
 -org.chromium.chrome.browser.translate.TranslateIntentTest.*
@@ -100,3 +104,6 @@
 
 # crbug.com/1179792
 -org.chromium.chrome.browser.customtabs.content.TabObserverRegistrarTest.testObserveActiveTab
+
+# crbug.com/1180466
+-org.chromium.chrome.browser.autofill_assistant.AutofillAssistantOverlayIntegrationTest.testShowCastOnIFrameElement

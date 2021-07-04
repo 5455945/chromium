@@ -16,7 +16,6 @@
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/single_thread_task_runner.h"
-#include "base/stl_util.h"
 #include "base/strings/stringize_macros.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -592,12 +591,11 @@ Me2MeNativeMessagingHost::DelegateToElevatedHost(
   DCHECK(needs_elevation_);
 
   if (!elevated_host_) {
-    elevated_host_.reset(new ElevatedNativeMessagingHost(
+    elevated_host_ = std::make_unique<ElevatedNativeMessagingHost>(
         base::CommandLine::ForCurrentProcess()->GetProgram(),
         parent_window_handle_,
         /*elevate_process=*/true,
-        base::TimeDelta::FromSeconds(kElevatedHostTimeoutSeconds),
-        client_));
+        base::TimeDelta::FromSeconds(kElevatedHostTimeoutSeconds), client_);
   }
 
   ProcessLaunchResult result = elevated_host_->EnsureElevatedHostCreated();

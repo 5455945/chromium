@@ -15,9 +15,9 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/chromeos/login/screens/error_screen.h"
-#include "chrome/browser/chromeos/login/signin_specifics.h"
-#include "chrome/browser/chromeos/login/ui/login_display.h"
+#include "chrome/browser/ash/login/screens/error_screen.h"
+#include "chrome/browser/ash/login/signin_specifics.h"
+#include "chrome/browser/ash/login/ui/login_display.h"
 #include "chrome/browser/ui/webui/chromeos/login/base_webui_handler.h"
 #include "chrome/browser/ui/webui/chromeos/login/network_state_informer.h"
 #include "chrome/browser/ui/webui/chromeos/login/oobe_ui.h"
@@ -55,10 +55,6 @@ class LoginDisplayWebUIHandler {
  public:
   virtual void ClearAndEnablePassword() = 0;
   virtual void OnPreferencesChanged() = 0;
-  virtual void ShowError(int login_attempts,
-                         const std::string& error_text,
-                         const std::string& help_link_text,
-                         HelpAppLauncher::HelpTopic help_topic_id) = 0;
   virtual void ShowAllowlistCheckFailedError() = 0;
 
  protected:
@@ -91,8 +87,6 @@ class SigninScreenHandlerDelegate {
   virtual void ShowWrongHWIDScreen() = 0;
 
   // --------------- Rest of the methods.
-  // Cancels user adding.
-  virtual void CancelUserAdding() = 0;
 
   // Let the delegate know about the handler it is supposed to be using.
   virtual void SetWebUIHandler(LoginDisplayWebUIHandler* webui_handler) = 0;
@@ -186,10 +180,6 @@ class SigninScreenHandler
   // LoginDisplayWebUIHandler implementation:
   void ClearAndEnablePassword() override;
   void OnPreferencesChanged() override;
-  void ShowError(int login_attempts,
-                 const std::string& error_text,
-                 const std::string& help_link_text,
-                 HelpAppLauncher::HelpTopic help_topic_id) override;
   void ShowAllowlistCheckFailedError() override;
 
   // content::NotificationObserver implementation:
@@ -230,15 +220,15 @@ class SigninScreenHandler
   bool AllAllowlistedUsersPresent();
 
   // Returns true if current visible screen is the Gaia sign-in page.
-  bool IsGaiaVisible() const;
+  bool IsGaiaVisible();
 
   // Returns true if current visible screen is the error screen over
   // Gaia sign-in page.
-  bool IsGaiaHiddenByError() const;
+  bool IsGaiaHiddenByError();
 
   // Returns true if current screen is the error screen over signin
   // screen.
-  bool IsSigninScreenHiddenByError() const;
+  bool IsSigninScreenHiddenByError();
 
   net::Error FrameError() const;
 

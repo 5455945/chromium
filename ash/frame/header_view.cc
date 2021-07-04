@@ -16,9 +16,10 @@
 #include "chromeos/ui/frame/caption_buttons/frame_caption_button_container_view.h"
 #include "chromeos/ui/frame/default_frame_header.h"
 #include "ui/aura/client/aura_constants.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/compositor/layer.h"
 #include "ui/views/controls/image_view.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/non_client_view.h"
 
@@ -74,6 +75,7 @@ HeaderView::HeaderView(views::Widget* target_widget,
       caption_button_container_);
 
   UpdateBackButton();
+  UpdateCenterButton();
 
   frame_header_->UpdateFrameColors();
   window_observation_.Observe(window);
@@ -139,6 +141,7 @@ void HeaderView::UpdateCaptionButtons() {
   caption_button_container_->UpdateCaptionButtonState(true /*=animate*/);
 
   UpdateBackButton();
+  UpdateCenterButton();
 
   Layout();
 }
@@ -320,6 +323,19 @@ void HeaderView::UpdateBackButton() {
   } else {
     delete back_button;
     frame_header_->SetBackButton(nullptr);
+  }
+}
+
+void HeaderView::UpdateCenterButton() {
+  bool is_center_button_visible = caption_button_container_->model()->IsVisible(
+      views::CAPTION_BUTTON_ICON_CENTER);
+  auto* center_button = frame_header_->GetCenterButton();
+  if (!center_button)
+    return;
+  if (is_center_button_visible && !center_button->parent()) {
+    AddChildView(center_button);
+  } else if (!is_center_button_visible && center_button->parent()) {
+    RemoveChildView(center_button);
   }
 }
 

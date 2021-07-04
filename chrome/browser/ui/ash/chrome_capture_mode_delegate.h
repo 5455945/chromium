@@ -31,7 +31,7 @@ class ChromeCaptureModeDelegate : public ash::CaptureModeDelegate {
   void InterruptVideoRecordingIfAny();
 
   // ash::CaptureModeDelegate:
-  base::FilePath GetActiveUserDownloadsDir() const override;
+  base::FilePath GetScreenCaptureDir() const override;
   void ShowScreenCaptureItemInFolder(const base::FilePath& file_path) override;
   void OpenScreenshotInImageEditor(const base::FilePath& file_path) override;
   bool Uses24HourFormat() const override;
@@ -48,8 +48,10 @@ class ChromeCaptureModeDelegate : public ash::CaptureModeDelegate {
   mojo::Remote<recording::mojom::RecordingService> LaunchRecordingService()
       override;
   void BindAudioStreamFactory(
-      mojo::PendingReceiver<audio::mojom::StreamFactory> receiver) override;
+      mojo::PendingReceiver<media::mojom::AudioStreamFactory> receiver)
+      override;
   void OnSessionStateChanged(bool started) override;
+  void OnServiceRemoteReset() override;
 
  private:
   // Used to temporarily disable capture mode in certain cases for which neither

@@ -18,7 +18,6 @@
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "base/sequenced_task_runner.h"
-#include "base/strings/stringprintf.h"
 #include "base/system/sys_info.h"
 #include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
@@ -30,15 +29,15 @@
 #include "chrome/browser/ash/app_mode/kiosk_cryptohome_remover.h"
 #include "chrome/browser/ash/app_mode/kiosk_external_updater.h"
 #include "chrome/browser/ash/app_mode/pref_names.h"
+#include "chrome/browser/ash/login/session/user_session_manager.h"
+#include "chrome/browser/ash/ownership/owner_settings_service_ash.h"
+#include "chrome/browser/ash/ownership/owner_settings_service_ash_factory.h"
+#include "chrome/browser/ash/policy/core/browser_policy_connector_chromeos.h"
+#include "chrome/browser/ash/policy/core/device_local_account.h"
 #include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/chromeos/extensions/external_cache_impl.h"
-#include "chrome/browser/chromeos/login/session/user_session_manager.h"
-#include "chrome/browser/chromeos/ownership/owner_settings_service_chromeos.h"
-#include "chrome/browser/chromeos/ownership/owner_settings_service_chromeos_factory.h"
-#include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
-#include "chrome/browser/chromeos/policy/device_local_account.h"
 #include "chrome/browser/extensions/external_loader.h"
 #include "chrome/browser/extensions/external_provider_impl.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
@@ -83,7 +82,7 @@ std::string GenerateKioskAppAccountId(const std::string& app_id) {
 // Check for presence of machine owner public key file.
 void CheckOwnerFilePresence(bool *present) {
   scoped_refptr<ownership::OwnerKeyUtil> util =
-      OwnerSettingsServiceChromeOSFactory::GetInstance()->GetOwnerKeyUtil();
+      OwnerSettingsServiceAshFactory::GetInstance()->GetOwnerKeyUtil();
   *present = util.get() && util->IsPublicKeyPresent();
 }
 
@@ -186,7 +185,7 @@ std::string KioskAppManager::GetAutoLaunchApp() const {
 }
 
 void KioskAppManager::SetAutoLaunchApp(const std::string& app_id,
-                                       OwnerSettingsServiceChromeOS* service) {
+                                       OwnerSettingsServiceAsh* service) {
   SetAutoLoginState(AutoLoginState::kRequested);
   // Clean first, so the proper change callbacks are triggered even
   // if we are only changing AutoLoginState here.
@@ -222,10 +221,9 @@ void KioskAppManager::InitSession(Profile* profile,
     // set here is to be able to properly restore session if the session is
     // restarted - e.g. due to crash. For example, this will ensure restarted
     // app session restores auto-launched state.
-    chromeos::UserSessionManager::GetInstance()->SetSwitchesForUser(
+    UserSessionManager::GetInstance()->SetSwitchesForUser(
         user_manager::UserManager::Get()->GetActiveUser()->GetAccountId(),
-        chromeos::UserSessionManager::CommandLineSwitchesType::
-            kPolicyAndFlagsAndKioskControl,
+        UserSessionManager::CommandLineSwitchesType::kPolicyAndKioskControl,
         flags);
   }
 
@@ -419,7 +417,7 @@ bool KioskAppManager::IsAutoLaunchRequested() const {
   // consent through UI.
   policy::BrowserPolicyConnectorChromeOS* connector =
       g_browser_process->platform_part()->browser_policy_connector_chromeos();
-  if (connector->IsEnterpriseManaged())
+  if (connector->IsDeviceEnterpriseManaged())
     return false;
 
   return GetAutoLoginState() == AutoLoginState::kRequested;
@@ -433,7 +431,7 @@ bool KioskAppManager::IsAutoLaunchEnabled() const {
   // consent through UI.
   policy::BrowserPolicyConnectorChromeOS* connector =
       g_browser_process->platform_part()->browser_policy_connector_chromeos();
-  if (connector->IsEnterpriseManaged())
+  if (connector->IsDeviceEnterpriseManaged())
     return true;
 
   return GetAutoLoginState() == AutoLoginState::kApproved;
@@ -449,7 +447,7 @@ std::string KioskAppManager::GetAutoLaunchAppRequiredPlatformVersion() const {
 }
 
 void KioskAppManager::AddApp(const std::string& app_id,
-                             OwnerSettingsServiceChromeOS* service) {
+                             OwnerSettingsServiceAsh* service) {
   std::vector<policy::DeviceLocalAccount> device_local_accounts =
       policy::GetDeviceLocalAccounts(CrosSettings::Get());
 
@@ -474,7 +472,7 @@ void KioskAppManager::AddApp(const std::string& app_id,
 }
 
 void KioskAppManager::RemoveApp(const std::string& app_id,
-                                OwnerSettingsServiceChromeOS* service) {
+                                OwnerSettingsServiceAsh* service) {
   // Resets auto launch app if it is the removed app.
   if (auto_launch_app_id_ == app_id)
     SetAutoLaunchApp(std::string(), service);
@@ -797,17 +795,17 @@ void KioskAppManager::UpdateExternalCachePrefs() {
   // Request external_cache_ to download new apps and update the existing apps.
   std::unique_ptr<base::DictionaryValue> prefs(new base::DictionaryValue);
   for (size_t i = 0; i < apps_.size(); ++i) {
-    std::unique_ptr<base::DictionaryValue> entry(new base::DictionaryValue);
+    base::DictionaryValue entry;
 
     if (apps_[i]->update_url().is_valid()) {
-      entry->SetString(extensions::ExternalProviderImpl::kExternalUpdateUrl,
-                       apps_[i]->update_url().spec());
+      entry.SetString(extensions::ExternalProviderImpl::kExternalUpdateUrl,
+                      apps_[i]->update_url().spec());
     } else {
-      entry->SetString(extensions::ExternalProviderImpl::kExternalUpdateUrl,
-                       extension_urls::GetWebstoreUpdateUrl().spec());
+      entry.SetString(extensions::ExternalProviderImpl::kExternalUpdateUrl,
+                      extension_urls::GetWebstoreUpdateUrl().spec());
     }
 
-    prefs->Set(apps_[i]->app_id(), std::move(entry));
+    prefs->SetPath(apps_[i]->app_id(), std::move(entry));
   }
   external_cache_->UpdateExtensionsList(std::move(prefs));
 }

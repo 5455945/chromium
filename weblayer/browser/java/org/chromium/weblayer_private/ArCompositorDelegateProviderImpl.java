@@ -12,9 +12,6 @@ import org.chromium.content_public.browser.WebContents;
 
 /**
  * Weblayer-specific implementation of ArCompositorDelegateProvider interface.
- *
- * This returns null because the {@link ArCompositorDelegate} is only used for overlay mode AR,
- * which is not currently supported in WebLayer.
  */
 @JNINamespace("weblayer")
 public class ArCompositorDelegateProviderImpl implements ArCompositorDelegateProvider {
@@ -23,6 +20,7 @@ public class ArCompositorDelegateProviderImpl implements ArCompositorDelegatePro
 
     @Override
     public ArCompositorDelegate create(WebContents webContents) {
+        // TODO(crbug.com/1057106): Implement a WebLayer specific version of this delegate.
         return null;
     }
 }

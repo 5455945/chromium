@@ -11,6 +11,7 @@
 #include "base/strings/stringprintf.h"
 #include "cc/paint/paint_filter.h"
 #include "cc/paint/paint_op_buffer.h"
+#include "cc/paint/skottie_wrapper.h"
 
 namespace cc {
 
@@ -36,7 +37,9 @@ class PaintOpHelper {
         const auto* op = static_cast<const ClipPathOp*>(base_op);
         str << "ClipPathOp(path=" << PaintOpHelper::SkiaTypeToString(op->path)
             << ", op=" << PaintOpHelper::SkiaTypeToString(op->op)
-            << ", antialias=" << op->antialias << ")";
+            << ", antialias=" << op->antialias
+            << ", use_cache=" << (op->use_cache == UsePaintCache::kEnabled)
+            << ")";
         break;
       }
       case PaintOpType::ClipRect: {
@@ -123,7 +126,9 @@ class PaintOpHelper {
       case PaintOpType::DrawPath: {
         const auto* op = static_cast<const DrawPathOp*>(base_op);
         str << "DrawPathOp(path=" << PaintOpHelper::SkiaTypeToString(op->path)
-            << ", flags=" << PaintOpHelper::FlagsToString(op->flags) << ")";
+            << ", flags=" << PaintOpHelper::FlagsToString(op->flags)
+            << ", use_cache=" << (op->use_cache == UsePaintCache::kEnabled)
+            << ")";
         break;
       }
       case PaintOpType::DrawRecord: {

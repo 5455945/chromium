@@ -6,8 +6,8 @@
 
 #include "ash/accelerometer/accelerometer_reader.h"
 #include "ash/accelerometer/accelerometer_types.h"
-#include "ash/public/cpp/app_types.h"
-#include "ash/public/cpp/ash_switches.h"
+#include "ash/constants/app_types.h"
+#include "ash/constants/ash_switches.h"
 #include "ash/shell.h"
 #include "ash/wm/mru_window_tracker.h"
 #include "ash/wm/splitview/split_view_controller.h"
@@ -21,7 +21,6 @@
 #include "ui/display/display.h"
 #include "ui/display/manager/display_manager.h"
 #include "ui/display/manager/managed_display_info.h"
-#include "ui/display/screen.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/wm/public/activation_client.h"
 
@@ -39,12 +38,6 @@ const float kDisplayRotationStickyAngleDegrees = 60.0f;
 // effectively the sine of the rise angle required times the acceleration due
 // to gravity, with the current value requiring at least a 25 degree rise.
 const float kMinimumAccelerationScreenRotation = 4.2f;
-
-// Return true if auto-rotation is allowed which happens when the device is in a
-// physical tablet state.
-bool IsAutoRotationAllowed() {
-  return Shell::Get()->tablet_mode_controller()->is_in_tablet_physical_state();
-}
 
 OrientationLockType GetDisplayNaturalOrientation() {
   if (!display::Display::HasInternalDisplay())
@@ -227,15 +220,12 @@ ScreenOrientationController::ScreenOrientationController()
       current_rotation_(display::Display::ROTATE_0) {
   Shell::Get()->tablet_mode_controller()->AddObserver(this);
   SplitViewController::Get(Shell::GetPrimaryRootWindow())->AddObserver(this);
-  display::Screen::GetScreen()->AddObserver(this);
   Shell::Get()->window_tree_host_manager()->AddObserver(this);
-
-  OnTabletPhysicalStateChanged();
+  AccelerometerReader::GetInstance()->AddObserver(this);
 }
 
 ScreenOrientationController::~ScreenOrientationController() {
   Shell::Get()->window_tree_host_manager()->RemoveObserver(this);
-  display::Screen::GetScreen()->RemoveObserver(this);
   SplitViewController::Get(Shell::GetPrimaryRootWindow())->RemoveObserver(this);
   Shell::Get()->tablet_mode_controller()->RemoveObserver(this);
   AccelerometerReader::GetInstance()->RemoveObserver(this);
@@ -338,6 +328,14 @@ void ScreenOrientationController::SetLockToRotation(
 
 OrientationLockType ScreenOrientationController::GetCurrentOrientation() const {
   return RotationToOrientation(natural_orientation_, current_rotation_);
+}
+
+bool ScreenOrientationController::IsAutoRotationAllowed() const {
+  return Shell::Get()
+             ->tablet_mode_controller()
+             ->is_in_tablet_physical_state() ||
+         base::CommandLine::ForCurrentProcess()->HasSwitch(
+             switches::kSupportsClamshellAutoRotation);
 }
 
 void ScreenOrientationController::OnWindowActivated(
@@ -456,8 +454,6 @@ void ScreenOrientationController::OnTabletPhysicalStateChanged() {
   auto* shell = Shell::Get();
 
   if (IsAutoRotationAllowed()) {
-    AccelerometerReader::GetInstance()->AddObserver(this);
-
     // Do not exit early, as the internal display can be determined after
     // Maximize Mode has started. (chrome-os-partner:38796) Always start
     // observing.
@@ -473,8 +469,6 @@ void ScreenOrientationController::OnTabletPhysicalStateChanged() {
       return;
     ApplyLockForTopMostWindowOnInternalDisplay();
   } else {
-    AccelerometerReader::GetInstance()->RemoveObserver(this);
-
     if (!display::Display::HasInternalDisplay())
       return;
 
@@ -686,7 +680,7 @@ void ScreenOrientationController::ApplyLockForTopMostWindowOnInternalDisplay() {
     return;
   }
 
-  current_app_requested_orientation_lock_ = base::nullopt;
+  current_app_requested_orientation_lock_ = absl::nullopt;
   if (!display::Display::HasInternalDisplay())
     return;
 
@@ -762,7 +756,7 @@ bool ScreenOrientationController::ApplyLockForWindowIfPossible(
         }
       }
       current_app_requested_orientation_lock_ =
-          base::make_optional<OrientationLockType>(lock_info.orientation_lock);
+          absl::make_optional<OrientationLockType>(lock_info.orientation_lock);
       return true;
     }
   }

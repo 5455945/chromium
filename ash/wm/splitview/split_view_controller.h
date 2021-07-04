@@ -34,6 +34,7 @@ class PresentationTimeRecorder;
 class OverviewSession;
 class SplitViewControllerTest;
 class SplitViewDivider;
+class SplitViewMetricsController;
 class SplitViewObserver;
 class SplitViewOverviewSessionTest;
 
@@ -97,9 +98,7 @@ class ASH_EXPORT SplitViewController : public aura::WindowObserver,
   // window and it does not matter. For code that only applies to tablet mode,
   // you may simply use the primary root (see |Shell::GetPrimaryRootWindow|).
   // The user actually can go to the display settings while in tablet mode and
-  // choose extend; we just are not yet trying to support it really well. When
-  // the |ash::features::kMultiDisplayOverviewAndSplitView| feature flag is
-  // disabled, |window| is ignored as there is only one |SplitViewController|.
+  // choose extend; we just are not yet trying to support it really well.
   static SplitViewController* Get(const aura::Window* window);
 
   // The return values of these two functions together indicate what actual
@@ -155,8 +154,8 @@ class ASH_EXPORT SplitViewController : public aura::WindowObserver,
                   bool activate_window = false);
 
   // This is called by WindowState::State when receiving a snap WMEvent (i.e.,
-  // WM_EVENT_SNAP_LEFT or WM_EVENT_SNAP_RIGHT). SplitViewController will decide
-  // if this window needs to be snapped in split view.
+  // WM_EVENT_SNAP_PRIMARY or WM_EVENT_SNAP_SECONDARY). SplitViewController will
+  // decide if this window needs to be snapped in split view.
   void OnWindowSnapWMEvent(aura::Window* window, WMEventType event_type);
 
   // Attaches the to-be-snapped |window| to split view at |snap_position|. It
@@ -289,6 +288,9 @@ class ASH_EXPORT SplitViewController : public aura::WindowObserver,
   SplitViewDivider* split_view_divider() { return split_view_divider_.get(); }
   bool is_resizing() const { return is_resizing_; }
   EndReason end_reason() const { return end_reason_; }
+  SplitViewMetricsController* split_view_metrics_controller() {
+    return split_view_metrics_controller_.get();
+  }
 
  private:
   friend class SplitViewControllerTest;
@@ -321,6 +323,12 @@ class ASH_EXPORT SplitViewController : public aura::WindowObserver,
 
   // Notifies observers that the split view divider position has been changed.
   void NotifyDividerPositionChanged();
+
+  // Notifies observers that the windows in split view is resized.
+  void NotifyWindowResized();
+
+  // Notifies observers that the windows are swappped.
+  void NotifyWindowSwapped();
 
   // Updates the black scrim layer's bounds and opacity while dragging the
   // divider. The opacity increases as the split divider gets closer to the edge
@@ -539,6 +547,12 @@ class ASH_EXPORT SplitViewController : public aura::WindowObserver,
 
   // Observes windows and performs auto snapping if needed.
   std::unique_ptr<AutoSnapController> auto_snap_controller_;
+
+  // The metrics controller for the same root window.
+  std::unique_ptr<SplitViewMetricsController> split_view_metrics_controller_;
+
+  // Register for DisplayObserver callbacks.
+  display::ScopedDisplayObserver display_observer_{this};
 
   // A pointer to the to-be-snapped window that will be activated after it's
   // snapped in splitview. There can be two cases when this value can be

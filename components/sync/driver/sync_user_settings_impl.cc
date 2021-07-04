@@ -157,9 +157,9 @@ void SyncUserSettingsImpl::SetOsSyncFeatureEnabled(bool enabled) {
 }
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
-bool SyncUserSettingsImpl::IsEncryptEverythingAllowed() const {
+bool SyncUserSettingsImpl::IsCustomPassphraseAllowed() const {
   return !preference_provider_ ||
-         preference_provider_->IsEncryptEverythingAllowed();
+         preference_provider_->IsCustomPassphraseAllowed();
 }
 
 bool SyncUserSettingsImpl::IsEncryptEverythingEnabled() const {
@@ -198,14 +198,12 @@ bool SyncUserSettingsImpl::IsTrustedVaultKeyRequiredForPreferredDataTypes()
 }
 
 bool SyncUserSettingsImpl::IsTrustedVaultRecoverabilityDegraded() const {
-  // TODO(crbug.com/1081649): This should verify that at least one sync entity
-  // is affected.
   return IsEncryptedDatatypeEnabled() &&
          crypto_->IsTrustedVaultRecoverabilityDegraded();
 }
 
-bool SyncUserSettingsImpl::IsUsingSecondaryPassphrase() const {
-  return crypto_->IsUsingSecondaryPassphrase();
+bool SyncUserSettingsImpl::IsUsingExplicitPassphrase() const {
+  return crypto_->IsUsingExplicitPassphrase();
 }
 
 base::Time SyncUserSettingsImpl::GetExplicitPassphraseTime() const {
@@ -245,7 +243,7 @@ ModelTypeSet SyncUserSettingsImpl::GetPreferredDataTypes() const {
 #endif
   types.RetainAll(registered_model_types_);
 
-  static_assert(39 == ModelType::NUM_ENTRIES,
+  static_assert(38 == GetNumModelTypes(),
                 "If adding a new sync data type, update the list below below if"
                 " you want to disable the new data type for local sync.");
   types.PutAll(ControlTypes());
@@ -257,6 +255,7 @@ ModelTypeSet SyncUserSettingsImpl::GetPreferredDataTypes() const {
     types.Remove(SHARING_MESSAGE);
     types.Remove(USER_CONSENTS);
     types.Remove(USER_EVENTS);
+    types.Remove(WORKSPACE_DESK);
   }
   return types;
 }
@@ -270,7 +269,7 @@ bool SyncUserSettingsImpl::IsEncryptedDatatypeEnabled() const {
     return true;
   const ModelTypeSet preferred_types = GetPreferredDataTypes();
   const ModelTypeSet encrypted_types = GetEncryptedDataTypes();
-  DCHECK(encrypted_types.Has(PASSWORDS));
+  DCHECK(encrypted_types.HasAll(AlwaysEncryptedUserTypes()));
   return !Intersection(preferred_types, encrypted_types).Empty();
 }
 

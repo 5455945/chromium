@@ -9,15 +9,15 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ash/app_mode/web_app/web_kiosk_app_manager.h"
 #include "chrome/browser/ash/login/app_mode/kiosk_launch_controller.h"
-#include "chrome/browser/chromeos/login/test/device_state_mixin.h"
-#include "chrome/browser/chromeos/login/test/js_checker.h"
-#include "chrome/browser/chromeos/login/test/kiosk_test_helpers.h"
-#include "chrome/browser/chromeos/login/test/network_portal_detector_mixin.h"
-#include "chrome/browser/chromeos/login/test/oobe_base_test.h"
-#include "chrome/browser/chromeos/login/test/oobe_screen_waiter.h"
-#include "chrome/browser/chromeos/login/ui/login_display_host.h"
-#include "chrome/browser/chromeos/ownership/fake_owner_settings_service.h"
-#include "chrome/browser/chromeos/policy/device_local_account.h"
+#include "chrome/browser/ash/login/test/device_state_mixin.h"
+#include "chrome/browser/ash/login/test/js_checker.h"
+#include "chrome/browser/ash/login/test/kiosk_test_helpers.h"
+#include "chrome/browser/ash/login/test/network_portal_detector_mixin.h"
+#include "chrome/browser/ash/login/test/oobe_base_test.h"
+#include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
+#include "chrome/browser/ash/login/ui/login_display_host.h"
+#include "chrome/browser/ash/ownership/fake_owner_settings_service.h"
+#include "chrome/browser/ash/policy/core/device_local_account.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/keyboard/chrome_keyboard_controller_client_test_helper.h"
 #include "chrome/browser/ui/browser_list.h"
@@ -38,7 +38,7 @@ namespace {
 
 const char kAppInstallUrl[] = "https://app.com/install";
 const char kAppLaunchUrl[] = "https://app.com/launch";
-const char kAppTitle[] = "title.";
+const char16_t kAppTitle[] = u"title.";
 const test::UIPath kNetworkConfigureScreenContinueButton = {"error-message",
                                                             "continueButton"};
 
@@ -92,7 +92,7 @@ class WebKioskTest : public OobeBaseTest {
   void MakeAppAlreadyInstalled() {
     auto info = std::make_unique<WebApplicationInfo>();
     info->start_url = GURL(kAppLaunchUrl);
-    info->title = base::UTF8ToUTF16(kAppTitle);
+    info->title = kAppTitle;
     WebKioskAppManager::Get()->UpdateAppByAccountId(account_id(),
                                                     std::move(info));
   }

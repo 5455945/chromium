@@ -34,6 +34,7 @@
 #import "ios/chrome/browser/ui/activity_services/requirements/activity_service_positioner.h"
 #import "ios/chrome/browser/ui/commands/bookmarks_commands.h"
 #import "ios/chrome/browser/ui/commands/qr_generation_commands.h"
+#import "ios/chrome/browser/ui/default_promo/default_browser_promo_non_modal_scheduler.h"
 #import "ios/chrome/browser/ui/util/uikit_ui_util.h"
 
 #if !defined(__has_feature) || !__has_feature(objc_arc)
@@ -73,28 +74,42 @@
   return self;
 }
 
-- (NSArray<id<ChromeActivityItemSource>>*)activityItemsForData:
-    (ShareToData*)data {
+- (NSArray<id<ChromeActivityItemSource>>*)activityItemsForDataItems:
+    (NSArray<ShareToData*>*)dataItems {
   NSMutableArray* items = [[NSMutableArray alloc] init];
 
-  if (data.additionalText) {
+  // The |additionalText| is not added when sharing multiple URLs since items
+  // are not associated with each other and the |additionalText| is not likely
+  // be meaningful without the context of the page it came from.
+  if (dataItems.count == 1 && dataItems.firstObject.additionalText) {
     [items addObject:[[ChromeActivityTextSource alloc]
-                         initWithText:data.additionalText]];
+                         initWithText:dataItems.firstObject.additionalText]];
   }
 
-  ChromeActivityURLSource* activityURLSource =
-      [[ChromeActivityURLSource alloc] initWithShareURL:data.shareNSURL
-                                                subject:data.title];
-  activityURLSource.thumbnailGenerator = data.thumbnailGenerator;
-  [items addObject:activityURLSource];
+  for (ShareToData* data in dataItems) {
+    ChromeActivityURLSource* activityURLSource =
+        [[ChromeActivityURLSource alloc] initWithShareURL:data.shareNSURL
+                                                  subject:data.title];
+    activityURLSource.thumbnailGenerator = data.thumbnailGenerator;
+    [items addObject:activityURLSource];
+  }
 
   return items;
 }
 
-- (NSArray*)applicationActivitiesForData:(ShareToData*)data {
+- (NSArray*)applicationActivitiesForDataItems:
+    (NSArray<ShareToData*>*)dataItems {
   NSMutableArray* applicationActivities = [NSMutableArray array];
 
-  [applicationActivities addObject:[[CopyActivity alloc] initWithData:data]];
+  [applicationActivities
+      addObject:[[CopyActivity alloc] initWithDataItems:dataItems]];
+
+  if (dataItems.count != 1) {
+    return applicationActivities;
+  }
+
+  // The following acitivites only support a single item.
+  ShareToData* data = dataItems.firstObject;
 
   if (data.shareURL.SchemeIsHTTPOrHTTPS()) {
     SendTabToSelfActivity* sendTabToSelfActivity =
@@ -173,6 +188,7 @@
         activity_type_util::TypeFromString(activityType);
     activity_type_util::RecordMetricForActivity(type);
     RecordActivityForScenario(type, scenario);
+    [self.promoScheduler logUserFinishedActivityFlow];
   } else {
     // Share action was cancelled.
     base::RecordAction(base::UserMetricsAction("MobileShareMenuCancel"));

@@ -14,34 +14,32 @@ import androidx.annotation.Nullable;
 import org.chromium.base.task.AsyncTask;
 import org.chromium.chrome.browser.signin.services.ProfileDataCache;
 import org.chromium.chrome.browser.signin.services.SigninMetricsUtils;
+import org.chromium.chrome.browser.signin.services.SigninPreferencesManager;
 import org.chromium.chrome.browser.signin.ui.account_picker.AccountPickerBottomSheetProperties.ViewState;
 import org.chromium.components.signin.AccountManagerFacade;
 import org.chromium.components.signin.AccountManagerFacadeProvider;
 import org.chromium.components.signin.AccountUtils;
 import org.chromium.components.signin.AccountsChangeObserver;
-import org.chromium.components.signin.base.CoreAccountId;
 import org.chromium.components.signin.base.CoreAccountInfo;
 import org.chromium.components.signin.base.GoogleServiceAuthError;
 import org.chromium.components.signin.base.GoogleServiceAuthError.State;
 import org.chromium.components.signin.metrics.AccountConsistencyPromoAction;
 import org.chromium.ui.modelutil.PropertyModel;
 
-import java.util.Collections;
 import java.util.List;
 
 /**
  * Mediator of the account picker bottom sheet in web sign-in flow.
  */
 class AccountPickerBottomSheetMediator implements AccountPickerCoordinator.Listener,
-                                                  AccountPickerBottomSheetView.BackPressListener {
+                                                  AccountPickerBottomSheetView.BackPressListener,
+                                                  AccountsChangeObserver,
+                                                  ProfileDataCache.Observer {
     private final AccountPickerDelegate mAccountPickerDelegate;
     private final ProfileDataCache mProfileDataCache;
     private final PropertyModel mModel;
-
-    private final ProfileDataCache.Observer mProfileDataSourceObserver =
-            this::updateSelectedAccountData;
     private final AccountManagerFacade mAccountManagerFacade;
-    private final AccountsChangeObserver mAccountsChangeObserver = this::onAccountListUpdated;
+
     private @Nullable String mSelectedAccountName;
     private @Nullable String mDefaultAccountName;
     private @Nullable String mAddedAccountName;
@@ -51,19 +49,17 @@ class AccountPickerBottomSheetMediator implements AccountPickerCoordinator.Liste
         mAccountPickerDelegate = accountPickerDelegate;
         mProfileDataCache = ProfileDataCache.createWithDefaultImageSizeAndNoBadge(context);
 
-        OnClickListener onDismissClicked = v -> {
-            SigninMetricsUtils.logAccountConsistencyPromoAction(
-                    AccountConsistencyPromoAction.DISMISSED_BUTTON);
-            dismissBottomSheetRunnable.run();
-        };
+        OnClickListener onDismissClicked = v -> dismissBottomSheetRunnable.run();
+
         mModel = AccountPickerBottomSheetProperties.createModel(
                 this::onSelectedAccountClicked, this::onContinueAsClicked, onDismissClicked);
-        mProfileDataCache.addObserver(mProfileDataSourceObserver);
+        mProfileDataCache.addObserver(this);
 
         mAccountManagerFacade = AccountManagerFacadeProvider.getInstance();
-        mAccountManagerFacade.addObserver(mAccountsChangeObserver);
+        mAccountManagerFacade.addObserver(this);
         mAddedAccountName = null;
-        onAccountListUpdated();
+        updateAccounts(
+                AccountUtils.getAccountsIfFulfilledOrEmpty(mAccountManagerFacade.getAccounts()));
     }
 
     /**
@@ -99,14 +95,6 @@ class AccountPickerBottomSheetMediator implements AccountPickerCoordinator.Liste
     }
 
     /**
-     * Notifies when the user clicked the "Go Incognito mode" button.
-     */
-    @Override
-    public void goIncognitoMode() {
-        mModel.set(AccountPickerBottomSheetProperties.VIEW_STATE, ViewState.INCOGNITO_INTERSTITIAL);
-    }
-
-    /**
      * Notifies when user clicks the back-press button.
      *
      * @return true if the listener handles the back press, false if not.
@@ -119,14 +107,24 @@ class AccountPickerBottomSheetMediator implements AccountPickerCoordinator.Liste
             mModel.set(AccountPickerBottomSheetProperties.VIEW_STATE,
                     ViewState.COLLAPSED_ACCOUNT_LIST);
             return true;
-        } else if (viewState == ViewState.INCOGNITO_INTERSTITIAL) {
-            mModel.set(
-                    AccountPickerBottomSheetProperties.VIEW_STATE, ViewState.EXPANDED_ACCOUNT_LIST);
-            return true;
-        } else {
-            // The bottom sheet will be dismissed for all other view states
-            return false;
         }
+        return false;
+    }
+
+    /**
+     * Implements {@link AccountsChangeObserver}.
+     */
+    @Override
+    public void onAccountsChanged() {
+        mAccountManagerFacade.getAccounts().then(this::updateAccounts);
+    }
+
+    /**
+     * Implements {@link ProfileDataCache.Observer}.
+     */
+    @Override
+    public void onProfileDataUpdated(String accountEmail) {
+        updateSelectedAccountData(accountEmail);
     }
 
     PropertyModel getModel() {
@@ -135,17 +133,11 @@ class AccountPickerBottomSheetMediator implements AccountPickerCoordinator.Liste
 
     void destroy() {
         mAccountPickerDelegate.onDismiss();
-        mProfileDataCache.removeObserver(mProfileDataSourceObserver);
-        mAccountManagerFacade.removeObserver(mAccountsChangeObserver);
+        mProfileDataCache.removeObserver(this);
+        mAccountManagerFacade.removeObserver(this);
     }
 
-    /**
-     * Updates the collapsed account list when account list changes.
-     *
-     * Implements {@link AccountsChangeObserver}.
-     */
-    private void onAccountListUpdated() {
-        List<Account> accounts = mAccountManagerFacade.tryGetGoogleAccounts();
+    private void updateAccounts(List<Account> accounts) {
         if (accounts.isEmpty()) {
             // If all accounts disappeared, no matter if the account list is collapsed or expanded,
             // we will go to the zero account screen.
@@ -176,17 +168,13 @@ class AccountPickerBottomSheetMediator implements AccountPickerCoordinator.Liste
 
     private void setSelectedAccountName(String accountName) {
         mSelectedAccountName = accountName;
-        mProfileDataCache.update(Collections.singletonList(mSelectedAccountName));
         updateSelectedAccountData(mSelectedAccountName);
     }
 
-    /**
-     * Implements {@link ProfileDataCache.Observer}.
-     */
-    private void updateSelectedAccountData(String accountName) {
-        if (TextUtils.equals(mSelectedAccountName, accountName)) {
+    private void updateSelectedAccountData(String accountEmail) {
+        if (TextUtils.equals(mSelectedAccountName, accountEmail)) {
             mModel.set(AccountPickerBottomSheetProperties.SELECTED_ACCOUNT_DATA,
-                    mProfileDataCache.getProfileDataOrDefault(accountName));
+                    mProfileDataCache.getProfileDataOrDefault(accountEmail));
         }
     }
 
@@ -231,6 +219,7 @@ class AccountPickerBottomSheetMediator implements AccountPickerCoordinator.Liste
             SigninMetricsUtils.logAccountConsistencyPromoAction(
                     AccountConsistencyPromoAction.SIGNED_IN_WITH_NON_DEFAULT_ACCOUNT);
         }
+        SigninPreferencesManager.getInstance().clearAccountPickerBottomSheetActiveDismissalCount();
         new AsyncTask<String>() {
             @Override
             protected String doInBackground() {
@@ -239,8 +228,8 @@ class AccountPickerBottomSheetMediator implements AccountPickerCoordinator.Liste
 
             @Override
             protected void onPostExecute(String accountGaiaId) {
-                CoreAccountInfo coreAccountInfo = new CoreAccountInfo(
-                        new CoreAccountId(accountGaiaId), mSelectedAccountName, accountGaiaId);
+                CoreAccountInfo coreAccountInfo = CoreAccountInfo.createFromEmailAndGaiaId(
+                        mSelectedAccountName, accountGaiaId);
                 mAccountPickerDelegate.signIn(
                         coreAccountInfo, AccountPickerBottomSheetMediator.this::onSigninFailed);
             }

@@ -14,9 +14,10 @@
 #include "chromeos/services/machine_learning/public/mojom/grammar_checker.mojom.h"
 #include "components/prefs/pref_service.h"
 #include "components/spellcheck/browser/pref_names.h"
-#include "components/spellcheck/common/spellcheck_result.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/ime/grammar_fragment.h"
+#include "ui/gfx/range/range.h"
 
 namespace chromeos {
 namespace {
@@ -44,9 +45,9 @@ TEST_F(GrammarServiceClientTest, ReturnsEmptyResultWhenSpellCheckIsDiabled) {
   base::RunLoop().RunUntilIdle();
 
   client.RequestTextCheck(
-      profile.get(), base::UTF8ToUTF16("cat"),
+      profile.get(), u"cat",
       base::BindOnce(
-          [](bool success, const std::vector<SpellCheckResult>& results) {
+          [](bool success, const std::vector<ui::GrammarFragment>& results) {
             EXPECT_FALSE(success);
             EXPECT_TRUE(results.empty());
           }));
@@ -82,21 +83,82 @@ TEST_F(GrammarServiceClientTest, ParsesResults) {
   result->candidates.emplace_back(std::move(candidate));
   fake_service_connection.SetOutputGrammarCheckerResult(result);
 
+  std::vector<machine_learning::mojom::TextLanguagePtr> languages;
+  languages.push_back(
+      machine_learning::mojom::TextLanguage::New("en", /*confidence=*/1));
+  fake_service_connection.SetOutputLanguages(languages);
+
   GrammarServiceClient client;
   base::RunLoop().RunUntilIdle();
 
   client.RequestTextCheck(
-      profile.get(), base::UTF8ToUTF16("fake input"),
+      profile.get(), u"fake input",
       base::BindOnce(
-          [](bool success, const std::vector<SpellCheckResult>& results) {
+          [](bool success, const std::vector<ui::GrammarFragment>& results) {
             EXPECT_TRUE(success);
             ASSERT_EQ(results.size(), 1U);
-            EXPECT_EQ(results[0].decoration, SpellCheckResult::GRAMMAR);
-            EXPECT_EQ(results[0].location, 3);
-            EXPECT_EQ(results[0].length, 5);
-            ASSERT_EQ(results[0].replacements.size(), 1U);
-            EXPECT_EQ(results[0].replacements[0],
-                      base::UTF8ToUTF16("fake replacement"));
+            EXPECT_EQ(results[0].range, gfx::Range(3, 8));
+            EXPECT_EQ(results[0].suggestion, "fake replacement");
+          }));
+
+  base::RunLoop().RunUntilIdle();
+}
+
+TEST_F(GrammarServiceClientTest, RejectsNonEnglishQuery) {
+  machine_learning::FakeServiceConnectionImpl fake_service_connection;
+  machine_learning::ServiceConnection::UseFakeServiceConnectionForTesting(
+      &fake_service_connection);
+  machine_learning::ServiceConnection::GetInstance()->Initialize();
+
+  auto profile = std::make_unique<TestingProfile>();
+  profile->GetPrefs()->SetBoolean(spellcheck::prefs::kSpellCheckEnable, true);
+  profile->GetPrefs()->SetBoolean(
+      spellcheck::prefs::kSpellCheckUseSpellingService, true);
+
+  // Construct fake output
+  std::vector<machine_learning::mojom::TextLanguagePtr> languages;
+  languages.push_back(
+      machine_learning::mojom::TextLanguage::New("jp", /* confidence */ 1));
+  fake_service_connection.SetOutputLanguages(languages);
+
+  GrammarServiceClient client;
+  base::RunLoop().RunUntilIdle();
+
+  client.RequestTextCheck(
+      profile.get(), u"fake input",
+      base::BindOnce(
+          [](bool success, const std::vector<ui::GrammarFragment>& results) {
+            EXPECT_FALSE(success);
+          }));
+
+  base::RunLoop().RunUntilIdle();
+}
+
+TEST_F(GrammarServiceClientTest, RejectsLongQueries) {
+  machine_learning::FakeServiceConnectionImpl fake_service_connection;
+  machine_learning::ServiceConnection::UseFakeServiceConnectionForTesting(
+      &fake_service_connection);
+  machine_learning::ServiceConnection::GetInstance()->Initialize();
+
+  auto profile = std::make_unique<TestingProfile>();
+  profile->GetPrefs()->SetBoolean(spellcheck::prefs::kSpellCheckEnable, true);
+  profile->GetPrefs()->SetBoolean(
+      spellcheck::prefs::kSpellCheckUseSpellingService, true);
+
+  GrammarServiceClient client;
+  base::RunLoop().RunUntilIdle();
+
+  const std::u16string long_text =
+      u"This is a very very very very very very very very very very very very "
+      "very very loooooooooooong sentence, indeed very very very very very "
+      "very very very very very very very very very loooooooooooong. Followed "
+      "by a fake input sentence.";
+
+  client.RequestTextCheck(
+      profile.get(), long_text,
+      base::BindOnce(
+          [](bool success, const std::vector<ui::GrammarFragment>& results) {
+            EXPECT_FALSE(success);
           }));
 
   base::RunLoop().RunUntilIdle();

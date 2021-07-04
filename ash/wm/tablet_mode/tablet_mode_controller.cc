@@ -9,7 +9,7 @@
 #include <utility>
 
 #include "ash/accessibility/accessibility_controller_impl.h"
-#include "ash/public/cpp/ash_switches.h"
+#include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/metrics_util.h"
 #include "ash/public/cpp/shelf_config.h"
 #include "ash/public/cpp/shell_window_ids.h"
@@ -30,6 +30,7 @@
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/command_line.h"
+#include "base/containers/contains.h"
 #include "base/location.h"
 #include "base/metrics/histogram.h"
 #include "base/metrics/histogram_macros.h"
@@ -43,6 +44,7 @@
 #include "ui/aura/window_observer.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_sequence.h"
 #include "ui/display/display.h"
 #include "ui/display/manager/display_manager.h"
@@ -259,17 +261,6 @@ constexpr TabletModeController::TabletModeBehavior kOnForDev{
     /*observe_pointer_device_events=*/true,
     /*block_internal_input_device=*/false,
     /*always_show_overview_button=*/true,
-    TabletModeController::ForcePhysicalTabletState::kForceTabletMode,
-};
-
-// Defines the behavior that sticks to physical tablet state. Used to implement
-// the --force-in-tablet-physical-state switch.
-constexpr TabletModeController::TabletModeBehavior kForceOnBySwitch{
-    /*use_sensor=*/false,
-    /*observe_display_events=*/false,
-    /*observe_pointer_device_events=*/true,
-    /*block_internal_input_device=*/true,
-    /*always_show_overview_button=*/false,
     TabletModeController::ForcePhysicalTabletState::kForceTabletMode,
 };
 
@@ -543,14 +534,14 @@ bool TabletModeController::InTabletMode() const {
   return tablet_state_.InTabletMode();
 }
 
-void TabletModeController::ForceUiTabletModeState(
-    base::Optional<bool> enabled) {
+bool TabletModeController::ForceUiTabletModeState(
+    absl::optional<bool> enabled) {
   if (!enabled.has_value()) {
     tablet_mode_behavior_ = kDefault;
     AccelerometerReader::GetInstance()->SetEnabled(true);
     if (!SetIsInTabletPhysicalState(CalculateIsInTabletPhysicalState()))
-      UpdateUiTabletState();
-    return;
+      return UpdateUiTabletState();
+    return true;
   }
   if (*enabled) {
     tablet_mode_behavior_ = kOnForAutotest;
@@ -562,7 +553,7 @@ void TabletModeController::ForceUiTabletModeState(
   // this should not block ScreenOrientationController as the screen may want
   // to be rotated for other factors.
   AccelerometerReader::GetInstance()->SetEnabled(false);
-  SetIsInTabletPhysicalState(CalculateIsInTabletPhysicalState());
+  return SetIsInTabletPhysicalState(CalculateIsInTabletPhysicalState());
 }
 
 void TabletModeController::SetEnabledForTest(bool enabled) {
@@ -586,12 +577,6 @@ void TabletModeController::OnShellInitialized() {
 
     case UiMode::kNone:
       break;
-  }
-
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kForceInTabletPhysicalState)) {
-    tablet_mode_behavior_ = kForceOnBySwitch;
-    SetIsInTabletPhysicalState(CalculateIsInTabletPhysicalState());
   }
 }
 
@@ -978,7 +963,7 @@ void TabletModeController::HandleHingeRotation(
 }
 
 void TabletModeController::OnGetSwitchStates(
-    base::Optional<chromeos::PowerManagerClient::SwitchStates> result) {
+    absl::optional<chromeos::PowerManagerClient::SwitchStates> result) {
   if (!result.has_value())
     return;
 
@@ -1156,7 +1141,8 @@ void TabletModeController::FinishInitTabletMode() {
       SplitViewController::Get(Shell::GetPrimaryRootWindow())->state();
   if (state == SplitViewController::State::kLeftSnapped ||
       state == SplitViewController::State::kRightSnapped) {
-    Shell::Get()->overview_controller()->StartOverview();
+    Shell::Get()->overview_controller()->StartOverview(
+        OverviewStartAction::kSplitView);
   }
 
   UpdateInternalInputDevicesEventBlocker();
@@ -1322,7 +1308,7 @@ bool TabletModeController::SetIsInTabletPhysicalState(bool new_state) {
     return true;
 
   UpdateInternalInputDevicesEventBlocker();
-  return true;
+  return false;
 }
 
 bool TabletModeController::UpdateUiTabletState() {

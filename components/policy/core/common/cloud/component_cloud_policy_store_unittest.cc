@@ -14,12 +14,11 @@
 #include "base/callback.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/ref_counted.h"
-#include "base/optional.h"
 #include "base/test/test_simple_task_runner.h"
 #include "base/time/time.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
-#include "components/policy/core/common/cloud/policy_builder.h"
 #include "components/policy/core/common/cloud/resource_cache.h"
+#include "components/policy/core/common/cloud/test/policy_builder.h"
 #include "components/policy/core/common/external_data_fetcher.h"
 #include "components/policy/core/common/policy_namespace.h"
 #include "components/policy/core/common/policy_types.h"
@@ -29,6 +28,7 @@
 #include "crypto/sha2.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace em = enterprise_management;
 
@@ -93,9 +93,9 @@ class ComponentCloudPolicyStoreTest : public testing::Test {
 
   void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
-    cache_.reset(new ResourceCache(
+    cache_ = std::make_unique<ResourceCache>(
         temp_dir_.GetPath(), base::MakeRefCounted<base::TestSimpleTaskRunner>(),
-        /* max_cache_size */ base::nullopt));
+        /* max_cache_size */ absl::nullopt);
     store_ = CreateStore();
     store_->SetCredentials(
         PolicyBuilder::kFakeUsername, PolicyBuilder::kFakeGaiaId,

@@ -12,7 +12,7 @@
 #include "chrome/browser/ui/app_list/app_list_client_impl.h"
 #include "chrome/browser/ui/app_list/app_list_syncable_service_factory.h"
 #include "chrome/browser/ui/app_list/chrome_app_list_model_updater.h"
-#include "chrome/browser/ui/ash/launcher/chrome_launcher_controller.h"
+#include "chrome/browser/ui/ash/notification_badge_color_cache.h"
 #include "extensions/browser/app_sorting.h"
 #include "extensions/browser/extension_system.h"
 #include "ui/gfx/color_utils.h"
@@ -87,8 +87,8 @@ std::unique_ptr<ash::AppListItemMetadata> ChromeAppListItem::CloneMetadata()
 void ChromeAppListItem::PerformActivate(int event_flags) {
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   // Handle recording app launch source from the AppList in Demo Mode.
-  chromeos::DemoSession::RecordAppLaunchSourceIfInDemoMode(
-      chromeos::DemoSession::AppLaunchSource::kAppList);
+  ash::DemoSession::RecordAppLaunchSourceIfInDemoMode(
+      ash::DemoSession::AppLaunchSource::kAppList);
 #endif
   Activate(event_flags);
   MaybeDismissAppList();
@@ -169,19 +169,14 @@ void ChromeAppListItem::SetDefaultPositionIfApplicable(
 void ChromeAppListItem::SetIcon(const gfx::ImageSkia& icon) {
   metadata_->icon = icon;
   metadata_->icon.EnsureRepsForSupportedScales();
-  AppListModelUpdater* updater = model_updater();
-  if (updater)
-    updater->SetItemIcon(id(), metadata_->icon);
-
-  // Calculate and set the notification badge color.
-  ChromeLauncherController* chrome_launcher_controller =
-      ChromeLauncherController::instance();
-  if (chrome_launcher_controller) {
-    SkColor current_badge_color =
-        chrome_launcher_controller->CalculateNotificationBadgeColorForApp(id(),
+  metadata_->badge_color =
+      ash::NotificationBadgeColorCache::GetInstance().GetBadgeColorForApp(id(),
                                                                           icon);
-    if (updater)
-      updater->SetNotificationBadgeColor(id(), current_badge_color);
+
+  AppListModelUpdater* updater = model_updater();
+  if (updater) {
+    updater->SetItemIcon(id(), metadata_->icon);
+    updater->SetNotificationBadgeColor(id(), metadata_->badge_color);
   }
 }
 

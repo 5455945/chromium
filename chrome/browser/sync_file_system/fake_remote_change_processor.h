@@ -6,7 +6,6 @@
 #define CHROME_BROWSER_SYNC_FILE_SYSTEM_FAKE_REMOTE_CHANGE_PROCESSOR_H_
 
 #include <map>
-#include <string>
 #include <vector>
 
 #include "base/callback.h"
@@ -50,7 +49,7 @@ class FakeRemoteChangeProcessor : public RemoteChangeProcessor {
                          SyncStatusCallback callback) override;
   void FinalizeRemoteSync(const storage::FileSystemURL& url,
                           bool clear_local_changes,
-                          const base::Closure& completion_callback) override;
+                          base::OnceClosure completion_callback) override;
   void RecordFakeLocalChange(const storage::FileSystemURL& url,
                              const FileChange& change,
                              SyncStatusCallback callback) override;

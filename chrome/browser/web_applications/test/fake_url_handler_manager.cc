@@ -13,16 +13,20 @@ FakeUrlHandlerManager::FakeUrlHandlerManager(Profile* profile)
 
 FakeUrlHandlerManager::~FakeUrlHandlerManager() = default;
 
-bool FakeUrlHandlerManager::RegisterUrlHandlers(const AppId& app_id) {
-  return true;
+void FakeUrlHandlerManager::RegisterUrlHandlers(
+    const AppId& app_id,
+    base::OnceCallback<void(bool success)> callback) {
+  std::move(callback).Run(true);
 }
 
 bool FakeUrlHandlerManager::UnregisterUrlHandlers(const AppId& app_id) {
   return true;
 }
 
-bool FakeUrlHandlerManager::UpdateUrlHandlers(const AppId& app_id) {
-  return true;
+void FakeUrlHandlerManager::UpdateUrlHandlers(
+    const AppId& app_id,
+    base::OnceCallback<void(bool success)> callback) {
+  std::move(callback).Run(true);
 }
 
 }  // namespace web_app

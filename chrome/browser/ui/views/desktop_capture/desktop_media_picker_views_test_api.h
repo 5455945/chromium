@@ -7,6 +7,7 @@
 
 #include "chrome/browser/media/webrtc/desktop_media_list.h"
 #include "content/public/browser/desktop_media_id.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class DesktopMediaPickerViews;
 
@@ -40,7 +41,7 @@ class DesktopMediaPickerViewsTestApi {
   bool HasSourceAtIndex(size_t index) const;
   void FocusSourceAtIndex(size_t index, bool select = true);
   void DoubleTapSourceAtIndex(size_t index);
-  base::Optional<int> GetSelectedSourceId() const;
+  absl::optional<int> GetSelectedSourceId() const;
   views::View* GetSelectedListView();
 
  private:

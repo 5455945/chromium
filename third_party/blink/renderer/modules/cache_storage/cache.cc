@@ -8,8 +8,8 @@
 #include <utility>
 
 #include "base/metrics/histogram_macros.h"
-#include "base/optional.h"
 #include "services/network/public/mojom/fetch_api.mojom-blink.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/cache_storage/cache_storage_utils.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/cache_storage/cache_storage.mojom-blink.h"
@@ -23,6 +23,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_request_init.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_response.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_throw_dom_exception.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_union_request_usvstring.h"
 #include "third_party/blink/renderer/core/dom/abort_controller.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
@@ -743,17 +744,23 @@ class Cache::CodeCacheHandleCallbackForPut final
 };
 
 ScriptPromise Cache::match(ScriptState* script_state,
-                           const RequestInfo& request,
+                           const V8RequestInfo* request,
                            const CacheQueryOptions* options,
                            ExceptionState& exception_state) {
-  DCHECK(!request.IsNull());
-  if (request.IsRequest())
-    return MatchImpl(script_state, request.GetAsRequest(), options);
-  Request* new_request =
-      Request::Create(script_state, request.GetAsUSVString(), exception_state);
-  if (exception_state.HadException())
-    return ScriptPromise();
-  return MatchImpl(script_state, new_request, options);
+  DCHECK(request);
+  Request* request_object = nullptr;
+  switch (request->GetContentType()) {
+    case V8RequestInfo::ContentType::kRequest:
+      request_object = request->GetAsRequest();
+      break;
+    case V8RequestInfo::ContentType::kUSVString:
+      request_object = Request::Create(script_state, request->GetAsUSVString(),
+                                       exception_state);
+      if (exception_state.HadException())
+        return ScriptPromise();
+      break;
+  }
+  return MatchImpl(script_state, request_object, options);
 }
 
 ScriptPromise Cache::matchAll(ScriptState* script_state,
@@ -762,83 +769,105 @@ ScriptPromise Cache::matchAll(ScriptState* script_state,
 }
 
 ScriptPromise Cache::matchAll(ScriptState* script_state,
-                              const RequestInfo& request,
+                              const V8RequestInfo* request,
                               const CacheQueryOptions* options,
                               ExceptionState& exception_state) {
-  DCHECK(!request.IsNull());
-  if (request.IsRequest())
-    return MatchAllImpl(script_state, request.GetAsRequest(), options);
-  Request* new_request =
-      Request::Create(script_state, request.GetAsUSVString(), exception_state);
-  if (exception_state.HadException())
-    return ScriptPromise();
-  return MatchAllImpl(script_state, new_request, options);
+  DCHECK(request);
+  Request* request_object = nullptr;
+  switch (request->GetContentType()) {
+    case V8RequestInfo::ContentType::kRequest:
+      request_object = request->GetAsRequest();
+      break;
+    case V8RequestInfo::ContentType::kUSVString:
+      request_object = Request::Create(script_state, request->GetAsUSVString(),
+                                       exception_state);
+      if (exception_state.HadException())
+        return ScriptPromise();
+      break;
+  }
+  return MatchAllImpl(script_state, request_object, options);
 }
 
 ScriptPromise Cache::add(ScriptState* script_state,
-                         const RequestInfo& request,
+                         const V8RequestInfo* request,
                          ExceptionState& exception_state) {
-  DCHECK(!request.IsNull());
+  DCHECK(request);
   HeapVector<Member<Request>> requests;
-  if (request.IsRequest()) {
-    requests.push_back(request.GetAsRequest());
-  } else {
-    requests.push_back(Request::Create(script_state, request.GetAsUSVString(),
-                                       exception_state));
-    if (exception_state.HadException())
-      return ScriptPromise();
+  switch (request->GetContentType()) {
+    case V8RequestInfo::ContentType::kRequest:
+      requests.push_back(request->GetAsRequest());
+      break;
+    case V8RequestInfo::ContentType::kUSVString:
+      requests.push_back(Request::Create(
+          script_state, request->GetAsUSVString(), exception_state));
+      if (exception_state.HadException())
+        return ScriptPromise();
+      break;
   }
-
   return AddAllImpl(script_state, "Cache.add()", requests, exception_state);
 }
 
 ScriptPromise Cache::addAll(ScriptState* script_state,
-                            const HeapVector<RequestInfo>& raw_requests,
+                            const HeapVector<Member<V8RequestInfo>>& requests,
                             ExceptionState& exception_state) {
-  HeapVector<Member<Request>> requests;
-  for (RequestInfo request : raw_requests) {
-    if (request.IsRequest()) {
-      requests.push_back(request.GetAsRequest());
-    } else {
-      requests.push_back(Request::Create(script_state, request.GetAsUSVString(),
-                                         exception_state));
-      if (exception_state.HadException())
-        return ScriptPromise();
+  HeapVector<Member<Request>> request_objects;
+  for (const V8RequestInfo* request : requests) {
+    switch (request->GetContentType()) {
+      case V8RequestInfo::ContentType::kRequest:
+        request_objects.push_back(request->GetAsRequest());
+        break;
+      case V8RequestInfo::ContentType::kUSVString:
+        request_objects.push_back(Request::Create(
+            script_state, request->GetAsUSVString(), exception_state));
+        if (exception_state.HadException())
+          return ScriptPromise();
+        break;
     }
   }
-
-  return AddAllImpl(script_state, "Cache.addAll()", requests, exception_state);
+  return AddAllImpl(script_state, "Cache.addAll()", request_objects,
+                    exception_state);
 }
 
 ScriptPromise Cache::Delete(ScriptState* script_state,
-                            const RequestInfo& request,
+                            const V8RequestInfo* request,
                             const CacheQueryOptions* options,
                             ExceptionState& exception_state) {
-  DCHECK(!request.IsNull());
-  if (request.IsRequest())
-    return DeleteImpl(script_state, request.GetAsRequest(), options);
-  Request* new_request =
-      Request::Create(script_state, request.GetAsUSVString(), exception_state);
-  if (exception_state.HadException())
-    return ScriptPromise();
-  return DeleteImpl(script_state, new_request, options);
+  DCHECK(request);
+  Request* request_object = nullptr;
+  switch (request->GetContentType()) {
+    case V8RequestInfo::ContentType::kRequest:
+      request_object = request->GetAsRequest();
+      break;
+    case V8RequestInfo::ContentType::kUSVString:
+      request_object = Request::Create(script_state, request->GetAsUSVString(),
+                                       exception_state);
+      if (exception_state.HadException())
+        return ScriptPromise();
+      break;
+  }
+  return DeleteImpl(script_state, request_object, options);
 }
 
 ScriptPromise Cache::put(ScriptState* script_state,
-                         const RequestInfo& request_info,
+                         const V8RequestInfo* request_info,
                          Response* response,
                          ExceptionState& exception_state) {
-  DCHECK(!request_info.IsNull());
+  DCHECK(request_info);
   int64_t trace_id = blink::cache_storage::CreateTraceId();
   TRACE_EVENT_WITH_FLOW0("CacheStorage", "Cache::put",
                          TRACE_ID_GLOBAL(trace_id), TRACE_EVENT_FLAG_FLOW_OUT);
-  Request* request =
-      request_info.IsRequest()
-          ? request_info.GetAsRequest()
-          : Request::Create(script_state, request_info.GetAsUSVString(),
-                            exception_state);
-  if (exception_state.HadException())
-    return ScriptPromise();
+  Request* request = nullptr;
+  switch (request_info->GetContentType()) {
+    case V8RequestInfo::ContentType::kRequest:
+      request = request_info->GetAsRequest();
+      break;
+    case V8RequestInfo::ContentType::kUSVString:
+      request = Request::Create(script_state, request_info->GetAsUSVString(),
+                                exception_state);
+      if (exception_state.HadException())
+        return ScriptPromise();
+      break;
+  }
 
   ValidateRequestForPut(request, exception_state);
   if (exception_state.HadException())
@@ -864,17 +893,23 @@ ScriptPromise Cache::keys(ScriptState* script_state, ExceptionState&) {
 }
 
 ScriptPromise Cache::keys(ScriptState* script_state,
-                          const RequestInfo& request,
+                          const V8RequestInfo* request,
                           const CacheQueryOptions* options,
                           ExceptionState& exception_state) {
-  DCHECK(!request.IsNull());
-  if (request.IsRequest())
-    return KeysImpl(script_state, request.GetAsRequest(), options);
-  Request* new_request =
-      Request::Create(script_state, request.GetAsUSVString(), exception_state);
-  if (exception_state.HadException())
-    return ScriptPromise();
-  return KeysImpl(script_state, new_request, options);
+  DCHECK(request);
+  Request* request_object = nullptr;
+  switch (request->GetContentType()) {
+    case V8RequestInfo::ContentType::kRequest:
+      request_object = request->GetAsRequest();
+      break;
+    case V8RequestInfo::ContentType::kUSVString:
+      request_object = Request::Create(script_state, request->GetAsUSVString(),
+                                       exception_state);
+      if (exception_state.HadException())
+        return ScriptPromise();
+      break;
+  }
+  return KeysImpl(script_state, request_object, options);
 }
 
 Cache::Cache(GlobalFetch::ScopedFetcher* fetcher,
@@ -1088,8 +1123,7 @@ ScriptPromise Cache::AddAllImpl(ScriptState* script_state,
     if (barrier_callback->Signal())
       request_list[i]->signal()->Follow(barrier_callback->Signal());
 
-    RequestInfo info;
-    info.SetRequest(request_list[i]);
+    V8RequestInfo* info = MakeGarbageCollected<V8RequestInfo>(request_list[i]);
 
     auto* response_loader = MakeGarbageCollected<ResponseBodyLoader>(
         script_state, barrier_callback, i, /*require_ok_response=*/true,

@@ -9,10 +9,10 @@
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/common/frame.mojom-test-utils.h"
 #include "content/common/frame.mojom.h"
-#include "content/common/frame_messages.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
+#include "third_party/blink/public/mojom/navigation/navigation_params.mojom.h"
 
 namespace content {
 
@@ -42,21 +42,18 @@ class FrameHostInterceptor::FrameAgent
   FrameHost* GetForwardingInterface() override { return impl_; }
 
   void BeginNavigation(
-      mojom::CommonNavigationParamsPtr common_params,
-      mojom::BeginNavigationParamsPtr begin_params,
+      blink::mojom::CommonNavigationParamsPtr common_params,
+      blink::mojom::BeginNavigationParamsPtr begin_params,
       mojo::PendingRemote<blink::mojom::BlobURLToken> blob_url_token,
       mojo::PendingAssociatedRemote<mojom::NavigationClient> navigation_client,
-      mojo::PendingRemote<blink::mojom::NavigationInitiator>
-          navigation_initiator,
       mojo::PendingRemote<blink::mojom::PolicyContainerHostKeepAliveHandle>
           initiator_policy_container_keep_alive_handle) override {
     if (interceptor_->WillDispatchBeginNavigation(
             rfhi_, &common_params, &begin_params, &blob_url_token,
-            &navigation_client, &navigation_initiator)) {
+            &navigation_client)) {
       GetForwardingInterface()->BeginNavigation(
           std::move(common_params), std::move(begin_params),
           std::move(blob_url_token), std::move(navigation_client),
-          std::move(navigation_initiator),
           std::move(initiator_policy_container_keep_alive_handle));
     }
   }
@@ -82,12 +79,10 @@ FrameHostInterceptor::~FrameHostInterceptor() = default;
 
 bool FrameHostInterceptor::WillDispatchBeginNavigation(
     RenderFrameHost* render_frame_host,
-    mojom::CommonNavigationParamsPtr* common_params,
-    mojom::BeginNavigationParamsPtr* begin_params,
+    blink::mojom::CommonNavigationParamsPtr* common_params,
+    blink::mojom::BeginNavigationParamsPtr* begin_params,
     mojo::PendingRemote<blink::mojom::BlobURLToken>* blob_url_token,
-    mojo::PendingAssociatedRemote<mojom::NavigationClient>* navigation_client,
-    mojo::PendingRemote<blink::mojom::NavigationInitiator>*
-        navigation_initiator) {
+    mojo::PendingAssociatedRemote<mojom::NavigationClient>* navigation_client) {
   return true;
 }
 

@@ -9,7 +9,7 @@
 #include <string.h>
 #include <algorithm>
 
-#include "base/stl_util.h"
+#include "base/cxx17_backports.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/test/chromedriver/chrome/ui_events.h"
 #include "ui/base/x/x11_util.h"
@@ -178,11 +178,11 @@ bool ConvertKeyCodeToText(ui::KeyboardCode key_code,
   if (!character)
     *text = std::string();
   else
-    *text = base::UTF16ToUTF8(base::string16(1, character));
+    *text = base::UTF16ToUTF8(std::u16string(1, character));
   return true;
 }
 
-bool ConvertCharToKeyCode(base::char16 key,
+bool ConvertCharToKeyCode(char16_t key,
                           ui::KeyboardCode* key_code,
                           int* necessary_modifiers,
                           std::string* error_msg) {
@@ -191,7 +191,7 @@ bool ConvertCharToKeyCode(base::char16 key,
                                      error_msg);
   }
 
-  std::string key_string(base::UTF16ToUTF8(base::string16(1, key)));
+  std::string key_string(base::UTF16ToUTF8(std::u16string(1, key)));
   bool found = false;
   ui::KeyboardCode test_code;
   int test_modifiers;

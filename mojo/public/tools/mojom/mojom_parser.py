@@ -11,6 +11,7 @@ generate usable language bindings.
 """
 
 import argparse
+import builtins
 import codecs
 import errno
 import json
@@ -19,6 +20,7 @@ import multiprocessing
 import os
 import os.path
 import sys
+import traceback
 from collections import defaultdict
 
 from mojom.generate import module
@@ -29,7 +31,15 @@ from mojom.parse import conditional_features
 
 # Disable this for easier debugging.
 # In Python 2, subprocesses just hang when exceptions are thrown :(.
-ENABLE_MULTIPROCESSING = sys.version_info[0] > 2
+_ENABLE_MULTIPROCESSING = sys.version_info[0] > 2
+
+if sys.version_info < (3, 4):
+  _MULTIPROCESSING_USES_FORK = sys.platform.startswith('linux')
+else:
+  # https://docs.python.org/3/library/multiprocessing.html#:~:text=bpo-33725
+  if __name__ == '__main__' and sys.platform == 'darwin':
+    multiprocessing.set_start_method('fork')
+  _MULTIPROCESSING_USES_FORK = multiprocessing.get_start_method() == 'fork'
 
 
 def _ResolveRelativeImportPath(path, roots):
@@ -131,7 +141,7 @@ def _EnsureInputLoaded(mojom_abspath, module_path, abs_paths, asts,
     # Already done.
     return
 
-  for dep_abspath, dep_path in dependencies[mojom_abspath]:
+  for dep_abspath, dep_path in sorted(dependencies[mojom_abspath]):
     if dep_abspath not in loaded_modules:
       _EnsureInputLoaded(dep_abspath, dep_path, abs_paths, asts, dependencies,
                          loaded_modules, module_metadata)
@@ -164,8 +174,7 @@ def _CollectAllowedImportsFromBuildMetadata(build_metadata_filename):
 
 
 # multiprocessing helper.
-def _ParseAstHelper(args):
-  mojom_abspath, enabled_features = args
+def _ParseAstHelper(mojom_abspath, enabled_features):
   with codecs.open(mojom_abspath, encoding='utf-8') as f:
     ast = parser.Parse(f.read(), mojom_abspath)
     conditional_features.RemoveDisabledDefinitions(ast, enabled_features)
@@ -173,8 +182,7 @@ def _ParseAstHelper(args):
 
 
 # multiprocessing helper.
-def _SerializeHelper(args):
-  mojom_abspath, mojom_path = args
+def _SerializeHelper(mojom_abspath, mojom_path):
   module_path = os.path.join(_SerializeHelper.output_root_path,
                              _GetModuleFilename(mojom_path))
   module_dir = os.path.dirname(module_path)
@@ -191,21 +199,52 @@ def _SerializeHelper(args):
     _SerializeHelper.loaded_modules[mojom_abspath].Dump(f)
 
 
-def _Shard(target_func, args, processes=None):
-  args = list(args)
+class _ExceptionWrapper:
+  def __init__(self):
+    # Do not capture exception object to ensure pickling works.
+    self.formatted_trace = traceback.format_exc()
+
+
+class _FuncWrapper:
+  """Marshals exceptions and spreads args."""
+
+  def __init__(self, func):
+    self._func = func
+
+  def __call__(self, args):
+    # multiprocessing does not gracefully handle excptions.
+    # https://crbug.com/1219044
+    try:
+      return self._func(*args)
+    except:  # pylint: disable=bare-except
+      return _ExceptionWrapper()
+
+
+def _Shard(target_func, arg_list, processes=None):
+  arg_list = list(arg_list)
   if processes is None:
     processes = multiprocessing.cpu_count()
   # Seems optimal to have each process perform at least 2 tasks.
-  processes = min(processes, len(args) // 2)
+  processes = min(processes, len(arg_list) // 2)
+
+  if sys.platform == 'win32':
+    # TODO(crbug.com/1190269) - we can't use more than 56
+    # cores on Windows or Python3 may hang.
+    processes = min(processes, 56)
+
   # Don't spin up processes unless there is enough work to merit doing so.
-  if not ENABLE_MULTIPROCESSING or processes < 2:
-    for result in map(target_func, args):
-      yield result
+  if not _ENABLE_MULTIPROCESSING or processes < 2:
+    for arg_tuple in arg_list:
+      yield target_func(*arg_tuple)
     return
 
   pool = multiprocessing.Pool(processes=processes)
   try:
-    for result in pool.imap_unordered(target_func, args):
+    wrapped_func = _FuncWrapper(target_func)
+    for result in pool.imap_unordered(wrapped_func, arg_list):
+      if isinstance(result, _ExceptionWrapper):
+        sys.stderr.write(result.formatted_trace)
+        sys.exit(1)
       yield result
   finally:
     pool.close()
@@ -260,7 +299,7 @@ def _ParseMojoms(mojom_files,
     loaded_mojom_asts[mojom_abspath] = ast
 
   logging.info('Processing dependencies')
-  for mojom_abspath, ast in loaded_mojom_asts.items():
+  for mojom_abspath, ast in sorted(loaded_mojom_asts.items()):
     invalid_imports = []
     for imp in ast.import_list:
       import_abspath = _ResolveRelativeImportPath(imp.import_filename,
@@ -313,7 +352,7 @@ def _ParseMojoms(mojom_files,
   _SerializeHelper.loaded_modules = loaded_modules
   _SerializeHelper.output_root_path = output_root_path
   # Doesn't seem to help past 4. Perhaps IO bound here?
-  processes = 0 if sys.platform == 'win32' else 4
+  processes = 4 if _MULTIPROCESSING_USES_FORK else 0
   map_args = mojom_files_to_parse.items()
   for _ in _Shard(_SerializeHelper, map_args, processes=processes):
     pass

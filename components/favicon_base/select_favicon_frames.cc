@@ -12,6 +12,7 @@
 #include <set>
 #include <utility>
 
+#include "base/containers/contains.h"
 #include "base/macros.h"
 #include "components/favicon_base/favicon_util.h"
 #include "skia/ext/image_operations.h"
@@ -218,6 +219,7 @@ gfx::ImageSkia CreateFaviconImageSkia(
     const std::vector<gfx::Size>& original_sizes,
     int desired_size_in_dip,
     float* score) {
+  DCHECK_EQ(bitmaps.size(), original_sizes.size());
 
   const std::vector<float>& favicon_scales = favicon_base::GetFaviconScales();
   std::vector<int> desired_sizes;

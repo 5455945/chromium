@@ -8,8 +8,8 @@
 #include "ash/constants/ash_features.h"
 #include "ash/metrics/user_metrics_action.h"
 #include "ash/metrics/user_metrics_recorder.h"
+#include "ash/projector/projector_controller_impl.h"
 #include "ash/projector/projector_feature_pod_controller.h"
-#include "ash/public/cpp/ash_features.h"
 #include "ash/public/cpp/metrics_util.h"
 #include "ash/public/cpp/pagination/pagination_controller.h"
 #include "ash/public/cpp/system_tray_client.h"
@@ -63,6 +63,8 @@
 #include "base/numerics/ranges.h"
 #include "media/base/media_switches.h"
 #include "ui/accessibility/ax_enums.mojom.h"
+#include "ui/compositor/compositor.h"
+#include "ui/display/screen.h"
 #include "ui/gfx/animation/slide_animation.h"
 #include "ui/message_center/message_center.h"
 #include "ui/views/widget/widget.h"
@@ -155,7 +157,10 @@ void UnifiedSystemTrayController::HandleLockAction() {
 
 void UnifiedSystemTrayController::HandleSettingsAction() {
   Shell::Get()->metrics()->RecordUserMetricsAction(UMA_TRAY_SETTINGS);
-  Shell::Get()->system_tray_model()->client()->ShowSettings();
+  Shell::Get()->system_tray_model()->client()->ShowSettings(
+      display::Screen::GetScreen()
+          ->GetDisplayNearestView(unified_view_->GetWidget()->GetNativeView())
+          .id());
 }
 
 void UnifiedSystemTrayController::HandlePowerAction() {
@@ -351,6 +356,7 @@ void UnifiedSystemTrayController::ShowLocaleDetailedView() {
 
 void UnifiedSystemTrayController::ShowAudioDetailedView() {
   ShowDetailedView(std::make_unique<UnifiedAudioDetailedViewController>(this));
+  showing_audio_detailed_view_ = true;
 }
 
 void UnifiedSystemTrayController::ShowDarkModeDetailedView() {
@@ -369,6 +375,7 @@ void UnifiedSystemTrayController::ShowMediaControlsDetailedView() {
 }
 
 void UnifiedSystemTrayController::TransitionToMainView(bool restore_focus) {
+  showing_audio_detailed_view_ = false;
   detailed_view_controller_.reset();
   unified_view_->ResetDetailedView();
   if (restore_focus)
@@ -392,6 +399,7 @@ void UnifiedSystemTrayController::EnsureCollapsed() {
 
 void UnifiedSystemTrayController::EnsureExpanded() {
   if (detailed_view_controller_) {
+    showing_audio_detailed_view_ = false;
     detailed_view_controller_.reset();
     unified_view_->ResetDetailedView();
   }
@@ -440,10 +448,13 @@ void UnifiedSystemTrayController::InitFeaturePods() {
   AddFeaturePodItem(std::make_unique<AccessibilityFeaturePodController>(this));
   AddFeaturePodItem(std::make_unique<QuietModeFeaturePodController>(this));
   AddFeaturePodItem(std::make_unique<RotationLockFeaturePodController>());
+  AddFeaturePodItem(std::make_unique<PrivacyScreenFeaturePodController>());
   if (features::IsCaptureModeEnabled())
     AddFeaturePodItem(std::make_unique<CaptureModeFeaturePodController>(this));
-  if (chromeos::features::IsProjectorFeaturePodEnabled())
+  if (chromeos::features::IsProjectorFeaturePodEnabled() &&
+      Shell::Get()->projector_controller()->IsEligible()) {
     AddFeaturePodItem(std::make_unique<ProjectorFeaturePodController>(this));
+  }
   AddFeaturePodItem(std::make_unique<NearbyShareFeaturePodController>(this));
   AddFeaturePodItem(std::make_unique<NightLightFeaturePodController>(this));
   AddFeaturePodItem(std::make_unique<CastFeaturePodController>(this));
@@ -493,6 +504,7 @@ void UnifiedSystemTrayController::ShowDetailedView(
   if (manager && manager->GetFocusedView())
     manager->ClearFocus();
 
+  showing_audio_detailed_view_ = false;
   unified_view_->SetDetailedView(controller->CreateView());
   detailed_view_controller_ = std::move(controller);
 

@@ -101,6 +101,12 @@ void RecordXPCEvent(XPCConnectionEvent event) {
                                      incognito:incognito];
 }
 
+- (void)closeNotificationsWithProfileId:(NSString*)profileId
+                              incognito:(BOOL)incognito {
+  [[self serviceProxy] closeNotificationsWithProfileId:profileId
+                                             incognito:incognito];
+}
+
 - (void)closeAllNotifications {
   [[self serviceProxy] closeAllNotifications];
 }
@@ -139,12 +145,11 @@ void RecordXPCEvent(XPCConnectionEvent event) {
 
     for (NSDictionary* toast in alerts) {
       std::string notificationId = base::SysNSStringToUTF8(
-          [toast objectForKey:notification_constants::kNotificationId]);
+          toast[notification_constants::kNotificationId]);
       std::string profileId = base::SysNSStringToUTF8(
-          [toast objectForKey:notification_constants::kNotificationProfileId]);
+          toast[notification_constants::kNotificationProfileId]);
       bool incognito =
-          [[toast objectForKey:notification_constants::kNotificationIncognito]
-              boolValue];
+          [toast[notification_constants::kNotificationIncognito] boolValue];
 
       alertIds.push_back(
           {std::move(notificationId), std::move(profileId), incognito});

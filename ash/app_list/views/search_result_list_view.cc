@@ -33,6 +33,7 @@
 #include "ui/views/background.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/widget/widget.h"
 
 namespace ash {
 
@@ -40,6 +41,10 @@ namespace {
 
 constexpr base::TimeDelta kImpressionThreshold =
     base::TimeDelta::FromSeconds(3);
+
+// TODO(crbug.com/1199206): Move this into SharedAppListConfig once the UI for
+// categories is more developed.
+constexpr size_t kMaxResultsWithCategoricalSearch = 12;
 
 SearchResultIdWithPositionIndices GetSearchResultsForLogging(
     std::vector<SearchResultView*> search_result_views) {
@@ -51,6 +56,12 @@ SearchResultIdWithPositionIndices GetSearchResultsForLogging(
     }
   }
   return results;
+}
+
+size_t GetMaxSearchResultListItems() {
+  if (app_list_features::IsCategoricalSearchEnabled())
+    return kMaxResultsWithCategoricalSearch;
+  return SharedAppListConfig::instance().max_search_result_list_items();
 }
 
 }  // namespace
@@ -65,8 +76,8 @@ SearchResultListView::SearchResultListView(AppListMainView* main_view,
       views::BoxLayout::Orientation::kVertical));
 
   size_t result_count =
-      AppListConfig::instance().max_search_result_list_items() +
-      AppListConfig::instance().max_assistant_search_result_list_items();
+      GetMaxSearchResultListItems() +
+      SharedAppListConfig::instance().max_assistant_search_result_list_items();
 
   for (size_t i = 0; i < result_count; ++i) {
     search_result_views_.emplace_back(
@@ -133,16 +144,14 @@ int SearchResultListView::DoUpdate() {
     impression_timer_.Stop();
   impression_timer_.Start(FROM_HERE, kImpressionThreshold, this,
                           &SearchResultListView::LogImpressions);
-
-  set_container_score(
-      display_results.empty()
-          ? -1.0
-          : AppListConfig::instance().results_list_container_score());
-
   return display_results.size();
 }
 
 void SearchResultListView::LogImpressions() {
+  // TODO(crbug.com/1216097): Handle impressions for bubble launcher.
+  if (!main_view_)
+    return;
+
   // Since no items is actually clicked, send the position index of clicked item
   // as -1.
   if (main_view_->search_box_view()->is_search_box_active()) {
@@ -185,7 +194,8 @@ void SearchResultListView::SearchResultActivated(SearchResultView* view,
       view->index_in_container());
 
   view_delegate_->OpenSearchResult(
-      result->id(), event_flags, AppListLaunchedFrom::kLaunchedFromSearchBox,
+      result->id(), result->result_type(), event_flags,
+      AppListLaunchedFrom::kLaunchedFromSearchBox,
       AppListLaunchType::kSearchResult, -1 /* suggestion_index */,
       !by_button_press && view->is_default_result() /* launch_as_default */);
 }
@@ -201,11 +211,6 @@ void SearchResultListView::SearchResultActionActivated(SearchResultView* view,
       main_view_->search_box_view()->UpdateQuery(view->result()->title());
     }
   }
-}
-
-void SearchResultListView::OnSearchResultInstalled(SearchResultView* view) {
-  if (main_view_ && view->result())
-    main_view_->OnResultInstalled(view->result());
 }
 
 void SearchResultListView::VisibilityChanged(View* starting_from,
@@ -234,7 +239,7 @@ std::vector<SearchResult*> SearchResultListView::GetAssistantResults() {
                    AppListSearchResultType::kAssistantText;
       }),
       /*max_results=*/
-      AppListConfig::instance().max_assistant_search_result_list_items());
+      SharedAppListConfig::instance().max_assistant_search_result_list_items());
 }
 
 std::vector<SearchResult*> SearchResultListView::GetSearchResults() {
@@ -245,8 +250,7 @@ std::vector<SearchResult*> SearchResultListView::GetSearchResults() {
                    result.result_type() !=
                        AppListSearchResultType::kAssistantText;
           }),
-          /*max_results=*/
-          AppListConfig::instance().max_search_result_list_items());
+          GetMaxSearchResultListItems());
 
   std::vector<SearchResult*> assistant_results = GetAssistantResults();
 

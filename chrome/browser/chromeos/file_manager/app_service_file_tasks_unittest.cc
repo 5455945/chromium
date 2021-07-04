@@ -12,7 +12,7 @@
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/app_service_test.h"
-#include "chrome/browser/chromeos/file_manager/file_tasks.h"
+#include "chrome/browser/ash/file_manager/file_tasks.h"
 #include "chrome/browser/chromeos/file_manager/path_util.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/testing_profile.h"
@@ -64,6 +64,8 @@ class AppServiceFileTasksTest : public testing::Test {
     auto app = apps::mojom::App::New();
     app->app_id = app_id;
     app->app_type = apps::mojom::AppType::kArc;
+    app->show_in_launcher = apps::mojom::OptionalBool::kTrue;
+    app->readiness = apps::mojom::Readiness::kReady;
     auto intent_filter =
         is_send_multiple
             ? apps_util::CreateIntentFilterForSendMultiple(mime_type,
@@ -89,7 +91,7 @@ class AppServiceFileTasksTest : public testing::Test {
   base::test::ScopedFeatureList scoped_feature_list_;
   content::BrowserTaskEnvironment task_environment_;
   std::unique_ptr<TestingProfile> profile_;
-  apps::AppServiceProxy* app_service_proxy_ = nullptr;
+  apps::AppServiceProxyChromeOs* app_service_proxy_ = nullptr;
   apps::AppServiceTest app_service_test_;
 };
 

@@ -40,16 +40,6 @@ int g_https_port_for_testing = 0;
 // Used to compute the fallback URL from the https URL.
 int g_http_port_for_testing = 0;
 
-bool IsNavigationUsingHttpsAsDefaultScheme(content::NavigationHandle* handle) {
-  content::NavigationUIData* ui_data = handle->GetNavigationUIData();
-  // UI data can be null in the case of navigations to interstitials.
-  if (!ui_data) {
-    return false;
-  }
-  return static_cast<ChromeNavigationUIData*>(ui_data)
-      ->is_using_https_as_default_scheme();
-}
-
 void RecordUMA(TypedNavigationUpgradeThrottle::Event event) {
   base::UmaHistogramEnumeration(TypedNavigationUpgradeThrottle::kHistogramName,
                                 event);
@@ -120,31 +110,39 @@ TypedNavigationUpgradeThrottle::MaybeCreateThrottleFor(
     content::NavigationHandle* handle) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  // Only observe HTTPS navigations typed in the omnibox. If a navigation has
+  // Check if the omnibox added https as the default scheme for this navigation.
+  // If not, no need to create the throttle.
+  if (!IsNavigationUsingHttpsAsDefaultScheme(handle)) {
+    return nullptr;
+  }
+  // Typed main frame navigations can only be GET requests.
+  DCHECK(!handle->IsPost());
+
+  return base::WrapUnique(new TypedNavigationUpgradeThrottle(handle));
+}
+
+// static
+bool TypedNavigationUpgradeThrottle::IsNavigationUsingHttpsAsDefaultScheme(
+    content::NavigationHandle* handle) {
+  content::NavigationUIData* ui_data = handle->GetNavigationUIData();
+  // UI data can be null in the case of navigations to interstitials.
+  if (!ui_data) {
+    return false;
+  }
+  // Only handle HTTPS navigations typed in the omnibox. If a navigation has
   // HTTP URL, either the omnibox didn't upgrade the navigation to HTTPS, or it
   // previously upgraded and we fell back to HTTP so there is no need to
   // observe again.
   // TODO(crbug.com/1161620): There are cases where we don't currently upgrade
   // even though we probably should. Make a decision for the ones listed in the
   // bug and potentially identify more.
-  if (!handle->IsInMainFrame() || handle->IsSameDocument() ||
-      !handle->GetURL().SchemeIs(url::kHttpsScheme) ||
-      handle->GetWebContents()->IsPortal() ||
-      !ui::PageTransitionCoreTypeIs(handle->GetPageTransition(),
-                                    ui::PAGE_TRANSITION_TYPED) ||
-      !ui::PageTransitionIsNewNavigation(handle->GetPageTransition())) {
-    return nullptr;
-  }
-  // Typed main frame navigations can only be GET requests.
-  DCHECK(!handle->IsPost());
-
-  // Check if the omnibox added https as the default scheme for this navigation.
-  // If not, no need to create the throttle.
-  if (!IsNavigationUsingHttpsAsDefaultScheme(handle)) {
-    return nullptr;
-  }
-
-  return base::WrapUnique(new TypedNavigationUpgradeThrottle(handle));
+  bool is_using_https_as_default_scheme =
+      static_cast<ChromeNavigationUIData*>(ui_data)
+          ->is_using_https_as_default_scheme();
+  return is_using_https_as_default_scheme && handle->IsInPrimaryMainFrame() &&
+         !handle->IsSameDocument() &&
+         handle->GetURL().SchemeIs(url::kHttpsScheme) &&
+         !handle->GetWebContents()->IsPortal();
 }
 
 TypedNavigationUpgradeThrottle::~TypedNavigationUpgradeThrottle() = default;
@@ -211,16 +209,6 @@ TypedNavigationUpgradeThrottle::WillProcessResponse() {
 
 const char* TypedNavigationUpgradeThrottle::GetNameForLogging() {
   return "TypedNavigationUpgradeThrottle";
-}
-
-// static
-bool TypedNavigationUpgradeThrottle::
-    ShouldIgnoreInterstitialBecauseNavigationDefaultedToHttps(
-        content::NavigationHandle* handle) {
-  DCHECK_EQ(url::kHttpsScheme, handle->GetURL().scheme());
-  return base::FeatureList::IsEnabled(
-             omnibox::kDefaultTypedNavigationsToHttps) &&
-         IsNavigationUsingHttpsAsDefaultScheme(handle);
 }
 
 // static

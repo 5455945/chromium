@@ -10,9 +10,11 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/json/json_string_value_serializer.h"
+#include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/stringprintf.h"
 #include "chromecast/browser/extensions/api/tts/tts_extension_api.h"
+#include "components/services/app_service/public/mojom/types.mojom-shared.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -88,8 +90,8 @@ const Extension* CastExtensionSystem::LoadExtensionByManifest(
   }
 
   scoped_refptr<extensions::Extension> extension(extensions::Extension::Create(
-      base::FilePath(), extensions::Manifest::COMMAND_LINE, *manifest, 0,
-      std::string(), &error));
+      base::FilePath(), extensions::mojom::ManifestLocation::kCommandLine,
+      *manifest, 0, std::string(), &error));
   if (!extension.get()) {
     LOG(ERROR) << "Failed to create extension: " << error;
     return nullptr;
@@ -114,9 +116,9 @@ const Extension* CastExtensionSystem::LoadExtension(
   CHECK(base::DirectoryExists(extension_dir)) << extension_dir.AsUTF8Unsafe();
   int load_flags = Extension::FOLLOW_SYMLINKS_ANYWHERE;
   std::string load_error;
-  scoped_refptr<Extension> extension =
-      file_util::LoadExtension(extension_dir, manifest_file, std::string(),
-                               Manifest::COMPONENT, load_flags, &load_error);
+  scoped_refptr<Extension> extension = file_util::LoadExtension(
+      extension_dir, manifest_file, std::string(),
+      mojom::ManifestLocation::kComponent, load_flags, &load_error);
   if (!extension.get()) {
     LOG(ERROR) << "Loading extension at " << extension_dir.value()
                << " failed with: " << load_error;

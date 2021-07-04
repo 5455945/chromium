@@ -455,7 +455,6 @@ constexpr double kSafeBrowsingRowMinDelay = 1.75;
 - (void)booleanDidChange:(id<ObservableBoolean>)observableBoolean {
   // TODO(crbug.com/1078782): Handle safe browsing state changes to reward user
   // for fixing state.
-  return;
 }
 
 #pragma mark - Private methods
@@ -503,27 +502,23 @@ constexpr double kSafeBrowsingRowMinDelay = 1.75;
     case PasswordCheckState::kNoPasswords:
       return PasswordCheckRowStateDefault;
     case PasswordCheckState::kSignedOut:
-      base::UmaHistogramEnumeration(
-          kSafetyCheckMetricsPasswords,
-          safety_check::SafetyCheck::PasswordsStatus::kSignedOut);
+      base::UmaHistogramEnumeration(kSafetyCheckMetricsPasswords,
+                                    safety_check::PasswordsStatus::kSignedOut);
       return noCompromisedPasswords ? PasswordCheckRowStateError
                                     : PasswordCheckRowStateUnSafe;
     case PasswordCheckState::kOffline:
-      base::UmaHistogramEnumeration(
-          kSafetyCheckMetricsPasswords,
-          safety_check::SafetyCheck::PasswordsStatus::kOffline);
+      base::UmaHistogramEnumeration(kSafetyCheckMetricsPasswords,
+                                    safety_check::PasswordsStatus::kOffline);
       return noCompromisedPasswords ? PasswordCheckRowStateError
                                     : PasswordCheckRowStateUnSafe;
     case PasswordCheckState::kQuotaLimit:
-      base::UmaHistogramEnumeration(
-          kSafetyCheckMetricsPasswords,
-          safety_check::SafetyCheck::PasswordsStatus::kQuotaLimit);
+      base::UmaHistogramEnumeration(kSafetyCheckMetricsPasswords,
+                                    safety_check::PasswordsStatus::kQuotaLimit);
       return noCompromisedPasswords ? PasswordCheckRowStateError
                                     : PasswordCheckRowStateUnSafe;
     case PasswordCheckState::kOther:
-      base::UmaHistogramEnumeration(
-          kSafetyCheckMetricsPasswords,
-          safety_check::SafetyCheck::PasswordsStatus::kError);
+      base::UmaHistogramEnumeration(kSafetyCheckMetricsPasswords,
+                                    safety_check::PasswordsStatus::kError);
       return noCompromisedPasswords ? PasswordCheckRowStateError
                                     : PasswordCheckRowStateUnSafe;
     case PasswordCheckState::kCanceled:
@@ -531,15 +526,14 @@ constexpr double kSafeBrowsingRowMinDelay = 1.75;
       if (!noCompromisedPasswords) {
         base::UmaHistogramEnumeration(
             kSafetyCheckMetricsPasswords,
-            safety_check::SafetyCheck::PasswordsStatus::kCompromisedExist);
+            safety_check::PasswordsStatus::kCompromisedExist);
         return PasswordCheckRowStateUnSafe;
       } else if (self.currentPasswordCheckState == PasswordCheckState::kIdle) {
         // Safe state is only possible after the state transitioned from
         // kRunning to kIdle.
         if (wasRunning) {
-          base::UmaHistogramEnumeration(
-              kSafetyCheckMetricsPasswords,
-              safety_check::SafetyCheck::PasswordsStatus::kSafe);
+          base::UmaHistogramEnumeration(kSafetyCheckMetricsPasswords,
+                                        safety_check::PasswordsStatus::kSafe);
           return PasswordCheckRowStateSafe;
         } else {
           return PasswordCheckRowStateDefault;
@@ -553,7 +547,6 @@ constexpr double kSafeBrowsingRowMinDelay = 1.75;
 // Computes the appropriate error info to be displayed in the updates popover.
 - (NSAttributedString*)updateCheckErrorInfoString {
   NSString* message;
-  GURL linkURL;
 
   switch (self.updateCheckRowState) {
     case UpdateCheckRowStateDefault:
@@ -573,7 +566,7 @@ constexpr double kSafeBrowsingRowMinDelay = 1.75;
     case UpdateCheckRowStateChannel:
       break;
   }
-  return [self attributedStringWithText:message link:linkURL];
+  return [self attributedStringWithText:message link:GURL()];
 }
 
 // Computes the appropriate error info to be displayed in the passwords popover.
@@ -619,38 +612,28 @@ constexpr double kSafeBrowsingRowMinDelay = 1.75;
 
 // Computes whether user is capable to run password check in Google Account.
 - (BOOL)canUseAccountPasswordCheckup {
-  return self.authService->IsAuthenticated() &&
-         self.syncService->IsSyncEnabled() &&
+  return self.syncService->CanSyncFeatureStart() &&
          !self.syncService->IsEncryptEverythingEnabled();
 }
 
 // Configures check error info with a link for popovers.
 - (NSAttributedString*)attributedStringWithText:(NSString*)text
                                            link:(GURL)link {
-  NSRange range;
+  NSDictionary* textAttributes = @{
+    NSFontAttributeName :
+        [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline],
+    NSForegroundColorAttributeName : [UIColor colorNamed:kTextSecondaryColor]
+  };
 
-  NSString* strippedText = ParseStringWithLink(text, &range);
-
-  NSRange fullRange = NSMakeRange(0, strippedText.length);
-  NSMutableAttributedString* attributedText =
-      [[NSMutableAttributedString alloc] initWithString:strippedText];
-  [attributedText addAttribute:NSForegroundColorAttributeName
-                         value:[UIColor colorNamed:kTextSecondaryColor]
-                         range:fullRange];
-
-  [attributedText
-      addAttribute:NSFontAttributeName
-             value:[UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline]
-             range:fullRange];
-
-  if (range.location != NSNotFound && range.length != 0) {
-    NSURL* URL = net::NSURLWithGURL(link);
-    id linkValue = URL ? URL : @"";
-    [attributedText addAttribute:NSLinkAttributeName
-                           value:linkValue
-                           range:range];
+  if (link.is_empty()) {
+    return [[NSMutableAttributedString alloc] initWithString:text
+                                                  attributes:textAttributes];
   }
-  return attributedText;
+  NSDictionary* linkAttributes =
+      @{NSLinkAttributeName : net::NSURLWithGURL(link)};
+
+  return AttributedStringFromStringWithLink(text, textAttributes,
+                                            linkAttributes);
 }
 
 // Upon a tap of checkStartItem either starts or cancels a safety check.
@@ -697,15 +680,12 @@ constexpr double kSafeBrowsingRowMinDelay = 1.75;
   base::RecordAction(base::UserMetricsAction("Settings.SafetyCheck.Start"));
   base::UmaHistogramEnumeration(kSafetyCheckInteractions,
                                 SafetyCheckInteractions::kStarted);
-  base::UmaHistogramEnumeration(
-      kSafetyCheckMetricsUpdates,
-      safety_check::SafetyCheck::UpdateStatus::kChecking);
-  base::UmaHistogramEnumeration(
-      kSafetyCheckMetricsPasswords,
-      safety_check::SafetyCheck::PasswordsStatus::kChecking);
-  base::UmaHistogramEnumeration(
-      kSafetyCheckMetricsSafeBrowsing,
-      safety_check::SafetyCheck::SafeBrowsingStatus::kChecking);
+  base::UmaHistogramEnumeration(kSafetyCheckMetricsUpdates,
+                                safety_check::UpdateStatus::kChecking);
+  base::UmaHistogramEnumeration(kSafetyCheckMetricsPasswords,
+                                safety_check::PasswordsStatus::kChecking);
+  base::UmaHistogramEnumeration(kSafetyCheckMetricsSafeBrowsing,
+                                safety_check::SafeBrowsingStatus::kChecking);
 
   // Change checkStartItem to cancel state.
   self.checkStartState = CheckStartStateCancel;
@@ -759,7 +739,7 @@ constexpr double kSafeBrowsingRowMinDelay = 1.75;
 
               base::UmaHistogramEnumeration(
                   kSafetyCheckMetricsPasswords,
-                  safety_check::SafetyCheck::PasswordsStatus::kNoPasswords);
+                  safety_check::PasswordsStatus::kNoPasswords);
             }
           });
     } else {
@@ -776,7 +756,6 @@ constexpr double kSafeBrowsingRowMinDelay = 1.75;
             [weakSelf checkAndReconfigureSafeBrowsingState];
         });
   }
-  return;
 }
 
 // Checks if any of the safety checks are still running, resets |checkStartItem|
@@ -806,7 +785,6 @@ constexpr double kSafeBrowsingRowMinDelay = 1.75;
 
   // Since no checks are running, attempt to show the timestamp.
   [self showTimestampIfNeeded];
-  return;
 }
 
 // Computes if any of the safety checks are still running.
@@ -827,9 +805,8 @@ constexpr double kSafeBrowsingRowMinDelay = 1.75;
     self.updateCheckRowState = UpdateCheckRowStateNetError;
     [self reconfigureUpdateCheckItem];
 
-    base::UmaHistogramEnumeration(
-        kSafetyCheckMetricsUpdates,
-        safety_check::SafetyCheck::UpdateStatus::kFailedOffline);
+    base::UmaHistogramEnumeration(kSafetyCheckMetricsUpdates,
+                                  safety_check::UpdateStatus::kFailedOffline);
   }
 }
 
@@ -841,11 +818,9 @@ constexpr double kSafeBrowsingRowMinDelay = 1.75;
     self.updateCheckRowState = UpdateCheckRowStateOmahaError;
     [self reconfigureUpdateCheckItem];
 
-    base::UmaHistogramEnumeration(
-        kSafetyCheckMetricsUpdates,
-        safety_check::SafetyCheck::UpdateStatus::kFailed);
+    base::UmaHistogramEnumeration(kSafetyCheckMetricsUpdates,
+                                  safety_check::UpdateStatus::kFailed);
   }
-  return;
 }
 
 // If the update check would have completed too quickly, making the UI appear
@@ -888,9 +863,8 @@ constexpr double kSafeBrowsingRowMinDelay = 1.75;
   if (details.is_up_to_date) {
     [self possiblyDelayReconfigureUpdateCheckItemWithState:
               UpdateCheckRowStateUpToDate];
-    base::UmaHistogramEnumeration(
-        kSafetyCheckMetricsUpdates,
-        safety_check::SafetyCheck::UpdateStatus::kUpdated);
+    base::UmaHistogramEnumeration(kSafetyCheckMetricsUpdates,
+                                  safety_check::UpdateStatus::kUpdated);
   } else {
     // upgradeURL and next_version are only set if not up to date.
     const GURL& upgradeUrl = details.upgrade_url;
@@ -899,9 +873,8 @@ constexpr double kSafeBrowsingRowMinDelay = 1.75;
       [self possiblyDelayReconfigureUpdateCheckItemWithState:
                 UpdateCheckRowStateOmahaError];
 
-      base::UmaHistogramEnumeration(
-          kSafetyCheckMetricsUpdates,
-          safety_check::SafetyCheck::UpdateStatus::kFailed);
+      base::UmaHistogramEnumeration(kSafetyCheckMetricsUpdates,
+                                    safety_check::UpdateStatus::kFailed);
       return;
     }
 
@@ -910,17 +883,15 @@ constexpr double kSafeBrowsingRowMinDelay = 1.75;
       [self possiblyDelayReconfigureUpdateCheckItemWithState:
                 UpdateCheckRowStateOmahaError];
 
-      base::UmaHistogramEnumeration(
-          kSafetyCheckMetricsUpdates,
-          safety_check::SafetyCheck::UpdateStatus::kFailed);
+      base::UmaHistogramEnumeration(kSafetyCheckMetricsUpdates,
+                                    safety_check::UpdateStatus::kFailed);
       return;
     }
     [self possiblyDelayReconfigureUpdateCheckItemWithState:
               UpdateCheckRowStateOutOfDate];
 
-    base::UmaHistogramEnumeration(
-        kSafetyCheckMetricsUpdates,
-        safety_check::SafetyCheck::UpdateStatus::kOutdated);
+    base::UmaHistogramEnumeration(kSafetyCheckMetricsUpdates,
+                                  safety_check::UpdateStatus::kOutdated);
 
     // Valid results, update all NSUserDefaults.
     [defaults setValue:base::SysUTF8ToNSString(upgradeUrl.spec())
@@ -932,7 +903,6 @@ constexpr double kSafeBrowsingRowMinDelay = 1.75;
     // infobar was just shown to not overshow the infobar to the user.
     [defaults setObject:[NSDate date] forKey:kLastInfobarDisplayTimeKey];
   }
-  return;
 }
 
 // Performs the update check and triggers the display update to
@@ -956,14 +926,13 @@ constexpr double kSafeBrowsingRowMinDelay = 1.75;
   if (!self.safeBrowsingPreferenceManaged) {
     if (self.safeBrowsingPreference.value) {
       self.safeBrowsingCheckRowState = SafeBrowsingCheckRowStateSafe;
-      base::UmaHistogramEnumeration(
-          kSafetyCheckMetricsSafeBrowsing,
-          safety_check::SafetyCheck::SafeBrowsingStatus::kEnabled);
+      base::UmaHistogramEnumeration(kSafetyCheckMetricsSafeBrowsing,
+                                    safety_check::SafeBrowsingStatus::kEnabled);
     } else {
       self.safeBrowsingCheckRowState = SafeBrowsingCheckRowStateUnsafe;
       base::UmaHistogramEnumeration(
           kSafetyCheckMetricsSafeBrowsing,
-          safety_check::SafetyCheck::SafeBrowsingStatus::kDisabled);
+          safety_check::SafeBrowsingStatus::kDisabled);
     }
   }
   if (self.safeBrowsingCheckRowState == SafeBrowsingCheckRowStateUnsafe &&
@@ -971,7 +940,7 @@ constexpr double kSafeBrowsingRowMinDelay = 1.75;
     self.safeBrowsingCheckRowState = SafeBrowsingCheckRowStateManaged;
     base::UmaHistogramEnumeration(
         kSafetyCheckMetricsSafeBrowsing,
-        safety_check::SafetyCheck::SafeBrowsingStatus::kDisabledByAdmin);
+        safety_check::SafeBrowsingStatus::kDisabledByAdmin);
   }
 
   [self reconfigureSafeBrowsingCheckItem];
@@ -1217,7 +1186,7 @@ constexpr double kSafeBrowsingRowMinDelay = 1.75;
 
   base::TimeDelta elapsedTime = base::Time::Now() - lastCompletedCheck;
 
-  base::string16 timestamp;
+  std::u16string timestamp;
   // If check found issues less than 1 minuete ago.
   if (elapsedTime < base::TimeDelta::FromMinutes(1)) {
     timestamp = l10n_util::GetStringUTF16(IDS_IOS_CHECK_FINISHED_JUST_NOW);

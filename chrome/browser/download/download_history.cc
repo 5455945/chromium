@@ -29,13 +29,13 @@
 
 #include "chrome/browser/download/download_history.h"
 
+#include <memory>
 #include <utility>
 
 #include "base/bind.h"
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/optional.h"
 #include "build/build_config.h"
 #include "chrome/browser/download/download_crx_util.h"
 #include "chrome/browser/profiles/profile.h"
@@ -50,6 +50,7 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_manager.h"
 #include "extensions/buildflags/buildflags.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "chrome/browser/extensions/api/downloads/downloads_api.h"
@@ -117,7 +118,7 @@ class DownloadHistoryData : public base::SupportsUserData::Data {
   history::DownloadRow* info() { return info_.get(); }
   void set_info(const history::DownloadRow& i) {
     // TODO(qinmin): avoid creating a new copy each time.
-    info_.reset(new history::DownloadRow(i));
+    info_ = std::make_unique<history::DownloadRow>(i);
   }
   void clear_info() {
     info_.reset();
@@ -381,7 +382,7 @@ void DownloadHistory::LoadHistoryDownloads(
     download::DownloadItem* item = notifier_.GetManager()->CreateDownloadItem(
         row.guid, loading_id_, row.current_path, row.target_path, url_chain,
         row.referrer_url, row.site_url, row.tab_url, row.tab_referrer_url,
-        base::nullopt, row.mime_type, row.original_mime_type, row.start_time,
+        absl::nullopt, row.mime_type, row.original_mime_type, row.start_time,
         row.end_time, row.etag, row.last_modified, row.received_bytes,
         row.total_bytes,
         std::string(),  // TODO(asanka): Need to persist and restore hash of
@@ -544,8 +545,6 @@ void DownloadHistory::OnDownloadUpdated(content::DownloadManager* manager,
       ShouldUpdateHistory(data->info(), current_info);
   bool should_update =
       (should_update_result != ShouldUpdateHistoryResult::NO_UPDATE);
-  UMA_HISTOGRAM_ENUMERATION("Download.HistoryPropagatedUpdate",
-                            should_update, 2);
   if (should_update) {
     history_->UpdateDownload(
         current_info,

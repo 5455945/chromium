@@ -44,6 +44,7 @@ class NearbyConnectorImpl : public NearbyConnector, public KeyedService {
   struct ConnectionRequestMetadata {
     ConnectionRequestMetadata(
         const std::vector<uint8_t>& bluetooth_public_address,
+        const std::vector<uint8_t>& eid,
         mojo::PendingRemote<mojom::NearbyMessageReceiver> message_receiver,
         ConnectCallback callback);
     ConnectionRequestMetadata(const ConnectionRequestMetadata&) = delete;
@@ -52,6 +53,7 @@ class NearbyConnectorImpl : public NearbyConnector, public KeyedService {
     ~ConnectionRequestMetadata();
 
     std::vector<uint8_t> bluetooth_public_address;
+    std::vector<uint8_t> eid;
     mojo::PendingRemote<mojom::NearbyMessageReceiver> message_receiver;
     ConnectCallback callback;
   };
@@ -71,6 +73,7 @@ class NearbyConnectorImpl : public NearbyConnector, public KeyedService {
   /// mojom::NearbyConnector:
   void Connect(
       const std::vector<uint8_t>& bluetooth_public_address,
+      const std::vector<uint8_t>& eid,
       mojo::PendingRemote<mojom::NearbyMessageReceiver> message_receiver,
       ConnectCallback callback) override;
 
@@ -118,7 +121,7 @@ class NearbyConnectorImpl : public NearbyConnector, public KeyedService {
   // Metadata for an ongoing connection attempt. If this field is set, it means
   // that the entry in |id_to_brokers_map_| with the given ID is currently
   // attempting a connection. If null, there is no pending connection attempt.
-  base::Optional<ActiveConnectionAttempt> active_connection_attempt_;
+  absl::optional<ActiveConnectionAttempt> active_connection_attempt_;
 
   base::WeakPtrFactory<NearbyConnectorImpl> weak_ptr_factory_{this};
 };

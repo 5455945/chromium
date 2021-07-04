@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/containers/contains.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_manager_util.h"
 #include "components/password_manager/core/browser/statistics_table.h"
@@ -56,7 +57,7 @@ bool FakeFormFetcher::IsBlocklisted() const {
 }
 
 bool FakeFormFetcher::IsMovingBlocked(const autofill::GaiaIdHash& destination,
-                                      const base::string16& username) const {
+                                      const std::u16string& username) const {
   // This is analogous to the implementation in
   // MultiStoreFormFetcher::IsMovingBlocked().
   for (const std::vector<const PasswordForm*>& matches_vector :

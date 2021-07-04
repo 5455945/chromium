@@ -11,11 +11,12 @@
 #include <utility>
 #include <vector>
 
-#include "ash/public/cpp/ash_switches.h"
+#include "ash/constants/ash_switches.h"
+#include "base/cxx17_backports.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
-#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -32,6 +33,7 @@
 #include "components/safe_browsing/core/common/safebrowsing_switches.h"
 #include "components/sync/base/pref_names.h"
 #include "content/public/common/content_switches.h"
+#include "net/base/port_util.h"
 #include "services/network/public/cpp/network_switches.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/display/display_switches.h"
@@ -43,8 +45,6 @@
 const CommandLinePrefStore::SwitchToPreferenceMapEntry
     ChromeCommandLinePrefStore::string_switch_map_[] = {
         {switches::kLang, language::prefs::kApplicationLocale},
-        {data_reduction_proxy::switches::kDataReductionProxy,
-         data_reduction_proxy::prefs::kDataReductionProxy},
         {switches::kAuthServerAllowlist, prefs::kAuthServerAllowlist},
         {switches::kSSLVersionMin, prefs::kSSLVersionMin},
         {switches::kSSLVersionMax, prefs::kSSLVersionMax},
@@ -105,6 +105,7 @@ ChromeCommandLinePrefStore::ChromeCommandLinePrefStore(
   ValidateProxySwitches();
   ApplySSLSwitches();
   ApplyBackgroundModeSwitches();
+  ApplyExplicitlyAllowedPortSwitch();
 }
 
 ChromeCommandLinePrefStore::~ChromeCommandLinePrefStore() {}
@@ -164,9 +165,12 @@ void ChromeCommandLinePrefStore::ApplyProxyMode() {
 void ChromeCommandLinePrefStore::ApplySSLSwitches() {
   if (command_line()->HasSwitch(switches::kCipherSuiteBlacklist)) {
     std::unique_ptr<base::ListValue> list_value(new base::ListValue());
-    list_value->AppendStrings(base::SplitString(
+    const std::vector<std::string> str_list = base::SplitString(
         command_line()->GetSwitchValueASCII(switches::kCipherSuiteBlacklist),
-        ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL));
+        ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
+    for (const std::string& str : str_list) {
+      list_value->Append(str);
+    }
     SetValue(prefs::kCipherSuiteBlacklist, std::move(list_value),
              WriteablePrefStore::DEFAULT_PREF_WRITE_FLAGS);
   }
@@ -178,4 +182,27 @@ void ChromeCommandLinePrefStore::ApplyBackgroundModeSwitches() {
              std::make_unique<base::Value>(false),
              WriteablePrefStore::DEFAULT_PREF_WRITE_FLAGS);
   }
+}
+
+void ChromeCommandLinePrefStore::ApplyExplicitlyAllowedPortSwitch() {
+  if (!command_line()->HasSwitch(switches::kExplicitlyAllowedPorts)) {
+    return;
+  }
+
+  base::Value integer_list(base::Value::Type::LIST);
+  std::string switch_value =
+      command_line()->GetSwitchValueASCII(switches::kExplicitlyAllowedPorts);
+  const auto& split = base::SplitStringPiece(
+      switch_value, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
+  for (const auto& piece : split) {
+    int port;
+    if (!base::StringToInt(piece, &port))
+      continue;
+    if (!net::IsPortValid(port))
+      continue;
+    integer_list.Append(base::Value(port));
+  }
+  SetValue(prefs::kExplicitlyAllowedNetworkPorts,
+           base::Value::ToUniquePtrValue(std::move(integer_list)),
+           WriteablePrefStore::DEFAULT_PREF_WRITE_FLAGS);
 }

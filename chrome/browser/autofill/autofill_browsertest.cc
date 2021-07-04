@@ -12,8 +12,6 @@
 #include "base/memory/ref_counted.h"
 #include "base/rand_util.h"
 #include "base/run_loop.h"
-#include "base/stl_util.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/utf_string_conversions.h"
@@ -56,6 +54,7 @@
 #include "net/test/embedded_test_server/http_response.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/switches.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 
@@ -128,12 +127,19 @@ class AutofillTest : public InProcessBrowserTest {
     // Make sure to close any showing popups prior to tearing down the UI.
     content::WebContents* web_contents =
         browser()->tab_strip_model()->GetActiveWebContents();
-    AutofillManager* autofill_manager =
+    BrowserAutofillManager* autofill_manager =
         ContentAutofillDriverFactory::FromWebContents(web_contents)
             ->DriverForFrame(web_contents->GetMainFrame())
-            ->autofill_manager();
+            ->browser_autofill_manager();
     autofill_manager->client()->HideAutofillPopup(PopupHidingReason::kTabGone);
     test::ReenableSystemServices();
+  }
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    InProcessBrowserTest::SetUpCommandLine(command_line);
+    // Slower test bots (chromeos, debug, etc) are flaky
+    // due to slower loading interacting with deferred commits.
+    command_line->AppendSwitch(blink::switches::kAllowPreCommitInput);
   }
 
   PersonalDataManager* personal_data_manager() {
@@ -286,12 +292,12 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, ProfilesAggregatedWithSubmitHandler) {
   FillFormAndSubmitWithHandler("duplicate_profiles_test.html", data, submit,
                                false);
 
-  // The AutofillManager will update the user's profile.
+  // The BrowserAutofillManager will update the user's profile.
   EXPECT_EQ(1u, personal_data_manager()->GetProfiles().size());
 
-  EXPECT_EQ(ASCIIToUTF16("Bob"),
+  EXPECT_EQ(u"Bob",
             personal_data_manager()->GetProfiles()[0]->GetRawInfo(NAME_FIRST));
-  EXPECT_EQ(ASCIIToUTF16("Smith"),
+  EXPECT_EQ(u"Smith",
             personal_data_manager()->GetProfiles()[0]->GetRawInfo(NAME_LAST));
 }
 
@@ -382,18 +388,17 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, ProfileSavedWithValidCountryPhone) {
     FillFormAndSubmit("autofill_test_form.html", profiles[i]);
 
   ASSERT_EQ(2u, personal_data_manager()->GetProfiles().size());
-  int us_address_index =
-      personal_data_manager()->GetProfiles()[0]->GetRawInfo(
-          ADDRESS_HOME_LINE1) == ASCIIToUTF16("123 Cherry Ave")
-          ? 0
-          : 1;
+  int us_address_index = personal_data_manager()->GetProfiles()[0]->GetRawInfo(
+                             ADDRESS_HOME_LINE1) == u"123 Cherry Ave"
+                             ? 0
+                             : 1;
 
   EXPECT_EQ(
-      ASCIIToUTF16("408-871-4567"),
+      u"408-871-4567",
       personal_data_manager()->GetProfiles()[us_address_index]->GetRawInfo(
           PHONE_HOME_WHOLE_NUMBER));
   ASSERT_EQ(
-      ASCIIToUTF16("+49 40-80-81-79-000"),
+      u"+49 40-80-81-79-000",
       personal_data_manager()->GetProfiles()[1 - us_address_index]->GetRawInfo(
           PHONE_HOME_WHOLE_NUMBER));
 }
@@ -419,17 +424,16 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, AppendCountryCodeForAggregatedPhones) {
   ASSERT_EQ(2u, personal_data_manager()->GetProfiles().size());
   int second_address_index =
       personal_data_manager()->GetProfiles()[0]->GetRawInfo(
-          ADDRESS_HOME_LINE1) == ASCIIToUTF16("4321 H St.")
+          ADDRESS_HOME_LINE1) == u"4321 H St."
           ? 0
           : 1;
 
-  EXPECT_EQ(ASCIIToUTF16("+49 8450 777777"),
-            personal_data_manager()
-                ->GetProfiles()[1 - second_address_index]
-                ->GetRawInfo(PHONE_HOME_WHOLE_NUMBER));
+  EXPECT_EQ(u"+49 8450 777777", personal_data_manager()
+                                    ->GetProfiles()[1 - second_address_index]
+                                    ->GetRawInfo(PHONE_HOME_WHOLE_NUMBER));
 
   EXPECT_EQ(
-      ASCIIToUTF16("08450 777777"),
+      u"08450 777777",
       personal_data_manager()->GetProfiles()[second_address_index]->GetRawInfo(
           PHONE_HOME_WHOLE_NUMBER));
 }
@@ -773,18 +777,19 @@ IN_PROC_BROWSER_TEST_F(AutofillAccessibilityTest, TestAutocompleteState) {
 }
 
 // Test fixture for testing that that appropriate form submission events are
-// fired in AutofillManager.
+// fired in BrowserAutofillManager.
 class FormSubmissionDetectionTest
     : public InProcessBrowserTest,
       public testing::WithParamInterface<std::tuple<bool, bool>> {
  protected:
-  class MockAutofillManager : public AutofillManager {
+  class MockBrowserAutofillManager : public BrowserAutofillManager {
    public:
-    MockAutofillManager(AutofillDriver* driver, AutofillClient* client)
-        : AutofillManager(driver,
-                          client,
-                          "en-US",
-                          AutofillManager::DISABLE_AUTOFILL_DOWNLOAD_MANAGER) {}
+    MockBrowserAutofillManager(AutofillDriver* driver, AutofillClient* client)
+        : BrowserAutofillManager(
+              driver,
+              client,
+              "en-US",
+              BrowserAutofillManager::DISABLE_AUTOFILL_DOWNLOAD_MANAGER) {}
 
     MOCK_METHOD3(OnFormSubmittedImpl,
                  void(const FormData&, bool, mojom::SubmissionSource));
@@ -796,6 +801,13 @@ class FormSubmissionDetectionTest
     SetUpServer();
     NavigateToPage("/form.html");
     Mock();
+  }
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    InProcessBrowserTest::SetUpCommandLine(command_line);
+    // Slower test bots (chromeos, debug, etc) are flaky
+    // due to slower loading interacting with deferred commits.
+    command_line->AppendSwitch(blink::switches::kAllowPreCommitInput);
   }
 
   void TearDownOnMainThread() override {}
@@ -812,7 +824,7 @@ class FormSubmissionDetectionTest
         blink::WebMouseEvent::Button::kLeft);
   }
 
-  MockAutofillManager* autofill_manager_ = nullptr;
+  MockBrowserAutofillManager* autofill_manager_ = nullptr;
 
  private:
   void InitializeFeatures() {
@@ -879,8 +891,8 @@ class FormSubmissionDetectionTest
   }
 
   // TODO(crbug/1119526) This dependency injection is wonky because it only
-  // mocks the current ContentAutofillDriver's AutofillManager, not the future
-  // ones' AutofillManagers.
+  // mocks the current ContentAutofillDriver's BrowserAutofillManager, not the
+  // future ones' BrowserAutofillManagers.
   void Mock() {
     content::WebContents* web_contents =
         browser()->tab_strip_model()->GetActiveWebContents();
@@ -890,18 +902,18 @@ class FormSubmissionDetectionTest
     ContentAutofillDriver* driver =
         driver_factory->DriverForFrame(web_contents->GetMainFrame());
 
-    std::unique_ptr<MockAutofillManager> mock_autofill_manager =
-        std::make_unique<MockAutofillManager>(driver, client);
+    std::unique_ptr<MockBrowserAutofillManager> mock_autofill_manager =
+        std::make_unique<MockBrowserAutofillManager>(driver, client);
     autofill_manager_ = mock_autofill_manager.get();
 
-    driver->SetAutofillManager(std::move(mock_autofill_manager));
+    driver->SetBrowserAutofillManager(std::move(mock_autofill_manager));
   }
 
   base::test::ScopedFeatureList feature_list_;
 };
 
 // Tests that user-triggered submission triggers a submission event in
-// AutofillManager.
+// BrowserAutofillManager.
 IN_PROC_BROWSER_TEST_P(FormSubmissionDetectionTest, Submission) {
   base::RunLoop run_loop;
   EXPECT_CALL(
@@ -918,7 +930,7 @@ IN_PROC_BROWSER_TEST_P(FormSubmissionDetectionTest, Submission) {
 }
 
 // Tests that non-link-click, renderer-inititiated navigation triggers a
-// submission event in AutofillManager.
+// submission event in BrowserAutofillManager.
 IN_PROC_BROWSER_TEST_P(FormSubmissionDetectionTest, ProbableSubmission) {
   base::RunLoop run_loop;
   EXPECT_CALL(*autofill_manager_,

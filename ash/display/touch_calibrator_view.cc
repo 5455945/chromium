@@ -4,12 +4,15 @@
 
 #include "ash/display/touch_calibrator_view.h"
 
+#include <memory>
+
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/shell.h"
 #include "base/memory/ptr_util.h"
 #include "ui/aura/window.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/gfx/animation/throb_animation.h"
 #include "ui/gfx/canvas.h"
@@ -88,7 +91,7 @@ views::Widget::InitParams GetWidgetParams(aura::Window* root_window) {
   params.name = kWidgetName;
   params.z_order = ui::ZOrderLevel::kFloatingWindow;
   params.accept_events = true;
-  params.activatable = views::Widget::InitParams::ACTIVATABLE_NO;
+  params.activatable = views::Widget::InitParams::Activatable::kNo;
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
   params.parent =
       Shell::GetContainer(root_window, kShellWindowId_OverlayContainer);
@@ -96,7 +99,7 @@ views::Widget::InitParams GetWidgetParams(aura::Window* root_window) {
 }
 
 // Returns the size of bounding box required for |text| of given |font_list|.
-gfx::Size GetSizeForString(const base::string16& text,
+gfx::Size GetSizeForString(const std::u16string& text,
                            const gfx::FontList& font_list) {
   int height = 0, width = 0;
   gfx::Canvas::SizeStringInt(text, font_list, &width, &height, 0, 0);
@@ -181,7 +184,7 @@ CircularThrobberView::CircularThrobberView(int width,
   outer_circle_flags_.setAntiAlias(true);
   outer_circle_flags_.setStyle(cc::PaintFlags::kFill_Style);
 
-  animation_.reset(new gfx::ThrobAnimation(this));
+  animation_ = std::make_unique<gfx::ThrobAnimation>(this);
   animation_->SetThrobDuration(animation_duration);
   animation_->StartThrobbing(-1);
 
@@ -274,14 +277,14 @@ class HintBox : public views::View {
   // views::View:
   void OnPaint(gfx::Canvas* canvas) override;
 
-  void SetLabel(const base::string16& text, const SkColor& color);
-  void SetSubLabel(const base::string16& text, const SkColor& color);
+  void SetLabel(const std::u16string& text, const SkColor& color);
+  void SetSubLabel(const std::u16string& text, const SkColor& color);
 
  private:
   void UpdateWidth(int updated_width);
 
-  base::string16 label_text_;
-  base::string16 sublabel_text_;
+  std::u16string label_text_;
+  std::u16string sublabel_text_;
 
   SkColor label_color_;
   SkColor sublabel_color_;
@@ -352,7 +355,7 @@ void HintBox::UpdateWidth(int updated_width) {
   rounded_rect_bounds_ = GetContentsBounds();
 }
 
-void HintBox::SetLabel(const base::string16& text, const SkColor& color) {
+void HintBox::SetLabel(const std::u16string& text, const SkColor& color) {
   label_text_ = text;
   label_color_ = color;
 
@@ -372,7 +375,7 @@ void HintBox::SetLabel(const base::string16& text, const SkColor& color) {
     UpdateWidth(minimum_expected_width);
 }
 
-void HintBox::SetSubLabel(const base::string16& text, const SkColor& color) {
+void HintBox::SetSubLabel(const std::u16string& text, const SkColor& color) {
   sublabel_text_ = text;
   sublabel_color_ = color;
 
@@ -404,14 +407,14 @@ void HintBox::OnPaint(gfx::Canvas* canvas) {
 
 class CompletionMessageView : public views::View {
  public:
-  CompletionMessageView(const gfx::Rect& bounds, const base::string16& message);
+  CompletionMessageView(const gfx::Rect& bounds, const std::u16string& message);
   ~CompletionMessageView() override;
 
   // views::View:
   void OnPaint(gfx::Canvas* canvas) override;
 
  private:
-  const base::string16 message_;
+  const std::u16string message_;
   gfx::FontList font_list_;
 
   gfx::Rect text_bounds_;
@@ -424,7 +427,7 @@ class CompletionMessageView : public views::View {
 };
 
 CompletionMessageView::CompletionMessageView(const gfx::Rect& bounds,
-                                             const base::string16& message)
+                                             const std::u16string& message)
     : message_(message) {
   SetBoundsRect(bounds);
 
@@ -547,9 +550,9 @@ void TouchCalibratorView::InitViewContents() {
   tap_label_->SetVisible(false);
 
   // Initialize the Hint Box view.
-  base::string16 hint_label_text =
+  std::u16string hint_label_text =
       rb.GetLocalizedString(IDS_DISPLAY_TOUCH_CALIBRATION_HINT_LABEL_TEXT);
-  base::string16 hint_sublabel_text =
+  std::u16string hint_sublabel_text =
       rb.GetLocalizedString(IDS_DISPLAY_TOUCH_CALIBRATION_HINT_SUBLABEL_TEXT);
 
   int tpv_width = touch_point_view_->width();
@@ -579,7 +582,7 @@ void TouchCalibratorView::InitViewContents() {
 
   // Initialize the view that contains the calibration complete message which
   // will be displayed at the end.
-  base::string16 finish_msg_text =
+  std::u16string finish_msg_text =
       rb.GetLocalizedString(IDS_DISPLAY_TOUCH_CALIBRATION_FINISH_LABEL);
 
   gfx::Rect msg_view_bounds(

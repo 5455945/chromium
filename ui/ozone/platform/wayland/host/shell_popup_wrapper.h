@@ -5,20 +5,14 @@
 #ifndef UI_OZONE_PLATFORM_WAYLAND_HOST_SHELL_POPUP_WRAPPER_H_
 #define UI_OZONE_PLATFORM_WAYLAND_HOST_SHELL_POPUP_WRAPPER_H_
 
+#include "ui/base/ui_base_types.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/ozone/platform/wayland/common/wayland_object.h"
+#include "ui/platform_window/platform_window_init_properties.h"
 
 namespace ui {
 
 class WaylandConnection;
-class WaylandWindow;
-
-enum class MenuType {
-  TYPE_RIGHT_CLICK,
-  TYPE_3DOT_PARENT_MENU,
-  TYPE_3DOT_CHILD_MENU,
-  TYPE_UNKNOWN,
-};
 
 enum class WlAnchor {
   None,
@@ -54,6 +48,11 @@ enum class WlConstraintAdjustment : uint32_t {
   ResizeY = 32,
 };
 
+struct ShellPopupParams {
+  gfx::Rect bounds;
+  MenuType menu_type = MenuType::kRootContextMenu;
+};
+
 inline WlConstraintAdjustment operator|(WlConstraintAdjustment a,
                                         WlConstraintAdjustment b) {
   return static_cast<WlConstraintAdjustment>(static_cast<uint32_t>(a) |
@@ -73,13 +72,14 @@ class ShellPopupWrapper {
 
   // Initializes the popup surface.
   virtual bool Initialize(WaylandConnection* connection,
-                          const gfx::Rect& bounds) = 0;
+                          const ShellPopupParams& params) = 0;
 
   // Sends acknowledge configure event back to wayland.
   virtual void AckConfigure(uint32_t serial) = 0;
 
-  MenuType GetMenuTypeForPositioner(WaylandConnection* connection,
-                                    WaylandWindow* parent_window) const;
+  // Tells if the surface has been AckConfigured at least once.
+  virtual bool IsConfigured() = 0;
+
   bool CanGrabPopup(WaylandConnection* connection) const;
 };
 

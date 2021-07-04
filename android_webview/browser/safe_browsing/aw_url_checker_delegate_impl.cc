@@ -20,10 +20,10 @@
 #include "base/android/jni_android.h"
 #include "base/bind.h"
 #include "base/feature_list.h"
-#include "components/safe_browsing/core/db/database_manager.h"
-#include "components/safe_browsing/core/db/v4_protocol_manager_util.h"
-#include "components/safe_browsing/core/features.h"
-#include "components/safe_browsing/core/web_ui/constants.h"
+#include "components/safe_browsing/core/browser/db/database_manager.h"
+#include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
+#include "components/safe_browsing/core/common/features.h"
+#include "components/safe_browsing/core/common/web_ui_constants.h"
 #include "components/security_interstitials/content/security_interstitial_tab_helper.h"
 #include "components/security_interstitials/content/unsafe_resource_util.h"
 #include "components/security_interstitials/core/unsafe_resource.h"
@@ -98,6 +98,12 @@ void AwUrlCheckerDelegateImpl::
 
 bool AwUrlCheckerDelegateImpl::IsUrlAllowlisted(const GURL& url) {
   return allowlist_manager_->IsUrlAllowed(url);
+}
+
+void AwUrlCheckerDelegateImpl::SetPolicyAllowlistDomains(
+    const std::vector<std::string>& allowlist_domains) {
+  // The SafeBrowsingAllowlistDomains policy is not supported on AW.
+  return;
 }
 
 bool AwUrlCheckerDelegateImpl::ShouldSkipRequestCheck(

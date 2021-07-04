@@ -7,6 +7,7 @@
 #import <Foundation/Foundation.h>
 #include <algorithm>
 #include <memory>
+#include <utility>
 
 #include "base/bind.h"
 #include "base/callback.h"
@@ -15,6 +16,7 @@
 #include "base/mac/bundle_locations.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/numerics/checked_math.h"
 #include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/timer/elapsed_timer.h"
@@ -69,7 +71,8 @@ NavigationManager::WebLoadParams::WebLoadParams(const GURL& url)
     : url(url),
       transition_type(ui::PAGE_TRANSITION_LINK),
       is_renderer_initiated(false),
-      post_data(nil) {}
+      post_data(nil),
+      is_using_https_as_default_scheme(false) {}
 
 NavigationManager::WebLoadParams::~WebLoadParams() {}
 
@@ -80,7 +83,9 @@ NavigationManager::WebLoadParams::WebLoadParams(const WebLoadParams& other)
       transition_type(other.transition_type),
       is_renderer_initiated(other.is_renderer_initiated),
       extra_headers([other.extra_headers copy]),
-      post_data([other.post_data copy]) {}
+      post_data([other.post_data copy]),
+      is_using_https_as_default_scheme(other.is_using_https_as_default_scheme) {
+}
 
 NavigationManager::WebLoadParams& NavigationManager::WebLoadParams::operator=(
     const WebLoadParams& other) {
@@ -91,26 +96,9 @@ NavigationManager::WebLoadParams& NavigationManager::WebLoadParams::operator=(
   transition_type = other.transition_type;
   extra_headers = [other.extra_headers copy];
   post_data = [other.post_data copy];
+  is_using_https_as_default_scheme = other.is_using_https_as_default_scheme;
 
   return *this;
-}
-
-/* static */
-NavigationItem* NavigationManagerImpl::GetLastCommittedNonRedirectedItem(
-    const NavigationManager* nav_manager) {
-  if (!nav_manager || !nav_manager->GetItemCount())
-    return nullptr;
-
-  int index = nav_manager->GetLastCommittedItemIndex();
-  while (index >= 0) {
-    NavigationItem* item = nav_manager->GetItemAtIndex(index);
-    // Returns the first non-Redirect item found.
-    if (!ui::PageTransitionIsRedirect(item->GetTransitionType()))
-      return item;
-    --index;
-  }
-
-  return nullptr;
 }
 
 NavigationManagerImpl::NavigationManagerImpl()
@@ -192,23 +180,13 @@ void NavigationManagerImpl::DetachFromWebView() {
   is_restore_session_in_progress_ = false;
 }
 
-void NavigationManagerImpl::AddTransientItem(const GURL& url) {
-  DCHECK(web_view_cache_.IsAttachedToWebView());
-  NavigationItem* last_committed_item = GetLastCommittedItem();
-  transient_item_ = CreateNavigationItemWithRewriters(
-      url, Referrer(), ui::PAGE_TRANSITION_CLIENT_REDIRECT,
-      NavigationInitiationType::BROWSER_INITIATED,
-      last_committed_item ? last_committed_item->GetURL() : GURL::EmptyGURL(),
-      nullptr /* use default rewriters only */);
-  transient_item_->SetTimestamp(
-      time_smoother_.GetSmoothedTime(base::Time::Now()));
-}
-
 void NavigationManagerImpl::AddPendingItem(
     const GURL& url,
     const web::Referrer& referrer,
     ui::PageTransition navigation_type,
-    NavigationInitiationType initiation_type) {
+    NavigationInitiationType initiation_type,
+    bool is_post_navigation,
+    bool is_using_https_as_default_scheme) {
   DiscardNonCommittedItems();
 
   pending_item_index_ = -1;
@@ -216,6 +194,7 @@ void NavigationManagerImpl::AddPendingItem(
       GetLastCommittedItemInCurrentOrRestoredSession();
   pending_item_ = CreateNavigationItemWithRewriters(
       url, referrer, navigation_type, initiation_type,
+      is_using_https_as_default_scheme,
       last_committed_item ? last_committed_item->GetURL() : GURL::EmptyGURL(),
       &transient_url_rewriters_);
   RemoveTransientURLRewriters();
@@ -282,7 +261,13 @@ void NavigationManagerImpl::AddPendingItem(
         IsSameOrPlaceholderOf(current_item_url, net::GURLWithNSURL(proxy.URL));
   }
 
-  if (proxy.backForwardList.currentItem && isCurrentURLSameAsPending) {
+  bool is_form_post =
+      base::FeatureList::IsEnabled(
+          web::features::kCreatePendingItemForPostFormSubmission) &&
+      is_post_navigation &&
+      (navigation_type & ui::PageTransition::PAGE_TRANSITION_FORM_SUBMIT);
+  if (proxy.backForwardList.currentItem && isCurrentURLSameAsPending &&
+      !is_form_post) {
     pending_item_index_ = web_view_cache_.GetCurrentItemIndex();
 
     // If |currentItem| is not already associated with a NavigationItemImpl,
@@ -290,9 +275,17 @@ void NavigationManagerImpl::AddPendingItem(
     // since it will be a duplicate.
     NavigationItemImpl* current_item =
         GetNavigationItemFromWKItem(current_wk_item);
+    ui::PageTransition transition = pending_item_->GetTransitionType();
     if (!current_item) {
       current_item = pending_item_.get();
       SetNavigationItemInWKItem(current_wk_item, std::move(pending_item_));
+    }
+    if (base::FeatureList::IsEnabled(
+            web::features::kCreatePendingItemForPostFormSubmission)) {
+      // Updating the transition type of the item is needed, for example when
+      // doing a FormSubmit with a GET method on the same URL. See
+      // crbug.com/1211879.
+      current_item->SetTransitionType(transition);
     }
 
     pending_item_.reset();
@@ -441,13 +434,13 @@ int NavigationManagerImpl::GetIndexForOffset(int offset) const {
         empty_window_open_item_ ? 0 : web_view_cache_.GetCurrentItemIndex();
   }
 
-  if (offset < 0 && GetTransientItem() && pending_item_index_ == -1) {
-    // Going back from transient item that added to the end navigation stack
-    // is a matter of discarding it as there is no need to move navigation
-    // index back.
-    offset++;
+  // Handled signed integer overflow or underflow.
+  int index;
+  if (!base::CheckAdd(current_item_index, offset).AssignIfValid(&index)) {
+    return -1;
   }
-  return current_item_index + offset;
+
+  return index;
 }
 
 void NavigationManagerImpl::SetPendingItemIndex(int index) {
@@ -489,12 +482,19 @@ void NavigationManagerImpl::SetWKWebViewNextPendingUrlNotSerializable(
   next_pending_url_should_skip_serialization_ = url;
 }
 
-bool NavigationManagerImpl::ShouldBlockUrlDuringRestore(const GURL& url) {
+bool NavigationManagerImpl::RestoreSessionFromCache(const GURL& url) {
   DCHECK(is_restore_session_in_progress_);
-  if (!web::GetWebClient()->ShouldBlockUrlDuringRestore(url, GetWebState()))
+
+  GURL targetURL;
+  if (!web::wk_navigation_util::IsRestoreSessionUrl(url) ||
+      web::wk_navigation_util::ExtractTargetURL(url, &targetURL)) {
+    return false;
+  }
+
+  if (!web::GetWebClient()->RestoreSessionFromCache(GetWebState()))
     return false;
 
-  // Abort restore.
+  // Native restore worked, abort unsafe restore.
   DiscardNonCommittedItems();
   last_committed_item_index_ = web_view_cache_.GetCurrentItemIndex();
   if (restored_visible_item_ &&
@@ -521,8 +521,7 @@ void NavigationManagerImpl::UpdatePendingItemUrl(const GURL& url) const {
     return;
 
   // UpdatePendingItemUrl is used to handle redirects after loading starts for
-  // the currenting pending item. No transient item should exists at this point.
-  DCHECK(!GetTransientItem());
+  // the currenting pending item.
   pending_item->SetURL(url);
   pending_item->SetVirtualURL(url);
   // Redirects (3xx response code), or client side navigation must change POST
@@ -532,10 +531,6 @@ void NavigationManagerImpl::UpdatePendingItemUrl(const GURL& url) const {
 }
 
 NavigationItemImpl* NavigationManagerImpl::GetCurrentItemImpl() const {
-  NavigationItemImpl* transient_item = GetTransientItemImpl();
-  if (transient_item)
-    return transient_item;
-
   NavigationItemImpl* pending_item = GetPendingItemInCurrentOrRestoredSession();
   if (pending_item)
     return pending_item;
@@ -565,11 +560,9 @@ NavigationItemImpl* NavigationManagerImpl::GetLastCommittedItemImpl() const {
 void NavigationManagerImpl::UpdateCurrentItemForReplaceState(
     const GURL& url,
     NSString* state_object) {
-  DCHECK(!GetTransientItem());
   NavigationItemImpl* current_item = GetCurrentItemImpl();
   current_item->SetURL(url);
   current_item->SetSerializedStateObject(state_object);
-  current_item->SetHasStateBeenReplaced(true);
   current_item->SetPostData(nil);
 }
 
@@ -581,10 +574,7 @@ void NavigationManagerImpl::GoToIndex(int index,
     return;
   }
 
-  if (!GetTransientItem()) {
-    delegate_->RecordPageStateInNavigationItem();
-  }
-  delegate_->ClearTransientContent();
+  delegate_->RecordPageStateInNavigationItem();
   delegate_->ClearDialogs();
 
   if (!web_view_cache_.IsAttachedToWebView()) {
@@ -636,11 +626,6 @@ WebState* NavigationManagerImpl::GetWebState() const {
 NavigationItem* NavigationManagerImpl::GetVisibleItem() const {
   if (is_restore_session_in_progress_ || restored_visible_item_)
     return restored_visible_item_.get();
-
-  NavigationItem* transient_item = GetTransientItem();
-  if (transient_item) {
-    return transient_item;
-  }
 
   // Only return pending_item_ for new (non-history), user-initiated
   // navigations in order to prevent URL spoof attacks.
@@ -700,13 +685,8 @@ NavigationItem* NavigationManagerImpl::GetPendingItem() const {
   return GetPendingItemInCurrentOrRestoredSession();
 }
 
-NavigationItem* NavigationManagerImpl::GetTransientItem() const {
-  return GetTransientItemImpl();
-}
-
 void NavigationManagerImpl::DiscardNonCommittedItems() {
   pending_item_.reset();
-  transient_item_.reset();
   pending_item_index_ = -1;
 }
 
@@ -721,7 +701,6 @@ void NavigationManagerImpl::LoadURLWithParams(
   }
 
   DCHECK(!(params.transition_type & ui::PAGE_TRANSITION_FORWARD_BACK));
-  delegate_->ClearTransientContent();
   delegate_->ClearDialogs();
   delegate_->RecordPageStateInNavigationItem();
 
@@ -730,7 +709,8 @@ void NavigationManagerImpl::LoadURLWithParams(
           ? NavigationInitiationType::RENDERER_INITIATED
           : NavigationInitiationType::BROWSER_INITIATED;
   AddPendingItem(params.url, params.referrer, params.transition_type,
-                 initiation_type);
+                 initiation_type, /*is_post_navigation=*/false,
+                 params.is_using_https_as_default_scheme);
 
   // Mark pending item as created from hash change if necessary. This is needed
   // because window.hashchange message may not arrive on time.
@@ -749,21 +729,23 @@ void NavigationManagerImpl::LoadURLWithParams(
 
     if (params.virtual_url.is_valid())
       pending_item->SetVirtualURL(params.virtual_url);
+
+    if (params.is_using_https_as_default_scheme)
+      pending_item->SetUpgradedToHttps();
   }
 
   // Add additional headers to the NavigationItem before loading it in the web
-  // view. This implementation must match CRWWebController's |currentNavItem|.
-  // However, to avoid introducing a GetCurrentItem() that is only used here,
-  // the logic in |currentNavItem| is inlined here with the small simplification
-  // since AddPendingItem() implies that any transient item would have been
-  // cleared.
-  DCHECK(!GetTransientItem());
+  // view.
   NavigationItemImpl* added_item =
       pending_item ? pending_item
                    : GetLastCommittedItemInCurrentOrRestoredSession();
   DCHECK(added_item);
   if (params.extra_headers)
     added_item->AddHttpRequestHeaders(params.extra_headers);
+
+  if (params.is_using_https_as_default_scheme)
+    added_item->SetUpgradedToHttps();
+
   if (params.post_data) {
     DCHECK([added_item->GetHttpRequestHeaders() objectForKey:@"Content-Type"])
         << "Post data should have an associated content type";
@@ -782,7 +764,7 @@ void NavigationManagerImpl::LoadURLWithParams(
       int next_item_index = web_view_cache_.GetCurrentItemIndex() + 1;
       DCHECK_GT(next_item_index, 0);
       cached_items.resize(next_item_index + 1);
-      cached_items[next_item_index].reset(pending_item_.release());
+      cached_items[next_item_index] = std::move(pending_item_);
       Restore(next_item_index, std::move(cached_items));
       DCHECK(web_view_cache_.IsAttachedToWebView());
       return;
@@ -883,25 +865,21 @@ void NavigationManagerImpl::Reload(ReloadType reload_type,
   // GetLastCommittedItem() so restore session URL's aren't suppressed.
   // Otherwise a cancelled/stopped navigation during the first post-restore
   // navigation will always return early from Reload.
-  if (!GetTransientItem() && !GetPendingItem() &&
-      !GetLastCommittedItemInCurrentOrRestoredSession())
+  if (!GetPendingItem() && !GetLastCommittedItemInCurrentOrRestoredSession())
     return;
 
   delegate_->ClearDialogs();
 
   // Reload with ORIGINAL_REQUEST_URL type should reload with the original
-  // request url of the transient item, or pending item if transient doesn't
-  // exist, or last committed item if both of them don't exist. The reason is
-  // that a server side redirect may change the item's url.
-  // For example, the user visits www.chromium.org and is then redirected
-  // to m.chromium.org, when the user wants to refresh the page with a different
-  // configuration (e.g. user agent), the user would be expecting to visit
-  // www.chromium.org instead of m.chromium.org.
+  // request url of the pending item, or last committed item if the pending item
+  // doesn't exist. The reason is that a server side redirect may change the
+  // item's url. For example, the user visits www.chromium.org and is then
+  // redirected to m.chromium.org, when the user wants to refresh the page with
+  // a different configuration (e.g. user agent), the user would be expecting to
+  // visit www.chromium.org instead of m.chromium.org.
   if (reload_type == web::ReloadType::ORIGINAL_REQUEST_URL) {
     NavigationItem* reload_item = nullptr;
-    if (GetTransientItem())
-      reload_item = GetTransientItem();
-    else if (GetPendingItem())
+    if (GetPendingItem())
       reload_item = GetPendingItem();
     else
       reload_item = GetLastCommittedItemInCurrentOrRestoredSession();
@@ -925,18 +903,11 @@ void NavigationManagerImpl::ReloadWithUserAgentType(
     UserAgentType user_agent_type) {
   DCHECK_NE(user_agent_type, UserAgentType::NONE);
 
-  NavigationItem* item_to_reload = GetTransientItem();
-  if (!item_to_reload ||
-      ui::PageTransitionIsRedirect(item_to_reload->GetTransitionType()))
-    item_to_reload = GetVisibleItem();
-  if (!item_to_reload ||
-      ui::PageTransitionIsRedirect(item_to_reload->GetTransitionType())) {
-    NavigationItem* last_committed_before_redirect =
-        GetLastCommittedNonRedirectedItem(this);
-    if (last_committed_before_redirect) {
-      // When a tab is opened on a redirect, there is no last committed item
-      // before the redirect. In that case, take the last committed item.
-      item_to_reload = last_committed_before_redirect;
+  NavigationItem* item_to_reload = GetVisibleItem();
+  if (!item_to_reload) {
+    NavigationItem* last_committed_item = GetLastCommittedItem();
+    if (last_committed_item) {
+      item_to_reload = last_committed_item;
     }
   }
 
@@ -967,14 +938,7 @@ NavigationItemList NavigationManagerImpl::GetBackwardItems() const {
   if (is_restore_session_in_progress_)
     return items;
 
-  // If the current navigation item is a transient item (e.g. SSL
-  // interstitial), the last committed item should also be considered part of
-  // the backward history.
   int current_back_forward_item_index = web_view_cache_.GetCurrentItemIndex();
-  if (GetTransientItem() && current_back_forward_item_index >= 0) {
-    items.push_back(GetItemAtIndex(current_back_forward_item_index));
-  }
-
   for (int index = current_back_forward_item_index - 1; index >= 0; index--) {
     items.push_back(GetItemAtIndex(index));
   }
@@ -1044,10 +1008,6 @@ NavigationManagerImpl::GetPendingItemInCurrentOrRestoredSession() const {
   return GetNavigationItemImplAtIndex(pending_item_index_);
 }
 
-NavigationItemImpl* NavigationManagerImpl::GetTransientItemImpl() const {
-  return transient_item_.get();
-}
-
 NavigationItemImpl*
 NavigationManagerImpl::GetLastCommittedItemInCurrentOrRestoredSession() const {
   if (empty_window_open_item_) {
@@ -1073,6 +1033,7 @@ NavigationManagerImpl::GetLastCommittedItemInCurrentOrRestoredSession() const {
           /*url=*/GURL::EmptyGURL(), Referrer(),
           ui::PageTransition::PAGE_TRANSITION_LINK,
           NavigationInitiationType::RENDERER_INITIATED,
+          /*is_using_https_as_default_scheme=*/false,
           /*previous_url=*/GURL::EmptyGURL(),
           nullptr /* use default rewriters only */);
       last_committed_web_view_item_->SetUntrusted();
@@ -1205,13 +1166,12 @@ void NavigationManagerImpl::UnsafeRestore(
 
   // Grab the title of the first item before |restored_visible_item_| (which may
   // or may not be the first index) is moved out of |items| below.
-  const base::string16& firstTitle = items[first_index]->GetTitle();
+  const std::u16string& firstTitle = items[first_index]->GetTitle();
 
   // Ordering is important. Cache the visible item of the restored session
   // before starting the new navigation, which may trigger client lookup of
   // visible item. The visible item of the restored session is the last
-  // committed item, because a restored session has no pending or transient
-  // item.
+  // committed item, because a restored session has no pending item.
   is_restore_session_in_progress_ = true;
   if (last_committed_item_index > -1)
     restored_visible_item_ = std::move(items[last_committed_item_index]);
@@ -1268,6 +1228,7 @@ NavigationManagerImpl::CreateNavigationItemWithRewriters(
     const Referrer& referrer,
     ui::PageTransition transition,
     NavigationInitiationType initiation_type,
+    bool is_using_https_as_default_scheme,
     const GURL& previous_url,
     const std::vector<BrowserURLRewriter::URLRewriter>* additional_rewriters)
     const {
@@ -1301,12 +1262,19 @@ NavigationManagerImpl::CreateNavigationItemWithRewriters(
     loaded_url = url;
   }
 
+  GURL original_url = loaded_url;
+  if (ui::PageTransitionIsRedirect(transition) && GetLastCommittedItem()) {
+    original_url = GetLastCommittedItem()->GetURL();
+  }
+
   auto item = std::make_unique<NavigationItemImpl>();
-  item->SetOriginalRequestURL(loaded_url);
+  item->SetOriginalRequestURL(original_url);
   item->SetURL(loaded_url);
   item->SetReferrer(referrer);
   item->SetTransitionType(transition);
   item->SetNavigationInitiationType(initiation_type);
+  if (is_using_https_as_default_scheme)
+    item->SetUpgradedToHttps();
 
   return item;
 }
@@ -1417,7 +1385,7 @@ NavigationManagerImpl::WKWebViewCache::ReleaseCachedItems() {
   DCHECK(!IsAttachedToWebView());
   std::vector<std::unique_ptr<NavigationItem>> result(cached_items_.size());
   for (size_t index = 0; index < cached_items_.size(); index++) {
-    result[index].reset(cached_items_[index].release());
+    result[index] = std::move(cached_items_[index]);
   }
   cached_items_.clear();
   return result;
@@ -1490,6 +1458,7 @@ NavigationManagerImpl::WKWebViewCache::GetNavigationItemImplAtIndex(
                         : web::Referrer()),
           ui::PageTransition::PAGE_TRANSITION_LINK,
           NavigationInitiationType::RENDERER_INITIATED,
+          /*is_using_https_as_default_scheme=*/false,
           // Not using GetLastCommittedItem()->GetURL() in case the last
           // committed item in the WKWebView hasn't been linked to a
           // NavigationItem and this method is called in that code path to avoid

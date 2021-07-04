@@ -16,18 +16,7 @@ NSString* const kAddAccountAccessibilityIdentifier =
 NSString* const kConfirmationAccessibilityIdentifier =
     @"kConfirmationAccessibilityIdentifier";
 NSString* const kMoreAccessibilityIdentifier = @"kMoreAccessibilityIdentifier";
-
-@implementation SigninCompletionInfo
-
-- (instancetype)initWithIdentity:(ChromeIdentity*)identity
-          signinCompletionAction:
-              (SigninCompletionAction)signinCompletionAction {
-  self = [super init];
-  if (self) {
-    _identity = identity;
-    _signinCompletionAction = signinCompletionAction;
-  }
-  return self;
-}
-
-@end
+NSString* const kWebSigninAccessibilityIdentifier =
+    @"kWebSigninAccessibilityIdentifier";
+NSString* const kWebSigninContinueAsButtonAccessibilityIdentifier =
+    @"kWebSigninContinueAsButtonAccessibilityIdentifier";

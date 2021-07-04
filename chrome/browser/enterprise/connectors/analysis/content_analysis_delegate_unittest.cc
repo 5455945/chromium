@@ -16,6 +16,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
@@ -34,8 +35,8 @@
 #include "components/enterprise/common/proto/connectors.pb.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/prefs/testing_pref_service.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
-#include "components/safe_browsing/core/features.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_utils.h"
@@ -513,12 +514,14 @@ TEST_F(ContentAnalysisDelegateIsEnabledTest, NoScanInIncognito) {
 
   // The same URL should not trigger a scan in incognito.
   EXPECT_FALSE(ContentAnalysisDelegate::IsEnabled(
-      profile()->GetPrimaryOTRProfile(), url, &data, FILE_ATTACHED));
+      profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true), url, &data,
+      FILE_ATTACHED));
 
   // The same URL should not trigger a scan in non-primary OTR profiles
   EXPECT_FALSE(ContentAnalysisDelegate::IsEnabled(
       profile()->GetOffTheRecordProfile(
-          Profile::OTRProfileID("Test::DeepScanning")),
+          Profile::OTRProfileID::CreateUniqueForTesting(),
+          /*create_if_needed=*/true),
       url, &data, FILE_ATTACHED));
 }
 
@@ -671,7 +674,7 @@ class ContentAnalysisDelegateAuditOnlyTest : public BaseTest {
   std::set<base::FilePath> encrypted_;
 
   // DLP response to ovewrite in the callback if present.
-  base::Optional<ContentAnalysisResponse> dlp_response_ = base::nullopt;
+  absl::optional<ContentAnalysisResponse> dlp_response_ = absl::nullopt;
 };
 
 TEST_F(ContentAnalysisDelegateAuditOnlyTest, Empty) {
@@ -1241,7 +1244,7 @@ TEST_F(ContentAnalysisDelegateAuditOnlyTest, NoDelay) {
   ASSERT_TRUE(
       ContentAnalysisDelegate::IsEnabled(profile(), url, &data, FILE_ATTACHED));
 
-  data.text.emplace_back(base::UTF8ToUTF16("dlp_text"));
+  data.text.emplace_back(u"dlp_text");
   CreateFilesForTest({FILE_PATH_LITERAL("foo_fail_malware_0.doc"),
                       FILE_PATH_LITERAL("foo_fail_malware_1.doc"),
                       FILE_PATH_LITERAL("foo_fail_malware_2.doc"),
@@ -1339,11 +1342,11 @@ TEST_F(ContentAnalysisDelegateAuditOnlyTest, SupportedTypes) {
              base::BindOnce(
                  [](bool* called, const ContentAnalysisDelegate::Data& data,
                     const ContentAnalysisDelegate::Result& result) {
-                   EXPECT_EQ(24u, data.paths.size());
-                   EXPECT_EQ(24u, result.paths_results.size());
+                   EXPECT_EQ(26u, data.paths.size());
+                   EXPECT_EQ(26u, result.paths_results.size());
 
                    // The supported types should be marked as false.
-                   for (const auto& result : result.paths_results)
+                   for (auto result : result.paths_results)
                      EXPECT_FALSE(result);
                    *called = true;
                  },
@@ -1623,7 +1626,7 @@ class ContentAnalysisDelegateSettingsTest
   const char* bool_setting() const { return GetParam() ? "true" : "false"; }
 
   AnalysisSettings settings() {
-    base::Optional<AnalysisSettings> settings =
+    absl::optional<AnalysisSettings> settings =
         ConnectorsServiceFactory::GetForBrowserContext(profile())
             ->GetAnalysisSettings(GURL(kTestUrl), FILE_ATTACHED);
     EXPECT_TRUE(settings.has_value());

@@ -892,13 +892,8 @@ void ShapeResult::ApplySpacingImpl(
       }
 
       typename ShapeResultSpacing<TextContainerType>::ComputeSpacingParameters
-          parameters{
-              .index = run_start_index + glyph_data.character_index,
-              .original_advance = glyph_data.advance,
-              .advance_override =
-                  IsCanvasRotationInVerticalUpright(run->canvas_rotation_)
-                      ? run->font_data_->GetAdvanceOverrideVerticalUpright()
-                      : run->font_data_->GetAdvanceOverride()};
+          parameters{.index = run_start_index + glyph_data.character_index,
+                     .original_advance = glyph_data.advance};
       space = spacing.ComputeSpacing(parameters, offset);
       glyph_data.advance += space;
       total_space_for_run += space;
@@ -1516,7 +1511,8 @@ scoped_refptr<ShapeResult> ShapeResult::CreateForSpaces(const Font* font,
       HB_SCRIPT_COMMON, start_index, length, length);
   result->width_ = run->width_ = width;
   for (unsigned i = 0; i < length; i++) {
-    run->glyph_data_[i] = {font_data->SpaceGlyph(), i, true, width};
+    unsigned index = blink::IsLtr(direction) ? i : length - 1 - i;
+    run->glyph_data_[i] = {font_data->SpaceGlyph(), index, true, width};
     width = 0;
   }
   result->runs_.push_back(std::move(run));

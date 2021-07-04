@@ -24,9 +24,8 @@ SyncedSessionsObserverBridge::SyncedSessionsObserverBridge(
     ChromeBrowserState* browserState)
     : owner_(owner),
       identity_manager_(
-          IdentityManagerFactory::GetForBrowserState(browserState)),
-      identity_manager_observer_(this) {
-  identity_manager_observer_.Add(identity_manager_);
+          IdentityManagerFactory::GetForBrowserState(browserState)) {
+  identity_manager_observation_.Observe(identity_manager_);
 
   // base::Unretained() is safe below because the subscription itself is a class
   // member field and handles destruction well.
@@ -56,7 +55,7 @@ void SyncedSessionsObserverBridge::OnPrimaryAccountChanged(
 
 #pragma mark - Signin and syncing status
 
-bool SyncedSessionsObserverBridge::IsSignedIn() {
+bool SyncedSessionsObserverBridge::HasSyncConsent() {
   return identity_manager_->HasPrimaryAccount(signin::ConsentLevel::kSync);
 }
 

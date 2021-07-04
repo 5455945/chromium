@@ -179,7 +179,7 @@ std::unique_ptr<base::DictionaryValue> TestingWebHistoryService::ReadResponse(
 void TestingWebHistoryService::SetAudioHistoryCallback(
     bool success, bool new_enabled_value) {
   EXPECT_TRUE(success);
-  // |new_enabled_value| should be equal to whatever the audio history value
+  // `new_enabled_value` should be equal to whatever the audio history value
   // was just set to.
   EXPECT_EQ(expected_audio_history_value_, new_enabled_value);
 }
@@ -210,10 +210,6 @@ std::string TestingWebHistoryService::GetExpectedAudioHistoryValue() {
 }  // namespace
 
 // A test class used for testing the WebHistoryService class.
-// In order for WebHistoryService to be valid, we must have a valid
-// ProfileSyncService. Using the ProfileSyncServiceMock class allows to
-// assign specific return values as needed to make sure the web history
-// service is available.
 class WebHistoryServiceTest : public testing::Test {
  public:
   WebHistoryServiceTest()

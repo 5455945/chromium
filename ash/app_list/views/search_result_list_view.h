@@ -25,7 +25,7 @@ class AppListViewDelegate;
 
 // SearchResultListView displays SearchResultList with a list of
 // SearchResultView.
-class APP_LIST_EXPORT SearchResultListView : public SearchResultContainerView {
+class ASH_EXPORT SearchResultListView : public SearchResultContainerView {
  public:
   SearchResultListView(AppListMainView* main_view,
                        AppListViewDelegate* view_delegate);
@@ -36,8 +36,6 @@ class APP_LIST_EXPORT SearchResultListView : public SearchResultContainerView {
                              bool by_button_press);
 
   void SearchResultActionActivated(SearchResultView* view, size_t action_index);
-
-  void OnSearchResultInstalled(SearchResultView* view);
 
   // Overridden from views::View:
   gfx::Size CalculatePreferredSize() const override;

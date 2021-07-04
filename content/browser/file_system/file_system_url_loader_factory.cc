@@ -108,7 +108,7 @@ class FileSystemEntryURLLoader
       const std::vector<std::string>& removed_headers,
       const net::HttpRequestHeaders& modified_headers,
       const net::HttpRequestHeaders& modified_cors_exempt_headers,
-      const base::Optional<GURL>& new_url) override {}
+      const absl::optional<GURL>& new_url) override {}
   void SetPriority(net::RequestPriority priority,
                    int32_t intra_priority_value) override {}
   void PauseReadingBodyFromNet() override {}
@@ -291,7 +291,7 @@ class FileSystemDirectoryURLLoader : public FileSystemEntryURLLoader {
       relative_path =
           base::FilePath(FILE_PATH_LITERAL("/") + relative_path.value());
 #endif
-      const base::string16& title = relative_path.LossyDisplayName();
+      const std::u16string& title = relative_path.LossyDisplayName();
       data_.append(net::GetDirectoryListingHeader(title));
     }
 
@@ -329,7 +329,7 @@ class FileSystemDirectoryURLLoader : public FileSystemEntryURLLoader {
     }
 
     const DirectoryEntry& entry = entries_[index];
-    const base::string16& name = base::FilePath(entry.name).LossyDisplayName();
+    const std::u16string& name = base::FilePath(entry.name).LossyDisplayName();
     data_.append(net::GetDirectoryListingEntry(
         name, std::string(),
         entry.type == filesystem::mojom::FsFileType::DIRECTORY, file_info.size,
@@ -433,8 +433,8 @@ class FileSystemFileURLLoader : public FileSystemEntryURLLoader {
         url_,
         FileSystemOperation::GET_METADATA_FIELD_IS_DIRECTORY |
             FileSystemOperation::GET_METADATA_FIELD_SIZE,
-        base::AdaptCallbackForRepeating(base::BindOnce(
-            &FileSystemFileURLLoader::DidGetMetadata, base::AsWeakPtr(this))));
+        base::BindOnce(&FileSystemFileURLLoader::DidGetMetadata,
+                       base::AsWeakPtr(this)));
   }
 
   void DidGetMetadata(base::File::Error error_code,
@@ -616,7 +616,6 @@ class FileSystemURLLoaderFactory
  private:
   void CreateLoaderAndStart(
       mojo::PendingReceiver<network::mojom::URLLoader> loader,
-      int32_t routing_id,
       int32_t request_id,
       uint32_t options,
       const network::ResourceRequest& request,

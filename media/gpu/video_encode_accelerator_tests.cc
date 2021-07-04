@@ -28,6 +28,7 @@
 #include "media/gpu/test/video_test_environment.h"
 #include "media/gpu/test/video_test_helpers.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace media {
 namespace test {
@@ -127,7 +128,7 @@ class VideoEncoderTest : public ::testing::Test {
       const VideoDecoderConfig& decoder_config,
       const size_t last_frame_index,
       VideoFrameValidator::GetModelFrameCB get_model_frame_cb,
-      base::Optional<size_t> num_vp9_temporal_layers_to_decode) {
+      absl::optional<size_t> num_vp9_temporal_layers_to_decode) {
     std::vector<std::unique_ptr<VideoFrameProcessor>> video_frame_processors;
 
     // Attach a video frame writer to store individual frames to disk if
@@ -217,7 +218,8 @@ class VideoEncoderTest : public ::testing::Test {
         break;
       case kCodecVP9:
         bitstream_processors.emplace_back(new VP9Validator(
-            config.output_profile, visible_rect, config.num_temporal_layers));
+            config.output_profile, visible_rect, /*num_spatial_layers=*/1,
+            config.num_temporal_layers));
         break;
       default:
         LOG(ERROR) << "Unsupported profile: "
@@ -254,7 +256,7 @@ class VideoEncoderTest : public ::testing::Test {
     } else {
       bitstream_processors.emplace_back(CreateBitstreamValidator(
           video, decoder_config, config.num_frames_to_encode - 1,
-          get_model_frame_cb, base::nullopt));
+          get_model_frame_cb, absl::nullopt));
       LOG_ASSERT(bitstream_processors.back());
     }
     return bitstream_processors;
@@ -275,19 +277,19 @@ class VideoEncoderTest : public ::testing::Test {
   std::unique_ptr<RawDataHelper> raw_data_helper_;
 };
 
-base::Optional<std::string> SupportsDynamicFramerate() {
+absl::optional<std::string> SupportsDynamicFramerate() {
   return g_env->IsKeplerUsed()
-             ? base::make_optional<std::string>(
+             ? absl::make_optional<std::string>(
                    "The rate controller in the kepler firmware doesn't handle "
                    "frame rate changes correctly.")
-             : base::nullopt;
+             : absl::nullopt;
 }
 
-base::Optional<std::string> SupportsNV12DmaBufInput() {
-  return g_env->IsKeplerUsed() ? base::make_optional<std::string>(
+absl::optional<std::string> SupportsNV12DmaBufInput() {
+  return g_env->IsKeplerUsed() ? absl::make_optional<std::string>(
                                      "Encoding with dmabuf input frames is not "
                                      "supported in kepler.")
-                               : base::nullopt;
+                               : absl::nullopt;
 }
 }  // namespace
 
@@ -721,7 +723,7 @@ int main(int argc, char** argv) {
       media::test::VideoEncoderTestEnvironment::Create(
           video_path, video_metadata_path, enable_bitstream_validator,
           output_folder, codec, num_temporal_layers, output_bitstream,
-          frame_output_config);
+          /*output_bitrate=*/absl::nullopt, frame_output_config);
 
   if (!test_environment)
     return EXIT_FAILURE;

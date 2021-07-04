@@ -9,12 +9,18 @@
 #include <memory>
 
 #include "base/macros.h"
+#include "components/page_load_metrics/browser/layout_shift_normalization.h"
 #include "components/page_load_metrics/browser/page_load_metrics_observer.h"
 #include "services/metrics/public/cpp/ukm_source.h"
 
 namespace content {
 class NavigationHandle;
 }
+namespace ukm {
+namespace builders {
+class AmpPageLoad;
+}  // namespace builders
+}  // namespace ukm
 
 // Observer responsible for recording metrics for AMP documents. This includes
 // both AMP documents loaded in the main frame, and AMP documents loaded in a
@@ -54,10 +60,12 @@ class AMPPageLoadMetricsObserver
       content::NavigationHandle* navigation_handle) override;
   void OnDidFinishSubFrameNavigation(
       content::NavigationHandle* navigation_handle) override;
-  void OnFrameDeleted(content::RenderFrameHost* rfh) override;
+  void OnRenderFrameDeleted(content::RenderFrameHost* rfh) override;
   void OnTimingUpdate(
       content::RenderFrameHost* subframe_rfh,
       const page_load_metrics::mojom::PageLoadTiming& timing) override;
+  void OnMobileFriendlinessUpdate(
+      const blink::MobileFriendliness& mobile_friendliness) override;
   void OnSubFrameRenderDataUpdate(
       content::RenderFrameHost* subframe_rfh,
       const page_load_metrics::mojom::FrameRenderDataUpdate& render_data)
@@ -103,6 +111,10 @@ class AMPPageLoadMetricsObserver
     // Performance metrics observed in the AMP iframe.
     page_load_metrics::mojom::PageLoadTimingPtr timing;
     page_load_metrics::PageRenderData render_data;
+    page_load_metrics::LayoutShiftNormalization layout_shift_normalization;
+
+    // MobileFriendliness metrics observed in the AMP iframe.
+    blink::MobileFriendliness mobile_friendliness;
 
     // Whether an AMP document was loaded, based on observed
     // LoadingBehaviorFlags for this frame.
@@ -113,6 +125,7 @@ class AMPPageLoadMetricsObserver
 
   void ProcessMainFrameNavigation(content::NavigationHandle* navigation_handle);
   void MaybeRecordAmpDocumentMetrics();
+  void RecordMobileFriendliness(ukm::builders::AmpPageLoad& builder);
 
   // Information about the currently active AMP navigation in the main
   // frame. Will be null if there isn't an active AMP navigation in the main

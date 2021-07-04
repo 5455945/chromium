@@ -70,6 +70,7 @@ enum VpnType {
   // Internal VPN types.
   kL2TPIPsec,
   kOpenVPN,
+  kWireGuard,
   // VPN provided by a Chrome Extension.
   kExtension,
   // VPN provided by an Arc++ app.
@@ -116,6 +117,37 @@ enum CertificateType {
   kUserCert,
 };
 
+// Reasons why the Cellular Device may have its scanning inhibited (i.e.,
+// temporarily stopped).
+enum InhibitReason {
+  // Not inhibited.
+  kNotInhibited,
+  // Inhibited because an eSIM profile is being installed.
+  kInstallingProfile,
+  // Inhibited because an eSIM profile is being renamed.
+  kRenamingProfile,
+  // Inhibited because an eSIM profile is being removed.
+  kRemovingProfile,
+  // Inhibited because a connection is in progress which requires that the
+  // device switch to a different eSIM profile.
+  kConnectingToProfile,
+  // Inhibited because the list of pending eSIM profiles is being refreshed by
+  // checking with an SMDS server.
+  kRefreshingProfileList
+};
+
+// Always-on VPN operating mode.
+enum AlwaysOnVpnMode {
+  // Always-on VPN is disabled.
+  kOff,
+  // Always-on VPN is enabled, traffic goes through the tunnel as long as it is
+  // available, otherwise it falls back to the default network.
+  kBestEffort,
+  // Always-on VPN is enabled and traffic is blocked when the tunnel is not
+  // available.
+  kStrict,
+};
+
 // The SIM card lock status for Cellular networks.
 struct SIMLockStatus {
   // The status of SIM lock. Possible values are 'sim-pin', 'sim-puk' or empty.
@@ -135,9 +167,17 @@ struct SIMInfo {
   // ICCID of the eSIM profile or the physical SIM
   // card active on this slot when available from Shill.
   string iccid;
+  // True when this slot is currently active.
+  bool is_primary;
 };
 
 struct CellularStateProperties {
+  // ICCID of the eSIM profile or the physical SIM that corresponds to this
+  // network.
+  string iccid;
+  // The EID of EUICC that this network is installed on. Empty if this network
+  // corresponds to a physical SIM.
+  string eid;
   // Enumerated ONC activation state.
   ActivationStateType activation_state = kUnknown;
   // ONC NetworkTechnology value.
@@ -245,6 +285,8 @@ struct DeviceStateProperties {
   // Details about the physical SIM and eSIM available on the device if Type =
   // Cellular. Note that the array will be ordered by the |slot_id|.
   array<SIMInfo>? sim_infos;
+  // The reason for cellular scans to be inhibited; only set if Type = Cellular.
+  InhibitReason inhibit_reason = kNotInhibited;
   // True when a SIM is required and not present.
   bool sim_absent = false;
   DeviceStateType device_state;
@@ -274,6 +316,9 @@ struct ApnProperties {
   string? name;
   string? password;
   string? username;
+  // The attach property uses a string? instead of an enum to allow for possible
+  // free-form entry in the future.
+  string? attach;
 };
 
 struct CellularProviderProperties {
@@ -361,6 +406,9 @@ struct ManagedApnProperties {
   ManagedString? name;
   ManagedString? password;
   ManagedString? username;
+  // The attach property uses a string? instead of an enum to allow for possible
+  // free-form entry in the future.
+  ManagedString? attach;
 };
 
 struct ManagedApnList {
@@ -387,6 +435,7 @@ struct ManagedEAPProperties {
   ManagedString? anonymous_identity;
   ManagedCertificatePattern? client_cert_pattern;
   ManagedString? client_cert_pkcs11_id;
+  ManagedString? client_cert_provisioning_profile_id;
   ManagedString? client_cert_ref;
   ManagedString? client_cert_type;
   ManagedString? identity;
@@ -417,6 +466,7 @@ struct ManagedIPSecProperties {
   ManagedString authentication_type;
   ManagedCertificatePattern? client_cert_pattern;
   ManagedString? client_cert_pkcs11_id;
+  ManagedString? client_cert_provisioning_profile_id;
   ManagedString? client_cert_ref;
   ManagedString? client_cert_type;
   ManagedEAPProperties? eap;
@@ -468,6 +518,7 @@ struct ManagedOpenVPNProperties {
   ManagedString? cipher;
   ManagedString? client_cert_pkcs11_id;
   ManagedCertificatePattern? client_cert_pattern;
+  ManagedString? client_cert_provisioning_profile_id;
   ManagedString? client_cert_ref;
   ManagedString? client_cert_type;
   ManagedString? compression_algorithm;
@@ -505,6 +556,8 @@ struct ManagedOpenVPNProperties {
 
 struct ManagedCellularProperties {
   ActivationStateType activation_state;
+  // Note: |sim_locked| field is not part of ONC spec.
+  bool sim_locked = false;
   bool allow_roaming = false;
   ManagedApnList? apn_list;
   ManagedBoolean? auto_connect;
@@ -611,6 +664,8 @@ struct ManagedProperties {
   // match the type of |type_properties|, which will always be provided.
   NetworkType type;
   NetworkTypeManagedProperties type_properties;
+  // Represents when the traffic counters for a Service were last reset.
+  mojo_base.mojom.Time? traffic_counter_reset_time;
 };
 
 // Properties for SetProperties and ConfigureNetwork. All of the top level
@@ -837,11 +892,51 @@ struct NetworkCertificate {
   // This will be used in the appropriate ConfigProperties dictionary.
   // TODO(1006901): Use a union here instead once the issue is fixed.
   string pem_or_id;
+  // Whether the certificate is available for network authentication.
+  bool available_for_network_auth;
   // Whether the certificate is hardware backed.
   bool hardware_backed;
   // Whether the certificate is device wide (i.e. stored in a shared profile,
   // not a user specific profile).
   bool device_wide;
+};
+
+// Always-on VPN configuration obtained with GetAlwaysOnVpn and set using
+// SetAlwaysOnVpn for the purpose of enabling/disabling the feature and choosing
+// the service to be automatically started.
+struct AlwaysOnVpnProperties {
+  // Always-on VPN operating mode.
+  AlwaysOnVpnMode mode;
+  // GUID of the VPN service managed by always-on VPN. This can be configured
+  // independently of |mode|, but it expected to be only used when |mode| is not
+  // AlwaysOnVpnMode::kOff.
+  string service_guid;
+};
+
+// Source of the traffic. These sources are kept in sync with
+// third_party/cros_system_api/dbus/shill/dbus-constants.h.
+enum TrafficCounterSource {
+  kUnknown,
+  kChrome,
+  kUser,
+  kArc,
+  kCrosvm,
+  kPluginvm,
+  kUpdateEngine,
+  kVpn,
+  kSystem,
+};
+
+// Information about a traffic counter for a single source.
+struct TrafficCounter {
+  // Source of traffic.
+  TrafficCounterSource source;
+  // Corresponds to the number of bytes received by |source| since the last
+  // reset.
+  uint64 rx_bytes;
+  // Corresponds to the number of bytes transmitted by |source| since the last
+  // reset.
+  uint64 tx_bytes;
 };
 
 // Interface for fetching and setting network configuration properties, e.g.
@@ -953,6 +1048,20 @@ interface CrosNetworkConfig {
   // available for network configuration. See NetworkCerificate for more info.
   GetNetworkCertificates() => (array<NetworkCertificate> server_cas,
                                array<NetworkCertificate> user_certs);
+
+  // Returns the current always-on VPN configuration.
+  GetAlwaysOnVpn() => (AlwaysOnVpnProperties properties);
+
+  // Sets the always-on VPN mode and service with |properties.mode| and
+  // |properties.service_guid|. The service GUID must match a VPN service.
+  SetAlwaysOnVpn(AlwaysOnVpnProperties properties);
+
+  // Requests traffic counters for a service with ID |guid|.
+  RequestTrafficCounters(string guid) =>
+    (array<TrafficCounter> traffic_counters);
+
+  // Resets traffic counters for a service with ID |guid|.
+  ResetTrafficCounters(string guid);
 };
 
 interface CrosNetworkConfigObserver {

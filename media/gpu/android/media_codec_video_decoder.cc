@@ -27,10 +27,10 @@
 #include "media/base/scoped_async_trace.h"
 #include "media/base/status.h"
 #include "media/base/supported_video_decoder_config.h"
+#include "media/base/video_aspect_ratio.h"
 #include "media/base/video_codecs.h"
 #include "media/base/video_decoder_config.h"
 #include "media/base/video_frame.h"
-#include "media/base/video_util.h"
 #include "media/gpu/android/android_video_surface_chooser.h"
 #include "media/gpu/android/codec_allocator.h"
 #include "media/media_buildflags.h"
@@ -44,10 +44,10 @@ namespace {
 
 void OutputBufferReleased(bool using_async_api,
                           base::RepeatingClosure pump_cb,
-                          bool is_drained_or_draining) {
+                          bool has_work) {
   // The asynchronous API doesn't need pumping upon calls to ReleaseOutputBuffer
   // unless we're draining or drained.
-  if (using_async_api && !is_drained_or_draining)
+  if (using_async_api && !has_work)
     return;
   pump_cb.Run();
 }
@@ -172,7 +172,19 @@ std::vector<SupportedVideoDecoderConfig> GetSupportedConfigsInternal(
                                  true,    // allow_encrypted
                                  false);  // require_encrypted
 #endif
+#if BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
+  // Technically we should check which profiles are supported, but we can
+  // allow them all like we do with H264 codec.
+  supported_configs.emplace_back(DOLBYVISION_PROFILE4, DOLBYVISION_PROFILE9,
+                                 gfx::Size(0, 0), gfx::Size(3840, 2160),
+                                 true,    // allow_encrypted
+                                 false);  // require_encrypted
+  supported_configs.emplace_back(DOLBYVISION_PROFILE4, DOLBYVISION_PROFILE9,
+                                 gfx::Size(0, 0), gfx::Size(2160, 3840),
+                                 true,    // allow_encrypted
+                                 false);  // require_encrypted
 #endif
+#endif  // #if BUILDFLAG(USE_PROPRIETARY_CODECS)
 
   return supported_configs;
 }
@@ -182,7 +194,7 @@ std::vector<SupportedVideoDecoderConfig> GetSupportedConfigsInternal(
 // When re-initializing the codec changes the resolution to be more than
 // |kReallocateThreshold| times the old one, force a codec reallocation to
 // update the hints that we provide to MediaCodec.  crbug.com/989182 .
-constexpr static float kReallocateThreshold = 4;
+constexpr static float kReallocateThreshold = 3.9;
 
 // static
 PendingDecode PendingDecode::CreateEos() {
@@ -221,7 +233,7 @@ MediaCodecVideoDecoder::MediaCodecVideoDecoder(
           std::move(surface_chooser),
           base::CommandLine::ForCurrentProcess()->HasSwitch(
               switches::kForceVideoOverlays),
-          base::FeatureList::IsEnabled(media::kUseAndroidOverlayAggressively),
+          base::FeatureList::IsEnabled(media::kUseAndroidOverlayForSecureOnly),
           is_surface_control_enabled_),
       video_frame_factory_(std::move(video_frame_factory)),
       overlay_factory_cb_(std::move(overlay_factory_cb)),
@@ -382,7 +394,7 @@ void MediaCodecVideoDecoder::Initialize(const VideoDecoderConfig& config,
   // Do the rest of the initialization lazily on the first decode.
   BindToCurrentLoop(std::move(init_cb)).Run(OkStatus());
 
-  const int width = config.coded_size().width();
+  const int width = decoder_config_.coded_size().width();
   // On re-init, reallocate the codec if the size has changed too much.
   // Restrict this behavior to Q, where the behavior changed.
   if (first_init) {
@@ -552,8 +564,8 @@ void MediaCodecVideoDecoder::OnOverlayInfoChanged(
   surface_chooser_helper_.SetIsPersistentVideo(
       overlay_info_.is_persistent_video);
   surface_chooser_helper_.UpdateChooserState(
-      overlay_changed ? base::make_optional(CreateOverlayFactoryCb())
-                      : base::nullopt);
+      overlay_changed ? absl::make_optional(CreateOverlayFactoryCb())
+                      : absl::nullopt);
 }
 
 void MediaCodecVideoDecoder::OnSurfaceChosen(
@@ -692,6 +704,7 @@ void MediaCodecVideoDecoder::OnCodecConfigured(
     return;
   }
 
+  max_input_size_ = codec->GetMaxInputSize();
   codec_ = std::make_unique<CodecWrapper>(
       CodecSurfacePair(std::move(codec), std::move(surface_bundle)),
       base::BindRepeating(&OutputBufferReleased, using_async_api_,
@@ -762,20 +775,9 @@ void MediaCodecVideoDecoder::FlushCodec() {
   if (!codec_ || codec_->IsFlushed())
     return;
 
-  if (codec_->SupportsFlush(device_info_)) {
-    DVLOG(2) << "Flushing codec";
-    if (!codec_->Flush())
-      EnterTerminalState(State::kError, "Codec flush failed");
-  } else {
-    DVLOG(2) << "flush() workaround: creating a new codec";
-    // Release the codec and create a new one.
-    // Note: we may end up with two codecs attached to the same surface if the
-    // release hangs on one thread and create proceeds on another. This will
-    // result in an error, letting the user retry the playback. The alternative
-    // of waiting for the release risks hanging the playback forever.
-    ReleaseCodec();
-    CreateCodec();
-  }
+  DVLOG(2) << "Flushing codec";
+  if (!codec_->Flush())
+    EnterTerminalState(State::kError, "Codec flush failed");
 }
 
 void MediaCodecVideoDecoder::PumpCodec(bool force_start_timer) {
@@ -863,6 +865,37 @@ bool MediaCodecVideoDecoder::QueueInput() {
     return false;
 
   PendingDecode& pending_decode = pending_decodes_.front();
+  if (!pending_decode.buffer->end_of_stream() &&
+      pending_decode.buffer->is_key_frame() &&
+      pending_decode.buffer->data_size() > max_input_size_) {
+    // If we we're already using the provided resolution, try to guess something
+    // larger based on the actual input size.
+    if (decoder_config_.coded_size().width() == last_width_) {
+      // See MediaFormatBuilder::addInputSizeInfoToFormat() for details.
+      const size_t compression_ratio = (decoder_config_.codec() == kCodecH264 ||
+                                        decoder_config_.codec() == kCodecVP8)
+                                           ? 2
+                                           : 4;
+      const size_t max_pixels =
+          (pending_decode.buffer->data_size() * compression_ratio * 2) / 3;
+      if (max_pixels > 8294400)  // 4K
+        decoder_config_.set_coded_size(gfx::Size(7680, 4320));
+      else if (max_pixels > 2088960)  // 1080p
+        decoder_config_.set_coded_size(gfx::Size(3840, 2160));
+      else
+        decoder_config_.set_coded_size(gfx::Size(1920, 1080));
+    }
+
+    // Flush and reallocate on the next call to QueueInput() if we changed size;
+    // otherwise just try queuing the buffer and hoping for the best.
+    if (decoder_config_.coded_size().width() != last_width_) {
+      deferred_flush_pending_ = true;
+      deferred_reallocation_pending_ = true;
+      last_width_ = decoder_config_.coded_size().width();
+      return true;
+    }
+  }
+
   auto status = codec_->QueueInputBuffer(*pending_decode.buffer);
   DVLOG((status == CodecWrapper::QueueStatus::kTryAgainLater ||
                  status == CodecWrapper::QueueStatus::kOk
@@ -963,6 +996,12 @@ bool MediaCodecVideoDecoder::DequeueOutput() {
           SurfaceChooserHelper::FrameInformation::FRAME_INFORMATION_MAX) +
           1);  // PRESUBMIT_IGNORE_UMA_MAX
 
+  // If we're getting outputs larger than our configured size, we run the risk
+  // of exceeding MediaCodec's allowed input buffer size. Update the coded size
+  // as we go to ensure we can correctly reconfigure if needed later.
+  if (output_buffer->size().GetArea() > decoder_config_.coded_size().GetArea())
+    decoder_config_.set_coded_size(output_buffer->size());
+
   gfx::Rect visible_rect(output_buffer->size());
   std::unique_ptr<ScopedAsyncTrace> async_trace =
       ScopedAsyncTrace::CreateIfEnabled(
@@ -979,7 +1018,7 @@ bool MediaCodecVideoDecoder::DequeueOutput() {
   }
   video_frame_factory_->CreateVideoFrame(
       std::move(output_buffer), presentation_time,
-      GetNaturalSize(visible_rect, decoder_config_.GetPixelAspectRatio()),
+      decoder_config_.aspect_ratio().GetNaturalSize(visible_rect),
       CreatePromotionHintCB(),
       base::BindOnce(&MediaCodecVideoDecoder::ForwardVideoFrame,
                      weak_factory_.GetWeakPtr(), reset_generation_,
@@ -1153,10 +1192,6 @@ AndroidOverlayFactoryCB MediaCodecVideoDecoder::CreateOverlayFactoryCb() {
     return AndroidOverlayFactoryCB();
 
   return base::BindRepeating(overlay_factory_cb_, *overlay_info_.routing_token);
-}
-
-std::string MediaCodecVideoDecoder::GetDisplayName() const {
-  return "MediaCodecVideoDecoder";
 }
 
 VideoDecoderType MediaCodecVideoDecoder::GetDecoderType() const {

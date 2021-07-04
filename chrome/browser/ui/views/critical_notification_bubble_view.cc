@@ -21,11 +21,11 @@
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/fill_layout.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/widget/widget.h"
 
@@ -85,7 +85,7 @@ void CriticalNotificationBubbleView::OnCountdown() {
   GetBubbleFrameView()->UpdateWindowTitle();
 }
 
-base::string16 CriticalNotificationBubbleView::GetWindowTitle() const {
+std::u16string CriticalNotificationBubbleView::GetWindowTitle() const {
   const auto remaining_time = GetRemainingTime();
   return remaining_time > base::TimeDelta()
              ? l10n_util::GetPluralStringFUTF16(IDS_CRITICAL_NOTIFICATION_TITLE,

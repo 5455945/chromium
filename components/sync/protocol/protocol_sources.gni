@@ -32,7 +32,6 @@ sync_protocol_bases = [
   "managed_user_setting_specifics",
   "managed_user_shared_setting_specifics",
   "managed_user_specifics",
-  "managed_user_whitelist_specifics",
   "model_type_state",
   "model_type_store_schema_descriptor",
   "nigori_local_data",
@@ -64,7 +63,9 @@ sync_protocol_bases = [
   "user_event_specifics",
   "vault",
   "web_app_specifics",
+  "webauthn_credential_specifics",
   "wifi_configuration_specifics",
+  "workspace_desk_specifics",
 ]
 
 sync_protocol_sources = []

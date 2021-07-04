@@ -22,10 +22,11 @@
 #include "ash/shelf/shelf_button_pressed_metric_tracker.h"
 #include "ash/shelf/shelf_tooltip_delegate.h"
 #include "ash/shell_observer.h"
+#include "base/cancelable_callback.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "base/optional.h"
 #include "base/timer/timer.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/compositor/throughput_tracker.h"
 #include "ui/views/accessibility/view_accessibility.h"
@@ -126,7 +127,7 @@ class ASH_EXPORT ShelfView : public views::AccessiblePaneView,
   bool ShouldHideTooltip(const gfx::Point& cursor_location) const override;
   const std::vector<aura::Window*> GetOpenWindowsForView(
       views::View* view) override;
-  base::string16 GetTitleForView(const views::View* view) const override;
+  std::u16string GetTitleForView(const views::View* view) const override;
   views::View* GetViewForEvent(const ui::Event& event) override;
 
   // Returns rectangle bounding all visible launcher items. Used screen
@@ -279,6 +280,9 @@ class ASH_EXPORT ShelfView : public views::AccessiblePaneView,
   // Modifies the announcement view to verbalize that the focused app button has
   // new updates, based on the item having a notification badge.
   void AnnounceShelfItemNotificationBadge(views::View* button);
+
+  // Returns whether `bounds_animator_` is animating any view.
+  bool IsAnimating() const;
 
   // Return the view model for test purposes.
   const views::ViewModel* view_model_for_test() const {
@@ -494,6 +498,7 @@ class ASH_EXPORT ShelfView : public views::AccessiblePaneView,
   // The |click_point| is only used for |context_menu|'s.
   void ShowMenu(std::unique_ptr<ui::SimpleMenuModel> menu_model,
                 views::View* source,
+                const ShelfID& shelf_id,
                 const gfx::Point& click_point,
                 bool context_menu,
                 ui::MenuSourceType source_type);
@@ -530,7 +535,7 @@ class ASH_EXPORT ShelfView : public views::AccessiblePaneView,
   void DestroyScopedDisplay();
 
   // Different from GetTitleForView, |view| here must be a child view.
-  base::string16 GetTitleForChildView(const views::View* view) const;
+  std::u16string GetTitleForChildView(const views::View* view) const;
 
   int CalculateAppIconsLayoutOffset() const;
 
@@ -702,10 +707,10 @@ class ASH_EXPORT ShelfView : public views::AccessiblePaneView,
   std::unique_ptr<FadeInAnimationDelegate> fade_in_animation_delegate_;
 
   // Tracks the icon move animation.
-  base::Optional<ui::ThroughputTracker> move_animation_tracker_;
+  absl::optional<ui::ThroughputTracker> move_animation_tracker_;
 
   // Tracks the icon fade-out animation.
-  base::Optional<ui::ThroughputTracker> fade_out_animation_tracker_;
+  absl::optional<ui::ThroughputTracker> fade_out_animation_tracker_;
 
   // Called when showing shelf context menu.
   base::RepeatingClosure context_menu_shown_callback_;

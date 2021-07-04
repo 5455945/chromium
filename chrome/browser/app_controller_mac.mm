@@ -4,6 +4,7 @@
 
 #import "chrome/browser/app_controller_mac.h"
 
+#include <dispatch/dispatch.h>
 #include <stddef.h>
 
 #include <memory>
@@ -46,6 +47,7 @@
 #include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
+#include "chrome/browser/mac/auth_session_request.h"
 #include "chrome/browser/mac/mac_startup_profiler.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
@@ -90,6 +92,7 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/web_applications/components/web_app_helpers.h"
 #include "chrome/browser/web_applications/components/web_app_shortcut_mac.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths_internal.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension_constants.h"
@@ -114,7 +117,6 @@
 #include "extensions/browser/extension_system.h"
 #include "net/base/filename_util.h"
 #include "net/base/mac/url_conversions.h"
-#include "ui/base/cocoa/focus_window_set.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 #include "url/gurl.h"
@@ -137,13 +139,20 @@ static const int kWorkspaceChangeTimeoutMs = 500;
 // make a new window while there are no other active windows.
 bool g_is_opening_new_window = false;
 
+// Open the urls in the last used browser from a regular profile.
+void OpenUrlsInBrowserWithProfile(const std::vector<GURL>& urls,
+                                  Profile* profile,
+                                  Profile::CreateStatus status);
+
 // Activates a browser window having the given profile (the last one active) if
 // possible and returns a pointer to the activate |Browser| or NULL if this was
 // not possible. If the last active browser is minimized (in particular, if
 // there are only minimized windows), it will unminimize it.
 Browser* ActivateBrowser(Profile* profile) {
   Browser* browser = chrome::FindLastActiveWithProfile(
-      profile->IsGuestSession() ? profile->GetPrimaryOTRProfile() : profile);
+      (profile->IsGuestSession() || profile->IsEphemeralGuestProfile())
+          ? profile->GetPrimaryOTRProfile(/*create_if_needed=*/true)
+          : profile);
   if (browser)
     browser->window()->Activate();
   return browser;
@@ -172,9 +181,8 @@ Browser* ActivateOrCreateBrowser(Profile* profile) {
 }
 
 CFStringRef BaseBundleID_CFString() {
-  NSString* base_bundle_id =
-      [NSString stringWithUTF8String:base::mac::BaseBundleID()];
-  return base::mac::NSToCFCast(base_bundle_id);
+  return base::mac::NSToCFCast(
+      base::SysUTF8ToNSString(base::mac::BaseBundleID()));
 }
 
 // Record the location of the application bundle (containing the main framework)
@@ -220,6 +228,113 @@ void ConfigureNSAppForKioskMode() {
       NSApplicationPresentationFullScreen;
 }
 
+// Returns the list of gfx::NativeWindows for all browser windows (excluding
+// apps).
+std::set<gfx::NativeWindow> GetBrowserNativeWindows() {
+  std::set<gfx::NativeWindow> result;
+  for (auto* browser : *BrowserList::GetInstance()) {
+    if (!browser)
+      continue;
+    // When focusing Chrome, don't focus any browser windows associated with
+    // an app.
+    // https://crbug.com/960904
+    if (browser->is_type_app())
+      continue;
+    result.insert(browser->window()->GetNativeWindow());
+  }
+  return result;
+}
+
+void FocusWindowSetOnCurrentSpace(const std::set<gfx::NativeWindow>& windows) {
+  // This callback runs before AppKit picks its own window to
+  // deminiaturize, so we get to pick one from the right set. Limit to
+  // the windows on the current workspace. Otherwise we jump spaces
+  // haphazardly.
+  //
+  // Also consider both visible and hidden windows; this call races
+  // with the system unhiding the application. http://crbug.com/368238
+  //
+  // NOTE: If this is called in the
+  // applicationShouldHandleReopen:hasVisibleWindows: hook when
+  // clicking the dock icon, and that caused macOS to begin switch
+  // spaces, isOnActiveSpace gives the answer for the PREVIOUS
+  // space. This means that we actually raise and focus the wrong
+  // space's windows, leaving the new key window off-screen. To detect
+  // this, check if the key window is on the active space prior to
+  // calling.
+  //
+  // Also, if we decide to deminiaturize a window during a space switch,
+  // that can switch spaces and then switch back. Fortunately, this only
+  // happens if, say, space 1 contains an app, space 2 contains a
+  // miniaturized browser. We click the icon, macOS switches to space 1,
+  // we deminiaturize the browser, and that triggers switching back.
+  //
+  // TODO(davidben): To limit those cases, consider preferentially
+  // deminiaturizing a window on the current space.
+  NSWindow* frontmost_window = nil;
+  NSWindow* frontmost_window_all_spaces = nil;
+  NSWindow* frontmost_miniaturized_window = nil;
+  bool all_miniaturized = true;
+  for (NSWindow* win in [[NSApp orderedWindows] reverseObjectEnumerator]) {
+    if (windows.find(win) == windows.end())
+      continue;
+    if ([win isMiniaturized]) {
+      frontmost_miniaturized_window = win;
+    } else if ([win isVisible]) {
+      all_miniaturized = false;
+      frontmost_window_all_spaces = win;
+      if ([win isOnActiveSpace]) {
+        // Raise the old |frontmost_window| (if any). The topmost |win| will be
+        // raised with makeKeyAndOrderFront: below.
+        [frontmost_window orderFront:nil];
+        frontmost_window = win;
+      }
+    }
+  }
+  if (all_miniaturized && frontmost_miniaturized_window) {
+    DCHECK(!frontmost_window);
+    // Note the call to makeKeyAndOrderFront: will deminiaturize the window.
+    frontmost_window = frontmost_miniaturized_window;
+  }
+
+  if (frontmost_window) {
+    [frontmost_window makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
+  }
+}
+
+// Returns the profile path to be used at startup.
+base::FilePath GetStartupProfilePathMac() {
+  // This profile path is used to open URLs passed in application:openFiles: and
+  // should not default to Guest when the profile picker is shown.
+  // TODO(https://crbug.com/1155158): Remove the ignore_profile_picker parameter
+  // once the picker supports opening URLs.
+  return GetStartupProfilePath(/*current_directory=*/base::FilePath(),
+                               *base::CommandLine::ForCurrentProcess(),
+                               /*ignore_profile_picker=*/true);
+}
+
+// Open the urls in the last used browser. Loads the profile asynchronously if
+// needed.
+void OpenUrlsInBrowser(const std::vector<GURL>& urls) {
+  AppController* controller =
+      base::mac::ObjCCastStrict<AppController>([NSApp delegate]);
+  if (!controller)
+    return;
+
+  if (Profile* profile = [controller lastProfileIfLoaded]) {
+    OpenUrlsInBrowserWithProfile(urls, profile,
+                                 Profile::CREATE_STATUS_INITIALIZED);
+    return;
+  }
+
+  // Asynchronously load the profile and open the URLs once it's loaded.
+  ProfileManager* profile_manager = g_browser_process->profile_manager();
+  profile_manager->CreateProfileAsync(
+      GetStartupProfilePathMac(),
+      base::BindRepeating(&OpenUrlsInBrowserWithProfile, urls));
+}
+
 }  // namespace
 
 // Returns the last profile. This is extracted as a standalone function in order
@@ -229,21 +344,11 @@ Profile* GetLastProfileMac() {
   if (!profile_manager)
     return nullptr;
 
-  base::FilePath profile_path =
-      GetStartupProfilePath(profile_manager->user_data_dir(),
-                            /*current_directory=*/base::FilePath(),
-                            *base::CommandLine::ForCurrentProcess(),
-                            /*ignore_profile_picker=*/true);
-
+  base::FilePath profile_path = GetStartupProfilePathMac();
   // ProfileManager::GetProfile() is blocking if the profile was not loaded yet.
-  // TODO(https://1176734): Change this code to return nullptr when the profile
-  // is not loaded, and update all callers to handle this case.
+  // TODO(https://crbug.com/1176734): Change this code to return nullptr when
+  // the profile is not loaded, and update all callers to handle this case.
   base::ScopedAllowBlocking allow_blocking;
-
-  // lastProfile is used to open URLs passed in application:openFiles: and
-  // should not default to Guest, even if the profile picker is shown.
-  // TODO(https://crbug.com/1155158): Remove the ignore_profile_picker parameter
-  // once the picker supports opening URLs.
   return profile_manager->GetProfile(profile_path);
 }
 
@@ -259,11 +364,9 @@ Profile* GetLastProfileMac() {
 - (BOOL)userWillWaitForInProgressDownloads:(int)downloadCount;
 - (BOOL)shouldQuitWithInProgressDownloads;
 - (void)executeApplication:(id)sender;
-- (void)profileWasRemoved:(const base::FilePath&)profilePath;
+- (void)profileWasRemoved:(const base::FilePath&)profilePath
+             forIncognito:(bool)isIncognito;
 - (void)setLastProfile:(Profile*)profile;
-
-// Opens a tab for each GURL in |urls|.
-- (void)openUrls:(const std::vector<GURL>&)urls;
 
 // This class cannot open urls until startup has finished. The urls that cannot
 // be opened are cached in |startupUrls_|. This method must be called exactly
@@ -307,24 +410,23 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
         app_controller_(app_controller) {
     DCHECK(profile_manager_);
     DCHECK(app_controller_);
-    // Listen to different events, depending on whether the
-    // kDestroyProfileOnBrowserClose experiment is disabled or not.
-    if (base::FeatureList::IsEnabled(features::kDestroyProfileOnBrowserClose)) {
+    // Listen to ProfileObserver and ProfileManagerObserver, either one of
+    // kDestroyProfileOnBrowserClose or kUpdateHistoryEntryPointsInIncognito
+    // are enabled.
+    if (ObserveRegularProfiles() || ObserveOTRProfiles()) {
       profile_manager_->AddObserver(this);
       for (Profile* profile : profile_manager_->GetLoadedProfiles())
         profile->AddObserver(this);
-    } else {
-      profile_manager_->GetProfileAttributesStorage().AddObserver(this);
     }
+    profile_manager_->GetProfileAttributesStorage().AddObserver(this);
   }
 
   ~AppControllerProfileObserver() override {
     DCHECK(profile_manager_);
-    if (base::FeatureList::IsEnabled(features::kDestroyProfileOnBrowserClose)) {
+    if (ObserveRegularProfiles() || ObserveOTRProfiles()) {
       profile_manager_->RemoveObserver(this);
-    } else {
-      profile_manager_->GetProfileAttributesStorage().RemoveObserver(this);
     }
+    profile_manager_->GetProfileAttributesStorage().RemoveObserver(this);
   }
 
  private:
@@ -332,26 +434,60 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
   void OnProfileAdded(const base::FilePath& profile_path) override {}
 
   void OnProfileWasRemoved(const base::FilePath& profile_path,
-                           const base::string16& profile_name) override {
+                           const std::u16string& profile_name) override {
     // When a profile is deleted we need to notify the AppController,
     // so it can correctly update its pointer to the last used profile.
-    [app_controller_ profileWasRemoved:profile_path];
+    [app_controller_ profileWasRemoved:profile_path forIncognito:false];
   }
 
   void OnProfileWillBeRemoved(const base::FilePath& profile_path) override {}
 
   void OnProfileNameChanged(const base::FilePath& profile_path,
-                            const base::string16& old_profile_name) override {}
+                            const std::u16string& old_profile_name) override {}
 
   void OnProfileAvatarChanged(const base::FilePath& profile_path) override {}
 
   // ProfileManager::Observer implementation:
-  void OnProfileAdded(Profile* profile) override { profile->AddObserver(this); }
+  void OnProfileAdded(Profile* profile) override {
+    // If regular profiles are not observed, then do not add observer.
+    if (!ObserveRegularProfiles()) {
+      return;
+    }
+    profile->AddObserver(this);
+  }
 
   // ProfileObserver implementation:
   void OnProfileWillBeDestroyed(Profile* profile) override {
     profile->RemoveObserver(this);
-    [app_controller_ profileWasRemoved:profile->GetPath()];
+
+    bool did_profile_observed = profile->IsOffTheRecord()
+                                  ? ObserveOTRProfiles()
+                                  : ObserveRegularProfiles();
+
+    // If the profile is not observed, then no need to call rest.
+    if (!did_profile_observed)
+      return;
+
+    [app_controller_ profileWasRemoved:profile->GetPath()
+                          forIncognito:profile->IsOffTheRecord()];
+  }
+
+  void OnOffTheRecordProfileCreated(Profile* off_the_record) override {
+    // If off_the_record profiles are not observed, then do not add observer.
+    if (!ObserveOTRProfiles()) {
+      return;
+    }
+    off_the_record->AddObserver(this);
+  }
+
+  static bool ObserveRegularProfiles() {
+    return base::FeatureList::IsEnabled(
+        features::kDestroyProfileOnBrowserClose);
+  }
+
+  static bool ObserveOTRProfiles() {
+    return base::FeatureList::IsEnabled(
+        features::kUpdateHistoryEntryPointsInIncognito);
   }
 
   ProfileManager* profile_manager_;
@@ -515,15 +651,8 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
   // sessions.
   if (!browser_shutdown::IsTryingToQuit() && !isPoweringOff &&
       _quitWithAppsController.get() && !_quitWithAppsController->ShouldQuit()) {
-    if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-            switches::kHostedAppQuitNotification)) {
-      return NO;
-    }
 
-    content::NotificationService::current()->Notify(
-        chrome::NOTIFICATION_CLOSE_ALL_BROWSERS_REQUEST,
-        content::NotificationService::AllSources(),
-        content::NotificationService::NoDetails());
+    chrome::OnClosingAllBrowsers(true);
     // This will close all browser sessions.
     chrome::CloseAllBrowsers();
 
@@ -540,10 +669,7 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
   // Initiate a shutdown (via chrome::CloseAllBrowsersAndQuit()) if we aren't
   // already shutting down.
   if (!browser_shutdown::IsTryingToQuit()) {
-    content::NotificationService::current()->Notify(
-        chrome::NOTIFICATION_CLOSE_ALL_BROWSERS_REQUEST,
-        content::NotificationService::AllSources(),
-        content::NotificationService::NoDetails());
+    chrome::OnClosingAllBrowsers(true);
     chrome::CloseAllBrowsersAndQuit();
   }
 
@@ -607,12 +733,6 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
 }
 
 - (void)didEndMainMessageLoop {
-  if (base::FeatureList::IsEnabled(features::kDestroyProfileOnBrowserClose)) {
-    // With DestroyProfileOnBrowserClose, Profiles get deleted earlier. So
-    // _lastProfile is already null, and and we cannot load it from disk now.
-    DCHECK_EQ(nullptr, _lastProfile);
-    return;
-  }
   if (!_lastProfile) {
     // If only the profile picker is open and closed again, there is no profile
     // loaded when main message loop ends and we cannot load it from disk now.
@@ -682,7 +802,14 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
     _tabMenuBridge.reset();
   }
 
-  [self windowChangedToProfile:browser->profile()->GetOriginalProfile()];
+  Profile* profile = browser->profile();
+  // If kUpdateHistoryEntryPointsInIncognito is not enabled, always pass
+  // original profile.
+  if (!base::FeatureList::IsEnabled(
+          features::kUpdateHistoryEntryPointsInIncognito)) {
+    profile = profile->GetOriginalProfile();
+  }
+  [self windowChangedToProfile:profile];
 }
 
 - (void)windowDidResignMain:(NSNotification*)notify {
@@ -704,11 +831,9 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
   // happened during a space change. Now that the change has
   // completed, raise browser windows.
   _reopenTime = base::TimeTicks();
-  std::set<gfx::NativeWindow> browserWindows;
-  for (auto* browser : *BrowserList::GetInstance())
-    browserWindows.insert(browser->window()->GetNativeWindow());
+  std::set<gfx::NativeWindow> browserWindows = GetBrowserNativeWindows();
   if (!browserWindows.empty())
-    ui::FocusWindowSetOnCurrentSpace(browserWindows);
+    FocusWindowSetOnCurrentSpace(browserWindows);
 }
 
 // Called when shutting down or logging out.
@@ -770,34 +895,8 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
     return;
   }
 
-  // If there's only 1 tab and the tab is NTP, close this NTP tab and open all
-  // startup urls in new tabs, because the omnibox will stay focused if we
-  // load url in NTP tab.
-  Profile* profile =
-      g_browser_process->profile_manager()->GetLastUsedProfileAllowedByPolicy();
-  Browser* browser = chrome::FindLastActiveWithProfile(profile);
-
-  int startupIndex = TabStripModel::kNoTab;
-  content::WebContents* startupContent = NULL;
-
-  if (browser && browser->tab_strip_model()->count() == 1) {
-    startupIndex = browser->tab_strip_model()->active_index();
-    startupContent = browser->tab_strip_model()->GetActiveWebContents();
-  }
-
-  [self openUrls:urls];
-
-  // In test environments where there is no network connection, the visible NTP
-  // URL may be chrome-search://local-ntp/local-ntp.html instead of
-  // chrome://newtab/. See local_ntp_test_utils::GetFinalNtpUrl for more
-  // details.
-  // This NTP check should be replaced once https://crbug.com/624410 is fixed.
-  if (startupIndex != TabStripModel::kNoTab &&
-      (startupContent->GetVisibleURL() == chrome::kChromeUINewTabURL ||
-       startupContent->GetVisibleURL() == chrome::kChromeSearchLocalNtpUrl)) {
-    browser->tab_strip_model()->CloseWebContentsAt(startupIndex,
-        TabStripModel::CLOSE_NONE);
-  }
+  StartupBrowserCreator::MaybeHandleProfileAgnosticUrls(
+      urls, base::BindOnce(&OpenUrlsInBrowser, urls));
 }
 
 // This is called after profiles have been loaded and preferences registered.
@@ -817,8 +916,8 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
 
   // Notify BrowserList to keep the application running so it doesn't go away
   // when all the browser windows get closed.
-  _keep_alive.reset(new ScopedKeepAlive(KeepAliveOrigin::APP_CONTROLLER,
-                                        KeepAliveRestartOption::DISABLED));
+  _keep_alive = std::make_unique<ScopedKeepAlive>(
+      KeepAliveOrigin::APP_CONTROLLER, KeepAliveRestartOption::DISABLED);
 
   [self setUpdateCheckInterval];
 
@@ -835,8 +934,9 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
 
   // Instantiate the ProfileAttributesStorage observer so that we can get
   // notified when a profile is deleted.
-  _profileAttributesStorageObserver.reset(new AppControllerProfileObserver(
-      g_browser_process->profile_manager(), self));
+  _profileAttributesStorageObserver =
+      std::make_unique<AppControllerProfileObserver>(
+          g_browser_process->profile_manager(), self);
 
   // Record the path to the (browser) app bundle; this is used by the app mode
   // shim.
@@ -873,8 +973,13 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
             _menuState.get()));
   }
 
-  _handoff_active_url_observer_bridge.reset(
-      new HandoffActiveURLObserverBridge(self));
+  _handoff_active_url_observer_bridge =
+      std::make_unique<HandoffActiveURLObserverBridge>(self);
+
+  if (@available(macOS 10.15, *)) {
+    ASWebAuthenticationSessionWebBrowserSessionManager.sharedManager
+        .sessionHandler = self;
+  }
 
 #if BUILDFLAG(USE_ALLOCATOR_SHIM)
   // Disable fatal OOM to hack around an OS bug https://crbug.com/654695.
@@ -941,7 +1046,7 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
         DownloadCoreServiceFactory::GetForBrowserContext(profiles[i]);
     DownloadManager* download_manager =
         (download_core_service->HasCreatedDownloadManager()
-             ? BrowserContext::GetDownloadManager(profiles[i])
+             ? profiles[i]->GetDownloadManager()
              : NULL);
     if (download_manager &&
         download_manager->NonMaliciousInProgressCount() > 0) {
@@ -972,31 +1077,33 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
 // Checks with the TabRestoreService to see if there's anything there to
 // restore and returns YES if so.
 - (BOOL)canRestoreTab {
+  Profile* lastProfile = [self lastProfileIfLoaded];
+  if (!lastProfile)
+    return NO;
   sessions::TabRestoreService* service =
-      TabRestoreServiceFactory::GetForProfile([self lastProfile]);
+      TabRestoreServiceFactory::GetForProfile(lastProfile);
   return service && !service->entries().empty();
 }
 
 // Called from the AppControllerProfileObserver every time a profile is deleted.
-- (void)profileWasRemoved:(const base::FilePath&)profilePath {
+- (void)profileWasRemoved:(const base::FilePath&)profilePath
+             forIncognito:(bool)isOffTheRecord {
   // If the lastProfile has been deleted, the profile manager has
   // already loaded a new one, so the pointer needs to be updated;
   // otherwise we will try to start up a browser window with a pointer
   // to the old profile.
   // In a browser test, the application is not brought to the front, so
   // |lastProfile_| might be null.
-  if (!_lastProfile || profilePath == _lastProfile->GetPath()) {
+  if (!_lastProfile || (profilePath == _lastProfile->GetPath() &&
+                        isOffTheRecord == _lastProfile->IsOffTheRecord())) {
     // Force windowChangedToProfile: to set the lastProfile_ and also update the
     // relevant menuBridge objects.
     [self setLastProfile:nullptr];
     auto* profile_manager = g_browser_process->profile_manager();
     if (profile_manager) {
       // |profile_manager| is null in browser tests during shutdown.
-      const base::FilePath last_used_path =
-          profile_manager->GetLastUsedProfileDir(
-              profile_manager->user_data_dir());
       Profile* last_used_profile =
-          profile_manager->GetProfileByPath(last_used_path);
+          profile_manager->GetLastUsedProfileIfLoaded();
       if (last_used_profile)
         [self windowChangedToProfile:last_used_profile];
     }
@@ -1088,7 +1195,11 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
 }
 
 - (void)commandDispatch:(id)sender {
-  Profile* lastProfile = [self safeLastProfileForNewWindows];
+  // Drop commands received after shutdown was initiated.
+  if (g_browser_process->IsShuttingDown())
+    return;
+
+  Profile* lastProfile = [self safeProfileForNewWindows:[self lastProfile]];
 
   // Handle the case where we're dispatching a command from a sender that's in a
   // browser window. This means that the command came from a background window
@@ -1123,8 +1234,10 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
   // locked profile needs authentication and the system profile cannot have a
   // browser.
   const PrefService* prefService = g_browser_process->local_state();
+  bool is_last_profile_guest =
+      lastProfile->IsGuestSession() || lastProfile->IsEphemeralGuestProfile();
   if (IsProfileSignedOut(lastProfile) || lastProfile->IsSystemProfile() ||
-      (lastProfile->IsGuestSession() && prefService &&
+      (is_last_profile_guest && prefService &&
        !prefService->GetBoolean(prefs::kBrowserGuestModeEnabled))) {
     ProfilePicker::Show(ProfilePicker::EntryPoint::kProfileLocked);
     return;
@@ -1151,7 +1264,8 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
                              IDC_FOCUS_SEARCH);
       break;
     case IDC_NEW_INCOGNITO_WINDOW:
-      CreateBrowser(lastProfile->GetPrimaryOTRProfile());
+      CreateBrowser(
+          lastProfile->GetPrimaryOTRProfile(/*create_if_needed=*/true));
       break;
     case IDC_RESTORE_TAB:
       chrome::OpenWindowWithRestoredTabs(lastProfile);
@@ -1262,21 +1376,7 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
   // If there are any, return here. Otherwise, the windows are panels or
   // notifications so we still need to open a new window.
   if (hasVisibleWindows) {
-    std::set<gfx::NativeWindow> browserWindows;
-    for (auto* browser : *BrowserList::GetInstance()) {
-      // When focusing Chrome, don't focus any browser windows associated with
-      // a currently running app shim, so ignore them.
-      if (browser && browser->deprecated_is_app()) {
-        extensions::ExtensionRegistry* registry =
-            extensions::ExtensionRegistry::Get(browser->profile());
-        const extensions::Extension* extension = registry->GetExtensionById(
-            web_app::GetAppIdFromApplicationName(browser->app_name()),
-            extensions::ExtensionRegistry::ENABLED);
-        if (extension && extension->is_hosted_app())
-          continue;
-      }
-      browserWindows.insert(browser->window()->GetNativeWindow());
-    }
+    std::set<gfx::NativeWindow> browserWindows = GetBrowserNativeWindows();
     if (!browserWindows.empty()) {
       NSWindow* keyWindow = [NSApp keyWindow];
       if (keyWindow && ![keyWindow isOnActiveSpace]) {
@@ -1294,7 +1394,7 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
         // See http://crbug.com/309656.
         _reopenTime = base::TimeTicks::Now();
       } else {
-        ui::FocusWindowSetOnCurrentSpace(browserWindows);
+        FocusWindowSetOnCurrentSpace(browserWindows);
       }
       // Return NO; we've done (or soon will do) the deminiaturize, so
       // AppKit shouldn't do anything.
@@ -1322,7 +1422,8 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
       SessionService* sessionService =
           SessionServiceFactory::GetForProfileForSessionRestore(lastProfile);
       if (sessionService &&
-          sessionService->RestoreIfNecessary(std::vector<GURL>()))
+          sessionService->RestoreIfNecessary(std::vector<GURL>(),
+                                             /* restore_apps */ false))
         return NO;
     }
   }
@@ -1338,8 +1439,8 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
     // to AppKit as there's nothing that it can do either.
     return NO;
   }
-  if (lastProfile->IsGuestSession() || IsProfileSignedOut(lastProfile) ||
-      lastProfile->IsSystemProfile()) {
+  if (lastProfile->IsGuestSession() || lastProfile->IsEphemeralGuestProfile() ||
+      IsProfileSignedOut(lastProfile) || lastProfile->IsSystemProfile()) {
     ProfilePicker::Show(ProfilePicker::EntryPoint::kProfileLocked);
   } else if (ProfilePicker::ShouldShowAtLaunch()) {
     ProfilePicker::Show(
@@ -1426,8 +1527,8 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
   [app registerServicesMenuSendTypes:types returnTypes:types];
 }
 
-// Return null if Chrome is not ready or there is no ProfileManager.
-- (Profile*)lastProfile {
+// Returns null if the profile is not loaded in memory.
+- (Profile*)lastProfileIfLoaded {
   // Return the profile of the last-used Browser, if available.
   if (_lastProfile)
     return _lastProfile;
@@ -1435,57 +1536,47 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
   if (![self isProfileReady])
     return nullptr;
 
+  ProfileManager* profile_manager = g_browser_process->profile_manager();
+  if (!profile_manager)
+    return nullptr;
+
+  // GetProfileByPath() returns nullptr if the profile is not loaded.
+  return profile_manager->GetProfileByPath(GetStartupProfilePathMac());
+}
+
+// Returns null if Chrome is not ready or there is no ProfileManager.
+// DEPRECATED: use lastProfileIfLoaded instead.
+// TODO(https://crbug.com/1176734): May be blocking, migrate all callers to
+// |-lastProfileIfLoaded|.
+- (Profile*)lastProfile {
+  Profile* lastLoadedProfile = [self lastProfileIfLoaded];
+  if (lastLoadedProfile)
+    return lastLoadedProfile;
+
+  if (![self isProfileReady])
+    return nullptr;
+
   return GetLastProfileMac();
 }
 
-- (Profile*)safeLastProfileForNewWindows {
-  Profile* profile = [self lastProfile];
-
+- (Profile*)safeProfileForNewWindows:(Profile*)profile {
   if (!profile)
     return nullptr;
 
-  // Guest sessions must always be OffTheRecord. Use that when opening windows.
-  if (profile->IsGuestSession())
-    return profile->GetPrimaryOTRProfile();
+  // When opening a Guest session or if incognito is forced.
+  if (ProfileManager::IsOffTheRecordModeForced(profile))
+    return profile->GetPrimaryOTRProfile(/*create_if_needed=*/true);
 
   return profile;
 }
 
 // Returns true if a browser window may be opened for the last active profile.
 - (bool)canOpenNewBrowser {
-  Profile* profile = [self safeLastProfileForNewWindows];
+  Profile* profile = [self safeProfileForNewWindows:[self lastProfile]];
 
   const PrefService* prefs = g_browser_process->local_state();
-  return !profile->IsGuestSession() ||
+  return (!profile->IsGuestSession() && !profile->IsEphemeralGuestProfile()) ||
          prefs->GetBoolean(prefs::kBrowserGuestModeEnabled);
-}
-
-// Various methods to open URLs that we get in a native fashion. We use
-// StartupBrowserCreator here because on the other platforms, URLs to open come
-// through the ProcessSingleton, and it calls StartupBrowserCreator. It's best
-// to bottleneck the openings through that for uniform handling.
-- (void)openUrls:(const std::vector<GURL>&)urls {
-  if (!_startupComplete) {
-    _startupUrls.insert(_startupUrls.end(), urls.begin(), urls.end());
-    return;
-  }
-  // Pick the last used browser from a regular profile to open the urls.
-  Profile* profile =
-      g_browser_process->profile_manager()->GetLastUsedProfileAllowedByPolicy();
-  Browser* browser = chrome::FindLastActiveWithProfile(profile);
-  // if no browser window exists then create one with no tabs to be filled in
-  if (!browser) {
-    browser = Browser::Create(
-        Browser::CreateParams([self safeLastProfileForNewWindows], true));
-    browser->window()->Show();
-  }
-
-  base::CommandLine dummy(base::CommandLine::NO_PROGRAM);
-  chrome::startup::IsFirstRun first_run =
-      first_run::IsChromeFirstRun() ? chrome::startup::IS_FIRST_RUN
-                                    : chrome::startup::IS_NOT_FIRST_RUN;
-  StartupBrowserCreatorImpl launch(base::FilePath(), dummy, first_run);
-  launch.OpenURLsInBrowser(browser, false, urls);
 }
 
 - (void)getUrl:(NSAppleEventDescriptor*)event
@@ -1536,12 +1627,13 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
 // Show the preferences window, or bring it to the front if it's already
 // visible.
 - (IBAction)showPreferences:(id)sender {
-  if (Browser* browser = ActivateBrowser([self lastProfile])) {
+  Profile* lastProfile = [self lastProfile];
+  if (Browser* browser = ActivateBrowser(lastProfile)) {
     // Show options tab in the active browser window.
     chrome::ShowSettings(browser);
   } else if ([self canOpenNewBrowser]) {
     // No browser window, so create one for the options tab.
-    chrome::OpenOptionsWindow([self safeLastProfileForNewWindows]);
+    chrome::OpenOptionsWindow([self safeProfileForNewWindows:lastProfile]);
   } else {
     // No way to create a browser, default to the Profile Picker. On profile
     // selection, it opens the profile on the settings page.
@@ -1551,11 +1643,12 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
 }
 
 - (IBAction)orderFrontStandardAboutPanel:(id)sender {
-  if (Browser* browser = ActivateBrowser([self lastProfile])) {
+  Profile* lastProfile = [self lastProfile];
+  if (Browser* browser = ActivateBrowser(lastProfile)) {
     chrome::ShowAboutChrome(browser);
   } else if ([self canOpenNewBrowser]) {
     // No browser window, so create one for the options tab.
-    chrome::OpenAboutWindow([self safeLastProfileForNewWindows]);
+    chrome::OpenAboutWindow([self safeProfileForNewWindows:lastProfile]);
   } else {
     // No way to create a browser, default to the User Manager. On profile
     // selection, it opens the profile on chrome help page.
@@ -1578,7 +1671,6 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
 
 - (NSMenu*)applicationDockMenu:(NSApplication*)sender {
   NSMenu* dockMenu = [[[NSMenu alloc] initWithTitle: @""] autorelease];
-  Profile* profile = [self lastProfile];
 
   BOOL profilesAdded = [_profileMenuController insertItemsIntoMenu:dockMenu
                                                           atOffset:0
@@ -1596,10 +1688,16 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
   [item setEnabled:[self validateUserInterfaceItem:item]];
   [dockMenu addItem:item];
 
-  // |profile| can be NULL during unit tests.
-  if (!profile ||
-      IncognitoModePrefs::GetAvailability(profile->GetPrefs()) !=
-          IncognitoModePrefs::DISABLED) {
+  Profile* profile = [self lastProfileIfLoaded];
+
+  // Buttons below require the profile to be loaded. In particular, if the
+  // profile picker is shown at startup, these buttons won't be added until the
+  // user picks a profile.
+  if (!profile)
+    return dockMenu;
+
+  if (IncognitoModePrefs::GetAvailability(profile->GetPrefs()) !=
+      IncognitoModePrefs::DISABLED) {
     titleStr = l10n_util::GetNSStringWithFixup(IDS_NEW_INCOGNITO_WINDOW_MAC);
     item.reset(
         [[NSMenuItem alloc] initWithTitle:titleStr
@@ -1611,33 +1709,28 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
     [dockMenu addItem:item];
   }
 
-  // TODO(rickcam): Mock out BackgroundApplicationListModel, then add unit
-  // tests which use the mock in place of the profile-initialized model.
-
-  // Avoid breaking unit tests which have no profile.
-  if (profile) {
-    BackgroundApplicationListModel applications(profile);
-    if (applications.size()) {
-      int position = 0;
-      NSString* menuStr =
-          l10n_util::GetNSStringWithFixup(IDS_BACKGROUND_APPS_MAC);
-      base::scoped_nsobject<NSMenu> appMenu(
-          [[NSMenu alloc] initWithTitle:menuStr]);
-      for (extensions::ExtensionList::const_iterator cursor =
-               applications.begin();
-           cursor != applications.end();
-           ++cursor, ++position) {
-        DCHECK_EQ(applications.GetPosition(cursor->get()), position);
-        NSString* itemStr =
-            base::SysUTF16ToNSString(base::UTF8ToUTF16((*cursor)->name()));
-        base::scoped_nsobject<NSMenuItem> appItem(
-            [[NSMenuItem alloc] initWithTitle:itemStr
-                                       action:@selector(executeApplication:)
-                                keyEquivalent:@""]);
-        [appItem setTarget:self];
-        [appItem setTag:position];
-        [appMenu addItem:appItem];
-      }
+  // TODO(rickcam): Mock out BackgroundApplicationListModel, then add unit tests
+  // which use the mock in place of the profile-initialized model.
+  BackgroundApplicationListModel applications(profile);
+  if (applications.size()) {
+    int position = 0;
+    NSString* menuStr =
+        l10n_util::GetNSStringWithFixup(IDS_BACKGROUND_APPS_MAC);
+    base::scoped_nsobject<NSMenu> appMenu(
+        [[NSMenu alloc] initWithTitle:menuStr]);
+    for (extensions::ExtensionList::const_iterator cursor =
+             applications.begin();
+         cursor != applications.end(); ++cursor, ++position) {
+      DCHECK_EQ(applications.GetPosition(cursor->get()), position);
+      NSString* itemStr =
+          base::SysUTF16ToNSString(base::UTF8ToUTF16((*cursor)->name()));
+      base::scoped_nsobject<NSMenuItem> appItem([[NSMenuItem alloc]
+          initWithTitle:itemStr
+                 action:@selector(executeApplication:)
+          keyEquivalent:@""]);
+      [appItem setTarget:self];
+      [appItem setTag:position];
+      [appMenu addItem:appItem];
     }
   }
 
@@ -1676,8 +1769,12 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
   }
 
   _lastProfile = profile;
-  _lastProfileKeepAlive = std::make_unique<ScopedProfileKeepAlive>(
-      _lastProfile, ProfileKeepAliveOrigin::kAppControllerMac);
+  if (profile->IsOffTheRecord()) {
+    _lastProfileKeepAlive.reset();
+  } else {
+    _lastProfileKeepAlive = std::make_unique<ScopedProfileKeepAlive>(
+        _lastProfile, ProfileKeepAliveOrigin::kAppControllerMac);
+  }
 }
 
 - (void)windowChangedToProfile:(Profile*)profile {
@@ -1688,6 +1785,10 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
   // its initial state.
   if (_historyMenuBridge)
     _historyMenuBridge->ResetMenu();
+
+  // Clear the profile pref registrar before tearing down.
+  if (_profilePrefRegistrar)
+    _profilePrefRegistrar->RemoveAll();
 
   // Rebuild the menus with the new profile. The bookmarks submenu is cached to
   // avoid slowdowns when switching between profiles with large numbers of
@@ -1720,13 +1821,13 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
   [bookmarkItem setSubmenu:_bookmarkMenuBridge->BookmarkMenu()];
   [bookmarkItem setHidden:hidden];
 
-  _historyMenuBridge.reset(new HistoryMenuBridge(_lastProfile));
+  _historyMenuBridge = std::make_unique<HistoryMenuBridge>(_lastProfile);
   _historyMenuBridge->BuildMenu();
 
   chrome::BrowserCommandController::
       UpdateSharedCommandsForIncognitoAvailability(
           _menuState.get(), _lastProfile);
-  _profilePrefRegistrar.reset(new PrefChangeRegistrar());
+  _profilePrefRegistrar = std::make_unique<PrefChangeRegistrar>();
   _profilePrefRegistrar->Init(_lastProfile->GetPrefs());
   _profilePrefRegistrar->Add(
       prefs::kIncognitoModeAvailability,
@@ -1775,7 +1876,7 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
   }
 
   NSString* originString = base::mac::ObjCCast<NSString>(
-      [userActivity.userInfo objectForKey:handoff::kOriginKey]);
+      (userActivity.userInfo)[handoff::kOriginKey]);
   handoff::Origin origin = handoff::OriginFromString(originString);
   UMA_HISTOGRAM_ENUMERATION(
       "OSX.Handoff.Origin", origin, handoff::ORIGIN_COUNT);
@@ -1843,6 +1944,25 @@ static base::mac::ScopedObjCClassSwizzler* g_swizzle_imk_input_session;
   [self updateHandoffManager:webContents];
 }
 
+#pragma mark - ASWebAuthenticationSessionWebBrowserSessionHandling
+
+// Note that both of these WebAuthenticationSession calls come in on a random
+// worker thread, so it's important to hop to the main thread.
+
+- (void)beginHandlingWebAuthenticationSessionRequest:
+    (ASWebAuthenticationSessionRequest*)request API_AVAILABLE(macos(10.15)) {
+  dispatch_async(dispatch_get_main_queue(), ^(void) {
+    AuthSessionRequest::StartNewAuthSession(request, [self lastProfile]);
+  });
+}
+
+- (void)cancelWebAuthenticationSessionRequest:
+    (ASWebAuthenticationSessionRequest*)request API_AVAILABLE(macos(10.15)) {
+  dispatch_async(dispatch_get_main_queue(), ^(void) {
+    AuthSessionRequest::CancelAuthSession(request);
+  });
+}
+
 @end  // @implementation AppController
 
 //---------------------------------------------------------------------------
@@ -1857,6 +1977,52 @@ void UpdateProfileInUse(Profile* profile, Profile::CreateStatus status) {
   }
 }
 
+void OpenUrlsInBrowserWithProfile(const std::vector<GURL>& urls,
+                                  Profile* profile,
+                                  Profile::CreateStatus status) {
+  if (status != Profile::CREATE_STATUS_INITIALIZED)
+    return;
+  AppController* controller =
+      base::mac::ObjCCastStrict<AppController>([NSApp delegate]);
+  if (!controller)
+    return;
+  DCHECK(profile);
+  profile = [controller safeProfileForNewWindows:profile];
+  Browser* browser = chrome::FindLastActiveWithProfile(profile);
+  int startupIndex = TabStripModel::kNoTab;
+  content::WebContents* startupContent = nullptr;
+  if (browser && browser->tab_strip_model()->count() == 1) {
+    // If there's only 1 tab and the tab is NTP, close this NTP tab and open all
+    // startup urls in new tabs, because the omnibox will stay focused if we
+    // load url in NTP tab.
+    startupIndex = browser->tab_strip_model()->active_index();
+    startupContent = browser->tab_strip_model()->GetActiveWebContents();
+  } else if (!browser) {
+    // if no browser window exists then create one with no tabs to be filled in.
+    browser = Browser::Create(Browser::CreateParams(profile, true));
+    browser->window()->Show();
+  }
+
+  // Various methods to open URLs that we get in a native fashion. We use
+  // StartupBrowserCreator here because on the other platforms, URLs to open
+  // come through the ProcessSingleton, and it calls StartupBrowserCreator. It's
+  // best to bottleneck the openings through that for uniform handling.
+  base::CommandLine dummy(base::CommandLine::NO_PROGRAM);
+  chrome::startup::IsFirstRun first_run =
+      first_run::IsChromeFirstRun() ? chrome::startup::IS_FIRST_RUN
+                                    : chrome::startup::IS_NOT_FIRST_RUN;
+  StartupBrowserCreatorImpl launch(base::FilePath(), dummy, first_run);
+  launch.OpenURLsInBrowser(browser, false, urls);
+
+  // This NTP check should be replaced once https://crbug.com/624410 is fixed.
+  if (startupIndex != TabStripModel::kNoTab &&
+      (startupContent->GetVisibleURL() == chrome::kChromeUINewTabURL ||
+       startupContent->GetVisibleURL() == chrome::kChromeUINewTabPageURL)) {
+    browser->tab_strip_model()->CloseWebContentsAt(startupIndex,
+                                                   TabStripModel::CLOSE_NONE);
+  }
+}
+
 }  // namespace
 
 namespace app_controller_mac {
@@ -1868,8 +2034,7 @@ bool IsOpeningNewWindow() {
 void CreateGuestProfileIfNeeded() {
   g_browser_process->profile_manager()->CreateProfileAsync(
       ProfileManager::GetGuestProfilePath(),
-      base::BindRepeating(&UpdateProfileInUse), base::string16(),
-      std::string());
+      base::BindRepeating(&UpdateProfileInUse));
 }
 
 void EnterpriseStartupDialogClosed() {

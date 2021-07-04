@@ -7,14 +7,14 @@ import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.m.js';
 import 'chrome://resources/cr_elements/cr_icons_css.m.js';
 import 'chrome://resources/cr_elements/hidden_style_css.m.js';
 
-import {loadTimeData} from 'chrome://resources/js/load_time_data.m.js';
 import {html, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
+import {loadTimeData} from '../i18n_setup.js';
 import {decodeString16} from '../utils.js';
 
 // clang-format off
 /**
- * Bitmap used to decode the value of search.mojom.ACMatchClassification style
+ * Bitmap used to decode the value of realbox.mojom.ACMatchClassification style
  * field.
  * See components/omnibox/browser/autocomplete_match.h.
  * @enum {number}
@@ -26,6 +26,8 @@ const ACMatchClassificationStyle = {
   DIM:   1 << 2,  // A "helper text".
 };
 // clang-format on
+
+const SEARCH_CALCULATOR_ANSWER_TYPE = 'search-calculator-answer';
 
 // Displays an autocomplete match similar to those in the Omnibox.
 class RealboxMatchElement extends PolymerElement {
@@ -64,7 +66,18 @@ class RealboxMatchElement extends PolymerElement {
       },
 
       /**
-       * @type {!search.mojom.AutocompleteMatch}
+       * Whether the match is a rich suggestion. Rich suggestions are displayed
+       * in two lines and may contain image.
+       * @type {boolean}
+       */
+      isRichSuggestion: {
+        type: Boolean,
+        computed: `computeIsRichSuggestion_(match, hasImage)`,
+        reflectToAttribute: true,
+      },
+
+      /**
+       * @type {!realbox.mojom.AutocompleteMatch}
        */
       match: {
         type: Object,
@@ -237,8 +250,19 @@ class RealboxMatchElement extends PolymerElement {
     if (!this.match) {
       return '';
     }
-    const contents = decodeString16(this.match.contents);
-    const description = decodeString16(this.match.description);
+    const spanContents = document.createElement('span');
+    spanContents.innerHTML = this.match.answer ?
+        decodeString16(this.match.answer.firstLine) :
+        decodeString16(this.match.contents);
+    const contents = spanContents.textContent || spanContents.innerText;
+
+    const spanDescription = document.createElement('span');
+    spanDescription.innerHTML = this.match.answer ?
+        decodeString16(this.match.answer.secondLine) :
+        decodeString16(this.match.description);
+    const description =
+        spanDescription.textContent || spanDescription.innerText;
+
     return this.match.swapContentsAndDescription ?
         description + this.separatorText_ + contents :
         contents + this.separatorText_ + description;
@@ -263,6 +287,9 @@ class RealboxMatchElement extends PolymerElement {
       return '';
     }
     const match = this.match;
+    if (match.answer) {
+      return decodeString16(match.answer.firstLine);
+    }
     return match.swapContentsAndDescription ?
         this.renderTextWithClassifications_(
                 decodeString16(match.description), match.descriptionClass)
@@ -281,6 +308,9 @@ class RealboxMatchElement extends PolymerElement {
       return '';
     }
     const match = this.match;
+    if (match.answer) {
+      return decodeString16(match.answer.secondLine);
+    }
     return match.swapContentsAndDescription ?
         this.renderTextWithClassifications_(
                 decodeString16(match.contents), match.contentsClass)
@@ -296,6 +326,17 @@ class RealboxMatchElement extends PolymerElement {
    */
   computeHasImage_() {
     return this.match && !!this.match.imageUrl;
+  }
+
+  /**
+   * @return {boolean}
+   * @private
+   */
+  computeIsRichSuggestion_() {
+    return this.hasImage ||
+        (this.match &&
+         (this.match.type === SEARCH_CALCULATOR_ANSWER_TYPE ||
+          !!this.match.answer));
   }
 
   /**
@@ -327,7 +368,7 @@ class RealboxMatchElement extends PolymerElement {
 
   /**
    * Decodes the ACMatchClassificationStyle enteries encoded in the given
-   * search.mojom.ACMatchClassification style field, maps each entry to a CSS
+   * realbox.mojom.ACMatchClassification style field, maps each entry to a CSS
    * class and returns them.
    * @param {number} style
    * @return {!Array<string>}
@@ -361,11 +402,11 @@ class RealboxMatchElement extends PolymerElement {
   }
 
   /**
-   * Renders |text| based on the given search.mojom.ACMatchClassification(s)
+   * Renders |text| based on the given realbox.mojom.ACMatchClassification(s)
    * Each classification contains an 'offset' and an encoded list of styles for
    * styling a substring starting with the 'offset' and ending with the next.
    * @param {string} text
-   * @param {!Array<!search.mojom.ACMatchClassification>} classifications
+   * @param {!Array<!realbox.mojom.ACMatchClassification>} classifications
    * @return {!Element} A <span> with <span> children for each styled substring.
    */
   renderTextWithClassifications_(text, classifications) {

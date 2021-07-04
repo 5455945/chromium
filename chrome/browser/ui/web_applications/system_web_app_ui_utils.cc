@@ -11,8 +11,6 @@
 #include "base/check_op.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/files/file_path.h"
-#include "base/metrics/histogram_functions.h"
-#include "base/optional.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/apps/app_service/app_launch_params.h"
@@ -21,26 +19,26 @@
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/launch_utils.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/chromeos/printing/print_management/print_management_uma.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/web_app_launch_manager.h"
 #include "chrome/browser/web_applications/components/app_registrar.h"
 #include "chrome/browser/web_applications/components/os_integration_manager.h"
 #include "chrome/browser/web_applications/components/web_app_helpers.h"
-#include "chrome/browser/web_applications/system_web_app_manager.h"
+#include "chrome/browser/web_applications/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_launch/web_launch_files_helper.h"
 #include "chrome/common/webui_url_constants.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
-#include "chromeos/components/scanning/scanning_uma.h"
 #endif
 
 namespace {
@@ -63,7 +61,7 @@ Profile* GetProfileForSystemWebAppLaunch(Profile* profile) {
   // is used for browsing in guest sessions. We do this because the "original"
   // profile of the guest session can't create windows.
   if (profile->IsGuestSession())
-    return profile->GetPrimaryOTRProfile();
+    return profile->GetPrimaryOTRProfile(/*create_if_needed=*/true);
 
   // We don't support launching SWA in incognito profiles, use the original
   // profile if an incognito profile is provided (with the exception of guest
@@ -78,46 +76,33 @@ Profile* GetProfileForSystemWebAppLaunch(Profile* profile) {
 }  // namespace
 
 namespace web_app {
-namespace {
 
-void LogPrintManagementEntryPoints(apps::mojom::AppLaunchSource source) {
-  if (source == apps::mojom::AppLaunchSource::kSourceAppLauncher) {
-    base::UmaHistogramEnumeration("Printing.CUPS.PrintManagementAppEntryPoint",
-                                  PrintManagementAppEntryPoint::kLauncher);
-  } else if (source == apps::mojom::AppLaunchSource::kSourceIntentUrl) {
-    base::UmaHistogramEnumeration("Printing.CUPS.PrintManagementAppEntryPoint",
-                                  PrintManagementAppEntryPoint::kBrowser);
-  }
-}
-
-}  // namespace
-
-base::Optional<SystemAppType> GetSystemWebAppTypeForAppId(Profile* profile,
+absl::optional<SystemAppType> GetSystemWebAppTypeForAppId(Profile* profile,
                                                           AppId app_id) {
-  auto* provider = WebAppProvider::Get(profile);
+  auto* provider = WebAppProvider::GetForSystemWebApps(profile);
   return provider ? provider->system_web_app_manager().GetSystemAppTypeForAppId(
                         app_id)
-                  : base::Optional<SystemAppType>();
+                  : absl::optional<SystemAppType>();
 }
 
-base::Optional<AppId> GetAppIdForSystemWebApp(Profile* profile,
+absl::optional<AppId> GetAppIdForSystemWebApp(Profile* profile,
                                               SystemAppType app_type) {
-  auto* provider = WebAppProvider::Get(profile);
+  auto* provider = WebAppProvider::GetForSystemWebApps(profile);
   return provider
              ? provider->system_web_app_manager().GetAppIdForSystemApp(app_type)
-             : base::Optional<AppId>();
+             : absl::optional<AppId>();
 }
 
-base::Optional<apps::AppLaunchParams> CreateSystemWebAppLaunchParams(
+absl::optional<apps::AppLaunchParams> CreateSystemWebAppLaunchParams(
     Profile* profile,
     SystemAppType app_type,
     int64_t display_id) {
-  base::Optional<AppId> app_id = GetAppIdForSystemWebApp(profile, app_type);
+  absl::optional<AppId> app_id = GetAppIdForSystemWebApp(profile, app_type);
   // TODO(calamity): Decide whether to report app launch failure or CHECK fail.
   if (!app_id)
-    return base::nullopt;
+    return absl::nullopt;
 
-  auto* provider = WebAppProvider::Get(profile);
+  auto* provider = WebAppProvider::GetForSystemWebApps(profile);
   DCHECK(provider);
 
   DisplayMode display_mode =
@@ -155,49 +140,43 @@ base::FilePath GetLaunchDirectory(
 
 }  // namespace
 
+SystemAppLaunchParams::SystemAppLaunchParams() = default;
+SystemAppLaunchParams::~SystemAppLaunchParams() = default;
+
 void LaunchSystemWebAppAsync(Profile* profile,
                              const SystemAppType type,
-                             const SystemAppLaunchParams& params) {
+                             const SystemAppLaunchParams& params,
+                             apps::mojom::WindowInfoPtr window_info) {
+  DCHECK(profile);
   // Terminal should be launched with crostini::LaunchTerminal*.
   DCHECK(type != SystemAppType::TERMINAL);
 
-  // TODO(https://crbug.com/1135863): Implement a SWA-wide approach to handle
-  // launching (or link capturing) from incognito.
-  if (type == SystemAppType::SETTINGS) {
-    // In non-guest incognito profile, OS Settings will silently launch into
-    // the original profile.
-    if (!profile->IsGuestSession() && profile->IsIncognitoProfile()) {
-      profile = profile->GetOriginalProfile();
-    }
-  }
-
+  // TODO(https://crbug.com/1135863): Implement a confirmation dialog when
+  // changing to a different profile.
   Profile* profile_for_launch = GetProfileForSystemWebAppLaunch(profile);
-  if (profile_for_launch == nullptr || profile_for_launch != profile) {
-    // The provided profile can't launch system web apps. Complain about this so
-    // we can catch the call site, and ask them to pick the right profile.
+  if (profile_for_launch == nullptr) {
+    // We can't find a suitable profile to launch. Complain about this so we
+    // can identify the call site, and ask them to pick the right profile.
     base::debug::DumpWithoutCrashing();
 
     DVLOG(1)
         << "LaunchSystemWebAppAsync is called on a profile that can't launch "
-           "system web apps. Please check the profile you are using is correct."
-        << (profile_for_launch
-                ? "Instead, launch the app into a suitable profile "
-                  "based on your intention."
-                : "Can't find a suitable profile based on the provided "
-                  "argument. Thus ignore the launch request.");
+           "system web apps. The launch request is ignored. Please check the "
+           "profile you are using is correct.";
 
+    // This will DCHECK in debug builds. But no-op in production builds.
     NOTREACHED();
 
-    if (profile_for_launch == nullptr)
-      return;
+    // Early return if we can't find a profile to launch.
+    return;
   }
 
-  const base::Optional<AppId> app_id =
+  const absl::optional<AppId> app_id =
       GetAppIdForSystemWebApp(profile_for_launch, type);
   if (!app_id)
     return;
 
-  apps::AppServiceProxy* app_service =
+  auto* app_service =
       apps::AppServiceProxyFactory::GetForProfile(profile_for_launch);
   DCHECK(app_service);
 
@@ -205,13 +184,25 @@ void LaunchSystemWebAppAsync(Profile* profile,
       apps::mojom::LaunchContainer::kLaunchContainerNone,
       WindowOpenDisposition::NEW_WINDOW, /* prefer_container */ false);
 
-  if (params.url.is_empty()) {
-    app_service->Launch(app_id.value(), event_flags, params.launch_source);
-  } else {
-    DCHECK(params.url.is_valid());
-    app_service->LaunchAppWithUrl(app_id.value(), event_flags, params.url,
-                                  params.launch_source);
+  if (!params.launch_paths.empty()) {
+    DCHECK(!params.url.has_value())
+        << "Launch URL can't be used with launch_paths.";
+    app_service->LaunchAppWithFiles(
+        *app_id, apps::mojom::LaunchContainer::kLaunchContainerWindow,
+        event_flags, params.launch_source,
+        apps::mojom::FilePaths::New(params.launch_paths));
+    return;
   }
+
+  if (params.url) {
+    DCHECK(params.url->is_valid());
+    app_service->LaunchAppWithUrl(*app_id, event_flags, *params.url,
+                                  params.launch_source, std::move(window_info));
+    return;
+  }
+
+  app_service->Launch(*app_id, event_flags, params.launch_source,
+                      std::move(window_info));
 }
 
 Browser* LaunchSystemWebAppImpl(Profile* profile,
@@ -225,30 +216,12 @@ Browser* LaunchSystemWebAppImpl(Profile* profile,
     return nullptr;
   }
 
-  auto* provider = WebAppProvider::Get(profile);
+  auto* provider = WebAppProvider::GetForSystemWebApps(profile);
   if (!provider)
     return nullptr;
 
   DCHECK(url.GetOrigin() ==
          provider->registrar().GetAppLaunchUrl(params.app_id).GetOrigin());
-
-  // TODO(crbug.com/1164802): Move metrics recorded here to AppService. To SWA
-  // teams and reviewers: don't put more metrics here. Consider using
-  // RecordAppLaunch in AppService.
-  //
-  // Log enumerated entry point for Print Management App. Only log here if the
-  // app was launched from the browser (omnibox) or from the system launcher.
-  if (app_type == SystemAppType::PRINT_MANAGEMENT)
-    LogPrintManagementEntryPoints(params.source);
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // Log enumerated entry point for the Scan app.
-  if (app_type == SystemAppType::SCANNING &&
-      params.source == apps::mojom::AppLaunchSource::kSourceAppLauncher) {
-    chromeos::scanning::RecordScanAppEntryPoint(
-        chromeos::scanning::ScanAppEntryPoint::kLauncher);
-  }
-#endif
 
   // Make sure we have a browser for app.  Always reuse an existing browser for
   // popups, otherwise check app type whether we should use a single window.
@@ -268,10 +241,16 @@ Browser* LaunchSystemWebAppImpl(Profile* profile,
   bool can_maximize =
       provider->system_web_app_manager().IsMaximizableWindow(app_type);
 
+  // System Web App windows can't be properly restored without storing the app
+  // type. Until that is implemented, skip them for session restore.
+  // TODO(crbug.com/1003170): Enable session restore for System Web Apps by
+  // passing through the underlying value of params.omit_from_session_restore.
+  const bool omit_from_session_restore = true;
+
   if (!browser) {
-    browser =
-        CreateWebApplicationWindow(profile, params.app_id, params.disposition,
-                                   params.restore_id, can_resize, can_maximize);
+    browser = CreateWebApplicationWindow(
+        profile, params.app_id, params.disposition, params.restore_id,
+        omit_from_session_restore, can_resize, can_maximize);
   }
 
   // Navigate application window to application's |url| if necessary.
@@ -319,7 +298,7 @@ void FlushSystemWebAppLaunchesForTesting(Profile* profile) {
       << "FlushSystemWebAppLaunchesForTesting is called for a profile that "
          "can't run System Apps. Check your code.";
   auto* app_service_proxy =
-      apps::AppServiceProxyFactory::GetForProfile(profile);
+      apps::AppServiceProxyFactory::GetForProfile(profile_for_launch);
   DCHECK(app_service_proxy);
   app_service_proxy->FlushMojoCallsForTesting();  // IN-TEST
 }
@@ -329,11 +308,11 @@ Browser* FindSystemWebAppBrowser(Profile* profile,
                                  Browser::Type browser_type) {
   // TODO(calamity): Determine whether, during startup, we need to wait for
   // app install and then provide a valid answer here.
-  base::Optional<AppId> app_id = GetAppIdForSystemWebApp(profile, app_type);
+  absl::optional<AppId> app_id = GetAppIdForSystemWebApp(profile, app_type);
   if (!app_id)
     return nullptr;
 
-  auto* provider = WebAppProvider::Get(profile);
+  auto* provider = WebAppProvider::GetForSystemWebApps(profile);
   DCHECK(provider);
 
   if (!provider->registrar().IsInstalled(app_id.value()))
@@ -362,12 +341,12 @@ bool IsBrowserForSystemWebApp(Browser* browser, SystemAppType type) {
          browser->app_controller()->system_app_type() == type;
 }
 
-base::Optional<SystemAppType> GetCapturingSystemAppForURL(Profile* profile,
+absl::optional<SystemAppType> GetCapturingSystemAppForURL(Profile* profile,
                                                           const GURL& url) {
-  auto* provider = WebAppProvider::Get(profile);
+  auto* provider = WebAppProvider::GetForSystemWebApps(profile);
 
   if (!provider)
-    return base::nullopt;
+    return absl::nullopt;
 
   return provider->system_web_app_manager().GetCapturingSystemAppForURL(url);
 }
@@ -381,7 +360,7 @@ gfx::Size GetSystemWebAppMinimumWindowSize(Browser* browser) {
   if (!app_controller->HasAppId())
     return gfx::Size();
 
-  auto* provider = WebAppProvider::Get(browser->profile());
+  auto* provider = WebAppProvider::GetForSystemWebApps(browser->profile());
   if (!provider)
     return gfx::Size();
 

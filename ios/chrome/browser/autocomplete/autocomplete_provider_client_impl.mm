@@ -30,7 +30,7 @@
 #include "ios/chrome/browser/pref_names.h"
 #include "ios/chrome/browser/search_engines/template_url_service_factory.h"
 #include "ios/chrome/browser/signin/identity_manager_factory.h"
-#include "ios/chrome/browser/sync/profile_sync_service_factory.h"
+#include "ios/chrome/browser/sync/sync_service_factory.h"
 #import "ios/chrome/browser/web_state_list/web_state_list.h"
 #include "ios/components/webui/web_ui_url_constants.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -42,10 +42,10 @@
 AutocompleteProviderClientImpl::AutocompleteProviderClientImpl(
     ChromeBrowserState* browser_state)
     : browser_state_(browser_state),
-      url_consent_helper_(unified_consent::UrlKeyedDataCollectionConsentHelper::
-                              NewPersonalizedDataCollectionConsentHelper(
-                                  ProfileSyncServiceFactory::GetForBrowserState(
-                                      browser_state_))),
+      url_consent_helper_(
+          unified_consent::UrlKeyedDataCollectionConsentHelper::
+              NewPersonalizedDataCollectionConsentHelper(
+                  SyncServiceFactory::GetForBrowserState(browser_state_))),
       omnibox_triggered_feature_service_(
           std::make_unique<OmniboxTriggeredFeatureService>()) {}
 
@@ -56,7 +56,7 @@ AutocompleteProviderClientImpl::GetURLLoaderFactory() {
   return browser_state_->GetSharedURLLoaderFactory();
 }
 
-PrefService* AutocompleteProviderClientImpl::GetPrefs() {
+PrefService* AutocompleteProviderClientImpl::GetPrefs() const {
   return browser_state_->GetPrefs();
 }
 
@@ -121,7 +121,6 @@ AutocompleteProviderClientImpl::GetDocumentSuggestionsService(
 }
 
 OmniboxPedalProvider* AutocompleteProviderClientImpl::GetPedalProvider() const {
-  NOTREACHED();
   return nullptr;
 }
 
@@ -162,19 +161,19 @@ AutocompleteProviderClientImpl::GetEmbedderRepresentationOfAboutScheme() const {
   return kChromeUIScheme;
 }
 
-std::vector<base::string16> AutocompleteProviderClientImpl::GetBuiltinURLs() {
+std::vector<std::u16string> AutocompleteProviderClientImpl::GetBuiltinURLs() {
   std::vector<std::string> chrome_builtins(
       kChromeHostURLs, kChromeHostURLs + kNumberOfChromeHostURLs);
   std::sort(chrome_builtins.begin(), chrome_builtins.end());
 
-  std::vector<base::string16> builtins;
+  std::vector<std::u16string> builtins;
   for (auto& url : chrome_builtins) {
     builtins.push_back(base::ASCIIToUTF16(url));
   }
   return builtins;
 }
 
-std::vector<base::string16>
+std::vector<std::u16string>
 AutocompleteProviderClientImpl::GetBuiltinsToProvideAsUserTypes() {
   return {base::ASCIIToUTF16(kChromeUIChromeURLsURL),
           base::ASCIIToUTF16(kChromeUIVersionURL)};
@@ -212,12 +211,12 @@ bool AutocompleteProviderClientImpl::IsAuthenticated() const {
 
 bool AutocompleteProviderClientImpl::IsSyncActive() const {
   syncer::SyncService* sync =
-      ProfileSyncServiceFactory::GetForBrowserState(browser_state_);
+      SyncServiceFactory::GetForBrowserState(browser_state_);
   return sync && sync->IsSyncFeatureActive();
 }
 
 void AutocompleteProviderClientImpl::Classify(
-    const base::string16& text,
+    const std::u16string& text,
     bool prefer_keyword,
     bool allow_exact_keyword_match,
     metrics::OmniboxEventProto::PageClassification page_classification,
@@ -230,7 +229,7 @@ void AutocompleteProviderClientImpl::Classify(
 
 void AutocompleteProviderClientImpl::DeleteMatchingURLsForKeywordFromHistory(
     history::KeywordID keyword_id,
-    const base::string16& term) {
+    const std::u16string& term) {
   GetHistoryService()->DeleteMatchingURLsForKeyword(keyword_id, term);
 }
 

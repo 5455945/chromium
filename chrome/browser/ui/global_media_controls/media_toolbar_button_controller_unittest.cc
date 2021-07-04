@@ -5,6 +5,7 @@
 #include "chrome/browser/ui/global_media_controls/media_toolbar_button_controller.h"
 
 #include <memory>
+#include <utility>
 
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
@@ -15,6 +16,7 @@
 #include "chrome/browser/ui/global_media_controls/media_session_notification_producer.h"
 #include "chrome/browser/ui/global_media_controls/media_toolbar_button_controller_delegate.h"
 #include "chrome/browser/ui/global_media_controls/overlay_media_notification.h"
+#include "chrome/browser/ui/global_media_controls/test_helper.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/media_message_center/media_notification_item.h"
 #include "components/media_message_center/media_notification_util.h"
@@ -31,6 +33,7 @@ using media_session::mojom::AudioFocusRequestStatePtr;
 using media_session::mojom::MediaSessionInfo;
 using media_session::mojom::MediaSessionInfoPtr;
 using testing::_;
+using testing::NiceMock;
 
 namespace {
 
@@ -47,50 +50,15 @@ class MockMediaToolbarButtonControllerDelegate
   MOCK_METHOD0(Disable, void());
 };
 
-class MockMediaDialogDelegate : public MediaDialogDelegate {
- public:
-  MockMediaDialogDelegate() = default;
-  ~MockMediaDialogDelegate() override { Close(); }
-
-  void Open(MediaNotificationService* service) {
-    ASSERT_NE(nullptr, service);
-    service_ = service;
-    service_->SetDialogDelegate(this);
-  }
-
-  void Close() {
-    if (!service_)
-      return;
-
-    service_->SetDialogDelegate(nullptr);
-    service_ = nullptr;
-  }
-
-  // MediaDialogDelegate implementation.
-  MOCK_METHOD2(
-      ShowMediaSession,
-      MediaNotificationContainerImpl*(
-          const std::string& id,
-          base::WeakPtr<media_message_center::MediaNotificationItem> item));
-  MOCK_METHOD1(HideMediaSession, void(const std::string& id));
-  MOCK_METHOD2(PopOut,
-               std::unique_ptr<OverlayMediaNotification>(const std::string& id,
-                                                         gfx::Rect bounds));
-  MOCK_METHOD0(HideMediaDialog, void());
-
- private:
-  MediaNotificationService* service_;
-
-  DISALLOW_COPY_AND_ASSIGN(MockMediaDialogDelegate);
-};
-
 }  // anonymous namespace
 
 class MediaToolbarButtonControllerTest : public testing::Test {
  public:
-  MediaToolbarButtonControllerTest()
-      : task_environment_(base::test::TaskEnvironment::TimeSource::MOCK_TIME,
-                          base::test::TaskEnvironment::MainThreadType::UI) {}
+  MediaToolbarButtonControllerTest() = default;
+  MediaToolbarButtonControllerTest(const MediaToolbarButtonControllerTest&) =
+      delete;
+  MediaToolbarButtonControllerTest& operator=(
+      const MediaToolbarButtonControllerTest&) = delete;
   ~MediaToolbarButtonControllerTest() override = default;
 
   void SetUp() override {
@@ -154,8 +122,8 @@ class MediaToolbarButtonControllerTest : public testing::Test {
               item_itr);
 
     media_session::MediaMetadata metadata;
-    metadata.title = base::ASCIIToUTF16("title");
-    metadata.artist = base::ASCIIToUTF16("artist");
+    metadata.title = u"title";
+    metadata.artist = u"artist";
     item_itr->second.item()->MediaSessionMetadataChanged(std::move(metadata));
   }
 
@@ -166,14 +134,14 @@ class MediaToolbarButtonControllerTest : public testing::Test {
   MockMediaToolbarButtonControllerDelegate& delegate() { return delegate_; }
 
  private:
-  content::BrowserTaskEnvironment task_environment_;
-  MockMediaToolbarButtonControllerDelegate delegate_;
+  content::BrowserTaskEnvironment task_environment_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME,
+      base::test::TaskEnvironment::MainThreadType::UI};
+  NiceMock<MockMediaToolbarButtonControllerDelegate> delegate_;
   TestingProfile profile_;
   std::unique_ptr<MediaNotificationService> service_;
   std::unique_ptr<MediaToolbarButtonController> controller_;
   base::test::ScopedFeatureList feature_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(MediaToolbarButtonControllerTest);
 };
 
 TEST_F(MediaToolbarButtonControllerTest, HidesAfterTimeoutAndShowsAgainOnPlay) {

@@ -23,20 +23,21 @@
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/platform/ax_platform_node.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/color_palette.h"
+#include "ui/gfx/skia_util.h"
 #include "ui/native_theme/native_theme.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/border.h"
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/layout/fill_layout.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 
 namespace autofill {
 
 int AutofillPopupBaseView::GetCornerRadius() {
   return ChromeLayoutProvider::Get()->GetCornerRadiusMetric(
-      views::EMPHASIS_MEDIUM);
+      views::Emphasis::kMedium);
 }
 
 SkColor AutofillPopupBaseView::GetBackgroundColor() const {
@@ -89,7 +90,7 @@ AutofillPopupBaseView::~AutofillPopupBaseView() {
   CHECK(!IsInObserverList());
 }
 
-void AutofillPopupBaseView::DoShow() {
+bool AutofillPopupBaseView::DoShow() {
   const bool initialize_widget = !GetWidget();
   if (initialize_widget) {
     // On Mac Cocoa browser, |parent_widget_| is null (the parent is not a
@@ -123,13 +124,15 @@ void AutofillPopupBaseView::DoShow() {
   // If there is insufficient height, DoUpdateBoundsAndRedrawPopup() hides and
   // thus deletes |this|. Hence, there is nothing else to do.
   if (!enough_height)
-    return;
+    return false;
   GetWidget()->Show();
 
   // Showing the widget can change native focus (which would result in an
   // immediate hiding of the popup). Only start observing after shown.
   if (initialize_widget)
     views::WidgetFocusManager::GetInstance()->AddFocusChangeListener(this);
+
+  return true;
 }
 
 void AutofillPopupBaseView::DoHide() {
@@ -309,7 +312,7 @@ std::unique_ptr<views::Border> AutofillPopupBaseView::CreateBorder() {
   border->SetCornerRadius(GetCornerRadius());
   border->set_md_shadow_elevation(
       ChromeLayoutProvider::Get()->GetShadowElevationMetric(
-          views::EMPHASIS_MEDIUM));
+          views::Emphasis::kMedium));
   return border;
 }
 

@@ -29,7 +29,7 @@ namespace {
 std::vector<std::string> GetCachedRules(PrefService* prefs,
                                         const std::string& pref_name) {
   std::vector<std::string> rules;
-  for (const auto& url : *prefs->GetList(pref_name))
+  for (const auto& url : prefs->GetList(pref_name)->GetList())
     rules.push_back(url.GetString());
   return rules;
 }
@@ -69,6 +69,8 @@ BrowserSwitcherPrefs::BrowserSwitcherPrefs(
     {prefs::kAlternativeBrowserParameters,
      base::BindRepeating(
          &BrowserSwitcherPrefs::AlternativeBrowserParametersChanged)},
+    {prefs::kParsingMode,
+     base::BindRepeating(&BrowserSwitcherPrefs::ParsingModeChanged)},
     {prefs::kUrlList,
      base::BindRepeating(&BrowserSwitcherPrefs::UrlListChanged)},
     {prefs::kUrlGreylist,
@@ -96,6 +98,7 @@ BrowserSwitcherPrefs::BrowserSwitcherPrefs(
     prefs::kAlternativeBrowserPath,
     prefs::kAlternativeBrowserParameters,
     prefs::kKeepLastTab,
+    prefs::kParsingMode,
     prefs::kUrlList,
     prefs::kUrlGreylist,
     prefs::kExternalSitelistUrl,
@@ -131,6 +134,7 @@ void BrowserSwitcherPrefs::RegisterProfilePrefs(
   registry->RegisterStringPref(prefs::kAlternativeBrowserPath, "");
   registry->RegisterListPref(prefs::kAlternativeBrowserParameters);
   registry->RegisterBooleanPref(prefs::kKeepLastTab, true);
+  registry->RegisterIntegerPref(prefs::kParsingMode, 0);
   registry->RegisterListPref(prefs::kUrlList);
   registry->RegisterListPref(prefs::kUrlGreylist);
   registry->RegisterStringPref(prefs::kExternalSitelistUrl, "");
@@ -165,6 +169,10 @@ bool BrowserSwitcherPrefs::KeepLastTab() const {
 
 int BrowserSwitcherPrefs::GetDelay() const {
   return prefs_->GetInteger(prefs::kDelay);
+}
+
+ParsingMode BrowserSwitcherPrefs::GetParsingMode() const {
+  return parsing_mode_;
 }
 
 const RuleSet& BrowserSwitcherPrefs::GetRules() const {
@@ -270,9 +278,21 @@ void BrowserSwitcherPrefs::AlternativeBrowserParametersChanged() {
     return;
   const base::ListValue* params =
       prefs_->GetList(prefs::kAlternativeBrowserParameters);
-  for (const auto& param : *params) {
+  for (const auto& param : params->GetList()) {
     std::string param_string = param.GetString();
     alt_browser_params_.push_back(param_string);
+  }
+}
+
+void BrowserSwitcherPrefs::ParsingModeChanged() {
+  parsing_mode_ =
+      static_cast<ParsingMode>(prefs_->GetInteger(prefs::kParsingMode));
+  if (parsing_mode_ < ParsingMode::kDefault ||
+      parsing_mode_ > ParsingMode::kMaxValue) {
+    LOG(WARNING) << "Unknown BrowserSwitcherParsingMode value "
+                 << static_cast<int>(parsing_mode_)
+                 << ". Falling back to 'Default' parsing mode.";
+    parsing_mode_ = ParsingMode::kDefault;
   }
 }
 
@@ -287,7 +307,7 @@ void BrowserSwitcherPrefs::UrlListChanged() {
       prefs_->GetList(prefs::kUrlList)->GetList().size());
 
   bool has_wildcard = false;
-  for (const auto& url : *prefs_->GetList(prefs::kUrlList)) {
+  for (const auto& url : prefs_->GetList(prefs::kUrlList)->GetList()) {
     std::string canonical = url.GetString();
     CanonicalizeRule(&canonical);
     rules_.sitelist.push_back(std::move(canonical));
@@ -310,7 +330,7 @@ void BrowserSwitcherPrefs::GreylistChanged() {
       prefs_->GetList(prefs::kUrlGreylist)->GetList().size());
 
   bool has_wildcard = false;
-  for (const auto& url : *prefs_->GetList(prefs::kUrlGreylist)) {
+  for (const auto& url : prefs_->GetList(prefs::kUrlGreylist)->GetList()) {
     std::string canonical = url.GetString();
     CanonicalizeRule(&canonical);
     rules_.greylist.push_back(std::move(canonical));
@@ -340,7 +360,7 @@ void BrowserSwitcherPrefs::ChromeParametersChanged() {
   if (!prefs_->IsManagedPreference(prefs::kChromeParameters))
     return;
   const base::ListValue* params = prefs_->GetList(prefs::kChromeParameters);
-  for (const auto& param : *params) {
+  for (const auto& param : params->GetList()) {
     std::string param_string = param.GetString();
     chrome_params_.push_back(param_string);
   }
@@ -395,6 +415,9 @@ const char kEnabled[] = "browser_switcher.enabled";
 
 // How long to wait on chrome://browser-switch (milliseconds).
 const char kDelay[] = "browser_switcher.delay";
+
+// Behavior switch for BrowserSwitcherSitelist.
+const char kParsingMode[] = "browser_switcher.parsing_mode";
 
 }  // namespace prefs
 }  // namespace browser_switcher

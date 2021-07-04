@@ -7,9 +7,9 @@ import 'chrome://settings/lazy_load.js';
 
 import {flush} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import {AccountManagerBrowserProxyImpl, pageVisibility, ProfileInfoBrowserProxyImpl, Router, SyncBrowserProxyImpl} from 'chrome://settings/settings.js';
-import {simulateSyncStatus} from 'chrome://test/settings/sync_test_util.m.js';
-import {TestProfileInfoBrowserProxy} from 'chrome://test/settings/test_profile_info_browser_proxy.m.js';
-import {TestSyncBrowserProxy} from 'chrome://test/settings/test_sync_browser_proxy.m.js';
+import {simulateSyncStatus} from 'chrome://test/settings/sync_test_util.js';
+import {TestProfileInfoBrowserProxy} from 'chrome://test/settings/test_profile_info_browser_proxy.js';
+import {TestSyncBrowserProxy} from 'chrome://test/settings/test_sync_browser_proxy.js';
 import {TestBrowserProxy} from 'chrome://test/test_browser_proxy.m.js';
 // clang-format on
 
@@ -120,10 +120,13 @@ suite('Chrome OS', function() {
 
   test('GAIA name and picture', async () => {
     chai.assert.include(
-        peoplePage.$$('#profile-icon').style.backgroundImage,
+        peoplePage.shadowRoot.querySelector('#profile-icon')
+            .style.backgroundImage,
         'data:image/png;base64,primaryAccountPicData');
     assertEquals(
-        'Primary Account', peoplePage.$$('#profile-name').textContent.trim());
+        'Primary Account',
+        peoplePage.shadowRoot.querySelector('#profile-name')
+            .textContent.trim());
   });
 
   test('profile row is actionable', () => {
@@ -133,10 +136,11 @@ suite('Chrome OS', function() {
     });
 
     // Profile row opens account manager, so the row is actionable.
-    const profileRow = peoplePage.$$('#profile-row');
+    const profileRow = peoplePage.shadowRoot.querySelector('#profile-row');
     assertTrue(!!profileRow);
     assertTrue(profileRow.hasAttribute('actionable'));
-    const subpageArrow = peoplePage.$$('#profile-subpage-arrow');
+    const subpageArrow =
+        peoplePage.shadowRoot.querySelector('#profile-subpage-arrow');
     assertTrue(!!subpageArrow);
     assertFalse(subpageArrow.hidden);
   });
@@ -178,13 +182,14 @@ suite('Chrome OS with account manager disabled', function() {
     });
 
     // Account manager isn't available, so the row isn't actionable.
-    const profileIcon = peoplePage.$$('#profile-icon');
+    const profileIcon = peoplePage.shadowRoot.querySelector('#profile-icon');
     assertTrue(!!profileIcon);
     assertFalse(profileIcon.hasAttribute('actionable'));
-    const profileRow = peoplePage.$$('#profile-row');
+    const profileRow = peoplePage.shadowRoot.querySelector('#profile-row');
     assertTrue(!!profileRow);
     assertFalse(profileRow.hasAttribute('actionable'));
-    const subpageArrow = peoplePage.$$('#profile-subpage-arrow');
+    const subpageArrow =
+        peoplePage.shadowRoot.querySelector('#profile-subpage-arrow');
     assertTrue(!!subpageArrow);
     assertTrue(subpageArrow.hidden);
 
@@ -230,11 +235,12 @@ suite('Chrome OS with UseBrowserSyncConsent', function() {
     });
 
     // Account control is visible.
-    const accountControl = peoplePage.$$('settings-sync-account-control');
+    const accountControl =
+        peoplePage.shadowRoot.querySelector('settings-sync-account-control');
     assertNotEquals('none', window.getComputedStyle(accountControl).display);
 
     // Profile row items are not available.
-    assertFalse(!!peoplePage.$$('#profile-icon'));
-    assertFalse(!!peoplePage.$$('#profile-row'));
+    assertFalse(!!peoplePage.shadowRoot.querySelector('#profile-icon'));
+    assertFalse(!!peoplePage.shadowRoot.querySelector('#profile-row'));
   });
 });

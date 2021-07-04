@@ -18,12 +18,12 @@
 #include "base/memory/weak_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_running_on_chromeos.h"
+#include "chrome/browser/ash/drive/file_system_util.h"
+#include "chrome/browser/ash/file_manager/fake_disk_mount_manager.h"
+#include "chrome/browser/ash/file_system_provider/fake_extension_provider.h"
+#include "chrome/browser/ash/file_system_provider/service.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/chromeos/drive/file_system_util.h"
-#include "chrome/browser/chromeos/file_manager/fake_disk_mount_manager.h"
 #include "chrome/browser/chromeos/file_manager/volume_manager_observer.h"
-#include "chrome/browser/chromeos/file_system_provider/fake_extension_provider.h"
-#include "chrome/browser/chromeos/file_system_provider/service.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
@@ -229,7 +229,7 @@ class VolumeManagerTest : public testing::Test {
           extension_registry_(
               std::make_unique<extensions::ExtensionRegistry>(profile_.get())),
           file_system_provider_service_(
-              std::make_unique<chromeos::file_system_provider::Service>(
+              std::make_unique<ash::file_system_provider::Service>(
                   profile_.get(),
                   extension_registry_.get())),
           drive_integration_service_(
@@ -272,7 +272,7 @@ class VolumeManagerTest : public testing::Test {
 
     std::unique_ptr<TestingProfile> profile_;
     std::unique_ptr<extensions::ExtensionRegistry> extension_registry_;
-    std::unique_ptr<chromeos::file_system_provider::Service>
+    std::unique_ptr<ash::file_system_provider::Service>
         file_system_provider_service_;
     std::unique_ptr<drive::DriveIntegrationService> drive_integration_service_;
     std::unique_ptr<VolumeManager> volume_manager_;
@@ -1079,16 +1079,14 @@ TEST_F(VolumeManagerTest, MTPPlugAndUnplug) {
   storage_monitor::StorageInfo info(
       storage_monitor::StorageInfo::MakeDeviceId(
           storage_monitor::StorageInfo::MTP_OR_PTP, "dummy-device-id"),
-      FILE_PATH_LITERAL("/dummy/device/location"), base::UTF8ToUTF16("label"),
-      base::UTF8ToUTF16("vendor"), base::UTF8ToUTF16("model"),
-      12345 /* size */);
+      FILE_PATH_LITERAL("/dummy/device/location"), u"label", u"vendor",
+      u"model", 12345 /* size */);
 
   storage_monitor::StorageInfo non_mtp_info(
       storage_monitor::StorageInfo::MakeDeviceId(
           storage_monitor::StorageInfo::FIXED_MASS_STORAGE, "dummy-device-id2"),
-      FILE_PATH_LITERAL("/dummy/device/location2"), base::UTF8ToUTF16("label2"),
-      base::UTF8ToUTF16("vendor2"), base::UTF8ToUTF16("model2"),
-      12345 /* size */);
+      FILE_PATH_LITERAL("/dummy/device/location2"), u"label2", u"vendor2",
+      u"model2", 12345 /* size */);
 
   // Attach
   volume_manager()->OnRemovableStorageAttached(info);

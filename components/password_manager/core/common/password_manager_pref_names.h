@@ -48,12 +48,12 @@ extern const char kPasswordRecovery[];
 // prompt was shown or not.
 extern const char kWasAutoSignInFirstRunExperienceShown[];
 
-// Boolean that indicated whether one time upload of phished credentials was
-// performed for syncing users.
-extern const char kWasPhishedCredentialsUploadedToSync[];
-
 // Boolean that indicated if user interacted with the Chrome Sign in promo.
 extern const char kWasSignInPasswordPromoClicked[];
+
+// Boolean that indicated whether one time removal of old google.com logins was
+// performed.
+extern const char kWereOldGoogleLoginsRemoved[];
 
 // Number of times the Chrome Sign in promo popped up.
 extern const char kNumberSignInPasswordPromoShown[];
@@ -86,6 +86,10 @@ extern const char kLastTimeObsoleteHttpCredentialsRemoved[];
 
 // The last time the password check has run to completion.
 extern const char kLastTimePasswordCheckCompleted[];
+
+// The last time the password check has run to completion synced across devices.
+// It's used on passwords.google.com and not in Chrome.
+extern const char kSyncedLastTimePasswordCheckCompleted[];
 
 // List that contains captured password hashes.
 extern const char kPasswordHashDataList[];

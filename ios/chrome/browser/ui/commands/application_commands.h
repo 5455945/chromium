@@ -9,6 +9,7 @@
 
 #include "ios/public/provider/chrome/browser/user_feedback/user_feedback_sender.h"
 
+class GURL;
 @class OpenNewTabCommand;
 @class ShowSigninCommand;
 @class StartVoiceSearchCommand;
@@ -34,6 +35,12 @@ enum class KeyRetrievalTriggerForUMA;
     (UIViewController*)baseViewController;
 
 // TODO(crbug.com/779791) : Do not pass baseViewController through dispatcher.
+// Shows the Sync settings UI, presenting from |baseViewController|.
+// If |baseViewController| is nil BVC will be used as presenterViewController.
+- (void)showSyncSettingsFromViewController:
+    (UIViewController*)baseViewController;
+
+// TODO(crbug.com/779791) : Do not pass baseViewController through dispatcher.
 // Shows the sync encryption passphrase UI, presenting from
 // |baseViewController|.
 - (void)showSyncPassphraseSettingsFromViewController:
@@ -54,6 +61,11 @@ enum class KeyRetrievalTriggerForUMA;
 
 // Shows the list of credit cards in the settings.
 - (void)showCreditCardSettingsFromViewController:
+    (UIViewController*)baseViewController;
+
+// Shows the settings page informing the user how to set Chrome as the default
+// browser.
+- (void)showDefaultBrowserSettingsFromViewController:
     (UIViewController*)baseViewController;
 
 @end
@@ -84,14 +96,26 @@ enum class KeyRetrievalTriggerForUMA;
 
 // Presents the Trusted Vault reauth dialog.
 // |baseViewController| presents the sign-in.
-// |retrievalTrigger| UI elements where the trusted vault reauth has been
-// triggered.
+// |trigger| UI elements where the trusted vault reauth has been triggered.
 - (void)
-    showTrustedVaultReauthenticationFromViewController:
+    showTrustedVaultReauthForFetchKeysFromViewController:
         (UIViewController*)baseViewController
-                                      retrievalTrigger:
-                                          (syncer::KeyRetrievalTriggerForUMA)
-                                              retrievalTrigger;
+                                                 trigger:
+                                                     (syncer::
+                                                          KeyRetrievalTriggerForUMA)
+                                                         trigger;
+
+// Presents the Trusted Vault degraded recoverability (to enroll additional
+// recovery factors).
+// |baseViewController| presents the sign-in.
+// |trigger| UI elements where the trusted vault reauth has been triggered.
+- (void)
+    showTrustedVaultReauthForDegradedRecoverabilityFromViewController:
+        (UIViewController*)baseViewController
+                                                              trigger:
+                                                                  (syncer::
+                                                                       KeyRetrievalTriggerForUMA)
+                                                                      trigger;
 
 // Starts a voice search on the current BVC.
 - (void)startVoiceSearch;
@@ -144,18 +168,13 @@ enum class KeyRetrievalTriggerForUMA;
 - (void)showSignin:(ShowSigninCommand*)command
     baseViewController:(UIViewController*)baseViewController;
 
-// Signs the user out and dismisses UI for any in-progress sign-in.
-- (void)forceSignOut;
-
-// TODO(crbug.com/779791) : Do not pass baseViewController through dispatcher.
-// Shows the Add Account UI, presenting from |baseViewController|.
-- (void)showAddAccountFromViewController:(UIViewController*)baseViewController;
-
 // TODO(crbug.com/779791) : Do not pass baseViewController through dispatcher.
 // Shows the consistency promo UI that allows users to sign in to Chrome using
 // the default accounts on the device.
+// Redirects to |url| when the sign-in flow is complete.
 - (void)showConsistencyPromoFromViewController:
-    (UIViewController*)baseViewController;
+            (UIViewController*)baseViewController
+                                           URL:(const GURL&)url;
 
 // Shows a notification with the signed-in user account.
 - (void)showSigninAccountNotificationFromViewController:

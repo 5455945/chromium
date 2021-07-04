@@ -4,7 +4,9 @@
 
 module blink.mojom;
 
+import "components/payments/mojom/payment_request_data.mojom";
 import "mojo/public/mojom/base/time.mojom";
+import "third_party/blink/public/mojom/payments/payment_credential.mojom";
 import "url/mojom/url.mojom";
 
 // This file describes the communication between the WebAuthentication renderer
@@ -102,6 +104,12 @@ struct MakeCredentialAuthenticatorResponse {
   bool echo_prf;
   bool prf;
 
+  // True if getClientExtensionResults() called on the returned
+  // PublicKeyCredential instance should contain a `credBlob` extension output.
+  // If so, |cred_blob| contains the value of the output.
+  bool echo_cred_blob;
+  bool cred_blob;
+
   // The DER-encoded, ASN.1 public key of the newly created credential. May be
   // missing if the browser does not understand the public-key type.
   array<uint8>? public_key_der;
@@ -184,6 +192,13 @@ struct GetAssertionAuthenticatorResponse {
   // with a `written` parameter. The value is indicated by |large_blob_written|.
   bool echo_large_blob_written;
   bool large_blob_written;
+
+  // True if getClientExtensionResults() called on the returned
+  // PublicKeyCredential instance should contain a `getCredBlob` extension
+  // output.
+  bool echo_get_cred_blob;
+  // The value of the `getCredBlob` extension output, or empty if none.
+  array<uint8>? get_cred_blob;
 };
 
 // Information about the relying party. These fields take arbitrary input.
@@ -275,6 +290,13 @@ struct PRFValues {
   array<uint8, 32>? second;
 };
 
+// Payment parameters passed into calls to GetAssertion for Secure Payment
+// Confirmation.
+struct PaymentOptions {
+  payments.mojom.PaymentCurrencyAmount total;
+  payments.mojom.PaymentCredentialInstrument instrument;
+};
+
 // Parameters passed into calls to GetAssertion.
 struct PublicKeyCredentialRequestOptions {
   // If true, indicates that this request should prioritize showing a UI only if
@@ -335,6 +357,13 @@ struct PublicKeyCredentialRequestOptions {
   // If present, large blob to be written on the credential.
   // https://w3c.github.io/webauthn/#dom-authenticationextensionslargeblobinputs-write
   array<uint8>? large_blob_write;
+
+  // If true, attempt to read a credblob.
+  // https://fidoalliance.org/specs/fido-v2.1-rd-20201208/fido-client-to-authenticator-protocol-v2.1-rd-20201208.html#sctn-credBlob-extension
+  bool get_cred_blob;
+
+  // If present, put the payment information into clientDataJSON.
+  PaymentOptions? payment;
 };
 
 // See https://w3c.github.io/webauthn/#enumdef-attestationconveyancepreference
@@ -464,6 +493,15 @@ struct PublicKeyCredentialCreationOptions {
 
   // Whether this request is for making a PaymentCredential.
   bool is_payment_credential_creation;
+
+  // If present, attempt the store the given value as a credblob.
+  // https://fidoalliance.org/specs/fido-v2.1-rd-20201208/fido-client-to-authenticator-protocol-v2.1-rd-20201208.html#sctn-credBlob-extension
+  array<uint8>? cred_blob;
+
+  // Whether a U2F-API-compatible should be made to support a U2F API
+  // migration.
+  // https://groups.google.com/a/chromium.org/g/blink-dev/c/xHC3AtU_65A
+  bool google_legacy_app_id_support = false;
 };
 
 enum PublicKeyCredentialType {

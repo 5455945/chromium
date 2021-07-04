@@ -16,6 +16,7 @@
 #include "base/base64.h"
 #include "base/base_paths.h"
 #include "base/bind.h"
+#include "base/callback_helpers.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
@@ -86,11 +87,11 @@ base::OnceClosure& GetRegistrationCBForTesting() {
   return *registration_cb_for_testing;
 }
 
-void ReportUploadsWithUma(const base::string16& upload_results) {
-  base::String16Tokenizer tokenizer(upload_results, STRING16_LITERAL(";"));
+void ReportUploadsWithUma(const std::u16string& upload_results) {
+  base::String16Tokenizer tokenizer(upload_results, u";");
   bool last_result = false;
   while (tokenizer.GetNext()) {
-    last_result = (tokenizer.token_piece() != STRING16_LITERAL("0"));
+    last_result = (tokenizer.token_piece() != u"0");
   }
 
   UMA_HISTOGRAM_BOOLEAN("SoftwareReporter.LastUploadResult", last_result);
@@ -133,12 +134,11 @@ bool GetOptionalBehaviour(
   // boolean.
   const base::Value* value = nullptr;
   if (invocation_params->Get(behaviour_name, &value)) {
-    bool enable_behaviour = false;
-    if (!value->GetAsBoolean(&enable_behaviour)) {
+    if (!value->is_bool()) {
       ReportConfigurationError(kBadParams);
       return false;
     }
-    if (enable_behaviour)
+    if (value->GetBool())
       *supported_behaviours |= behaviour_flag;
   }
   return true;
@@ -178,7 +178,7 @@ bool ExtractInvocationSequenceFromManifest(
     return true;
   }
 
-  for (const auto& iter : *parameter_list) {
+  for (const auto& iter : parameter_list->GetList()) {
     const base::DictionaryValue* invocation_params = nullptr;
     if (!iter.GetAsDictionary(&invocation_params)) {
       ReportConfigurationError(kBadParams);
@@ -209,14 +209,14 @@ bool ExtractInvocationSequenceFromManifest(
     }
 
     std::vector<std::wstring> argv = {exe_path.value()};
-    for (const auto& value : *arguments) {
-      base::string16 argument;
-      if (!value.GetAsString(&argument)) {
+    for (const auto& value : arguments->GetList()) {
+      if (!value.is_string()) {
         ReportConfigurationError(kBadParams);
         return false;
       }
+      std::string argument = value.GetString();
       if (!argument.empty())
-        argv.push_back(base::UTF16ToWide(argument));
+        argv.push_back(base::UTF8ToWide(argument));
     }
 
     base::CommandLine command_line(argv);

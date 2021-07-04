@@ -283,7 +283,7 @@ class ConnectionTest : public testing::Test,
   void SetUp() override {
     // Create fake sessions.
     host_session_ = new FakeSession();
-    owned_client_session_.reset(new FakeSession());
+    owned_client_session_ = std::make_unique<FakeSession>();
     client_session_ = owned_client_session_.get();
 
     // Create Connection objects.
@@ -291,20 +291,20 @@ class ConnectionTest : public testing::Test,
       // Set the polling interval to zero to prevent hangs from PostDelayedTask.
       WebrtcTransport::SetDataChannelPollingIntervalForTests(base::TimeDelta());
 
-      host_connection_.reset(new WebrtcConnectionToClient(
+      host_connection_ = std::make_unique<WebrtcConnectionToClient>(
           base::WrapUnique(host_session_),
           TransportContext::ForTests(protocol::TransportRole::SERVER),
           task_environment_.GetMainThreadTaskRunner(),
-          task_environment_.GetMainThreadTaskRunner()));
-      client_connection_.reset(new WebrtcConnectionToHost());
+          task_environment_.GetMainThreadTaskRunner());
+      client_connection_ = std::make_unique<WebrtcConnectionToHost>();
 
     } else {
-      host_connection_.reset(new IceConnectionToClient(
+      host_connection_ = std::make_unique<IceConnectionToClient>(
           base::WrapUnique(host_session_),
           TransportContext::ForTests(protocol::TransportRole::SERVER),
           task_environment_.GetMainThreadTaskRunner(),
-          task_environment_.GetMainThreadTaskRunner()));
-      client_connection_.reset(new IceConnectionToHost());
+          task_environment_.GetMainThreadTaskRunner());
+      client_connection_ = std::make_unique<IceConnectionToHost>();
     }
 
     // Setup host side.
@@ -353,7 +353,7 @@ class ConnectionTest : public testing::Test,
         &client_event_handler_);
     client_session_->SimulateConnection(host_session_);
 
-    run_loop_.reset(new base::RunLoop());
+    run_loop_ = std::make_unique<base::RunLoop>();
     run_loop_->Run();
 
     EXPECT_TRUE(client_connected_);
@@ -483,7 +483,13 @@ TEST_P(ConnectionTest, RejectConnection) {
   client_session_->event_handler()->OnSessionStateChange(Session::CLOSED);
 }
 
-TEST_P(ConnectionTest, Disconnect) {
+// crbug.com/1224862: Tests are flaky on Mac.
+#if defined(OS_MAC)
+#define MAYBE_Disconnect DISABLED_Disconnect
+#else
+#define MAYBE_Disconnect Disconnect
+#endif
+TEST_P(ConnectionTest, MAYBE_Disconnect) {
   Connect();
 
   EXPECT_CALL(client_event_handler_,
@@ -494,7 +500,13 @@ TEST_P(ConnectionTest, Disconnect) {
   base::RunLoop().RunUntilIdle();
 }
 
-TEST_P(ConnectionTest, Control) {
+// crbug.com/1224862: Tests are flaky on Mac.
+#if defined(OS_MAC)
+#define MAYBE_Control DISABLED_Control
+#else
+#define MAYBE_Control Control
+#endif
+TEST_P(ConnectionTest, MAYBE_Control) {
   Connect();
 
   Capabilities capabilities_msg;
@@ -512,7 +524,13 @@ TEST_P(ConnectionTest, Control) {
   run_loop.Run();
 }
 
-TEST_P(ConnectionTest, Events) {
+// crbug.com/1224862: Tests are flaky on Mac.
+#if defined(OS_MAC)
+#define MAYBE_Events DISABLED_Events
+#else
+#define MAYBE_Events Events
+#endif
+TEST_P(ConnectionTest, MAYBE_Events) {
   Connect();
 
   KeyEvent event;
@@ -530,7 +548,13 @@ TEST_P(ConnectionTest, Events) {
   run_loop.Run();
 }
 
-TEST_P(ConnectionTest, Video) {
+// crbug.com/1224862: Tests are flaky on Mac.
+#if defined(OS_MAC)
+#define MAYBE_Video DISABLED_Video
+#else
+#define MAYBE_Video Video
+#endif
+TEST_P(ConnectionTest, MAYBE_Video) {
   Connect();
 
   std::unique_ptr<VideoStream> video_stream =
@@ -543,9 +567,15 @@ TEST_P(ConnectionTest, Video) {
   }
 }
 
+// crbug.com/1224862: Tests are flaky on Mac.
+#if defined(OS_MAC)
+#define MAYBE_VideoWithSlowSignaling DISABLED_VideoWithSlowSignaling
+#else
+#define MAYBE_VideoWithSlowSignaling VideoWithSlowSignaling
+#endif
 // Verifies that the VideoStream doesn't loose any video frames while the
 // connection is being established.
-TEST_P(ConnectionTest, VideoWithSlowSignaling) {
+TEST_P(ConnectionTest, MAYBE_VideoWithSlowSignaling) {
   // Add signaling delay to slow down connection handshake.
   host_session_->set_signaling_delay(base::TimeDelta::FromMilliseconds(100));
   client_session_->set_signaling_delay(base::TimeDelta::FromMilliseconds(100));
@@ -559,7 +589,13 @@ TEST_P(ConnectionTest, VideoWithSlowSignaling) {
   WaitNextVideoFrame();
 }
 
-TEST_P(ConnectionTest, DestroyOnIncomingMessage) {
+// crbug.com/1224862: Tests are flaky on Mac.
+#if defined(OS_MAC)
+#define MAYBE_DestroyOnIncomingMessage DISABLED_DestroyOnIncomingMessage
+#else
+#define MAYBE_DestroyOnIncomingMessage DestroyOnIncomingMessage
+#endif
+TEST_P(ConnectionTest, MAYBE_DestroyOnIncomingMessage) {
   Connect();
 
   KeyEvent event;

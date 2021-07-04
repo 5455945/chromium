@@ -4,20 +4,26 @@
 
 #include <memory>
 
+#include "ash/constants/ash_features.h"
 #include "base/bind.h"
+#include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/run_loop.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/values.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/shill/fake_shill_device_client.h"
 #include "chromeos/dbus/shill/shill_clients.h"
 #include "chromeos/dbus/shill/shill_manager_client.h"
+#include "chromeos/network/cellular_metrics_logger.h"
 #include "chromeos/network/network_device_handler_impl.h"
 #include "chromeos/network/network_handler_callbacks.h"
 #include "chromeos/network/network_state_handler.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 #include "third_party/cros_system_api/dbus/shill/dbus-constants.h"
 
@@ -93,7 +99,7 @@ class NetworkDeviceHandlerTest : public testing::Test {
   void SuccessCallback() { result_ = kResultSuccess; }
 
   void GetPropertiesCallback(const std::string& device_path,
-                             base::Optional<base::Value> properties) {
+                             absl::optional<base::Value> properties) {
     if (!properties) {
       result_ = kResultFailure;
       return;
@@ -122,10 +128,9 @@ class NetworkDeviceHandlerTest : public testing::Test {
                             const std::string& property_name,
                             const std::string& expected_value) {
     GetDeviceProperties(device_path, kResultSuccess);
-    std::string value;
-    ASSERT_TRUE(
-        properties_->GetStringWithoutPathExpansion(property_name, &value));
-    ASSERT_EQ(value, expected_value);
+    std::string* value = properties_->FindStringKey(property_name);
+    ASSERT_NE(value, nullptr);
+    ASSERT_EQ(*value, expected_value);
   }
 
  protected:
@@ -159,10 +164,10 @@ TEST_F(NetworkDeviceHandlerTest, SetDeviceProperty) {
   // GetDeviceProperties should return the value set by SetDeviceProperty.
   GetDeviceProperties(kDefaultCellularDevicePath, kResultSuccess);
 
-  int interval = 0;
-  EXPECT_TRUE(properties_->GetIntegerWithoutPathExpansion(
-      shill::kScanIntervalProperty, &interval));
-  EXPECT_EQ(1, interval);
+  absl::optional<int> interval =
+      properties_->FindIntKey(shill::kScanIntervalProperty);
+  EXPECT_TRUE(interval.has_value());
+  EXPECT_EQ(1, interval.value());
 
   // Repeat the same with value false.
   network_device_handler_->SetDeviceProperty(
@@ -173,9 +178,9 @@ TEST_F(NetworkDeviceHandlerTest, SetDeviceProperty) {
 
   GetDeviceProperties(kDefaultCellularDevicePath, kResultSuccess);
 
-  EXPECT_TRUE(properties_->GetIntegerWithoutPathExpansion(
-      shill::kScanIntervalProperty, &interval));
-  EXPECT_EQ(2, interval);
+  interval = properties_->FindIntKey(shill::kScanIntervalProperty);
+  EXPECT_TRUE(interval.has_value());
+  EXPECT_EQ(2, interval.value());
 
   // Set property on an invalid path.
   network_device_handler_->SetDeviceProperty(
@@ -207,20 +212,59 @@ TEST_F(NetworkDeviceHandlerTest, CellularAllowRoaming) {
   // Roaming should be enabled now.
   GetDeviceProperties(kDefaultCellularDevicePath, kResultSuccess);
 
-  bool allow_roaming;
-  EXPECT_TRUE(properties_->GetBooleanWithoutPathExpansion(
-      shill::kCellularAllowRoamingProperty, &allow_roaming));
-  EXPECT_TRUE(allow_roaming);
+  absl::optional<bool> allow_roaming =
+      properties_->FindBoolKey(shill::kCellularAllowRoamingProperty);
+  EXPECT_TRUE(allow_roaming.has_value());
+  EXPECT_TRUE(allow_roaming.value());
 
   network_device_handler_->SetCellularAllowRoaming(false);
   base::RunLoop().RunUntilIdle();
 
-  // Roaming should be disable again.
+  // Roaming should be disabled again.
   GetDeviceProperties(kDefaultCellularDevicePath, kResultSuccess);
 
-  EXPECT_TRUE(properties_->GetBooleanWithoutPathExpansion(
-      shill::kCellularAllowRoamingProperty, &allow_roaming));
-  EXPECT_FALSE(allow_roaming);
+  allow_roaming =
+      properties_->FindBoolKey(shill::kCellularAllowRoamingProperty);
+  EXPECT_TRUE(allow_roaming.has_value());
+  EXPECT_FALSE(allow_roaming.value());
+}
+
+// This test is nearly identical to
+// NetworkDeviceHandlerTest.CellularAllowRoaming except that it enables a
+// feature flag that allows it to test using the property that will eventually
+// replace shill::kCellularAllowRoamingProperty for devices.
+TEST_F(NetworkDeviceHandlerTest, CellularPolicyAllowRoaming) {
+  base::test::ScopedFeatureList scoped_feature_list(
+      ash::features::kCellularAllowPerNetworkRoaming);
+
+  // Start with disabled data roaming.
+  ShillDeviceClient::TestInterface* device_test =
+      fake_device_client_->GetTestInterface();
+  device_test->SetDeviceProperty(kDefaultCellularDevicePath,
+                                 shill::kCellularPolicyAllowRoamingProperty,
+                                 base::Value(false), /*notify_changed=*/true);
+
+  network_device_handler_->SetCellularAllowRoaming(true);
+  base::RunLoop().RunUntilIdle();
+
+  // Roaming should be enabled now.
+  GetDeviceProperties(kDefaultCellularDevicePath, kResultSuccess);
+
+  absl::optional<bool> allow_roaming =
+      properties_->FindBoolKey(shill::kCellularPolicyAllowRoamingProperty);
+  EXPECT_TRUE(allow_roaming.has_value());
+  EXPECT_TRUE(allow_roaming.value());
+
+  network_device_handler_->SetCellularAllowRoaming(false);
+  base::RunLoop().RunUntilIdle();
+
+  // Roaming should be disabled again.
+  GetDeviceProperties(kDefaultCellularDevicePath, kResultSuccess);
+
+  allow_roaming =
+      properties_->FindBoolKey(shill::kCellularPolicyAllowRoamingProperty);
+  EXPECT_TRUE(allow_roaming.has_value());
+  EXPECT_FALSE(allow_roaming.value());
 }
 
 TEST_F(NetworkDeviceHandlerTest,
@@ -429,12 +473,19 @@ TEST_F(NetworkDeviceHandlerTest, UsbEthernetMacAddressSource) {
 }
 
 TEST_F(NetworkDeviceHandlerTest, RequirePin) {
+  base::HistogramTester histogram_tester;
+
   // Test that the success callback gets called.
   network_device_handler_->RequirePin(kDefaultCellularDevicePath, true,
                                       kDefaultPin, GetSuccessCallback(),
                                       GetErrorCallback());
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(kResultSuccess, result_);
+  histogram_tester.ExpectTotalCount(
+      CellularMetricsLogger::kSimPinLockSuccessHistogram, 1);
+  histogram_tester.ExpectBucketCount(
+      CellularMetricsLogger::kSimPinLockSuccessHistogram,
+      CellularMetricsLogger::SimPinOperationResult::kSuccess, 1);
 
   // Test that the shill error propagates to the error callback.
   network_device_handler_->RequirePin(kUnknownCellularDevicePath, true,
@@ -442,23 +493,42 @@ TEST_F(NetworkDeviceHandlerTest, RequirePin) {
                                       GetErrorCallback());
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(NetworkDeviceHandler::kErrorDeviceMissing, result_);
+
+  histogram_tester.ExpectTotalCount(
+      CellularMetricsLogger::kSimPinLockSuccessHistogram, 2);
+  histogram_tester.ExpectBucketCount(
+      CellularMetricsLogger::kSimPinLockSuccessHistogram,
+      CellularMetricsLogger::SimPinOperationResult::kErrorUnknown, 1);
 }
 
 TEST_F(NetworkDeviceHandlerTest, EnterPin) {
+  base::HistogramTester histogram_tester;
+
   // Test that the success callback gets called.
   network_device_handler_->EnterPin(kDefaultCellularDevicePath, kDefaultPin,
                                     GetSuccessCallback(), GetErrorCallback());
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(kResultSuccess, result_);
+  histogram_tester.ExpectTotalCount(
+      CellularMetricsLogger::kSimPinUnlockSuccessHistogram, 1);
+  histogram_tester.ExpectBucketCount(
+      CellularMetricsLogger::kSimPinUnlockSuccessHistogram,
+      CellularMetricsLogger::SimPinOperationResult::kSuccess, 1);
 
   // Test that the shill error propagates to the error callback.
   network_device_handler_->EnterPin(kUnknownCellularDevicePath, kDefaultPin,
                                     GetSuccessCallback(), GetErrorCallback());
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(NetworkDeviceHandler::kErrorDeviceMissing, result_);
+  histogram_tester.ExpectTotalCount(
+      CellularMetricsLogger::kSimPinUnlockSuccessHistogram, 2);
+  histogram_tester.ExpectBucketCount(
+      CellularMetricsLogger::kSimPinUnlockSuccessHistogram,
+      CellularMetricsLogger::SimPinOperationResult::kErrorUnknown, 1);
 }
 
 TEST_F(NetworkDeviceHandlerTest, UnblockPin) {
+  base::HistogramTester histogram_tester;
   const char kPuk[] = "12345678";
   const char kPin[] = "1234";
 
@@ -467,15 +537,26 @@ TEST_F(NetworkDeviceHandlerTest, UnblockPin) {
                                       GetSuccessCallback(), GetErrorCallback());
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(kResultSuccess, result_);
+  histogram_tester.ExpectTotalCount(
+      CellularMetricsLogger::kSimPinUnblockSuccessHistogram, 1);
+  histogram_tester.ExpectBucketCount(
+      CellularMetricsLogger::kSimPinUnblockSuccessHistogram,
+      CellularMetricsLogger::SimPinOperationResult::kSuccess, 1);
 
   // Test that the shill error propagates to the error callback.
   network_device_handler_->UnblockPin(kUnknownCellularDevicePath, kPin, kPuk,
                                       GetSuccessCallback(), GetErrorCallback());
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(NetworkDeviceHandler::kErrorDeviceMissing, result_);
+  histogram_tester.ExpectTotalCount(
+      CellularMetricsLogger::kSimPinUnblockSuccessHistogram, 2);
+  histogram_tester.ExpectBucketCount(
+      CellularMetricsLogger::kSimPinUnblockSuccessHistogram,
+      CellularMetricsLogger::SimPinOperationResult::kErrorUnknown, 1);
 }
 
 TEST_F(NetworkDeviceHandlerTest, ChangePin) {
+  base::HistogramTester histogram_tester;
   const char kNewPin[] = "1234";
   const char kIncorrectPin[] = "9999";
 
@@ -488,6 +569,11 @@ TEST_F(NetworkDeviceHandlerTest, ChangePin) {
       kNewPin, GetSuccessCallback(), GetErrorCallback());
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(kResultSuccess, result_);
+  histogram_tester.ExpectTotalCount(
+      CellularMetricsLogger::kSimPinChangeSuccessHistogram, 1);
+  histogram_tester.ExpectBucketCount(
+      CellularMetricsLogger::kSimPinChangeSuccessHistogram,
+      CellularMetricsLogger::SimPinOperationResult::kSuccess, 1);
 
   // Test that the shill error propagates to the error callback.
   network_device_handler_->ChangePin(kDefaultCellularDevicePath, kIncorrectPin,
@@ -495,32 +581,11 @@ TEST_F(NetworkDeviceHandlerTest, ChangePin) {
                                      GetErrorCallback());
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(NetworkDeviceHandler::kErrorIncorrectPin, result_);
-}
-
-TEST_F(NetworkDeviceHandlerTest, AddWifiWakeOnPacketOfTypes) {
-  std::vector<std::string> valid_packet_types = {shill::kWakeOnTCP,
-                                                 shill::kWakeOnUDP};
-
-  network_device_handler_->AddWifiWakeOnPacketOfTypes(
-      valid_packet_types, GetSuccessCallback(), GetErrorCallback());
-  base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(kResultSuccess, result_);
-}
-
-TEST_F(NetworkDeviceHandlerTest, AddAndRemoveWifiWakeOnPacketOfTypes) {
-  std::vector<std::string> valid_packet_types = {shill::kWakeOnTCP,
-                                                 shill::kWakeOnUDP};
-  std::vector<std::string> remove_packet_types = {shill::kWakeOnTCP};
-
-  network_device_handler_->AddWifiWakeOnPacketOfTypes(
-      valid_packet_types, GetSuccessCallback(), GetErrorCallback());
-  base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(kResultSuccess, result_);
-
-  network_device_handler_->RemoveWifiWakeOnPacketOfTypes(
-      remove_packet_types, GetSuccessCallback(), GetErrorCallback());
-  base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(kResultSuccess, result_);
+  histogram_tester.ExpectTotalCount(
+      CellularMetricsLogger::kSimPinChangeSuccessHistogram, 2);
+  histogram_tester.ExpectBucketCount(
+      CellularMetricsLogger::kSimPinChangeSuccessHistogram,
+      CellularMetricsLogger::SimPinOperationResult::kErrorUnknown, 1);
 }
 
 }  // namespace chromeos

@@ -11,7 +11,7 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/chromeos/login/users/fake_chrome_user_manager.h"
+#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "components/user_manager/scoped_user_manager.h"
 #endif
 #include "build/chromeos_buildflags.h"
@@ -48,8 +48,7 @@ class OnStartupHandlerTest : public testing::Test {
     ASSERT_TRUE(profile_manager_.SetUp());
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-    chromeos::FakeChromeUserManager* fake_user_manager =
-        new chromeos::FakeChromeUserManager;
+    auto* fake_user_manager = new ash::FakeChromeUserManager;
     user_manager_enabler_ = std::make_unique<user_manager::ScopedUserManager>(
         base::WrapUnique(fake_user_manager));
     constexpr char kFakeEmail[] = "fake_id@gmail.com";
@@ -92,9 +91,8 @@ TEST_F(OnStartupHandlerTest, HandleGetNtpExtension) {
   ASSERT_TRUE(data.arg1()->GetAsString(&callback_id));
   EXPECT_EQ(kCallbackId, callback_id);
 
-  bool success = false;
-  ASSERT_TRUE(data.arg2()->GetAsBoolean(&success));
-  EXPECT_TRUE(success);
+  ASSERT_TRUE(data.arg2()->is_bool());
+  EXPECT_TRUE(data.arg2()->GetBool());
 }
 
 TEST_F(OnStartupHandlerTest, HandleValidateStartupPage_Valid) {
@@ -112,13 +110,11 @@ TEST_F(OnStartupHandlerTest, HandleValidateStartupPage_Valid) {
   ASSERT_TRUE(data.arg1()->GetAsString(&callback_id));
   EXPECT_EQ(kCallbackId, callback_id);
 
-  bool success = false;
-  ASSERT_TRUE(data.arg2()->GetAsBoolean(&success));
-  EXPECT_TRUE(success);
+  ASSERT_TRUE(data.arg2()->is_bool());
+  EXPECT_TRUE(data.arg2()->GetBool());
 
-  bool is_valid = false;
-  ASSERT_TRUE(data.arg2()->GetAsBoolean(&is_valid));
-  EXPECT_TRUE(is_valid);
+  ASSERT_TRUE(data.arg3()->is_bool());
+  EXPECT_TRUE(data.arg3()->GetBool());
 }
 
 TEST_F(OnStartupHandlerTest, HandleValidateStartupPage_Invalid) {
@@ -136,13 +132,11 @@ TEST_F(OnStartupHandlerTest, HandleValidateStartupPage_Invalid) {
   ASSERT_TRUE(data.arg1()->GetAsString(&callback_id));
   EXPECT_EQ(kCallbackId, callback_id);
 
-  bool success = false;
-  ASSERT_TRUE(data.arg2()->GetAsBoolean(&success));
-  EXPECT_TRUE(success);
+  ASSERT_TRUE(data.arg2()->is_bool());
+  EXPECT_TRUE(data.arg2()->GetBool());
 
-  bool is_valid = false;
-  ASSERT_TRUE(data.arg3()->GetAsBoolean(&is_valid));
-  EXPECT_FALSE(is_valid);
+  ASSERT_TRUE(data.arg3()->is_bool());
+  EXPECT_FALSE(data.arg3()->GetBool());
 }
 
 }  // namespace settings

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "base/bind.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
@@ -23,6 +24,7 @@
 #include "net/base/test_completion_callback.h"
 #include "storage/browser/blob/blob_storage_context.h"
 #include "storage/browser/file_system/file_stream_reader.h"
+#include "storage/browser/quota/quota_manager_proxy.h"
 #include "storage/browser/test/async_file_test_helper.h"
 #include "storage/browser/test/test_file_system_context.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -63,7 +65,7 @@ class FileSystemAccessFileHandleImplTest : public testing::Test {
     handle_ = std::make_unique<FileSystemAccessFileHandleImpl>(
         manager_.get(),
         FileSystemAccessManagerImpl::BindingContext(
-            test_src_origin_, test_src_url_, /*process_id=*/1),
+            test_src_origin_, test_src_url_, /*worker_process_id=*/1),
         test_file_url_,
         FileSystemAccessManagerImpl::SharedHandleState(
             allow_grant_, allow_grant_, /*file_system=*/{}));
@@ -91,6 +93,22 @@ class FileSystemAccessFileHandleImplTest : public testing::Test {
     }
   }
 
+  std::unique_ptr<FileSystemAccessFileHandleImpl>
+  GetHandleWithPermissions(const base::FilePath& path, bool read, bool write) {
+    auto url_and_fs = manager_->CreateFileSystemURLFromPath(
+        test_src_origin_, FileSystemAccessEntryFactory::PathType::kLocal, path);
+    auto handle = std::make_unique<FileSystemAccessFileHandleImpl>(
+        manager_.get(),
+        FileSystemAccessManagerImpl::BindingContext(
+            test_src_origin_, test_src_url_, /*worker_process_id=*/1),
+        url_and_fs.url,
+        FileSystemAccessManagerImpl::SharedHandleState(
+            /*read_grant=*/read ? allow_grant_ : deny_grant_,
+            /*write_grant=*/write ? allow_grant_ : deny_grant_,
+            url_and_fs.file_system));
+    return handle;
+  }
+
  protected:
   const GURL test_src_url_ = GURL("http://example.com/foo");
   const url::Origin test_src_origin_ = url::Origin::Create(test_src_url_);
@@ -107,6 +125,10 @@ class FileSystemAccessFileHandleImplTest : public testing::Test {
   scoped_refptr<FixedFileSystemAccessPermissionGrant> allow_grant_ =
       base::MakeRefCounted<FixedFileSystemAccessPermissionGrant>(
           FixedFileSystemAccessPermissionGrant::PermissionStatus::GRANTED,
+          base::FilePath());
+  scoped_refptr<FixedFileSystemAccessPermissionGrant> deny_grant_ =
+      base::MakeRefCounted<FixedFileSystemAccessPermissionGrant>(
+          FixedFileSystemAccessPermissionGrant::PermissionStatus::DENIED,
           base::FilePath());
   std::unique_ptr<FileSystemAccessFileHandleImpl> handle_;
 };
@@ -162,6 +184,40 @@ TEST_F(FileSystemAccessFileHandleImplTest, CreateFileWriterOverLimitNotOK) {
                       result->status);
             loop.Quit();
           }));
+  loop.Run();
+}
+
+TEST_F(FileSystemAccessFileHandleImplTest, Remove_NoWriteAccess) {
+  base::FilePath file;
+  ASSERT_TRUE(base::CreateTemporaryFileInDir(dir_.GetPath(), &file));
+
+  auto handle = GetHandleWithPermissions(file, /*read=*/true, /*write=*/false);
+
+  base::RunLoop loop;
+  handle->Remove(
+      base::BindLambdaForTesting([&file](blink::mojom::FileSystemAccessErrorPtr
+                                             result) {
+        EXPECT_EQ(result->status,
+                  blink::mojom::FileSystemAccessStatus::kPermissionDenied);
+        EXPECT_TRUE(base::PathExists(file));
+      }).Then(loop.QuitClosure()));
+  loop.Run();
+}
+
+TEST_F(FileSystemAccessFileHandleImplTest, Remove_HasWriteAccess) {
+  base::FilePath file;
+  ASSERT_TRUE(base::CreateTemporaryFileInDir(dir_.GetPath(), &file));
+
+  auto handle = GetHandleWithPermissions(file, /*read=*/true, /*write=*/true);
+
+  base::RunLoop loop;
+  handle->Remove(base::BindLambdaForTesting(
+                     [&file](blink::mojom::FileSystemAccessErrorPtr result) {
+                       EXPECT_EQ(result->status,
+                                 blink::mojom::FileSystemAccessStatus::kOk);
+                       EXPECT_FALSE(base::PathExists(file));
+                     })
+                     .Then(loop.QuitClosure()));
   loop.Run();
 }
 

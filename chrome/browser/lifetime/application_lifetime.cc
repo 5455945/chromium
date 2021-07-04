@@ -8,9 +8,12 @@
 #include <string>
 
 #include "base/bind.h"
+#include "base/callback_list.h"
 #include "base/logging.h"
+#include "base/no_destructor.h"
 #include "base/process/process.h"
 #include "base/process/process_handle.h"
+#include "base/trace_event/trace_event.h"
 #include "base/types/strong_alias.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
@@ -46,7 +49,6 @@
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/chromeos/boot_times_recorder.h"
-#include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/power/power_policy_controller.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 #include "ui/aura/env.h"
@@ -58,6 +60,11 @@
 
 #if defined(OS_WIN)
 #include "base/win/win_util.h"
+#endif
+
+#if BUILDFLAG(ENABLE_SESSION_SERVICE)
+#include "chrome/browser/sessions/session_data_service.h"
+#include "chrome/browser/sessions/session_data_service_factory.h"
 #endif
 
 namespace chrome {
@@ -84,6 +91,12 @@ bool AreAllBrowsersCloseable() {
   }
   return true;
 }
+
+base::RepeatingCallbackList<void(bool)>& GetClosingAllBrowsersCallbackList() {
+  static base::NoDestructor<base::RepeatingCallbackList<void(bool)>>
+      callback_list;
+  return *callback_list;
+}
 #endif  // !defined(OS_ANDROID)
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
@@ -92,7 +105,7 @@ bool AreAllBrowsersCloseable() {
 // policy or the owner's locale.  Returns true if any pref has been modified.
 bool SetLocaleForNextStart(PrefService* local_state) {
   // If a policy mandates the login screen locale, use it.
-  chromeos::CrosSettings* cros_settings = chromeos::CrosSettings::Get();
+  ash::CrosSettings* cros_settings = ash::CrosSettings::Get();
   const base::ListValue* login_screen_locales = nullptr;
   std::string login_screen_locale;
   if (cros_settings->GetList(chromeos::kDeviceLoginScreenLocales,
@@ -128,8 +141,16 @@ using IgnoreUnloadHandlers =
 
 void AttemptRestartInternal(IgnoreUnloadHandlers ignore_unload_handlers) {
   // TODO(beng): Can this use ProfileManager::GetLoadedProfiles instead?
-  for (auto* browser : *BrowserList::GetInstance())
-    content::BrowserContext::SaveSessionState(browser->profile());
+  // TODO(crbug.com/1205798): Unset SaveSessionState if the restart fails.
+  for (auto* browser : *BrowserList::GetInstance()) {
+    browser->profile()->SaveSessionState();
+#if BUILDFLAG(ENABLE_SESSION_SERVICE)
+    auto* session_data_service =
+        SessionDataServiceFactory::GetForProfile(browser->profile());
+    if (session_data_service)
+      session_data_service->SetForceKeepSessionState();
+#endif
+  }
 
   PrefService* pref_service = g_browser_process->local_state();
   pref_service->SetBoolean(prefs::kWasRestarted, true);
@@ -171,10 +192,9 @@ void AttemptExitInternal(bool try_to_quit_application) {
     browser_shutdown::SetTryingToQuit(true);
 #endif
 
-  content::NotificationService::current()->Notify(
-      NOTIFICATION_CLOSE_ALL_BROWSERS_REQUEST,
-      content::NotificationService::AllSources(),
-      content::NotificationService::NoDetails());
+#if !defined(OS_ANDROID)
+  OnClosingAllBrowsers(true);
+#endif
 
   g_browser_process->platform_part()->AttemptExit(try_to_quit_application);
 }
@@ -344,10 +364,12 @@ void SessionEnding() {
 
   // EndSession is invoked once per frame. Only do something the first time.
   static bool already_ended = false;
-  // We may get called in the middle of shutdown, e.g. http://crbug.com/70852
-  // In this case, do nothing.
-  if (already_ended || !content::NotificationService::current())
+  // We may get called in the middle of shutdown, e.g. https://crbug.com/70852
+  // and https://crbug.com/1187418.  In this case, do nothing.
+  if (already_ended || !content::NotificationService::current() ||
+      !g_browser_process) {
     return;
+  }
   already_ended = true;
 
   // ~ShutdownWatcherHelper uses IO (it joins a thread). We'll only trigger that
@@ -371,10 +393,7 @@ void SessionEnding() {
   // Instead, here we call RecordShutdownInfoPrefs to record the shutdown info.
   browser_shutdown::RecordShutdownInfoPrefs();
 
-  content::NotificationService::current()->Notify(
-      NOTIFICATION_CLOSE_ALL_BROWSERS_REQUEST,
-      content::NotificationService::AllSources(),
-      content::NotificationService::NoDetails());
+  OnClosingAllBrowsers(true);
 
   // Write important data first.
   g_browser_process->EndSession();
@@ -403,6 +422,16 @@ void OnAppExiting() {
     return;
   notified = true;
   HandleAppExitingForPlatform();
+}
+
+void OnClosingAllBrowsers(bool closing) {
+  GetClosingAllBrowsersCallbackList().Notify(closing);
+}
+
+base::CallbackListSubscription AddClosingAllBrowsersCallback(
+    base::RepeatingCallback<void(bool)> closing_all_browsers_callback) {
+  return GetClosingAllBrowsersCallbackList().Add(
+      std::move(closing_all_browsers_callback));
 }
 #endif  // !defined(OS_ANDROID)
 

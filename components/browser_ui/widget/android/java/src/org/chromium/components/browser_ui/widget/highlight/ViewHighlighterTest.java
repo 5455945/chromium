@@ -5,7 +5,10 @@
 package org.chromium.components.browser_ui.widget.highlight;
 
 import android.content.Context;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.drawable.ColorDrawable;
 import android.support.test.InstrumentationRegistry;
 import android.view.View;
@@ -17,6 +20,9 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.Mock;
+import org.mockito.Mockito;
+import org.mockito.MockitoAnnotations;
 
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.Batch;
@@ -27,11 +33,19 @@ import org.chromium.base.test.util.Batch;
 @RunWith(BaseJUnit4ClassRunner.class)
 @Batch(Batch.UNIT_TESTS)
 public class ViewHighlighterTest {
+    @Mock
+    Canvas mCanvas;
+
     private Context mContext;
+    private final ViewHighlighter.HighlightParams mCircleParams =
+            new ViewHighlighter.HighlightParams(ViewHighlighter.HighlightShape.CIRCLE);
+    private final ViewHighlighter.HighlightParams mRectangleParams =
+            new ViewHighlighter.HighlightParams(ViewHighlighter.HighlightShape.RECTANGLE);
 
     @Before
     public void setUp() {
         mContext = InstrumentationRegistry.getTargetContext();
+        MockitoAnnotations.initMocks(this);
     }
 
     @Test
@@ -44,15 +58,15 @@ public class ViewHighlighterTest {
         ViewHighlighter.turnOffHighlight(tintedImageButton);
         checkHighlightOff(tintedImageButton);
 
-        ViewHighlighter.turnOnCircularHighlight(tintedImageButton);
-        ViewHighlighter.turnOnCircularHighlight(tintedImageButton);
+        ViewHighlighter.turnOnHighlight(tintedImageButton, mCircleParams);
+        ViewHighlighter.turnOnHighlight(tintedImageButton, mCircleParams);
         checkHighlightOn(tintedImageButton);
 
         ViewHighlighter.turnOffHighlight(tintedImageButton);
         ViewHighlighter.turnOffHighlight(tintedImageButton);
         checkHighlightOff(tintedImageButton);
 
-        ViewHighlighter.turnOnRectangularHighlight(tintedImageButton);
+        ViewHighlighter.turnOnHighlight(tintedImageButton, mRectangleParams);
         checkHighlightOn(tintedImageButton);
     }
 
@@ -65,14 +79,37 @@ public class ViewHighlighterTest {
         ViewHighlighter.turnOffHighlight(tintedImageButton);
         checkHighlightOff(tintedImageButton);
 
-        ViewHighlighter.turnOnCircularHighlight(tintedImageButton);
+        ViewHighlighter.turnOnHighlight(tintedImageButton, mCircleParams);
         checkHighlightOn(tintedImageButton);
 
         ViewHighlighter.turnOffHighlight(tintedImageButton);
         checkHighlightOff(tintedImageButton);
 
-        ViewHighlighter.turnOnRectangularHighlight(tintedImageButton);
+        ViewHighlighter.turnOnHighlight(tintedImageButton, mRectangleParams);
         checkHighlightOn(tintedImageButton);
+    }
+
+    @Test
+    @MediumTest
+    public void testHighlightExtension() {
+        int highlightExtension = 10;
+        View tintedImageButton = new ImageView(mContext);
+        ViewHighlighter.HighlightParams highlightParams =
+                new ViewHighlighter.HighlightParams(ViewHighlighter.HighlightShape.RECTANGLE);
+        highlightParams.setHighlightExtension(highlightExtension);
+
+        ViewHighlighter.turnOnHighlight(tintedImageButton, highlightParams);
+        checkHighlightOn(tintedImageButton);
+
+        Rect viewBounds = tintedImageButton.getBackground().getBounds();
+        RectF expectedBounds = new RectF(viewBounds.left - highlightExtension,
+                viewBounds.top - highlightExtension, viewBounds.right + highlightExtension,
+                viewBounds.bottom + highlightExtension);
+
+        ViewHighlighterTestUtils.drawPulseDrawable(tintedImageButton, mCanvas);
+
+        Mockito.verify(mCanvas).drawRoundRect(
+                Mockito.eq(expectedBounds), Mockito.anyFloat(), Mockito.anyFloat(), Mockito.any());
     }
 
     /**

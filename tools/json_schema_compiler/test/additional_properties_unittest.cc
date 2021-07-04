@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -14,13 +15,13 @@ namespace ap = test::api::additional_properties;
 TEST(JsonSchemaCompilerAdditionalPropertiesTest,
     AdditionalPropertiesTypePopulate) {
   {
-    auto list_value = std::make_unique<base::ListValue>();
-    list_value->AppendString("asdf");
-    list_value->AppendInteger(4);
+    base::ListValue list_value;
+    list_value.AppendString("asdf");
+    list_value.AppendInteger(4);
     auto type_value = std::make_unique<base::DictionaryValue>();
     type_value->SetString("string", "value");
     type_value->SetInteger("other", 9);
-    type_value->Set("another", std::move(list_value));
+    type_value->SetKey("another", std::move(list_value));
     auto type = std::make_unique<ap::AdditionalPropertiesType>();
     ASSERT_TRUE(
         ap::AdditionalPropertiesType::Populate(*type_value, type.get()));
@@ -55,14 +56,14 @@ TEST(JsonSchemaCompilerAdditionalPropertiesTest,
   result_object.integer = 5;
   result_object.additional_properties["key"] = "value";
 
-  base::ListValue expected;
+  std::vector<base::Value> expected;
   {
-    auto dict = std::make_unique<base::DictionaryValue>();
-    dict->SetInteger("integer", 5);
-    dict->SetString("key", "value");
-    expected.Append(std::move(dict));
+    base::Value dict(base::Value::Type::DICTIONARY);
+    dict.SetIntKey("integer", 5);
+    dict.SetStringKey("key", "value");
+    expected.push_back(std::move(dict));
   }
 
   EXPECT_EQ(expected,
-            *ap::ReturnAdditionalProperties::Results::Create(result_object));
+            ap::ReturnAdditionalProperties::Results::Create(result_object));
 }

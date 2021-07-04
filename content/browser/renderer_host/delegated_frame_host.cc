@@ -20,7 +20,7 @@
 #include "components/viz/common/features.h"
 #include "components/viz/common/frame_sinks/copy_output_request.h"
 #include "components/viz/common/quads/compositor_frame.h"
-#include "components/viz/common/resources/single_release_callback.h"
+#include "components/viz/common/resources/release_callback.h"
 #include "content/browser/compositor/surface_utils.h"
 #include "content/browser/gpu/compositor_util.h"
 #include "content/public/common/content_switches.h"
@@ -131,7 +131,8 @@ void DelegatedFrameHost::CopyFromCompositingSurface(
       base::BindOnce(
           [](base::OnceCallback<void(const SkBitmap&)> callback,
              std::unique_ptr<viz::CopyOutputResult> result) {
-            std::move(callback).Run(result->AsSkBitmap());
+            auto scoped_bitmap = result->ScopedAccessSkBitmap();
+            std::move(callback).Run(scoped_bitmap.GetOutScopedBitmap());
           },
           std::move(callback)));
 }
@@ -218,6 +219,10 @@ void DelegatedFrameHost::EmbedSurface(
     const viz::LocalSurfaceId& new_local_surface_id,
     const gfx::Size& new_dip_size,
     cc::DeadlinePolicy deadline_policy) {
+  TRACE_EVENT2("viz", "DelegatedFrameHost::EmbedSurface", "surface_id",
+               new_local_surface_id.ToString(), "deadline_policy",
+               deadline_policy.ToString());
+
   const viz::SurfaceId* primary_surface_id =
       client_->DelegatedFrameHostGetLayer()->GetSurfaceId();
 
@@ -241,7 +246,13 @@ void DelegatedFrameHost::EmbedSurface(
     // time user switches back to it the page is blank. This is preferred to
     // showing contents of old size. Don't call EvictDelegatedFrame to avoid
     // races when dragging tabs across displays. See https://crbug.com/813157.
-    if (surface_dip_size_ != current_frame_size_in_dip_) {
+    //
+    // An empty |current_frame_size_in_dip_| indicates this renderer has never
+    // been made visible. This is the case for pre-rendered contents. Don't use
+    // the primary id as fallback since it's guaranteed to have no content. See
+    // crbug.com/1218238.
+    if (!current_frame_size_in_dip_.IsEmpty() &&
+        surface_dip_size_ != current_frame_size_in_dip_) {
       client_->DelegatedFrameHostGetLayer()->SetOldestAcceptableFallback(
           new_primary_surface_id);
     }
@@ -377,8 +388,7 @@ void DelegatedFrameHost::DidCopyStaleContent(
       result->GetTextureResult()->mailbox, GL_LINEAR, GL_TEXTURE_2D,
       result->GetTextureResult()->sync_token, result->size(),
       false /* is_overlay_candidate */);
-  std::unique_ptr<viz::SingleReleaseCallback> release_callback =
-      result->TakeTextureOwnership();
+  viz::ReleaseCallback release_callback = result->TakeTextureOwnership();
 
   if (stale_content_layer_->parent() != client_->DelegatedFrameHostGetLayer())
     client_->DelegatedFrameHostGetLayer()->Add(stale_content_layer_.get());

@@ -8,11 +8,13 @@
 #include "third_party/blink/public/platform/web_vector.h"
 #include "third_party/blink/public/web/web_range.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_edit_context_init.h"
-#include "third_party/blink/renderer/core/css/css_color_value.h"
+#include "third_party/blink/renderer/core/css/css_color.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/editing/ime/input_method_controller.h"
 #include "third_party/blink/renderer/core/editing/ime/text_format_update_event.h"
 #include "third_party/blink/renderer/core/editing/ime/text_update_event.h"
+#include "third_party/blink/renderer/core/editing/state_machines/backward_grapheme_boundary_state_machine.h"
+#include "third_party/blink/renderer/core/editing/state_machines/forward_grapheme_boundary_state_machine.h"
 #include "third_party/blink/renderer/core/events/composition_event.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
@@ -160,13 +162,13 @@ void EditContext::DispatchTextFormatEvent(
     }
     TextFormatUpdateEvent* event = MakeGarbageCollected<TextFormatUpdateEvent>(
         format_range_start, format_range_end,
-        cssvalue::CSSColorValue::SerializeAsCSSComponentValue(
+        cssvalue::CSSColor::SerializeAsCSSComponentValue(
             ime_text_span.underline_color),
-        cssvalue::CSSColorValue::SerializeAsCSSComponentValue(
+        cssvalue::CSSColor::SerializeAsCSSComponentValue(
             ime_text_span.background_color),
-        cssvalue::CSSColorValue::SerializeAsCSSComponentValue(
+        cssvalue::CSSColor::SerializeAsCSSComponentValue(
             ime_text_span.suggestion_highlight_color),
-        cssvalue::CSSColorValue::SerializeAsCSSComponentValue(
+        cssvalue::CSSColor::SerializeAsCSSComponentValue(
             ime_text_span.text_color),
         underline_thickness, underline_style);
     DispatchEvent(*event);
@@ -190,7 +192,7 @@ void EditContext::blur() {
     return;
   // Clean up the state of the |this| EditContext.
   FinishComposingText(ConfirmCompositionBehavior::kKeepSelection);
-  GetInputMethodController().SetActiveEditContext(this);
+  GetInputMethodController().SetActiveEditContext(nullptr);
 }
 
 void EditContext::updateSelection(uint32_t start,
@@ -471,6 +473,54 @@ bool EditContext::InsertText(const WebString& text) {
   return true;
 }
 
+void EditContext::DeleteCurrentSelection() {
+  if (selection_start_ == selection_end_)
+    return;
+
+  StringBuilder stringBuilder;
+  stringBuilder.Append(StringView(text_, 0, selection_start_));
+  stringBuilder.Append(StringView(text_, selection_end_));
+  text_ = stringBuilder.ToString();
+
+  DispatchTextUpdateEvent(String(), selection_start_, selection_end_,
+                          selection_start_, selection_start_);
+
+  selection_end_ = selection_start_;
+}
+
+template <typename StateMachine>
+int FindNextBoundaryOffset(const String& str, int current);
+
+void EditContext::DeleteBackward() {
+  // If the current selection is collapsed, delete one grapheme, otherwise,
+  // delete whole selection.
+  if (selection_start_ == selection_end_) {
+    selection_start_ =
+        FindNextBoundaryOffset<BackwardGraphemeBoundaryStateMachine>(
+            text_, selection_start_);
+  }
+
+  DeleteCurrentSelection();
+}
+
+void EditContext::DeleteForward() {
+  if (selection_start_ == selection_end_) {
+    selection_end_ =
+        FindNextBoundaryOffset<ForwardGraphemeBoundaryStateMachine>(
+            text_, selection_start_);
+  }
+
+  DeleteCurrentSelection();
+}
+
+void EditContext::DeleteWordBackward() {
+  // TODO(shihken): Implement backward word delete.
+}
+
+void EditContext::DeleteWordForward() {
+  // TODO(shihken): Implement forward word delete.
+}
+
 bool EditContext::CommitText(const WebString& text,
                              const WebVector<ui::ImeTextSpan>& ime_text_spans,
                              const WebRange& replacement_range,
@@ -580,6 +630,9 @@ WebTextInputMode EditContext::GetInputModeOfEditContext() const {
 WebTextInputInfo EditContext::TextInputInfo() {
   WebTextInputInfo info;
   // Fetch all the text input info from edit context.
+  // TODO(crbug.com/1197325): Change this to refer to the "view" part of the
+  // EditContext once the EditContext spec adds this feature.
+  info.node_id = GetInputMethodController().NodeIdOfFocusedElement();
   info.action = GetEditContextEnterKeyHint();
   info.input_mode = GetInputModeOfEditContext();
   info.type = TextInputType();

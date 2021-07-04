@@ -7,6 +7,7 @@
 #include <map>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "base/bind.h"
 #include "base/command_line.h"
@@ -24,6 +25,7 @@
 #include "chrome/test/views/chrome_test_views_delegate.h"
 #include "components/web_modal/test_web_contents_modal_dialog_host.h"
 #include "content/public/test/browser_task_environment.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/events/event_utils.h"
@@ -79,6 +81,19 @@ class DesktopMediaPickerViewsTest : public testing::Test {
         switches::kDisableModalAnimations);
 #endif
     DesktopMediaPickerManager::Get()->AddObserver(&observer_);
+    CreatePickerViews();
+  }
+
+  void TearDown() override {
+    if (GetPickerDialogView())
+      GetPickerDialogView()->GetWidget()->CloseNow();
+    widget_destroyed_waiter_->Wait();
+    DesktopMediaPickerManager::Get()->RemoveObserver(&observer_);
+  }
+
+  void CreatePickerViews() {
+    widget_destroyed_waiter_.reset();
+    picker_views_.reset();
 
     picker_views_ = std::make_unique<DesktopMediaPickerViews>();
     test_api_.set_picker(picker_views_.get());
@@ -86,7 +101,7 @@ class DesktopMediaPickerViewsTest : public testing::Test {
     views::NamedWidgetShownWaiter waiter(views::test::AnyWidgetTestPasskey{},
                                          "DesktopMediaPickerDialogView");
 
-    const base::string16 kAppName = base::ASCIIToUTF16("foo");
+    const std::u16string kAppName = u"foo";
     DesktopMediaPicker::Params picker_params;
     picker_params.context = test_helper_.GetContext();
     picker_params.app_name = kAppName;
@@ -109,13 +124,6 @@ class DesktopMediaPickerViewsTest : public testing::Test {
             waiter.WaitIfNeededAndGet());
   }
 
-  void TearDown() override {
-    if (GetPickerDialogView())
-      GetPickerDialogView()->GetWidget()->CloseNow();
-    widget_destroyed_waiter_->Wait();
-    DesktopMediaPickerManager::Get()->RemoveObserver(&observer_);
-  }
-
   DesktopMediaPickerDialogView* GetPickerDialogView() const {
     return picker_views_->GetDialogViewForTesting();
   }
@@ -125,12 +133,12 @@ class DesktopMediaPickerViewsTest : public testing::Test {
     run_loop_.Quit();
   }
 
-  base::Optional<content::DesktopMediaID> WaitForPickerDone() {
+  absl::optional<content::DesktopMediaID> WaitForPickerDone() {
     run_loop_.Run();
     return picked_id_;
   }
 
-  base::Optional<content::DesktopMediaID> picked_id() const {
+  absl::optional<content::DesktopMediaID> picked_id() const {
     return picked_id_;
   }
 
@@ -145,7 +153,7 @@ class DesktopMediaPickerViewsTest : public testing::Test {
   const std::vector<DesktopMediaList::Type> source_types_;
 
   base::RunLoop run_loop_;
-  base::Optional<content::DesktopMediaID> picked_id_;
+  absl::optional<content::DesktopMediaID> picked_id_;
   std::unique_ptr<views::test::WidgetDestroyedWaiter> widget_destroyed_waiter_;
 };
 
@@ -438,7 +446,7 @@ TEST_F(DesktopMediaPickerViewsSingleTabPaneTest,
   AddTabSource();
 
   test_api_.FocusSourceAtIndex(0, false);
-  EXPECT_EQ(base::nullopt, test_api_.GetSelectedSourceId());
+  EXPECT_EQ(absl::nullopt, test_api_.GetSelectedSourceId());
   EXPECT_FALSE(
       GetPickerDialogView()->IsDialogButtonEnabled(ui::DIALOG_BUTTON_OK));
 

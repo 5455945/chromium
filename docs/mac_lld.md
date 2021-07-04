@@ -41,11 +41,10 @@ LLD does have a few advantages unrelated to speed, however:
 For that reason, it's possible to opt in to LLD for macOS builds (not for
 iOS builds, and that's intentionally not in scope).
 
-A background note: There are two versions of LLD upstream: The newer ports
-that are nowadays used for ELF and COFF, and an older design that's still the
-default Mach-O LLD. There's however an effort underway to write a new Mach-O
-LLD that's built on the same design as the ELF and COFF ports. Chromium Mac
-builds uses the new Mach-O port of LLD ("`ld64.lld.darwinnew`").
+A background note: There are two versions of LLD upstream: The newer ports,
+and an older design that's still available as ld64.lld.darwinold for Mach-O
+LLD. We use the new `lld/MachO` port, not the old one. The new one is the
+default selection for `-fuse-ld=lld` on macOS as of March 1 2021.
 
 Just like the LLD ELF port tries to be commandline-compatible with other ELF
 linkers and the LLD COFF port tries to be commandline-compatible with the
@@ -55,37 +54,33 @@ different platforms.
 
 ## Current status and known issues
 
-A `symbol_level = 0` `is_debug = false` `use_lld = true` build produces
+A `symbol_level = 0` `is_debug = false` `use_lld = true` x64 build produces
 a mostly-working Chromium.app, but there are open issues and missing features:
 
-- LLD does not yet have any ARM support
-  - relocations are missing
-    ([in-progress patch](https://reviews.llvm.org/D88629))
-  - ad-hoc code signing is missing
-- LLD produces bad debug info, and LLD-linked binaries don't yet show C++
-  source code in a debugger ([bug](https://llvm.org/PR48714)]
-- LLD doesn't produce unwind info, so code relying on exceptions doesn't work
-  ([bug](https://llvm.org/PR48389))
-- We haven't tried actually running any other binaries, so chances are many
-  other tests fail
+- LLD's ARM support is fairly new
+  - Chromium crashes very early during startup ([bug](https://llvm.org/PR50411))
+  - likely other bugs for `target_cpu="arm64"`
+- Some tests fail, see mac-rel job on https://chromium-review.googlesource.com/c/chromium/src/+/2885356
+  - Two crashpad_tests fail
+    ([fixed upstream](https://reviews.llvm.org/rGb4ead2c37bcbb1f81919c68e2a2a227aac90f07c))
+  - LLD-linked Chromium fails to run on macOS 10.14 or earlier
+    ([bug](https://llvm.org/PR49800))
 - LLD doesn't yet implement `-dead_strip`, leading to many linker warnings
 - LLD doesn't yet implement deduplication (aka "ICF")
-- LLD doesn't yet call graph profile sort
-- LLD doesn't yet implement `-exported_symbol` or `-exported_symbols_list`,
-  leading to some linker warnings
+- LLD doesn't yet implement call graph profile sort
 
 ## Opting in
 
 1. First, obtain lld. Do either of:
 
-   1. run `src/tools/clang/scripts/update.py --package=lld_mac` to download a
-      prebuilt lld binary.
+   1. Do nothing. Chromium's hooks already downloaded a prebuilt lld binary
+      for you.
    2. build `lld` and `llvm-ar` locally and copy it to
-      `third_party/llvm-build/Relase+Asserts/bin`. Also run
-      `ln -s lld third_party/llvm-build/Release+Asserts/bin/ld64.lld.darwinnew`.
+      `third_party/llvm-build/Release+Asserts/bin`. Also run
+      `ln -s lld third_party/llvm-build/Release+Asserts/bin/ld64.lld`.
 
-   You have to do this again every time `runhooks` updates the clang
-   package.
+      You have to do this again every time `runhooks` updates the clang
+      package.
 
    The prebuilt might work less well than a more up-to-date, locally-built
    version -- see the list of open issues above for details. If anything is

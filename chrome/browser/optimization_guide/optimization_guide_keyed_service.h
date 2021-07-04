@@ -8,11 +8,10 @@
 #include <memory>
 #include <vector>
 
-#include "base/containers/flat_set.h"
 #include "base/macros.h"
-#include "base/time/time.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/optimization_guide/content/browser/optimization_guide_decider.h"
+#include "components/optimization_guide/core/optimization_guide_model_provider.h"
 #include "components/optimization_guide/proto/hints.pb.h"
 #include "components/optimization_guide/proto/models.pb.h"
 
@@ -27,17 +26,20 @@ class NavigationHandle;
 
 namespace optimization_guide {
 namespace android {
+class AndroidPushNotificationManagerJavaTest;
 class OptimizationGuideBridge;
 }  // namespace android
 class OptimizationGuideStore;
 class PredictionManager;
 class PredictionManagerBrowserTestBase;
 class PredictionModelDownloadClient;
+class TabUrlProvider;
 class TopHostProvider;
 }  // namespace optimization_guide
 
 class GURL;
 class OptimizationGuideHintsManager;
+class OptimizationGuideNavigationData;
 
 // Keyed service that can be used to get information received from the remote
 // Optimization Guide Service. For regular profiles, this will do the work to
@@ -48,7 +50,8 @@ class OptimizationGuideHintsManager;
 // and no information will be retrieved.
 class OptimizationGuideKeyedService
     : public KeyedService,
-      public optimization_guide::OptimizationGuideDecider {
+      public optimization_guide::OptimizationGuideDecider,
+      public optimization_guide::OptimizationGuideModelProvider {
  public:
   explicit OptimizationGuideKeyedService(
       content::BrowserContext* browser_context);
@@ -61,17 +64,8 @@ class OptimizationGuideKeyedService
   void ShouldTargetNavigationAsync(
       content::NavigationHandle* navigation_handle,
       optimization_guide::proto::OptimizationTarget optimization_target,
-      const base::flat_map<optimization_guide::proto::ClientModelFeature,
-                           float>& client_model_feature_values,
       optimization_guide::OptimizationGuideTargetDecisionCallback callback)
       override;
-  void AddObserverForOptimizationTargetModel(
-      optimization_guide::proto::OptimizationTarget optimization_target,
-      const base::Optional<optimization_guide::proto::Any>& model_metadata,
-      optimization_guide::OptimizationTargetModelObserver* observer) override;
-  void RemoveObserverForOptimizationTargetModel(
-      optimization_guide::proto::OptimizationTarget optimization_target,
-      optimization_guide::OptimizationTargetModelObserver* observer) override;
   void RegisterOptimizationTypes(
       const std::vector<optimization_guide::proto::OptimizationType>&
           optimization_types) override;
@@ -84,6 +78,15 @@ class OptimizationGuideKeyedService
       optimization_guide::proto::OptimizationType optimization_type,
       optimization_guide::OptimizationMetadata* optimization_metadata) override;
 
+  // optimization_guide::OptimizationGuideModelProvider implementation:
+  void AddObserverForOptimizationTargetModel(
+      optimization_guide::proto::OptimizationTarget optimization_target,
+      const absl::optional<optimization_guide::proto::Any>& model_metadata,
+      optimization_guide::OptimizationTargetModelObserver* observer) override;
+  void RemoveObserverForOptimizationTargetModel(
+      optimization_guide::proto::OptimizationTarget optimization_target,
+      optimization_guide::OptimizationTargetModelObserver* observer) override;
+
   // Adds hints for a URL with provided metadata to the optimization guide.
   // For testing purposes only. This will flush any callbacks for |url| that
   // were registered via |CanApplyOptimizationAsync|. If no applicable callbacks
@@ -91,21 +94,19 @@ class OptimizationGuideKeyedService
   void AddHintForTesting(
       const GURL& url,
       optimization_guide::proto::OptimizationType optimization_type,
-      const base::Optional<optimization_guide::OptimizationMetadata>& metadata);
-
-  // Override the decision returned by |ShouldTargetNavigation|
-  // for |optimization_target|. For testing purposes only.
-  void OverrideTargetDecisionForTesting(
-      optimization_guide::proto::OptimizationTarget optimization_target,
-      optimization_guide::OptimizationGuideDecision
-          optimization_guide_decision);
+      const absl::optional<optimization_guide::OptimizationMetadata>& metadata);
 
   // Override the model file sent to observers of |optimization_target|. For
   // testing purposes only.
   void OverrideTargetModelFileForTesting(
       optimization_guide::proto::OptimizationTarget optimization_target,
-      const base::Optional<optimization_guide::proto::Any>& model_metadata,
+      const absl::optional<optimization_guide::proto::Any>& model_metadata,
       const base::FilePath& file_path);
+
+  // Returns the OptimizationGuideNavigationData for |navigation_handle|. Will
+  // return nullptr if one cannot be created for it for any reason.
+  static OptimizationGuideNavigationData* GetNavigationDataFromNavigationHandle(
+      content::NavigationHandle* navigation_handle);
 
  private:
   friend class ChromeBrowsingDataRemoverDelegate;
@@ -114,6 +115,8 @@ class OptimizationGuideKeyedService
   friend class OptimizationGuideWebContentsObserver;
   friend class optimization_guide::PredictionModelDownloadClient;
   friend class optimization_guide::PredictionManagerBrowserTestBase;
+  friend class optimization_guide::android::
+      AndroidPushNotificationManagerJavaTest;
   friend class optimization_guide::android::OptimizationGuideBridge;
 
   // Initializes |this|.
@@ -142,9 +145,6 @@ class OptimizationGuideKeyedService
   // Clears data specific to the user.
   void ClearData();
 
-  // Updates |prediction_manager_| with the provided fcp value.
-  void UpdateSessionFCP(base::TimeDelta fcp);
-
   // KeyedService implementation:
   void Shutdown() override;
 
@@ -168,6 +168,10 @@ class OptimizationGuideKeyedService
   // hosts. Will be null if the user has not consented to this type of browser
   // behavior.
   std::unique_ptr<optimization_guide::TopHostProvider> top_host_provider_;
+
+  // The tab URL provider to use for fetching information for the user's active
+  // tabs. Will be null if the user is off the record.
+  std::unique_ptr<optimization_guide::TabUrlProvider> tab_url_provider_;
 
   DISALLOW_COPY_AND_ASSIGN(OptimizationGuideKeyedService);
 };

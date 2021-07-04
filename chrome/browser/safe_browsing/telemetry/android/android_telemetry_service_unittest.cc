@@ -17,8 +17,8 @@
 #include "chrome/test/base/testing_profile.h"
 #include "components/download/public/common/mock_download_item.h"
 #include "components/prefs/pref_service.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
-#include "components/safe_browsing/core/features.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_item_utils.h"
@@ -64,14 +64,12 @@ class AndroidTelemetryServiceTest : public testing::Test {
     sb_service_->Initialize();
     base::RunLoop().RunUntilIdle();
 
-    download_item_.reset(new ::testing::NiceMock<download::MockDownloadItem>());
-    profile_.reset(new TestingProfile());
+    download_item_ =
+        std::make_unique<::testing::NiceMock<download::MockDownloadItem>>();
+    profile_ = std::make_unique<TestingProfile>();
 
     telemetry_service_ =
         std::make_unique<AndroidTelemetryService>(sb_service_.get(), profile());
-
-    scoped_feature_list_.InitAndEnableFeature(
-        safe_browsing::kEnhancedProtection);
   }
 
   void TearDown() override {
@@ -93,7 +91,8 @@ class AndroidTelemetryServiceTest : public testing::Test {
   }
 
   void SetOffTheRecordProfile() {
-    telemetry_service_->profile_ = profile()->GetPrimaryOTRProfile();
+    telemetry_service_->profile_ =
+        profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true);
   }
 
   void ResetProfile() { telemetry_service_->profile_ = profile(); }
@@ -298,6 +297,32 @@ TEST_F(AndroidTelemetryServiceTest, GetReport_ValidateAllFields) {
   EXPECT_EQ(kItemReceivedBytes, report->download_item_info().length());
   ASSERT_TRUE(report->download_item_info().has_file_basename());
   EXPECT_EQ(kItemTargetFilePath, report->download_item_info().file_basename());
+}
+
+// Regression test for https://crbug.com/1173145#c17.
+TEST_F(AndroidTelemetryServiceTest,
+       OnDownloadUpdated_ObserverNotRemovedIfDownloadIsNotCompleted) {
+  // Disable Safe Browsing so we can log the telemetry outcome metric.
+  profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled, false);
+  download_item_->AddObserver(telemetry_service_.get());
+
+  // Simulate APK download. The file name is not populated yet but the MIME type
+  // is APK.
+  ON_CALL(*download_item_, GetFileNameToReportUser())
+      .WillByDefault(testing::Return(base::FilePath(FILE_PATH_LITERAL(""))));
+  ON_CALL(*download_item_, GetMimeType())
+      .WillByDefault(
+          testing::Return("application/vnd.android.package-archive"));
+
+  // This should trigger OnDownloadUpdated.
+  download_item_->NotifyObserversDownloadUpdated();
+  get_histograms()->ExpectTotalCount(kApkDownloadTelemetryOutcomeMetric, 1);
+
+  // OnDownloadUpdated should still be called.
+  download_item_->NotifyObserversDownloadUpdated();
+  get_histograms()->ExpectTotalCount(kApkDownloadTelemetryOutcomeMetric, 2);
+
+  download_item_->RemoveObserver(telemetry_service_.get());
 }
 
 }  // namespace safe_browsing

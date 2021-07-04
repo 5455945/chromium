@@ -5,6 +5,7 @@
 #ifndef MEDIA_GPU_TEST_VIDEO_FRAME_VALIDATOR_H_
 #define MEDIA_GPU_TEST_VIDEO_FRAME_VALIDATOR_H_
 
+#include <map>
 #include <memory>
 #include <string>
 #include <utility>
@@ -12,7 +13,6 @@
 
 #include "base/callback.h"
 #include "base/files/file.h"
-#include "base/files/file_path.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/synchronization/condition_variable.h"
 #include "base/synchronization/lock.h"

@@ -13,7 +13,6 @@
 
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/optional.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
@@ -29,9 +28,7 @@
 #include "extensions/buildflags/buildflags.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "net/cookies/cookie_store.h"
-#include "services/network/public/mojom/network_context.mojom.h"
-#include "services/network/public/mojom/network_service.mojom.h"
-#include "services/service_manager/public/mojom/service.mojom.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
@@ -48,6 +45,12 @@ class SSLHostStateDelegate;
 class ZoomLevelDelegate;
 #endif  // !defined(OS_ANDROID)
 }  // namespace content
+
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+namespace chromeos {
+class ScopedLacrosServiceTestHelper;
+}  // namespace chromeos
+#endif
 
 namespace net {
 class CookieStore;
@@ -88,8 +91,9 @@ class TestingProfile : public Profile {
   // Sets the feature list to enable/disable ephemeral Guest profiles.
   // Returns true if ephemeral Guest profiles are supported on the platform and
   // feature list is initialized.
-  // TODO(https://crbug.com/1125474): Expand to cover ChromeOS when ChromeOS
-  // code supports ephemeral Guest profiles.
+  // NOTE: Ephemeral Guest profiles are deprecated and code support is under
+  // removal. This function always returns false.
+  // TODO(https://crbug.com/1225156): Delete this function.
   static bool SetScopedFeatureListForEphemeralGuestProfiles(
       base::test::ScopedFeatureList& scoped_feature_list,
       bool enabled);
@@ -210,7 +214,7 @@ class TestingProfile : public Profile {
     std::unique_ptr<policy::PolicyService> policy_service_;
     TestingFactories testing_factories_;
     std::string profile_name_{kDefaultProfileUserName};
-    base::Optional<bool> override_policy_connector_is_managed_;
+    absl::optional<bool> override_policy_connector_is_managed_;
   };
 
   // Multi-profile aware constructor that takes the path to a directory managed
@@ -248,8 +252,8 @@ class TestingProfile : public Profile {
       std::unique_ptr<policy::PolicyService> policy_service,
       TestingFactories testing_factories,
       const std::string& profile_name,
-      base::Optional<bool> override_policy_connector_is_managed,
-      base::Optional<OTRProfileID> otr_profile_id);
+      absl::optional<bool> override_policy_connector_is_managed,
+      absl::optional<OTRProfileID> otr_profile_id);
 
   ~TestingProfile() override;
 
@@ -316,19 +320,14 @@ class TestingProfile : public Profile {
   content::BackgroundSyncController* GetBackgroundSyncController() override;
   content::BrowsingDataRemoverDelegate* GetBrowsingDataRemoverDelegate()
       override;
-  void SetCorsOriginAccessListForOrigin(
-      TargetBrowserContexts target_mode,
-      const url::Origin& source_origin,
-      std::vector<network::mojom::CorsOriginPatternPtr> allow_patterns,
-      std::vector<network::mojom::CorsOriginPatternPtr> block_patterns,
-      base::OnceClosure closure) override;
 
   TestingProfile* AsTestingProfile() override;
 
   // Profile
   std::string GetProfileUserName() const override;
 
-  Profile* GetOffTheRecordProfile(const OTRProfileID& otr_profile_id) override;
+  Profile* GetOffTheRecordProfile(const OTRProfileID& otr_profile_id,
+                                  bool create_if_needed) override;
   std::vector<Profile*> GetAllOffTheRecordProfiles() override;
   void DestroyOffTheRecordProfile(Profile* otr_profile) override;
   bool HasOffTheRecordProfile(const OTRProfileID& otr_profile_id) override;
@@ -373,7 +372,6 @@ class TestingProfile : public Profile {
   void set_last_selected_directory(const base::FilePath& path) override;
   bool WasCreatedByVersionOrLater(const std::string& version) override;
   bool IsGuestSession() const override;
-  bool IsEphemeralGuestProfile() const override;
   bool IsNewProfile() const override;
   void SetExitType(ExitType exit_type) override {}
   ExitType GetLastSessionExitType() const override;
@@ -382,9 +380,9 @@ class TestingProfile : public Profile {
   void ChangeAppLocale(const std::string&, AppLocaleChangedVia) override;
   void OnLogin() override {}
   void InitChromeOSPreferences() override {}
-  chromeos::ScopedCrosSettingsTestHelper* ScopedCrosSettingsTestHelper();
+  ash::ScopedCrosSettingsTestHelper* ScopedCrosSettingsTestHelper();
 
-  base::Optional<std::string> requested_locale() { return requested_locale_; }
+  absl::optional<std::string> requested_locale() { return requested_locale_; }
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
   // Schedules a task on the history backend and runs a nested loop until the
@@ -395,8 +393,6 @@ class TestingProfile : public Profile {
   GURL GetHomePage() override;
 
   void SetCreationTimeForTesting(base::Time creation_time) override;
-
-  PrefService* GetOffTheRecordPrefs() override;
 
   void RecordMainFrameNavigation() override {}
 
@@ -433,6 +429,8 @@ class TestingProfile : public Profile {
 
   // Finishes initialization when a profile is created asynchronously.
   void FinishInit();
+
+  void InitializeProfileType();
 
   // Creates a TestingPrefService and associates it with the TestingProfile.
   void CreateTestingPrefService();
@@ -508,15 +506,20 @@ class TestingProfile : public Profile {
 
   std::string profile_name_{kDefaultProfileUserName};
 
-  base::Optional<bool> override_policy_connector_is_managed_;
-  base::Optional<OTRProfileID> otr_profile_id_;
+  absl::optional<bool> override_policy_connector_is_managed_;
+  absl::optional<OTRProfileID> otr_profile_id_;
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-  std::unique_ptr<chromeos::ScopedCrosSettingsTestHelper>
+  std::unique_ptr<ash::ScopedCrosSettingsTestHelper>
       scoped_cros_settings_test_helper_;
 
-  base::Optional<std::string> requested_locale_;
+  absl::optional<std::string> requested_locale_;
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+  std::unique_ptr<chromeos::ScopedLacrosServiceTestHelper>
+      lacros_service_test_helper_;
+#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
 
   std::unique_ptr<policy::PolicyService> policy_service_;
 

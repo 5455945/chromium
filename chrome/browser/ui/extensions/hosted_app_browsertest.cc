@@ -8,11 +8,9 @@
 
 #include "base/bind.h"
 #include "base/callback.h"
-#include "base/callback_forward.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/files/file_path.h"
-#include "base/optional.h"
 #include "base/run_loop.h"
 #include "base/strings/string_split.h"
 #include "base/strings/stringprintf.h"
@@ -25,6 +23,7 @@
 #include "build/chromeos_buildflags.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/apps/app_service/app_service_test.h"
+#include "chrome/browser/chrome_content_browser_client.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/predictors/loading_predictor_config.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
@@ -51,16 +50,19 @@
 #include "chrome/browser/web_applications/components/web_app_provider_base.h"
 #include "chrome/browser/web_applications/components/web_application_info.h"
 #include "chrome/browser/web_applications/test/web_app_install_observer.h"
+#include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/sessions/core/tab_restore_service.h"
+#include "components/webapps/browser/installable/installable_metrics.h"
 #include "content/public/browser/child_process_security_policy.h"
 #include "content/public/browser/context_menu_params.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/content_client.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
@@ -83,9 +85,12 @@
 #include "net/test/embedded_test_server/request_handler_util.h"
 #include "testing/gtest/include/gtest/gtest-param-test.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
+#include "third_party/blink/public/common/switches.h"
 #include "third_party/blink/public/mojom/manifest/display_mode.mojom.h"
+#include "ui/views/image_model_utils.h"
 
 using content::RenderFrameHost;
 using content::WebContents;
@@ -198,7 +203,8 @@ class HostedOrWebAppTest : public extensions::ExtensionBrowserTest,
       web_app_info->start_url = start_url;
       web_app_info->scope = start_url.GetWithoutFilename();
       web_app_info->open_as_window = true;
-      app_id_ = web_app::InstallWebApp(profile(), std::move(web_app_info));
+      app_id_ =
+          web_app::test::InstallWebApp(profile(), std::move(web_app_info));
 
       // Launch app in a window.
       app_browser_ = web_app::LaunchWebAppBrowser(profile(), app_id_);
@@ -216,7 +222,7 @@ class HostedOrWebAppTest : public extensions::ExtensionBrowserTest,
   void SetupApp(const base::FilePath& app_folder) {
     DCHECK_EQ(GetParam(), AppType::HOSTED_APP);
     const Extension* app = InstallExtensionWithSourceAndFlags(
-        app_folder, 1, extensions::Manifest::INTERNAL,
+        app_folder, 1, extensions::mojom::ManifestLocation::kInternal,
         app_type_ == AppType::HOSTED_APP
             ? extensions::Extension::NO_FLAGS
             : extensions::Extension::FROM_BOOKMARK);
@@ -260,6 +266,9 @@ class HostedOrWebAppTest : public extensions::ExtensionBrowserTest,
     // Browser will both run and display insecure content.
     command_line->AppendSwitch(switches::kAllowRunningInsecureContent);
     cert_verifier_.SetUpCommandLine(command_line);
+    // Some builders are flaky due to slower loading interacting
+    // with deferred commits.
+    command_line->AppendSwitch(blink::switches::kAllowPreCommitInput);
   }
 
   void SetUpOnMainThread() override {
@@ -475,7 +484,8 @@ IN_PROC_BROWSER_TEST_P(HostedAppTest, LoadIcon) {
       app_service_test().LoadAppIconBlocking(
           apps::mojom::AppType::kExtension, app_id_,
           extension_misc::EXTENSION_ICON_SMALL),
-      app_browser_->app_controller()->GetWindowAppIcon()));
+      views::GetImageSkiaFromImageModel(
+          app_browser_->app_controller()->GetWindowAppIcon(), nullptr)));
 }
 #endif
 
@@ -664,7 +674,7 @@ IN_PROC_BROWSER_TEST_P(HostedOrWebAppTest, CanUserUninstall) {
   ASSERT_TRUE(embedded_test_server()->Start());
   GURL app_url = embedded_test_server()->GetURL("app.com", "/title1.html");
   SetupAppWithURL(app_url);
-  EXPECT_TRUE(app_browser_->app_controller()->CanUninstall());
+  EXPECT_TRUE(app_browser_->app_controller()->CanUserUninstall());
 }
 
 // Tests that platform apps can still load mixed content.
@@ -1584,6 +1594,129 @@ IN_PROC_BROWSER_TEST_P(HostedAppSitePerProcessTest,
   EXPECT_TRUE(process_map->Contains(bar_process->GetID()));
 }
 
+template <bool jit_disabled_by_default>
+class HostedAppJitTestBase : public HostedAppProcessModelTest {
+ public:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    HostedOrWebAppTest::SetUpCommandLine(command_line);
+    ASSERT_TRUE(embedded_test_server()->InitializeAndListen());
+    content::IsolateAllSitesForTesting(command_line);
+  }
+
+  void SetUpOnMainThread() override {
+    HostedAppProcessModelTest::SetUpOnMainThread();
+    scoped_client_override_ =
+        std::make_unique<ScopedJitChromeBrowserClientOverride>(
+            jit_disabled_by_default);
+  }
+
+ protected:
+  HostedAppJitTestBase() = default;
+  ~HostedAppJitTestBase() override = default;
+
+  // Utility class to override ChromeBrowserClient within a scope with a
+  // BrowserClient that has a different JIT policy.
+  class ScopedJitChromeBrowserClientOverride {
+   public:
+    // A custom ContentBrowserClient to selectively turn off JIT for certain
+    // sites.
+    class JitChromeContentBrowserClient : public ChromeContentBrowserClient {
+     public:
+      explicit JitChromeContentBrowserClient(bool jit_disabled_default)
+          : is_jit_disabled_by_default_(jit_disabled_default) {}
+
+      bool IsJitDisabledForSite(content::BrowserContext* browser_context,
+                                const GURL& site_url) override {
+        if (site_url.is_empty())
+          return is_jit_disabled_by_default_;
+        if (site_url.DomainIs("jit-disabled.com"))
+          return true;
+        if (site_url.DomainIs("jit-enabled.com"))
+          return false;
+        return is_jit_disabled_by_default_;
+      }
+
+     private:
+      bool is_jit_disabled_by_default_;
+    };
+
+    explicit ScopedJitChromeBrowserClientOverride(
+        bool is_jit_disabled_by_default) {
+      overriden_client_ = std::make_unique<JitChromeContentBrowserClient>(
+          is_jit_disabled_by_default);
+      original_client_ =
+          content::SetBrowserClientForTesting(overriden_client_.get());
+    }
+
+    ~ScopedJitChromeBrowserClientOverride() {
+      content::SetBrowserClientForTesting(original_client_);
+    }
+
+   private:
+    std::unique_ptr<JitChromeContentBrowserClient> overriden_client_;
+    content::ContentBrowserClient* original_client_;
+  };
+
+  void JitTestInternal() {
+    // Set up a hosted app covering http://jit-disabled.com.
+    GURL jit_disabled_app_url(
+        embedded_test_server()->GetURL("jit-disabled.com", "/title2.html"));
+    constexpr const char kHostedAppManifest[] =
+        R"( { "name": "Hosted App With SitePerProcess Test",
+              "version": "1",
+              "manifest_version": 2,
+              "app": {
+                "launch": {
+                  "web_url": "%s"
+                },
+                "urls": ["http://jit-disabled.com/", "http://jit-enabled.com/"]
+              }
+            } )";
+    {
+      extensions::TestExtensionDir test_app_dir;
+      test_app_dir.WriteManifest(base::StringPrintf(
+          kHostedAppManifest, jit_disabled_app_url.spec().c_str()));
+      SetupApp(test_app_dir.UnpackedPath());
+    }
+
+    // Navigate main window to a jit-disabled.com app URL.
+    ui_test_utils::NavigateToURL(browser(), jit_disabled_app_url);
+    content::WebContents* web_contents =
+        browser()->tab_strip_model()->GetActiveWebContents();
+    EXPECT_EQ(jit_disabled_app_url, web_contents->GetLastCommittedURL());
+    scoped_refptr<content::SiteInstance> site_instance =
+        web_contents->GetMainFrame()->GetSiteInstance();
+    EXPECT_TRUE(
+        site_instance->GetSiteURL().SchemeIs(extensions::kExtensionScheme));
+    EXPECT_TRUE(site_instance->GetProcess()->IsJitDisabled());
+
+    // Navigate main window to a jit-enabled.com app URL.
+    GURL jit_enabled_app_url(
+        embedded_test_server()->GetURL("jit-enabled.com", "/title2.html"));
+    ui_test_utils::NavigateToURL(browser(), jit_enabled_app_url);
+    web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+    EXPECT_EQ(jit_enabled_app_url, web_contents->GetLastCommittedURL());
+    site_instance = web_contents->GetMainFrame()->GetSiteInstance();
+    EXPECT_TRUE(
+        site_instance->GetSiteURL().SchemeIs(extensions::kExtensionScheme));
+    EXPECT_FALSE(site_instance->GetProcess()->IsJitDisabled());
+  }
+
+ private:
+  std::unique_ptr<ScopedJitChromeBrowserClientOverride> scoped_client_override_;
+};
+
+typedef HostedAppJitTestBase<false> HostedAppJitTestBaseDefaultEnabled;
+typedef HostedAppJitTestBase<true> HostedAppJitTestBaseDefaultDisabled;
+
+IN_PROC_BROWSER_TEST_P(HostedAppJitTestBaseDefaultEnabled, JITDisabledTest) {
+  JitTestInternal();
+}
+
+IN_PROC_BROWSER_TEST_P(HostedAppJitTestBaseDefaultDisabled, JITDisabledTest) {
+  JitTestInternal();
+}
+
 // Check that when a hosted app covers multiple sites in its web extent,
 // navigating from one of these sites to another swaps processes.
 IN_PROC_BROWSER_TEST_P(HostedAppSitePerProcessTest,
@@ -1880,7 +2013,7 @@ class HostedAppOriginIsolationTest : public HostedOrWebAppTest {
                 nested_origin_url.spec().c_str());
             content::URLLoaderInterceptor::WriteResponse(
                 headers, body, params->client.get(),
-                base::Optional<net::SSLInfo>());
+                absl::optional<net::SSLInfo>());
             return true;
           } else if (params->url_request.url.host() ==
                      nested_origin_url.host()) {
@@ -1891,7 +2024,7 @@ class HostedAppOriginIsolationTest : public HostedOrWebAppTest {
                 nested_origin_url.spec().c_str());
             content::URLLoaderInterceptor::WriteResponse(
                 headers, body, params->client.get(),
-                base::Optional<net::SSLInfo>());
+                absl::optional<net::SSLInfo>());
             return true;
           }
           // Not handled by us.
@@ -1998,3 +2131,11 @@ INSTANTIATE_TEST_SUITE_P(
     All,
     HostedAppSitePerProcessTest,
     ::testing::Values(AppType::HOSTED_APP));
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         HostedAppJitTestBaseDefaultEnabled,
+                         ::testing::Values(AppType::HOSTED_APP));
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         HostedAppJitTestBaseDefaultDisabled,
+                         ::testing::Values(AppType::HOSTED_APP));

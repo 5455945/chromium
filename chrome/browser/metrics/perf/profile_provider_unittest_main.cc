@@ -5,14 +5,17 @@
 #include "chrome/browser/metrics/perf/profile_provider_chromeos.h"
 
 #include "base/bind.h"
+#include "base/callback_helpers.h"
 #include "base/command_line.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/statistics_recorder.h"
 #include "base/run_loop.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/task/thread_pool.h"
 #include "base/test/bind.h"
 #include "base/test/test_suite.h"
 #include "base/timer/timer.h"
+#include "build/build_config.h"
 #include "chrome/browser/metrics/perf/collection_params.h"
 #include "chrome/browser/metrics/perf/metric_provider.h"
 #include "chrome/browser/metrics/perf/perf_events_collector.h"
@@ -29,9 +32,9 @@ const base::TimeDelta kPeriodicCollectionInterval =
 const base::TimeDelta kMaxCollectionDelay = base::TimeDelta::FromSeconds(1);
 // Use a 2-sec collection duration.
 const base::TimeDelta kCollectionDuration = base::TimeDelta::FromSeconds(2);
-// The timeout in waiting until collection done. 8 sec is a safe value far
+// The timeout in waiting until collection done. 20 seconds is a safe value far
 // beyond the collection duration used.
-const base::TimeDelta kCollectionDoneTimeout = base::TimeDelta::FromSeconds(8);
+const base::TimeDelta kCollectionDoneTimeout = base::TimeDelta::FromSeconds(20);
 
 class TestPerfCollector : public PerfCollector {
  public:
@@ -166,6 +169,7 @@ class ProfileProviderRealCollectionTest : public testing::Test {
     StopSpinningCPU();
 
     profile_provider_.reset();
+    TestingBrowserProcess::DeleteInstance();
     chromeos::LoginState::Shutdown();
     chromeos::PowerManagerClient::Shutdown();
     chromeos::DBusThreadManager::Shutdown();
@@ -208,10 +212,18 @@ class ProfileProviderRealCollectionTest : public testing::Test {
   void StartSpinningCPU() {
     spin_cpu_ = true;
     spin_cpu_task_runner_ = base::ThreadPool::CreateSequencedTaskRunner({});
+    static constexpr auto spin_duration = base::TimeDelta::FromMilliseconds(1);
+    static constexpr auto sleep_duration = base::TimeDelta::FromMilliseconds(9);
     spin_cpu_task_runner_->PostTask(
         FROM_HERE, base::BindOnce(
                        [](ProfileProviderRealCollectionTest* self) {
+                         // Spin the CPU nicely: spin for 1 ms per 10 ms so that
+                         // we don't take more than 10% of a core.
                          while (self->spin_cpu_) {
+                           auto start = base::Time::Now();
+                           while (base::Time::Now() - start < spin_duration) {
+                           }
+                           base::PlatformThread::Sleep(sleep_duration);
                          }
                          // Signal that this task is exiting and won't touch
                          // |this| anymore.
@@ -247,6 +259,7 @@ class ProfileProviderRealCollectionTest : public testing::Test {
   DISALLOW_COPY_AND_ASSIGN(ProfileProviderRealCollectionTest);
 };
 
+// Flaky on chromeos: crbug.com/1184119
 TEST_F(ProfileProviderRealCollectionTest, SuspendDone) {
   // Trigger a resume from suspend.
   profile_provider_->SuspendDone(base::TimeDelta::FromMinutes(10));
@@ -267,6 +280,7 @@ TEST_F(ProfileProviderRealCollectionTest, SessionRestoreDone) {
   AssertProfileData(SampledProfile::RESTORE_SESSION);
 }
 
+// Flaky on Chrome OS: crbug.com/1188498.
 TEST_F(ProfileProviderRealCollectionTest, OnJankStarted) {
   // Trigger a resume from suspend.
   profile_provider_->OnJankStarted();

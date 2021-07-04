@@ -4,6 +4,7 @@
 
 #include "base/bind.h"
 #include "base/test/scoped_feature_list.h"
+#include "build/build_config.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_list.h"
@@ -13,6 +14,7 @@
 #include "chrome/browser/ui/views/location_bar/intent_picker_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
+#include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/test/web_app_navigation_browsertest.h"
 #include "chrome/browser/web_applications/components/web_application_info.h"
 #include "chrome/common/chrome_features.h"
@@ -136,9 +138,17 @@ IN_PROC_BROWSER_TEST_P(IntentPickerBubbleViewBrowserTest,
 // Tests that clicking a link from an app browser to either within or outside
 // the scope of an installed app does not show the intent picker, even when an
 // outside of scope link is opened within the context of the PWA.
+// Flaky on Linux: https://crbug.com/1186613
+#if defined(OS_LINUX)
+#define MAYBE_NavigationInAppWindowToInScopeLinkDoesNotShowIntentPicker \
+  DISABLED_NavigationInAppWindowToInScopeLinkDoesNotShowIntentPicker
+#else
+#define MAYBE_NavigationInAppWindowToInScopeLinkDoesNotShowIntentPicker \
+  NavigationInAppWindowToInScopeLinkDoesNotShowIntentPicker
+#endif
 IN_PROC_BROWSER_TEST_P(
     IntentPickerBubbleViewBrowserTest,
-    NavigationInAppWindowToInScopeLinkDoesNotShowIntentPicker) {
+    MAYBE_NavigationInAppWindowToInScopeLinkDoesNotShowIntentPicker) {
   InstallTestWebApp();
 
   // No intent picker should be seen when first opening the web app.

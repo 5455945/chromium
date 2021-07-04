@@ -28,6 +28,8 @@
 #import "ios/chrome/browser/ui/commands/generate_qr_code_command.h"
 #import "ios/chrome/browser/ui/commands/qr_generation_commands.h"
 #import "ios/chrome/browser/ui/commands/snackbar_commands.h"
+#import "ios/chrome/browser/ui/main/scene_state.h"
+#import "ios/chrome/browser/ui/main/scene_state_browser_agent.h"
 #import "ios/chrome/browser/ui/table_view/table_view_navigation_controller.h"
 #import "ios/chrome/browser/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/web_state_list/web_state_opener.h"
@@ -60,7 +62,7 @@ class MockWebState : public web::FakeWebState {
   }
 
   MOCK_METHOD2(ExecuteJavaScript,
-               void(const base::string16&, JavaScriptResultCallback));
+               void(const std::u16string&, JavaScriptResultCallback));
 };
 
 }  // namespace
@@ -71,7 +73,8 @@ class SharingCoordinatorTest : public BookmarkIOSUnitTest {
   SharingCoordinatorTest()
       : base_view_controller_([[UIViewController alloc] init]),
         fake_origin_view_([[UIView alloc] init]),
-        test_scenario_(ActivityScenario::TabShareButton) {
+        test_scenario_(ActivityScenario::TabShareButton),
+        scene_state_([[SceneState alloc] initWithAppState:nil]) {
     [scoped_key_window_.Get() setRootViewController:base_view_controller_];
   }
 
@@ -81,6 +84,8 @@ class SharingCoordinatorTest : public BookmarkIOSUnitTest {
     [browser_->GetCommandDispatcher()
         startDispatchingToTarget:snackbar_handler_
                      forProtocol:@protocol(SnackbarCommands)];
+
+    SceneStateBrowserAgent::CreateForBrowser(browser_.get(), scene_state_);
   }
 
   void AppendNewWebState(std::unique_ptr<web::FakeWebState> web_state) {
@@ -133,6 +138,7 @@ class SharingCoordinatorTest : public BookmarkIOSUnitTest {
   UIView* fake_origin_view_;
   id snackbar_handler_;
   ActivityScenario test_scenario_;
+  SceneState* scene_state_;
 };
 
 // Tests that the start method shares the current page and ends up presenting
@@ -147,7 +153,7 @@ TEST_F(SharingCoordinatorTest, Start_ShareCurrentPage) {
 
   EXPECT_CALL(*test_web_state, ExecuteJavaScript(testing::_, testing::_))
       .WillOnce(testing::Invoke(
-          [&](const base::string16& javascript,
+          [&](const std::u16string& javascript,
               base::OnceCallback<void(const base::Value*)> callback) {
             std::move(callback).Run(&url_value);
           }));

@@ -8,8 +8,6 @@
 #include <string>
 
 #include "base/macros.h"
-#include "base/observer_list.h"
-#include "base/strings/string16.h"
 #include "chrome/browser/ui/autofill/payments/autofill_dialog_models.h"
 #include "chrome/browser/ui/views/payments/payment_request_sheet_controller.h"
 #include "components/autofill/core/browser/payments/full_card_request.h"
@@ -66,10 +64,10 @@ class CvcUnmaskViewController
 
  protected:
   // PaymentRequestSheetController:
-  base::string16 GetSheetTitle() override;
+  std::u16string GetSheetTitle() override;
   void FillContentView(views::View* content_view) override;
-  base::string16 GetPrimaryButtonLabel() override;
-  views::Button::PressedCallback GetPrimaryButtonCallback() override;
+  std::u16string GetPrimaryButtonLabel() override;
+  ButtonCallback GetPrimaryButtonCallback() override;
   int GetPrimaryButtonId() override;
   bool GetPrimaryButtonEnabled() override;
   bool ShouldShowSecondaryButton() override;
@@ -80,7 +78,7 @@ class CvcUnmaskViewController
   void CvcConfirmed();
 
   // Display a label with the text |error|
-  void DisplayError(base::string16 error);
+  void DisplayError(std::u16string error);
 
   // Updates the enabled state of the pay button
   void UpdatePayButtonState();
@@ -93,7 +91,7 @@ class CvcUnmaskViewController
 
   // views::TextfieldController:
   void ContentsChanged(views::Textfield* sender,
-                       const base::string16& new_contents) override;
+                       const std::u16string& new_contents) override;
 
   void OnPerformAction();
 
@@ -101,7 +99,7 @@ class CvcUnmaskViewController
   autofill::YearComboboxModel year_combobox_model_;
   views::Textfield* cvc_field_;  // owned by the view hierarchy, outlives this.
   autofill::CreditCard credit_card_;
-  const content::GlobalFrameRoutingId frame_routing_id_;
+  const content::GlobalRenderFrameHostId frame_routing_id_;
   autofill::payments::PaymentsClient payments_client_;
   autofill::payments::FullCardRequest full_card_request_;
   base::WeakPtr<autofill::CardUnmaskDelegate> unmask_delegate_;

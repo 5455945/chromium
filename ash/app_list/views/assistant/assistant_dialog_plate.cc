@@ -23,7 +23,9 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chromeos/ui/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/compositor/callback_layer_animation_observer.h"
+#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_palette.h"
@@ -62,9 +64,7 @@ using keyboard::KeyboardUIController;
 // Textfield used for inputting text based Assistant queries.
 class AssistantTextfield : public views::Textfield {
  public:
-  AssistantTextfield() : views::Textfield() {
-    SetID(AssistantViewID::kTextQueryField);
-  }
+  AssistantTextfield() { SetID(AssistantViewID::kTextQueryField); }
 
   // views::Textfield overrides:
   const char* GetClassName() const override { return "AssistantTextfield"; }
@@ -117,17 +117,13 @@ AssistantDialogPlate::~AssistantDialogPlate() {
     AssistantInteractionController::Get()->GetModel()->RemoveObserver(this);
 }
 
-const char* AssistantDialogPlate::GetClassName() const {
-  return "AssistantDialogPlate";
-}
-
 gfx::Size AssistantDialogPlate::CalculatePreferredSize() const {
   return gfx::Size(INT_MAX, GetHeightForWidth(INT_MAX));
 }
 
 void AssistantDialogPlate::OnButtonPressed(AssistantButtonId button_id) {
   delegate_->OnDialogPlateButtonPressed(button_id);
-  textfield_->SetText(base::string16());
+  textfield_->SetText(std::u16string());
 }
 
 bool AssistantDialogPlate::HandleKeyEvent(views::Textfield* textfield,
@@ -153,7 +149,7 @@ bool AssistantDialogPlate::HandleKeyEvent(views::Textfield* textfield,
             base::UTF16ToUTF8(trimmed_text));
       }
 
-      textfield_->SetText(base::string16());
+      textfield_->SetText(std::u16string());
 
       return true;
     }
@@ -273,15 +269,15 @@ void AssistantDialogPlate::OnCommittedQueryChanged(
 void AssistantDialogPlate::OnUiVisibilityChanged(
     AssistantVisibility new_visibility,
     AssistantVisibility old_visibility,
-    base::Optional<AssistantEntryPoint> entry_point,
-    base::Optional<AssistantExitPoint> exit_point) {
+    absl::optional<AssistantEntryPoint> entry_point,
+    absl::optional<AssistantExitPoint> exit_point) {
   if (new_visibility == AssistantVisibility::kVisible) {
     UpdateModalityVisibility();
     UpdateKeyboardVisibility();
   } else {
     // When the Assistant UI is no longer visible we need to clear the dialog
     // plate so that text does not persist across Assistant launches.
-    textfield_->SetText(base::string16());
+    textfield_->SetText(std::u16string());
 
     HideKeyboardIfEnabled();
   }
@@ -299,7 +295,7 @@ views::View* AssistantDialogPlate::FindFirstFocusableView() {
     case InputModality::kKeyboard:
       return textfield_;
     case InputModality::kVoice:
-      return voice_layout_container_;
+      return animated_voice_input_toggle_;
   }
 }
 
@@ -501,5 +497,8 @@ bool AssistantDialogPlate::OnAnimationEnded(
 InputModality AssistantDialogPlate::input_modality() const {
   return AssistantInteractionController::Get()->GetModel()->input_modality();
 }
+
+BEGIN_METADATA(AssistantDialogPlate, views::View)
+END_METADATA
 
 }  // namespace ash

@@ -13,6 +13,7 @@
 #include "ash/style/ash_color_provider.h"
 #include "ash/system/tray/tray_popup_utils.h"
 #include "ash/system/unified/unified_system_tray_controller.h"
+#include "base/bind.h"
 #include "base/i18n/number_formatting.h"
 #include "base/macros.h"
 #include "base/metrics/histogram_macros.h"
@@ -25,6 +26,7 @@
 #include "ui/gfx/skia_util.h"
 #include "ui/strings/grit/ui_strings.h"
 #include "ui/views/animation/flood_fill_ink_drop_ripple.h"
+#include "ui/views/animation/ink_drop.h"
 #include "ui/views/animation/ink_drop_highlight.h"
 #include "ui/views/animation/ink_drop_impl.h"
 #include "ui/views/background.h"
@@ -51,8 +53,34 @@ class PageIndicatorView::PageIndicatorButton : public views::Button {
             base::Unretained(controller),
             page)) {
     SetFocusBehavior(views::View::FocusBehavior::ACCESSIBLE_ONLY);
-    SetInkDropMode(InkDropMode::ON);
+    views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::ON);
     views::InstallFixedSizeCircleHighlightPathGenerator(this, kInkDropRadius);
+    views::InkDrop::Get(this)->SetCreateInkDropCallback(base::BindRepeating(
+        [](Button* host) {
+          return TrayPopupUtils::CreateInkDrop(host,
+                                               /*highlight_on_hover=*/true);
+        },
+        this));
+    views::InkDrop::Get(this)->SetCreateHighlightCallback(base::BindRepeating(
+        [](PageIndicatorButton* host) {
+          auto highlight = std::make_unique<views::InkDropHighlight>(
+              gfx::SizeF(host->size()), host->ripple_base_color_);
+          highlight->set_visible_opacity(host->highlight_opacity_);
+          return highlight;
+        },
+        this));
+    views::InkDrop::Get(this)->SetCreateRippleCallback(base::BindRepeating(
+        [](PageIndicatorButton* host) -> std::unique_ptr<views::InkDropRipple> {
+          gfx::Point center = host->GetLocalBounds().CenterPoint();
+          gfx::Rect bounds(center.x() - kInkDropRadius,
+                           center.y() - kInkDropRadius, 2 * kInkDropRadius,
+                           2 * kInkDropRadius);
+          return std::make_unique<views::FloodFillInkDropRipple>(
+              host->size(), host->GetLocalBounds().InsetsFrom(bounds),
+              views::InkDrop::Get(host)->GetInkDropCenterBasedOnLastEvent(),
+              host->ripple_base_color_, host->inkdrop_opacity_);
+        },
+        this));
   }
 
   ~PageIndicatorButton() override {}
@@ -106,33 +134,10 @@ class PageIndicatorView::PageIndicatorButton : public views::Button {
 
  protected:
   // views::Button:
-  std::unique_ptr<views::InkDrop> CreateInkDrop() override {
-    auto ink_drop = TrayPopupUtils::CreateInkDrop(this);
-    ink_drop->SetShowHighlightOnHover(true);
-    return ink_drop;
-  }
-
-  std::unique_ptr<views::InkDropRipple> CreateInkDropRipple() const override {
-    gfx::Point center = GetLocalBounds().CenterPoint();
-    gfx::Rect bounds(center.x() - kInkDropRadius, center.y() - kInkDropRadius,
-                     2 * kInkDropRadius, 2 * kInkDropRadius);
-    return std::make_unique<views::FloodFillInkDropRipple>(
-        size(), GetLocalBounds().InsetsFrom(bounds),
-        GetInkDropCenterBasedOnLastEvent(), ripple_base_color_,
-        inkdrop_opacity_);
-  }
-
-  std::unique_ptr<views::InkDropHighlight> CreateInkDropHighlight()
-      const override {
-    auto highlight = std::make_unique<views::InkDropHighlight>(
-        gfx::SizeF(size()), ripple_base_color_);
-    highlight->set_visible_opacity(highlight_opacity_);
-    return highlight;
-  }
-
   void NotifyClick(const ui::Event& event) override {
     Button::NotifyClick(event);
-    GetInkDrop()->AnimateToState(views::InkDropState::ACTION_TRIGGERED);
+    views::InkDrop::Get(this)->GetInkDrop()->AnimateToState(
+        views::InkDropState::ACTION_TRIGGERED);
   }
 
  private:
@@ -228,9 +233,9 @@ void PageIndicatorView::SelectedPageChanged(int old_selected,
                                             int new_selected) {
   size_t total_children = buttons_container_->children().size();
 
-  if (old_selected >= 0 && size_t{old_selected} < total_children)
+  if (old_selected >= 0 && static_cast<size_t>(old_selected) < total_children)
     GetButtonByIndex(old_selected)->SetSelected(false);
-  if (new_selected >= 0 && size_t{old_selected} < total_children)
+  if (new_selected >= 0 && static_cast<size_t>(new_selected) < total_children)
     GetButtonByIndex(new_selected)->SetSelected(true);
 }
 

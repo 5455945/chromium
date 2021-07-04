@@ -15,14 +15,22 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chromeos/services/ime/public/cpp/suggestions.h"
 #include "components/exo/wm_helper.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "ui/base/ime/chromeos/ime_bridge.h"
+#include "ui/base/ime/chromeos/ime_input_context_handler_interface.h"
+#include "ui/base/ime/chromeos/input_method_ukm.h"
 #include "url/gurl.h"
 
 namespace chromeos {
 
 namespace {
+
+using ::chromeos::ime::TextSuggestion;
+using ::chromeos::ime::TextSuggestionMode;
+using ::chromeos::ime::TextSuggestionType;
 
 const char kMaxTextBeforeCursorLength = 50;
 
@@ -34,6 +42,13 @@ const char* kAllowedDomainsForPersonalInfoSuggester[] = {
 };
 
 const char* kAllowedDomainsForEmojiSuggester[] = {
+    "discord.com",      "messenger.com",       "web.whatsapp.com",
+    "web.skype.com",    "duo.google.com",      "hangouts.google.com",
+    "chat.google.com",  "messages.google.com", "web.telegram.org",
+    "voice.google.com",
+};
+
+const char* kAllowedDomainsForMultiWordSuggester[] = {
     "discord.com",      "messenger.com",       "web.whatsapp.com",
     "web.skype.com",    "duo.google.com",      "hangouts.google.com",
     "chat.google.com",  "messages.google.com", "web.telegram.org",
@@ -104,8 +119,43 @@ const char* kAllowedAppsForEmojiSuggester[] = {
     "mmfbcljfglbokpmkimbfghdkjmjhdgbg",  // System text
 };
 
+// For ARC++ apps, use arc package name. For system apps, use app ID.
+const char* kAllowedAppsForMultiWordSuggester[] = {
+    "com.discord",
+    "com.facebook.orca",
+    "com.whatsapp",
+    "com.skype.raider",
+    "com.google.android.apps.tachyon",
+    "com.google.android.talk",
+    "org.telegram.messenger",
+    "com.enflick.android.TextNow",
+    "com.facebook.mlite",
+    "com.viber.voip",
+    "com.skype.m2",
+    "com.imo.android.imoim",
+    "com.google.android.apps.googlevoice",
+    "com.playstation.mobilemessenger",
+    "kik.android",
+    "com.link.messages.sms",
+    "jp.naver.line.android",
+    "com.skype.m2",
+    "co.happybits.marcopolo",
+    "com.imo.android.imous",
+    "mmfbcljfglbokpmkimbfghdkjmjhdgbg",  // System text
+};
+
 void RecordAssistiveMatch(AssistiveType type) {
   base::UmaHistogramEnumeration("InputMethod.Assistive.Match", type);
+
+  ui::IMEInputContextHandlerInterface* input_context =
+      ui::IMEBridge::Get()->GetInputContextHandler();
+  if (!input_context)
+    return;
+
+  auto sourceId = input_context->GetClientSourceForMetrics();
+  if (sourceId != ukm::kInvalidSourceId) {
+    ui::RecordUkmAssistiveMatch(sourceId, static_cast<int>(type));
+  }
 }
 
 void RecordAssistiveDisabled(AssistiveType type) {
@@ -121,6 +171,11 @@ void RecordAssistiveDisabledReasonForEmoji(DisabledReason reason) {
   base::UmaHistogramEnumeration("InputMethod.Assistive.Disabled.Emoji", reason);
 }
 
+void RecordAssistiveDisabledReasonForMultiWord(DisabledReason reason) {
+  base::UmaHistogramEnumeration("InputMethod.Assistive.Disabled.MultiWord",
+                                reason);
+}
+
 void RecordAssistiveUserPrefForPersonalInfo(bool value) {
   base::UmaHistogramBoolean("InputMethod.Assistive.UserPref.PersonalInfo",
                             value);
@@ -128,6 +183,10 @@ void RecordAssistiveUserPrefForPersonalInfo(bool value) {
 
 void RecordAssistiveUserPrefForEmoji(bool value) {
   base::UmaHistogramBoolean("InputMethod.Assistive.UserPref.Emoji", value);
+}
+
+void RecordAssistiveUserPrefForMultiWord(bool value) {
+  base::UmaHistogramBoolean("InputMethod.Assistive.UserPref.MultiWord", value);
 }
 
 void RecordAssistiveNotAllowed(AssistiveType type) {
@@ -218,21 +277,55 @@ bool IsAllowedUrlOrAppForEmojiSuggestion() {
          IsAllowedApp(kAllowedAppsForEmojiSuggester);
 }
 
+bool IsAllowedUrlOrAppForMultiWordSuggestion() {
+  return IsAllowedUrl(kAllowedDomainsForMultiWordSuggester) ||
+         IsAllowedApp(kAllowedAppsForMultiWordSuggester);
+}
+
+bool IsTopResultMultiWord(const std::vector<TextSuggestion>& suggestions) {
+  if (suggestions.empty())
+    return false;
+  // There should only ever be one multi word suggestion given if any.
+  return suggestions[0].type == TextSuggestionType::kMultiWord;
+}
+
+void RecordSuggestionsMatch(const std::vector<TextSuggestion>& suggestions) {
+  if (suggestions.empty())
+    return;
+
+  auto top_result = suggestions[0];
+  if (top_result.type != TextSuggestionType::kMultiWord)
+    return;
+
+  switch (top_result.mode) {
+    case TextSuggestionMode::kCompletion:
+      RecordAssistiveMatch(AssistiveType::kMultiWordCompletion);
+      return;
+    case TextSuggestionMode::kPrediction:
+      RecordAssistiveMatch(AssistiveType::kMultiWordPrediction);
+      return;
+  }
+}
+
 }  // namespace
 
 AssistiveSuggester::AssistiveSuggester(InputMethodEngine* engine,
                                        Profile* profile)
     : profile_(profile),
       personal_info_suggester_(engine, profile),
-      emoji_suggester_(engine, profile) {
+      emoji_suggester_(engine, profile),
+      multi_word_suggester_(engine) {
   RecordAssistiveUserPrefForPersonalInfo(
       profile_->GetPrefs()->GetBoolean(prefs::kAssistPersonalInfoEnabled));
   RecordAssistiveUserPrefForEmoji(
       profile_->GetPrefs()->GetBoolean(prefs::kEmojiSuggestionEnabled));
+  RecordAssistiveUserPrefForMultiWord(
+      profile_->GetPrefs()->GetBoolean(prefs::kAssistPredictiveWritingEnabled));
 }
 
 bool AssistiveSuggester::IsAssistiveFeatureEnabled() {
-  return IsAssistPersonalInfoEnabled() || IsEmojiSuggestAdditionEnabled();
+  return IsAssistPersonalInfoEnabled() || IsEmojiSuggestAdditionEnabled() ||
+         IsMultiWordSuggestEnabled();
 }
 
 bool AssistiveSuggester::IsAssistPersonalInfoEnabled() {
@@ -247,6 +340,12 @@ bool AssistiveSuggester::IsEmojiSuggestAdditionEnabled() {
          profile_->GetPrefs()->GetBoolean(
              prefs::kEmojiSuggestionEnterpriseAllowed) &&
          profile_->GetPrefs()->GetBoolean(prefs::kEmojiSuggestionEnabled);
+}
+
+bool AssistiveSuggester::IsMultiWordSuggestEnabled() {
+  return chromeos::features::IsAssistiveMultiWordEnabled() &&
+         profile_->GetPrefs()->GetBoolean(
+             prefs::kAssistPredictiveWritingEnabled);
 }
 
 DisabledReason AssistiveSuggester::GetDisabledReasonForPersonalInfo() {
@@ -280,6 +379,20 @@ DisabledReason AssistiveSuggester::GetDisabledReasonForEmoji() {
   return DisabledReason::kNone;
 }
 
+DisabledReason AssistiveSuggester::GetDisabledReasonForMultiWord() {
+  if (!chromeos::features::IsAssistiveMultiWordEnabled()) {
+    return DisabledReason::kFeatureFlagOff;
+  }
+  if (!profile_->GetPrefs()->GetBoolean(
+          prefs::kAssistPredictiveWritingEnabled)) {
+    return DisabledReason::kUserSettingsOff;
+  }
+  if (!IsAllowedUrlOrAppForMultiWordSuggestion()) {
+    return DisabledReason::kUrlOrAppNotAllowed;
+  }
+  return DisabledReason::kNone;
+}
+
 bool AssistiveSuggester::IsActionEnabled(AssistiveType action) {
   switch (action) {
     case AssistiveType::kPersonalEmail:
@@ -294,6 +407,9 @@ bool AssistiveSuggester::IsActionEnabled(AssistiveType action) {
       break;
     case AssistiveType::kEmoji:
       return IsEmojiSuggestAdditionEnabled();
+    case AssistiveType::kMultiWordCompletion:
+    case AssistiveType::kMultiWordPrediction:
+      return IsMultiWordSuggestEnabled();
     default:
       break;
   }
@@ -304,12 +420,14 @@ void AssistiveSuggester::OnFocus(int context_id) {
   context_id_ = context_id;
   personal_info_suggester_.OnFocus(context_id_);
   emoji_suggester_.OnFocus(context_id_);
+  multi_word_suggester_.OnFocus(context_id_);
 }
 
 void AssistiveSuggester::OnBlur() {
   context_id_ = -1;
   personal_info_suggester_.OnBlur();
   emoji_suggester_.OnBlur();
+  multi_word_suggester_.OnBlur();
 }
 
 bool AssistiveSuggester::OnKeyEvent(const ui::KeyEvent& event) {
@@ -336,7 +454,30 @@ bool AssistiveSuggester::OnKeyEvent(const ui::KeyEvent& event) {
         break;
     }
   }
+
   return false;
+}
+
+void AssistiveSuggester::OnExternalSuggestionsUpdated(
+    const std::vector<TextSuggestion>& suggestions) {
+  if (!IsMultiWordSuggestEnabled() ||
+      !IsAllowedUrlOrAppForMultiWordSuggestion()) {
+    RecordAssistiveDisabledReasonForMultiWord(GetDisabledReasonForMultiWord());
+    return;
+  }
+
+  RecordSuggestionsMatch(suggestions);
+
+  if (current_suggester_) {
+    current_suggester_->OnExternalSuggestionsUpdated(suggestions);
+    return;
+  }
+
+  if (IsTopResultMultiWord(suggestions)) {
+    current_suggester_ = &multi_word_suggester_;
+    current_suggester_->OnExternalSuggestionsUpdated(suggestions);
+    RecordAssistiveCoverage(current_suggester_->GetProposeActionType());
+  }
 }
 
 void AssistiveSuggester::RecordAssistiveMatchMetricsForAction(
@@ -349,14 +490,14 @@ void AssistiveSuggester::RecordAssistiveMatchMetricsForAction(
   }
 }
 
-void AssistiveSuggester::RecordAssistiveMatchMetrics(const base::string16& text,
+void AssistiveSuggester::RecordAssistiveMatchMetrics(const std::u16string& text,
                                                      int cursor_pos,
                                                      int anchor_pos) {
   int len = static_cast<int>(text.length());
   if (cursor_pos > 0 && cursor_pos <= len && cursor_pos == anchor_pos &&
       (cursor_pos == len || base::IsAsciiWhitespace(text[cursor_pos]))) {
     int start_pos = std::max(0, cursor_pos - kMaxTextBeforeCursorLength);
-    base::string16 text_before_cursor =
+    std::u16string text_before_cursor =
         text.substr(start_pos, cursor_pos - start_pos);
     // Personal info suggestion match
     AssistiveType action =
@@ -375,37 +516,53 @@ void AssistiveSuggester::RecordAssistiveMatchMetrics(const base::string16& text,
   }
 }
 
-bool AssistiveSuggester::OnSurroundingTextChanged(const base::string16& text,
+bool AssistiveSuggester::WithinGrammarFragment(int cursor_pos, int anchor_pos) {
+  ui::IMEInputContextHandlerInterface* input_context =
+      ui::IMEBridge::Get()->GetInputContextHandler();
+  if (!input_context)
+    return false;
+
+  gfx::Range cursor_range = cursor_pos <= anchor_pos
+                                ? gfx::Range(cursor_pos, anchor_pos)
+                                : gfx::Range(anchor_pos, cursor_pos);
+  absl::optional<ui::GrammarFragment> grammar_fragment_opt =
+      input_context->GetGrammarFragment(cursor_range);
+
+  return grammar_fragment_opt != absl::nullopt;
+}
+
+bool AssistiveSuggester::OnSurroundingTextChanged(const std::u16string& text,
                                                   int cursor_pos,
                                                   int anchor_pos) {
   if (context_id_ == -1)
     return false;
 
-  if (!Suggest(text, cursor_pos, anchor_pos)) {
+  if (IsMultiWordSuggestEnabled()) {
+    // Only multi word cares about tracking the current state of the text field
+    multi_word_suggester_.OnSurroundingTextChanged(text, cursor_pos,
+                                                   anchor_pos);
+  }
+
+  if (WithinGrammarFragment(cursor_pos, anchor_pos) ||
+      !Suggest(text, cursor_pos, anchor_pos)) {
     DismissSuggestion();
   }
   return IsSuggestionShown();
 }
 
-bool AssistiveSuggester::Suggest(const base::string16& text,
+bool AssistiveSuggester::Suggest(const std::u16string& text,
                                  int cursor_pos,
                                  int anchor_pos) {
   int len = static_cast<int>(text.length());
   if (cursor_pos > 0 && cursor_pos <= len && cursor_pos == anchor_pos &&
       (cursor_pos == len || base::IsAsciiWhitespace(text[cursor_pos])) &&
       (base::IsAsciiWhitespace(text[cursor_pos - 1]) || IsSuggestionShown())) {
-    // |text| could be very long, we get at most |kMaxTextBeforeCursorLength|
-    // characters before cursor.
-    int start_pos = std::max(0, cursor_pos - kMaxTextBeforeCursorLength);
-    base::string16 text_before_cursor =
-        text.substr(start_pos, cursor_pos - start_pos);
-
     if (IsSuggestionShown()) {
-      return current_suggester_->Suggest(text_before_cursor);
+      return current_suggester_->Suggest(text, cursor_pos, anchor_pos);
     }
     if (IsAssistPersonalInfoEnabled() &&
         IsAllowedUrlOrAppForPersonalInfoSuggestion() &&
-        personal_info_suggester_.Suggest(text_before_cursor)) {
+        personal_info_suggester_.Suggest(text, cursor_pos, anchor_pos)) {
       current_suggester_ = &personal_info_suggester_;
       if (personal_info_suggester_.IsFirstShown()) {
         RecordAssistiveCoverage(current_suggester_->GetProposeActionType());
@@ -413,7 +570,7 @@ bool AssistiveSuggester::Suggest(const base::string16& text,
       return true;
     } else if (IsEmojiSuggestAdditionEnabled() &&
                IsAllowedUrlOrAppForEmojiSuggestion() &&
-               emoji_suggester_.Suggest(text_before_cursor)) {
+               emoji_suggester_.Suggest(text, cursor_pos, anchor_pos)) {
       current_suggester_ = &emoji_suggester_;
       RecordAssistiveCoverage(current_suggester_->GetProposeActionType());
       return true;
@@ -437,6 +594,12 @@ void AssistiveSuggester::DismissSuggestion() {
 
 bool AssistiveSuggester::IsSuggestionShown() {
   return current_suggester_ != nullptr;
+}
+
+std::vector<ime::TextSuggestion> AssistiveSuggester::GetSuggestions() {
+  if (IsSuggestionShown())
+    return current_suggester_->GetSuggestions();
+  return {};
 }
 
 }  // namespace chromeos

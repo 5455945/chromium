@@ -23,10 +23,12 @@
 #include "remoting/base/service_urls.h"
 #include "remoting/host/chromoting_host.h"
 #include "remoting/host/chromoting_host_context.h"
+#include "remoting/host/ftl_signaling_connector.h"
 #include "remoting/host/host_event_logger.h"
 #include "remoting/host/host_secret.h"
 #include "remoting/host/host_status_logger.h"
 #include "remoting/host/it2me/it2me_confirmation_dialog.h"
+#include "remoting/host/it2me/it2me_helpers.h"
 #include "remoting/host/it2me_desktop_environment.h"
 #include "remoting/protocol/auth_util.h"
 #include "remoting/protocol/chromium_port_allocator_factory.h"
@@ -134,15 +136,27 @@ void It2MeHost::ConnectOnNetworkThread(
     const protocol::IceConfig& ice_config,
     CreateDeferredConnectContext create_context) {
   DCHECK(host_context_->network_task_runner()->BelongsToCurrentThread());
-  DCHECK_EQ(kDisconnected, state_);
+  DCHECK_EQ(It2MeHostState::kDisconnected, state_);
 
-  SetState(kStarting, ErrorCode::OK);
+  SetState(It2MeHostState::kStarting, ErrorCode::OK);
 
   auto connection_context = std::move(create_context).Run(host_context_.get());
   log_to_server_ = std::move(connection_context->log_to_server);
   signal_strategy_ = std::move(connection_context->signal_strategy);
   DCHECK(log_to_server_);
   DCHECK(signal_strategy_);
+
+  if (connection_context->use_ftl_signaling) {
+    // If the host owns the signaling channel then we want to make sure that it
+    // will reconnect that channel if a transient network error occurs.
+    // FtlSignalingConnector takes a callback which will indicate whether an
+    // auth error has occurred (e.g. token expired). For our purposes, there
+    // isn't anything we need to do in this case since a new token will be
+    // generated for the next connection.
+    ftl_signaling_connector_ = std::make_unique<FtlSignalingConnector>(
+        signal_strategy_.get(), base::DoNothing::Once());
+    ftl_signaling_connector_->Start();
+  }
 
   // Check the host domain policy.
   if (!required_host_domain_list_.empty()) {
@@ -155,7 +169,7 @@ void It2MeHost::ConnectOnNetworkThread(
       }
     }
     if (!matched) {
-      SetState(kInvalidDomainError, ErrorCode::OK);
+      SetState(It2MeHostState::kInvalidDomainError, ErrorCode::OK);
       return;
     }
   }
@@ -237,7 +251,7 @@ void It2MeHost::ConnectOnNetworkThread(
   signal_strategy_->Connect();
   host_->Start(username);
 
-  SetState(kRequestedAccessCode, ErrorCode::OK);
+  SetState(It2MeHostState::kRequestedAccessCode, ErrorCode::OK);
   return;
 }
 
@@ -248,10 +262,10 @@ void It2MeHost::OnAccessDenied(const std::string& jid) {
   if (failed_login_attempts_ == kMaxLoginAttempts) {
     DisconnectOnNetworkThread();
   } else if (connecting_jid_ == NormalizeSignalingId(jid)) {
-    DCHECK_EQ(state_, kConnecting);
+    DCHECK_EQ(state_, It2MeHostState::kConnecting);
     connecting_jid_.clear();
     confirmation_dialog_proxy_.reset();
-    SetState(kReceivedAccessCode, ErrorCode::OK);
+    SetState(It2MeHostState::kReceivedAccessCode, ErrorCode::OK);
   }
 }
 
@@ -260,7 +274,7 @@ void It2MeHost::OnClientConnected(const std::string& jid) {
 
   // ChromotingHost doesn't allow concurrent connections and the host is
   // destroyed in OnClientDisconnected() after the first connection.
-  CHECK_NE(state_, kConnected);
+  CHECK_NE(state_, It2MeHostState::kConnected);
 
   std::string client_username;
   if (!SplitSignalingIdResource(jid, &client_username, /*resource=*/nullptr)) {
@@ -275,7 +289,7 @@ void It2MeHost::OnClientConnected(const std::string& jid) {
       FROM_HERE, base::BindOnce(&It2MeHost::Observer::OnClientAuthenticated,
                                 observer_, client_username));
 
-  SetState(kConnected, ErrorCode::OK);
+  SetState(It2MeHostState::kConnected, ErrorCode::OK);
 }
 
 void It2MeHost::OnClientDisconnected(const std::string& jid) {
@@ -318,7 +332,7 @@ void It2MeHost::OnPolicyUpdate(
   if (policies->GetList(policy::key::kRemoteAccessHostDomainList,
                         &host_domain_list)) {
     std::vector<std::string> host_domain_list_vector;
-    for (const auto& value : *host_domain_list) {
+    for (const auto& value : host_domain_list->GetList()) {
       host_domain_list_vector.push_back(value.GetString());
     }
     UpdateHostDomainListPolicy(std::move(host_domain_list_vector));
@@ -328,7 +342,7 @@ void It2MeHost::OnPolicyUpdate(
   if (policies->GetList(policy::key::kRemoteAccessHostClientDomainList,
                         &client_domain_list)) {
     std::vector<std::string> client_domain_list_vector;
-    for (const auto& value : *client_domain_list) {
+    for (const auto& value : client_domain_list->GetList()) {
       client_domain_list_vector.push_back(value.GetString());
     }
     UpdateClientDomainListPolicy(std::move(client_domain_list_vector));
@@ -417,40 +431,48 @@ void It2MeHost::SetState(It2MeHostState state, ErrorCode error_code) {
   DCHECK(host_context_->network_task_runner()->BelongsToCurrentThread());
 
   switch (state_) {
-    case kDisconnected:
-      DCHECK(state == kStarting ||
-             state == kError) << state;
+    case It2MeHostState::kDisconnected:
+      DCHECK(state == It2MeHostState::kStarting ||
+             state == It2MeHostState::kError)
+          << It2MeHostStateToString(state);
       break;
-    case kStarting:
-      DCHECK(state == kRequestedAccessCode ||
-             state == kDisconnected ||
-             state == kError ||
-             state == kInvalidDomainError) << state;
+    case It2MeHostState::kStarting:
+      DCHECK(state == It2MeHostState::kRequestedAccessCode ||
+             state == It2MeHostState::kDisconnected ||
+             state == It2MeHostState::kError ||
+             state == It2MeHostState::kInvalidDomainError)
+          << It2MeHostStateToString(state);
       break;
-    case kRequestedAccessCode:
-      DCHECK(state == kReceivedAccessCode ||
-             state == kDisconnected ||
-             state == kError) << state;
+    case It2MeHostState::kRequestedAccessCode:
+      DCHECK(state == It2MeHostState::kReceivedAccessCode ||
+             state == It2MeHostState::kDisconnected ||
+             state == It2MeHostState::kError)
+          << It2MeHostStateToString(state);
       break;
-    case kReceivedAccessCode:
-      DCHECK(state == kConnecting ||
-             state == kDisconnected ||
-             state == kError) << state;
+    case It2MeHostState::kReceivedAccessCode:
+      DCHECK(state == It2MeHostState::kConnecting ||
+             state == It2MeHostState::kDisconnected ||
+             state == It2MeHostState::kError)
+          << It2MeHostStateToString(state);
       break;
-    case kConnecting:
-      DCHECK(state == kConnected ||
-             state == kDisconnected ||
-             state == kError) << state;
+    case It2MeHostState::kConnecting:
+      DCHECK(state == It2MeHostState::kConnected ||
+             state == It2MeHostState::kDisconnected ||
+             state == It2MeHostState::kError)
+          << It2MeHostStateToString(state);
       break;
-    case kConnected:
-      DCHECK(state == kDisconnected ||
-             state == kError) << state;
+    case It2MeHostState::kConnected:
+      DCHECK(state == It2MeHostState::kDisconnected ||
+             state == It2MeHostState::kError)
+          << It2MeHostStateToString(state);
       break;
-    case kError:
-      DCHECK(state == kDisconnected) << state;
+    case It2MeHostState::kError:
+      DCHECK(state == It2MeHostState::kDisconnected)
+          << It2MeHostStateToString(state);
       break;
-    case kInvalidDomainError:
-      DCHECK(state == kDisconnected) << state;
+    case It2MeHostState::kInvalidDomainError:
+      DCHECK(state == It2MeHostState::kDisconnected)
+          << It2MeHostStateToString(state);
       break;
   };
 
@@ -463,8 +485,10 @@ void It2MeHost::SetState(It2MeHostState state, ErrorCode error_code) {
 }
 
 bool It2MeHost::IsRunning() const {
-  return state_ == kRequestedAccessCode || state_ == kReceivedAccessCode ||
-         state_ == kConnected || state_ == kConnecting;
+  return state_ == It2MeHostState::kRequestedAccessCode ||
+         state_ == It2MeHostState::kReceivedAccessCode ||
+         state_ == It2MeHostState::kConnected ||
+         state_ == It2MeHostState::kConnecting;
 }
 
 void It2MeHost::OnReceivedSupportID(const std::string& support_id,
@@ -473,7 +497,7 @@ void It2MeHost::OnReceivedSupportID(const std::string& support_id,
   DCHECK(host_context_->network_task_runner()->BelongsToCurrentThread());
 
   if (error_code != ErrorCode::OK) {
-    SetState(kError, error_code);
+    SetState(It2MeHostState::kError, error_code);
     DisconnectOnNetworkThread();
     return;
   }
@@ -486,7 +510,7 @@ void It2MeHost::OnReceivedSupportID(const std::string& support_id,
   std::string local_certificate = host_key_pair_->GenerateCertificate();
   if (local_certificate.empty()) {
     LOG(ERROR) << "Failed to generate host certificate.";
-    SetState(kError, ErrorCode::HOST_CERTIFICATE_ERROR);
+    SetState(It2MeHostState::kError, ErrorCode::HOST_CERTIFICATE_ERROR);
     DisconnectOnNetworkThread();
     return;
   }
@@ -503,7 +527,7 @@ void It2MeHost::OnReceivedSupportID(const std::string& support_id,
       FROM_HERE, base::BindOnce(&It2MeHost::Observer::OnStoreAccessCode,
                                 observer_, access_code, lifetime));
 
-  SetState(kReceivedAccessCode, ErrorCode::OK);
+  SetState(It2MeHostState::kReceivedAccessCode, ErrorCode::OK);
 }
 
 void It2MeHost::DisconnectOnNetworkThread() {
@@ -511,7 +535,7 @@ void It2MeHost::DisconnectOnNetworkThread() {
 
   // Disconnect() may be called even after the host has already been stopped.
   // Ignore repeated calls.
-  if (state_ == kDisconnected) {
+  if (state_ == It2MeHostState::kDisconnected) {
     return;
   }
 
@@ -525,6 +549,7 @@ void It2MeHost::DisconnectOnNetworkThread() {
   register_request_ = nullptr;
   host_status_logger_ = nullptr;
   log_to_server_ = nullptr;
+  ftl_signaling_connector_ = nullptr;
   signal_strategy_ = nullptr;
   host_event_logger_ = nullptr;
 
@@ -532,7 +557,7 @@ void It2MeHost::DisconnectOnNetworkThread() {
   host_context_->ui_task_runner()->DeleteSoon(
       FROM_HERE, desktop_environment_factory_.release());
 
-  SetState(kDisconnected, ErrorCode::OK);
+  SetState(It2MeHostState::kDisconnected, ErrorCode::OK);
 }
 
 void It2MeHost::ValidateConnectionDetails(
@@ -582,8 +607,8 @@ void It2MeHost::ValidateConnectionDetails(
 
   // If we receive valid connection details multiple times, then we don't know
   // which remote user (if either) is valid so disconnect everyone.
-  if (state_ != kReceivedAccessCode) {
-    DCHECK_EQ(kConnecting, state_);
+  if (state_ != It2MeHostState::kReceivedAccessCode) {
+    DCHECK_EQ(It2MeHostState::kConnecting, state_);
     LOG(ERROR) << "Received too many connection requests.";
     std::move(result_callback)
         .Run(ValidationResult::ERROR_TOO_MANY_CONNECTIONS);
@@ -593,7 +618,7 @@ void It2MeHost::ValidateConnectionDetails(
 
   HOST_LOG << "Client " << client_username << " connecting.";
   connecting_jid_ = remote_jid;
-  SetState(kConnecting, ErrorCode::OK);
+  SetState(It2MeHostState::kConnecting, ErrorCode::OK);
 
   // Show a confirmation dialog to the user to allow them to confirm/reject it.
   // If dialogs are suppressed, just call the callback directly.

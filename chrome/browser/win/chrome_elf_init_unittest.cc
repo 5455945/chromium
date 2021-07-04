@@ -5,10 +5,10 @@
 #include "chrome/browser/win/chrome_elf_init.h"
 
 #include <memory>
+#include <string>
 
 #include "base/macros.h"
 #include "base/metrics/field_trial.h"
-#include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/test_reg_util_win.h"
 #include "chrome/chrome_elf/chrome_elf_constants.h"
@@ -32,12 +32,12 @@ class ChromeBlacklistTrialTest : public testing::Test {
     ASSERT_NO_FATAL_FAILURE(
         override_manager_.OverrideRegistry(HKEY_CURRENT_USER));
 
-    blacklist_registry_key_.reset(
-        new base::win::RegKey(HKEY_CURRENT_USER,
-                              install_static::GetRegistryPath()
-                                  .append(blacklist::kRegistryBeaconKeyName)
-                                  .c_str(),
-                              KEY_QUERY_VALUE | KEY_SET_VALUE));
+    blacklist_registry_key_ = std::make_unique<base::win::RegKey>(
+        HKEY_CURRENT_USER,
+        install_static::GetRegistryPath()
+            .append(blacklist::kRegistryBeaconKeyName)
+            .c_str(),
+        KEY_QUERY_VALUE | KEY_SET_VALUE);
   }
 
   DWORD GetBlacklistState() {

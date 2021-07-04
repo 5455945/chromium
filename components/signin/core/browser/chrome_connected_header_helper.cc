@@ -19,6 +19,11 @@
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "url/gurl.h"
 
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+#include "chromeos/crosapi/mojom/crosapi.mojom.h"
+#include "chromeos/lacros/lacros_chrome_service_impl.h"
+#endif
+
 namespace signin {
 
 namespace {
@@ -35,7 +40,7 @@ const char kProfileModeAttrName[] = "mode";
 const char kServiceTypeAttrName[] = "action";
 const char kSupervisedAttrName[] = "supervised";
 const char kSourceAttrName[] = "source";
-#if defined(OS_ANDROID) || defined(OS_IOS)
+#if defined(OS_ANDROID)
 const char kEligibleForConsistency[] = "eligible_for_consistency";
 const char kShowConsistencyPromo[] = "show_consistency_promo";
 #endif
@@ -79,7 +84,7 @@ std::string ChromeConnectedHeaderHelper::BuildRequestCookieIfPossible(
   // this information in the ChromeConnected cookie.
   return chrome_connected_helper.BuildRequestHeader(
       false /* is_header_request */, url, gaia_id,
-      base::nullopt /* is_child_account */, profile_mode_mask, "" /* source */,
+      absl::nullopt /* is_child_account */, profile_mode_mask, "" /* source */,
       false /* force_account_consistency */);
 }
 
@@ -104,7 +109,7 @@ ManageAccountsParams ChromeConnectedHeaderHelper::BuildManageAccountsParams(
       params.continue_url = value;
     } else if (key_name == kIsSameTabAttrName) {
       params.is_same_tab = value == "true";
-#if defined(OS_ANDROID) || defined(OS_IOS)
+#if defined(OS_ANDROID)
     } else if (key_name == kShowConsistencyPromo) {
       params.show_consistency_promo = value == "true";
 #endif
@@ -183,7 +188,7 @@ std::string ChromeConnectedHeaderHelper::BuildRequestHeader(
     bool is_header_request,
     const GURL& url,
     const std::string& gaia_id,
-    const base::Optional<bool>& is_child_account,
+    const absl::optional<bool>& is_child_account,
     int profile_mode_mask,
     const std::string& source,
     bool force_account_consistency) {
@@ -199,11 +204,13 @@ std::string ChromeConnectedHeaderHelper::BuildRequestHeader(
 // Sessions and Active Directory logins. Guest Sessions have already been
 // filtered upstream and we want to enforce account consistency in Public
 // Sessions and Active Directory logins.
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
+  force_account_consistency = true;
+#endif
+
   if (!force_account_consistency && gaia_id.empty()) {
-#if defined(OS_ANDROID) || defined(OS_IOS)
-    if (base::FeatureList::IsEnabled(kMobileIdentityConsistency) &&
-        gaia::IsGaiaSignonRealm(url.GetOrigin())) {
+#if defined(OS_ANDROID)
+    if (gaia::IsGaiaSignonRealm(url.GetOrigin())) {
       parts.push_back(
           base::StringPrintf("%s=%s", kEligibleForConsistency, "true"));
       return base::JoinString(parts, is_header_request ? "," : ":");
@@ -211,7 +218,6 @@ std::string ChromeConnectedHeaderHelper::BuildRequestHeader(
 #endif  // defined(OS_ANDROID) || defined(OS_IOS)
     return std::string();
   }
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
 
   if (!gaia_id.empty() &&
       IsUrlEligibleToIncludeGaiaId(url, is_header_request)) {

@@ -4,10 +4,12 @@
 //
 package org.chromium.chrome.browser.share.share_sheet;
 
+import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
+import android.os.Build;
 import android.text.TextUtils;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -66,6 +68,7 @@ class ShareSheetBottomSheetContent implements BottomSheetContent, OnItemClickLis
     private String mUrl;
     private ScrollView mContentScrollableView;
     private @LinkGeneration int mLinkGenerationState;
+    private Toast mToast;
 
     /**
      * Creates a ShareSheetBottomSheetContent (custom share sheet) opened from the given activity.
@@ -81,10 +84,16 @@ class ShareSheetBottomSheetContent implements BottomSheetContent, OnItemClickLis
         mIconBridge = iconBridge;
         mShareSheetCoordinator = shareSheetCoordinator;
         mParams = params;
-        mLinkGenerationState =
-                mParams.getLinkToTextSuccessful() != null && mParams.getLinkToTextSuccessful()
-                ? LinkGeneration.LINK
-                : LinkGeneration.FAILURE;
+
+        // Set |mLinkGenerationState| to invalid value of |MAX| if |getLinkToTextSuccessful|
+        // is not set in order to distinguish it from failure state. |getLinkToTextSuccessful| will
+        // be set only for link to text.
+        if (mParams.getLinkToTextSuccessful() == null) {
+            mLinkGenerationState = LinkGeneration.MAX;
+        } else {
+            mLinkGenerationState = mParams.getLinkToTextSuccessful() ? LinkGeneration.LINK
+                                                                     : LinkGeneration.FAILURE;
+        }
         createContentView();
     }
 
@@ -132,6 +141,11 @@ class ShareSheetBottomSheetContent implements BottomSheetContent, OnItemClickLis
 
     void updateShareParams(ShareParams params) {
         mParams = params;
+    }
+
+    @LinkGeneration
+    int getLinkGenerationState() {
+        return mLinkGenerationState;
     }
 
     private void populateView(List<PropertyModel> models, RecyclerView view, boolean firstParty) {
@@ -194,12 +208,6 @@ class ShareSheetBottomSheetContent implements BottomSheetContent, OnItemClickLis
         String title = mParams.getTitle();
         String subtitle =
                 UrlFormatter.formatUrlForDisplayOmitSchemeOmitTrivialSubdomains(mParams.getUrl());
-        if (!ChromeFeatureList.isEnabled(ChromeFeatureList.CHROME_SHARING_HUB_V15)) {
-            fetchFavicon(mParams.getUrl());
-            setTitleStyle(R.style.TextAppearance_TextMediumThick_Primary);
-            setTextForPreview(title, subtitle);
-            return;
-        }
 
         if (contentTypes.contains(ContentType.IMAGE)) {
             setImageForPreviewFromUri(mParams.getFileUris().get(0));
@@ -224,7 +232,7 @@ class ShareSheetBottomSheetContent implements BottomSheetContent, OnItemClickLis
             fetchFavicon(mParams.getUrl());
         }
 
-        if (ChromeFeatureList.isEnabled(ChromeFeatureList.PREEMTIVE_LINK_TO_TEXT_GENERATION)
+        if (ChromeFeatureList.isEnabled(ChromeFeatureList.PREEMPTIVE_LINK_TO_TEXT_GENERATION)
                 && contentTypes.contains(ContentType.HIGHLIGHTED_TEXT)) {
             setLinkImageViewForPreview();
         }
@@ -247,6 +255,11 @@ class ShareSheetBottomSheetContent implements BottomSheetContent, OnItemClickLis
         try {
             Bitmap bitmap =
                     ApiCompatibilityUtils.getBitmapByUri(mContext.getContentResolver(), imageUri);
+            // We don't want to use hardware bitmaps in case of software rendering. See
+            // https://crbug.com/1172883.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isHardwareBitmap(bitmap)) {
+                bitmap = bitmap.copy(Bitmap.Config.ARGB_8888, /*mutable=*/false);
+            }
             RoundedCornerImageView imageView =
                     this.getContentView().findViewById(R.id.image_preview);
             imageView.setImageBitmap(bitmap);
@@ -256,6 +269,12 @@ class ShareSheetBottomSheetContent implements BottomSheetContent, OnItemClickLis
         } catch (IOException e) {
             // If no image preview available, don't show a preview.
         }
+    }
+
+    @TargetApi(Build.VERSION_CODES.O)
+    private boolean isHardwareBitmap(Bitmap bitmap) {
+        assert Build.VERSION.SDK_INT >= Build.VERSION_CODES.O;
+        return bitmap.getConfig() == Bitmap.Config.HARDWARE;
     }
 
     private void setTitleStyle(int resId) {
@@ -290,11 +309,15 @@ class ShareSheetBottomSheetContent implements BottomSheetContent, OnItemClickLis
     }
 
     public void updateLinkGenerationState() {
-        if (mLinkGenerationState == LinkGeneration.FAILURE) return;
-        if (mLinkGenerationState == LinkGeneration.LINK) {
-            mLinkGenerationState = LinkGeneration.TEXT;
-        } else {
-            mLinkGenerationState = LinkGeneration.LINK;
+        switch (mLinkGenerationState) {
+            case LinkGeneration.FAILURE:
+                return;
+            case LinkGeneration.LINK:
+                mLinkGenerationState = LinkGeneration.TEXT;
+                break;
+            case LinkGeneration.TEXT:
+                mLinkGenerationState = LinkGeneration.LINK;
+                break;
         }
     }
 
@@ -360,11 +383,14 @@ class ShareSheetBottomSheetContent implements BottomSheetContent, OnItemClickLis
     }
 
     private void showToast(int resource) {
+        if (mToast != null) {
+            mToast.cancel();
+        }
         String toastMessage = mContext.getResources().getString(resource);
-        Toast toast = Toast.makeText(mContext, toastMessage, Toast.LENGTH_SHORT);
-        toast.setGravity(toast.getGravity(), toast.getXOffset(),
+        mToast = Toast.makeText(mContext, toastMessage, Toast.LENGTH_SHORT);
+        mToast.setGravity(mToast.getGravity(), mToast.getXOffset(),
                 mContext.getResources().getDimensionPixelSize(R.dimen.y_offset_full_sharesheet));
-        toast.show();
+        mToast.show();
     }
 
     private void centerIcon(ImageView imageView) {
@@ -483,6 +509,9 @@ class ShareSheetBottomSheetContent implements BottomSheetContent, OnItemClickLis
 
     @Override
     public void destroy() {
+        if (mToast != null) {
+            mToast.cancel();
+        }
         mShareSheetCoordinator.destroy();
     }
 

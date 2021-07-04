@@ -20,6 +20,7 @@
 #include "third_party/blink/renderer/platform/geometry/double_rect.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
+#include "third_party/blink/renderer/platform/loader/fetch/loader_freeze_mode.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/request_conversion.h"
@@ -435,7 +436,7 @@ void InspectorEmulationAgent::ApplyVirtualTimePolicy(
         WTF::Bind(&InspectorEmulationAgent::VirtualTimeBudgetExpired,
                   WrapWeakPersistent(this)));
     for (DocumentLoader* loader : pending_document_loaders_)
-      loader->SetDefersLoading(WebURLLoader::DeferType::kNotDeferred);
+      loader->SetDefersLoading(LoaderFreezeMode::kNone);
     pending_document_loaders_.clear();
   }
   if (new_policy.max_virtual_time_task_starvation_count) {
@@ -448,19 +449,19 @@ void InspectorEmulationAgent::FrameStartedLoading(LocalFrame*) {
   if (pending_virtual_time_policy_) {
     wait_for_navigation_.Set(false);
     ApplyVirtualTimePolicy(*pending_virtual_time_policy_);
-    pending_virtual_time_policy_ = base::nullopt;
+    pending_virtual_time_policy_ = absl::nullopt;
   }
 }
 
 AtomicString InspectorEmulationAgent::OverrideAcceptImageHeader(
     const HashSet<String>* disabled_image_types) {
-  String header(kImageAcceptHeader);
+  String header(ImageAcceptHeader());
   for (String type : *disabled_image_types) {
     // The header string is expected to be like
-    // `image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8` and is
-    // expected to be always ending with `image/*,*/*;q=xxx`, therefore, to
-    // remove a type we replace `image/x,` with empty string. Only webp and avif
-    // types can be disabled.
+    // `image/jxl,image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8`
+    // and is expected to be always ending with `image/*,*/*;q=xxx`, therefore,
+    // to remove a type we replace `image/x,` with empty string. Only webp, avif
+    // and jxl types can be disabled.
     header.Replace(String(type + ","), "");
   }
   return AtomicString(header);
@@ -531,7 +532,7 @@ Response InspectorEmulationAgent::setDefaultBackgroundColorOverride(
     return response;
   if (!color.isJust()) {
     // Clear the override and state.
-    GetWebViewImpl()->ClearBaseBackgroundColorOverride();
+    GetWebViewImpl()->SetBaseBackgroundColorOverrideForInspector(absl::nullopt);
     default_background_color_override_rgba_.Clear();
     return Response::Success();
   }
@@ -540,7 +541,7 @@ Response InspectorEmulationAgent::setDefaultBackgroundColorOverride(
   default_background_color_override_rgba_.Set(rgba->Serialize());
   // Clamping of values is done by Color() constructor.
   int alpha = static_cast<int>(lroundf(255.0f * rgba->getA(1.0f)));
-  GetWebViewImpl()->SetBaseBackgroundColorOverride(
+  GetWebViewImpl()->SetBaseBackgroundColorOverrideForInspector(
       Color(rgba->getR(), rgba->getG(), rgba->getB(), alpha).Rgb());
   return Response::Success();
 }
@@ -593,7 +594,7 @@ Response InspectorEmulationAgent::setUserAgentOverride(
         Platform::Current()->UserAgentMetadata();
 
     if (user_agent.IsEmpty()) {
-      ua_metadata_override_ = base::nullopt;
+      ua_metadata_override_ = absl::nullopt;
       serialized_ua_metadata_override_.Set(std::vector<uint8_t>());
       return Response::InvalidParams(
           "Can't specify UserAgentMetadata but no UA string");
@@ -628,7 +629,7 @@ Response InspectorEmulationAgent::setUserAgentOverride(
     ua_metadata_override_->model = ua_metadata->getModel().Ascii();
     ua_metadata_override_->mobile = ua_metadata->getMobile();
   } else {
-    ua_metadata_override_ = base::nullopt;
+    ua_metadata_override_ = absl::nullopt;
   }
 
   std::string marshalled =
@@ -695,7 +696,7 @@ void InspectorEmulationAgent::WillCommitLoad(LocalFrame*,
       protocol::Emulation::VirtualTimePolicyEnum::Pause) {
     return;
   }
-  loader->SetDefersLoading(WebURLLoader::DeferType::kDeferred);
+  loader->SetDefersLoading(LoaderFreezeMode::kStrict);
   pending_document_loaders_.push_back(loader);
 }
 
@@ -710,7 +711,7 @@ void InspectorEmulationAgent::ApplyUserAgentOverride(String* user_agent) {
 }
 
 void InspectorEmulationAgent::ApplyUserAgentMetadataOverride(
-    base::Optional<blink::UserAgentMetadata>* ua_metadata) {
+    absl::optional<blink::UserAgentMetadata>* ua_metadata) {
   // This applies when UA override is set.
   if (!user_agent_override_.Get().IsEmpty()) {
     *ua_metadata = ua_metadata_override_;
@@ -749,6 +750,7 @@ protocol::Response InspectorEmulationAgent::setDisabledImageTypes(
   namespace DisabledImageTypeEnum = protocol::Emulation::DisabledImageTypeEnum;
   for (protocol::Emulation::DisabledImageType type : *disabled_types) {
     if (DisabledImageTypeEnum::Avif == type ||
+        DisabledImageTypeEnum::Jxl == type ||
         DisabledImageTypeEnum::Webp == type) {
       disabled_image_types_.Set(prefix + type, true);
       continue;

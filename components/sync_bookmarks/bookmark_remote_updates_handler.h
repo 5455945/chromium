@@ -6,9 +6,9 @@
 #define COMPONENTS_SYNC_BOOKMARKS_BOOKMARK_REMOTE_UPDATES_HANDLER_H_
 
 #include <map>
-#include <string>
 #include <vector>
 
+#include "components/sync/base/unique_position.h"
 #include "components/sync/engine/commit_and_get_updates_types.h"
 #include "components/sync_bookmarks/synced_bookmark_tracker.h"
 
@@ -27,14 +27,6 @@ namespace sync_bookmarks {
 // server.
 class BookmarkRemoteUpdatesHandler {
  public:
-  enum class DuplicateBookmarkEntityOnRemoteUpdateCondition {
-    kServerIdTombstone = 0,
-    kTempSyncIdTombstone = 1,
-    kBothEntitiesNonTombstone = 2,
-
-    kMaxValue = kBothEntitiesNonTombstone,
-  };
-
   // |bookmark_model|, |favicon_service| and |bookmark_tracker| must not be null
   // and must outlive this object.
   BookmarkRemoteUpdatesHandler(bookmarks::BookmarkModel* bookmark_model,
@@ -54,7 +46,7 @@ class BookmarkRemoteUpdatesHandler {
 
   static size_t ComputeChildNodeIndexForTest(
       const bookmarks::BookmarkNode* parent,
-      const sync_pb::UniquePosition& unique_position,
+      const syncer::UniquePosition& unique_position,
       const SyncedBookmarkTracker* bookmark_tracker);
 
  private:

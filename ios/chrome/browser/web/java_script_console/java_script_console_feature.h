@@ -9,11 +9,10 @@
 #import "ios/web/public/js_messaging/java_script_feature.h"
 
 namespace web {
-class BrowserState;
+class WebState;
 }  // namespace web
 
 class JavaScriptConsoleFeatureDelegate;
-@class WKScriptMessage;
 
 // A feature which listens for JavaScript console messages and sends details
 // about them to a JavaScriptConsoleFeatureDelegate instance.
@@ -34,9 +33,9 @@ class JavaScriptConsoleFeature : public KeyedService,
   JavaScriptConsoleFeature& operator=(const JavaScriptConsoleFeature&) = delete;
 
   // JavaScriptFeature:
-  base::Optional<std::string> GetScriptMessageHandlerName() const override;
-  void ScriptMessageReceived(web::BrowserState* browser_state,
-                             WKScriptMessage* message) override;
+  absl::optional<std::string> GetScriptMessageHandlerName() const override;
+  void ScriptMessageReceived(web::WebState* web_state,
+                             const web::ScriptMessage& message) override;
 
   // The delegate which receives details about the console messages.
   JavaScriptConsoleFeatureDelegate* delegate_ = nullptr;

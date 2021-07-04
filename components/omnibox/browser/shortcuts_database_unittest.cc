@@ -6,11 +6,10 @@
 
 #include <stddef.h>
 
+#include "base/cxx17_backports.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/format_macros.h"
 #include "base/path_service.h"
-#include "base/stl_util.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
@@ -209,7 +208,7 @@ TEST_F(ShortcutsDatabaseTest, UpdateShortcut) {
   AddAll();
   ShortcutsDatabase::Shortcut shortcut(
       ShortcutFromTestInfo(shortcut_test_db[1]));
-  shortcut.match_core.contents = ASCIIToUTF16("gro.todhsals");
+  shortcut.match_core.contents = u"gro.todhsals";
   EXPECT_TRUE(db_->UpdateShortcut(shortcut));
   ShortcutsDatabase::GuidToShortcutMap shortcuts;
   db_->LoadShortcuts(&shortcuts);

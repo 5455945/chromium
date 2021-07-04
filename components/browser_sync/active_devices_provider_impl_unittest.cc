@@ -14,6 +14,7 @@
 #include "base/test/simple_test_clock.h"
 #include "base/time/time.h"
 #include "components/browser_sync/browser_sync_switches.h"
+#include "components/sync/protocol/sync_enums.pb.h"
 #include "components/sync_device_info/device_info_util.h"
 #include "components/sync_device_info/fake_device_info_tracker.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -35,10 +36,12 @@ std::unique_ptr<DeviceInfo> CreateFakeDeviceInfo(
   return std::make_unique<syncer::DeviceInfo>(
       base::GUID::GenerateRandomV4().AsLowercaseString(), name,
       "chrome_version", "user_agent", sync_pb::SyncEnums::TYPE_UNSET,
-      "device_id", "manufacturer_name", "model_name", last_updated_timestamp,
+      "device_id", "manufacturer_name", "model_name", "full_hardware_class",
+      last_updated_timestamp,
       base::TimeDelta::FromMinutes(kPulseIntervalMinutes),
       /*send_tab_to_self_receiving_enabled=*/false,
-      /*sharing_info=*/base::nullopt, fcm_registration_token,
+      /*sharing_info=*/absl::nullopt, /*paask_info=*/absl::nullopt,
+      fcm_registration_token,
       /*interested_data_types=*/syncer::ModelTypeSet());
 }
 

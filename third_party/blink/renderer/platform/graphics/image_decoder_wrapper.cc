@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/platform/graphics/image_decoder_wrapper.h"
 
+#include "base/trace_event/trace_event.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/platform/graphics/image_decoding_store.h"
 #include "third_party/blink/renderer/platform/graphics/image_frame_generator.h"
@@ -39,6 +40,8 @@ class ExternalMemoryAllocator final : public SkBitmap::Allocator {
                           void* pixels,
                           size_t row_bytes)
       : info_(info), pixels_(pixels), row_bytes_(row_bytes) {}
+  ExternalMemoryAllocator(const ExternalMemoryAllocator&) = delete;
+  ExternalMemoryAllocator& operator=(const ExternalMemoryAllocator&) = delete;
 
   bool allocPixelRef(SkBitmap* dst) override {
     const SkImageInfo& info = dst->info();
@@ -55,8 +58,6 @@ class ExternalMemoryAllocator final : public SkBitmap::Allocator {
   SkImageInfo info_;
   void* pixels_;
   size_t row_bytes_;
-
-  DISALLOW_COPY_AND_ASSIGN(ExternalMemoryAllocator);
 };
 
 }  // namespace

@@ -1,0 +1,31 @@
+<style include="cr-hidden-style">
+  :host {
+    display: block;
+  }
+
+  ntp-module-wrapper {
+    width: var(--ntp-module-width);
+  }
+
+  ntp-module-wrapper + ntp-module-wrapper {
+    margin-top: 16px;
+  }
+
+  #removeModuleToastMessage {
+    flex-grow: 1;
+  }
+
+  [dragging] {
+    position: fixed;
+    z-index: 2;
+  }
+</style>
+<div id="modules"></div>
+<cr-toast id="removeModuleToast" duration="10000">
+  <div id="removeModuleToastMessage">[[removedModuleData_.message]]</div>
+  <cr-button id="undoRemoveModuleButton"
+      aria-label="[[i18n('undoDescription')]]"
+      on-click="onUndoRemoveModuleButtonClick_">
+    [[i18n('undo')]]
+  </cr-button>
+</cr-toast>

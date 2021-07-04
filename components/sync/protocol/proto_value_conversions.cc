@@ -145,23 +145,6 @@ class ToValueVisitor {
 
   // Customizations
 
-  // ExperimentsSpecifics flags
-  #define IMPLEMENT_VISIT_EXPERIMENT_ENABLED_FIELD(Name) \
-    void Visit(const sync_pb::ExperimentsSpecifics&, \
-               const char* field_name, \
-               const sync_pb::Name& field) { \
-      if (field.has_enabled()) { \
-        Visit(field, field_name, field.enabled()); \
-      } \
-    }
-  IMPLEMENT_VISIT_EXPERIMENT_ENABLED_FIELD(KeystoreEncryptionFlags)
-  IMPLEMENT_VISIT_EXPERIMENT_ENABLED_FIELD(HistoryDeleteDirectives)
-  IMPLEMENT_VISIT_EXPERIMENT_ENABLED_FIELD(AutofillCullingFlags)
-  IMPLEMENT_VISIT_EXPERIMENT_ENABLED_FIELD(PreCommitUpdateAvoidanceFlags)
-  IMPLEMENT_VISIT_EXPERIMENT_ENABLED_FIELD(GcmChannelFlags)
-  IMPLEMENT_VISIT_EXPERIMENT_ENABLED_FIELD(GcmInvalidationsFlags)
-  #undef IMPLEMENT_VISIT_EXPERIMENT_ENABLED_FIELD
-
   // EntitySpecifics
   template <class P>
   void Visit(const P& parent_proto,
@@ -170,22 +153,6 @@ class ToValueVisitor {
     if (include_specifics_) {
       VisitImpl(parent_proto, field_name, field);
     }
-  }
-
-  // EnhancedBookmarksFlags
-  template <class P>
-  void Visit(const P& parent_proto,
-             const char* field_name,
-             const sync_pb::EnhancedBookmarksFlags& field) {
-    // Obsolete, don't visit
-  }
-
-  // WalletSyncFlags
-  template <class P>
-  void Visit(const P& parent_proto,
-             const char* field_name,
-             const sync_pb::WalletSyncFlags& field) {
-    // Obsolete, don't visit
   }
 
   // AutofillWalletSpecifics
@@ -288,7 +255,6 @@ class ToValueVisitor {
   }
 
 IMPLEMENT_PROTO_TO_VALUE(AppListSpecifics)
-IMPLEMENT_PROTO_TO_VALUE(AppNotificationSettings)
 IMPLEMENT_PROTO_TO_VALUE(AppSettingSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(AppSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(ArcPackageSpecifics)
@@ -306,14 +272,12 @@ IMPLEMENT_PROTO_TO_VALUE(DictionarySpecifics)
 IMPLEMENT_PROTO_TO_VALUE(EncryptedData)
 IMPLEMENT_PROTO_TO_VALUE(EntityMetadata)
 IMPLEMENT_PROTO_TO_VALUE(EntitySpecifics)
-IMPLEMENT_PROTO_TO_VALUE(ExperimentsSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(ExtensionSettingSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(ExtensionSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(GlobalIdDirective)
 IMPLEMENT_PROTO_TO_VALUE(HistoryDeleteDirectiveSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(LinkedAppIconInfo)
 IMPLEMENT_PROTO_TO_VALUE(ManagedUserSettingSpecifics)
-IMPLEMENT_PROTO_TO_VALUE(ManagedUserWhitelistSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(NavigationRedirect)
 IMPLEMENT_PROTO_TO_VALUE(NigoriSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(OsPreferenceSpecifics)
@@ -348,6 +312,7 @@ IMPLEMENT_PROTO_TO_VALUE(WalletMetadataSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(WalletPostalAddress)
 IMPLEMENT_PROTO_TO_VALUE(WebAppSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(WifiConfigurationSpecifics)
+IMPLEMENT_PROTO_TO_VALUE(WorkspaceDeskSpecifics)
 
 IMPLEMENT_PROTO_TO_VALUE_INCLUDE_SPECIFICS(ClientToServerMessage)
 IMPLEMENT_PROTO_TO_VALUE_INCLUDE_SPECIFICS(ClientToServerResponse)

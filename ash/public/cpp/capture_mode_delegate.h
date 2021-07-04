@@ -10,12 +10,6 @@
 #include "base/callback.h"
 #include "mojo/public/cpp/bindings/remote.h"
 
-namespace audio {
-namespace mojom {
-class StreamFactory;
-}  // namespace mojom
-}  // namespace audio
-
 namespace aura {
 class Window;
 }  // namespace aura
@@ -28,6 +22,12 @@ namespace gfx {
 class Rect;
 }  // namespace gfx
 
+namespace media {
+namespace mojom {
+class AudioStreamFactory;
+}  // namespace mojom
+}  // namespace media
+
 namespace ash {
 
 // Defines the interface for the delegate of CaptureModeController, that can be
@@ -37,9 +37,9 @@ class ASH_PUBLIC_EXPORT CaptureModeDelegate {
  public:
   virtual ~CaptureModeDelegate() = default;
 
-  // Returns the path to the active user's downloads directory. This will never
-  // be called if the user is not logged in.
-  virtual base::FilePath GetActiveUserDownloadsDir() const = 0;
+  // Returns the path to save screen capture files based on user login status.
+  // If no user is logged in, returns the temporary directory.
+  virtual base::FilePath GetScreenCaptureDir() const = 0;
 
   // Shows the screenshot or screen recording item in the screen capture folder.
   virtual void ShowScreenCaptureItemInFolder(
@@ -82,12 +82,16 @@ class ASH_PUBLIC_EXPORT CaptureModeDelegate {
   virtual mojo::Remote<recording::mojom::RecordingService>
   LaunchRecordingService() = 0;
 
-  // Binds the given audio StreamFactory |receiver| to the audio service.
+  // Binds the given AudioStreamFactory |receiver| to the audio service.
   virtual void BindAudioStreamFactory(
-      mojo::PendingReceiver<audio::mojom::StreamFactory> receiver) = 0;
+      mojo::PendingReceiver<media::mojom::AudioStreamFactory> receiver) = 0;
 
   // Called when a capture mode session starts or stops.
   virtual void OnSessionStateChanged(bool started) = 0;
+
+  // Called after the controller resets its |mojo::Remote| instance of the
+  // service.
+  virtual void OnServiceRemoteReset() = 0;
 };
 
 }  // namespace ash

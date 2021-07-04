@@ -38,6 +38,7 @@
 <translation id="1662989795263954667">Har stoppats – slut på bläck</translation>
 <translation id="1703835215927279855">Letter</translation>
 <translation id="1706391837335750954">DNS-resolver finns</translation>
+<translation id="1715359911173058521">Det gick inte att kommunicera med skannern. Kontrollera nätverket eller USB-anslutningen och försök igen.</translation>
 <translation id="1717874160321062422">Hanteras av <ph name="FIRST_MANAGER" /> och <ph name="SECOND_MANAGER" /></translation>
 <translation id="1758018619400202187">EAP-TLS</translation>
 <translation id="1792647875738159689">Skanningen avbryts</translation>
@@ -51,16 +52,18 @@
 <translation id="1999615961760456652">Infångstportal</translation>
 <translation id="2008685064673031089">Primtalssökning</translation>
 <translation id="2080070583977670716">Fler inställningar</translation>
+<translation id="2119172414412204879"><ph name="BOARD_NAME" />, version <ph name="MILESTONE_VERSION" /></translation>
+<translation id="2126937207024182736"><ph name="AVAILABLE_MEMORY" /> GB av <ph name="TOTAL_MEMORY" /> GB är tillgängligt</translation>
 <translation id="2141644705054017895"><ph name="PERCENTAGE_VALUE" /> %</translation>
 <translation id="2157959690810728433">I KÖ</translation>
 <translation id="2161394479394250669">Avbryt utskriftsjobb</translation>
+<translation id="2217935453350629363">Nuvarande hastighet</translation>
 <translation id="2224337661447660594">Inget internet</translation>
 <translation id="2230051135190148440">CHAP</translation>
 <translation id="225692081236532131">Aktiveringsstatus</translation>
 <translation id="2326139988748364651"><ph name="RESOLUTION_VALUE" /> DPI</translation>
 <translation id="2338501278241028356">Aktivera Bluetooth så att det går att upptäcka enheter i närheten</translation>
 <translation id="2364498172489649528">Godkänd</translation>
-<translation id="2365324413026422635">Det går inte att testa batteriets laddning när det är fulladdat</translation>
 <translation id="2391082728065870591">Skicka feedbackrapport</translation>
 <translation id="2418150275289244458">Öppna i inställningarna</translation>
 <translation id="2446553403094072641">Flyttalsprecision</translation>
@@ -73,11 +76,13 @@
 <translation id="2620436844016719705">System</translation>
 <translation id="2740531572673183784">OK</translation>
 <translation id="2751739896257479635">Fas 2 i EAP-autentisering</translation>
+<translation id="2783010256799387990">SLUTFÖRT</translation>
 <translation id="2789486458103222910">OK</translation>
 <translation id="2805756323405976993">Appar</translation>
 <translation id="2862104018715411648">Sätt dokumentet i skannern och välj Skanna för att komma igång</translation>
 <translation id="2872961005593481000">Stäng av</translation>
 <translation id="2878387241690264070"><ph name="RATE" /> urladdat på <ph name="NUM_SECONDS" /> sekunder.</translation>
+<translation id="2983662233540284543">Lär dig av en gamingkreatör, hämta appar för spelutveckling och annat</translation>
 <translation id="3008341117444806826">UPPDATERA</translation>
 <translation id="3009958530611748826">Välj vilken mapp du vill spara i</translation>
 <translation id="3054177598518735801"><ph name="CURRENT_VALUE" /> mA</translation>
@@ -93,6 +98,7 @@
 <translation id="3226405216343213872">Söker efter skannrar</translation>
 <translation id="3246869037381808805">Utskriftsjobb som är äldre än 1 dagar tas bort</translation>
 <translation id="3268178239013324452">Misslyckades – luckan är öppen</translation>
+<translation id="3283504360622356314">{0,plural, =1{Redigera fil}other{Redigera filer}}</translation>
 <translation id="3286515922899063534"><ph name="CURRENT" /> GHz</translation>
 <translation id="3310640316857623290">DNS-latensen är avsevärt högre än det godtagbara tröskelvärdet</translation>
 <translation id="3328783797891415197">Testet körs</translation>
@@ -106,9 +112,9 @@
 <translation id="3488065109653206955">Delvis aktiverat</translation>
 <translation id="3527036260304016759">Misslyckades – okänt fel</translation>
 <translation id="3532980081107202182">Ungefär <ph name="MIN_REMAINING" /> minuter kvar</translation>
-<translation id="357889014807611375">Wi-Fi med datapriser</translation>
+<translation id="357889014807611375">wifi med datapriser</translation>
 <translation id="3595596368722241419">Batteriet är fulladdat</translation>
-<translation id="360565022852130722">Wi-Fi-nätverket använder det svaga säkerhetsprotokollet WEP 802.1x</translation>
+<translation id="360565022852130722">wifi-nätverket använder det svaga säkerhetsprotokollet WEP 802.1x</translation>
 <translation id="3689839747745352263">Test – <ph name="TEST_NAME" /></translation>
 <translation id="3740976234706877572"><ph name="AVERAGE_SCORE" /> ★ (<ph name="AGGREGATED_COUNT" /> recensioner)</translation>
 <translation id="3748026146096797577">Ej ansluten</translation>
@@ -117,6 +123,7 @@
 <translation id="3820172043799983114">Ogiltig pinkod</translation>
 <translation id="3838338534323494292">Nytt lösenord</translation>
 <translation id="3865414814144988605">Upplösning</translation>
+<translation id="387301095347517405">Antalet gånger som batteriet har laddats hela sin kapacitet</translation>
 <translation id="3941014780699102620">DNS-matchningen misslyckades för värden</translation>
 <translation id="3942420633017001071">Diagnostik</translation>
 <translation id="3967822245660637423">Nedladdning slutförd</translation>
@@ -129,15 +136,15 @@
 <translation id="4155551848414053977">Kontrollera att skannern är på och tillgänglig via nätverket eller med direktanslutning</translation>
 <translation id="4170700058716978431">MISSLYCKADES</translation>
 <translation id="4176463684765177261">Inaktiverad</translation>
-<translation id="4222698289790462549">Nuvarande hastighet</translation>
 <translation id="4227825898293920515">Lösenordet upphör att gälla om <ph name="TIME" /></translation>
-<translation id="4228041325992544252"><ph name="AVAILABLE_MEMORY" /> GB av <ph name="TOTAL_MEMORY" /> GB är tillgängligt.</translation>
 <translation id="4238516577297848345">Inga utskriftsjobb pågår</translation>
 <translation id="4297501883039923494">Har stoppats – okänt fel</translation>
+<translation id="4300073214558989"><ph name="IMAGE_COUNT" /> bilder</translation>
 <translation id="4378373042927530923">Har inte körts</translation>
 <translation id="4382484599443659549">PDF</translation>
 <translation id="4425149324548788773">Min enhet</translation>
 <translation id="4429881212383817840">Kerberos-biljetten upphör snart att gälla</translation>
+<translation id="4431821876790500265">Visa rapporten</translation>
 <translation id="445059817448385655">Gammalt lösenord</translation>
 <translation id="4453205916657964690">Delnätsmask</translation>
 <translation id="4454245904991689773">Skanningar sparas i</translation>
@@ -150,7 +157,7 @@
 <translation id="458794348635939462">DNS-matchningen av alla värdar misslyckades</translation>
 <translation id="4593212453765072419">Proxyautentisering krävs</translation>
 <translation id="4627232916386272576"><ph name="DOCUMENT_TITLE" />, <ph name="PRINTER_NAME" />, <ph name="CREATION_TIME" />, <ph name="PRINTED_PAGE_NUMBER" /> av <ph name="TOTAL_PAGE_NUMBER" />. Tryck på retur för att avbryta utskriftsjobbet.</translation>
-<translation id="4646949265910132906">Säker Wi-Fi-anslutning</translation>
+<translation id="4646949265910132906">Säker wifi-anslutning</translation>
 <translation id="4652335678334611408">Spara sessionslogg</translation>
 <translation id="4665014895760275686">Tillverkare</translation>
 <translation id="467510802200863975">Lösenorden matchar inte</translation>
@@ -159,8 +166,12 @@
 <translation id="469379815867856270">Signalstyrka</translation>
 <translation id="4707579418881001319">L2TP/IPSec + användarcertifikat</translation>
 <translation id="4731797938093519117">Föräldraåtkomst</translation>
+<translation id="475869545581454722">Lösenordet för Chrome OS har uppdaterats</translation>
 <translation id="4773299976671772492">Har stoppats</translation>
+<translation id="4794140124556169553">Systemet kan bli långsammare när du kör ett CPU-test</translation>
 <translation id="4808449224298348341">Utskriftsjobbet <ph name="DOCUMENT_TITLE" /> har avbrutits</translation>
+<translation id="4813136279048157860">Mina bilder</translation>
+<translation id="4813345808229079766">Anslutning</translation>
 <translation id="4832079907277790330">Välj en fil i appen Filer</translation>
 <translation id="4835901797422965222">Inga aktiva nätverk</translation>
 <translation id="4848429997038228357">KÖRS</translation>
@@ -175,6 +186,8 @@
 <translation id="4932733599132424254">Datum</translation>
 <translation id="498186245079027698">Kontrollera skannern och försök igen. Kontrollera att utrymmet lokalt räcker för att spara de skannade filerna.</translation>
 <translation id="4985509611418653372">Kör</translation>
+<translation id="4987769320337599931">Brandvägg</translation>
+<translation id="4999333166442584738">Dölj rapporten</translation>
 <translation id="500920857929044050">Avsluta testet</translation>
 <translation id="5017508259293544172">LEAP</translation>
 <translation id="5050042263972837708">Gruppnamn</translation>
@@ -183,6 +196,8 @@
 <translation id="5142961317498132443">Autentisering</translation>
 <translation id="5154917547274118687">Minne</translation>
 <translation id="5168185087976003268">Batterinivå</translation>
+<translation id="5170568018924773124">Visa i mapp</translation>
+<translation id="519607504553633437">Designa och bygg egna spel</translation>
 <translation id="5212543919916444558">Det finns inget på skärmen som jag kan hjälpa till med.
 Tryck på mikrofonen och fråga om något.</translation>
 <translation id="5222676887888702881">Logga ut</translation>
@@ -191,13 +206,15 @@ Tryck på mikrofonen och fråga om något.</translation>
 <translation id="5267975978099728568"><ph name="DOCUMENT_TITLE" />, <ph name="PRINTER_NAME" />, <ph name="CREATION_TIME" />, <ph name="ERROR_STATUS" /></translation>
 <translation id="5275828089655680674">Kör rutinerna igen</translation>
 <translation id="5286252187236914003">L2TP/IPsec</translation>
+<translation id="5294769550414936029">version <ph name="MILESTONE_VERSION" /></translation>
+<translation id="5300814202279832142">Flytta fönstret till ett skrivbord</translation>
 <translation id="5315873049536339193">Identitet</translation>
 <translation id="5317780077021120954">Spara</translation>
 <translation id="5318334351163689047">Misslyckad TCP-begäran</translation>
 <translation id="5326394068492324457"><ph name="DOCUMENT_TITLE" />, <ph name="PRINTER_NAME" />, <ph name="CREATION_TIME" />, <ph name="COMPLETION_STATUS" /></translation>
 <translation id="5332948983412042822">Välj ett nytt nu</translation>
 <translation id="5333530671332546086">Okänd portalstatus</translation>
-<translation id="5372659122375744710">Wi-Fi-nätverket är inte säkert</translation>
+<translation id="5372659122375744710">wifi-nätverket är inte säkert</translation>
 <translation id="5401938042319910061">Kör alla rutiner</translation>
 <translation id="5423849171846380976">Aktiverat</translation>
 <translation id="5430931332414098647">Direktinternetdelning</translation>
@@ -207,13 +224,13 @@ Tryck på mikrofonen och fråga om något.</translation>
 <translation id="54609108002486618">Hanterade</translation>
 <translation id="5478289488939624992">{ATTEMPTS_LEFT,plural, =1{{0} försök kvar}other{{0} försök kvar}}</translation>
 <translation id="5493614766091057239"><ph name="VERDICT" />: <ph name="PROBLEMS" /></translation>
+<translation id="5499114900554609492">Det gick inte att slutföra skanningen</translation>
 <translation id="554517032089923082">GTC</translation>
-<translation id="5635169860413004179">Visa rapporten</translation>
 <translation id="5669267381087807207">Aktiverar</translation>
 <translation id="5670702108860320605">BSSID</translation>
 <translation id="5691511426247308406">Familj</translation>
+<translation id="5752751666635965375">Gör ditt eget spel</translation>
 <translation id="5760715441271661976">Portalläge</translation>
-<translation id="5797428682393400134">LYCKADES</translation>
 <translation id="5832805196449965646">Lägg till person</translation>
 <translation id="583281660410589416">Okänd</translation>
 <translation id="5849570051105887917">Kod för hemleverantör</translation>
@@ -222,7 +239,7 @@ Tryck på mikrofonen och fråga om något.</translation>
 <translation id="5916084858004523819">Aldrig</translation>
 <translation id="5921506667911082617">{COUNT,plural, =1{Filen har genomsökts och sparats i <ph name="LINK_BEGIN" /><ph name="FOLDER_NAME" /><ph name="LINK_END" />.}other{Filerna har genomsökts och sparats i <ph name="LINK_BEGIN" /><ph name="FOLDER_NAME" /><ph name="LINK_END" />.}}</translation>
 <translation id="5931523347251946569">Filen hittades inte</translation>
-<translation id="5982592372228113572">(<ph name="BOARD_NAME" />, version <ph name="MILESTONE_VERSION" />)</translation>
+<translation id="6037291330010597344">Skannerns dokumentmatare är tom. Fyll på med dokument och försök igen.</translation>
 <translation id="6040143037577758943">Stäng</translation>
 <translation id="6040852767465482106">Anonym identitet</translation>
 <translation id="604124094241169006">Automatisk</translation>
@@ -242,18 +259,20 @@ Tryck på mikrofonen och fråga om något.</translation>
 <translation id="6191293864534840972">Namnserveradresserna har fel format</translation>
 <translation id="6223752125779001553">Ingen skanner är tillgänglig</translation>
 <translation id="6232017090690406397">Batteri</translation>
+<translation id="6243280677745499710">Nuvarande</translation>
 <translation id="6302401976930124515"><ph name="TEST_NAME" />-testet har avbrutits</translation>
 <translation id="6325525973963619867">Misslyckades</translation>
 <translation id="636850387210749493">Företagsregistrering</translation>
+<translation id="6388847657025262518">Skannerns dokumentmatare är blockerad. Kontrollera mataren och försök igen.</translation>
 <translation id="641081527798843608">Ämnesmatchning</translation>
 <translation id="6423239382391657905">Öppen VPN</translation>
 <translation id="6456394469623773452">Okej</translation>
 <translation id="6472207088655375767">Engångslösenord</translation>
 <translation id="6480327114083866287">Hanteras av <ph name="MANAGER" /></translation>
 <translation id="649050271426829538">Har stoppats – papperstrassel</translation>
+<translation id="6516990319416533844">Om du vill testa batteriets laddningshastighet låter du det laddas ur under en kortare period</translation>
 <translation id="6517239166834772319">Utforska</translation>
-<translation id="6527081081771465939">Okänt säkerhetsprotokoll för Wi-Fi</translation>
-<translation id="6532051501443766164">Dölj rapporten</translation>
+<translation id="6527081081771465939">Okänt säkerhetsprotokoll för wifi</translation>
 <translation id="65587193855025101">Flatbädd</translation>
 <translation id="6564646048574748301">Misslyckades – skrivaren kan inte nås</translation>
 <translation id="6618744767048954150">Körs</translation>
@@ -266,7 +285,7 @@ Tryck på mikrofonen och fråga om något.</translation>
 <translation id="6766275201586212568">Misslyckade DNS-matchningar</translation>
 <translation id="6768237774506518020">Hög felfrekvens för DNS-matchningar</translation>
 <translation id="6853312040151791195">Urladdningshastighet</translation>
-<translation id="6898743098396957679">Det gick inte att slutföra skanningen</translation>
+<translation id="6910312834584889076">Skannerns lucka är öppen. Stäng luckan och försök igen.</translation>
 <translation id="6911383237894364323">Det gick inte att ansluta till medieservrarna</translation>
 <translation id="6957231940976260713">Namn på tjänsten</translation>
 <translation id="6977381486153291903">Revision av firmware</translation>
@@ -274,13 +293,17 @@ Tryck på mikrofonen och fråga om något.</translation>
 <translation id="7040230719604914234">Operatör</translation>
 <translation id="7059230779847288458">Laddas – fulladdat om <ph name="TIME_VALUE" /></translation>
 <translation id="708426984172631313">HAR STOPPATS</translation>
+<translation id="7086440545492620869"><ph name="VALUE" /> <ph name="DISPLAY_NAME" /></translation>
 <translation id="7143207342074048698">Ansluter</translation>
 <translation id="7144878232160441200">Försök igen</translation>
 <translation id="714876143603641390">LAN-anslutningar</translation>
 <translation id="7162487448488904999">Gallery</translation>
+<translation id="7172721935181587524">1 bild</translation>
 <translation id="7177485034254901881">Denna <ph name="DEVICE_TYPE" /> hanteras av <ph name="MANAGER" />. Administratörer kan fjärrkonfigurera enheten.</translation>
 <translation id="7216409898977639127">Mobiloperatör</translation>
+<translation id="7271040990581020067">Skannern används för närvarande. Försök igen senare.</translation>
 <translation id="7274587244503383581"><ph name="PRINTED_PAGES_NUMBER" />/<ph name="TOTAL_PAGES_NUMBER" /></translation>
+<translation id="7302860742311162920">ICCID</translation>
 <translation id="7343649194310845056">Nätverksenheter</translation>
 <translation id="7359657277149375382">Filtyp</translation>
 <translation id="7375053625150546623">EAP</translation>
@@ -302,9 +325,11 @@ Tryck på mikrofonen och fråga om något.</translation>
 <translation id="7701040980221191251">Inga</translation>
 <translation id="7705524343798198388">VPN</translation>
 <translation id="773153675489693198">Antal cykler</translation>
+<translation id="7762130827864645708">Lösenordet har bytts. Använd det nya lösenordet i fortsättningen.</translation>
 <translation id="7769672763586021400">Modell-id</translation>
 <translation id="7805768142964895445">Status</translation>
 <translation id="7819857487979277519">PSK (WPA eller RSN)</translation>
+<translation id="7881066108824108340">DNS</translation>
 <translation id="7882358943899516840">Leverantörstyp</translation>
 <translation id="7936303884198020182">Inga namnservrar hittades</translation>
 <translation id="7960831585769876809">Temperatur</translation>
@@ -316,26 +341,31 @@ Tryck på mikrofonen och fråga om något.</translation>
 <translation id="8129620843620772246"><ph name="TEMPERATURE_C" /> °C</translation>
 <translation id="8206859287963243715">Mobil</translation>
 <translation id="8208861521865154048">Förmåner</translation>
+<translation id="8214184102975786227">Skanna flera sidor till en PDF</translation>
 <translation id="8230672074305416752">Det gick inte att pinga standardnätverkets gateway</translation>
 <translation id="8246209727385807362">Okänd operatör</translation>
 <translation id="8291967909914612644">Hemleverantörens land</translation>
 <translation id="8294431847097064396">Källa</translation>
 <translation id="8297006494302853456">Svag</translation>
 <translation id="8302368968391049045">HTTPS-brandvägg</translation>
+<translation id="8318753676953949627">Inga bilder</translation>
 <translation id="8347227221149377169">Utskriftsjobb</translation>
 <translation id="8352772353338965963">Lägg till ett konto för multiinloggning. Alla inloggade konton kan öppnas utan lösenord, så använd bara den här funktionen med konton du litar på.</translation>
 <translation id="8364946094152050673">Inga namnservrar har angetts</translation>
 <translation id="8372477600026034341">Ytterligare värdar</translation>
 <translation id="8395584934117017006">Denna <ph name="DEVICE_TYPE" /> är företagshanterad</translation>
 <translation id="8398927464629426868">Hur fort enheten laddas eller laddas ur för närvarande</translation>
+<translation id="8422748173858722634">IMEI</translation>
 <translation id="8461329675984532579">Hemleverantörens namn</translation>
-<translation id="8475690821716466388">Wi-Fi-nätverket använder det svaga säkerhetsprotokollet WEP PSK</translation>
+<translation id="8475690821716466388">wifi-nätverket använder det svaga säkerhetsprotokollet WEP PSK</translation>
 <translation id="8477551185774834963">DNS-latensen är något högre än det godtagbara tröskelvärdet</translation>
 <translation id="8483248364096924578">IP-adress</translation>
 <translation id="8503813439785031346">Användarnamn</translation>
 <translation id="8503836310948963452">Bara några minuter kvar …</translation>
+<translation id="8575298406870537639">Det här alternativet kan krävas för att du ska kunna ansluta till operatörens nätverk. Kontakta operatören för mer information.</translation>
 <translation id="8576249514688522074">Inte initierat</translation>
 <translation id="8620617069779373398">Dirigeringsstatus</translation>
+<translation id="8660881923941176839">pund</translation>
 <translation id="8675354002693747642">I förväg delad nyckel</translation>
 <translation id="871560550817059752">Misslyckades – slut på bläck</translation>
 <translation id="8723108084122415655">Tröskelvärdet för latens överskreds för nätverket som inte är standard</translation>
@@ -345,17 +375,19 @@ Tryck på mikrofonen och fråga om något.</translation>
 <translation id="877985182522063539">A4</translation>
 <translation id="8798099450830957504">Standard</translation>
 <translation id="8798441408945964110">Leverantörens namn</translation>
-<translation id="880791622116642296">Antalet gånger som batteriet har laddats hela sin kapacitet</translation>
-<translation id="8814190375133053267">Wi-Fi</translation>
+<translation id="8814190375133053267">wifi</translation>
+<translation id="8818152010000655963">Bakgrund</translation>
 <translation id="8845001906332463065">Få hjälp</translation>
 <translation id="8881098542468797602">Testet lyckades</translation>
 <translation id="8898840733695078011">Signalstyrka</translation>
 <translation id="8910721771319628100">Tröskelvärdet för latens överskreds för standardnätverket</translation>
+<translation id="8918637186205009138"><ph name="DEVICE_TYPE" /> som tillhör <ph name="GIVEN_NAME" /></translation>
 <translation id="8919837981463578619">Misslyckades – fack saknas</translation>
 <translation id="8928727111548978589">Misslyckades – slut på papper</translation>
 <translation id="8930622219860340959">Trådlöst</translation>
 <translation id="8968751544471797276">Laddningshastighet</translation>
 <translation id="8970109610781093811">Kör igen</translation>
+<translation id="8987565828374052507">{NUMBER_OF_PAGES,plural, =0{Genomsök}=1{Genomsök sida {NUMBER_OF_PAGES}}other{Genomsök sida {NUMBER_OF_PAGES}}}</translation>
 <translation id="9003704114456258138">Frekvens</translation>
 <translation id="9039663905644212491">PEAP</translation>
 <translation id="9073281213608662541">PAP</translation>
@@ -364,9 +396,11 @@ Tryck på mikrofonen och fråga om något.</translation>
 <translation id="910415269708673980">Uppdatera biljetten för <ph name="PRINCIPAL_NAME" /></translation>
 <translation id="9106415115617144481">Skannar sidan <ph name="PAGE_NUMBER" /></translation>
 <translation id="9111102763498581341">Lås upp</translation>
+<translation id="9137526406337347448">Google Services</translation>
 <translation id="9149391708638971077">Kör minnestest</translation>
 <translation id="9173638680043580060">Mindre än en minut kvar</translation>
 <translation id="9190063653747922532">L2TP/IPSec + i förväg delad nyckel</translation>
+<translation id="9211490828691860325">Alla skrivbord</translation>
 <translation id="939519157834106403">SSID</translation>
 <translation id="952992212772159698">Inte aktiverat</translation>
 <translation id="960719561871045870">Operatörskod</translation>

@@ -54,8 +54,8 @@ class BookmarkBubbleViewTest : public BrowserWithTestWindowTest {
         BookmarkModelFactory::GetForBrowserContext(profile());
     bookmarks::test::WaitForBookmarkModelToLoad(bookmark_model);
 
-    bookmarks::AddIfNotBookmarked(
-        bookmark_model, GURL(kTestBookmarkURL), base::string16());
+    bookmarks::AddIfNotBookmarked(bookmark_model, GURL(kTestBookmarkURL),
+                                  std::u16string());
   }
 
   void TearDown() override {
@@ -94,7 +94,7 @@ class BookmarkBubbleViewTest : public BrowserWithTestWindowTest {
 TEST_F(BookmarkBubbleViewTest, SyncPromoSignedIn) {
   signin::MakePrimaryAccountAvailable(
       IdentityManagerFactory::GetForProfile(profile()),
-      "fake_username@gmail.com");
+      "fake_username@gmail.com", signin::ConsentLevel::kSync);
   CreateBubbleView();
   EXPECT_FALSE(
       BookmarkBubbleView::bookmark_bubble()->GetFootnoteViewForTesting());

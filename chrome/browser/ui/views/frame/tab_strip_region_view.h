@@ -6,9 +6,9 @@
 #define CHROME_BROWSER_UI_VIEWS_FRAME_TAB_STRIP_REGION_VIEW_H_
 
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/pointer/touch_ui_controller.h"
 #include "ui/views/accessible_pane_view.h"
-#include "ui/views/metadata/metadata_header_macros.h"
 
 namespace views {
 class FlexLayout;
@@ -78,6 +78,10 @@ class TabStripRegionView final : public views::AccessiblePaneView,
   // Updates the border padding for |new_tab_button_|.  This should be called
   // whenever any input of the computation of the border's sizing changes.
   void UpdateNewTabButtonBorder();
+
+  // Changes the visibility of the scroll buttons, so they're hidden if they
+  // aren't needed to control tabstrip scrolling.
+  void UpdateScrollButtonVisibility();
 
   views::FlexLayout* layout_manager_ = nullptr;
   views::View* tab_strip_container_;

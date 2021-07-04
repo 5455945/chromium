@@ -10,6 +10,7 @@
 #include "base/macros.h"
 #include "base/time/time.h"
 #include "services/device/public/mojom/screen_orientation_lock_types.mojom-shared.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/manifest/manifest.h"
 #include "third_party/skia/include/core/SkColor.h"
 
@@ -32,8 +33,8 @@ struct WebApkInfo {
              std::string manifest_start_url,
              blink::mojom::DisplayMode display,
              device::mojom::ScreenOrientationLockType orientation,
-             base::Optional<SkColor> theme_color,
-             base::Optional<SkColor> background_color,
+             absl::optional<SkColor> theme_color,
+             absl::optional<SkColor> background_color,
              base::Time last_update_check_time,
              base::Time last_update_completion_time,
              bool relax_updates,
@@ -69,8 +70,8 @@ struct WebApkInfo {
   std::string manifest_start_url;
   blink::mojom::DisplayMode display;
   device::mojom::ScreenOrientationLockType orientation;
-  base::Optional<SkColor> theme_color;
-  base::Optional<SkColor> background_color;
+  absl::optional<SkColor> theme_color;
+  absl::optional<SkColor> background_color;
   base::Time last_update_check_time;
   base::Time last_update_completion_time;
   bool relax_updates;

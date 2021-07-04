@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_ENTERPRISE_CONNECTORS_COMMON_H_
 #define CHROME_BROWSER_ENTERPRISE_CONNECTORS_COMMON_H_
 
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
@@ -31,10 +32,15 @@ constexpr char kKeyBlockUnsupportedFileTypes[] = "block_unsupported_file_types";
 constexpr char kKeyMinimumDataSize[] = "minimum_data_size";
 constexpr char kKeyEnabledEventNames[] = "enabled_event_names";
 constexpr char kKeyCustomMessages[] = "custom_messages";
+constexpr char kKeyCustomMessagesTag[] = "tag";
 constexpr char kKeyCustomMessagesMessage[] = "message";
 constexpr char kKeyCustomMessagesLearnMoreUrl[] = "learn_more_url";
 constexpr char kKeyMimeTypes[] = "mime_types";
 constexpr char kKeyEnterpriseId[] = "enterprise_id";
+constexpr char kKeyDomain[] = "domain";
+
+// A MIME type string that matches all MIME types.
+constexpr char kWildcardMimeType[] = "*";
 
 enum class ReportingConnector {
   SECURITY_EVENT,
@@ -49,6 +55,13 @@ enum class FileSystemConnector {
 enum class BlockUntilVerdict {
   NO_BLOCK = 0,
   BLOCK = 1,
+};
+
+// A struct representing a custom message and associated "learn more" URL. These
+// are scoped to a tag.
+struct CustomMessageData {
+  std::u16string message;
+  GURL learn_more_url;
 };
 
 // Structs representing settings to be used for an analysis or a report. These
@@ -66,8 +79,7 @@ struct AnalysisSettings {
   bool block_password_protected_files = false;
   bool block_large_files = false;
   bool block_unsupported_file_types = false;
-  base::string16 custom_message_text;
-  GURL custom_message_learn_more_url;
+  std::map<std::string, CustomMessageData> custom_message_data;
 
   // Minimum text size for BulkDataEntry scans. 0 means no minimum.
   size_t minimum_data_size = 100;
@@ -75,6 +87,14 @@ struct AnalysisSettings {
   // The DM token to be used for scanning. May be empty, for example if this
   // scan is initiated by APP.
   std::string dm_token = "";
+
+  // Indicates if the scan is made at the profile level, or at the browser level
+  // if false.
+  bool per_profile = false;
+
+  // ClientMetadata to include in the scanning request(s). This is populated
+  // based on OnSecurityEvent and the affiliation state of the browser.
+  std::unique_ptr<ClientMetadata> client_metadata;
 };
 
 struct ReportingSettings {
@@ -105,6 +125,8 @@ struct FileSystemSettings {
   GURL home;
   GURL authorization_endpoint;
   GURL token_endpoint;
+  std::string enterprise_id;
+  std::string email_domain;
   std::string client_id;
   std::string client_secret;
   std::vector<std::string> scopes;
@@ -119,9 +141,11 @@ const char* ConnectorPref(FileSystemConnector connector);
 const char* ConnectorScopePref(AnalysisConnector connector);
 const char* ConnectorScopePref(ReportingConnector connector);
 
-// Returns the highest precedence action in the given parameters.
+// Returns the highest precedence action in the given parameters. Writes the tag
+// field of the result containing the highest precedence action into |tag|.
 TriggeredRule::Action GetHighestPrecedenceAction(
-    const ContentAnalysisResponse& response);
+    const ContentAnalysisResponse& response,
+    std::string* tag);
 TriggeredRule::Action GetHighestPrecedenceAction(
     const TriggeredRule::Action& action_1,
     const TriggeredRule::Action& action_2);

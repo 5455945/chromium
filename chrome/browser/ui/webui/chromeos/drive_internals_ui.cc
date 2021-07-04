@@ -31,8 +31,8 @@
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/sequenced_task_runner_handle.h"
-#include "chrome/browser/chromeos/drive/drive_integration_service.h"
-#include "chrome/browser/chromeos/drive/file_system_util.h"
+#include "chrome/browser/ash/drive/drive_integration_service.h"
+#include "chrome/browser/ash/drive/file_system_util.h"
 #include "chrome/browser/chromeos/file_manager/path_util.h"
 #include "chrome/browser/drive/drive_notification_manager_factory.h"
 #include "chrome/browser/file_util_service.h"
@@ -574,7 +574,7 @@ class DriveInternalsWebUIHandler : public content::WebUIMessageHandler {
           base::StrCat({"log-", severity}));
       last_sent_event_id_ = log[i].id;
     }
-    if (!list.empty()) {
+    if (!list.GetList().empty()) {
       MaybeCallJavascript("updateEventLog", std::move(list));
     }
   }
@@ -612,7 +612,7 @@ class DriveInternalsWebUIHandler : public content::WebUIMessageHandler {
       service_log_file_inode_ = response.first;
       last_sent_line_number_ = 0;
     }
-    if (!response.second.empty()) {
+    if (!response.second.GetList().empty()) {
       last_sent_line_number_ += response.second.GetList().size();
       MaybeCallJavascript("updateServiceLog", std::move(response.second));
     }
@@ -841,9 +841,9 @@ class LogsZipper : public download::AllDownloadItemNotifier::Observer {
   static constexpr char kLogsZipName[] = "drivefs_logs.zip";
 
   void ZipLogFiles(const std::vector<base::FilePath>& files) {
-    (new ZipFileCreator(
-         base::BindOnce(&LogsZipper::OnZipDone, base::Unretained(this)),
-         logs_directory_, files, zip_path_))
+    base::MakeRefCounted<ZipFileCreator>(
+        base::BindOnce(&LogsZipper::OnZipDone, base::Unretained(this)),
+        logs_directory_, files, zip_path_)
         ->Start(LaunchFileUtilService());
   }
 
@@ -873,7 +873,7 @@ class LogsZipper : public download::AllDownloadItemNotifier::Observer {
       return;
     }
     download_notifier_ = std::make_unique<download::AllDownloadItemNotifier>(
-        content::BrowserContext::GetDownloadManager(profile_), this);
+        profile_->GetDownloadManager(), this);
     drive_internals_->DownloadLogsZip(zip_path_);
   }
 

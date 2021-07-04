@@ -22,7 +22,7 @@
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #include "chromeos/components/chromebox_for_meetings/buildflags/buildflags.h"
 #if BUILDFLAG(PLATFORM_CFM)
-#include "chrome/browser/chromeos/policy/enrollment_requisition_manager.h"
+#include "chrome/browser/chromeos/policy/enrollment/enrollment_requisition_manager.h"
 #include "chrome/browser/device_identity/device_identity_provider.h"
 #include "chrome/browser/device_identity/device_oauth2_token_service_factory.h"
 #endif  // BUILDFLAG(PLATFORM_CFM)
@@ -51,7 +51,7 @@ void QueueSingleReport(base::WeakPtr<feedback::FeedbackUploader> uploader,
 // be expensive, this is delayed so that it does not happen during startup.
 scoped_refptr<network::SharedURLLoaderFactory>
 CreateURLLoaderFactoryForBrowserContext(content::BrowserContext* context) {
-  return content::BrowserContext::GetDefaultStoragePartition(context)
+  return context->GetDefaultStoragePartition()
       ->GetURLLoaderFactoryForBrowserProcess();
 }
 
@@ -128,7 +128,7 @@ void FeedbackUploaderChrome::StartDispatchingReport() {
   // Sync consent is not required to send feedback because the feedback dialog
   // has its own privacy notice.
   if (identity_manager &&
-      identity_manager->HasPrimaryAccount(signin::ConsentLevel::kNotRequired)) {
+      identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin)) {
     signin::ScopeSet scopes;
     scopes.insert(kScope);
     primary_account_token_fetcher_ =
@@ -138,7 +138,7 @@ void FeedbackUploaderChrome::StartDispatchingReport() {
                 &FeedbackUploaderChrome::PrimaryAccountAccessTokenAvailable,
                 base::Unretained(this)),
             signin::PrimaryAccountAccessTokenFetcher::Mode::kImmediate,
-            signin::ConsentLevel::kNotRequired);
+            signin::ConsentLevel::kSignin);
     return;
   }
 

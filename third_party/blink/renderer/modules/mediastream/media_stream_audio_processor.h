@@ -7,18 +7,18 @@
 
 #include <memory>
 
-#include "base/atomicops.h"
 #include "base/files/file.h"
 #include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/optional.h"
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
 #include "media/webrtc/audio_delay_stats_reporter.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/mediastream/aec_dump_agent_impl.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_audio_processor_options.h"
 #include "third_party/blink/renderer/platform/webrtc/webrtc_source.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/webrtc/api/media_stream_interface.h"
 #include "third_party/webrtc/modules/audio_processing/include/audio_processing.h"
 #include "third_party/webrtc/rtc_base/task_queue.h"
@@ -37,6 +37,7 @@ namespace blink {
 class AecDumpAgentImpl;
 class MediaStreamAudioBus;
 class MediaStreamAudioFifo;
+class WebRtcAudioDeviceImpl;
 
 using webrtc::AudioProcessorInterface;
 
@@ -55,8 +56,10 @@ class MODULES_EXPORT MediaStreamAudioProcessor
   //
   // Threading note: The constructor assumes it is being run on the main render
   // thread.
-  MediaStreamAudioProcessor(const AudioProcessingProperties& properties,
-                            WebRtcPlayoutDataSource* playout_data_source);
+  MediaStreamAudioProcessor(
+      const AudioProcessingProperties& properties,
+      bool use_capture_multi_channel_processing,
+      scoped_refptr<WebRtcAudioDeviceImpl> playout_data_source);
 
   // Called when the format of the capture data has changed.
   // Called on the main render thread. The caller is responsible for stopping
@@ -108,6 +111,11 @@ class MODULES_EXPORT MediaStreamAudioProcessor
   // Accessor to check if the audio processing is enabled or not.
   bool has_audio_processing() const { return !!audio_processing_; }
 
+  // Instructs the Audio Processing Module (APM) to reduce its complexity when
+  // |muted| is true. This mode is triggered when all audio tracks are disabled.
+  // The default APM complexity mode is restored by |muted| set to false.
+  void SetOutputWillBeMuted(bool muted);
+
   // AecDumpAgentImpl::Delegate implementation.
   // Called on the main render thread.
   void OnStartDump(base::File dump_file) override;
@@ -128,23 +136,31 @@ class MODULES_EXPORT MediaStreamAudioProcessor
   FRIEND_TEST_ALL_PREFIXES(MediaStreamAudioProcessorTest,
                            TestAgcEnableDefaultAgc1);
   FRIEND_TEST_ALL_PREFIXES(MediaStreamAudioProcessorTest,
+                           TestAgcEnableExperimentalAgc1);
+  FRIEND_TEST_ALL_PREFIXES(MediaStreamAudioProcessorTest,
                            TestAgcEnableHybridAgc);
   FRIEND_TEST_ALL_PREFIXES(MediaStreamAudioProcessorTest,
+                           TestAgcEnableHybridAgcDryRun);
+  FRIEND_TEST_ALL_PREFIXES(MediaStreamAudioProcessorTest,
                            TestAgcEnableHybridAgcSimdNotAllowed);
+  FRIEND_TEST_ALL_PREFIXES(MediaStreamAudioProcessorTest,
+                           TestAgcEnableClippingControl);
+  FRIEND_TEST_ALL_PREFIXES(MediaStreamAudioProcessorTest,
+                           TestAgcEnableClippingControlDefaultParams);
 
   // WebRtcPlayoutDataSource::Sink implementation.
   void OnPlayoutData(media::AudioBus* audio_bus,
                      int sample_rate,
-                     int audio_delay_milliseconds) override;
+                     base::TimeDelta audio_delay) override;
   void OnPlayoutDataSourceChanged() override;
   void OnRenderThreadChanged() override;
 
-  base::Optional<webrtc::AudioProcessing::Config>
+  absl::optional<webrtc::AudioProcessing::Config>
   GetAudioProcessingModuleConfig() const {
     if (audio_processing_) {
       return audio_processing_->GetConfig();
     }
-    return base::nullopt;
+    return absl::nullopt;
   }
 
   // This method is called on the libjingle thread.
@@ -178,9 +194,11 @@ class MODULES_EXPORT MediaStreamAudioProcessor
   // Update AEC stats. Called on the main render thread.
   void UpdateAecStats();
 
+  void SendLogMessage(const WTF::String& message);
+
   // Cached value for the render delay latency. This member is accessed by
   // both the capture audio thread and the render audio thread.
-  base::subtle::Atomic32 render_delay_ms_;
+  std::atomic<base::TimeDelta> render_delay_;
 
   // For reporting audio delay stats.
   media::AudioDelayStatsReporter audio_delay_stats_reporter_;
@@ -208,11 +226,8 @@ class MODULES_EXPORT MediaStreamAudioProcessor
   media::AudioParameters input_format_;
   media::AudioParameters output_format_;
 
-  // Raw pointer to the WebRtcPlayoutDataSource, which is valid for the
-  // lifetime of RenderThread.
-  //
   // TODO(crbug.com/704136): Replace with Member at some point.
-  WebRtcPlayoutDataSource* playout_data_source_;
+  scoped_refptr<WebRtcAudioDeviceImpl> playout_data_source_;
 
   // Task runner for the main render thread.
   const scoped_refptr<base::SingleThreadTaskRunner> main_thread_runner_;
@@ -224,12 +239,6 @@ class MODULES_EXPORT MediaStreamAudioProcessor
 
   // Flag to enable stereo channel mirroring.
   bool audio_mirroring_;
-
-  // Typing detector. |typing_detected_| is used to show the result of typing
-  // detection. It can be accessed by the capture audio thread and by the
-  // libjingle thread which calls GetStats().
-  std::unique_ptr<webrtc::TypingDetection> typing_detector_;
-  base::subtle::Atomic32 typing_detected_;
 
   // Communication with browser for AEC dump.
   std::unique_ptr<AecDumpAgentImpl> aec_dump_agent_impl_;

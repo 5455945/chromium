@@ -14,14 +14,14 @@ MockLanguageModel::GetLanguages() {
 }
 
 void MockTranslateInfoBarDelegate::SetTranslateLanguagesForTest(
-    std::vector<std::pair<std::string, base::string16>> languages) {
+    std::vector<std::pair<std::string, std::u16string>> languages) {
   for (auto pair : languages) {
     languages_.push_back(pair);
   }
 }
 
 void MockTranslateInfoBarDelegate::GetLanguagesNames(
-    std::vector<base::string16>* names) const {
+    std::vector<std::u16string>* names) const {
   for (auto& entry : languages_) {
     names->push_back(entry.second);
   }
@@ -34,31 +34,17 @@ void MockTranslateInfoBarDelegate::GetLanguagesCodes(
   }
 }
 
-void MockTranslateInfoBarDelegate::SetContentLanguagesForTest(
-    std::vector<LanguageNameTriple> languages) {
+void MockTranslateInfoBarDelegate::SetContentLanguagesCodesForTest(
+    std::vector<std::string> languages) {
   for (auto& entry : languages) {
     content_languages_.push_back(entry);
-  }
-}
-
-void MockTranslateInfoBarDelegate::GetContentLanguagesNames(
-    std::vector<base::string16>* languages) const {
-  for (auto& entry : content_languages_) {
-    languages->push_back(entry.name);
-  }
-}
-
-void MockTranslateInfoBarDelegate::GetContentLanguagesNativeNames(
-    std::vector<base::string16>* languages) const {
-  for (auto& entry : content_languages_) {
-    languages->push_back(entry.native_name);
   }
 }
 
 void MockTranslateInfoBarDelegate::GetContentLanguagesCodes(
     std::vector<std::string>* codes) const {
   for (auto& entry : content_languages_) {
-    codes->push_back(entry.code);
+    codes->push_back(entry);
   }
 }
 
@@ -66,14 +52,14 @@ MockTranslateInfoBarDelegate::MockTranslateInfoBarDelegate(
     const base::WeakPtr<translate::TranslateManager>& translate_manager,
     bool is_off_the_record,
     translate::TranslateStep step,
-    const std::string& original_language,
+    const std::string& source_language,
     const std::string& target_language,
     translate::TranslateErrors::Type error_type,
     bool triggered_from_menu)
     : translate::TranslateInfoBarDelegate(translate_manager,
                                           is_off_the_record,
                                           step,
-                                          original_language,
+                                          source_language,
                                           target_language,
                                           error_type,
                                           triggered_from_menu) {}
@@ -81,7 +67,7 @@ MockTranslateInfoBarDelegate::MockTranslateInfoBarDelegate(
 MockTranslateInfoBarDelegate::~MockTranslateInfoBarDelegate() {}
 
 MockTranslateInfoBarDelegateFactory::MockTranslateInfoBarDelegateFactory(
-    const std::string& original_language,
+    const std::string& source_language,
     const std::string& target_language) {
   pref_service_ =
       std::make_unique<sync_preferences::TestingPrefServiceSyncable>();
@@ -98,8 +84,8 @@ MockTranslateInfoBarDelegateFactory::MockTranslateInfoBarDelegateFactory(
   delegate_ = std::make_unique<MockTranslateInfoBarDelegate>(
       manager_->GetWeakPtr(), false,
       translate::TranslateStep::TRANSLATE_STEP_BEFORE_TRANSLATE,
-      original_language, target_language,
-      translate::TranslateErrors::Type::NONE, false);
+      source_language, target_language, translate::TranslateErrors::Type::NONE,
+      false);
 }
 
 MockTranslateInfoBarDelegateFactory::~MockTranslateInfoBarDelegateFactory() {}

@@ -5,15 +5,19 @@
 #ifndef ASH_PUBLIC_CPP_DESKS_HELPER_H_
 #define ASH_PUBLIC_CPP_DESKS_HELPER_H_
 
+#include <string>
+
 #include "ash/public/cpp/ash_public_export.h"
+#include "base/callback.h"
 #include "base/macros.h"
-#include "base/strings/string16.h"
 
 namespace aura {
 class Window;
 }  // namespace aura
 
 namespace ash {
+
+class DeskTemplate;
 
 // Interface for an ash client (e.g. Chrome) to interact with the Virtual Desks
 // feature.
@@ -29,7 +33,7 @@ class ASH_PUBLIC_EXPORT DesksHelper {
 
   // Returns the names of the desk at |index|. If |index| is out-of-bounds,
   // return empty string.
-  virtual base::string16 GetDeskName(int index) const = 0;
+  virtual std::u16string GetDeskName(int index) const = 0;
 
   // Returns the number of desks.
   virtual int GetNumberOfDesks() const = 0;
@@ -37,6 +41,16 @@ class ASH_PUBLIC_EXPORT DesksHelper {
   // Sends |window| to desk at |desk_index|. Does nothing if the desk at
   // |desk_index| is the active desk. |desk_index| must be valid.
   virtual void SendToDeskAtIndex(aura::Window* window, int desk_index) = 0;
+
+  // Captures the active desk and returns it as a desk template containing
+  // necessary information that can be used to create a same desk.
+  virtual std::unique_ptr<DeskTemplate> CaptureActiveDeskAsTemplate() const = 0;
+
+  // Creates and activates a new desk for a template with name `desk_name`. Runs
+  // `callback` with true if creation was successful, false otherwise.
+  virtual void CreateAndActivateNewDeskForTemplate(
+      const std::u16string& desk_name,
+      base::OnceCallback<void(bool)> callback) = 0;
 
  protected:
   DesksHelper();

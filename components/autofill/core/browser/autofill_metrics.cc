@@ -8,12 +8,15 @@
 #include <utility>
 #include <vector>
 
+#include "base/containers/contains.h"
+#include "base/containers/fixed_flat_map.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_piece.h"
+#include "base/strings/string_piece_forward.h"
 #include "base/time/time.h"
 #include "components/autofill/core/browser/autofill_data_util.h"
 #include "components/autofill/core/browser/autofill_field.h"
@@ -38,6 +41,29 @@ namespace {
 
 // Exponential bucket spacing for UKM event data.
 constexpr double kAutofillEventDataBucketSpacing = 2.0;
+
+// Translates structured name types into simple names that are used for
+// naming histograms.
+constexpr auto kStructuredNameTypeToNameMap =
+    base::MakeFixedFlatMap<ServerFieldType, base::StringPiece>(
+        {{NAME_FULL, "Full"},
+         {NAME_FIRST, "First"},
+         {NAME_MIDDLE, "Middle"},
+         {NAME_LAST, "Last"},
+         {NAME_LAST_FIRST, "FirstLast"},
+         {NAME_LAST_SECOND, "SecondLast"}});
+
+// Translates structured address types into simple names that are used for
+// naming histograms.
+constexpr auto kStructuredAddressTypeToNameMap =
+    base::MakeFixedFlatMap<ServerFieldType, base::StringPiece>(
+        {{ADDRESS_HOME_STREET_ADDRESS, "StreetAddress"},
+         {ADDRESS_HOME_STREET_NAME, "StreetName"},
+         {ADDRESS_HOME_HOUSE_NUMBER, "HouseNumber"},
+         {ADDRESS_HOME_FLOOR, "FloorNumber"},
+         {ADDRESS_HOME_APT_NUM, "ApartmentNumber"},
+         {ADDRESS_HOME_PREMISE_NAME, "Premise"},
+         {ADDRESS_HOME_SUBPREMISE, "SubPremise"}});
 
 // Note: if adding an enum value here, update the corresponding description for
 // AutofillFieldPredictionQualityByFieldType in
@@ -100,6 +126,49 @@ std::string PreviousSaveCreditCardPromptUserDecisionToString(
     previous_response = ".NoPreviousDecision";
   }
   return previous_response;
+}
+
+// Converts a server field type that can be edited in the settings to an enum
+// used for metrics.
+AutofillMetrics::SettingsVisibleFieldTypeForMetrics
+ConvertSettingsVisibleFieldTypeForMetrics(ServerFieldType field_type) {
+  switch (field_type) {
+    case ServerFieldType::NAME_FULL:
+      return AutofillMetrics::SettingsVisibleFieldTypeForMetrics::kName;
+
+    case ServerFieldType::EMAIL_ADDRESS:
+      return AutofillMetrics::SettingsVisibleFieldTypeForMetrics::kEmailAddress;
+
+    case ServerFieldType::PHONE_HOME_WHOLE_NUMBER:
+      return AutofillMetrics::SettingsVisibleFieldTypeForMetrics::kPhoneNumber;
+
+    case ServerFieldType::ADDRESS_HOME_CITY:
+      return AutofillMetrics::SettingsVisibleFieldTypeForMetrics::kCity;
+
+    case ServerFieldType::ADDRESS_HOME_COUNTRY:
+      return AutofillMetrics::SettingsVisibleFieldTypeForMetrics::kCountry;
+
+    case ServerFieldType::ADDRESS_HOME_ZIP:
+      return AutofillMetrics::SettingsVisibleFieldTypeForMetrics::kZip;
+
+    case ServerFieldType::ADDRESS_HOME_STATE:
+      return AutofillMetrics::SettingsVisibleFieldTypeForMetrics::kState;
+
+    case ServerFieldType::ADDRESS_HOME_STREET_ADDRESS:
+      return AutofillMetrics::SettingsVisibleFieldTypeForMetrics::
+          kStreetAddress;
+
+    case ServerFieldType::ADDRESS_HOME_DEPENDENT_LOCALITY:
+      return AutofillMetrics::SettingsVisibleFieldTypeForMetrics::
+          kDependentLocality;
+
+    case ServerFieldType::NAME_HONORIFIC_PREFIX:
+      return AutofillMetrics::SettingsVisibleFieldTypeForMetrics::
+          kHonorificPrefix;
+
+    default:
+      return AutofillMetrics::SettingsVisibleFieldTypeForMetrics::kUndefined;
+  }
 }
 
 }  // namespace
@@ -445,7 +514,7 @@ ServerFieldType GetActualFieldType(const ServerFieldTypeSet& possible_types,
   // Collapse field types that Chrome treats as identical, e.g. home and
   // billing address fields.
   ServerFieldTypeSet collapsed_field_types;
-  for (const auto& type : possible_types) {
+  for (auto type : possible_types) {
     DCHECK_NE(type, EMPTY_TYPE);
     DCHECK_NE(type, UNKNOWN_TYPE);
 
@@ -1114,6 +1183,67 @@ void AutofillMetrics::LogLocalCardMigrationPromptMetric(
 }
 
 // static
+void AutofillMetrics::LogOfferNotificationBubbleOfferMetric(bool is_reshow) {
+  base::UmaHistogramBoolean(
+      "Autofill.OfferNotificationBubbleOffer.CardLinkedOffer", is_reshow);
+}
+
+// static
+void AutofillMetrics::LogOfferNotificationBubbleResultMetric(
+    OfferNotificationBubbleResultMetric metric,
+    bool is_reshow) {
+  DCHECK_LE(metric, OfferNotificationBubbleResultMetric::kMaxValue);
+  static const char first_show[] =
+      "Autofill.OfferNotificationBubbleResult.CardLinkedOffer.FirstShow";
+  static const char reshows[] =
+      "Autofill.OfferNotificationBubbleResult.CardLinkedOffer.Reshows";
+  base::UmaHistogramEnumeration(is_reshow ? reshows : first_show, metric);
+}
+
+// static
+void AutofillMetrics::LogOfferNotificationInfoBarDeepLinkClicked() {
+  base::RecordAction(base::UserMetricsAction(
+      "Autofill_OfferNotificationInfoBar_DeepLinkClicked"));
+}
+
+// static
+void AutofillMetrics::LogOfferNotificationInfoBarResultMetric(
+    OfferNotificationInfoBarResultMetric metric) {
+  DCHECK_LE(metric, OfferNotificationInfoBarResultMetric::kMaxValue);
+  base::UmaHistogramEnumeration(
+      "Autofill.OfferNotificationInfoBarResult.CardLinkedOffer", metric);
+}
+
+void AutofillMetrics::LogOfferNotificationInfoBarShown() {
+  base::UmaHistogramBoolean(
+      "Autofill.OfferNotificationInfoBarOffer.CardLinkedOffer", true);
+}
+
+// static
+void AutofillMetrics::LogVirtualCardManualFallbackBubbleShown(bool is_reshow) {
+  base::UmaHistogramBoolean("Autofill.VirtualCardManualFallbackBubble.Shown",
+                            is_reshow);
+}
+
+// static
+void AutofillMetrics::LogVirtualCardManualFallbackBubbleResultMetric(
+    VirtualCardManualFallbackBubbleResultMetric metric,
+    bool is_reshow) {
+  static const char first_show[] =
+      "Autofill.VirtualCardManualFallbackBubble.Result.FirstShow";
+  static const char reshows[] =
+      "Autofill.VirtualCardManualFallbackBubble.Result.Reshows";
+  base::UmaHistogramEnumeration(is_reshow ? reshows : first_show, metric);
+}
+
+// static
+void AutofillMetrics::LogVirtualCardManualFallbackBubbleFieldClicked(
+    VirtualCardManualFallbackBubbleFieldClickedMetric metric) {
+  base::UmaHistogramEnumeration(
+      "Autofill.VirtualCardManualFallbackBubble.FieldClicked", metric);
+}
+
+// static
 void AutofillMetrics::LogSaveCardWithFirstAndLastNameOffered(bool is_local) {
   std::string histogram_name = "Autofill.SaveCardWithFirstAndLastNameOffered.";
   histogram_name += is_local ? "Local" : "Server";
@@ -1130,27 +1260,48 @@ void AutofillMetrics::LogSaveCardWithFirstAndLastNameComplete(bool is_local) {
 // static
 void AutofillMetrics::LogCardUnmaskDurationAfterWebauthn(
     const base::TimeDelta& duration,
-    AutofillClient::PaymentsRpcResult result) {
-  std::string suffix;
+    AutofillClient::PaymentsRpcResult result,
+    AutofillClient::PaymentsRpcCardType card_type) {
+  std::string result_suffix;
+  std::string card_type_suffix;
+
   switch (result) {
     case AutofillClient::SUCCESS:
-      suffix = "Success";
+      result_suffix = "Success";
       break;
     case AutofillClient::TRY_AGAIN_FAILURE:
     case AutofillClient::PERMANENT_FAILURE:
-      suffix = "Failure";
+      result_suffix = "Failure";
       break;
     case AutofillClient::NETWORK_ERROR:
-      suffix = "NetworkError";
+      result_suffix = "NetworkError";
+      break;
+    case AutofillClient::VCN_RETRIEVAL_TRY_AGAIN_FAILURE:
+    case AutofillClient::VCN_RETRIEVAL_PERMANENT_FAILURE:
+      result_suffix = "VcnRetrievalFailure";
       break;
     case AutofillClient::NONE:
       NOTREACHED();
       return;
   }
+
+  switch (card_type) {
+    case AutofillClient::SERVER_CARD:
+      card_type_suffix = "ServerCard";
+      break;
+    case AutofillClient::VIRTUAL_CARD:
+      card_type_suffix = "VirtualCard";
+      break;
+    case AutofillClient::UNKNOWN_TYPE:
+      NOTREACHED();
+      return;
+  }
+
   base::UmaHistogramLongTimes("Autofill.BetterAuth.CardUnmaskDuration.Fido",
                               duration);
-  base::UmaHistogramLongTimes(
-      "Autofill.BetterAuth.CardUnmaskDuration.Fido." + suffix, duration);
+  base::UmaHistogramLongTimes("Autofill.BetterAuth.CardUnmaskDuration.Fido." +
+                                  card_type_suffix + "." + result_suffix,
+                              duration);
 }
 
 // static
@@ -1344,7 +1495,8 @@ void AutofillMetrics::LogTimeBeforeAbandonUnmasking(
 
 // static
 void AutofillMetrics::LogRealPanResult(
-    AutofillClient::PaymentsRpcResult result) {
+    AutofillClient::PaymentsRpcResult result,
+    AutofillClient::PaymentsRpcCardType card_type) {
   PaymentsRpcResult metric_result;
   switch (result) {
     case AutofillClient::SUCCESS:
@@ -1359,64 +1511,133 @@ void AutofillMetrics::LogRealPanResult(
     case AutofillClient::NETWORK_ERROR:
       metric_result = PAYMENTS_RESULT_NETWORK_ERROR;
       break;
-    default:
+    case AutofillClient::VCN_RETRIEVAL_TRY_AGAIN_FAILURE:
+      DCHECK_EQ(card_type, AutofillClient::VIRTUAL_CARD);
+      metric_result = PAYMENTS_RESULT_VCN_RETRIEVAL_TRY_AGAIN_FAILURE;
+      break;
+    case AutofillClient::VCN_RETRIEVAL_PERMANENT_FAILURE:
+      DCHECK_EQ(card_type, AutofillClient::VIRTUAL_CARD);
+      metric_result = PAYMENTS_RESULT_VCN_RETRIEVAL_PERMANENT_FAILURE;
+      break;
+    case AutofillClient::NONE:
       NOTREACHED();
       return;
   }
-  UMA_HISTOGRAM_ENUMERATION("Autofill.UnmaskPrompt.GetRealPanResult",
-                            metric_result, NUM_PAYMENTS_RESULTS);
+
+  std::string card_type_suffix;
+  switch (card_type) {
+    case AutofillClient::SERVER_CARD:
+      card_type_suffix = "ServerCard";
+      break;
+    case AutofillClient::VIRTUAL_CARD:
+      card_type_suffix = "VirtualCard";
+      break;
+    case AutofillClient::UNKNOWN_TYPE:
+      NOTREACHED();
+      return;
+  }
+
+  base::UmaHistogramEnumeration("Autofill.UnmaskPrompt.GetRealPanResult",
+                                metric_result);
+
+  base::UmaHistogramEnumeration(
+      "Autofill.UnmaskPrompt.GetRealPanResult." + card_type_suffix,
+      metric_result);
 }
 
 // static
 void AutofillMetrics::LogRealPanDuration(
     const base::TimeDelta& duration,
-    AutofillClient::PaymentsRpcResult result) {
-  std::string suffix;
-  switch (result) {
-    case AutofillClient::SUCCESS:
-      suffix = "Success";
+    AutofillClient::PaymentsRpcResult result,
+    AutofillClient::PaymentsRpcCardType card_type) {
+  std::string result_suffix;
+  std::string card_type_suffix;
+
+  switch (card_type) {
+    case AutofillClient::SERVER_CARD:
+      card_type_suffix = "ServerCard";
       break;
-    case AutofillClient::TRY_AGAIN_FAILURE:
-    case AutofillClient::PERMANENT_FAILURE:
-      suffix = "Failure";
+    case AutofillClient::VIRTUAL_CARD:
+      card_type_suffix = "VirtualCard";
       break;
-    case AutofillClient::NETWORK_ERROR:
-      suffix = "NetworkError";
-      break;
-    default:
+    case AutofillClient::UNKNOWN_TYPE:
       NOTREACHED();
       return;
   }
+
+  switch (result) {
+    case AutofillClient::SUCCESS:
+      result_suffix = "Success";
+      break;
+    case AutofillClient::TRY_AGAIN_FAILURE:
+    case AutofillClient::PERMANENT_FAILURE:
+      result_suffix = "Failure";
+      break;
+    case AutofillClient::VCN_RETRIEVAL_TRY_AGAIN_FAILURE:
+    case AutofillClient::VCN_RETRIEVAL_PERMANENT_FAILURE:
+      DCHECK_EQ(card_type, AutofillClient::VIRTUAL_CARD);
+      result_suffix = "VcnRetrievalFailure";
+      break;
+    case AutofillClient::NETWORK_ERROR:
+      result_suffix = "NetworkError";
+      break;
+    case AutofillClient::NONE:
+      NOTREACHED();
+      return;
+  }
+
   base::UmaHistogramLongTimes("Autofill.UnmaskPrompt.GetRealPanDuration",
                               duration);
-  base::UmaHistogramLongTimes(
-      "Autofill.UnmaskPrompt.GetRealPanDuration." + suffix, duration);
+  base::UmaHistogramLongTimes("Autofill.UnmaskPrompt.GetRealPanDuration." +
+                                  card_type_suffix + "." + result_suffix,
+                              duration);
 }
 
 // static
 void AutofillMetrics::LogUnmaskingDuration(
     const base::TimeDelta& duration,
-    AutofillClient::PaymentsRpcResult result) {
-  std::string suffix;
+    AutofillClient::PaymentsRpcResult result,
+    AutofillClient::PaymentsRpcCardType card_type) {
+  std::string result_suffix;
+  std::string card_type_suffix;
+
+  switch (card_type) {
+    case AutofillClient::SERVER_CARD:
+      card_type_suffix = "ServerCard";
+      break;
+    case AutofillClient::VIRTUAL_CARD:
+      card_type_suffix = "VirtualCard";
+      break;
+    case AutofillClient::UNKNOWN_TYPE:
+      NOTREACHED();
+      return;
+  }
+
   switch (result) {
     case AutofillClient::SUCCESS:
-      suffix = "Success";
+      result_suffix = "Success";
       break;
     case AutofillClient::TRY_AGAIN_FAILURE:
     case AutofillClient::PERMANENT_FAILURE:
-      suffix = "Failure";
+      result_suffix = "Failure";
+      break;
+    case AutofillClient::VCN_RETRIEVAL_TRY_AGAIN_FAILURE:
+    case AutofillClient::VCN_RETRIEVAL_PERMANENT_FAILURE:
+      DCHECK_EQ(card_type, AutofillClient::VIRTUAL_CARD);
+      result_suffix = "VcnRetrievalFailure";
       break;
     case AutofillClient::NETWORK_ERROR:
-      suffix = "NetworkError";
+      result_suffix = "NetworkError";
       break;
-    default:
+    case AutofillClient::NONE:
       NOTREACHED();
       return;
   }
   base::UmaHistogramLongTimes("Autofill.UnmaskPrompt.UnmaskingDuration",
                               duration);
-  base::UmaHistogramLongTimes(
-      "Autofill.UnmaskPrompt.UnmaskingDuration." + suffix, duration);
+  base::UmaHistogramLongTimes("Autofill.UnmaskPrompt.UnmaskingDuration." +
+                                  card_type_suffix + "." + result_suffix,
+                              duration);
 }
 
 // static
@@ -1786,6 +2007,10 @@ void AutofillMetrics::LogStoredCreditCardMetrics(
         num_unmasked_cards += 1;
         num_disused_unmasked_cards += disused_delta;
         break;
+      case CreditCard::VIRTUAL_CARD:
+        // This card type is not persisted in Chrome.
+        NOTREACHED();
+        break;
     }
   }
 
@@ -1836,6 +2061,16 @@ void AutofillMetrics::LogStoredCreditCardMetrics(
         "Autofill.StoredCreditCardDisusedCount.Server.Unmasked",
         num_disused_unmasked_cards);
   }
+
+  // Log the number of server cards that are enrolled with virtual cards.
+  size_t virtual_card_enabled_card_count = base::ranges::count_if(
+      server_cards, [](const std::unique_ptr<CreditCard>& card) {
+        return card->virtual_card_enrollment_state() ==
+               CreditCard::VirtualCardEnrollmentState::ENROLLED;
+      });
+  base::UmaHistogramCounts1000(
+      "Autofill.StoredCreditCardCount.Server.WithVirtualCardMetadata",
+      virtual_card_enabled_card_count);
 }
 
 // static
@@ -1847,7 +2082,7 @@ void AutofillMetrics::LogStoredOfferMetrics(
   for (const std::unique_ptr<AutofillOfferData>& offer : offers) {
     base::UmaHistogramCounts1000(
         "Autofill.Offer.StoredOfferRelatedMerchantCount",
-        offer->merchant_domain.size());
+        offer->merchant_origins.size());
     base::UmaHistogramCounts1000("Autofill.Offer.StoredOfferRelatedCardCount",
                                  offer->eligible_instrument_id.size());
   }
@@ -2352,7 +2587,7 @@ void AutofillMetrics::FormInteractionsUkmLogger::
 int64_t AutofillMetrics::FormTypesToBitVector(
     const DenseSet<FormType>& form_types) {
   int64_t form_type_bv = 0;
-  for (const FormType& form_type : form_types) {
+  for (FormType form_type : form_types) {
     DCHECK_LT(static_cast<int64_t>(form_type), 63);
     form_type_bv |= 1LL << static_cast<int64_t>(form_type);
   }
@@ -2549,4 +2784,109 @@ void AutofillMetrics::LogNumberOfAutofilledFieldsAtSubmission(
       "Autofill.NumberOfAutofilledFieldsAtSubmission.Corrected",
       number_of_corrected_fields, 50);
 }
+
+void AutofillMetrics::LogProfileImportType(
+    AutofillProfileImportType import_type) {
+  base::UmaHistogramEnumeration("Autofill.ProfileImport.ProfileImportType",
+                                import_type);
+}
+
+void AutofillMetrics::LogNewProfileImportDecision(
+    AutofillClient::SaveAddressProfileOfferUserDecision decision) {
+  base::UmaHistogramEnumeration("Autofill.ProfileImport.NewProfileDecision",
+                                decision);
+}
+
+void AutofillMetrics::LogNewProfileEditedType(ServerFieldType edited_type) {
+  base::UmaHistogramEnumeration(
+      "Autofill.ProfileImport.NewProfileEditedType",
+      ConvertSettingsVisibleFieldTypeForMetrics(edited_type));
+}
+
+void AutofillMetrics::LogNewProfileNumberOfEditedFields(
+    int number_of_edited_fields) {
+  base::UmaHistogramExactLinear(
+      "Autofill.ProfileImport.NewProfileNumberOfEditedFields",
+      number_of_edited_fields, /*exclusive_max=*/15);
+}
+
+void AutofillMetrics::LogProfileUpdateImportDecision(
+    AutofillClient::SaveAddressProfileOfferUserDecision decision) {
+  base::UmaHistogramEnumeration("Autofill.ProfileImport.UpdateProfileDecision",
+                                decision);
+}
+
+void AutofillMetrics::LogProfileUpdateAffectedType(
+    ServerFieldType affected_type) {
+  base::UmaHistogramEnumeration(
+      "Autofill.ProfileImport.UpdateProfileAffectedType",
+      ConvertSettingsVisibleFieldTypeForMetrics(affected_type));
+}
+
+void AutofillMetrics::LogProfileUpdateEditedType(ServerFieldType edited_type) {
+  base::UmaHistogramEnumeration(
+      "Autofill.ProfileImport.UpdateProfileEditedType",
+      ConvertSettingsVisibleFieldTypeForMetrics(edited_type));
+}
+
+void AutofillMetrics::LogUpdateProfileNumberOfEditedFields(
+    int number_of_edited_fields) {
+  base::UmaHistogramExactLinear(
+      "Autofill.ProfileImport.UpdateProfileNumberOfEditedFields",
+      number_of_edited_fields, /*exclusive_max=*/15);
+}
+
+void AutofillMetrics::LogUpdateProfileNumberOfAffectedFields(
+    int number_of_edited_fields) {
+  base::UmaHistogramExactLinear(
+      "Autofill.ProfileImport.UpdateProfileNumberOfAffectedFields",
+      number_of_edited_fields, /*exclusive_max=*/15);
+}
+
+void AutofillMetrics::LogVerificationStatusOfNameTokensOnProfileUsage(
+    const AutofillProfile& profile) {
+  constexpr base::StringPiece base_histogram_name =
+      "Autofill.NameTokenVerificationStatusAtProfileUsage.";
+
+  for (const auto& type_name_pair : kStructuredNameTypeToNameMap) {
+    // Do not record the status for empty values.
+    if (profile.GetRawInfo(type_name_pair.first).empty()) {
+      continue;
+    }
+
+    structured_address::VerificationStatus status =
+        profile.GetVerificationStatus(type_name_pair.first);
+    base::UmaHistogramEnumeration(
+        base::StrCat({base_histogram_name, type_name_pair.second}), status);
+    base::UmaHistogramEnumeration(base::StrCat({base_histogram_name, "Any"}),
+                                  status);
+  }
+}
+
+void AutofillMetrics::LogVerificationStatusOfAddressTokensOnProfileUsage(
+    const AutofillProfile& profile) {
+  constexpr base::StringPiece base_histogram_name =
+      "Autofill.AddressTokenVerificationStatusAtProfileUsage.";
+
+  for (const auto& type_name_pair : kStructuredAddressTypeToNameMap) {
+    // Do not record the status for empty values.
+    if (profile.GetRawInfo(type_name_pair.first).empty()) {
+      continue;
+    }
+
+    structured_address::VerificationStatus status =
+        profile.GetVerificationStatus(type_name_pair.first);
+    base::UmaHistogramEnumeration(
+        base::StrCat({base_histogram_name, type_name_pair.second}), status);
+    base::UmaHistogramEnumeration(base::StrCat({base_histogram_name, "Any"}),
+                                  status);
+  }
+}
+
+// static
+void AutofillMetrics::LogVirtualCardMetadataSynced(bool existing_card) {
+  base::UmaHistogramBoolean("Autofill.VirtualCard.MetadataSynced",
+                            existing_card);
+}
+
 }  // namespace autofill

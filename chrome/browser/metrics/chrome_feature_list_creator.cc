@@ -47,9 +47,9 @@
 #include "ui/base/resource/resource_bundle.h"
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
+#include "chrome/browser/ash/policy/core/browser_policy_connector_chromeos.h"
 #include "chrome/browser/ash/settings/owner_flags_storage.h"
-#include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
-#include "chromeos/dbus/dbus_thread_manager.h"
+#include "chromeos/dbus/dbus_thread_manager.h"  // nogncheck
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 ChromeFeatureListCreator::ChromeFeatureListCreator() = default;
@@ -154,8 +154,8 @@ void ChromeFeatureListCreator::ConvertFlagsToSwitches() {
   // from signed device settings, while flags for user session are stored in
   // preferences and applied via a chrome restart upon user login, see
   // UserSessionManager::RestartToApplyPerSessionFlagsIfNeed for the latter.
-  chromeos::about_flags::ReadOnlyFlagsStorage flags_storage(
-      chromeos::about_flags::ParseFlagsFromCommandLine());
+  ash::about_flags::ReadOnlyFlagsStorage flags_storage(
+      ash::about_flags::ParseFlagsFromCommandLine());
 #else
   flags_ui::PrefServiceFlagsStorage flags_storage(local_state_.get());
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)

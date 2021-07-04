@@ -16,6 +16,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "components/viz/common/buildflags.h"
 #include "content/browser/bad_message.h"
 #include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/devtools/devtools_manager.h"
@@ -57,6 +58,7 @@
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/network_service_instance.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host_iterator.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
@@ -70,6 +72,10 @@
 #include "services/device/public/mojom/wake_lock_context.mojom.h"
 #else
 #include "content/browser/devtools/protocol/webauthn_handler.h"
+#endif
+
+#if BUILDFLAG(USE_VIZ_DEBUGGER)
+#include "content/browser/devtools/protocol/visual_debugger_handler.h"
 #endif
 
 namespace content {
@@ -198,7 +204,7 @@ void RenderFrameDevToolsAgentHost::AddAllAgentHosts(
 }
 
 // static
-void RenderFrameDevToolsAgentHost::WebContentsMainFrameCreated(
+void RenderFrameDevToolsAgentHost::AttachToWebContents(
     WebContents* web_contents) {
   if (ShouldForceCreation()) {
     // Force agent host.
@@ -301,6 +307,9 @@ bool RenderFrameDevToolsAgentHost::AttachSession(DevToolsSession* session,
   session->AddHandler(std::make_unique<protocol::InspectorHandler>());
   session->AddHandler(std::make_unique<protocol::IOHandler>(GetIOContext()));
   session->AddHandler(std::make_unique<protocol::MemoryHandler>());
+#if BUILDFLAG(USE_VIZ_DEBUGGER)
+  session->AddHandler(std::make_unique<protocol::VisualDebuggerHandler>());
+#endif
   if (!frame_tree_node_ || !frame_tree_node_->parent())
     session->AddHandler(std::make_unique<protocol::OverlayHandler>());
   session->AddHandler(std::make_unique<protocol::NetworkHandler>(
@@ -328,14 +337,16 @@ bool RenderFrameDevToolsAgentHost::AttachSession(DevToolsSession* session,
       may_attach_to_brower
           ? protocol::TargetHandler::AccessMode::kRegular
           : protocol::TargetHandler::AccessMode::kAutoAttachOnly,
-      GetId(), GetRendererChannel(), session->GetRootSession()));
+      GetId(),
+      protocol::TargetAutoAttacher::CreateForFrame(GetRendererChannel()),
+      session->GetRootSession()));
   session->AddHandler(std::make_unique<protocol::PageHandler>(
       emulation_handler_ptr, browser_handler_ptr,
       session->GetClient()->MayReadLocalFiles()));
   session->AddHandler(std::make_unique<protocol::SecurityHandler>());
   if (!frame_tree_node_ || !frame_tree_node_->parent()) {
-    session->AddHandler(std::make_unique<protocol::TracingHandler>(
-        frame_tree_node_, GetIOContext()));
+    session->AddHandler(
+        std::make_unique<protocol::TracingHandler>(GetIOContext()));
   }
   session->AddHandler(std::make_unique<protocol::LogHandler>());
 #if !defined(OS_ANDROID)
@@ -425,25 +436,28 @@ void RenderFrameDevToolsAgentHost::ReadyToCommitNavigation(
 void RenderFrameDevToolsAgentHost::DidFinishNavigation(
     NavigationHandle* navigation_handle) {
   NavigationRequest* request = NavigationRequest::From(navigation_handle);
-  if (request->frame_tree_node() != frame_tree_node_)
-    return;
-  navigation_requests_.erase(request);
-  if (request->HasCommitted())
-    NotifyNavigated();
+  // If we opt for retaning self within the conditional block below, do so
+  // till the end of the function, as we require |this| after the conditional.
+  scoped_refptr<RenderFrameDevToolsAgentHost> protect;
+  if (request->frame_tree_node() == frame_tree_node_) {
+    navigation_requests_.erase(request);
+    if (request->HasCommitted())
+      NotifyNavigated();
 
-  if (IsAttached()) {
-    UpdateRawHeadersAccess(frame_tree_node_->current_frame_host());
-  }
-  // UpdateFrameHost may destruct |this|.
-  scoped_refptr<RenderFrameDevToolsAgentHost> protect(this);
-  UpdateFrameHost(frame_tree_node_->current_frame_host());
+    if (IsAttached()) {
+      UpdateRawHeadersAccess(frame_tree_node_->current_frame_host());
+    }
+    // UpdateFrameHost may destruct |this|.
+    protect = this;
+    UpdateFrameHost(frame_tree_node_->current_frame_host());
 
-  if (navigation_requests_.empty()) {
-    for (DevToolsSession* session : sessions())
-      session->ResumeSendingMessagesToAgent();
+    if (navigation_requests_.empty()) {
+      for (DevToolsSession* session : sessions())
+        session->ResumeSendingMessagesToAgent();
+    }
   }
   for (auto* target : protocol::TargetHandler::ForAgentHost(this))
-    target->DidFinishNavigation();
+    target->DidFinishNavigation(navigation_handle);
 }
 
 void RenderFrameDevToolsAgentHost::UpdateFrameHost(
@@ -470,8 +484,11 @@ void RenderFrameDevToolsAgentHost::UpdateFrameHost(
     if (!ShouldAllowSession(session))
       restricted_sessions.push_back(session);
   }
-  if (!restricted_sessions.empty())
+  scoped_refptr<RenderFrameDevToolsAgentHost> protect;
+  if (!restricted_sessions.empty()) {
+    protect = this;
     ForceDetachRestrictedSessions(restricted_sessions);
+  }
 
   UpdateFrameAlive();
 }
@@ -499,11 +516,10 @@ void RenderFrameDevToolsAgentHost::RenderFrameHostChanged(
   // UpdateFrameHost may destruct |this|.
 }
 
-void RenderFrameDevToolsAgentHost::FrameDeleted(RenderFrameHost* rfh) {
-  RenderFrameHostImpl* host = static_cast<RenderFrameHostImpl*>(rfh);
+void RenderFrameDevToolsAgentHost::FrameDeleted(int frame_tree_node_id) {
   for (auto* tracing : protocol::TracingHandler::ForAgentHost(this))
-    tracing->FrameDeleted(host);
-  if (host->frame_tree_node() == frame_tree_node_) {
+    tracing->FrameDeleted(frame_tree_node_id);
+  if (frame_tree_node_id == frame_tree_node_->frame_tree_node_id()) {
     DestroyOnRenderFrameGone();
     // |this| may be deleted at this point.
   }
@@ -675,7 +691,7 @@ std::string RenderFrameDevToolsAgentHost::GetOpenerId() {
 std::string RenderFrameDevToolsAgentHost::GetOpenerFrameId() {
   if (!frame_tree_node_)
     return std::string();
-  const base::Optional<base::UnguessableToken>& opener_devtools_frame_token =
+  const absl::optional<base::UnguessableToken>& opener_devtools_frame_token =
       frame_tree_node_->opener_devtools_frame_token();
   return opener_devtools_frame_token ? opener_devtools_frame_token->ToString()
                                      : std::string();
@@ -877,27 +893,27 @@ void RenderFrameDevToolsAgentHost::UpdateResourceLoaderFactories() {
   }
 }
 
-base::Optional<network::CrossOriginEmbedderPolicy>
+absl::optional<network::CrossOriginEmbedderPolicy>
 RenderFrameDevToolsAgentHost::cross_origin_embedder_policy(
     const std::string& id) {
   FrameTreeNode* frame_tree_node =
       protocol::FrameTreeNodeFromDevToolsFrameToken(
           frame_host_->frame_tree_node(), id);
   if (!frame_tree_node) {
-    return base::nullopt;
+    return absl::nullopt;
   }
   RenderFrameHostImpl* rfhi = frame_tree_node->current_frame_host();
   return rfhi->cross_origin_embedder_policy();
 }
 
-base::Optional<network::CrossOriginOpenerPolicy>
+absl::optional<network::CrossOriginOpenerPolicy>
 RenderFrameDevToolsAgentHost::cross_origin_opener_policy(
     const std::string& id) {
   FrameTreeNode* frame_tree_node =
       protocol::FrameTreeNodeFromDevToolsFrameToken(
           frame_host_->frame_tree_node(), id);
   if (!frame_tree_node) {
-    return base::nullopt;
+    return absl::nullopt;
   }
   RenderFrameHostImpl* rfhi = frame_tree_node->current_frame_host();
   return rfhi->cross_origin_opener_policy();

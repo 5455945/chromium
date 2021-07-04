@@ -198,6 +198,7 @@ AutomationPredicate = class {
         node.role === Role.PORTAL || node.role === Role.RADIO_BUTTON ||
         node.role === Role.SLIDER || node.role === Role.SWITCH ||
         node.role === Role.TEXT_FIELD ||
+        node.role === Role.TEXT_FIELD_WITH_COMBO_BOX ||
         (node.role === Role.MENU_ITEM && !hasActionableDescendant(node));
   }
 
@@ -470,16 +471,16 @@ AutomationPredicate = class {
       return true;
     }
 
-    // Ignore nodes acting as labels for another control, that don't
-    // have actionable descendants.
+    // Ignore nodes acting as labels for another control, that are unambiguously
+    // labels.
     if (node.labelFor && node.labelFor.length > 0 &&
-        !isActionableOrHasActionableDescendant(node)) {
+        node.role === Role.LABEL_TEXT) {
       return true;
     }
 
     // Similarly, ignore nodes acting as descriptions.
     if (node.descriptionFor && node.descriptionFor.length > 0 &&
-        !isActionableOrHasActionableDescendant(node)) {
+        node.role === Role.LABEL_TEXT) {
       return true;
     }
 
@@ -783,8 +784,7 @@ AutomationPredicate.structuralContainer = AutomationPredicate.roles([
   Role.ALERT_DIALOG, Role.CLIENT, Role.DIALOG, Role.LAYOUT_TABLE,
   Role.LAYOUT_TABLE_CELL, Role.LAYOUT_TABLE_ROW, Role.ROOT_WEB_AREA,
   Role.WEB_VIEW, Role.WINDOW, Role.EMBEDDED_OBJECT, Role.IFRAME,
-  Role.IFRAME_PRESENTATIONAL, Role.PLUGIN_OBJECT, Role.IGNORED, Role.UNKNOWN,
-  Role.PANE
+  Role.IFRAME_PRESENTATIONAL, Role.PLUGIN_OBJECT, Role.UNKNOWN, Role.PANE
 ]);
 
 

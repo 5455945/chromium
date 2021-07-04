@@ -36,7 +36,7 @@ class WaylandInputMethodContext : public LinuxInputMethodContext,
   // LinuxInputMethodContext overrides:
   bool DispatchKeyEvent(const ui::KeyEvent& key_event) override;
   void SetCursorLocation(const gfx::Rect& rect) override;
-  void SetSurroundingText(const base::string16& text,
+  void SetSurroundingText(const std::u16string& text,
                           const gfx::Range& selection_range) override;
   void Reset() override;
   void Focus() override;
@@ -51,7 +51,7 @@ class WaylandInputMethodContext : public LinuxInputMethodContext,
   void OnKeysym(uint32_t keysym, uint32_t state, uint32_t modifiers) override;
 
  private:
-  void UpdatePreeditText(const base::string16& preedit_text);
+  void UpdatePreeditText(const std::u16string& preedit_text);
 
   WaylandConnection* const connection_;  // TODO(jani) Handle this better
 
@@ -67,6 +67,12 @@ class WaylandInputMethodContext : public LinuxInputMethodContext,
   // An object to compose a character from a sequence of key presses
   // including dead key etc.
   CharacterComposer character_composer_;
+
+  // Stores the parameters required for OnDeleteSurroundingText.
+  // The index moved by SetSurroundingText. This is byte-offset in UTF8 form.
+  size_t surrounding_text_offset_ = 0;
+  // The string in SetSurroundingText.
+  std::string surrounding_text_;
 
   DISALLOW_COPY_AND_ASSIGN(WaylandInputMethodContext);
 };

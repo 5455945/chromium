@@ -8,137 +8,184 @@
  * the subpage title, a search field and a back icon.
  */
 
-Polymer({
-  is: 'settings-subpage',
+import '//resources/cr_elements/cr_icon_button/cr_icon_button.m.js';
+import '//resources/cr_elements/icons.m.js';
+import '//resources/cr_elements/shared_style_css.m.js';
+import '//resources/polymer/v3_0/paper-spinner/paper-spinner-lite.js';
+import '../settings_shared_css.js';
 
-  behaviors: [
-    FindShortcutBehavior,
-    I18nBehavior,
-    Polymer.IronResizableBehavior,
-    settings.RouteObserverBehavior,
-  ],
+import {CrSearchFieldElement} from '//resources/cr_elements/cr_search_field/cr_search_field.js';
+import {FindShortcutBehavior, FindShortcutBehaviorInterface} from '//resources/cr_elements/find_shortcut_behavior.js';
+import {assert} from '//resources/js/assert.m.js';
+import {focusWithoutInk} from '//resources/js/cr/ui/focus_without_ink.m.js';
+import {I18nBehavior, I18nBehaviorInterface} from '//resources/js/i18n_behavior.m.js';
+import {listenOnce} from '//resources/js/util.m.js';
+import {IronResizableBehavior} from '//resources/polymer/v3_0/iron-resizable-behavior/iron-resizable-behavior.js';
+import {afterNextRender, html, mixinBehaviors, PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {EventTracker} from 'chrome://resources/js/event_tracker.m.js';
 
-  properties: {
-    pageTitle: String,
+import {loadTimeData} from '../i18n_setup.js';
+import {RouteObserverBehavior, Router} from '../router.js';
+import {getSettingIdParameter} from '../setting_id_param_util.js';
 
-    titleIcon: String,
 
-    learnMoreUrl: String,
+/**
+ * @constructor
+ * @extends {PolymerElement}
+ * @implements {I18nBehaviorInterface}
+ * @implements {FindShortcutBehaviorInterface}
+ */
+const SettingsSubpageElementBase = mixinBehaviors(
+    [
+      FindShortcutBehavior, I18nBehavior, IronResizableBehavior,
+      RouteObserverBehavior
+    ],
+    PolymerElement);
 
-    /** Setting a |searchLabel| will enable search. */
-    searchLabel: String,
+/** @polymer */
+class SettingsSubpageElement extends SettingsSubpageElementBase {
+  static get is() {
+    return 'settings-subpage';
+  }
 
-    searchTerm: {
-      type: String,
-      notify: true,
-      value: '',
-    },
+  static get template() {
+    return html`{__html_template__}`;
+  }
 
-    /** If true shows an active spinner at the end of the subpage header. */
-    showSpinner: {
-      type: Boolean,
-      value: false,
-    },
+  static get properties() {
+    return {
+      pageTitle: String,
 
-    /**
-     * Title (i.e., tooltip) to be displayed on the spinner. If |showSpinner| is
-     * false, this field has no effect.
-     */
-    spinnerTitle: {
-      type: String,
-      value: '',
-    },
+      titleIcon: String,
 
-    /**
-     * Whether we should hide the "close" button to get to the previous page.
-     */
-    hideCloseButton: {
-      type: Boolean,
-      value: false,
-    },
+      learnMoreUrl: String,
 
-    /**
-     * Indicates which element triggers this subpage. Used by the searching
-     * algorithm to show search bubbles. It is |null| for subpages that are
-     * skipped during searching.
-     * @type {?HTMLElement}
-     */
-    associatedControl: {
-      type: Object,
-      value: null,
-    },
+      /** Setting a |searchLabel| will enable search. */
+      searchLabel: String,
 
-    /**
-     * Whether the subpage search term should be preserved across navigations.
-     */
-    preserveSearchTerm: {
-      type: Boolean,
-      value: false,
-    },
+      searchTerm: {
+        type: String,
+        notify: true,
+        value: '',
+      },
 
-    /** @private */
-    active_: {
-      type: Boolean,
-      value: false,
-      observer: 'onActiveChanged_',
-    },
-  },
+      /** If true shows an active spinner at the end of the subpage header. */
+      showSpinner: {
+        type: Boolean,
+        value: false,
+      },
 
-  /** @private {boolean} */
-  lastActiveValue_: false,
+      /**
+       * Title (i.e., tooltip) to be displayed on the spinner. If |showSpinner|
+       * is false, this field has no effect.
+       */
+      spinnerTitle: {
+        type: String,
+        value: '',
+      },
 
-  // Override FindShortcutBehavior property.
-  findShortcutListenOnAttach: false,
+      /**
+       * Whether we should hide the "close" button to get to the previous page.
+       */
+      hideCloseButton: {
+        type: Boolean,
+        value: false,
+      },
+
+      /**
+       * Indicates which element triggers this subpage. Used by the searching
+       * algorithm to show search bubbles. It is |null| for subpages that are
+       * skipped during searching.
+       * @type {?HTMLElement}
+       */
+      associatedControl: {
+        type: Object,
+        value: null,
+      },
+
+      /**
+       * Whether the subpage search term should be preserved across navigations.
+       */
+      preserveSearchTerm: {
+        type: Boolean,
+        value: false,
+      },
+
+      /** @private */
+      active_: {
+        type: Boolean,
+        value: false,
+        observer: 'onActiveChanged_',
+      },
+    };
+  }
+
+  constructor() {
+    super();
+
+    /** @private {boolean} */
+    this.lastActiveValue_ = false;
+
+    // Override FindShortcutBehavior property.
+    this.findShortcutListenOnAttach = false;
+
+    /** @private {?EventTracker} */
+    this.eventTracker_ = null;
+  }
 
   /** @override */
-  attached() {
+  connectedCallback() {
+    super.connectedCallback();
+
     if (this.searchLabel) {
       // |searchLabel| should not change dynamically.
-      this.listen(this, 'clear-subpage-search', 'onClearSubpageSearch_');
+      this.eventTracker_ = new EventTracker();
+      this.eventTracker_.add(
+          this, 'clear-subpage-search', this.onClearSubpageSearch_);
     }
-  },
+  }
 
   /** @override */
-  detached() {
+  disconnectedCallback() {
+    super.disconnectedCallback();
+
     if (this.searchLabel) {
       // |searchLabel| should not change dynamically.
-      this.unlisten(this, 'clear-subpage-search', 'onClearSubpageSearch_');
+      this.eventTracker_.removeAll();
     }
-  },
+  }
 
   /**
    * @return {!Promise<!CrSearchFieldElement>}
    * @private
    */
   getSearchField_() {
-    let searchField = this.$$('cr-search-field');
+    let searchField = this.shadowRoot.querySelector('cr-search-field');
     if (searchField) {
       return Promise.resolve(searchField);
     }
 
     return new Promise(resolve => {
       listenOnce(this, 'dom-change', () => {
-        searchField = this.$$('cr-search-field');
+        searchField = this.shadowRoot.querySelector('cr-search-field');
         resolve(assert(searchField));
       });
     });
-  },
+  }
 
   /**
    * Restore search field value from URL search param
    * @private
    */
   restoreSearchInput_() {
-    const searchField = this.$$('cr-search-field');
+    const searchField = this.shadowRoot.querySelector('cr-search-field');
     if (assert(searchField)) {
       const urlSearchQuery =
-          settings.Router.getInstance().getQueryParameters().get(
-              'searchSubpage') ||
-          '';
+          Router.getInstance().getQueryParameters().get('searchSubpage') || '';
       this.searchTerm = urlSearchQuery;
       searchField.setValue(urlSearchQuery);
     }
-  },
+  }
 
   /**
    * Preserve search field value to URL search param
@@ -149,18 +196,17 @@ Polymer({
     const searchParams = query.length > 0 ?
         new URLSearchParams('searchSubpage=' + encodeURIComponent(query)) :
         undefined;
-    const currentRoute = settings.Router.getInstance().getCurrentRoute();
-    settings.Router.getInstance().navigateTo(currentRoute, searchParams);
-  },
+    const currentRoute = Router.getInstance().getCurrentRoute();
+    Router.getInstance().navigateTo(currentRoute, searchParams);
+  }
 
   /** Focuses the back button when page is loaded. */
   focusBackButton() {
     if (this.hideCloseButton) {
       return;
     }
-    Polymer.RenderStatus.afterNextRender(
-        this, () => cr.ui.focusWithoutInk(this.$.closeButton));
-  },
+    afterNextRender(this, () => focusWithoutInk(this.$.closeButton));
+  }
 
   /** @protected */
   currentRouteChanged(newRoute, oldRoute) {
@@ -168,18 +214,16 @@ Polymer({
     if (this.active_ && this.searchLabel && this.preserveSearchTerm) {
       this.getSearchField_().then(() => this.restoreSearchInput_());
     }
-    // <if expr="chromeos">
-    if (!oldRoute && loadTimeData.valueExists('isOSSettings') &&
-        loadTimeData.getBoolean('isOSSettings') && !getSettingIdParameter()) {
-      // If an OS settings subpage is opened directly (i.e the |oldRoute| is
-      // null, e.g via an OS settings search result that surfaces from the
-      // Chrome OS launcher), the back button should be focused since it's the
-      // first actionable element in the the subpage. An exception is when
-      // a setting is deep linked, focus that setting instead of back button.
+    if (!oldRoute && !getSettingIdParameter()) {
+      // If a settings subpage is opened directly (i.e the |oldRoute| is null,
+      // e.g via an OS settings search result that surfaces from the Chrome OS
+      // launcher, or linking from other places of Chrome UI), the back button
+      // should be focused since it's the first actionable element in the the
+      // subpage. An exception is when a setting is deep linked, focus that
+      // setting instead of back button.
       this.focusBackButton();
     }
-    // </if>
-  },
+  }
 
   /** @private */
   onActiveChanged_() {
@@ -197,7 +241,7 @@ Polymer({
       return;
     }
 
-    const searchField = this.$$('cr-search-field');
+    const searchField = this.shadowRoot.querySelector('cr-search-field');
     if (searchField) {
       searchField.setValue('');
     }
@@ -207,7 +251,7 @@ Polymer({
     } else {
       this.removeSelfAsFindShortcutListener();
     }
-  },
+  }
 
   /**
    * Clear the value of the search field.
@@ -215,18 +259,18 @@ Polymer({
    */
   onClearSubpageSearch_(e) {
     e.stopPropagation();
-    this.$$('cr-search-field').setValue('');
-  },
+    this.shadowRoot.querySelector('cr-search-field').setValue('');
+  }
 
   /** @private */
   onBackClick_() {
-    settings.Router.getInstance().navigateToPreviousRoute();
-  },
+    Router.getInstance().navigateToPreviousRoute();
+  }
 
   /** @private */
   onHelpClick_() {
     window.open(this.learnMoreUrl);
-  },
+  }
 
   /** @private */
   onSearchChanged_(e) {
@@ -238,30 +282,32 @@ Polymer({
     if (this.preserveSearchTerm && this.active_) {
       this.preserveSearchInput_();
     }
-  },
+  }
 
   /** @private */
   getBackButtonAriaLabel_() {
     return this.i18n('subpageBackButtonAriaLabel', this.pageTitle);
-  },
+  }
 
   /** @private */
   getBackButtonAriaRoleDescription_() {
     return this.i18n('subpageBackButtonAriaRoleDescription', this.pageTitle);
-  },
+  }
 
   // Override FindShortcutBehavior methods.
   handleFindShortcut(modalContextOpen) {
     if (modalContextOpen) {
       return false;
     }
-    this.$$('cr-search-field').getSearchInput().focus();
+    this.shadowRoot.querySelector('cr-search-field').getSearchInput().focus();
     return true;
-  },
+  }
 
   // Override FindShortcutBehavior methods.
   searchInputHasFocus() {
-    const field = this.$$('cr-search-field');
+    const field = this.shadowRoot.querySelector('cr-search-field');
     return field.getSearchInput() === field.shadowRoot.activeElement;
-  },
-});
+  }
+}
+
+customElements.define(SettingsSubpageElement.is, SettingsSubpageElement);

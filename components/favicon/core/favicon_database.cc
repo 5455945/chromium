@@ -581,6 +581,19 @@ bool FaviconDatabase::SetFaviconBitmapLastUpdateTime(FaviconBitmapID bitmap_id,
   return statement.Run();
 }
 
+bool FaviconDatabase::SetFaviconsOutOfDateBetween(base::Time begin,
+                                                  base::Time end) {
+  if (end.is_null())
+    end = base::Time::Max();
+  sql::Statement statement(
+      db_.GetCachedStatement(SQL_FROM_HERE,
+                             "UPDATE favicon_bitmaps SET last_updated=0 "
+                             "WHERE last_updated>=? AND last_updated<?"));
+  statement.BindInt64(0, begin.ToDeltaSinceWindowsEpoch().InMicroseconds());
+  statement.BindInt64(1, end.ToDeltaSinceWindowsEpoch().InMicroseconds());
+  return statement.Run();
+}
+
 bool FaviconDatabase::TouchOnDemandFavicon(const GURL& icon_url,
                                            base::Time time) {
   // Look up the icon ids for the url.
@@ -773,11 +786,11 @@ bool FaviconDatabase::GetIconMappingsForPageURL(
   return result;
 }
 
-base::Optional<GURL> FaviconDatabase::FindFirstPageURLForHost(
+absl::optional<GURL> FaviconDatabase::FindFirstPageURLForHost(
     const GURL& url,
     const favicon_base::IconTypeSet& required_icon_types) {
   if (url.host().empty())
-    return base::nullopt;
+    return absl::nullopt;
 
   sql::Statement statement(
       db_.GetCachedStatement(SQL_FROM_HERE,
@@ -797,9 +810,9 @@ base::Optional<GURL> FaviconDatabase::FindFirstPageURLForHost(
         FaviconDatabase::FromPersistedIconType(statement.ColumnInt(1));
 
     if (required_icon_types.count(icon_type) != 0)
-      return base::make_optional(GURL(statement.ColumnString(0)));
+      return absl::make_optional(GURL(statement.ColumnString(0)));
   }
-  return base::nullopt;
+  return absl::nullopt;
 }
 
 IconMappingID FaviconDatabase::AddIconMapping(const GURL& page_url,

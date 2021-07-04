@@ -12,7 +12,6 @@
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "base/bind.h"
 #include "base/ranges/algorithm.h"
-#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
@@ -447,7 +446,7 @@ void AccelerometerProviderMojo::OnAccelerometerRemoteDisconnect(int32_t id) {
 
 void AccelerometerProviderMojo::GetAttributesCallback(
     int32_t id,
-    const std::vector<base::Optional<std::string>>& values) {
+    const std::vector<absl::optional<std::string>>& values) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   auto& accelerometer = accelerometers_[id];

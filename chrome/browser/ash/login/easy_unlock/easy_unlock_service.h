@@ -21,6 +21,8 @@
 #include "chromeos/components/multidevice/remote_device_ref.h"
 #include "chromeos/components/proximity_auth/screenlock_state.h"
 #include "chromeos/components/proximity_auth/smart_lock_metrics_recorder.h"
+// TODO(https://crbug.com/1164001): move to forward declaration
+#include "chromeos/services/secure_channel/public/cpp/client/secure_channel_client.h"
 #include "components/keyed_service/core/keyed_service.h"
 
 class AccountId;
@@ -45,11 +47,7 @@ class ProximityAuthSystem;
 class Profile;
 class PrefRegistrySimple;
 
-namespace chromeos {
-
-namespace secure_channel {
-class SecureChannelClient;
-}  // namespace secure_channel
+namespace ash {
 
 class EasyUnlockService : public KeyedService {
  public:
@@ -136,8 +134,10 @@ class EasyUnlockService : public KeyedService {
   bool UpdateScreenlockState(proximity_auth::ScreenlockState state);
 
   // Starts an auth attempt for the user associated with the service. The
-  // attempt type (unlock vs. signin) will depend on the service type.
-  void AttemptAuth(const AccountId& account_id);
+  // attempt type (unlock vs. signin) will depend on the service type. Returns
+  // true if no other attempt is in progress and the attempt request can be
+  // processed.
+  bool AttemptAuth(const AccountId& account_id);
 
   // Finalizes the previously started auth attempt for easy unlock. If called on
   // signin profile service, it will cancel the current auth attempt if one
@@ -223,7 +223,7 @@ class EasyUnlockService : public KeyedService {
   void SetProximityAuthDevices(
       const AccountId& account_id,
       const multidevice::RemoteDeviceRefList& remote_devices,
-      base::Optional<multidevice::RemoteDeviceRef> local_device);
+      absl::optional<multidevice::RemoteDeviceRef> local_device);
 
   bool will_authenticate_using_easy_unlock() const {
     return will_authenticate_using_easy_unlock_;
@@ -292,6 +292,12 @@ class EasyUnlockService : public KeyedService {
   DISALLOW_COPY_AND_ASSIGN(EasyUnlockService);
 };
 
-}  // namespace chromeos
+}  // namespace ash
+
+// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
+// source migration is finished.
+namespace chromeos {
+using ::ash::EasyUnlockService;
+}
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_EASY_UNLOCK_EASY_UNLOCK_SERVICE_H_

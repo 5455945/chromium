@@ -5,7 +5,6 @@
 #ifndef CHROME_BROWSER_SYNC_TEST_INTEGRATION_USER_EVENTS_HELPER_H_
 #define CHROME_BROWSER_SYNC_TEST_INTEGRATION_USER_EVENTS_HELPER_H_
 
-#include <string>
 #include <vector>
 
 #include "base/time/time.h"
@@ -26,7 +25,7 @@ sync_pb::UserEventSpecifics CreateTestEvent(base::Time time);
 class UserEventEqualityChecker : public SingleClientStatusChangeChecker {
  public:
   UserEventEqualityChecker(
-      syncer::ProfileSyncService* service,
+      syncer::SyncServiceImpl* service,
       fake_server::FakeServer* fake_server,
       std::vector<sync_pb::UserEventSpecifics> expected_specifics);
   ~UserEventEqualityChecker() override;

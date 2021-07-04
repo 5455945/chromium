@@ -34,6 +34,7 @@
 #include "chrome/browser/ui/status_bubble.h"
 #include "chrome/browser/ui/tab_helpers.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/system_web_app_ui_utils.h"
 #include "chrome/browser/web_applications/components/web_app_helpers.h"
 #include "chrome/common/url_constants.h"
@@ -164,7 +165,7 @@ std::pair<Browser*, int> GetBrowserAndTabForDisposition(
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   if (params.open_pwa_window_if_possible) {
-    base::Optional<web_app::AppId> app_id =
+    absl::optional<web_app::AppId> app_id =
         web_app::FindInstalledAppWithUrlInScope(profile, params.url,
                                                 /*window_only=*/true);
     if (app_id) {
@@ -266,8 +267,9 @@ std::pair<Browser*, int> GetBrowserAndTabForDisposition(
     }
     case WindowOpenDisposition::OFF_THE_RECORD:
       // Make or find an incognito window.
-      return {GetOrCreateBrowser(profile->GetPrimaryOTRProfile(),
-                                 params.user_gesture),
+      return {GetOrCreateBrowser(
+                  profile->GetPrimaryOTRProfile(/*create_if_needed=*/true),
+                  params.user_gesture),
               -1};
     // The following types result in no navigation.
     case WindowOpenDisposition::SAVE_TO_DISK:
@@ -492,16 +494,18 @@ void Navigate(NavigateParams* params) {
   // Open System Apps in their standalone window if necessary.
   // TODO(crbug.com/1096345): Remove this code after we integrate with intent
   // handling.
-  const base::Optional<web_app::SystemAppType> capturing_system_app_type =
+  const absl::optional<web_app::SystemAppType> capturing_system_app_type =
       web_app::GetCapturingSystemAppForURL(params->initiating_profile,
                                            params->url);
   if (capturing_system_app_type &&
       (!params->browser ||
        !web_app::IsBrowserForSystemWebApp(params->browser,
                                           capturing_system_app_type.value()))) {
+    web_app::SystemAppLaunchParams swa_params;
+    swa_params.url = params->url;
     web_app::LaunchSystemWebAppAsync(params->initiating_profile,
                                      capturing_system_app_type.value(),
-                                     {.url = params->url});
+                                     swa_params);
 
     // It's okay to early return here, because LaunchSystemWebAppAsync uses a
     // different logic to choose (and create if necessary) a browser window for
@@ -635,12 +639,7 @@ void Navigate(NavigateParams* params) {
   // singleton), we need to construct one if we are supposed to target a new
   // tab.
   if (!contents_to_navigate_or_insert) {
-// TODO(crbug.com/1171737): Revert https://crrev.com/c/2676315 to re-enable this
-// DCHECK on CrOS. See go/chrome-dcheck-on-cros or http://crbug.com/1113456 for
-// more details.
-#if !(defined(OS_CHROMEOS) && DCHECK_IS_ON())
     DCHECK(!params->url.is_empty());
-#endif
     if (params->disposition != WindowOpenDisposition::CURRENT_TAB) {
       contents_to_insert = CreateTargetContents(*params, params->url);
       contents_to_navigate_or_insert = contents_to_insert.get();
@@ -729,8 +728,6 @@ void Navigate(NavigateParams* params) {
             (params->source_contents->GetLastCommittedURL().spec() !=
                  chrome::kChromeUINewTabURL &&
              params->source_contents->GetLastCommittedURL().spec() !=
-                 chrome::kChromeSearchLocalNtpUrl &&
-             params->source_contents->GetLastCommittedURL().spec() !=
                  url::kAboutBlankURL)) {
           // Blur location bar before state save in ActivateTabAt() below.
           params->source_contents->Focus();
@@ -768,7 +765,7 @@ bool IsHostAllowedInIncognito(const GURL& url) {
     // option is only available on Windows for use with Google Credential
     // Provider for Windows.
     return signin::GetSigninReasonForEmbeddedPromoURL(url) ==
-           signin_metrics::Reason::REASON_FETCH_LST_ONLY;
+           signin_metrics::Reason::kFetchLstOnly;
 #else
     return false;
 #endif  // defined(OS_WIN)

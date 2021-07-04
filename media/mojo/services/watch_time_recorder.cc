@@ -31,7 +31,7 @@ static void RecordWatchTimeInternal(
     base::TimeDelta value,
     base::TimeDelta minimum = kMinimumElapsedWatchTime) {
   DCHECK(!key.empty());
-  base::UmaHistogramCustomTimes(key.as_string(), value, minimum,
+  base::UmaHistogramCustomTimes(std::string(key), value, minimum,
                                 base::TimeDelta::FromHours(10), 50);
 }
 
@@ -47,13 +47,13 @@ static void RecordMeanTimeBetweenRebuffers(base::StringPiece key,
 static void RecordDiscardedWatchTime(base::StringPiece key,
                                      base::TimeDelta value) {
   DCHECK(!key.empty());
-  base::UmaHistogramCustomTimes(key.as_string(), value, base::TimeDelta(),
+  base::UmaHistogramCustomTimes(std::string(key), value, base::TimeDelta(),
                                 kMinimumElapsedWatchTime, 50);
 }
 
 static void RecordRebuffersCount(base::StringPiece key, int underflow_count) {
   DCHECK(!key.empty());
-  base::UmaHistogramCounts100(key.as_string(), underflow_count);
+  base::UmaHistogramCounts100(std::string(key), underflow_count);
 }
 
 WatchTimeRecorder::WatchTimeUkmRecord::WatchTimeUkmRecord(
@@ -122,7 +122,7 @@ void WatchTimeRecorder::FinalizeWatchTime(
     // watch time requirement. Otherwise, for SRC/MSE/EME keys, log them to the
     // discard metric.
     base::StringPiece key_str = ConvertWatchTimeKeyToStringForUma(kv.first);
-    if (!key_str.empty()) {
+    if (ShouldRecordUma() && !key_str.empty()) {
       if (kv.second >= kMinimumElapsedWatchTime) {
         RecordWatchTimeInternal(key_str, kv.second);
       } else if (kv.second > base::TimeDelta()) {
@@ -151,7 +151,8 @@ void WatchTimeRecorder::FinalizeWatchTime(
   // Check for watch times entries that have corresponding MTBR entries and
   // report the MTBR value using watch_time / |underflow_count|. Do this only
   // for foreground reporters since we only have UMA keys for foreground.
-  if (!properties_->is_background && !properties_->is_muted) {
+  if (ShouldRecordUma() && !properties_->is_background &&
+      !properties_->is_muted) {
     for (auto& mapping : extended_metrics_keys_) {
       auto it = watch_time_info_.find(mapping.watch_time_key);
       if (it == watch_time_info_.end() || it->second < kMinimumElapsedWatchTime)
@@ -327,7 +328,7 @@ void WatchTimeRecorder::RecordUkmPlaybackData() {
     return;
 
   // Round duration to the most significant digit in milliseconds for privacy.
-  base::Optional<uint64_t> clamped_duration_ms;
+  absl::optional<uint64_t> clamped_duration_ms;
   if (duration_ != kNoTimestamp && duration_ != kInfiniteDuration) {
     clamped_duration_ms = duration_.InMilliseconds();
     if (duration_ > base::TimeDelta::FromSeconds(1)) {
@@ -446,6 +447,8 @@ void WatchTimeRecorder::RecordUkmPlaybackData() {
         ukm_record.secondary_properties->video_encryption_scheme));
     builder.SetIsEME(properties_->is_eme);
     builder.SetIsMSE(properties_->is_mse);
+    builder.SetMediaStreamType(
+        static_cast<int64_t>(properties_->media_stream_type));
     builder.SetLastPipelineStatus(pipeline_status_);
     builder.SetRebuffersCount(ukm_record.total_underflow_count);
     builder.SetCompletedRebuffersCount(
@@ -462,7 +465,7 @@ void WatchTimeRecorder::RecordUkmPlaybackData() {
     builder.Record(ukm_recorder);
   }
 
-  if (!aac_profiles.empty()) {
+  if (ShouldRecordUma() && !aac_profiles.empty()) {
     for (auto profile : aac_profiles)
       base::UmaHistogramEnumeration("Media.AudioCodecProfile.AAC", profile);
   }
@@ -474,6 +477,10 @@ void WatchTimeRecorder::RecordUkmPlaybackData() {
   }
 
   ukm_records_.clear();
+}
+
+bool WatchTimeRecorder::ShouldRecordUma() const {
+  return properties_->media_stream_type == mojom::MediaStreamType::kNone;
 }
 
 WatchTimeRecorder::ExtendedMetricsKeyMap::ExtendedMetricsKeyMap(

@@ -4,7 +4,6 @@
 
 #include "third_party/blink/renderer/core/messaging/blink_transferable_message_mojom_traits.h"
 
-#include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
 #include "mojo/public/cpp/base/big_buffer_mojom_traits.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -49,8 +48,8 @@ TEST(BlinkTransferableMessageStructTraitsTest,
     size_t num_elements = 8;
     v8::Local<v8::ArrayBuffer> v8_buffer =
         v8::ArrayBuffer::New(isolate, num_elements);
-    uint8_t* original_data =
-        static_cast<uint8_t*>(v8_buffer->GetContents().Data());
+    auto backing_store = v8_buffer->GetBackingStore();
+    uint8_t* original_data = static_cast<uint8_t*>(backing_store->Data());
     for (size_t i = 0; i < num_elements; i++)
       original_data[i] = static_cast<uint8_t>(i);
 
@@ -88,7 +87,8 @@ TEST(BlinkTransferableMessageStructTraitsTest,
   size_t num_elements = 8;
   v8::Local<v8::ArrayBuffer> v8_buffer =
       v8::ArrayBuffer::New(isolate, num_elements);
-  void* originalContentsData = v8_buffer->GetContents().Data();
+  auto backing_store = v8_buffer->GetBackingStore();
+  void* originalContentsData = backing_store->Data();
   uint8_t* contents = static_cast<uint8_t*>(originalContentsData);
   for (size_t i = 0; i < num_elements; i++)
     contents[i] = static_cast<uint8_t>(i);
@@ -116,7 +116,7 @@ TEST(BlinkTransferableMessageStructTraitsTest,
   ASSERT_EQ(originalContentsData, deserialized_contents.Data());
 
   // The original ArrayBufferContents should be detached.
-  ASSERT_EQ(nullptr, v8_buffer->GetContents().Data());
+  ASSERT_EQ(nullptr, v8_buffer->GetBackingStore()->Data());
   ASSERT_TRUE(original_array_buffer->IsDetached());
 }
 

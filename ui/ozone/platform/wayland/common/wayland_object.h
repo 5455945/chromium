@@ -13,6 +13,10 @@ struct gtk_primary_selection_device;
 struct gtk_primary_selection_device_manager;
 struct gtk_primary_selection_offer;
 struct gtk_primary_selection_source;
+struct gtk_shell1;
+struct gtk_surface1;
+struct org_kde_kwin_idle;
+struct org_kde_kwin_idle_timeout;
 struct zwp_primary_selection_device_v1;
 struct zwp_primary_selection_device_manager_v1;
 struct zwp_primary_selection_offer_v1;
@@ -26,6 +30,7 @@ struct wl_data_device;
 struct wl_data_offer;
 struct wl_data_source;
 struct wl_drm;
+struct wl_event_queue;
 struct wl_keyboard;
 struct wl_output;
 struct wl_pointer;
@@ -40,6 +45,7 @@ struct wl_surface;
 struct wl_touch;
 struct wp_presentation;
 struct wp_presentation_feedback;
+struct wl_proxy;
 struct wp_viewport;
 struct wp_viewporter;
 struct xdg_wm_base;
@@ -59,6 +65,12 @@ struct zwp_linux_dmabuf_v1;
 struct zwp_linux_buffer_release_v1;
 struct zwp_linux_explicit_synchronization_v1;
 struct zwp_linux_surface_synchronization_v1;
+struct zwp_locked_pointer_v1;
+struct zwp_pointer_constraints_v1;
+struct zwp_pointer_gesture_pinch_v1;
+struct zwp_pointer_gestures_v1;
+struct zwp_relative_pointer_manager_v1;
+struct zwp_relative_pointer_v1;
 struct zxdg_shell_v6;
 struct zxdg_surface_v6;
 struct zxdg_toplevel_v6;
@@ -110,6 +122,30 @@ template <>
 struct ObjectTraits<gtk_primary_selection_source> {
   static const wl_interface* interface;
   static void (*deleter)(gtk_primary_selection_source*);
+};
+
+template <>
+struct ObjectTraits<gtk_shell1> {
+  static const wl_interface* interface;
+  static void (*deleter)(gtk_shell1*);
+};
+
+template <>
+struct ObjectTraits<gtk_surface1> {
+  static const wl_interface* interface;
+  static void (*deleter)(gtk_surface1*);
+};
+
+template <>
+struct ObjectTraits<org_kde_kwin_idle> {
+  static const wl_interface* interface;
+  static void (*deleter)(org_kde_kwin_idle*);
+};
+
+template <>
+struct ObjectTraits<org_kde_kwin_idle_timeout> {
+  static const wl_interface* interface;
+  static void (*deleter)(org_kde_kwin_idle_timeout*);
 };
 
 template <>
@@ -187,6 +223,12 @@ template <>
 struct ObjectTraits<wl_drm> {
   static const wl_interface* interface;
   static void (*deleter)(wl_drm*);
+};
+
+template <>
+struct ObjectTraits<wl_event_queue> {
+  static const wl_interface* interface;
+  static void (*deleter)(wl_event_queue*);
 };
 
 template <>
@@ -277,6 +319,49 @@ template <>
 struct ObjectTraits<wp_presentation_feedback> {
   static const wl_interface* interface;
   static void (*deleter)(wp_presentation_feedback*);
+};
+
+template <>
+struct ObjectTraits<wl_proxy> {
+  // Interface is null for proxy.
+  static const wl_interface* interface;
+  static void (*deleter)(void*);
+};
+
+template <>
+struct ObjectTraits<zwp_locked_pointer_v1> {
+  static const wl_interface* interface;
+  static void (*deleter)(zwp_locked_pointer_v1*);
+};
+
+template <>
+struct ObjectTraits<zwp_pointer_constraints_v1> {
+  static const wl_interface* interface;
+  static void (*deleter)(zwp_pointer_constraints_v1*);
+};
+
+template <>
+struct ObjectTraits<zwp_pointer_gesture_pinch_v1> {
+  static const wl_interface* interface;
+  static void (*deleter)(zwp_pointer_gesture_pinch_v1*);
+};
+
+template <>
+struct ObjectTraits<zwp_pointer_gestures_v1> {
+  static const wl_interface* interface;
+  static void (*deleter)(zwp_pointer_gestures_v1*);
+};
+
+template <>
+struct ObjectTraits<zwp_relative_pointer_manager_v1> {
+  static const wl_interface* interface;
+  static void (*deleter)(zwp_relative_pointer_manager_v1*);
+};
+
+template <>
+struct ObjectTraits<zwp_relative_pointer_v1> {
+  static const wl_interface* interface;
+  static void (*deleter)(zwp_relative_pointer_v1*);
 };
 
 template <>
@@ -468,6 +553,7 @@ class Object : public std::unique_ptr<T, Deleter> {
 
 template <typename T>
 wl::Object<T> Bind(wl_registry* registry, uint32_t name, uint32_t version) {
+  DCHECK(ObjectTraits<T>::interface);
   return wl::Object<T>(wl::bind_registry<T>(
       registry, name, ObjectTraits<T>::interface, version));
 }

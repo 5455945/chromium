@@ -7,13 +7,14 @@
 
 #include <stdint.h>
 
+#include <string>
+
 #include "base/compiler_specific.h"
 #include "base/macros.h"
-#include "base/strings/string16.h"
 #include "chrome/browser/download/download_ui_model.h"
 #include "components/download/public/common/download_item.h"
 #include "components/safe_browsing/buildflags.h"
-#include "components/safe_browsing/core/proto/download_file_types.pb.h"
+#include "components/safe_browsing/core/common/proto/download_file_types.pb.h"
 
 // Implementation of DownloadUIModel that wrappers around a |DownloadItem*|. As
 // such, the caller is expected to ensure that the |download| passed into the
@@ -32,7 +33,7 @@ class DownloadItemModel : public DownloadUIModel,
   // DownloadUIModel implementation.
   ContentId GetContentId() const override;
   Profile* profile() const override;
-  base::string16 GetTabProgressStatusText() const override;
+  std::u16string GetTabProgressStatusText() const override;
   int64_t GetCompletedBytes() const override;
   int64_t GetTotalBytes() const override;
   int PercentComplete() const override;
@@ -81,6 +82,7 @@ class DownloadItemModel : public DownloadUIModel,
   bool AllDataSaved() const override;
   bool GetFileExternallyRemoved() const override;
   GURL GetURL() const override;
+  bool HasUserGesture() const override;
   offline_items_collection::FailState GetLastFailState() const override;
 
 #if !defined(OS_ANDROID)

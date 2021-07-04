@@ -34,7 +34,7 @@ constexpr int kMinHeightDip = 180;
 
 #define EXPECT_INTERACTION_OF_TYPE(type_)                      \
   ({                                                           \
-    base::Optional<AssistantInteractionMetadata> interaction = \
+    absl::optional<AssistantInteractionMetadata> interaction = \
         current_interaction();                                 \
     ASSERT_TRUE(interaction.has_value());                      \
     EXPECT_EQ(interaction->type, type_);                       \
@@ -42,7 +42,7 @@ constexpr int kMinHeightDip = 180;
 
 #define EXPECT_NO_INTERACTION()                                \
   ({                                                           \
-    base::Optional<AssistantInteractionMetadata> interaction = \
+    absl::optional<AssistantInteractionMetadata> interaction = \
         current_interaction();                                 \
     ASSERT_FALSE(interaction.has_value());                     \
   })
@@ -222,7 +222,7 @@ class AssistantInteractionCounter
  public:
   explicit AssistantInteractionCounter(
       chromeos::assistant::Assistant* service) {
-    interaction_observer_.Add(service);
+    interaction_observer_.Observe(service);
   }
   AssistantInteractionCounter(AssistantInteractionCounter&) = delete;
   AssistantInteractionCounter& operator=(AssistantInteractionCounter&) = delete;
@@ -429,10 +429,10 @@ TEST_F(AssistantPageViewTest,
   }
 }
 
-TEST_F(AssistantPageViewTest, ShouldNotFocusMicWhenOpeningWithHotword) {
+TEST_F(AssistantPageViewTest, ShouldFocusMicWhenOpeningWithHotword) {
   ShowAssistantUi(AssistantEntryPoint::kHotword);
 
-  EXPECT_NOT_HAS_FOCUS(mic_view());
+  EXPECT_HAS_FOCUS(mic_view());
 }
 
 TEST_F(AssistantPageViewTest, ShouldShowGreetingLabelWhenOpening) {
@@ -627,13 +627,12 @@ TEST_F(AssistantPageViewTest,
   EXPECT_FALSE(onboarding_view()->IsDrawn());
 }
 
-TEST_F(AssistantPageViewTest,
-       ShouldNotFocusMicViewWhenPressingVoiceInputToggle) {
+TEST_F(AssistantPageViewTest, ShouldFocusMicViewWhenPressingVoiceInputToggle) {
   ShowAssistantUiInTextMode();
 
   ClickOnAndWait(voice_input_toggle());
 
-  EXPECT_NOT_HAS_FOCUS(mic_view());
+  EXPECT_HAS_FOCUS(mic_view());
 }
 
 TEST_F(AssistantPageViewTest,
@@ -838,23 +837,23 @@ TEST_F(AssistantPageViewTest, RememberAndShowHistory) {
   EXPECT_TRUE(input_text_field()->GetText().empty());
 
   PressKey(ui::VKEY_UP);
-  EXPECT_EQ(input_text_field()->GetText(), base::UTF8ToUTF16("query 2"));
+  EXPECT_EQ(input_text_field()->GetText(), u"query 2");
 
   PressKey(ui::VKEY_UP);
-  EXPECT_EQ(input_text_field()->GetText(), base::UTF8ToUTF16("query 1"));
+  EXPECT_EQ(input_text_field()->GetText(), u"query 1");
 
   PressKey(ui::VKEY_UP);
-  EXPECT_EQ(input_text_field()->GetText(), base::UTF8ToUTF16("query 1"));
+  EXPECT_EQ(input_text_field()->GetText(), u"query 1");
 
   PressKey(ui::VKEY_DOWN);
-  EXPECT_EQ(input_text_field()->GetText(), base::UTF8ToUTF16("query 2"));
+  EXPECT_EQ(input_text_field()->GetText(), u"query 2");
 
   PressKey(ui::VKEY_DOWN);
   EXPECT_TRUE(input_text_field()->GetText().empty());
 }
 
 TEST_F(AssistantPageViewTest, ShouldNotClearQueryWhenSwitchingToTabletMode) {
-  const base::string16 query_text = base::UTF8ToUTF16("unsubmitted query");
+  const std::u16string query_text = u"unsubmitted query";
   ShowAssistantUiInTextMode();
   input_text_field()->SetText(query_text);
 
@@ -934,17 +933,16 @@ class AssistantPageViewTabletModeTest : public AssistantPageViewTest {
 };
 
 TEST_F(AssistantPageViewTabletModeTest,
-       ShouldNotFocusMicWhenOpeningWithLongPressLauncher) {
+       ShouldFocusMicWhenOpeningWithLongPressLauncher) {
   ShowAssistantUi(AssistantEntryPoint::kLongPressLauncher);
 
-  EXPECT_NOT_HAS_FOCUS(mic_view());
+  EXPECT_HAS_FOCUS(mic_view());
 }
 
-TEST_F(AssistantPageViewTabletModeTest,
-       ShouldNotFocusMicWhenOpeningWithHotword) {
+TEST_F(AssistantPageViewTabletModeTest, ShouldFocusMicWhenOpeningWithHotword) {
   ShowAssistantUi(AssistantEntryPoint::kHotword);
 
-  EXPECT_NOT_HAS_FOCUS(mic_view());
+  EXPECT_HAS_FOCUS(mic_view());
 }
 
 TEST_F(AssistantPageViewTabletModeTest, ShouldFocusTextFieldAfterSendingQuery) {

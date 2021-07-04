@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import 'chrome://resources/cr_elements/cr_button/cr_button.m.js';
 import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.m.js';
 import 'chrome://resources/cr_elements/hidden_style_css.m.js';
 import 'chrome://resources/cr_elements/shared_vars_css.m.js';
@@ -9,16 +10,15 @@ import 'chrome://resources/cr_elements/mwb_shared_style.js';
 import 'chrome://resources/cr_elements/mwb_shared_vars.js';
 import 'chrome://resources/polymer/v3_0/iron-selector/iron-selector.js';
 import './read_later_shared_style.js';
+import './strings.m.js';
 
 import {assertNotReached} from 'chrome://resources/js/assert.m.js';
-import {listenOnce} from 'chrome://resources/js/util.m.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.m.js';
+import {listenOnce} from 'chrome://resources/js/util.m.js';
 import {html, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {ReadLaterApiProxy, ReadLaterApiProxyImpl} from './read_later_api_proxy.js';
 import {ReadLaterItemElement} from './read_later_item.js';
-
-import './strings.js';
 
 /** @type {!Set<string>} */
 const navigationKeys = new Set(['ArrowDown', 'ArrowUp']);
@@ -113,11 +113,16 @@ export class ReadLaterAppElement extends PolymerElement {
         'ReadingList.WebUI.ReadingListDataReceived',
         Math.round(Date.now() - getEntriesStartTimestamp));
 
-    listenOnce(this.$.readLaterList, 'dom-change', () => {
-      // Push ShowUI() callback to the event queue to allow deferred rendering
-      // to take place.
+    if (entries.unreadEntries.length !== 0 ||
+        entries.readEntries.length !== 0) {
+      listenOnce(this.$.readLaterList, 'dom-change', () => {
+        // Push ShowUI() callback to the event queue to allow deferred rendering
+        // to take place.
+        setTimeout(() => this.apiProxy_.showUI(), 0);
+      });
+    } else {
       setTimeout(() => this.apiProxy_.showUI(), 0);
-    });
+    }
 
     this.updateItems_(entries);
   }
@@ -147,6 +152,11 @@ export class ReadLaterAppElement extends PolymerElement {
    */
   isReadingListEmpty_() {
     return this.unreadItems_.length === 0 && this.readItems_.length === 0;
+  }
+
+  /** @private */
+  onAddButtonClick_() {
+    this.apiProxy_.addCurrentTab();
   }
 
   /**
@@ -191,6 +201,22 @@ export class ReadLaterAppElement extends PolymerElement {
   onCloseClick_(e) {
     e.stopPropagation();
     this.apiProxy_.closeUI();
+  }
+
+  /**
+   * @return {boolean}
+   * @private
+   */
+  shouldShowAddButton_() {
+    return loadTimeData.getBoolean('addButtonEnabled');
+  }
+
+  /**
+   * @return {boolean}
+   * @private
+   */
+  shouldShowHr_() {
+    return this.unreadItems_.length > 0 && this.readItems_.length > 0;
   }
 }
 

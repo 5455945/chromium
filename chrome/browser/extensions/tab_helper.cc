@@ -4,8 +4,11 @@
 
 #include "chrome/browser/extensions/tab_helper.h"
 
+#include <memory>
+
 #include "base/bind.h"
 #include "base/check_op.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
@@ -30,7 +33,9 @@
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
 #include "chrome/common/url_constants.h"
+#include "components/back_forward_cache/back_forward_cache_disable.h"
 #include "components/sessions/content/session_tab_helper.h"
+#include "content/public/browser/back_forward_cache.h"
 #include "content/public/browser/invalidate_type.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
@@ -41,11 +46,13 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/content_features.h"
 #include "extensions/browser/api/declarative/rules_registry_service.h"
 #include "extensions/browser/api/declarative_net_request/web_contents_helper.h"
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_system.h"
+#include "extensions/browser/extension_util.h"
 #include "extensions/browser/extension_web_contents_observer.h"
 #include "extensions/browser/image_loader.h"
 #include "extensions/common/extension.h"
@@ -54,7 +61,9 @@
 #include "extensions/common/extension_resource.h"
 #include "extensions/common/extension_urls.h"
 #include "extensions/common/feature_switch.h"
+#include "extensions/common/manifest.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
+#include "extensions/common/permissions/api_permission.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "url/url_constants.h"
@@ -69,6 +78,173 @@ using content::NavigationEntry;
 using content::WebContents;
 
 namespace extensions {
+
+namespace {
+
+// User data key for caching if bfcache is disabled.
+const char kIsBFCacheDisabledKey[] = "extensions.backforward.browsercontext";
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class ExtensionPermissionsOnLoad {
+  kTotal,
+  kContentScriptAccess,
+  kPageAccess,
+  kWebNavigation,
+  kWebRequest,
+  kDeclarativeNetRequest,
+  kHistory,
+  kMaxValue = kHistory
+};
+
+void RecordPermission(ExtensionPermissionsOnLoad permission) {
+  UMA_HISTOGRAM_ENUMERATION("Extensions.Navigation.Permissions", permission);
+}
+
+// Record permissions for features that may be influence by BFCache shipping.
+// Details in
+// https://docs.google.com/document/d/11rdAEFyS1DEky_LRE_SfthHZHZa2DtC156U-ZK1zyQk/edit#heading=h.h3agt9njihgd
+void RecordExtensionPermissionsPerNavigation(
+    const ExtensionSet& enabled_extensions,
+    content::BrowserContext* context,
+    int tab_id,
+    const GURL& url) {
+  // This is just the set of permissions we want to look for.
+  const std::pair<mojom::APIPermissionID, ExtensionPermissionsOnLoad>
+      kPermissions[] = {{mojom::APIPermissionID::kWebNavigation,
+                         ExtensionPermissionsOnLoad::kWebNavigation},
+                        {mojom::APIPermissionID::kHistory,
+                         ExtensionPermissionsOnLoad::kHistory},
+                        {mojom::APIPermissionID::kWebRequest,
+                         ExtensionPermissionsOnLoad::kWebRequest},
+                        {mojom::APIPermissionID::kWebRequestBlocking,
+                         ExtensionPermissionsOnLoad::kWebRequest},
+                        {mojom::APIPermissionID::kDeclarativeNetRequest,
+                         ExtensionPermissionsOnLoad::kDeclarativeNetRequest}};
+
+  // We put the values into a set so we only will count them once for a set of
+  // extensions per navigation.
+  std::set<ExtensionPermissionsOnLoad> permissions_discovered;
+
+  for (const auto& extension : enabled_extensions) {
+    if (util::IsExtensionVisibleToContext(*extension, context)) {
+      // Determine if the extension can access the page.
+      if (extension->permissions_data()->GetContentScriptAccess(
+              url, tab_id, nullptr) == PermissionsData::PageAccess::kAllowed) {
+        permissions_discovered.insert(
+            ExtensionPermissionsOnLoad::kContentScriptAccess);
+      }
+      if (extension->permissions_data()->GetPageAccess(url, tab_id, nullptr) ==
+          PermissionsData::PageAccess::kAllowed) {
+        permissions_discovered.insert(ExtensionPermissionsOnLoad::kPageAccess);
+      }
+
+      for (auto permission : kPermissions) {
+        if (extension->permissions_data()->HasAPIPermission(permission.first)) {
+          permissions_discovered.insert(permission.second);
+        }
+      }
+    }
+  }
+
+  for (auto permission : permissions_discovered) {
+    RecordPermission(permission);
+  }
+  // kTotal is used as the total navigations denominator.
+  RecordPermission(ExtensionPermissionsOnLoad::kTotal);
+}
+
+bool AreAllExtensionsAllowedForBFCache() {
+  // If back forward cache is disabled, indicate we accept everything.
+  if (!content::BackForwardCache::IsBackForwardCacheFeatureEnabled())
+    return true;
+
+  static base::FeatureParam<bool> all_extensions_allowed(
+      &features::kBackForwardCache, "all_extensions_allowed", false);
+  return all_extensions_allowed.Get();
+}
+
+std::string BlockedExtensionListForBFCache() {
+  // If back forward cache is disabled, indicate nothing is blocked.
+  if (!content::BackForwardCache::IsBackForwardCacheFeatureEnabled())
+    return std::string();
+
+  static base::FeatureParam<std::string> extensions_blocked(
+      &features::kBackForwardCache, "blocked_extensions", "");
+  return extensions_blocked.Get();
+}
+
+void DisableBackForwardCacheIfNecessary(
+    const ExtensionSet& enabled_extensions,
+    content::BrowserContext* context,
+    content::NavigationHandle* navigation_handle) {
+  bool all_allowed = AreAllExtensionsAllowedForBFCache();
+  std::string blocked_extensions = BlockedExtensionListForBFCache();
+
+  // If we allow all extensions for bfcache and there aren't any blocked, then
+  // just return.
+  if (all_allowed && blocked_extensions.empty())
+    return;
+
+  // We shouldn't have blocked extensions if `all_allowed` is false.
+  DCHECK(blocked_extensions.empty() || all_allowed);
+
+  bool disable_bfcache = false;
+  // If the user data exists we know we are disabled.
+  if (context->GetUserData(kIsBFCacheDisabledKey)) {
+    disable_bfcache = true;
+  } else {
+    std::vector<std::string> blocked_extensions_list =
+        base::SplitString(blocked_extensions, ",", base::TRIM_WHITESPACE,
+                          base::SPLIT_WANT_NONEMPTY);
+
+    // Compute whether we need to disable it.
+    for (const auto& extension : enabled_extensions) {
+      // Skip component extensions, apps, themes, shared modules and the google
+      // docs pre-installed extension.
+      if (Manifest::IsComponentLocation(extension->location()) ||
+          extension->is_app() || extension->is_theme() ||
+          extension->is_shared_module() ||
+          extension->id() == extension_misc::kDocsOfflineExtensionId) {
+        continue;
+      }
+      if (util::IsExtensionVisibleToContext(*extension, context)) {
+        // If we are allowing all extensions with a block filter set, and this
+        // extension is not in it then continue.
+        if (all_allowed &&
+            !base::Contains(blocked_extensions_list, extension->id())) {
+          continue;
+        }
+
+        VLOG(1) << "Disabled bfcache due to " << extension->short_name() << ","
+                << extension->id();
+        if (!disable_bfcache) {
+          // Set a user data key indicating we've disabled disabled bfcache for
+          // this context.
+          context->SetUserData(
+              kIsBFCacheDisabledKey,
+              std::make_unique<base::SupportsUserData::Data>());
+          disable_bfcache = true;
+        }
+
+        // TODO(dtapuska): Early termination disabled for now to capture VLOG(1)
+        // break;
+      }
+    }
+  }
+
+  if (disable_bfcache) {
+    // We do not care if GetPreviousRenderFrameHostId returns a reused
+    // RenderFrameHost since disabling the cache multiple times has no side
+    // effects.
+    content::BackForwardCache::DisableForRenderFrameHost(
+        navigation_handle->GetPreviousRenderFrameHostId(),
+        back_forward_cache::DisabledReason(
+            back_forward_cache::DisabledReasonId::kExtensions));
+  }
+}
+
+}  // namespace
 
 TabHelper::~TabHelper() = default;
 
@@ -88,9 +264,9 @@ TabHelper::TabHelper(content::WebContents* web_contents)
   // The Unretained() is safe because ForEachFrame() is synchronous.
   web_contents->ForEachFrame(
       base::BindRepeating(&TabHelper::SetTabId, base::Unretained(this)));
-  active_tab_permission_granter_.reset(new ActiveTabPermissionGranter(
+  active_tab_permission_granter_ = std::make_unique<ActiveTabPermissionGranter>(
       web_contents, sessions::SessionTabHelper::IdForTab(web_contents).id(),
-      profile_));
+      profile_);
 
   ActivityLog::GetInstance(profile_)->ObserveScripts(script_executor_.get());
 
@@ -100,6 +276,9 @@ TabHelper::TabHelper(content::WebContents* web_contents)
 
   ExtensionWebContentsObserver::GetForWebContents(web_contents)->dispatcher()->
       set_delegate(this);
+
+  registry_observation_.Observe(
+      ExtensionRegistry::Get(web_contents->GetBrowserContext()));
 
   BookmarkManagerPrivateDragEventRouter::CreateForWebContents(web_contents);
 }
@@ -114,13 +293,6 @@ void TabHelper::SetExtensionApp(const Extension* extension) {
     DCHECK(!extension->from_bookmark());
   }
   extension_app_ = extension;
-
-  if (extension_app_) {
-    registry_observer_.Add(
-        ExtensionRegistry::Get(web_contents()->GetBrowserContext()));
-  } else {
-    registry_observer_.RemoveAll();
-  }
 
   UpdateExtensionAppIcon(extension_app_);
 
@@ -156,6 +328,14 @@ SkBitmap* TabHelper::GetExtensionAppIcon() {
   return &extension_app_icon_;
 }
 
+void TabHelper::OnWatchedPageChanged(
+    const std::vector<std::string>& css_selectors) {
+  InvokeForContentRulesRegistries(
+      [this, css_selectors](ContentRulesRegistry* registry) {
+        registry->OnWatchedPageChanged(web_contents(), css_selectors);
+      });
+}
+
 // Encapsulates the logic to decide which ContentRulesRegistries need to be
 // invoked, depending on whether this WebContents is associated with an Original
 // or OffTheRecord profile. In the latter case, we need to invoke on both the
@@ -186,7 +366,11 @@ void TabHelper::RenderFrameCreated(content::RenderFrameHost* host) {
 
 void TabHelper::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
-  if (!navigation_handle->HasCommitted() || !navigation_handle->IsInMainFrame())
+  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
+  // frames. This caller was converted automatically to the primary main frame
+  // to preserve its semantics. Follow up to confirm correctness.
+  if (!navigation_handle->HasCommitted() ||
+      !navigation_handle->IsInPrimaryMainFrame())
     return;
 
   InvokeForContentRulesRegistries(
@@ -197,6 +381,14 @@ void TabHelper::DidFinishNavigation(
   content::BrowserContext* context = web_contents()->GetBrowserContext();
   ExtensionRegistry* registry = ExtensionRegistry::Get(context);
   const ExtensionSet& enabled_extensions = registry->enabled_extensions();
+
+  RecordExtensionPermissionsPerNavigation(
+      enabled_extensions, context,
+      sessions::SessionTabHelper::IdForTab(web_contents()).id(),
+      navigation_handle->GetURL());
+
+  DisableBackForwardCacheIfNecessary(enabled_extensions, context,
+                                     navigation_handle);
 
   Browser* browser = chrome::FindBrowserWithWebContents(web_contents());
   if (browser && browser->deprecated_is_app()) {
@@ -218,8 +410,6 @@ bool TabHelper::OnMessageReceived(const IPC::Message& message,
                                   content::RenderFrameHost* sender) {
   bool handled = true;
   IPC_BEGIN_MESSAGE_MAP_WITH_PARAM(TabHelper, message, sender)
-    IPC_MESSAGE_HANDLER(ExtensionHostMsg_GetAppInstallState,
-                        OnGetAppInstallState)
     IPC_MESSAGE_HANDLER(ExtensionHostMsg_ContentScriptsExecuting,
                         OnContentScriptsExecuting)
     IPC_MESSAGE_UNHANDLED(handled = false)
@@ -242,30 +432,6 @@ void TabHelper::WebContentsDestroyed() {
   InvokeForContentRulesRegistries([this](ContentRulesRegistry* registry) {
     registry->WebContentsDestroyed(web_contents());
   });
-}
-
-void TabHelper::OnGetAppInstallState(content::RenderFrameHost* host,
-                                     const GURL& requestor_url,
-                                     int return_route_id,
-                                     int callback_id) {
-  ExtensionRegistry* registry =
-      ExtensionRegistry::Get(web_contents()->GetBrowserContext());
-  const ExtensionSet& extensions = registry->enabled_extensions();
-  const ExtensionSet& disabled_extensions = registry->disabled_extensions();
-
-  std::string state;
-  if (extensions.GetHostedAppByURL(requestor_url))
-    state = extension_misc::kAppStateInstalled;
-  else if (disabled_extensions.GetHostedAppByURL(requestor_url))
-    state = extension_misc::kAppStateDisabled;
-  else
-    state = extension_misc::kAppStateNotInstalled;
-
-  // We use the |host| to send the message because using
-  // WebContentsObserver::Send() defaults to using the main RenderView, which
-  // might be in a different process if the request came from a frame.
-  host->Send(new ExtensionMsg_GetAppInstallStateResponse(return_route_id, state,
-                                                         callback_id));
 }
 
 void TabHelper::OnContentScriptsExecuting(
@@ -320,10 +486,21 @@ WebContents* TabHelper::GetAssociatedWebContents() const {
   return web_contents();
 }
 
+void TabHelper::OnExtensionLoaded(content::BrowserContext* browser_context,
+                                  const Extension* extension) {
+  // Clear the back forward cache for the associated tab to accommodate for any
+  // side effects of loading/unloading the extension.
+  web_contents()->GetController().GetBackForwardCache().Flush();
+}
+
 void TabHelper::OnExtensionUnloaded(content::BrowserContext* browser_context,
                                     const Extension* extension,
                                     UnloadedExtensionReason reason) {
-  DCHECK(extension_app_);
+  // Clear the back forward cache for the associated tab to accommodate for any
+  // side effects of loading/unloading the extension.
+  web_contents()->GetController().GetBackForwardCache().Flush();
+  if (!extension_app_)
+    return;
   if (extension == extension_app_)
     SetExtensionApp(nullptr);
 }

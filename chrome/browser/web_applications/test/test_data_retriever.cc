@@ -36,7 +36,7 @@ void TestDataRetriever::CheckInstallabilityAndRetrieveManifest(
     content::WebContents* web_contents,
     bool bypass_service_worker_check,
     CheckInstallabilityCallback callback) {
-  base::Optional<blink::Manifest> opt_manifest;
+  absl::optional<blink::Manifest> opt_manifest;
   if (manifest_ && !manifest_->IsEmpty())
     opt_manifest = *manifest_;
 
@@ -103,7 +103,7 @@ void TestDataRetriever::BuildDefaultDataToRetrieve(const GURL& url,
   manifest->start_url = url;
   manifest->scope = scope;
   manifest->display = DisplayMode::kStandalone;
-  manifest->short_name = base::ASCIIToUTF16("Manifest Name");
+  manifest->short_name = u"Manifest Name";
 
   SetManifest(std::move(manifest), /*is_installable=*/true);
 

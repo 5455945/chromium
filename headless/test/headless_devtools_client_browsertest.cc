@@ -36,6 +36,7 @@
 #include "net/test/spawned_test_server/spawned_test_server.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/chrome_debug_urls.h"
 #include "url/gurl.h"
 
 #define EXPECT_SIZE_EQ(expected, actual)               \
@@ -494,7 +495,7 @@ class HeadlessCrashObserverTest : public HeadlessAsyncDevTooledBrowserTest,
     devtools_client_->GetInspector()->GetExperimental()->AddObserver(this);
     devtools_client_->GetInspector()->GetExperimental()->Enable(
         inspector::EnableParams::Builder().Build());
-    devtools_client_->GetPage()->Navigate(content::kChromeUICrashURL);
+    devtools_client_->GetPage()->Navigate(blink::kChromeUICrashURL);
   }
 
   void OnTargetCrashed(const inspector::TargetCrashedParams& params) override {
@@ -510,7 +511,7 @@ class HeadlessCrashObserverTest : public HeadlessAsyncDevTooledBrowserTest,
     // ASan's normal error exit code is 1, which base categorizes as the process
     // being killed.
     EXPECT_EQ(base::TERMINATION_STATUS_PROCESS_WAS_KILLED, status);
-#elif defined(OS_WIN) || defined(OS_MAC)
+#elif defined(OS_WIN) || defined(OS_MAC) || defined(OS_LINUX)
     EXPECT_EQ(base::TERMINATION_STATUS_PROCESS_CRASHED, status);
 #else
     EXPECT_EQ(base::TERMINATION_STATUS_ABNORMAL_TERMINATION, status);
@@ -722,9 +723,9 @@ class RawDevtoolsProtocolTest
     base::DictionaryValue message;
     message.SetInteger("id", devtools_client_->GetNextRawDevToolsMessageId());
     message.SetString("method", "Runtime.evaluate");
-    std::unique_ptr<base::DictionaryValue> params(new base::DictionaryValue());
-    params->SetString("expression", "1+1");
-    message.Set("params", std::move(params));
+    base::DictionaryValue params;
+    params.SetString("expression", "1+1");
+    message.SetKey("params", std::move(params));
     std::string json_message;
     base::JSONWriter::Write(message, &json_message);
     devtools_client_->SendRawDevToolsMessage(json_message);
@@ -841,8 +842,9 @@ class DomTreeExtractionBrowserTest : public HeadlessAsyncDevTooledBrowserTest,
         const std::unique_ptr<dom_snapshot::LayoutTreeNode>& layout_node =
             (*result->GetLayoutTreeNodes())[layout_node_index];
 
-        node_dict->Set("boundingBox",
-                       layout_node->GetBoundingBox()->Serialize());
+        node_dict->SetKey("boundingBox",
+                          base::Value::FromUniquePtrValue(
+                              layout_node->GetBoundingBox()->Serialize()));
 
         if (layout_node->HasLayoutText())
           node_dict->SetString("layoutText", layout_node->GetLayoutText());
@@ -851,14 +853,13 @@ class DomTreeExtractionBrowserTest : public HeadlessAsyncDevTooledBrowserTest,
           node_dict->SetInteger("styleIndex", layout_node->GetStyleIndex());
 
         if (layout_node->HasInlineTextNodes()) {
-          std::unique_ptr<base::ListValue> inline_text_nodes(
-              new base::ListValue());
+          base::ListValue inline_text_nodes;
           for (const std::unique_ptr<dom_snapshot::InlineTextBox>&
                    inline_text_box : *layout_node->GetInlineTextNodes()) {
-            size_t index = inline_text_nodes->GetSize();
-            inline_text_nodes->Set(index, inline_text_box->Serialize());
+            size_t index = inline_text_nodes.GetSize();
+            inline_text_nodes.Set(index, inline_text_box->Serialize());
           }
-          node_dict->Set("inlineTextNodes", std::move(inline_text_nodes));
+          node_dict->SetKey("inlineTextNodes", std::move(inline_text_nodes));
         }
       }
     }

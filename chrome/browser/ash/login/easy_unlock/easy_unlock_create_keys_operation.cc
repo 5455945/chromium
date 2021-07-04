@@ -18,10 +18,11 @@
 #include "chrome/browser/ash/login/easy_unlock/easy_unlock_types.h"
 #include "chromeos/components/multidevice/logging/logging.h"
 #include "chromeos/cryptohome/cryptohome_util.h"
-#include "chromeos/cryptohome/homedir_methods.h"
 #include "chromeos/cryptohome/system_salt_getter.h"
+#include "chromeos/cryptohome/userdataauth_util.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/easy_unlock_client.h"
+#include "chromeos/dbus/userdataauth/userdataauth_client.h"
 #include "chromeos/login/auth/key.h"
 #include "crypto/encryptor.h"
 #include "crypto/random.h"
@@ -29,8 +30,7 @@
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
-namespace chromeos {
-
+namespace ash {
 namespace {
 
 const int kUserKeyByteSize = 16;
@@ -279,10 +279,10 @@ void EasyUnlockCreateKeysOperation::CreateKeyForDeviceAtIndex(size_t index) {
     return;
   }
 
-  challenge_creator_.reset(new ChallengeCreator(
+  challenge_creator_ = std::make_unique<ChallengeCreator>(
       user_key, session_key->key(), tpm_public_key_, device,
       base::BindOnce(&EasyUnlockCreateKeysOperation::OnChallengeCreated,
-                     weak_ptr_factory_.GetWeakPtr(), index)));
+                     weak_ptr_factory_.GetWeakPtr(), index));
   challenge_creator_->Start();
 }
 
@@ -343,29 +343,32 @@ void EasyUnlockCreateKeysOperation::OnGetSystemSalt(
   if (auth_key->GetKeyType() == Key::KEY_TYPE_PASSWORD_PLAIN)
     auth_key->Transform(Key::KEY_TYPE_SALTED_SHA256_TOP_HALF, system_salt);
 
-  cryptohome::AddKeyRequest request;
+  ::user_data_auth::AddKeyRequest request;
   cryptohome::KeyDefinitionToKey(key_def, request.mutable_key());
   request.set_clobber_if_exists(true);
 
   // Create the authorization request with an empty label, in order to act as a
   // wildcard. See https://crbug.com/1002336 for more.
-  cryptohome::HomedirMethods::GetInstance()->AddKeyEx(
-      cryptohome::Identification(user_context_.GetAccountId()),
+  *request.mutable_authorization_request() =
       cryptohome::CreateAuthorizationRequest(std::string() /* label */,
-                                             auth_key->GetSecret()),
-      request,
-      base::BindOnce(&EasyUnlockCreateKeysOperation::OnKeyCreated,
-                     weak_ptr_factory_.GetWeakPtr(), index, user_key));
+                                             auth_key->GetSecret());
+  *request.mutable_account_id() = CreateAccountIdentifierFromIdentification(
+      cryptohome::Identification(user_context_.GetAccountId()));
+  chromeos::UserDataAuthClient::Get()->AddKey(
+      request, base::BindOnce(&EasyUnlockCreateKeysOperation::OnKeyCreated,
+                              weak_ptr_factory_.GetWeakPtr(), index, user_key));
 }
 
 void EasyUnlockCreateKeysOperation::OnKeyCreated(
     size_t index,
     const Key& user_key,
-    bool success,
-    cryptohome::MountError return_code) {
+    absl::optional<::user_data_auth::AddKeyReply> reply) {
   DCHECK_EQ(key_creation_index_, index);
+  cryptohome::MountError return_code = cryptohome::MOUNT_ERROR_FATAL;
+  if (reply.has_value())
+    return_code = user_data_auth::CryptohomeErrorToMountError(reply->error());
 
-  if (!success) {
+  if (return_code != cryptohome::MOUNT_ERROR_NONE) {
     PA_LOG(ERROR) << "Easy unlock failed to create key, code=" << return_code;
     std::move(callback_).Run(false);
     return;
@@ -383,4 +386,4 @@ void EasyUnlockCreateKeysOperation::OnKeyCreated(
   CreateKeyForDeviceAtIndex(key_creation_index_);
 }
 
-}  // namespace chromeos
+}  // namespace ash

@@ -13,7 +13,6 @@
 #include "base/containers/contains.h"
 #include "base/location.h"
 #include "base/metrics/field_trial_params.h"
-#include "base/optional.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/threading/thread_task_runner_handle.h"
@@ -50,6 +49,7 @@
 #include "content/public/browser/download_item_utils.h"
 #include "content/public/browser/download_request_utils.h"
 #include "net/url_request/referrer_policy.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/mime_util/mime_util.h"
 #include "url/origin.h"
 
@@ -160,10 +160,10 @@ ScopedJavaLocalRef<jobject> DownloadManagerService::CreateJavaDownloadInfo(
     otr_profile_id = profile->GetOTRProfileID().ConvertToJavaOTRProfileID(env);
   }
 
-  base::Optional<OfflineItemSchedule> offline_item_schedule;
+  absl::optional<OfflineItemSchedule> offline_item_schedule;
   auto download_schedule = item->GetDownloadSchedule();
   if (download_schedule.has_value()) {
-    offline_item_schedule = base::make_optional<OfflineItemSchedule>(
+    offline_item_schedule = absl::make_optional<OfflineItemSchedule>(
         download_schedule->only_on_wifi(), download_schedule->start_time());
   }
   auto j_offline_item_schedule =
@@ -175,7 +175,6 @@ ScopedJavaLocalRef<jobject> DownloadManagerService::CreateJavaDownloadInfo(
       ConvertUTF8ToJavaString(env, item->GetTabUrl().spec()),
       ConvertUTF8ToJavaString(env, item->GetMimeType()),
       item->GetReceivedBytes(), item->GetTotalBytes(),
-      browser_context ? browser_context->IsOffTheRecord() : false,
       otr_profile_id, item->GetState(), item->PercentComplete(),
       item->IsPaused(), DownloadUtils::IsDownloadUserInitiated(item),
       item->CanResume(), item->IsParallelDownload(),
@@ -239,7 +238,7 @@ void DownloadManagerService::OnProfileAdded(
 
 void DownloadManagerService::OnProfileAdded(Profile* profile) {
   InitializeForProfile(profile->GetProfileKey());
-  observed_profiles_.Add(profile);
+  observed_profiles_.AddObservation(profile);
   for (Profile* otr : profile->GetAllOffTheRecordProfiles())
     InitializeForProfile(otr->GetProfileKey());
 }
@@ -249,8 +248,10 @@ void DownloadManagerService::OnOffTheRecordProfileCreated(
   InitializeForProfile(off_the_record->GetProfileKey());
 }
 
-void DownloadManagerService::OpenDownload(download::DownloadItem* download,
-                                          int source) {
+void DownloadManagerService::OpenDownload(
+    download::DownloadItem* download,
+    int source,
+    const JavaParamRef<jobject>& j_context) {
   if (java_ref_.is_null())
     return;
 
@@ -258,7 +259,8 @@ void DownloadManagerService::OpenDownload(download::DownloadItem* download,
   ScopedJavaLocalRef<jobject> j_item =
       JNI_DownloadManagerService_CreateJavaDownloadItem(env, download);
 
-  Java_DownloadManagerService_openDownloadItem(env, java_ref_, j_item, source);
+  Java_DownloadManagerService_openDownloadItem(env, java_ref_, j_item, source,
+                                               j_context);
 }
 
 void DownloadManagerService::HandleOMADownload(download::DownloadItem* download,
@@ -279,7 +281,8 @@ void DownloadManagerService::OpenDownload(
     jobject obj,
     const JavaParamRef<jstring>& jdownload_guid,
     const JavaParamRef<jobject>& j_profile_key,
-    jint source) {
+    jint source,
+    const JavaParamRef<jobject>& j_context) {
   if (!is_manager_initialized_)
     return;
 
@@ -289,7 +292,7 @@ void DownloadManagerService::OpenDownload(
   if (!item)
     return;
 
-  OpenDownload(item, source);
+  OpenDownload(item, source, j_context);
 }
 
 void DownloadManagerService::ResumeDownload(
@@ -394,7 +397,7 @@ void DownloadManagerService::GetAllDownloadsInternal(ProfileKey* profile_key) {
 
   Java_DownloadManagerService_onAllDownloadsRetrieved(
       env, java_ref_, j_download_item_list,
-      ProfileKeyAndroid(profile_key).GetJavaObject());
+      profile_key->GetProfileKeyAndroid()->GetJavaObject());
 }
 
 void DownloadManagerService::CheckForExternallyRemovedDownloads(
@@ -731,8 +734,7 @@ content::DownloadManager* DownloadManagerService::GetDownloadManager(
       IsReducedModeProfileKey(profile_key)
           ? ProfileManager::GetActiveUserProfile()
           : ProfileManager::GetProfileFromProfileKey(profile_key);
-  content::DownloadManager* manager =
-      content::BrowserContext::GetDownloadManager(profile);
+  content::DownloadManager* manager = profile->GetDownloadManager();
   ResetCoordinatorIfNeeded(profile_key);
   return manager;
 }
@@ -803,12 +805,12 @@ void DownloadManagerService::ChangeSchedule(
   if (!item)
     return;
 
-  base::Optional<DownloadSchedule> download_schedule;
+  absl::optional<DownloadSchedule> download_schedule;
   if (only_on_wifi) {
-    download_schedule = base::make_optional<DownloadSchedule>(
-        true /*only_on_wifi*/, base::nullopt);
+    download_schedule = absl::make_optional<DownloadSchedule>(
+        true /*only_on_wifi*/, absl::nullopt);
   } else if (start_time > 0) {
-    download_schedule = base::make_optional<DownloadSchedule>(
+    download_schedule = absl::make_optional<DownloadSchedule>(
         false /*only_on_wifi*/, base::Time::FromJavaTime(start_time));
   }
 
@@ -838,7 +840,7 @@ void DownloadManagerService::CreateInterruptedDownloadForTest(
           download::DOWNLOAD_INTERRUPT_REASON_CRASH, false, false, false,
           base::Time(), false,
           std::vector<download::DownloadItem::ReceivedSlice>(),
-          base::nullopt /*download_schedule*/, nullptr));
+          absl::nullopt /*download_schedule*/, nullptr));
 }
 
 void DownloadManagerService::InitializeForProfile(ProfileKey* profile_key) {

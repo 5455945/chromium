@@ -13,7 +13,6 @@
 #include <memory>
 #include <set>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "base/callback.h"
@@ -33,7 +32,7 @@
 #include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager.h"
 #include "chrome/browser/safe_browsing/services_delegate.h"
 #include "chrome/browser/safe_browsing/ui_manager.h"
-#include "components/safe_browsing/core/db/database_manager.h"
+#include "components/safe_browsing/core/browser/db/database_manager.h"
 #include "components/sessions/core/session_id.h"
 #include "url/gurl.h"
 
@@ -171,11 +170,6 @@ class DownloadProtectionService {
 
   double allowlist_sample_rate() const { return allowlist_sample_rate_; }
 
-  scoped_refptr<SafeBrowsingNavigationObserverManager>
-  navigation_observer_manager() {
-    return navigation_observer_manager_;
-  }
-
   static void SetDownloadPingToken(download::DownloadItem* item,
                                    const std::string& token);
 
@@ -272,6 +266,7 @@ class DownloadProtectionService {
   // ClientDownloadRequest proto. This function also records UMA stats of
   // download attribution result.
   void AddReferrerChainToPPAPIClientDownloadRequest(
+      content::WebContents* web_contents,
       const GURL& initiating_frame_url,
       const GURL& initiating_main_frame_url,
       SessionID tab_id,
@@ -285,12 +280,14 @@ class DownloadProtectionService {
   // overridden in tests.
   virtual BinaryUploadService* GetBinaryUploadService(Profile* profile);
 
+  // Get the SafeBrowsingNavigationObserverManager for the given |web_contents|.
+  SafeBrowsingNavigationObserverManager* GetNavigationObserverManager(
+      content::WebContents* web_contents);
+
   SafeBrowsingService* sb_service_;
   // These pointers may be NULL if SafeBrowsing is disabled.
   scoped_refptr<SafeBrowsingUIManager> ui_manager_;
   scoped_refptr<SafeBrowsingDatabaseManager> database_manager_;
-  scoped_refptr<SafeBrowsingNavigationObserverManager>
-      navigation_observer_manager_;
 
   // Set of pending server requests for DownloadManager mediated downloads.
   base::flat_map<CheckClientDownloadRequestBase*,

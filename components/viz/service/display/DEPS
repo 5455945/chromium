@@ -34,6 +34,7 @@ include_rules = [
   "+ui/gfx/video_types.h",
   "+ui/gl/ca_renderer_layer_params.h",
   "+ui/gl/dc_renderer_layer_params.h",
+  "+ui/gl/gl_fence.h",
   "+ui/gl/gl_utils.h",
   "+ui/gl/gpu_switching_manager.h",
   "+ui/gl/gpu_switching_observer.h",
@@ -78,5 +79,8 @@ specific_include_rules = {
   "overlay_processor_using_strategy\.(cc|h)": [
     "+media/gpu/buildflags.h",
     "+media/gpu/vaapi/vaapi_wrapper.h",
+  ],
+  "output_surface\.h": [
+    "+mojo/public/cpp/bindings/pending_receiver.h",
   ]
 }

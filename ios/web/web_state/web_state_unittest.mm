@@ -9,6 +9,7 @@
 #include "base/bind.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #import "base/test/ios/wait_util.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -75,12 +76,12 @@ TEST_F(WebStateTest, ScriptExecution) {
   ASSERT_TRUE(LoadHtml("<html></html>"));
 
   // Execute script without callback.
-  web_state()->ExecuteJavaScript(base::UTF8ToUTF16("window.foo = 'bar'"));
+  web_state()->ExecuteJavaScript(u"window.foo = 'bar'");
 
   // Execute script with callback.
   __block std::unique_ptr<base::Value> execution_result;
   __block bool execution_complete = false;
-  web_state()->ExecuteJavaScript(base::UTF8ToUTF16("window.foo"),
+  web_state()->ExecuteJavaScript(u"window.foo",
                                  base::BindOnce(^(const base::Value* value) {
                                    execution_result = value->CreateDeepCopy();
                                    execution_complete = true;
@@ -129,7 +130,7 @@ TEST_F(WebStateTest, OverridingWebKitObject) {
   // Add a script command handler.
   __block bool message_received = false;
   const web::WebState::ScriptCommandCallback callback = base::BindRepeating(
-      ^(const base::DictionaryValue&, const GURL&,
+      ^(const base::Value&, const GURL&,
         /*interacted*/ bool, /*is_main_frame*/ web::WebFrame*) {
         message_received = true;
       });
@@ -152,14 +153,12 @@ TEST_F(WebStateTest, OverridingWebKitObject) {
 // manager is empty.
 TEST_F(WebStateTest, ReloadWithNormalTypeWithEmptyNavigationManager) {
   NavigationManager* navigation_manager = web_state()->GetNavigationManager();
-  ASSERT_FALSE(navigation_manager->GetTransientItem());
   ASSERT_FALSE(navigation_manager->GetPendingItem());
   ASSERT_FALSE(navigation_manager->GetLastCommittedItem());
 
   navigation_manager->Reload(web::ReloadType::NORMAL,
                              false /* check_for_repost */);
 
-  ASSERT_FALSE(navigation_manager->GetTransientItem());
   ASSERT_FALSE(navigation_manager->GetPendingItem());
   ASSERT_FALSE(navigation_manager->GetLastCommittedItem());
 }
@@ -168,14 +167,12 @@ TEST_F(WebStateTest, ReloadWithNormalTypeWithEmptyNavigationManager) {
 // navigation manager is empty.
 TEST_F(WebStateTest, ReloadWithOriginalTypeWithEmptyNavigationManager) {
   NavigationManager* navigation_manager = web_state()->GetNavigationManager();
-  ASSERT_FALSE(navigation_manager->GetTransientItem());
   ASSERT_FALSE(navigation_manager->GetPendingItem());
   ASSERT_FALSE(navigation_manager->GetLastCommittedItem());
 
   navigation_manager->Reload(web::ReloadType::ORIGINAL_REQUEST_URL,
                              false /* check_for_repost */);
 
-  ASSERT_FALSE(navigation_manager->GetTransientItem());
   ASSERT_FALSE(navigation_manager->GetPendingItem());
   ASSERT_FALSE(navigation_manager->GetLastCommittedItem());
 }
@@ -395,7 +392,7 @@ TEST_F(WebStateTest, MessageFromMainFrame) {
   __block bool message_from_main_frame = false;
   __block base::Value message_value;
   const web::WebState::ScriptCommandCallback callback =
-      base::BindRepeating(^(const base::DictionaryValue& value, const GURL&,
+      base::BindRepeating(^(const base::Value& value, const GURL&,
                             bool user_interacted, WebFrame* sender_frame) {
         message_received = true;
         message_from_main_frame = sender_frame->IsMainFrame();
@@ -428,7 +425,7 @@ TEST_F(WebStateTest, MessageFromIFrame) {
   __block bool message_from_main_frame = false;
   __block base::Value message_value;
   const web::WebState::ScriptCommandCallback callback =
-      base::BindRepeating(^(const base::DictionaryValue& value, const GURL&,
+      base::BindRepeating(^(const base::Value& value, const GURL&,
                             bool user_interacted, WebFrame* sender_frame) {
         message_received = true;
         message_from_main_frame = sender_frame->IsMainFrame();
@@ -539,7 +536,6 @@ TEST_F(WebStateTest, RestoreLargeSession) {
     EXPECT_TRUE(visible_item);
     EXPECT_TRUE(visible_item && visible_item->GetURL() == "http://www.0.com/");
     EXPECT_FALSE(navigation_manager->CanGoBack());
-    EXPECT_FALSE(navigation_manager->GetTransientItem());
     EXPECT_FALSE(IsWKInternalUrl(web_state_ptr->GetVisibleURL()));
 
     return restored;
@@ -661,7 +657,7 @@ TEST_F(WebStateTest, CallLoadURLWithParamsDuringSessionRestore) {
   // TODO(crbug.com/996544) On Xcode 11 beta 6 this became very slow.  This
   // appears to only affect simulator, and will hopefully be fixed in a future
   // Xcode release.  Revert this to |kWaitForPageLoadTimeout| alone when fixed.
-  EXPECT_TRUE(WaitUntilConditionOrTimeout(kWaitForPageLoadTimeout * 5, ^{
+  EXPECT_TRUE(WaitUntilConditionOrTimeout(kWaitForPageLoadTimeout * 7, ^{
     return web_state_ptr->GetLastCommittedURL() == url;
   }));
 }

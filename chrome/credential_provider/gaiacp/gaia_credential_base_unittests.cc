@@ -7,6 +7,7 @@
 #include <sddl.h>  // For ConvertSidToStringSid()
 #include <wrl/client.h>
 #include <algorithm>
+#include <memory>
 #include <vector>
 
 #include "base/base64.h"
@@ -1014,6 +1015,7 @@ TEST_F(GcpGaiaCredentialBaseTest, DenySigninBlockedDuringSignin) {
   ASSERT_EQ(S_OK, SetGlobalFlagForTesting(kRegMdmAllowConsumerAccounts, 1));
   GoogleMdmEnrolledStatusForTesting force_success(true);
   GoogleUploadDeviceDetailsNeededForTesting upload_device_details_needed(false);
+  FakeUserPoliciesManager fake_user_policies_manager;
 
   // Create a fake user that has the same gaia id as the test gaia id.
   CComBSTR first_sid;
@@ -1023,6 +1025,11 @@ TEST_F(GcpGaiaCredentialBaseTest, DenySigninBlockedDuringSignin) {
                 username, L"password", L"name", L"comment",
                 base::UTF8ToWide(kDefaultGaiaId), std::wstring(), &first_sid));
   ASSERT_EQ(2ul, fake_os_user_manager()->GetUserCount());
+
+  UserPolicies user_policies;
+  fake_user_policies_manager.SetUserPolicies((BSTR)first_sid, user_policies);
+  fake_user_policies_manager.SetUserPolicyStaleOrMissing((BSTR)first_sid,
+                                                         false);
 
   std::vector<std::wstring> reauth_sids;
   reauth_sids.push_back((BSTR)first_sid);
@@ -1098,6 +1105,7 @@ TEST_F(GcpGaiaCredentialBaseTest,
   ASSERT_EQ(S_OK, SetGlobalFlagForTesting(kRegMdmSupportsMultiUser, 1));
   ASSERT_EQ(S_OK, SetGlobalFlagForTesting(kRegMdmAllowConsumerAccounts, 1));
   GoogleUploadDeviceDetailsNeededForTesting upload_device_details_needed(false);
+  FakeUserPoliciesManager fake_user_policies_manager;
 
   // Create a fake user that has the same gaia id as the test gaia id.
   CComBSTR first_sid;
@@ -1125,6 +1133,12 @@ TEST_F(GcpGaiaCredentialBaseTest,
   ASSERT_EQ(S_OK, SetGlobalFlagForTesting(
                       base::UTF8ToWide(std::string(kKeyValidityPeriodInDays)),
                       validity_period_in_days_dword));
+
+  UserPolicies user_policies;
+  user_policies.validity_period_days = validity_period_in_days_dword;
+  fake_user_policies_manager.SetUserPolicies((BSTR)first_sid, user_policies);
+  fake_user_policies_manager.SetUserPolicyStaleOrMissing((BSTR)first_sid,
+                                                         false);
 
   GoogleMdmEnrolledStatusForTesting force_success(true);
   fake_internet_checker()->SetHasInternetConnection(
@@ -2661,10 +2675,10 @@ TEST_P(GcpGaiaCredentialBasePasswordRecoveryTest, PasswordRecovery) {
   std::unique_ptr<base::WaitableEvent> generate_key_event;
 
   if (generate_public_key_result == 2)
-    get_key_event.reset(new base::WaitableEvent());
+    get_key_event = std::make_unique<base::WaitableEvent>();
 
   if (get_private_key_result == 2)
-    generate_key_event.reset(new base::WaitableEvent());
+    generate_key_event = std::make_unique<base::WaitableEvent>();
 
   if (get_key_event || generate_key_event) {
     fake_password_recovery_manager()->SetRequestTimeoutForTesting(
@@ -2712,7 +2726,7 @@ TEST_P(GcpGaiaCredentialBasePasswordRecoveryTest, PasswordRecovery) {
   }
 
   if (generate_public_key_again_result == 2)
-    generate_key_event.reset(new base::WaitableEvent());
+    generate_key_event = std::make_unique<base::WaitableEvent>();
 
   if (generate_key_event) {
     fake_password_recovery_manager()->SetRequestTimeoutForTesting(
@@ -3173,7 +3187,7 @@ TEST_P(GcpGaiaCredentialBaseUploadDeviceDetailsTest, UploadDeviceDetails) {
   std::unique_ptr<base::WaitableEvent> upload_device_details_key_event;
 
   if (fail_upload_device_details_timeout) {
-    upload_device_details_key_event.reset(new base::WaitableEvent());
+    upload_device_details_key_event = std::make_unique<base::WaitableEvent>();
 
     fake_gem_device_details_manager()->SetRequestTimeoutForTesting(
         base::TimeDelta::FromMilliseconds(50));
@@ -3398,7 +3412,10 @@ TEST_P(GcpGaiaCredentialBaseUploadEventLogsTest, UploadEventViewerLogs) {
   std::vector<FakeEventLogsUploadManager::EventLogEntry> logs;
   for (size_t i = 0; i < num_events_in_log; i++) {
     std::wstring data(1024, '0');  // 1KB payload.
-    logs.push_back({i + 1, {1000 + i, 200 + i}, data, 1 + i % 4});
+    logs.push_back({i + 1,
+                    {1000 + i, static_cast<uint32_t>(200 + i)},
+                    data,
+                    static_cast<uint32_t>(1 + i % 4)});
   }
 
   FakeEventLogsUploadManager fake_event_logs_upload_manager(logs);
@@ -3531,7 +3548,7 @@ void GcpGaiaCredentialBaseFetchCloudPoliciesTest::SetUp() {
   FakesForTesting fakes;
   fakes.fake_win_http_url_fetcher_creator =
       fake_http_url_fetcher_factory()->GetCreatorCallback();
-  UserPoliciesManager::Get()->SetFakesForTesting(&fakes);  // IN-TEST
+  UserPoliciesManager::Get()->SetFakesForTesting(&fakes);
 }
 
 TEST_P(GcpGaiaCredentialBaseFetchCloudPoliciesTest, FetchAndStore) {

@@ -98,8 +98,6 @@ class DownloadUIAdapterDelegate : public DownloadUIAdapter::Delegate {
       const OfflineItem& item,
       int64_t offline_id,
       const offline_items_collection::OpenParams& open_params) override;
-  bool MaybeSuppressNotification(const std::string& origin,
-                                 const ClientId& id) override;
   void GetShareInfoForItem(const ContentId& id,
                            ShareCallback share_callback) override;
 
@@ -125,22 +123,10 @@ void DownloadUIAdapterDelegate::OpenItem(
     const offline_items_collection::OpenParams& open_params) {
   JNIEnv* env = AttachCurrentThread();
   Java_OfflinePageDownloadBridge_openItem(
-      env, ConvertUTF8ToJavaString(env, item.page_url.spec()), offline_id,
+      env, ConvertUTF8ToJavaString(env, item.url.spec()), offline_id,
       static_cast<int>(open_params.launch_location),
       open_params.open_in_incognito,
       offline_pages::ShouldOfflinePagesInDownloadHomeOpenInCct());
-}
-
-bool DownloadUIAdapterDelegate::MaybeSuppressNotification(
-    const std::string& origin,
-    const ClientId& id) {
-  // Do not suppress notification if chrome.
-  if (origin == "" || !IsOfflinePagesSuppressNotificationsEnabled())
-    return false;
-  JNIEnv* env = AttachCurrentThread();
-  return Java_OfflinePageDownloadBridge_maybeSuppressNotification(
-      env, ConvertUTF8ToJavaString(env, origin),
-      ConvertUTF8ToJavaString(env, id.id));
 }
 
 void DownloadUIAdapterDelegate::GetShareInfoForItem(
@@ -277,8 +263,8 @@ content::WebContents::Getter GetWebContentsGetter(
 }
 
 void DownloadAsFile(content::WebContents* web_contents, const GURL& url) {
-  content::DownloadManager* dlm = content::BrowserContext::GetDownloadManager(
-      web_contents->GetBrowserContext());
+  content::DownloadManager* dlm =
+      web_contents->GetBrowserContext()->GetDownloadManager();
   std::unique_ptr<download::DownloadUrlParameters> dl_params(
       content::DownloadRequestUtils::CreateDownloadForWebContentsMainFrame(
           web_contents, url,

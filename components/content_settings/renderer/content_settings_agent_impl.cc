@@ -20,7 +20,6 @@
 #include "content/public/common/url_constants.h"
 #include "content/public/renderer/document_state.h"
 #include "content/public/renderer/render_frame.h"
-#include "content/public/renderer/render_view.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
 #include "third_party/blink/public/common/browser_interface_broker_proxy.h"
@@ -77,18 +76,18 @@ bool ContentSettingsAgentImpl::Delegate::IsSchemeAllowlisted(
   return false;
 }
 
-base::Optional<bool>
+absl::optional<bool>
 ContentSettingsAgentImpl::Delegate::AllowReadFromClipboard() {
-  return base::nullopt;
+  return absl::nullopt;
 }
 
-base::Optional<bool>
+absl::optional<bool>
 ContentSettingsAgentImpl::Delegate::AllowWriteToClipboard() {
-  return base::nullopt;
+  return absl::nullopt;
 }
 
-base::Optional<bool> ContentSettingsAgentImpl::Delegate::AllowMutationEvents() {
-  return base::nullopt;
+absl::optional<bool> ContentSettingsAgentImpl::Delegate::AllowMutationEvents() {
+  return absl::nullopt;
 }
 
 void ContentSettingsAgentImpl::Delegate::PassiveInsecureContentFound(
@@ -112,8 +111,7 @@ ContentSettingsAgentImpl::ContentSettingsAgentImpl(
           &ContentSettingsAgentImpl::OnContentSettingsAgentRequest,
           base::Unretained(this)));
 
-  content::RenderFrame* main_frame =
-      render_frame->GetRenderView()->GetMainRenderFrame();
+  content::RenderFrame* main_frame = render_frame->GetMainRenderFrame();
   // TODO(nasko): The main frame is not guaranteed to be in the same process
   // with this frame with --site-per-process. This code needs to be updated
   // to handle this case. See https://crbug.com/496670.
@@ -312,6 +310,7 @@ bool ContentSettingsAgentImpl::AllowStorageAccessSync(
   if (permissions != cached_storage_permissions_.end())
     return permissions->second;
 
+  SCOPED_UMA_HISTOGRAM_TIMER("ContentSettings.AllowStorageAccessSync");
   bool result = false;
   GetContentSettingsManager().AllowStorageAccess(
       routing_id(), ConvertToMojoStorageType(storage_type),

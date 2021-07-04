@@ -25,9 +25,9 @@
 #include "components/no_state_prefetch/browser/no_state_prefetch_contents.h"
 #include "components/prefs/pref_service.h"
 #include "components/safe_browsing/content/browser/threat_details.h"
+#include "components/safe_browsing/core/browser/ping_manager.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
-#include "components/safe_browsing/core/features.h"
-#include "components/safe_browsing/core/ping_manager.h"
 #include "components/security_interstitials/content/security_interstitial_tab_helper.h"
 #include "components/security_interstitials/content/unsafe_resource_util.h"
 #include "components/security_interstitials/core/unsafe_resource.h"
@@ -124,9 +124,8 @@ void SafeBrowsingUIManager::StartDisplayingBlockingPage(
           prerender::FINAL_STATUS_SAFE_BROWSING);
     }
     // Tab is gone or it's being prerendered.
-    content::GetIOThreadTaskRunner({})->PostTask(
-        FROM_HERE, base::BindOnce(resource.callback, false /*proceed*/,
-                                  false /*showed_interstitial*/));
+    resource.DispatchCallback(FROM_HERE, false /*proceed*/,
+                              false /*showed_interstitial*/);
     return;
   }
 
@@ -141,11 +140,8 @@ void SafeBrowsingUIManager::StartDisplayingBlockingPage(
         extension_manager->GetExtensionHostForRenderFrameHost(
             web_contents->GetMainFrame());
     if (extension_host) {
-      if (!resource.callback.is_null()) {
-        resource.callback_thread->PostTask(
-            FROM_HERE, base::BindOnce(resource.callback, false /* proceed */,
-                                      false /* showed_interstitial */));
-      }
+      resource.DispatchCallback(FROM_HERE, false /* proceed */,
+                                false /* showed_interstitial */);
       return;
     }
   }

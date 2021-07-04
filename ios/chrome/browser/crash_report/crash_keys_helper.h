@@ -5,7 +5,6 @@
 #ifndef IOS_CHROME_BROWSER_CRASH_REPORT_CRASH_KEYS_HELPER_H_
 #define IOS_CHROME_BROWSER_CRASH_REPORT_CRASH_KEYS_HELPER_H_
 
-#include <string>
 
 @class NSString;
 @class NSArray;
@@ -62,6 +61,12 @@ void SetCurrentHorizontalSizeClass(int horizontalSizeClass);
 // style. The values are from the UIKit UIUserInterfaceStyle enum (decimal
 // values from 0 to 2).
 void SetCurrentUserInterfaceStyle(int userInterfaceStyle);
+
+// Sets the number of connected scenes. Only reported if not 1.
+void SetConnectedScenesCount(int connectedScenes);
+
+// Sets the number of foreground scenes. Only reported if not 1.
+void SetForegroundScenesCount(int connectedScenes);
 
 // Sets a key in browser_state dictionary to store the count of regular tabs.
 void SetRegularTabCount(int tabCount);

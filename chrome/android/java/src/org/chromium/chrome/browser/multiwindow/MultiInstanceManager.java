@@ -31,7 +31,7 @@ import org.chromium.chrome.browser.app.tabmodel.TabModelOrchestrator;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.lifecycle.ConfigurationChangedObserver;
-import org.chromium.chrome.browser.lifecycle.Destroyable;
+import org.chromium.chrome.browser.lifecycle.DestroyObserver;
 import org.chromium.chrome.browser.lifecycle.NativeInitObserver;
 import org.chromium.chrome.browser.lifecycle.PauseResumeWithNativeObserver;
 import org.chromium.chrome.browser.lifecycle.RecreateObserver;
@@ -52,7 +52,7 @@ import java.util.List;
 public class MultiInstanceManager
         implements PauseResumeWithNativeObserver, RecreateObserver, ConfigurationChangedObserver,
                    NativeInitObserver, MultiWindowModeStateDispatcher.MultiWindowModeObserver,
-                   Destroyable, MenuOrKeyboardActionController.MenuOrKeyboardActionHandler {
+                   DestroyObserver, MenuOrKeyboardActionController.MenuOrKeyboardActionHandler {
     /**
      * Should be called when multi-instance mode is started.
      */
@@ -119,7 +119,7 @@ public class MultiInstanceManager
     }
 
     @Override
-    public void destroy() {
+    public void onDestroy() {
         mMultiWindowModeStateDispatcher.removeObserver(this);
         mMenuOrKeyboardActionController.unregisterMenuOrKeyboardActionHandler(this);
         DisplayManager displayManager =
@@ -194,11 +194,13 @@ public class MultiInstanceManager
         mDisplayListener = new DisplayListener() {
             @Override
             public void onDisplayAdded(int displayId) {
+                if (!isNormalDisplay(displayId)) return;
                 sActivityTypePendingMergeOnStartup = null;
             }
 
             @Override
             public void onDisplayRemoved(int displayId) {
+                if (!isNormalDisplay(displayId)) return;
                 if (displayId == mDisplayId) {
                     // If activity on removed display is in the foreground, do tab merge.
                     // Note that activity on removed display may be recreated because of the
@@ -221,7 +223,7 @@ public class MultiInstanceManager
 
             @Override
             public void onDisplayChanged(int displayId) {
-                if (displayId == mDisplayId) return;
+                if (displayId == mDisplayId || !isNormalDisplay(displayId)) return;
                 List<Integer> ids = sTestDisplayIds != null
                     ? sTestDisplayIds
                     : ApiCompatibilityUtils.getTargetableDisplayIds(mActivity);
@@ -231,6 +233,30 @@ public class MultiInstanceManager
             }
         };
         displayManager.registerDisplayListener(mDisplayListener, null);
+    }
+
+    /**
+     * Check if the given display is what Chrome can use for showing activity/tab.
+     * It should be either the default display, or secondary one such as external,
+     * wireless display.
+     * @param id ID of the display.
+     * @return {@code true} if the display is a normal one.
+     */
+    private boolean isNormalDisplay(int id) {
+        if (id == Display.DEFAULT_DISPLAY || sTestDisplayIds != null) return true;
+        Display display = getDisplayFromId(id);
+        return (display != null && (display.getFlags() & Display.FLAG_PRESENTATION) != 0);
+    }
+
+    private @Nullable Display getDisplayFromId(int id) {
+        DisplayManager displayManager =
+                (DisplayManager) mActivity.getSystemService(Context.DISPLAY_SERVICE);
+        if (displayManager == null) return null;
+        Display[] displays = displayManager.getDisplays();
+        for (Display display : displays) {
+            if (display.getDisplayId() == id) return display;
+        }
+        return null;
     }
 
     @Override
@@ -321,7 +347,11 @@ public class MultiInstanceManager
             Tab currentTab = tabModelSelector.getCurrentTab();
             if (currentTab != null) moveTabToOtherWindow(currentTab);
             return true;
+        } else if (id == org.chromium.chrome.R.id.new_window_menu_id) {
+            openNewWindow();
+            return true;
         }
+
         return false;
     }
 
@@ -422,6 +452,22 @@ public class MultiInstanceManager
         onMultiInstanceModeStarted();
         ReparentingTask.from(tab).begin(mActivity, intent,
                 mMultiWindowModeStateDispatcher.getOpenInOtherWindowActivityOptions(), null);
+        RecordUserAction.record("MobileMenuMoveToOtherWindow");
+    }
+
+    private void openNewWindow() {
+        assert mMultiWindowModeStateDispatcher.canEnterMultiWindowMode()
+                || mMultiWindowModeStateDispatcher.isInMultiWindowMode()
+                || mMultiWindowModeStateDispatcher.isInMultiDisplayMode();
+
+        Intent intent = mMultiWindowModeStateDispatcher.getOpenInOtherWindowIntent();
+        if (intent == null) return;
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        intent.addFlags(Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT);
+
+        onMultiInstanceModeStarted();
+        mActivity.startActivity(intent);
+        RecordUserAction.record("MobileMenuNewWindow");
     }
 
     /**

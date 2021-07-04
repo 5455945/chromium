@@ -19,7 +19,9 @@
 #include "components/arc/mojom/cast_receiver.mojom.h"
 #include "components/arc/mojom/cert_store.mojom.h"
 #include "components/arc/mojom/clipboard.mojom.h"
+#include "components/arc/mojom/compatibility_mode.mojom.h"
 #include "components/arc/mojom/crash_collector.mojom.h"
+#include "components/arc/mojom/dark_theme.mojom.h"
 #include "components/arc/mojom/disk_quota.mojom.h"
 #include "components/arc/mojom/enterprise_reporting.mojom.h"
 #include "components/arc/mojom/file_system.mojom.h"
@@ -30,8 +32,10 @@
 #include "components/arc/mojom/kiosk.mojom.h"
 #include "components/arc/mojom/lock_screen.mojom.h"
 #include "components/arc/mojom/media_session.mojom.h"
+#include "components/arc/mojom/memory.mojom.h"
 #include "components/arc/mojom/metrics.mojom.h"
 #include "components/arc/mojom/midis.mojom.h"
+#include "components/arc/mojom/nearby_share.mojom.h"
 #include "components/arc/mojom/net.mojom.h"
 #include "components/arc/mojom/notifications.mojom.h"
 #include "components/arc/mojom/obb_mounter.mojom.h"
@@ -110,9 +114,16 @@ void FakeArcBridgeHost::OnCertStoreInstanceReady(
 void FakeArcBridgeHost::OnClipboardInstanceReady(
     mojo::PendingRemote<mojom::ClipboardInstance> clipboard_remote) {}
 
+void FakeArcBridgeHost::OnCompatibilityModeInstanceReady(
+    mojo::PendingRemote<mojom::CompatibilityModeInstance>
+        compatibility_mode_remote) {}
+
 void FakeArcBridgeHost::OnCrashCollectorInstanceReady(
     mojo::PendingRemote<mojom::CrashCollectorInstance> crash_collector_remote) {
 }
+
+void FakeArcBridgeHost::OnDarkThemeInstanceReady(
+    mojo::PendingRemote<mojom::DarkThemeInstance> dark_theme_remote) {}
 
 void FakeArcBridgeHost::OnDigitalGoodsInstanceReady(
     mojo::PendingRemote<mojom::DigitalGoodsInstance> digital_goods_remote) {}
@@ -152,11 +163,17 @@ void FakeArcBridgeHost::OnLockScreenInstanceReady(
 void FakeArcBridgeHost::OnMediaSessionInstanceReady(
     mojo::PendingRemote<mojom::MediaSessionInstance> media_sesssion_remote) {}
 
+void FakeArcBridgeHost::OnMemoryInstanceReady(
+    mojo::PendingRemote<mojom::MemoryInstance> memory_remote) {}
+
 void FakeArcBridgeHost::OnMetricsInstanceReady(
     mojo::PendingRemote<mojom::MetricsInstance> metrics_remote) {}
 
 void FakeArcBridgeHost::OnMidisInstanceReady(
     mojo::PendingRemote<mojom::MidisInstance> midis_remote) {}
+
+void FakeArcBridgeHost::OnNearbyShareInstanceReady(
+    mojo::PendingRemote<mojom::NearbyShareInstance> nearby_share_remote) {}
 
 void FakeArcBridgeHost::OnNetInstanceReady(
     mojo::PendingRemote<mojom::NetInstance> net_remote) {}
@@ -241,5 +258,8 @@ void FakeArcBridgeHost::OnWakeLockInstanceReady(
 
 void FakeArcBridgeHost::OnWallpaperInstanceReady(
     mojo::PendingRemote<mojom::WallpaperInstance> wallpaper_remote) {}
+
+void FakeArcBridgeHost::OnWebApkInstanceReady(
+    mojo::PendingRemote<mojom::WebApkInstance> wallpaper_remote) {}
 
 }  // namespace arc

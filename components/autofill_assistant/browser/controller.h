@@ -12,7 +12,6 @@
 
 #include "base/callback_helpers.h"
 #include "base/macros.h"
-#include "base/optional.h"
 #include "components/autofill_assistant/browser/basic_interactions.h"
 #include "components/autofill_assistant/browser/bottom_sheet_state.h"
 #include "components/autofill_assistant/browser/client.h"
@@ -36,6 +35,7 @@
 #include "components/autofill_assistant/browser/web/web_controller.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace content {
 class RenderFrameHost;
@@ -152,7 +152,12 @@ class Controller : public ScriptExecutorDelegate,
       base::OnceCallback<void(const ClientStatus&)> end_action_callback,
       base::OnceCallback<void(const ClientStatus&)>
           view_inflation_finished_callback) override;
+  void SetPersistentGenericUi(
+      std::unique_ptr<GenericUserInterfaceProto> generic_ui,
+      base::OnceCallback<void(const ClientStatus&)>
+          view_inflation_finished_callback) override;
   void ClearGenericUi() override;
+  void ClearPersistentGenericUi() override;
   void SetBrowseModeInvisible(bool invisible) override;
   bool ShouldShowWarning() override;
   void SetShowFeedbackChip(bool show_feedback_chip) override;
@@ -193,10 +198,10 @@ class Controller : public ScriptExecutorDelegate,
   std::vector<Details> GetDetails() const override;
   const InfoBox* GetInfoBox() const override;
   int GetProgress() const override;
-  base::Optional<int> GetProgressActiveStep() const override;
+  absl::optional<int> GetProgressActiveStep() const override;
   bool GetProgressVisible() const override;
   bool GetProgressBarErrorState() const override;
-  base::Optional<ShowProgressBarProto::StepProgressBarConfiguration>
+  absl::optional<ShowProgressBarProto::StepProgressBarConfiguration>
   GetStepProgressBarConfiguration() const override;
   const std::vector<UserAction>& GetUserActions() const override;
   bool PerformUserActionWithContext(
@@ -218,17 +223,16 @@ class Controller : public ScriptExecutorDelegate,
   void OnTextLinkClicked(int link) override;
   void OnFormActionLinkClicked(int link) override;
   void SetDateTimeRangeStartDate(
-      const base::Optional<DateProto>& date) override;
+      const absl::optional<DateProto>& date) override;
   void SetDateTimeRangeStartTimeSlot(
-      const base::Optional<int>& timeslot_index) override;
-  void SetDateTimeRangeEndDate(const base::Optional<DateProto>& date) override;
+      const absl::optional<int>& timeslot_index) override;
+  void SetDateTimeRangeEndDate(const absl::optional<DateProto>& date) override;
   void SetDateTimeRangeEndTimeSlot(
-      const base::Optional<int>& timeslot_index) override;
+      const absl::optional<int>& timeslot_index) override;
   void SetAdditionalValue(const std::string& client_memory_key,
                           const ValueProto& value) override;
   void GetTouchableArea(std::vector<RectF>* area) const override;
   void GetRestrictedArea(std::vector<RectF>* area) const override;
-  void GetVisualViewport(RectF* visual_viewport) const override;
   void OnFatalError(const std::string& error_message,
                     bool show_feedback_chip,
                     Metrics::DropOutReason reason) override;
@@ -257,9 +261,11 @@ class Controller : public ScriptExecutorDelegate,
   bool ShouldPromptActionExpandSheet() const override;
   BasicInteractions* GetBasicInteractions() override;
   const GenericUserInterfaceProto* GetGenericUiProto() const override;
+  const GenericUserInterfaceProto* GetPersistentGenericUiProto() const override;
   bool ShouldShowOverlay() const override;
   void ShutdownIfNecessary() override;
   void OnKeyboardVisibilityChanged(bool visible) override;
+  void OnInputTextFocusChanged(bool is_text_focused) override;
 
  private:
   friend ControllerTest;
@@ -357,7 +363,8 @@ class Controller : public ScriptExecutorDelegate,
       content::NavigationHandle* navigation_handle) override;
   void DidFinishNavigation(
       content::NavigationHandle* navigation_handle) override;
-  void DocumentAvailableInMainFrame() override;
+  void DocumentAvailableInMainFrame(
+      content::RenderFrameHost* render_frame_host) override;
   void RenderProcessGone(base::TerminationStatus status) override;
   void OnWebContentsFocused(
       content::RenderWidgetHost* render_widget_host) override;
@@ -366,8 +373,7 @@ class Controller : public ScriptExecutorDelegate,
   void OnValueChanged(const std::string& identifier,
                       const ValueProto& new_value) override;
 
-  void OnTouchableAreaChanged(const RectF& visual_viewport,
-                              const std::vector<RectF>& touchable_areas,
+  void OnTouchableAreaChanged(const std::vector<RectF>& touchable_areas,
                               const std::vector<RectF>& restricted_areas);
 
   void SetOverlayColors(std::unique_ptr<OverlayColors> colors);
@@ -395,6 +401,8 @@ class Controller : public ScriptExecutorDelegate,
 
   bool StateNeedsUI(AutofillAssistantState state);
 
+  bool ShouldChipsBeVisible();
+  bool ShouldUpdateChipVisibility();
   void SetVisibilityAndUpdateUserActions();
 
   void MakeDetailsVisible(size_t details_index);
@@ -463,12 +471,12 @@ class Controller : public ScriptExecutorDelegate,
 
   // Current progress.
   int progress_ = 0;
-  base::Optional<int> progress_active_step_;
+  absl::optional<int> progress_active_step_;
 
   // Current visibility of the progress bar. It is initially visible.
   bool progress_visible_ = true;
   bool progress_bar_error_state_ = false;
-  base::Optional<ShowProgressBarProto::StepProgressBarConfiguration>
+  absl::optional<ShowProgressBarProto::StepProgressBarConfiguration>
       step_progress_bar_configuration_;
 
   // Current set of user actions. May be null, but never empty.
@@ -561,7 +569,7 @@ class Controller : public ScriptExecutorDelegate,
   // If set, the controller entered the STOPPED state but shutdown was delayed
   // until the browser has left the |script_url_.host()| for which the decision
   // was taken.
-  base::Optional<Metrics::DropOutReason> delayed_shutdown_reason_;
+  absl::optional<Metrics::DropOutReason> delayed_shutdown_reason_;
 
   EventHandler event_handler_;
   UserModel user_model_;
@@ -571,10 +579,14 @@ class Controller : public ScriptExecutorDelegate,
   std::vector<std::string> browse_domains_allowlist_;
   bool browse_mode_invisible_ = false;
   bool is_keyboard_showing_ = false;
+  bool is_focus_on_bottom_sheet_text_input_ = false;
   bool show_feedback_chip_on_graceful_shutdown_ = false;
+  bool are_chips_visible_ = true;
 
   // Only set during a ShowGenericUiAction.
   std::unique_ptr<GenericUserInterfaceProto> generic_user_interface_;
+
+  std::unique_ptr<GenericUserInterfaceProto> persistent_generic_user_interface_;
 
   base::WeakPtrFactory<Controller> weak_ptr_factory_{this};
 

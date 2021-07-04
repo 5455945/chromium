@@ -5,14 +5,10 @@
 #ifndef FUCHSIA_ENGINE_BROWSER_WEB_ENGINE_CONTENT_BROWSER_CLIENT_H_
 #define FUCHSIA_ENGINE_BROWSER_WEB_ENGINE_CONTENT_BROWSER_CLIENT_H_
 
-#include <lib/zx/channel.h>
-
-#include <fuchsia/web/cpp/fidl.h>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
 #include "content/public/browser/content_browser_client.h"
 #include "fuchsia/engine/browser/content_directory_loader_factory.h"
 #include "mojo/public/cpp/bindings/binder_map.h"
@@ -22,16 +18,18 @@ class WebEngineBrowserMainParts;
 
 class WebEngineContentBrowserClient : public content::ContentBrowserClient {
  public:
-  explicit WebEngineContentBrowserClient(
-      fidl::InterfaceRequest<fuchsia::web::Context> request);
+  WebEngineContentBrowserClient();
   ~WebEngineContentBrowserClient() final;
 
-  WebEngineBrowserMainParts* main_parts_for_test() const { return main_parts_; }
+  WebEngineContentBrowserClient(const WebEngineContentBrowserClient&) = delete;
+  WebEngineContentBrowserClient& operator=(
+      const WebEngineContentBrowserClient&) = delete;
 
   // ContentBrowserClient overrides.
   std::unique_ptr<content::BrowserMainParts> CreateBrowserMainParts(
       const content::MainFunctionParams& parameters) final;
-  content::DevToolsManagerDelegate* GetDevToolsManagerDelegate() final;
+  std::unique_ptr<content::DevToolsManagerDelegate>
+  CreateDevToolsManagerDelegate() final;
   std::string GetProduct() final;
   std::string GetUserAgent() final;
   void OverrideWebkitPrefs(content::WebContents* web_contents,
@@ -76,16 +74,14 @@ class WebEngineContentBrowserClient : public content::ContentBrowserClient {
           cert_verifier_creation_params) final;
   std::vector<url::Origin> GetOriginsRequiringDedicatedProcess() final;
 
- private:
-  fidl::InterfaceRequest<fuchsia::web::Context> request_;
+  WebEngineBrowserMainParts* main_parts_for_test() const { return main_parts_; }
 
+ private:
   const std::vector<std::string> cors_exempt_headers_;
   const bool allow_insecure_content_;
 
   // Owned by content::BrowserMainLoop.
   WebEngineBrowserMainParts* main_parts_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebEngineContentBrowserClient);
 };
 
 #endif  // FUCHSIA_ENGINE_BROWSER_WEB_ENGINE_CONTENT_BROWSER_CLIENT_H_

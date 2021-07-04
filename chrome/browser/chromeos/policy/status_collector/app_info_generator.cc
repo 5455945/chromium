@@ -5,6 +5,7 @@
 #include "chrome/browser/chromeos/policy/status_collector/app_info_generator.h"
 
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
+#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/web_app_provider_factory.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
@@ -19,12 +20,25 @@ namespace em = enterprise_management;
 
 namespace {
 
+bool IsPrimaryAndAffiliated(Profile* profile) {
+  user_manager::User* user =
+      chromeos::ProfileHelper::Get()->GetUserByProfile(profile);
+  bool is_primary = chromeos::ProfileHelper::Get()->IsPrimaryProfile(profile);
+  bool is_affiliated = user && user->IsAffiliated();
+  if (!is_primary || !is_affiliated) {
+    VLOG(1) << "The profile for the primary user is not associated with an "
+               "affiliated user.";
+  }
+  return is_primary && is_affiliated;
+}
+
 em::AppInfo::Status ExtractStatus(const apps::mojom::Readiness readiness) {
   switch (readiness) {
     case apps::mojom::Readiness::kReady:
       return em::AppInfo::Status::AppInfo_Status_STATUS_INSTALLED;
     case apps::mojom::Readiness::kRemoved:
     case apps::mojom::Readiness::kUninstalledByUser:
+    case apps::mojom::Readiness::kUninstalledByMigration:
       return em::AppInfo::Status::AppInfo_Status_STATUS_UNINSTALLED;
     case apps::mojom::Readiness::kDisabledByBlocklist:
     case apps::mojom::Readiness::kDisabledByPolicy:
@@ -49,11 +63,12 @@ em::AppInfo::AppType ExtractAppType(const apps::mojom::AppType app_type) {
     case apps::mojom::AppType::kExtension:
       return em::AppInfo::AppType::AppInfo_AppType_TYPE_EXTENSION;
     case apps::mojom::AppType::kWeb:
+    case apps::mojom::AppType::kSystemWeb:
       return em::AppInfo::AppType::AppInfo_AppType_TYPE_WEB;
     case apps::mojom::AppType::kBorealis:
       return em::AppInfo::AppType::AppInfo_AppType_TYPE_BOREALIS;
     case apps::mojom::AppType::kMacOs:
-    case apps::mojom::AppType::kLacros:
+    case apps::mojom::AppType::kStandaloneBrowser:
     case apps::mojom::AppType::kRemote:
     case apps::mojom::AppType::kUnknown:
       return em::AppInfo::AppType::AppInfo_AppType_TYPE_UNKNOWN;
@@ -75,10 +90,15 @@ AppInfoGenerator::AppInfoProvider::AppInfoProvider(Profile* profile)
 AppInfoGenerator::AppInfoProvider::~AppInfoProvider() = default;
 
 AppInfoGenerator::AppInfoGenerator(
+    ManagedSessionService* managed_session_service,
     base::TimeDelta max_stored_past_activity_interval,
     base::Clock* clock)
     : max_stored_past_activity_interval_(max_stored_past_activity_interval),
-      clock_(*clock) {}
+      clock_(*clock) {
+  if (managed_session_service) {
+    managed_session_observation_.Observe(managed_session_service);
+  }
+}
 
 AppInfoGenerator::AppInstances::AppInstances(const base::Time start_time_)
     : start_time(start_time_) {}
@@ -97,11 +117,11 @@ void AppInfoGenerator::RegisterProfilePrefs(PrefRegistrySimple* registry) {
 const AppInfoGenerator::Result AppInfoGenerator::Generate() const {
   if (!should_report_) {
     VLOG(1) << "App usage reporting is not enabled for this user.";
-    return base::nullopt;
+    return absl::nullopt;
   }
   if (!provider_) {
     VLOG(1) << "No affiliated user session. Returning empty app list.";
-    return base::nullopt;
+    return absl::nullopt;
   }
   auto activity_periods = provider_->activity_storage.GetActivityPeriods();
   auto activity_compare = [](const em::TimePeriod& time_period1,
@@ -150,7 +170,11 @@ void AppInfoGenerator::OnWillReport() {
   SetIdleDurationsToOpen();
 }
 
-void AppInfoGenerator::OnAffiliatedLogin(Profile* profile) {
+void AppInfoGenerator::OnLogin(Profile* profile) {
+  if (!IsPrimaryAndAffiliated(profile)) {
+    return;
+  }
+
   if (!apps::AppServiceProxyFactory::IsAppServiceAvailableForProfile(profile)) {
     VLOG(1) << "No apps available. Will not track usage.";
     return;
@@ -165,7 +189,11 @@ void AppInfoGenerator::OnAffiliatedLogin(Profile* profile) {
   }
 }
 
-void AppInfoGenerator::OnAffiliatedLogout(Profile* profile) {
+void AppInfoGenerator::OnLogout(Profile* profile) {
+  if (!IsPrimaryAndAffiliated(profile)) {
+    return;
+  }
+
   if (provider_) {
     if (should_report_) {
       provider_->app_service_proxy.InstanceRegistry().RemoveObserver(this);
@@ -233,27 +261,29 @@ void AppInfoGenerator::SetIdleDurationsToOpen() {
   provider_->app_service_proxy.InstanceRegistry().ForEachInstance(
       [this, start_time](const apps::InstanceUpdate& update) {
         if (update.State() & apps::InstanceState::kStarted) {
-          OpenUsageInterval(update.AppId(), update.Window(), start_time);
+          OpenUsageInterval(update.AppId(), update.InstanceKey(), start_time);
         }
       });
   provider_->app_service_proxy.InstanceRegistry().AddObserver(this);
 }
 
-void AppInfoGenerator::OpenUsageInterval(const std::string& app_id,
-                                         aura::Window* window,
-                                         const base::Time start_time) {
+void AppInfoGenerator::OpenUsageInterval(
+    const std::string& app_id,
+    const apps::Instance::InstanceKey& instance_key,
+    const base::Time start_time) {
   if (app_instances_by_id_.count(app_id) == 0) {
     app_instances_by_id_[app_id] = std::make_unique<AppInstances>(start_time);
   }
-  app_instances_by_id_[app_id]->running_instances.insert(window);
+  app_instances_by_id_[app_id]->running_instances.insert(instance_key);
 }
 
-void AppInfoGenerator::CloseUsageInterval(const std::string& app_id,
-                                          aura::Window* window,
-                                          const base::Time end_time) {
+void AppInfoGenerator::CloseUsageInterval(
+    const std::string& app_id,
+    const apps::Instance::InstanceKey& instance_key,
+    const base::Time end_time) {
   if (app_instances_by_id_.count(app_id)) {
     auto& app_instances = app_instances_by_id_[app_id];
-    app_instances->running_instances.erase(window);
+    app_instances->running_instances.erase(instance_key);
     if (app_instances->running_instances.empty()) {
       base::Time start_time = app_instances->start_time;
       provider_->activity_storage.AddActivityPeriod(start_time, end_time,
@@ -269,11 +299,11 @@ void AppInfoGenerator::OnInstanceUpdate(const apps::InstanceUpdate& update) {
   }
   apps::InstanceState state = update.State();
   const std::string& app_id = update.AppId();
-  aura::Window* window = update.Window();
+  auto instance_key = update.InstanceKey();
   if (state & apps::InstanceState::kStarted) {
-    OpenUsageInterval(app_id, window, update.LastUpdatedTime());
+    OpenUsageInterval(app_id, instance_key, update.LastUpdatedTime());
   } else if (state & apps::InstanceState::kDestroyed) {
-    CloseUsageInterval(app_id, window, update.LastUpdatedTime());
+    CloseUsageInterval(app_id, instance_key, update.LastUpdatedTime());
   }
 }
 

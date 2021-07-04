@@ -392,10 +392,21 @@ EVENT_TYPE(TCP_CONNECT)
 //     "address": <String of the network address>,
 //   }
 //
-// And the END event will contain the system error code if it failed:
+// The END event will contain one of the following:
+//
+// On success:
+//   {
+//     "local_address": <The local address, as a string>,
+//     "remote_address": <The remote address, as a string>,
+//   }
+//
+// On success, but unable to determine the connected address:
+//   {
+//     "get_address_net_error": <Net integer error code>,
+//   }
 //
 //   {
-//     "os_error": <Integer error code the operating system returned>,
+//     "net_error": <Net integer error code>,
 //   }
 EVENT_TYPE(TCP_CONNECT_ATTEMPT)
 
@@ -1240,6 +1251,13 @@ EVENT_TYPE(HTTP_TRANSACTION_READ_HEADERS)
 //     "headers": <The list of header:value pairs>,
 //   }
 EVENT_TYPE(HTTP_TRANSACTION_READ_RESPONSE_HEADERS)
+
+// This event is sent on receipt of a 103 Early Hints response headers.
+// The following parameters are attached:
+//   {
+//     "headers": <The list of header:value pairs>,
+//   }
+EVENT_TYPE(HTTP_TRANSACTION_READ_EARLY_HINTS_RESPONSE_HEADERS)
 
 // Measures the time to read the entity body from the server.
 EVENT_TYPE(HTTP_TRANSACTION_READ_BODY)
@@ -2293,6 +2311,12 @@ EVENT_TYPE(HTTP_STREAM_REQUEST_BOUND_TO_QUIC_SESSION)
 //   }
 EVENT_TYPE(QUIC_CHROMIUM_CLIENT_STREAM_SEND_REQUEST_HEADERS)
 
+// The stream has read a 103 Early Hints response headers.
+//   {
+//     "headers": <The list of header:value pairs>
+//   }
+EVENT_TYPE(QUIC_CHROMIUM_CLIENT_STREAM_READ_EARLY_HINTS_RESPONSE_HEADERS)
+
 // The stream has read the response headers.
 //   {
 //     "headers": <The list of header:value pairs>
@@ -2837,6 +2861,10 @@ EVENT_TYPE(SPECIFIC_NETWORK_SOON_TO_DISCONNECT)
 //                                       networks.>
 //   }
 EVENT_TYPE(SPECIFIC_NETWORK_MADE_DEFAULT)
+
+// This event is emitted whenever CertDatabase determines that the certificate
+// database has changed.
+EVENT_TYPE(CERTIFICATE_DATABASE_CHANGED)
 
 // ------------------------------------------------------------------------
 // Exponential back-off throttling events
@@ -3894,3 +3922,15 @@ EVENT_TYPE(TRUST_TOKEN_OPERATION_BEGIN_REDEMPTION)
 EVENT_TYPE(TRUST_TOKEN_OPERATION_FINALIZE_REDEMPTION)
 
 EVENT_TYPE(TRUST_TOKEN_OPERATION_BEGIN_SIGNING)
+
+// Temporarily added to for https://crbug.com/1186863. Logged at
+// net::URLRequestJob::NotifyHeadersComplete.
+EVENT_TYPE(URL_REQUEST_JOB_NOTIFY_HEADERS_COMPLETE_NEEDS_AUTH)
+
+// Temporarily added to for https://crbug.com/1186863. Logged at
+// net::URLRequestHttpJob::NotifyHeadersComplete.
+// The following parameters are attached:
+//   {
+//     "ready_to_restart_for_auth": <boolean>,
+//   }
+EVENT_TYPE(URL_REQUEST_HTTP_JOB_NOTIFY_HEADERS_COMPLETE)

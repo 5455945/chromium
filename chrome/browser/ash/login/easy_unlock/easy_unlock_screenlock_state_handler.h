@@ -8,7 +8,6 @@
 #include <string>
 
 #include "base/macros.h"
-#include "base/strings/string16.h"
 #include "chromeos/components/proximity_auth/screenlock_bridge.h"
 #include "chromeos/components/proximity_auth/screenlock_state.h"
 #include "components/account_id/account_id.h"
@@ -17,7 +16,7 @@ namespace proximity_auth {
 class ProximityAuthPrefManager;
 }  // namespace proximity_auth
 
-namespace chromeos {
+namespace ash {
 
 // Profile specific class responsible for updating screenlock UI for the user
 // associated with the profile when their Easy Unlock state changes.
@@ -88,11 +87,11 @@ class EasyUnlockScreenlockStateHandler
 
   // Updates icon's tooltip options.
   void UpdateTooltipOptions(
-      proximity_auth::ScreenlockBridge::UserPodCustomIconOptions* icon_options);
+      proximity_auth::ScreenlockBridge::UserPodCustomIconInfo* icon_info);
 
   // Gets the name to be used for the device. The name depends on the device
   // type (example values: Chromebook and Chromebox).
-  base::string16 GetDeviceName();
+  std::u16string GetDeviceName();
 
   // Updates the screenlock auth type if it has to be changed.
   void UpdateScreenlockAuthType();
@@ -112,6 +111,12 @@ class EasyUnlockScreenlockStateHandler
   DISALLOW_COPY_AND_ASSIGN(EasyUnlockScreenlockStateHandler);
 };
 
-}  // namespace chromeos
+}  // namespace ash
+
+// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
+// source migration is finished.
+namespace chromeos {
+using ::ash::EasyUnlockScreenlockStateHandler;
+}
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_EASY_UNLOCK_EASY_UNLOCK_SCREENLOCK_STATE_HANDLER_H_

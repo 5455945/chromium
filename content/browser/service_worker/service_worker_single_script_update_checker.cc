@@ -27,6 +27,8 @@
 #include "net/http/http_response_info.h"
 #include "services/network/public/cpp/net_adapters.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "services/network/public/mojom/early_hints.mojom.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "third_party/blink/public/common/loader/throttling_url_loader.h"
 #include "third_party/blink/public/common/loader/url_loader_throttle.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom.h"
@@ -178,9 +180,8 @@ ServiceWorkerSingleScriptUpdateChecker::ServiceWorkerSingleScriptUpdateChecker(
       network_client_receiver_.BindNewPipeAndPassRemote());
   network_loader_ = blink::ThrottlingURLLoader::CreateLoaderAndStart(
       network::SharedURLLoaderFactory::Create(loader_factory->Clone()),
-      std::move(throttles), MSG_ROUTING_NONE,
-      GlobalRequestID::MakeBrowserInitiated().request_id, options,
-      &resource_request, network_client_remote_.get(),
+      std::move(throttles), GlobalRequestID::MakeBrowserInitiated().request_id,
+      options, &resource_request, network_client_remote_.get(),
       kUpdateCheckTrafficAnnotation, base::ThreadTaskRunnerHandle::Get());
   DCHECK_EQ(network_loader_state_,
             ServiceWorkerUpdatedScriptLoader::LoaderState::kNotStarted);
@@ -192,6 +193,9 @@ ServiceWorkerSingleScriptUpdateChecker::
     ~ServiceWorkerSingleScriptUpdateChecker() = default;
 
 // URLLoaderClient override ----------------------------------------------------
+
+void ServiceWorkerSingleScriptUpdateChecker::OnReceiveEarlyHints(
+    network::mojom::EarlyHintsPtr early_hints) {}
 
 void ServiceWorkerSingleScriptUpdateChecker::OnReceiveResponse(
     network::mojom::URLResponseHeadPtr response_head) {

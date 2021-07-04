@@ -114,11 +114,11 @@ cr.define('settings_about_page', function() {
       fireStatusChanged(UpdateStatus.DISABLED_BY_ADMIN);
       assertEquals(null, icon.src);
       assertEquals('cr20:domain', icon.icon);
-      assertEquals(0, statusMessageEl.textContent.trim().length);
+      assertNotEquals(previousMessageText, statusMessageEl.textContent);
 
       fireStatusChanged(UpdateStatus.FAILED);
       assertEquals(null, icon.src);
-      assertEquals('cr:error', icon.icon);
+      assertEquals('cr:error-outline', icon.icon);
       assertEquals(0, statusMessageEl.textContent.trim().length);
 
       fireStatusChanged(UpdateStatus.DISABLED);
@@ -220,7 +220,8 @@ cr.define('settings_about_page', function() {
       assertAllHidden();
 
       fireStatusChanged(UpdateStatus.DISABLED_BY_ADMIN);
-      assertAllHidden();
+      assertFalse(checkForUpdates.hidden);
+      assertTrue(relaunch.hidden);
     });
 
     /**
@@ -350,8 +351,8 @@ cr.define('settings_about_page', function() {
 
       Polymer.dom.flush();
 
-      const deepLinkElement =
-          page.$$('#releaseNotesOffline').$$('cr-icon-button');
+      const deepLinkElement = page.$$('#releaseNotesOffline')
+                                  .shadowRoot.querySelector('cr-icon-button');
       await test_util.waitAfterNextRender(deepLinkElement);
       assertEquals(
           deepLinkElement, getDeepActiveElement(),
@@ -455,7 +456,32 @@ cr.define('settings_about_page', function() {
       await checkHasEndOfLife(false);
     });
 
+    test('managed detailed build info page', async () => {
+      loadTimeData.overrideValues({
+        isManaged: true,
+      });
+
+      // Despite there being a valid end of life, the information is not
+      // shown if the user is managed.
+      aboutBrowserProxy.setEndOfLifeInfo({
+        hasEndOfLife: true,
+        aboutPageEndOfLifeMessage: 'message',
+      });
+      await initNewPage();
+      page.scroller = page.offsetParent;
+      assertTrue(!!page.$['detailed-build-info-trigger']);
+      page.$['detailed-build-info-trigger'].click();
+      const buildInfoPage = page.$$('settings-detailed-build-info');
+      assertTrue(!!buildInfoPage);
+      assertTrue(!!buildInfoPage.$['endOfLifeSectionContainer']);
+      assertTrue(buildInfoPage.$['endOfLifeSectionContainer'].hidden);
+    });
+
     test('detailed build info page', async () => {
+      loadTimeData.overrideValues({
+        isManaged: false,
+      });
+
       async function checkEndOfLifeSection() {
         await aboutBrowserProxy.whenCalled('getEndOfLifeInfo');
         const buildInfoPage = page.$$('settings-detailed-build-info');
@@ -523,11 +549,21 @@ cr.define('settings_about_page', function() {
 
       Polymer.dom.flush();
 
-      const deepLinkElement = page.$$('#diagnostics').$$('cr-icon-button');
+      const deepLinkElement =
+          page.$$('#diagnostics').shadowRoot.querySelector('cr-icon-button');
       await test_util.waitAfterNextRender(deepLinkElement);
       assertEquals(
           deepLinkElement, getDeepActiveElement(),
           'Diagnostics should be focused for settingId=1707.');
+    });
+
+    // Regression test for crbug.com/1220294
+    test('Update button shown initially', async () => {
+      aboutBrowserProxy.blockRefreshUpdateStatus();
+      await initNewPage();
+
+      const {checkForUpdates} = page.$;
+      assertFalse(checkForUpdates.hidden);
     });
   });
 
@@ -811,7 +847,8 @@ cr.define('settings_about_page', function() {
 
       Polymer.dom.flush();
 
-      const deepLinkElement = page.$$('#reportIssue').$$('cr-icon-button');
+      const deepLinkElement =
+          page.$$('#reportIssue').shadowRoot.querySelector('cr-icon-button');
       await test_util.waitAfterNextRender(deepLinkElement);
       assertEquals(
           deepLinkElement, getDeepActiveElement(),

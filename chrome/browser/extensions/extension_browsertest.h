@@ -33,6 +33,7 @@
 #include "extensions/common/feature_switch.h"
 #include "extensions/common/features/feature_channel.h"
 #include "extensions/common/manifest.h"
+#include "extensions/common/mojom/manifest.mojom-shared.h"
 
 class Profile;
 
@@ -57,40 +58,6 @@ class ExtensionBrowserTest : virtual public InProcessBrowserTest {
   };
 
  protected:
-  // Flags used to configure how the tests are run.
-  enum Flags {
-    kFlagNone = 0,
-
-    // Allow the extension to run in incognito mode.
-    kFlagEnableIncognito = 1 << 0,
-
-    // Allow file access for the extension.
-    kFlagEnableFileAccess = 1 << 1,
-
-    // Don't fail when the loaded manifest has warnings (should only be used
-    // when testing deprecated features).
-    kFlagIgnoreManifestWarnings = 1 << 2,
-
-    // Allow older manifest versions (typically these can't be loaded - we allow
-    // them for testing).
-    kFlagAllowOldManifestVersions = 1 << 3,
-
-    // Pass the FOR_LOGIN_SCREEN flag when loading the extension. This flag is
-    // usually provided for force-installed extension on the login screen.
-    kFlagLoadForLoginScreen = 1 << 4,
-
-    // Load the provided extension as Service Worker based extension.
-    kFlagRunAsServiceWorkerBasedExtension = 1 << 5,
-
-    // Don't wait for extension renderers to fully load.
-    kFlagDontWaitForExtensionRenderers = 1 << 6,
-
-    // Always maintain this as the next flag value. The flags in
-    // ExtensionApiTest depend on this to avoid having overlapping
-    // values with these flags.
-    kFlagNextValue = 1 << 7,
-  };
-
   struct LoadOptions {
     // Allows the extension to run in incognito mode.
     bool allow_in_incognito = false;
@@ -102,15 +69,6 @@ class ExtensionBrowserTest : virtual public InProcessBrowserTest {
     // when testing deprecated features).
     bool ignore_manifest_warnings = false;
 
-    // Requires a modern manifest version. Extensions with older manifest
-    // versions won't load if this is true.
-    bool require_modern_manifest_version = true;
-
-    // Passes the FOR_LOGIN_SCREEN flag and sets the location to EXTERNAL_POLICY
-    // when loading the extension. This flag is usually provided for
-    // force-installed extension on the login screen.
-    bool load_for_login_screen = false;
-
     // Loads the provided extension as Service Worker based extension.
     bool load_as_service_worker = false;
 
@@ -119,6 +77,13 @@ class ExtensionBrowserTest : virtual public InProcessBrowserTest {
 
     // An optional install param.
     const char* install_param = nullptr;
+
+    // If this is a Service Worker-based extension, wait for the
+    // Service Worker's registration to be stored before returning.
+    bool wait_for_registration_stored = false;
+
+    // Loads the extension with location COMPONENT.
+    bool load_as_component = false;
   };
 
   ExtensionBrowserTest();
@@ -170,13 +135,6 @@ class ExtensionBrowserTest : virtual public InProcessBrowserTest {
 
   const Extension* LoadExtension(const base::FilePath& path,
                                  const LoadOptions& options);
-
-  // Same as above, but sets the installation parameter to the extension
-  // preferences.
-  const Extension* LoadExtensionWithInstallParam(
-      const base::FilePath& path,
-      int flags,
-      const std::string& install_param);
 
   // Converts an extension from |path| to a Service Worker based extension and
   // returns true on success.
@@ -233,11 +191,11 @@ class ExtensionBrowserTest : virtual public InProcessBrowserTest {
         std::string(), path, INSTALL_UI_TYPE_NONE, expected_change);
   }
 
-  // Same as above, but an install source other than Manifest::INTERNAL can be
-  // specified.
+  // Same as above, but an install source other than
+  // mojom::ManifestLocation::kInternal can be specified.
   const Extension* InstallExtension(const base::FilePath& path,
                                     int expected_change,
-                                    Manifest::Location install_source) {
+                                    mojom::ManifestLocation install_source) {
     return InstallOrUpdateExtension(std::string(),
                                     path,
                                     INSTALL_UI_TYPE_NONE,
@@ -253,7 +211,8 @@ class ExtensionBrowserTest : virtual public InProcessBrowserTest {
       int expected_change) {
     return InstallOrUpdateExtension(
         std::string(), file_path, INSTALL_UI_TYPE_NONE, expected_change,
-        Manifest::INTERNAL, browser(), Extension::NO_FLAGS, false, true);
+        mojom::ManifestLocation::kInternal, browser(), Extension::NO_FLAGS,
+        false, true);
   }
 
   // Installs extension as if it came from the Chrome Webstore.
@@ -285,7 +244,7 @@ class ExtensionBrowserTest : virtual public InProcessBrowserTest {
   const Extension* InstallExtensionWithSourceAndFlags(
       const base::FilePath& path,
       int expected_change,
-      Manifest::Location install_source,
+      mojom::ManifestLocation install_source,
       Extension::InitFromValueFlags creation_flags) {
     return InstallOrUpdateExtension(std::string(), path, INSTALL_UI_TYPE_NONE,
                                     expected_change, install_source, browser(),
@@ -414,17 +373,18 @@ class ExtensionBrowserTest : virtual public InProcessBrowserTest {
       int expected_change,
       Browser* browser,
       Extension::InitFromValueFlags creation_flags);
-  const Extension* InstallOrUpdateExtension(const std::string& id,
-                                            const base::FilePath& path,
-                                            InstallUIType ui_type,
-                                            int expected_change,
-                                            Manifest::Location install_source);
   const Extension* InstallOrUpdateExtension(
       const std::string& id,
       const base::FilePath& path,
       InstallUIType ui_type,
       int expected_change,
-      Manifest::Location install_source,
+      mojom::ManifestLocation install_source);
+  const Extension* InstallOrUpdateExtension(
+      const std::string& id,
+      const base::FilePath& path,
+      InstallUIType ui_type,
+      int expected_change,
+      mojom::ManifestLocation install_source,
       Browser* browser,
       Extension::InitFromValueFlags creation_flags,
       bool wait_for_idle,

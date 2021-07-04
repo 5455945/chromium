@@ -10,9 +10,9 @@
 
 #include "base/bind.h"
 #include "base/callback_helpers.h"
+#include "base/containers/cxx20_erase.h"
 #include "base/guid.h"
 #include "base/logging.h"
-#include "base/stl_util.h"
 #include "components/media_router/browser/media_router_metrics.h"
 #include "components/media_router/browser/media_routes_observer.h"
 #include "components/media_router/browser/media_sinks_observer.h"
@@ -309,7 +309,7 @@ void MediaRouterAndroid::OnRouteTerminated(const MediaRoute::Id& route_id) {
 
 void MediaRouterAndroid::OnRouteClosed(
     const MediaRoute::Id& route_id,
-    const base::Optional<std::string>& error) {
+    const absl::optional<std::string>& error) {
   RemoveRoute(route_id);
   // TODO(crbug.com/882690): When the sending context is destroyed, tell MRP to
   // clean up the connection.

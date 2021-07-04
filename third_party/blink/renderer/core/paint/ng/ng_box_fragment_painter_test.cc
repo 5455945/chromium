@@ -124,11 +124,12 @@ TEST_P(NGBoxFragmentPainterTest, AddUrlRects) {
   // PaintPreviewTracker records URLs via the GraphicsContext under certain
   // flagsets when painting. This is the simplest way to check if URLs were
   // annotated.
-  Document::PaintPreviewScope paint_preview(GetDocument());
+  Document::PaintPreviewScope paint_preview(GetDocument(),
+                                            Document::kPaintingPreview);
   UpdateAllLifecyclePhasesForTest();
 
   paint_preview::PaintPreviewTracker tracker(base::UnguessableToken::Create(),
-                                             base::nullopt, true);
+                                             absl::nullopt, true);
   PaintRecordBuilder builder;
   builder.Context().SetPaintPreviewTracker(&tracker);
 
@@ -144,6 +145,59 @@ TEST_P(NGBoxFragmentPainterTest, AddUrlRects) {
   ASSERT_EQ(links.size(), 2U);
   EXPECT_EQ(links[0].spec(), "https://www.chromium.org/");
   EXPECT_EQ(links[1].spec(), "https://www.wikipedia.org/");
+}
+
+TEST_P(NGBoxFragmentPainterTest, SelectionTablePainting) {
+  // This test passes if it does not timeout
+  // Repro case of crbug.com/1182106.
+  SetBodyInnerHTML(R"HTML(
+    <!doctype html>
+    <table id="t1"><tbody id="b1"><tr id="r1"><td id="c1">
+    <table id="t2"><tbody id="b2"><tr id="r2"><td id="c2">
+    <table id="t3"><tbody id="b3"><tr id="r3"><td id="c3">
+    <table id="t4"><tbody id="b4"><tr id="r4"><td id="c4">
+    <table id="t5"><tbody id="b5"><tr id="r5"><td id="c5">
+      <table id="target">
+        <tbody id="b6">
+          <tr id="r6"> <!-- 8388608 steps-->
+            <td id="c6.1">
+              <table id="t7">
+                <tbody id="b7">
+                  <tr id="r7">
+                    <td><img src="./resources/blue-100.png" style="width:100px">Drag me</td>
+                  </tr>
+                </tbody>
+              </table>
+            </td>
+            <td id="c6.2">
+              <table id="t8" style="float:left;width:100%">
+                <tbody id="b8">
+                  <tr id="r8">
+                    <td id="c8">Float</td>
+                  </tr>
+                </tbody>
+              </table>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </td></tr></tbody></table>
+    </td></tr></tbody></table>
+    </td></tr></tbody></table>
+    </td></tr></tbody></table>
+    </td></tr></tbody></table>
+  )HTML");
+  // Drag image will only paint if there is selection.
+  GetDocument().View()->GetFrame().Selection().SelectAll();
+  GetDocument().GetLayoutView()->CommitPendingSelection();
+  UpdateAllLifecyclePhasesForTest();
+  PaintRecordBuilder builder;
+  GetDocument().View()->PaintContentsOutsideOfLifecycle(
+      builder.Context(),
+      kGlobalPaintSelectionDragImageOnly | kGlobalPaintFlattenCompositingLayers,
+      CullRect::Infinite());
+
+  auto record = builder.EndRecording();
 }
 
 }  // namespace blink

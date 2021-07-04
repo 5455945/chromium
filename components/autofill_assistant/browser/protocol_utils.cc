@@ -4,15 +4,19 @@
 
 #include "components/autofill_assistant/browser/protocol_utils.h"
 
+#include <map>
 #include <utility>
 
 #include "base/feature_list.h"
 #include "base/logging.h"
 #include "components/autofill_assistant/browser/actions/action_delegate_util.h"
-#include "components/autofill_assistant/browser/actions/click_action.h"
+#include "components/autofill_assistant/browser/actions/check_element_tag_action.h"
+#include "components/autofill_assistant/browser/actions/check_option_element_action.h"
+#include "components/autofill_assistant/browser/actions/clear_persistent_ui_action.h"
 #include "components/autofill_assistant/browser/actions/collect_user_data_action.h"
 #include "components/autofill_assistant/browser/actions/configure_bottom_sheet_action.h"
 #include "components/autofill_assistant/browser/actions/configure_ui_state_action.h"
+#include "components/autofill_assistant/browser/actions/dispatch_js_event_action.h"
 #include "components/autofill_assistant/browser/actions/expect_navigation_action.h"
 #include "components/autofill_assistant/browser/actions/generate_password_for_form_field_action.h"
 #include "components/autofill_assistant/browser/actions/get_element_status_action.h"
@@ -27,6 +31,7 @@
 #include "components/autofill_assistant/browser/actions/select_option_action.h"
 #include "components/autofill_assistant/browser/actions/set_attribute_action.h"
 #include "components/autofill_assistant/browser/actions/set_form_field_value_action.h"
+#include "components/autofill_assistant/browser/actions/set_persistent_ui_action.h"
 #include "components/autofill_assistant/browser/actions/show_cast_action.h"
 #include "components/autofill_assistant/browser/actions/show_details_action.h"
 #include "components/autofill_assistant/browser/actions/show_form_action.h"
@@ -111,7 +116,7 @@ std::string ProtocolUtils::CreateInitialScriptActionsRequest(
     const std::string& script_payload,
     const ClientContextProto& client_context,
     const ScriptParameters& script_parameters,
-    const base::Optional<ScriptStoreConfig>& script_store_config) {
+    const absl::optional<ScriptStoreConfig>& script_store_config) {
   ScriptActionRequestProto request_proto;
   InitialScriptActionsRequestProto* initial_request_proto =
       request_proto.mutable_initial_request();
@@ -168,8 +173,6 @@ std::string ProtocolUtils::CreateNextScriptActionsRequest(
 std::unique_ptr<Action> ProtocolUtils::CreateAction(ActionDelegate* delegate,
                                                     const ActionProto& action) {
   switch (action.action_info_case()) {
-    case ActionProto::ActionInfoCase::kClick:
-      return std::make_unique<ClickAction>(delegate, action);
     case ActionProto::ActionInfoCase::kTell:
       return std::make_unique<TellAction>(delegate, action);
     case ActionProto::ActionInfoCase::kShowCast:
@@ -233,7 +236,7 @@ std::unique_ptr<Action> ProtocolUtils::CreateAction(ActionDelegate* delegate,
       return PerformOnSingleElementAction::WithClientId(
           delegate, action, action.scroll_into_view().client_id(),
           base::BindOnce(&WebController::ScrollIntoView,
-                         delegate->GetWebController()->GetWeakPtr()));
+                         delegate->GetWebController()->GetWeakPtr(), true));
     case ActionProto::ActionInfoCase::kWaitForDocumentToBecomeInteractive:
       return PerformOnSingleElementAction::WithOptionalClientIdTimed(
           delegate, action,
@@ -257,18 +260,20 @@ std::unique_ptr<Action> ProtocolUtils::CreateAction(ActionDelegate* delegate,
     case ActionProto::ActionInfoCase::kSendClickEvent:
       return PerformOnSingleElementAction::WithClientId(
           delegate, action, action.send_click_event().client_id(),
-          base::BindOnce(&ActionDelegate::ClickOrTapElement,
-                         delegate->GetWeakPtr(), ClickType::CLICK));
+          base::BindOnce(&WebController::ClickOrTapElement,
+                         delegate->GetWebController()->GetWeakPtr(),
+                         ClickType::CLICK));
     case ActionProto::ActionInfoCase::kSendTapEvent:
       return PerformOnSingleElementAction::WithClientId(
           delegate, action, action.send_tap_event().client_id(),
-          base::BindOnce(&ActionDelegate::ClickOrTapElement,
-                         delegate->GetWeakPtr(), ClickType::TAP));
+          base::BindOnce(&WebController::ClickOrTapElement,
+                         delegate->GetWebController()->GetWeakPtr(),
+                         ClickType::TAP));
     case ActionProto::ActionInfoCase::kJsClick:
       return PerformOnSingleElementAction::WithClientId(
           delegate, action, action.js_click().client_id(),
-          base::BindOnce(&ActionDelegate::ClickOrTapElement,
-                         delegate->GetWeakPtr(), ClickType::JAVASCRIPT));
+          base::BindOnce(&WebController::JsClickElement,
+                         delegate->GetWebController()->GetWeakPtr()));
     case ActionProto::ActionInfoCase::kSendKeystrokeEvents:
       return PerformOnSingleElementAction::WithClientId(
           delegate, action, action.send_keystroke_events().client_id(),
@@ -290,10 +295,12 @@ std::unique_ptr<Action> ProtocolUtils::CreateAction(ActionDelegate* delegate,
       }
       return PerformOnSingleElementAction::WithClientId(
           delegate, action, action.set_element_attribute().client_id(),
-          base::BindOnce(&action_delegate_util::PerformWithTextValue, delegate,
-                         action.set_element_attribute().value(),
-                         base::BindOnce(&ActionDelegate::SetAttribute,
-                                        delegate->GetWeakPtr(), attributes)));
+          base::BindOnce(
+              &action_delegate_util::PerformWithTextValue, delegate,
+              action.set_element_attribute().value(),
+              base::BindOnce(&WebController::SetAttribute,
+                             delegate->GetWebController()->GetWeakPtr(),
+                             attributes)));
     }
     case ActionProto::ActionInfoCase::kSelectFieldValue:
       return PerformOnSingleElementAction::WithClientId(
@@ -309,8 +316,8 @@ std::unique_ptr<Action> ProtocolUtils::CreateAction(ActionDelegate* delegate,
       return PerformOnSingleElementAction::WithClientIdTimed(
           delegate, action,
           action.wait_for_element_to_become_stable().client_id(),
-          base::BindOnce(&ActionDelegate::WaitUntilElementIsStable,
-                         delegate->GetWeakPtr(),
+          base::BindOnce(&WebController::WaitUntilElementIsStable,
+                         delegate->GetWebController()->GetWeakPtr(),
                          action.wait_for_element_to_become_stable()
                              .stable_check_max_rounds(),
                          base::TimeDelta::FromMilliseconds(
@@ -323,6 +330,30 @@ std::unique_ptr<Action> ProtocolUtils::CreateAction(ActionDelegate* delegate,
                          delegate->GetWebController()->GetWeakPtr()));
     case ActionProto::ActionInfoCase::kReleaseElements:
       return std::make_unique<ReleaseElementsAction>(delegate, action);
+    case ActionProto::ActionInfoCase::kDispatchJsEvent:
+      return std::make_unique<DispatchJsEventAction>(delegate, action);
+    case ActionProto::ActionInfoCase::kSendKeyEvent:
+      return PerformOnSingleElementAction::WithClientId(
+          delegate, action, action.send_key_event().client_id(),
+          base::BindOnce(&WebController::SendKeyEvent,
+                         delegate->GetWebController()->GetWeakPtr(),
+                         action.send_key_event().key_event()));
+    case ActionProto::ActionInfoCase::kSelectOptionElement:
+      return PerformOnSingleElementAction::WithClientId(
+          delegate, action, action.select_option_element().select_id(),
+          base::BindOnce(
+              &action_delegate_util::PerformWithElementValue, delegate,
+              action.select_option_element().option_id(),
+              base::BindOnce(&WebController::SelectOptionElement,
+                             delegate->GetWebController()->GetWeakPtr())));
+    case ActionProto::ActionInfoCase::kCheckElementTag:
+      return std::make_unique<CheckElementTagAction>(delegate, action);
+    case ActionProto::ActionInfoCase::kCheckOptionElement:
+      return std::make_unique<CheckOptionElementAction>(delegate, action);
+    case ActionProto::ActionInfoCase::kSetPersistentUi:
+      return std::make_unique<SetPersistentUiAction>(delegate, action);
+    case ActionProto::ActionInfoCase::kClearPersistentUi:
+      return std::make_unique<ClearPersistentUiAction>(delegate, action);
     case ActionProto::ActionInfoCase::ACTION_INFO_NOT_SET: {
       VLOG(1) << "Encountered action with ACTION_INFO_NOT_SET";
       return std::make_unique<UnsupportedAction>(delegate, action);
@@ -384,7 +415,7 @@ std::string ProtocolUtils::CreateGetTriggerScriptsRequest(
   GetTriggerScriptsRequestProto request_proto;
   request_proto.set_url(url.spec());
   *request_proto.mutable_client_context() = client_context;
-  *request_proto.mutable_debug_script_parameters() =
+  *request_proto.mutable_script_parameters() =
       script_parameters.ToProto(/* only_trigger_script_allowlisted = */ true);
 
   std::string serialized_request_proto;
@@ -399,11 +430,13 @@ bool ProtocolUtils::ParseTriggerScripts(
     std::vector<std::unique_ptr<TriggerScript>>* trigger_scripts,
     std::vector<std::string>* additional_allowed_domains,
     int* trigger_condition_check_interval_ms,
-    base::Optional<int>* timeout_ms) {
+    absl::optional<int>* timeout_ms,
+    absl::optional<std::unique_ptr<ScriptParameters>>* script_parameters) {
   DCHECK(trigger_scripts);
   DCHECK(additional_allowed_domains);
   DCHECK(trigger_condition_check_interval_ms);
   DCHECK(timeout_ms);
+  DCHECK(script_parameters);
 
   GetTriggerScriptsResponseProto response_proto;
   if (!response_proto.ParseFromString(response)) {
@@ -437,6 +470,14 @@ bool ProtocolUtils::ParseTriggerScripts(
       response_proto.trigger_condition_check_interval_ms();
   if (response_proto.has_timeout_ms()) {
     *timeout_ms = response_proto.timeout_ms();
+  }
+
+  if (!response_proto.script_parameters().empty()) {
+    std::map<std::string, std::string> parameters;
+    for (const auto& param : response_proto.script_parameters()) {
+      parameters.emplace(param.name(), param.value());
+    }
+    *script_parameters = std::make_unique<ScriptParameters>(parameters);
   }
   return true;
 }

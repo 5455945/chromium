@@ -8,7 +8,6 @@
 #include <memory>
 #include <utility>
 
-#include "ash/public/cpp/ash_features.h"
 #include "ash/public/cpp/ash_pref_names.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/session/session_controller_impl.h"
@@ -16,8 +15,10 @@
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/ash_color_provider.h"
 #include "ash/system/tray/tray_popup_utils.h"
+#include "base/bind.h"
+#include "base/cxx17_backports.h"
 #include "base/i18n/rtl.h"
-#include "base/stl_util.h"
+#include "components/live_caption/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/vector_icons/vector_icons.h"
 #include "media/base/media_switches.h"
@@ -25,12 +26,14 @@
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/image/image_skia_operations.h"
 #include "ui/gfx/paint_vector_icon.h"
+#include "ui/gfx/vector_icon_utils.h"
 #include "ui/views/animation/flood_fill_ink_drop_ripple.h"
 #include "ui/views/animation/ink_drop_highlight.h"
 #include "ui/views/animation/ink_drop_impl.h"
 #include "ui/views/animation/ink_drop_mask.h"
 #include "ui/views/background.h"
 #include "ui/views/controls/button/image_button_factory.h"
+#include "ui/views/controls/focus_ring.h"
 #include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/layout/box_layout.h"
@@ -85,25 +88,10 @@ class UnifiedVolumeViewButton : public T {
 
   ~UnifiedVolumeViewButton() override = default;
 
-  std::unique_ptr<views::InkDrop> CreateInkDrop() override {
-    return TrayPopupUtils::CreateInkDrop(this);
-  }
-
-  std::unique_ptr<views::InkDropRipple> CreateInkDropRipple() const override {
-    return TrayPopupUtils::CreateInkDropRipple(
-        TrayPopupInkDropStyle::FILL_BOUNDS, this,
-        T::GetInkDropCenterBasedOnLastEvent());
-  }
-
-  std::unique_ptr<views::InkDropHighlight> CreateInkDropHighlight()
-      const override {
-    return TrayPopupUtils::CreateInkDropHighlight(this);
-  }
-
   void OnThemeChanged() override {
     T::OnThemeChanged();
     auto* color_provider = AshColorProvider::Get();
-    T::focus_ring()->SetColor(color_provider->GetControlsLayerColor(
+    views::FocusRing::Get(this)->SetColor(color_provider->GetControlsLayerColor(
         AshColorProvider::ControlsLayerType::kFocusRingColor));
     T::background()->SetNativeControlColor(GetBackgroundColor());
   }
@@ -257,12 +245,13 @@ void UnifiedVolumeView::Update(bool by_user) {
   slider()->SetRenderingStyle(
       is_muted ? views::Slider::RenderingStyle::kMinimalStyle
                : views::Slider::RenderingStyle::kDefaultStyle);
+  slider()->SetEnabled(!CrasAudioHandler::Get()->IsOutputMutedByPolicy());
 
   // The button should be gray when muted and colored otherwise.
   button()->SetToggled(!is_muted);
   button()->SetVectorIcon(is_muted ? kUnifiedMenuVolumeMuteIcon
                                    : GetVolumeIconForLevel(level));
-  base::string16 state_tooltip_text = l10n_util::GetStringUTF16(
+  std::u16string state_tooltip_text = l10n_util::GetStringUTF16(
       is_muted ? IDS_ASH_STATUS_TRAY_VOLUME_STATE_MUTED
                : IDS_ASH_STATUS_TRAY_VOLUME_STATE_ON);
   button()->SetTooltipText(l10n_util::GetStringFUTF16(
@@ -273,14 +262,14 @@ void UnifiedVolumeView::Update(bool by_user) {
       base::FeatureList::IsEnabled(media::kLiveCaptionSystemWideOnChromeOS));
   live_caption_button_->SetToggled(
       Shell::Get()->session_controller()->GetActivePrefService()->GetBoolean(
-          prefs::kLiveCaptionEnabled));
+          ::prefs::kLiveCaptionEnabled));
 
   // Slider's value is in finer granularity than audio volume level(0.01),
   // there will be a small discrepancy between slider's value and volume level
   // on audio side. To avoid the jittering in slider UI, use the slider's
   // current value.
-  if (std::abs(level - slider()->GetValue()) <
-      kAudioSliderIgnoreUpdateThreshold) {
+  if (level != 1.0 && std::abs(level - slider()->GetValue()) <
+                          kAudioSliderIgnoreUpdateThreshold) {
     level = slider()->GetValue();
   }
   // Note: even if the value does not change, we still need to call this
@@ -316,8 +305,8 @@ void UnifiedVolumeView::ChildVisibilityChanged(views::View* child) {
 void UnifiedVolumeView::OnLiveCaptionButtonPressed() {
   PrefService* prefs =
       Shell::Get()->session_controller()->GetActivePrefService();
-  bool enabled = !prefs->GetBoolean(prefs::kLiveCaptionEnabled);
-  prefs->SetBoolean(prefs::kLiveCaptionEnabled, enabled);
+  bool enabled = !prefs->GetBoolean(::prefs::kLiveCaptionEnabled);
+  prefs->SetBoolean(::prefs::kLiveCaptionEnabled, enabled);
   live_caption_button_->SetToggled(enabled);
 }
 

@@ -15,7 +15,6 @@
 #include "base/containers/queue.h"
 #include "base/i18n/i18n_constants.h"
 #include "base/i18n/icu_string_conversions.h"
-#include "base/json/json_reader.h"
 #include "base/process/process_handle.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -42,8 +41,6 @@
 #include "content/browser/url_loader_factory_params_helper.h"
 #include "content/browser/web_package/signed_exchange_envelope.h"
 #include "content/browser/web_package/signed_exchange_error.h"
-#include "content/common/navigation_params.h"
-#include "content/common/navigation_params.mojom.h"
 #include "content/common/web_package/signed_exchange_utils.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -88,6 +85,7 @@
 #include "services/network/public/mojom/client_security_state.mojom-shared.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "third_party/blink/public/common/loader/referrer_utils.h"
+#include "third_party/blink/public/mojom/navigation/navigation_params.mojom.h"
 #include "third_party/blink/public/platform/resource_request_blocked_reason.h"
 #include "third_party/boringssl/src/include/openssl/ssl.h"
 #include "url/third_party/mozilla/url_parse.h"
@@ -149,7 +147,7 @@ Network::CookieSourceScheme BuildCookieSourceScheme(
       return Network::CookieSourceSchemeEnum::Secure;
   }
 }
-base::Optional<Network::CookieSameSite> BuildCookieSameSite(
+absl::optional<Network::CookieSameSite> BuildCookieSameSite(
     net::CookieSameSite same_site) {
   switch (same_site) {
     case net::CookieSameSite::STRICT_MODE:
@@ -159,7 +157,7 @@ base::Optional<Network::CookieSameSite> BuildCookieSameSite(
     case net::CookieSameSite::NO_RESTRICTION:
       return Network::CookieSameSiteEnum::None;
     case net::CookieSameSite::UNSPECIFIED:
-      return base::nullopt;
+      return absl::nullopt;
   }
 }
 }  // namespace
@@ -185,7 +183,7 @@ std::unique_ptr<Network::Cookie> BuildCookie(
           .SetSourcePort(cookie.SourcePort())
           .Build();
 
-  base::Optional<Network::CookieSourceScheme> maybe_same_site =
+  absl::optional<Network::CookieSourceScheme> maybe_same_site =
       BuildCookieSameSite(cookie.SameSite());
   if (maybe_same_site) {
     devtools_cookie->SetSameSite(*maybe_same_site);
@@ -883,6 +881,19 @@ BuildProtocolAssociatedCookies(const net::CookieAccessResultList& net_list) {
   return protocol_list;
 }
 
+using SourceTypeEnum = net::SourceStream::SourceType;
+namespace ContentEncodingEnum = protocol::Network::ContentEncodingEnum;
+absl::optional<SourceTypeEnum> SourceTypeFromProtocol(
+    const protocol::Network::ContentEncoding& encoding) {
+  if (ContentEncodingEnum::Gzip == encoding)
+    return SourceTypeEnum::TYPE_GZIP;
+  if (ContentEncodingEnum::Br == encoding)
+    return SourceTypeEnum::TYPE_BROTLI;
+  if (ContentEncodingEnum::Deflate == encoding)
+    return SourceTypeEnum::TYPE_DEFLATE;
+  return absl::nullopt;
+}
+
 }  // namespace
 
 class BackgroundSyncRestorer {
@@ -1193,7 +1204,7 @@ std::vector<NetworkHandler*> NetworkHandler::ForAgentHost(
 }
 
 void NetworkHandler::Wire(UberDispatcher* dispatcher) {
-  frontend_.reset(new Network::Frontend(dispatcher->channel()));
+  frontend_ = std::make_unique<Network::Frontend>(dispatcher->channel());
   Network::Dispatcher::wire(dispatcher, this);
 }
 
@@ -1225,11 +1236,31 @@ Response NetworkHandler::Disable() {
   url_loader_interceptor_.reset();
   SetNetworkConditions(nullptr);
   extra_headers_.clear();
+  ClearAcceptedEncodingsOverride();
   return Response::FallThrough();
 }
 
 Response NetworkHandler::SetCacheDisabled(bool cache_disabled) {
   cache_disabled_ = cache_disabled;
+  return Response::FallThrough();
+}
+
+Response NetworkHandler::SetAcceptedEncodings(
+    std::unique_ptr<Array<Network::ContentEncoding>> encodings) {
+  std::set<net::SourceStream::SourceType> accepted_stream_types;
+  for (auto encoding : *encodings) {
+    auto type = SourceTypeFromProtocol(encoding);
+    if (!type)
+      return Response::InvalidParams("Unknown encoding type: " + encoding);
+    accepted_stream_types.insert(type.value());
+  }
+  accepted_stream_types_ = std::move(accepted_stream_types);
+
+  return Response::FallThrough();
+}
+
+Response NetworkHandler::ClearAcceptedEncodingsOverride() {
+  accepted_stream_types_ = absl::nullopt;
   return Response::FallThrough();
 }
 
@@ -1262,7 +1293,7 @@ void NetworkHandler::ClearBrowserCache(
     return;
   }
   content::BrowsingDataRemover* remover =
-      content::BrowserContext::GetBrowsingDataRemover(browser_context_);
+      browser_context_->GetBrowsingDataRemover();
   remover->RemoveAndReply(
       base::Time(), base::Time::Max(),
       content::BrowsingDataRemover::DATA_TYPE_CACHE,
@@ -1723,8 +1754,6 @@ String blockedReason(blink::ResourceRequestBlockedReason reason) {
       return protocol::Network::BlockedReasonEnum::ContentType;
     case blink::ResourceRequestBlockedReason::kOther:
       return protocol::Network::BlockedReasonEnum::Other;
-    case blink::ResourceRequestBlockedReason::kCollapsedByClient:
-      return protocol::Network::BlockedReasonEnum::CollapsedByClient;
     case blink::ResourceRequestBlockedReason::kCoepFrameResourceNeedsCoepHeader:
       return protocol::Network::BlockedReasonEnum::
           CoepFrameResourceNeedsCoepHeader;
@@ -1776,8 +1805,16 @@ Maybe<String> GetBlockedReasonFor(
   if (status.error_code != net::ERR_BLOCKED_BY_CLIENT &&
       status.error_code != net::ERR_BLOCKED_BY_RESPONSE)
     return Maybe<String>();
-  return blockedReason(static_cast<blink::ResourceRequestBlockedReason>(
-      status.extended_error_code));
+
+  if (status.extended_error_code <=
+      static_cast<int>(blink::ResourceRequestBlockedReason::kMax)) {
+    return blockedReason(static_cast<blink::ResourceRequestBlockedReason>(
+        status.extended_error_code));
+  }
+
+  // TODO(karandeepb): Embedder would know how to interpret the
+  // `status.extended_error_code` in this case. For now just return Other.
+  return {protocol::Network::BlockedReasonEnum::Other};
 }
 
 String GetTrustTokenOperationType(
@@ -1830,12 +1867,12 @@ void NetworkHandler::NavigationRequestWillBeSent(
     return;
 
   net::HttpRequestHeaders headers;
-  headers.AddHeadersFromString(nav_request.begin_params()->headers);
+  headers.AddHeadersFromString(nav_request.begin_params().headers);
   std::unique_ptr<DictionaryValue> headers_dict(DictionaryValue::create());
   for (net::HttpRequestHeaders::Iterator it(headers); it.GetNext();)
     headers_dict->setString(it.name(), it.value());
 
-  const mojom::CommonNavigationParams& common_params =
+  const blink::mojom::CommonNavigationParams& common_params =
       nav_request.common_params();
   GURL referrer = common_params.referrer->url;
   // This is normally added down the stack, so we have to fake it here.
@@ -1843,7 +1880,7 @@ void NetworkHandler::NavigationRequestWillBeSent(
     headers_dict->setString(net::HttpRequestHeaders::kReferer, referrer.spec());
 
   std::unique_ptr<Network::Response> redirect_response;
-  const mojom::CommitNavigationParams& commit_params =
+  const blink::mojom::CommitNavigationParams& commit_params =
       nav_request.commit_params();
   if (!commit_params.redirect_response.empty()) {
     redirect_response = BuildResponse(commit_params.redirects.back(),
@@ -1879,8 +1916,8 @@ void NetworkHandler::NavigationRequestWillBeSent(
   request->SetMixedContentType(Security::MixedContentTypeEnum::None);
 
   std::unique_ptr<Network::Initiator> initiator;
-  const base::Optional<base::Value>& initiator_optional =
-      nav_request.begin_params()->devtools_initiator;
+  const absl::optional<base::Value>& initiator_optional =
+      nav_request.begin_params().devtools_initiator;
   if (initiator_optional.has_value()) {
     initiator = protocol::ValueTypeConverter<Network::Initiator>::FromValue(
         *toProtocolValue(&initiator_optional.value(), 1000));
@@ -1896,12 +1933,20 @@ void NetworkHandler::NavigationRequestWillBeSent(
   std::string frame_token =
       nav_request.frame_tree_node()->devtools_frame_token().ToString();
 
-  const mojom::BeginNavigationParams* begin_params = nav_request.begin_params();
-  if (begin_params->trust_token_params) {
+  const blink::mojom::BeginNavigationParams& begin_params =
+      nav_request.begin_params();
+  if (begin_params.trust_token_params) {
     request->SetTrustTokenParams(
-        BuildTrustTokenParams(*begin_params->trust_token_params));
+        BuildTrustTokenParams(*begin_params.trust_token_params));
   }
 
+  if (host_) {
+    RenderFrameHostImpl* root_host = host_->GetOutermostMainFrame();
+    WebExposedIsolationInfo web_exposed_isolation_info =
+        root_host->GetSiteInstance()->GetWebExposedIsolationInfo();
+    request->SetIsSameSite(
+        host_->ComputeSiteForCookies().IsFirstParty(common_params.url));
+  }
   frontend_->RequestWillBeSent(
       id, id, url_without_fragment, std::move(request), current_ticks,
       current_wall_time, std::move(initiator), std::move(redirect_response),
@@ -1914,7 +1959,7 @@ void NetworkHandler::RequestSent(
     const std::string& loader_id,
     const network::ResourceRequest& request,
     const char* initiator_type,
-    const base::Optional<GURL>& initiator_url,
+    const absl::optional<GURL>& initiator_url,
     const std::string& initiator_devtools_request_id,
     base::TimeTicks timestamp) {
   if (!enabled_)
@@ -2039,14 +2084,6 @@ String BuildCorsError(network::mojom::CorsError cors_error) {
       return protocol::Network::CorsErrorEnum::InsecurePrivateNetwork;
   }
 }
-
-std::unique_ptr<protocol::Network::CorsErrorStatus> BuildCorsErrorStatus(
-    network::CorsErrorStatus status) {
-  return protocol::Network::CorsErrorStatus::Create()
-      .SetCorsError(BuildCorsError(status.cors_error))
-      .SetFailedParameter(status.failed_parameter)
-      .Build();
-}
 }  // namespace
 
 void NetworkHandler::ResponseReceived(
@@ -2094,12 +2131,12 @@ void NetworkHandler::LoadingComplete(
 }
 
 void NetworkHandler::OnSignedExchangeReceived(
-    base::Optional<const base::UnguessableToken> devtools_navigation_token,
+    absl::optional<const base::UnguessableToken> devtools_navigation_token,
     const GURL& outer_request_url,
     const network::mojom::URLResponseHead& outer_response,
-    const base::Optional<SignedExchangeEnvelope>& envelope,
+    const absl::optional<SignedExchangeEnvelope>& envelope,
     const scoped_refptr<net::X509Certificate>& certificate,
-    const base::Optional<net::SSLInfo>& ssl_info,
+    const absl::optional<net::SSLInfo>& ssl_info,
     const std::vector<SignedExchangeError>& errors) {
   if (!enabled_)
     return;
@@ -2245,7 +2282,7 @@ void NetworkHandler::ContinueInterceptedRequest(
     body_offset = header_size;
   }
 
-  base::Optional<net::Error> error;
+  absl::optional<net::Error> error;
   if (error_reason.isJust()) {
     bool ok;
     error = NetErrorFromString(error_reason.fromJust(), &ok);
@@ -2414,24 +2451,35 @@ NetworkHandler::CreateRequestFromResourceRequest(
 }
 
 bool NetworkHandler::MaybeCreateProxyForInterception(
-    RenderProcessHost* rph,
+    int process_id,
+    StoragePartition* storage_partition,
     const base::UnguessableToken& frame_token,
     bool is_navigation,
     bool is_download,
     network::mojom::URLLoaderFactoryOverride* intercepting_factory) {
   return url_loader_interceptor_ &&
          url_loader_interceptor_->CreateProxyForInterception(
-             rph, frame_token, is_navigation, is_download,
-             intercepting_factory);
+             process_id, storage_partition, frame_token, is_navigation,
+             is_download, intercepting_factory);
 }
 
-void NetworkHandler::ApplyOverrides(net::HttpRequestHeaders* headers,
-                                    bool* skip_service_worker,
-                                    bool* disable_cache) {
+void NetworkHandler::ApplyOverrides(
+    net::HttpRequestHeaders* headers,
+    bool* skip_service_worker,
+    bool* disable_cache,
+    absl::optional<std::vector<net::SourceStream::SourceType>>*
+        accepted_stream_types) {
   for (auto& entry : extra_headers_)
     headers->SetHeader(entry.first, entry.second);
   *skip_service_worker |= bypass_service_worker_;
   *disable_cache |= cache_disabled_;
+  if (!accepted_stream_types_)
+    return;
+  if (!*accepted_stream_types)
+    *accepted_stream_types = std::vector<net::SourceStream::SourceType>();
+  (*accepted_stream_types)
+      ->insert((*accepted_stream_types)->end(), accepted_stream_types_->begin(),
+               accepted_stream_types_->end());
 }
 
 void NetworkHandler::RequestIntercepted(
@@ -2510,6 +2558,9 @@ makeCrossOriginEmbedderPolicyValue(
   switch (value) {
     case network::mojom::CrossOriginEmbedderPolicyValue::kNone:
       return protocol::Network::CrossOriginEmbedderPolicyValueEnum::None;
+    case network::mojom::CrossOriginEmbedderPolicyValue::kCredentialless:
+      return protocol::Network::CrossOriginEmbedderPolicyValueEnum::
+          Credentialless;
     case network::mojom::CrossOriginEmbedderPolicyValue::kRequireCorp:
       return protocol::Network::CrossOriginEmbedderPolicyValueEnum::RequireCorp;
   }
@@ -2589,7 +2640,7 @@ void NetworkHandler::OnResponseReceivedExtraInfo(
     const std::string& devtools_request_id,
     const net::CookieAndLineAccessResultList& response_cookie_list,
     const std::vector<network::mojom::HttpRawHeaderPairPtr>& response_headers,
-    const base::Optional<std::string>& response_headers_text,
+    const absl::optional<std::string>& response_headers_text,
     network::mojom::IPAddressSpace resource_address_space) {
   if (!enabled_)
     return;
@@ -2737,8 +2788,7 @@ void NetworkHandler::LoadNetworkResource(
     auto loader = DevToolsNetworkResourceLoader::Create(
         std::move(url_loader_factory), std::move(gurl),
         frame->GetLastCommittedOrigin(), frame->ComputeSiteForCookies(),
-        caching, include_credentials, frame->GetRoutingID(),
-        std::move(complete_callback));
+        caching, include_credentials, std::move(complete_callback));
     loaders_.emplace(std::move(loader), std::move(callback));
     return;
   }
@@ -2754,7 +2804,7 @@ void NetworkHandler::LoadNetworkResource(
       auto loader = DevToolsNetworkResourceLoader::Create(
           std::move(url_loader_factory), std::move(gurl),
           std::move(info.origin), std::move(info.site_for_cookies), caching,
-          include_credentials, MSG_ROUTING_NONE, std::move(complete_callback));
+          include_credentials, std::move(complete_callback));
       loaders_.emplace(std::move(loader), std::move(callback));
       return;
     }
@@ -2824,17 +2874,70 @@ void NetworkHandler::OnTrustTokenOperationDone(
       result.issued_token_count);
 }
 
+void NetworkHandler::OnSubresourceWebBundleMetadata(
+    const std::string& devtools_request_id,
+    const std::vector<GURL>& urls) {
+  if (!enabled_)
+    return;
+
+  auto new_urls = std::make_unique<protocol::Array<protocol::String>>();
+  for (const auto& url : urls) {
+    new_urls->push_back(url.spec());
+  }
+  frontend()->SubresourceWebBundleMetadataReceived(devtools_request_id,
+                                                   std::move(new_urls));
+}
+
+void NetworkHandler::OnSubresourceWebBundleMetadataError(
+    const std::string& devtools_request_id,
+    const std::string& error_message) {
+  if (!enabled_)
+    return;
+
+  frontend()->SubresourceWebBundleMetadataError(devtools_request_id,
+                                                error_message);
+}
+
+void NetworkHandler::OnSubresourceWebBundleInnerResponse(
+    const std::string& inner_request_devtools_id,
+    const GURL& url,
+    const absl::optional<std::string>& bundle_request_devtools_id) {
+  if (!enabled_)
+    return;
+
+  frontend()->SubresourceWebBundleInnerResponseParsed(
+      inner_request_devtools_id, url.spec(),
+      bundle_request_devtools_id.has_value()
+          ? Maybe<std::string>(*bundle_request_devtools_id)
+          : Maybe<std::string>());
+}
+
+void NetworkHandler::OnSubresourceWebBundleInnerResponseError(
+    const std::string& inner_request_devtools_id,
+    const GURL& url,
+    const std::string& error_message,
+    const absl::optional<std::string>& bundle_request_devtools_id) {
+  if (!enabled_)
+    return;
+
+  frontend()->SubresourceWebBundleInnerResponseError(
+      inner_request_devtools_id, url.spec(), error_message,
+      bundle_request_devtools_id.has_value()
+          ? Maybe<std::string>(*bundle_request_devtools_id)
+          : Maybe<std::string>());
+}
+
 String NetworkHandler::BuildPrivateNetworkRequestPolicy(
     network::mojom::PrivateNetworkRequestPolicy policy) {
   switch (policy) {
     case network::mojom::PrivateNetworkRequestPolicy::kAllow:
       return protocol::Network::PrivateNetworkRequestPolicyEnum::Allow;
-    case network::mojom::PrivateNetworkRequestPolicy::
-        kBlockFromInsecureToMorePrivate:
+    case network::mojom::PrivateNetworkRequestPolicy::kBlock:
+      // TODO(https://crbug.com/1141824): Fix this.
       return protocol::Network::PrivateNetworkRequestPolicyEnum::
           BlockFromInsecureToMorePrivate;
-    case network::mojom::PrivateNetworkRequestPolicy::
-        kWarnFromInsecureToMorePrivate:
+    case network::mojom::PrivateNetworkRequestPolicy::kWarn:
+      // TODO(https://crbug.com/1141824): Fix this.
       return protocol::Network::PrivateNetworkRequestPolicyEnum::
           WarnFromInsecureToMorePrivate;
   }
@@ -2865,6 +2968,14 @@ NetworkHandler::MaybeBuildClientSecurityState(
           state->private_network_request_policy))
       .SetInitiatorIPAddressSpace(BuildIpAddressSpace(state->ip_address_space))
       .SetInitiatorIsSecureContext(state->is_web_secure_context)
+      .Build();
+}
+
+std::unique_ptr<protocol::Network::CorsErrorStatus>
+NetworkHandler::BuildCorsErrorStatus(const network::CorsErrorStatus& status) {
+  return protocol::Network::CorsErrorStatus::Create()
+      .SetCorsError(BuildCorsError(status.cors_error))
+      .SetFailedParameter(status.failed_parameter)
       .Build();
 }
 

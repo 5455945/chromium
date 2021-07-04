@@ -54,6 +54,9 @@ const int kDefaultDownloadExpiredTimeInDays = 90;
 // Default time for an overwritten download to be removed from the history.
 const int kDefaultOverwrittenDownloadExpiredTimeInDays = 90;
 
+// Default buffer size in bytes to write to the download file.
+const int kDefaultDownloadFileBufferSize = 4096;
+
 #if defined(OS_ANDROID)
 // Default maximum length of a downloaded file name on Android.
 const int kDefaultMaxFileNameLengthOnAndroid = 127;
@@ -270,17 +273,22 @@ std::unique_ptr<network::ResourceRequest> CreateResourceRequest(
   request->request_initiator = params->initiator();
   request->trusted_params = network::ResourceRequest::TrustedParams();
 
-  // Treat downloads like top-level frame navigations to be consistent with
-  // cookie behavior. Also, since web-initiated downloads bypass the disk cache,
-  // sites can't use download timing information to tell if a cross-site URL has
-  // been visited before.
-  url::Origin origin = url::Origin::Create(params->url());
-  request->trusted_params->isolation_info = net::IsolationInfo::Create(
-      net::IsolationInfo::RequestType::kMainFrame, origin, origin,
-      net::SiteForCookies::FromOrigin(origin));
+  if (params->isolation_info().has_value()) {
+    request->trusted_params->isolation_info = params->isolation_info().value();
+    request->site_for_cookies = params->isolation_info()->site_for_cookies();
+  } else {
+    // Treat downloads like top-level frame navigations to be consistent with
+    // cookie behavior. Also, since web-initiated downloads bypass the disk
+    // cache, sites can't use download timing information to tell if a
+    // cross-site URL has been visited before.
+    url::Origin origin = url::Origin::Create(params->url());
+    request->trusted_params->isolation_info = net::IsolationInfo::Create(
+        net::IsolationInfo::RequestType::kMainFrame, origin, origin,
+        net::SiteForCookies::FromOrigin(origin));
+    request->site_for_cookies = net::SiteForCookies::FromUrl(params->url());
+  }
 
   request->do_not_prompt_for_login = params->do_not_prompt_for_login();
-  request->site_for_cookies = net::SiteForCookies::FromUrl(params->url());
   request->referrer = params->referrer();
   request->referrer_policy = params->referrer_policy();
   request->is_main_frame = true;
@@ -443,13 +451,13 @@ DownloadDBEntry CreateDownloadDBEntryFromItem(const DownloadItemImpl& item) {
 }
 
 std::unique_ptr<DownloadEntry> CreateDownloadEntryFromDownloadDBEntry(
-    base::Optional<DownloadDBEntry> entry) {
+    absl::optional<DownloadDBEntry> entry) {
   if (!entry || !entry->download_info)
     return nullptr;
 
-  base::Optional<InProgressInfo> in_progress_info =
+  absl::optional<InProgressInfo> in_progress_info =
       entry->download_info->in_progress_info;
-  base::Optional<UkmInfo> ukm_info = entry->download_info->ukm_info;
+  absl::optional<UkmInfo> ukm_info = entry->download_info->ukm_info;
   if (!ukm_info || !in_progress_info)
     return nullptr;
 
@@ -648,6 +656,12 @@ base::TimeDelta GetOverwrittenDownloadDeleteTime() {
       kOverwrittenDownloadDeleteTimeFinchKey,
       kDefaultOverwrittenDownloadExpiredTimeInDays);
   return base::TimeDelta::FromDays(expired_days);
+}
+
+int GetDownloadFileBufferSize() {
+  return base::GetFieldTrialParamByFeatureAsInt(
+      features::kAllowFileBufferSizeControl, kDownloadFileBufferSizeFinchKey,
+      kDefaultDownloadFileBufferSize);
 }
 
 }  // namespace download

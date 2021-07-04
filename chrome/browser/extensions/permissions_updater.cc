@@ -18,6 +18,7 @@
 #include "chrome/browser/extensions/api/permissions/permissions_api_helpers.h"
 #include "chrome/browser/extensions/extension_management.h"
 #include "chrome/browser/extensions/extension_system_factory.h"
+#include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/extensions/scripting_permissions_modifier.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/api/permissions.h"
@@ -41,6 +42,7 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_messages.h"
 #include "extensions/common/manifest_handlers/permissions_parser.h"
+#include "extensions/common/mojom/permission_set.mojom.h"
 #include "extensions/common/mojom/renderer.mojom.h"
 #include "extensions/common/permissions/permission_set.h"
 #include "extensions/common/permissions/permissions_data.h"
@@ -123,6 +125,19 @@ class PermissionsUpdaterShutdownNotifierFactory
   DISALLOW_COPY_AND_ASSIGN(PermissionsUpdaterShutdownNotifierFactory);
 };
 
+void SetCorsOriginAccessListForAllRelatedProfiles(
+    content::BrowserContext* browser_context,
+    const Extension& extension,
+    base::OnceClosure closure) {
+  // Non-tab-specific extension permissions are shared across profiles (even for
+  // split-mode extensions), so we update all profiles the extension is enabled
+  // for.
+  util::SetCorsOriginAccessListForExtension(
+      util::GetAllRelatedProfiles(Profile::FromBrowserContext(browser_context),
+                                  extension),
+      extension, std::move(closure));
+}
+
 }  // namespace
 
 // A helper class to asynchronously dispatch the event to notify policy host
@@ -186,9 +201,8 @@ void PermissionsUpdater::NetworkPermissionsUpdateHelper::UpdatePermissions(
 
   // After an asynchronous call below, the helper will call
   // NotifyPermissionsUpdated if the profile is still valid.
-  util::SetCorsOriginAccessListForExtension(
+  SetCorsOriginAccessListForAllRelatedProfiles(
       browser_context, *extension,
-      content::BrowserContext::TargetBrowserContexts::kAllRelatedContexts,
       base::BindOnce(&NetworkPermissionsUpdateHelper::OnOriginAccessUpdated,
                      helper->weak_factory_.GetWeakPtr()));
 }
@@ -214,10 +228,8 @@ void PermissionsUpdater::NetworkPermissionsUpdateHelper::
                      helper->weak_factory_.GetWeakPtr()));
 
   for (const auto& extension : extensions) {
-    util::SetCorsOriginAccessListForExtension(
-        browser_context, *extension,
-        content::BrowserContext::TargetBrowserContexts::kAllRelatedContexts,
-        barrier_closure);
+    SetCorsOriginAccessListForAllRelatedProfiles(browser_context, *extension,
+                                                 barrier_closure);
   }
 }
 
@@ -621,32 +633,32 @@ void PermissionsUpdater::NotifyPermissionsUpdated(
   UpdatedExtensionPermissionsInfo info =
       UpdatedExtensionPermissionsInfo(extension.get(), *changed, reason);
   content::NotificationService::current()->Notify(
-      extensions::NOTIFICATION_EXTENSION_PERMISSIONS_UPDATED,
+      NOTIFICATION_EXTENSION_PERMISSIONS_UPDATED,
       content::Source<Profile>(profile),
       content::Details<UpdatedExtensionPermissionsInfo>(&info));
 
-  ExtensionMsg_UpdatePermissions_Params params;
-  params.extension_id = extension->id();
-  params.active_permissions = ExtensionMsg_PermissionSetStruct(
-      extension->permissions_data()->active_permissions());
-  params.withheld_permissions = ExtensionMsg_PermissionSetStruct(
-      extension->permissions_data()->withheld_permissions());
-  params.uses_default_policy_host_restrictions =
-      extension->permissions_data()->UsesDefaultPolicyHostRestrictions();
-  if (!params.uses_default_policy_host_restrictions) {
-    params.policy_blocked_hosts =
-        extension->permissions_data()->policy_blocked_hosts().Clone();
-    params.policy_allowed_hosts =
-        extension->permissions_data()->policy_allowed_hosts().Clone();
-  }
-
   // Send the new permissions to the renderers.
-  for (RenderProcessHost::iterator i(RenderProcessHost::AllHostsIterator());
-       !i.IsAtEnd(); i.Advance()) {
-    RenderProcessHost* host = i.GetCurrentValue();
-    if (profile->IsSameOrParent(
+  for (RenderProcessHost::iterator host_iterator(
+           RenderProcessHost::AllHostsIterator());
+       !host_iterator.IsAtEnd(); host_iterator.Advance()) {
+    RenderProcessHost* host = host_iterator.GetCurrentValue();
+    if (host->IsInitializedAndNotDead() &&
+        profile->IsSameOrParent(
             Profile::FromBrowserContext(host->GetBrowserContext()))) {
-      host->Send(new ExtensionMsg_UpdatePermissions(params));
+      mojom::Renderer* renderer =
+          RendererStartupHelperFactory::GetForBrowserContext(
+              host->GetBrowserContext())
+              ->GetRenderer(host);
+      if (renderer) {
+        const PermissionsData* permissions_data = extension->permissions_data();
+        renderer->UpdatePermissions(
+            extension->id(),
+            std::move(*permissions_data->active_permissions().Clone()),
+            std::move(*permissions_data->withheld_permissions().Clone()),
+            permissions_data->policy_blocked_hosts(),
+            permissions_data->policy_allowed_hosts(),
+            permissions_data->UsesDefaultPolicyHostRestrictions());
+      }
     }
   }
 
@@ -659,8 +671,9 @@ void PermissionsUpdater::NotifyPermissionsUpdated(
     std::unique_ptr<api::permissions::Permissions> permissions =
         PackPermissionSet(*changed);
     value->Append(permissions->ToValue());
-    auto event = std::make_unique<Event>(histogram_value, event_name,
-                                         std::move(value), browser_context);
+    auto event =
+        std::make_unique<Event>(histogram_value, event_name,
+                                std::move(*value).TakeList(), browser_context);
     event_router->DispatchEventToExtension(extension->id(), std::move(event));
   }
 
@@ -688,7 +701,8 @@ void PermissionsUpdater::NotifyDefaultPolicyHostRestrictionsUpdated(
               ->GetRenderer(host);
       if (renderer) {
         renderer->UpdateDefaultPolicyHostRestrictions(
-            default_runtime_blocked_hosts, default_runtime_allowed_hosts);
+            default_runtime_blocked_hosts.Clone(),
+            default_runtime_allowed_hosts.Clone());
       }
     }
   }

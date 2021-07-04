@@ -213,13 +213,13 @@ IN_PROC_BROWSER_TEST_F(TabActivityWatcherTestWithBackgroundLogDisabled,
   test_clock.Advance(base::TimeDelta::FromMinutes(1));
 
   // A background tab is scored successfully.
-  base::Optional<float> background_score =
+  absl::optional<float> background_score =
       TabActivityWatcher::GetInstance()->CalculateReactivationScore(
           browser()->tab_strip_model()->GetWebContentsAt(1));
   EXPECT_TRUE(background_score.has_value());
 
   // Foreground tabs are not modeled by the tab ranker and should not be scored.
-  base::Optional<float> foreground_score =
+  absl::optional<float> foreground_score =
       TabActivityWatcher::GetInstance()->CalculateReactivationScore(
           browser()->tab_strip_model()->GetWebContentsAt(0));
   EXPECT_FALSE(foreground_score.has_value());
@@ -368,7 +368,7 @@ IN_PROC_BROWSER_TEST_F(TabActivityWatcherTest, TabDrag) {
   content::WebContents* dragged_contents =
       browser()->tab_strip_model()->GetWebContentsAt(1);
   std::unique_ptr<content::WebContents> owned_dragged_contents =
-      browser()->tab_strip_model()->DetachWebContentsAt(1);
+      browser()->tab_strip_model()->DetachWebContentsAtForInsertion(1);
   dragged_contents->WasHidden();
   // The other tab in the browser is now foregrounded.
   ExpectNewForegroundedEntry(kBrowserStartUrl);

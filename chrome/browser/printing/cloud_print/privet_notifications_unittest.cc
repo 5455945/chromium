@@ -10,7 +10,6 @@
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/notifications/notification_display_service_tester.h"
-#include "chrome/browser/notifications/notification_test_util.h"
 #include "chrome/browser/printing/cloud_print/privet_http_asynchronous_factory.h"
 #include "chrome/browser/printing/cloud_print/privet_http_impl.h"
 #include "chrome/test/base/testing_browser_process.h"
@@ -253,9 +252,6 @@ class PrivetNotificationsNotificationTest : public testing::Test {
     profile_ = profile_manager_->CreateTestingProfile("test-user");
     display_service_ =
         std::make_unique<NotificationDisplayServiceTester>(profile_);
-
-    TestingBrowserProcess::GetGlobal()->SetNotificationUIManager(
-        std::make_unique<StubNotificationUIManager>());
   }
 
   void TearDown() override {
@@ -288,7 +284,7 @@ TEST_F(PrivetNotificationsNotificationTest, AddToCloudPrint) {
   ASSERT_EQ(1U, notifications.size());
   display_service_->SimulateClick(NotificationHandler::Type::TRANSIENT,
                                   notifications[0].id(), 0 /* add */,
-                                  base::nullopt);
+                                  absl::nullopt);
 
   EXPECT_EQ("chrome://devices/", service.open_tab_url().spec());
   EXPECT_EQ(1U, service.open_tab_count());
@@ -310,7 +306,7 @@ TEST_F(PrivetNotificationsNotificationTest, DontShowAgain) {
   ASSERT_EQ(1U, notifications.size());
   display_service_->SimulateClick(NotificationHandler::Type::TRANSIENT,
                                   notifications[0].id(),
-                                  1 /* don't show again */, base::nullopt);
+                                  1 /* don't show again */, absl::nullopt);
 
   EXPECT_EQ("", service.open_tab_url().spec());
   EXPECT_EQ(0U, service.open_tab_count());

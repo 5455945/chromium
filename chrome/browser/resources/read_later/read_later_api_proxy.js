@@ -7,7 +7,8 @@ import 'chrome://resources/mojo/url/mojom/url.mojom-lite.js';
 
 import './read_later.mojom-lite.js';
 
-import {addSingletonGetter} from 'chrome://resources/js/cr.m.js';
+/** @type {?ReadLaterApiProxy} */
+let instance = null;
 
 /** @interface */
 export class ReadLaterApiProxy {
@@ -16,8 +17,11 @@ export class ReadLaterApiProxy {
    */
   getReadLaterEntries() {}
 
-  /** @param {!url.mojom.Url} url */
-  openSavedEntry(url) {}
+  /**
+   * @param {!url.mojom.Url} url
+   * @param {boolean} mark_as_read
+   */
+  openURL(url, mark_as_read) {}
 
   /**
    * @param {!url.mojom.Url} url
@@ -25,8 +29,17 @@ export class ReadLaterApiProxy {
    */
   updateReadStatus(url, read) {}
 
+  addCurrentTab() {}
+
   /** @param {!url.mojom.Url} url */
   removeEntry(url) {}
+
+  /**
+   * @param {!url.mojom.Url} url
+   * @param {number} locationX
+   * @param {number} locationY
+   */
+  showContextMenuForURL(url, locationX, locationY) {}
 
   showUI() {}
 
@@ -57,8 +70,8 @@ export class ReadLaterApiProxyImpl {
   }
 
   /** @override */
-  openSavedEntry(url) {
-    this.handler.openSavedEntry(url);
+  openURL(url, mark_as_read) {
+    this.handler.openURL(url, mark_as_read);
   }
 
   /** @override */
@@ -67,8 +80,18 @@ export class ReadLaterApiProxyImpl {
   }
 
   /** @override */
+  addCurrentTab() {
+    this.handler.addCurrentTab();
+  }
+
+  /** @override */
   removeEntry(url) {
     this.handler.removeEntry(url);
+  }
+
+  /** @override */
+  showContextMenuForURL(url, locationX, locationY) {
+    this.handler.showContextMenuForURL(url, locationX, locationY);
   }
 
   /** @override */
@@ -85,6 +108,15 @@ export class ReadLaterApiProxyImpl {
   getCallbackRouter() {
     return this.callbackRouter;
   }
+
+  /** @return {!ReadLaterApiProxy} */
+  static getInstance() {
+    return instance || (instance = new ReadLaterApiProxyImpl());
+  }
+
+  /** @param {!ReadLaterApiProxy} obj */
+  static setInstance(obj) {
+    instance = obj;
+  }
 }
 
-addSingletonGetter(ReadLaterApiProxyImpl);

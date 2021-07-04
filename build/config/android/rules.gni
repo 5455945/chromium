@@ -11,8 +11,8 @@ import("//build/config/android/internal_rules.gni")
 import("//build/config/clang/clang.gni")
 import("//build/config/compiler/compiler.gni")
 import("//build/config/coverage/coverage.gni")
-import("//build/config/dcheck_always_on.gni")
 import("//build/config/python.gni")
+import("//build/config/rts.gni")
 import("//build/config/zip.gni")
 import("//build/toolchain/toolchain.gni")
 
@@ -725,12 +725,6 @@ if (enable_java_templates) {
           "--native-libraries-list",
           rebase_path(invoker.native_libraries_list_file, root_build_dir),
         ]
-        if (defined(invoker.version_number)) {
-          args += [
-            "--version-number",
-            invoker.version_number,
-          ]
-        }
         if (defined(invoker.main_component_library)) {
           args += [
             "--main-component-library",
@@ -960,6 +954,8 @@ if (enable_java_templates) {
   #     merged into apks that directly or indirectly depend on this target.
   #   android_manifest_dep: Target that generates AndroidManifest (if applicable)
   #   custom_package: java package for generated .java files.
+  #   allow_missing_resources: Do not fail if a resource exists in a directory
+  #      but is not listed in sources.
   #   shared_resources: If true make a resource package that can be loaded by a
   #     different application at runtime to access the package's resources.
   #   resource_overlay: Whether the resources in 'sources' should override
@@ -998,10 +994,6 @@ if (enable_java_templates) {
       not_needed(invoker, [ "v14_skip" ])
     }
 
-    assert(!defined(invoker.resource_dirs) || defined(invoker.sources),
-           "resource_dirs in android_resources is deprecated. Please use " +
-               "sources=[] and list resource files instead. Details: " +
-               "https://crbug.com/1026378")
     _res_sources_path = "$target_gen_dir/${invoker.target_name}.res.sources"
 
     _resources_zip = "$target_out_dir/$target_name.resources.zip"
@@ -1070,26 +1062,20 @@ if (enable_java_templates) {
       forward_variables_from(invoker,
                              [
                                "strip_drawables",
+                               "allow_missing_resources",
                                "visibility",
                              ])
       deps = _deps
-      deps += [ ":$_build_config_target_name" ]
 
       res_sources_path = _res_sources_path
       sources = _resource_files
 
-      build_config = _build_config
       resources_zip = _resources_zip
       r_text_out_path = _r_text_out_path
 
       if (defined(invoker.r_text_file)) {
         r_text_in_path = invoker.r_text_file
       }
-
-      # Always generate R.onResourcesLoaded() method, it is required for
-      # compiling ResourceRewriter, there is no side effect because the
-      # generated R.class isn't used in final apk.
-      shared_resources = true
     }
   }
 
@@ -1380,6 +1366,12 @@ if (enable_java_templates) {
       testonly = true
       main_class = _main_class
       wrapper_script_name = "helper/$main_target_name"
+
+      # As of April 2021, adding -XX:TieredStopAtLevel=1 does not affect the
+      # wall time of a single robolectric shard, but does reduce the CPU time by
+      # 66%, which makes sharding more effective.
+      tiered_stop_at_level_one = true
+
       if (!defined(srcjar_deps)) {
         srcjar_deps = []
       }
@@ -1388,7 +1380,7 @@ if (enable_java_templates) {
         ":$_jni_srcjar_target",
 
         # This dep is required for any targets that depend on //base:base_java.
-        "//base:base_build_config_gen",
+        "//build/android:build_config_gen",
       ]
     }
 
@@ -1419,6 +1411,8 @@ if (enable_java_templates) {
   # Variables
   #   deps: Specifies the dependencies of this target. Java targets in this list
   #     will be added to the javac classpath.
+  #   public_deps: Dependencies that this target exposes as part of its public API.
+  #     public_deps do not need to be listed in both the 'deps' and 'public_deps' lists.
   #   annotation_processor_deps: List of java_annotation_processor targets to
   #     use when compiling.
   #
@@ -1434,11 +1428,19 @@ if (enable_java_templates) {
   #
   #   chromium_code: If true, extra analysis warning/errors will be enabled.
   #   enable_errorprone: If true, enables the errorprone compiler.
+  #   skip_build_server: If true, avoids sending tasks to the build server.
   #
   #   jar_excluded_patterns: List of patterns of .class files to exclude.
   #   jar_included_patterns: List of patterns of .class files to include.
   #     When omitted, all classes not matched by jar_excluded_patterns are
   #     included. When specified, all non-matching .class files are stripped.
+  #
+  #   low_classpath_priority: Indicates that the library should be placed at the
+  #     end of the classpath. The default classpath order has libraries ordered
+  #     before the libraries that they depend on. 'low_classpath_priority' is
+  #     useful when one java_library() overrides another via
+  #     'jar_excluded_patterns' and the overriding library does not depend on
+  #     the overridee.
   #
   #   output_name: File name for the output .jar (not including extension).
   #     Defaults to the input .jar file name.
@@ -1565,6 +1567,7 @@ if (enable_java_templates) {
         requires_android =
             defined(invoker.requires_android) && invoker.requires_android
         possible_config_deps = _deps
+        ignore_dependency_public_deps = _direct_deps_only
         build_config = _build_config
       }
 
@@ -1743,6 +1746,7 @@ if (enable_java_templates) {
       possible_config_deps = _deps
       supports_android = true
       requires_android = true
+      ignore_dependency_public_deps = _direct_deps_only
       build_config = _build_config
     }
 
@@ -1897,7 +1901,7 @@ if (enable_java_templates) {
     }
   }
 
-  # Creates org/chromium/base/BuildConfig.java
+  # Creates org/chromium/build/BuildConfig.java
   # This doesn't really belong in //build since it genates a file for //base.
   # However, we don't currently have a better way to include this file in all
   # apks that depend on //base:base_java.
@@ -1914,13 +1918,13 @@ if (enable_java_templates) {
   template("generate_build_config_srcjar") {
     java_cpp_template(target_name) {
       forward_variables_from(invoker, TESTONLY_AND_VISIBILITY)
-      sources = [ "//base/android/java/templates/BuildConfig.template" ]
+      sources = [ "//build/android/java/templates/BuildConfig.template" ]
       defines = []
 
       # Set these even when !use_final_fields so that they have correct default
       # values within junit_binary(), which ignores jar_excluded_patterns.
-      if (is_java_debug || dcheck_always_on) {
-        defines += [ "_DCHECK_IS_ON" ]
+      if (enable_java_asserts) {
+        defines += [ "_ENABLE_ASSERTS" ]
       }
       if (use_cfi_diag || is_ubsan || is_ubsan_security || is_ubsan_vptr) {
         defines += [ "_IS_UBSAN" ]
@@ -2043,7 +2047,7 @@ if (enable_java_templates) {
   #     the apk for the secondary ABI (optional).
   #   generate_buildconfig_java: If defined and false, skip generating the
   #     BuildConfig java class describing the build configuration. The default
-  #     is true for non-test APKs.
+  #     is true when building with Chromium for non-test APKs.
   #   generate_final_jni: If defined and false, skip generating the
   #     GEN_JNI srcjar.
   #   jni_registration_header: If specified, causes the
@@ -2076,6 +2080,8 @@ if (enable_java_templates) {
   #   uncompress_dex: Store final .dex files uncompressed in the apk.
   #   strip_resource_names: True if resource names should be stripped from the
   #     resources.arsc file in the apk or module.
+  #   strip_unused_resources: True if unused resources should be stripped from
+  #     the apk or module.
   #   short_resource_paths: True if resource paths should be shortened in the
   #     apk or module.
   #   resources_config_paths: List of paths to the aapt2 optimize config files
@@ -2165,17 +2171,6 @@ if (enable_java_templates) {
       _final_rtxt_path = "${_final_apk_path}.R.txt"
     }
 
-    _short_resource_paths =
-        defined(invoker.short_resource_paths) && invoker.short_resource_paths &&
-        enable_arsc_obfuscation
-    _strip_resource_names =
-        defined(invoker.strip_resource_names) && invoker.strip_resource_names &&
-        enable_arsc_obfuscation
-    _optimize_resources = _strip_resource_names || _short_resource_paths
-
-    if (!_is_bundle_module && _short_resource_paths) {
-      _final_pathmap_path = "${_final_apk_path}.pathmap.txt"
-    }
     _res_size_info_path = "$target_out_dir/$target_name.ap_.info"
     if (!_is_bundle_module) {
       _final_apk_path_no_ext_list =
@@ -2192,20 +2187,12 @@ if (enable_java_templates) {
     if (_is_bundle_module) {
       # Path to the intermediate proto-format resources zip file.
       _proto_resources_path = "$target_out_dir/$target_name.proto.ap_"
-      if (_optimize_resources) {
-        _optimized_proto_resources_path =
-            "$target_out_dir/$target_name.optimized.proto.ap_"
-      }
     } else {
       # resource_sizes.py needs to be able to find the unpacked resources.arsc
       # file based on apk name to compute normatlized size.
       _resource_sizes_arsc_path =
           "$root_out_dir/arsc/" +
           rebase_path(_final_apk_path_no_ext, root_build_dir) + ".ap_"
-      if (_optimize_resources) {
-        _optimized_arsc_resources_path =
-            "$target_out_dir/$target_name.optimized.ap_"
-      }
     }
 
     if (defined(invoker.version_code)) {
@@ -2448,11 +2435,6 @@ if (enable_java_templates) {
           "${_shared_resources_allowlist_target}__compile_resources"
     }
 
-    if (_short_resource_paths) {
-      _resources_path_map_out_path =
-          "${target_gen_dir}/${_template_name}_resources_path_map.txt"
-    }
-
     _compile_resources_target = "${_template_name}__compile_resources"
     _compile_resources_rtxt_out =
         "${target_gen_dir}/${_compile_resources_target}_R.txt"
@@ -2478,14 +2460,10 @@ if (enable_java_templates) {
                                "resource_exclusion_exceptions",
                                "resource_exclusion_regex",
                                "resource_values_filter_rules",
-                               "resources_config_paths",
                                "shared_resources",
                                "shared_resources_allowlist_locales",
-                               "support_zh_hk",
                                "uses_split",
                              ])
-      short_resource_paths = _short_resource_paths
-      strip_resource_names = _strip_resource_names
       android_manifest = _android_manifest
       android_manifest_dep = ":$_merge_manifest_target"
       version_code = _version_code
@@ -2510,9 +2488,6 @@ if (enable_java_templates) {
       proguard_file = _generated_proguard_config
       if (_enable_main_dex_list) {
         proguard_file_main_dex = _generated_proguard_main_dex_config
-      }
-      if (_short_resource_paths) {
-        resources_path_map_out_path = _resources_path_map_out_path
       }
 
       build_config = _build_config
@@ -2550,9 +2525,6 @@ if (enable_java_templates) {
       if (_is_bundle_module) {
         is_bundle_module = true
         proto_output = _proto_resources_path
-        if (_optimize_resources) {
-          optimized_proto_output = _optimized_proto_resources_path
-        }
 
         if (defined(invoker.base_module_target)) {
           include_resource =
@@ -2560,8 +2532,6 @@ if (enable_java_templates) {
               "/" + get_label_info(invoker.base_module_target, "name") + ".ap_"
           _link_against = invoker.base_module_target
         }
-      } else if (_optimize_resources) {
-        optimized_arsc_output = _optimized_arsc_resources_path
       }
 
       if (defined(_link_against)) {
@@ -2584,16 +2554,53 @@ if (enable_java_templates) {
     }
     _srcjar_deps += [ ":$_compile_resources_target" ]
 
-    if (defined(_resource_sizes_arsc_path)) {
-      _copy_arsc_target = "${_template_name}__copy_arsc"
-      copy(_copy_arsc_target) {
-        deps = [ ":$_compile_resources_target" ]
+    # We don't ship apks anymore, only optimize bundle builds
+    if (_is_bundle_module) {
+      _short_resource_paths =
+          defined(invoker.short_resource_paths) &&
+          invoker.short_resource_paths && enable_arsc_obfuscation
+      _strip_resource_names =
+          defined(invoker.strip_resource_names) &&
+          invoker.strip_resource_names && enable_arsc_obfuscation
+      _strip_unused_resources = defined(invoker.strip_unused_resources) &&
+                                invoker.strip_unused_resources
+      _optimize_resources = _strip_resource_names || _short_resource_paths ||
+                            _strip_unused_resources
+    }
 
-        # resource_sizes.py doesn't care if it gets the optimized .arsc.
-        sources = [ _arsc_resources_path ]
-        outputs = [ _resource_sizes_arsc_path ]
+    if (_is_bundle_module && _optimize_resources) {
+      _optimized_proto_resources_path =
+          "$target_out_dir/$target_name.optimized.proto.ap_"
+      if (_short_resource_paths) {
+        _resources_path_map_out_path =
+            "${target_gen_dir}/${_template_name}_resources_path_map.txt"
       }
-      _final_deps += [ ":$_copy_arsc_target" ]
+      _optimize_resources_target = "${_template_name}__optimize_resources"
+      optimize_resources(_optimize_resources_target) {
+        deps = _deps + [ ":$_compile_resources_target" ]
+        short_resource_paths = _short_resource_paths
+        strip_resource_names = _strip_resource_names
+        if (_short_resource_paths) {
+          resources_path_map_out_path = _resources_path_map_out_path
+        }
+        r_text_path = _compile_resources_rtxt_out
+        proto_input_path = _proto_resources_path
+        optimized_proto_output = _optimized_proto_resources_path
+        if (_strip_unused_resources) {
+          # These need to be kept in sync with the target names + output paths
+          # in the android_app_bundle template.
+          _unused_resources_target = "${_template_name}__unused_resources"
+          _unused_resources_config_path =
+              "$target_gen_dir/${_template_name}_unused_resources.config"
+          resources_config_paths = [ _unused_resources_config_path ]
+          deps += [ ":$_unused_resources_target" ]
+        } else {
+          resources_config_paths = []
+        }
+        if (defined(invoker.resources_config_paths)) {
+          resources_config_paths += invoker.resources_config_paths
+        }
+      }
     }
 
     if (!_is_bundle_module) {
@@ -2610,20 +2617,18 @@ if (enable_java_templates) {
         outputs = [ _final_rtxt_path ]
       }
       _final_deps += [ ":$_copy_rtxt_target" ]
+    }
 
-      if (_short_resource_paths) {
-        # Do the same for path map
-        _copy_pathmap_target = "${_template_name}__copy_pathmap"
-        copy(_copy_pathmap_target) {
-          deps = [ ":$_compile_resources_target" ]
-          sources = [ _resources_path_map_out_path ]
-          outputs = [ _final_pathmap_path ]
+    if (defined(_resource_sizes_arsc_path)) {
+      _copy_arsc_target = "${_template_name}__copy_arsc"
+      copy(_copy_arsc_target) {
+        deps = [ ":$_compile_resources_target" ]
 
-          # The monochrome_public_apk_checker test needs pathmap when run on swarming.
-          data = [ _final_pathmap_path ]
-        }
-        _final_deps += [ ":$_copy_pathmap_target" ]
+        # resource_sizes.py doesn't care if it gets the optimized .arsc.
+        sources = [ _arsc_resources_path ]
+        outputs = [ _resource_sizes_arsc_path ]
       }
+      _final_deps += [ ":$_copy_arsc_target" ]
     }
 
     _generate_native_libraries_java =
@@ -2633,13 +2638,6 @@ if (enable_java_templates) {
     if (_generate_native_libraries_java) {
       write_native_libraries_java("${_template_name}__native_libraries") {
         forward_variables_from(invoker, [ "main_component_library" ])
-        deps = []
-        if (defined(invoker.native_lib_version_rule)) {
-          deps += [ invoker.native_lib_version_rule ]
-        }
-        if (defined(invoker.native_lib_version_arg)) {
-          version_number = invoker.native_lib_version_arg
-        }
 
         # Do not add a dep on the generated_file target in order to avoid having
         # to build the native libraries before this target. The dependency is
@@ -2655,13 +2653,6 @@ if (enable_java_templates) {
         use_final_fields = true
       }
       _srcjar_deps += [ ":${_template_name}__native_libraries" ]
-    } else {
-      if (defined(invoker.native_lib_version_arg)) {
-        not_needed(invoker, [ "native_lib_version_arg" ])
-      }
-      if (defined(invoker.native_lib_version_rule)) {
-        not_needed(invoker, [ "native_lib_version_rule" ])
-      }
     }
 
     _loadable_modules = []
@@ -2738,6 +2729,12 @@ if (enable_java_templates) {
         }
       }
       _srcjar_deps += [ ":${_template_name}__final_jni" ]
+    } else {
+      not_needed(invoker,
+                 [
+                   "enable_native_mocks",
+                   "jni_registration_header",
+                 ])
     }
 
     _java_target = "${_template_name}__java"
@@ -2761,6 +2758,7 @@ if (enable_java_templates) {
                                "secondary_native_lib_placeholders",
                                "sources",
                                "static_library_dependent_targets",
+                               "use_classic_desugar",
                                "library_always_compress",
                                "library_renames",
                              ])
@@ -2795,6 +2793,7 @@ if (enable_java_templates) {
       supports_android = true
       requires_android = true
       srcjar_deps = _srcjar_deps
+      merged_android_manifest = _android_manifest
       if (defined(_final_dex_path)) {
         final_dex_path = _final_dex_path
       }
@@ -2824,7 +2823,7 @@ if (enable_java_templates) {
         if (_enable_main_dex_list) {
           proguard_configs += [ "//build/android/multidex.flags" ]
         }
-        if (!dcheck_always_on && (!defined(testonly) || !testonly) &&
+        if (!enable_java_asserts && (!defined(testonly) || !testonly) &&
             # Injected JaCoCo code causes -checkdiscards to fail.
             !use_jacoco_coverage) {
           proguard_configs += [ "//build/android/dcheck_is_off.flags" ]
@@ -3062,6 +3061,9 @@ if (enable_java_templates) {
                        ":$_build_config_target",
                        ":$_compile_resources_target",
                      ] + _all_native_libs_deps
+      if (_optimize_resources) {
+        _final_deps += [ ":$_optimize_resources_target" ]
+      }
       if (defined(_final_dex_target_dep)) {
         not_needed([ "_final_dex_target_dep" ])
       }
@@ -3205,11 +3207,7 @@ if (enable_java_templates) {
             deps += [ _final_dex_target_dep ]
           }
 
-          if (_optimize_resources) {
-            packaged_resources_path = _optimized_arsc_resources_path
-          } else {
-            packaged_resources_path = _arsc_resources_path
-          }
+          packaged_resources_path = _arsc_resources_path
 
           if (defined(_native_libs_filearg)) {
             native_libs_filearg = _native_libs_filearg
@@ -3474,8 +3472,6 @@ if (enable_java_templates) {
                                "main_component_library",
                                "min_sdk_version",
                                "native_lib_placeholders",
-                               "native_lib_version_arg",
-                               "native_lib_version_rule",
                                "never_incremental",
                                "no_xml_namespaces",
                                "png_to_webp",
@@ -3490,7 +3486,6 @@ if (enable_java_templates) {
                                "resource_exclusion_regex",
                                "resource_ids_provider_dep",
                                "resource_values_filter_rules",
-                               "resources_config_paths",
                                "require_native_mocks",
                                "secondary_abi_loadable_modules",
                                "secondary_abi_shared_libraries",
@@ -3499,18 +3494,16 @@ if (enable_java_templates) {
                                "shared_resources",
                                "shared_resources_allowlist_locales",
                                "shared_resources_allowlist_target",
-                               "short_resource_paths",
                                "sources",
                                "srcjar_deps",
                                "static_library_dependent_targets",
                                "static_library_provider",
                                "static_library_synchronized_proguard",
-                               "strip_resource_names",
-                               "support_zh_hk",
                                "target_sdk_version",
                                "testonly",
                                "uncompress_dex",
                                "uncompress_shared_libraries",
+                               "use_classic_desugar",
                                "library_always_compress",
                                "library_renames",
                                "use_chromium_linker",
@@ -3607,8 +3600,6 @@ if (enable_java_templates) {
                                "max_sdk_version",
                                "min_sdk_version",
                                "native_lib_placeholders",
-                               "native_lib_version_arg",
-                               "native_lib_version_rule",
                                "no_xml_namespaces",
                                "package_id",
                                "package_name",
@@ -3635,7 +3626,7 @@ if (enable_java_templates) {
                                "static_library_provider",
                                "static_library_synchronized_proguard",
                                "strip_resource_names",
-                               "support_zh_hk",
+                               "strip_unused_resources",
                                "target_sdk_version",
                                "testonly",
                                "uncompress_shared_libraries",
@@ -3683,6 +3674,14 @@ if (enable_java_templates) {
   #     apk_under_test: ":bar"
   #   }
   template("instrumentation_test_runner") {
+    if (use_rts) {
+      action("${invoker.target_name}__rts_filters") {
+        script = "//build/add_rts_filters.py"
+        rts_file = "${root_build_dir}/gen/rts/${invoker.target_name}.filter"
+        args = [ rebase_path(rts_file, root_build_dir) ]
+        outputs = [ rts_file ]
+      }
+    }
     test_runner_script(target_name) {
       forward_variables_from(invoker,
                              [
@@ -3720,6 +3719,12 @@ if (enable_java_templates) {
       }
       if (defined(invoker.additional_apks)) {
         public_deps += invoker.additional_apks
+      }
+      if (use_rts) {
+        if (!defined(data_deps)) {
+          data_deps = []
+        }
+        data_deps += [ ":${invoker.target_name}__rts_filters" ]
       }
     }
   }
@@ -3895,7 +3900,12 @@ if (enable_java_templates) {
     if (!defined(invoker.android_manifest)) {
       jinja_template("${target_name}_manifest") {
         _native_library_name = get_label_info(invoker.shared_library, "name")
-        input = "//testing/android/native_test/java/AndroidManifest.xml.jinja2"
+        if (defined(invoker.android_manifest_template)) {
+          input = invoker.android_manifest_template
+        } else {
+          input =
+              "//testing/android/native_test/java/AndroidManifest.xml.jinja2"
+        }
         output = _android_manifest
         variables = [
           "is_component_build=${is_component_build}",
@@ -3933,14 +3943,16 @@ if (enable_java_templates) {
       final_apk_path = "$root_build_dir/${apk_name}_apk/${apk_name}-debug.apk"
 
       if (!defined(use_default_launcher) || use_default_launcher) {
-        deps += [ "//testing/android/native_test:native_test_java" ]
+        deps += [
+          "//base:base_java",
+          "//build/android/gtest_apk:native_test_instrumentation_test_runner_java",
+          "//testing/android/native_test:native_test_java",
+        ]
       }
       shared_libraries = [ invoker.shared_library ]
       deps += [
         ":${target_name}__secondary_abi_shared_library_list",
         ":${target_name}__shared_library_list",
-        "//base:base_java",
-        "//testing/android/reporter:reporter_java",
       ]
     }
   }
@@ -3969,6 +3981,7 @@ if (enable_java_templates) {
       forward_variables_from(invoker, TESTONLY_AND_VISIBILITY)
 
       script = "//build/android/gyp/aidl.py"
+      depfile = "$target_gen_dir/$target_name.d"
       sources = invoker.sources
 
       _srcjar_path = "${target_gen_dir}/${target_name}.srcjar"
@@ -3990,22 +4003,15 @@ if (enable_java_templates) {
         "--imports=$_rebased_imports",
         "--srcjar",
         rebase_path(_srcjar_path, root_build_dir),
+        "--depfile",
+        rebase_path(depfile, root_build_dir),
       ]
       if (defined(invoker.import_include) && invoker.import_include != []) {
-        # TODO(cjhopman): aidl supports creating a depfile. We should be able to
-        # switch to constructing a depfile for the overall action from that
-        # instead of having all the .java files in the include paths as inputs.
         _rebased_import_paths = []
         foreach(_import_path, invoker.import_include) {
           _rebased_import_path = []
           _rebased_import_path = [ rebase_path(_import_path, root_build_dir) ]
           _rebased_import_paths += _rebased_import_path
-          _java_files_build_rel = []
-          _java_files_build_rel =
-              exec_script("//build/android/gyp/find.py",
-                          [ "--pattern=*.java" ] + _rebased_import_path,
-                          "list lines")
-          inputs += rebase_path(_java_files_build_rel, ".", root_build_dir)
         }
         args += [ "--includes=$_rebased_import_paths" ]
       }
@@ -4329,6 +4335,7 @@ if (enable_java_templates) {
         "missing_classes_allowlist",
         "requires_android",
         "testonly",
+        "use_classic_desugar",
       ]
 
       # Create android_java_prebuilt target for extra jars within jars/.
@@ -4728,6 +4735,7 @@ if (enable_java_templates) {
     _all_create_module_targets = []
     _all_module_zip_paths = []
     _all_module_build_configs = []
+    _all_module_unused_resources_deps = []
     foreach(_module, _modules) {
       _module_target = _module.module_target
       _module_build_config = _module.build_config
@@ -4746,7 +4754,6 @@ if (enable_java_templates) {
       # this file *must* be named ${_module.name}.zip
       _create_module_target = "${_target_name}__${_module.name}__create"
       _module_zip_path = "$target_gen_dir/$target_name/${_module.name}.zip"
-
       create_android_app_bundle_module(_create_module_target) {
         forward_variables_from(invoker,
                                [
@@ -4797,6 +4804,28 @@ if (enable_java_templates) {
       ]
       _all_module_zip_paths += [ _module_zip_path ]
       _all_module_build_configs += [ _module_build_config ]
+      _all_module_unused_resources_deps += [
+        "${_module_target}__compile_resources",
+        _dex_target_for_module,
+        _module_build_config_target,
+      ]
+    }
+    if (defined(invoker.strip_unused_resources) &&
+        invoker.strip_unused_resources) {
+      # Resources only live in the base module so we define the unused resources
+      # target only on the base module target.
+      _unused_resources_target = "${_base_target_name}__unused_resources"
+      _unused_resources_config =
+          "${_base_target_gen_dir}/${_base_target_name}_unused_resources.config"
+      unused_resources(_unused_resources_target) {
+        deps = _all_module_unused_resources_deps
+        all_module_build_configs = _all_module_build_configs
+        build_config = _base_module_build_config
+        if (_proguard_enabled) {
+          proguard_mapping_path = _proguard_mapping_path
+        }
+        output_config = _unused_resources_config
+      }
     }
 
     _all_rebased_module_zip_paths =

@@ -5,6 +5,7 @@
 #include "ash/shelf/home_button.h"
 
 #include <math.h>  // std::ceil
+#include <memory>
 
 #include "ash/app_list/app_list_controller_impl.h"
 #include "ash/public/cpp/shelf_config.h"
@@ -39,6 +40,21 @@ constexpr uint8_t kAssistantInvisibleAlpha = 138;  // 54% alpha
 // static
 const char HomeButton::kViewClassName[] = "ash/HomeButton";
 
+// HomeButton::ScopedNoClipRect ------------------------------------------------
+
+HomeButton::ScopedNoClipRect::ScopedNoClipRect(
+    ShelfNavigationWidget* shelf_navigation_widget)
+    : shelf_navigation_widget_(shelf_navigation_widget),
+      clip_rect_(shelf_navigation_widget_->GetLayer()->clip_rect()) {
+  shelf_navigation_widget_->GetLayer()->SetClipRect(gfx::Rect());
+}
+
+HomeButton::ScopedNoClipRect::~ScopedNoClipRect() {
+  shelf_navigation_widget_->GetLayer()->SetClipRect(clip_rect_);
+}
+
+// HomeButton::ScopedNoClipRect ------------------------------------------------
+
 HomeButton::HomeButton(Shelf* shelf)
     : ShelfControlButton(shelf, this), controller_(this) {
   SetAccessibleName(
@@ -58,9 +74,9 @@ void HomeButton::OnGestureEvent(ui::GestureEvent* event) {
     Button::OnGestureEvent(event);
 }
 
-base::string16 HomeButton::GetTooltipText(const gfx::Point& p) const {
+std::u16string HomeButton::GetTooltipText(const gfx::Point& p) const {
   // Don't show a tooltip if we're already showing the app list.
-  return IsShowingAppList() ? base::string16() : GetAccessibleName();
+  return IsShowingAppList() ? std::u16string() : GetAccessibleName();
 }
 
 const char* HomeButton::GetClassName() const {
@@ -120,6 +136,12 @@ void HomeButton::HandleLocaleChange() {
 int64_t HomeButton::GetDisplayId() const {
   aura::Window* window = GetWidget()->GetNativeWindow();
   return display::Screen::GetScreen()->GetDisplayNearestWindow(window).id();
+}
+
+std::unique_ptr<HomeButton::ScopedNoClipRect>
+HomeButton::CreateScopedNoClipRect() {
+  return std::make_unique<HomeButton::ScopedNoClipRect>(
+      shelf()->navigation_widget());
 }
 
 void HomeButton::PaintButtonContents(gfx::Canvas* canvas) {

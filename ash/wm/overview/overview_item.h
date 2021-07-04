@@ -13,7 +13,7 @@
 #include "ash/wm/window_state_observer.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "base/optional.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_observer.h"
 #include "ui/gfx/geometry/rect.h"
@@ -156,7 +156,7 @@ class ASH_EXPORT OverviewItem : public aura::WindowObserver,
 
   // Sets the bounds of the window shadow. If |bounds_in_screen| is nullopt,
   // the shadow is hidden.
-  void SetShadowBounds(base::Optional<gfx::RectF> bounds_in_screen);
+  void SetShadowBounds(absl::optional<gfx::RectF> bounds_in_screen);
 
   // Updates the rounded corners and shadow on this overview window item.
   void UpdateRoundedCornersAndShadow();
@@ -243,8 +243,15 @@ class ASH_EXPORT OverviewItem : public aura::WindowObserver,
 
   void set_disable_mask(bool disable) { disable_mask_ = disable; }
 
-  void set_unclipped_size(base::Optional<gfx::Size> unclipped_size) {
+  void set_unclipped_size(absl::optional<gfx::Size> unclipped_size) {
     unclipped_size_ = unclipped_size;
+  }
+
+  void set_scrolling_bounds(absl::optional<gfx::RectF> scrolling_bounds) {
+    scrolling_bounds_ = scrolling_bounds;
+  }
+  absl::optional<gfx::RectF> scrolling_bounds() const {
+    return scrolling_bounds_;
   }
 
   gfx::Rect GetShadowBoundsForTesting();
@@ -408,12 +415,16 @@ class ASH_EXPORT OverviewItem : public aura::WindowObserver,
   // window, who's bounds are not set to split view size. So in |SetItemBounds|,
   // we transform the window not to |target_bounds_| but to this value, and then
   // apply clipping on the window to |target_bounds_|.
-  base::Optional<gfx::Size> unclipped_size_ = base::nullopt;
+  absl::optional<gfx::Size> unclipped_size_ = absl::nullopt;
 
   // The shadow around the overview window. Shadows the original window, not
   // |item_widget_|. Done here instead of on the original window because of the
   // rounded edges mask applied on entering overview window.
   std::unique_ptr<ui::Shadow> shadow_;
+
+  // Cached values of the item bounds so that they do not have to be calculated
+  // on each scroll update. Will be nullopt unless a grid scroll is underway.
+  absl::optional<gfx::RectF> scrolling_bounds_ = absl::nullopt;
 
   base::WeakPtrFactory<OverviewItem> weak_ptr_factory_{this};
 

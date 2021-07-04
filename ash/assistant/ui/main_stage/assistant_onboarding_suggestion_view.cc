@@ -8,17 +8,18 @@
 #include "ash/assistant/ui/assistant_view_delegate.h"
 #include "ash/assistant/util/resource_util.h"
 #include "base/bind.h"
-#include "base/stl_util.h"
+#include "base/cxx17_backports.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chromeos/services/assistant/public/cpp/assistant_service.h"
+#include "chromeos/services/libassistant/public/cpp/assistant_suggestion.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/background.h"
+#include "ui/views/controls/focus_ring.h"
 #include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/flex_layout.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/view_class_properties.h"
 
 namespace ash {
@@ -81,8 +82,12 @@ AssistantOnboardingSuggestionView::AssistantOnboardingSuggestionView(
   InitLayout(suggestion);
 }
 
-AssistantOnboardingSuggestionView::~AssistantOnboardingSuggestionView() =
-    default;
+AssistantOnboardingSuggestionView::~AssistantOnboardingSuggestionView() {
+  // TODO(pbos): Revisit explicit removal of InkDrop for classes that override
+  // Add/RemoveLayerBeneathView(). This is done so that the InkDrop doesn't
+  // access the non-override versions in ~View.
+  views::InkDrop::Remove(this);
+}
 
 int AssistantOnboardingSuggestionView::GetHeightForWidth(int width) const {
   return kPreferredHeightDip;
@@ -94,30 +99,23 @@ void AssistantOnboardingSuggestionView::ChildPreferredSizeChanged(
 }
 
 void AssistantOnboardingSuggestionView::AddLayerBeneathView(ui::Layer* layer) {
-  // This method is called by InkDropHostView, a base class of Button, to add
-  // ink drop layers beneath |this| view. Unfortunately, this will cause ink
-  // drop layers to also paint below our background and, because our background
-  // is opaque, they will not be visible to the user. To work around this, we
-  // instead add ink drop layers beneath |ink_drop_container_| which *will*
-  // paint above our background.
+  // This routes background layers to `ink_drop_container_` instead of `this` to
+  // avoid painting effects underneath our background.
   ink_drop_container_->AddLayerBeneathView(layer);
 }
 
 void AssistantOnboardingSuggestionView::RemoveLayerBeneathView(
     ui::Layer* layer) {
-  // This method is called by InkDropHostView, a base class of Button, to remove
-  // ink drop layers beneath |this| view. Because we instead added ink drop
-  // layers beneath |ink_drop_container_| to work around paint ordering issues,
-  // we inversely need to remove ink drop layers from |ink_drop_container_|
-  // here. See also comments in AddLayerBeneathView().
+  // This routes background layers to `ink_drop_container_` instead of `this` to
+  // avoid painting effects underneath our background.
   ink_drop_container_->RemoveLayerBeneathView(layer);
 }
 
-const gfx::ImageSkia& AssistantOnboardingSuggestionView::GetIcon() const {
+gfx::ImageSkia AssistantOnboardingSuggestionView::GetIcon() const {
   return icon_->GetImage();
 }
 
-const base::string16& AssistantOnboardingSuggestionView::GetText() const {
+const std::u16string& AssistantOnboardingSuggestionView::GetText() const {
   return label_->GetText();
 }
 
@@ -132,26 +130,22 @@ void AssistantOnboardingSuggestionView::InitLayout(
 
   // Focus.
   SetFocusBehavior(FocusBehavior::ALWAYS);
-  focus_ring()->SetColor(gfx::kGoogleBlue300);
+  views::FocusRing::Get(this)->SetColor(gfx::kGoogleBlue300);
 
   // Ink Drop.
-  SetInkDropMode(InkDropMode::ON);
+  views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::ON);
   SetHasInkDropActionOnClick(true);
-  SetInkDropBaseColor(GetForegroundColor(index_));
-  SetInkDropVisibleOpacity(kInkDropVisibleOpacity);
-  SetInkDropHighlightOpacity(kInkDropHighlightOpacity);
+  views::InkDrop::Get(this)->SetBaseColor(GetForegroundColor(index_));
+  views::InkDrop::Get(this)->SetVisibleOpacity(kInkDropVisibleOpacity);
+  views::InkDrop::Get(this)->SetHighlightOpacity(kInkDropHighlightOpacity);
 
   // Installing this highlight path generator will set the desired shape for
   // both ink drop effects as well as our focus ring.
   views::InstallRoundRectHighlightPathGenerator(this, gfx::Insets(),
                                                 kCornerRadiusDip);
 
-  // By default, InkDropHostView, a base class of Button, will add ink drop
-  // layers beneath |this| view. Unfortunately, this will cause ink drop layers
-  // to paint below our background and, because our background is opaque, they
-  // will not be visible to the user. To work around this, we will instead be
-  // adding/removing ink drop layers as necessary to/from |ink_drop_container_|
-  // which *will* paint above our background.
+  // This is used as a parent for ink-drop effects to prevent painting them
+  // below the background for `this`.
   ink_drop_container_ =
       AddChildView(std::make_unique<views::InkDropContainerView>());
 
@@ -167,7 +161,7 @@ void AssistantOnboardingSuggestionView::InitLayout(
 
   // NOTE: Our |layout| ignores the view for drawing focus as it is a special
   // view which lays out itself. Removing this would cause it *not* to paint.
-  layout.SetChildViewIgnoredByLayout(focus_ring(), true);
+  layout.SetChildViewIgnoredByLayout(views::FocusRing::Get(this), true);
 
   // NOTE: Our |ink_drop_container_| serves only to hold reference to ink drop
   // layers for painting purposes. It can be completely ignored by our |layout|.

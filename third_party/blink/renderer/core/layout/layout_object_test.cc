@@ -14,8 +14,10 @@
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
 #include "third_party/blink/renderer/core/html/html_style_element.h"
+#include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
 #include "third_party/blink/renderer/core/layout/layout_text_fragment.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
+#include "third_party/blink/renderer/core/loader/resource/image_resource_content.h"
 #include "third_party/blink/renderer/core/svg/svg_g_element.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_request.h"
@@ -37,6 +39,17 @@ class LayoutObjectTest : public RenderingTest {
  protected:
   template <bool should_have_wrapper>
   void ExpectAnonymousInlineWrapperFor(Node*);
+};
+
+class LayoutObjectTestWithCompositing : public LayoutObjectTest {
+ public:
+  LayoutObjectTestWithCompositing() = default;
+
+ protected:
+  void SetUp() override {
+    EnableCompositing();
+    LayoutObjectTest::SetUp();
+  }
 };
 
 template <bool should_have_wrapper>
@@ -233,9 +246,8 @@ TEST_F(LayoutObjectTest, UseCountContainWithoutContentVisibility) {
   target->classList().Add("strict");
   UpdateAllLifecyclePhasesForTest();
 
-  // Strict should register, but without style containment the "all" bucket is
-  // not counted.
-  EXPECT_FALSE(GetDocument().IsUseCounted(
+  // Strict should register, and all is counted.
+  EXPECT_TRUE(GetDocument().IsUseCounted(
       WebFeature::kCSSContainAllWithoutContentVisibility));
   EXPECT_TRUE(GetDocument().IsUseCounted(
       WebFeature::kCSSContainStrictWithoutContentVisibility));
@@ -252,6 +264,7 @@ TEST_F(LayoutObjectTest, UseCountContainWithoutContentVisibility) {
 }
 
 TEST_F(LayoutObjectTest, UseCountContainingBlockFixedPosUnderFlattened3D) {
+  ScopedTransformInteropForTest disabled(false);
   SetBodyInnerHTML(R"HTML(
     <div style='transform-style: preserve-3d; opacity: 0.9'>
       <div id=target style='position:fixed'></div>
@@ -260,6 +273,22 @@ TEST_F(LayoutObjectTest, UseCountContainingBlockFixedPosUnderFlattened3D) {
 
   LayoutObject* target = GetLayoutObjectByElementId("target");
   EXPECT_EQ(target->View(), target->Container());
+
+  EXPECT_TRUE(GetDocument().IsUseCounted(
+      WebFeature::kTransformStyleContainingBlockComputedUsedMismatch));
+}
+
+TEST_F(LayoutObjectTest,
+       UseCountContainingBlockFixedPosUnderFlattened3DTransformInterop) {
+  ScopedTransformInteropForTest enabled(true);
+  SetBodyInnerHTML(R"HTML(
+    <div style='transform-style: preserve-3d; opacity: 0.9'>
+      <div id=target style='position:fixed'></div>
+    </div>
+  )HTML");
+
+  LayoutObject* target = GetLayoutObjectByElementId("target");
+  EXPECT_EQ(target->View(), target->GetDocument().GetLayoutView());
 
   EXPECT_TRUE(GetDocument().IsUseCounted(
       WebFeature::kTransformStyleContainingBlockComputedUsedMismatch));
@@ -739,7 +768,7 @@ TEST_F(LayoutObjectTest, VisualRect) {
   };
 
   MockLayoutObject mock_object;
-  auto style = ComputedStyle::Create();
+  auto style = GetDocument().GetStyleResolver().CreateComputedStyle();
   mock_object.SetStyle(style.get());
   EXPECT_EQ(PhysicalRect(10, 10, 20, 20), mock_object.LocalVisualRect());
   EXPECT_EQ(PhysicalRect(10, 10, 20, 20), mock_object.LocalVisualRect());
@@ -1413,7 +1442,8 @@ TEST_F(LayoutObjectTest, LocalToAncestorRectFastPath) {
   PhysicalRect result;
 
   EXPECT_TRUE(target->LocalToAncestorRectFastPath(
-      rect, nullptr, kUseGeometryMapperMode, result));
+      rect, nullptr, kUseGeometryMapperMode | kIgnoreScrollOffsetOfAncestor,
+      result));
   EXPECT_EQ(PhysicalRect(50, 25, 10, 10), result);
   // Compare with non-fast path.
   EXPECT_EQ(PhysicalRect(50, 25, 10, 10),
@@ -1430,6 +1460,8 @@ TEST_F(LayoutObjectTest, LocalToAncestorRectFastPath) {
   EXPECT_FALSE(target->LocalToAncestorRectFastPath(
       rect, nullptr, kIgnoreScrollOffset, result));
   EXPECT_FALSE(target->LocalToAncestorRectFastPath(
+      rect, nullptr, kIgnoreScrollOffsetOfAncestor, result));
+  EXPECT_FALSE(target->LocalToAncestorRectFastPath(
       rect, nullptr, kApplyRemoteMainFrameTransform, result));
 
   EXPECT_EQ(PhysicalRect(50, 25, 10, 10),
@@ -1439,22 +1471,229 @@ TEST_F(LayoutObjectTest, LocalToAncestorRectFastPath) {
   LayoutObject* ancestor2 = GetLayoutObjectByElementId("ancestor2");
   PhysicalRect result2;
 
-  EXPECT_TRUE(target2->LocalToAncestorRectFastPath(
-      rect, To<LayoutBoxModelObject>(ancestor2), kUseGeometryMapperMode,
-      result2));
-  EXPECT_EQ(PhysicalRect(75, 15, 10, 10), result2);
+  EXPECT_FALSE(target2->LocalToAncestorRectFastPath(
+      rect, To<LayoutBoxModelObject>(ancestor2),
+      kUseGeometryMapperMode | kIgnoreScrollOffsetOfAncestor, result2));
 
   EXPECT_EQ(
       PhysicalRect(75, 15, 10, 10),
       target2->LocalToAncestorRect(rect, To<LayoutBoxModelObject>(ancestor2)));
   // Compare with non-fast path.
   EXPECT_TRUE(target2->LocalToAncestorRectFastPath(
-      rect, nullptr, kUseGeometryMapperMode, result2));
+      rect, nullptr, kUseGeometryMapperMode | kIgnoreScrollOffsetOfAncestor,
+      result2));
   // 25 instead of 15, because #target is 10px high.
   EXPECT_EQ(PhysicalRect(75, 25, 10, 10), result2);
 
   EXPECT_EQ(PhysicalRect(75, 25, 10, 10),
             target2->LocalToAncestorRect(rect, nullptr));
+}
+
+TEST_F(LayoutObjectTest, LocalToAncestoRectIgnoreAncestorScroll) {
+  SetBodyInnerHTML(R"HTML(
+    <style>body { margin:0; }</style>
+    <div id=ancestor style="overflow:scroll; width: 100px; height: 100px">
+      <div style="height: 2000px"></div>
+      <div id="target" style="width: 100px; height: 100px"></div>
+    </div>
+    )HTML");
+
+  LayoutObject* target = GetLayoutObjectByElementId("target");
+  LayoutBoxModelObject* ancestor =
+      To<LayoutBoxModelObject>(GetLayoutObjectByElementId("ancestor"));
+  ancestor->GetScrollableArea()->ScrollBy(ScrollOffset(0, 100),
+                                          mojom::blink::ScrollType::kUser);
+  UpdateAllLifecyclePhasesForTest();
+
+  PhysicalRect rect(0, 0, 100, 100);
+  EXPECT_EQ(PhysicalRect(0, 2000, 100, 100),
+            target->LocalToAncestorRect(rect, ancestor,
+                                        kIgnoreScrollOffsetOfAncestor));
+
+  EXPECT_EQ(PhysicalRect(0, 2000, 100, 100),
+            target->LocalToAncestorRect(rect, ancestor, kIgnoreScrollOffset));
+
+  EXPECT_EQ(PhysicalRect(0, 1900, 100, 100),
+            target->LocalToAncestorRect(rect, ancestor, 0));
+}
+
+TEST_F(LayoutObjectTest, LocalToAncestoRectViewIgnoreAncestorScroll) {
+  SetBodyInnerHTML(R"HTML(
+    <style>body { margin:0; }</style>
+    <div style="height: 2000px"></div>
+    <div id="target" style="width: 100px; height: 100px"></div>
+    )HTML");
+
+  LayoutObject* target = GetLayoutObjectByElementId("target");
+  GetDocument().View()->LayoutViewport()->SetScrollOffset(
+      ScrollOffset(0, 100), mojom::blink::ScrollType::kProgrammatic);
+  UpdateAllLifecyclePhasesForTest();
+
+  PhysicalRect rect(0, 0, 100, 100);
+  EXPECT_EQ(PhysicalRect(0, 2000, 100, 100),
+            target->LocalToAncestorRect(rect, nullptr,
+                                        kIgnoreScrollOffsetOfAncestor));
+  EXPECT_EQ(PhysicalRect(0, 2000, 100, 100),
+            target->LocalToAncestorRect(
+                rect, nullptr,
+                kUseGeometryMapperMode | kIgnoreScrollOffsetOfAncestor));
+
+  EXPECT_EQ(PhysicalRect(0, 2000, 100, 100),
+            target->LocalToAncestorRect(rect, nullptr, kIgnoreScrollOffset));
+
+  EXPECT_EQ(PhysicalRect(0, 1900, 100, 100),
+            target->LocalToAncestorRect(rect, nullptr, 0));
+}
+
+TEST_F(LayoutObjectTest,
+       LocalToAncestoRectIgnoreAncestorScrollIntermediateScroller) {
+  SetBodyInnerHTML(R"HTML(
+    <style>body { margin:0; }</style>
+    <div id=ancestor style="overflow:scroll; width: 100px; height: 100px">
+      <div id=intermediate style="overflow:scroll; width: 100px; height: 100px">
+        <div style="height: 2000px"></div>
+        <div id="target" style="width: 100px; height: 100px"></div>
+      </div>
+      <div style="height: 2000px"></div>
+    </div>
+    )HTML");
+
+  LayoutObject* target = GetLayoutObjectByElementId("target");
+  LayoutBoxModelObject* ancestor =
+      To<LayoutBoxModelObject>(GetLayoutObjectByElementId("ancestor"));
+  LayoutBoxModelObject* intermediate =
+      To<LayoutBoxModelObject>(GetLayoutObjectByElementId("intermediate"));
+  ancestor->GetScrollableArea()->ScrollBy(ScrollOffset(0, 100),
+                                          mojom::blink::ScrollType::kUser);
+  intermediate->GetScrollableArea()->ScrollBy(ScrollOffset(0, 100),
+                                              mojom::blink::ScrollType::kUser);
+  UpdateAllLifecyclePhasesForTest();
+
+  PhysicalRect rect(0, 0, 100, 100);
+  EXPECT_EQ(PhysicalRect(0, 1900, 100, 100),
+            target->LocalToAncestorRect(rect, ancestor,
+                                        kIgnoreScrollOffsetOfAncestor));
+
+  EXPECT_EQ(PhysicalRect(0, 2000, 100, 100),
+            target->LocalToAncestorRect(rect, ancestor, kIgnoreScrollOffset));
+
+  EXPECT_EQ(PhysicalRect(0, 1800, 100, 100),
+            target->LocalToAncestorRect(rect, ancestor, 0));
+}
+
+TEST_F(LayoutObjectTest,
+       LocalToAncestoRectViewIgnoreAncestorScrollIntermediateScroller) {
+  SetBodyInnerHTML(R"HTML(
+    <style>body { margin:0; }</style>
+    <div id=intermediate style="overflow:scroll; width: 100px; height: 100px">
+      <div style="height: 2000px"></div>
+      <div id="target" style="width: 100px; height: 100px"></div>
+    </div>
+    <div style="height: 2000px"></div>
+    )HTML");
+
+  LayoutObject* target = GetLayoutObjectByElementId("target");
+  LayoutBoxModelObject* intermediate =
+      To<LayoutBoxModelObject>(GetLayoutObjectByElementId("intermediate"));
+  GetDocument().View()->LayoutViewport()->SetScrollOffset(
+      ScrollOffset(0, 100), mojom::blink::ScrollType::kProgrammatic);
+  intermediate->GetScrollableArea()->ScrollBy(ScrollOffset(0, 100),
+                                              mojom::blink::ScrollType::kUser);
+  UpdateAllLifecyclePhasesForTest();
+
+  PhysicalRect rect(0, 0, 100, 100);
+  EXPECT_EQ(PhysicalRect(0, 1900, 100, 100),
+            target->LocalToAncestorRect(rect, nullptr,
+                                        kIgnoreScrollOffsetOfAncestor));
+  EXPECT_EQ(PhysicalRect(0, 1900, 100, 100),
+            target->LocalToAncestorRect(
+                rect, nullptr,
+                kUseGeometryMapperMode | kIgnoreScrollOffsetOfAncestor));
+
+  EXPECT_EQ(PhysicalRect(0, 2000, 100, 100),
+            target->LocalToAncestorRect(rect, nullptr, kIgnoreScrollOffset));
+
+  EXPECT_EQ(PhysicalRect(0, 1800, 100, 100),
+            target->LocalToAncestorRect(rect, nullptr, 0));
+}
+
+static const char* const kTransformsWith3D[] = {"transform: rotateX(20deg)",
+                                                "transform: translateZ(30px)"};
+static const char kTransformWithout3D[] =
+    "transform: matrix(2, 2, 0, 2, 2, 2, 0, 2, 2, 2, 2, 2, 2, 2, 0, 2)";
+static const char kPreserve3D[] = "transform-style: preserve-3d";
+
+TEST_F(LayoutObjectTestWithCompositing,
+       UseCountDifferentPerspectiveCBOrParent) {
+  // Start with a case that has no containing block / parent difference.
+  SetBodyInnerHTML(R"HTML(
+    <div style='perspective: 200px'>
+      <div id=target></div>
+    </div>
+  )HTML");
+
+  auto* target = GetDocument().getElementById("target");
+
+  target->setAttribute(html_names::kStyleAttr, kTransformsWith3D[0]);
+  UpdateAllLifecyclePhasesForTest();
+  target->scrollIntoView();
+  EXPECT_FALSE(
+      GetDocument().IsUseCounted(WebFeature::kDifferentPerspectiveCBOrParent));
+
+  target->setAttribute(html_names::kStyleAttr, kPreserve3D);
+  UpdateAllLifecyclePhasesForTest();
+  target->scrollIntoView();
+  EXPECT_FALSE(
+      GetDocument().IsUseCounted(WebFeature::kDifferentPerspectiveCBOrParent));
+
+  target = nullptr;
+
+  // Switch to a case that has a difference between containing block and parent.
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      .abs { position: absolute; top: 0; left: 0; }
+    </style>
+    <div style='perspective: 200px; position: relative'>
+      <div>
+        <div class=abs id=target></div>
+      </div>
+    </div>
+  )HTML");
+
+  target = GetDocument().getElementById("target");
+
+  target->setAttribute(html_names::kStyleAttr, kTransformWithout3D);
+  UpdateAllLifecyclePhasesForTest();
+  target->scrollIntoView();
+  EXPECT_FALSE(
+      GetDocument().IsUseCounted(WebFeature::kDifferentPerspectiveCBOrParent));
+
+  target->setAttribute(html_names::kStyleAttr, kTransformsWith3D[0]);
+  UpdateAllLifecyclePhasesForTest();
+  target->scrollIntoView();
+  EXPECT_TRUE(
+      GetDocument().IsUseCounted(WebFeature::kDifferentPerspectiveCBOrParent));
+  GetDocument().ClearUseCounterForTesting(
+      WebFeature::kDifferentPerspectiveCBOrParent);
+
+  EXPECT_FALSE(
+      GetDocument().IsUseCounted(WebFeature::kDifferentPerspectiveCBOrParent));
+
+  target->setAttribute(html_names::kStyleAttr, kTransformsWith3D[1]);
+  UpdateAllLifecyclePhasesForTest();
+  target->scrollIntoView();
+  EXPECT_TRUE(
+      GetDocument().IsUseCounted(WebFeature::kDifferentPerspectiveCBOrParent));
+  GetDocument().ClearUseCounterForTesting(
+      WebFeature::kDifferentPerspectiveCBOrParent);
+
+  target->setAttribute(html_names::kStyleAttr, kPreserve3D);
+  UpdateAllLifecyclePhasesForTest();
+  target->scrollIntoView();
+  EXPECT_TRUE(
+      GetDocument().IsUseCounted(WebFeature::kDifferentPerspectiveCBOrParent));
+  GetDocument().ClearUseCounterForTesting(
+      WebFeature::kDifferentPerspectiveCBOrParent);
 }
 
 }  // namespace blink

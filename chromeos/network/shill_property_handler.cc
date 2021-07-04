@@ -11,6 +11,7 @@
 
 #include "base/bind.h"
 #include "base/callback_helpers.h"
+#include "base/containers/contains.h"
 #include "base/format_macros.h"
 #include "base/macros.h"
 #include "base/strings/string_split.h"
@@ -299,6 +300,35 @@ void ShillPropertyHandler::RequestProperties(ManagedState::ManagedType type,
   NOTREACHED();
 }
 
+void ShillPropertyHandler::RequestTrafficCounters(
+    const std::string& service_path,
+    ShillServiceClient::ListValueCallback callback) {
+  ShillServiceClient::Get()->RequestTrafficCounters(
+      dbus::ObjectPath(service_path),
+      base::BindOnce(
+          [](const std::string* sp, ShillServiceClient::ListValueCallback cb,
+             const base::ListValue& traffic_counters) {
+            NET_LOG(EVENT) << "Received traffic counters for "
+                           << NetworkPathId(*sp);
+            std::move(cb).Run(traffic_counters);
+          },
+          &service_path, std::move(callback)),
+      base::BindOnce(&network_handler::ShillErrorCallbackFunction,
+                     "RequestTrafficCounters Failed", service_path,
+                     network_handler::ErrorCallback()));
+}
+
+void ShillPropertyHandler::ResetTrafficCounters(
+    const std::string& service_path) {
+  NET_LOG(EVENT) << "ResetTrafficCounters: Success";
+
+  ShillServiceClient::Get()->ResetTrafficCounters(
+      dbus::ObjectPath(service_path), base::DoNothing(),
+      base::BindOnce(&network_handler::ShillErrorCallbackFunction,
+                     "ResetTrafficCounters Failed", service_path,
+                     network_handler::ErrorCallback()));
+}
+
 void ShillPropertyHandler::OnPropertyChanged(const std::string& key,
                                              const base::Value& value) {
   ManagerPropertyChanged(key, value);
@@ -309,7 +339,7 @@ void ShillPropertyHandler::OnPropertyChanged(const std::string& key,
 // Private methods
 
 void ShillPropertyHandler::ManagerPropertiesCallback(
-    base::Optional<base::Value> properties) {
+    absl::optional<base::Value> properties) {
   if (!properties) {
     NET_LOG(ERROR) << "ManagerPropertiesCallback Failed";
     return;
@@ -398,10 +428,9 @@ void ShillPropertyHandler::UpdateProperties(ManagedState::ManagedType type,
   std::set<std::string> new_requested_updates;
   NET_LOG(DEBUG) << "UpdateProperties: " << ManagedState::TypeToString(type)
                  << ": " << entries.GetSize();
-  for (base::ListValue::const_iterator iter = entries.begin();
-       iter != entries.end(); ++iter) {
+  for (const auto& entry : entries.GetList()) {
     std::string path;
-    iter->GetAsString(&path);
+    entry.GetAsString(&path);
     if (path.empty())
       continue;
 
@@ -423,7 +452,7 @@ void ShillPropertyHandler::UpdateObserved(ManagedState::ManagedType type,
       (type == ManagedState::MANAGED_TYPE_NETWORK) ? observed_networks_
                                                    : observed_devices_;
   ShillPropertyObserverMap new_observed;
-  for (const auto& entry : entries) {
+  for (const auto& entry : entries.GetList()) {
     std::string path;
     entry.GetAsString(&path);
     if (path.empty())
@@ -557,7 +586,7 @@ void ShillPropertyHandler::DisableTechnologyFailed(
 void ShillPropertyHandler::GetPropertiesCallback(
     ManagedState::ManagedType type,
     const std::string& path,
-    base::Optional<base::Value> properties) {
+    absl::optional<base::Value> properties) {
   pending_updates_[type].erase(path);
   if (!properties) {
     // The shill service no longer exists.  This can happen when a network
@@ -631,9 +660,8 @@ void ShillPropertyHandler::RequestIPConfigsList(
   const base::ListValue* ip_configs;
   if (!ip_config_list_value.GetAsList(&ip_configs))
     return;
-  for (base::ListValue::const_iterator iter = ip_configs->begin();
-       iter != ip_configs->end(); ++iter) {
-    RequestIPConfig(type, path, *iter);
+  for (const auto& entry : ip_configs->GetList()) {
+    RequestIPConfig(type, path, entry);
   }
 }
 
@@ -641,7 +669,7 @@ void ShillPropertyHandler::GetIPConfigCallback(
     ManagedState::ManagedType type,
     const std::string& path,
     const std::string& ip_config_path,
-    base::Optional<base::Value> properties) {
+    absl::optional<base::Value> properties) {
   if (!properties) {
     // IP Config properties not available. Shill will emit a property change
     // when they are.

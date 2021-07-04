@@ -6,9 +6,16 @@
 
 GEN_INCLUDE(['//chrome/test/data/webui/polymer_browser_test_base.js']);
 
-GEN('#include "ash/constants/ash_features.h"');
-GEN('#include "content/public/test/browser_test.h"');
-GEN('#include "build/chromeos_buildflags.h"');
+GEN(`#include "content/public/test/browser_test.h"
+#include "build/build_config.h"
+#include "build/chromeos_buildflags.h"
+
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+#include "ash/constants/ash_features.h"
+#elif BUILDFLAG(IS_CHROMEOS_LACROS)
+// Do not enable ash features in lacros chrome.
+#define InitWithFeatures(enabled, disabled) InitWithFeatures({}, {})
+#endif`);
 
 const PrintPreviewTest = class extends PolymerTest {
   /** @override */
@@ -60,7 +67,7 @@ TEST_F('PrintPreviewAppTest', 'CssBackgroundManaged', function() {
   this.runMochaTest(print_preview_app_test.TestNames.CssBackgroundManaged);
 });
 
-GEN('#if BUILDFLAG(IS_CHROMEOS_ASH)');
+GEN('#if defined(OS_CHROMEOS)');
 TEST_F('PrintPreviewAppTest', 'SheetsManaged', function() {
   this.runMochaTest(print_preview_app_test.TestNames.SheetsManaged);
 });
@@ -108,6 +115,14 @@ var PrintPreviewPagesSettingsTest = class extends PrintPreviewTest {
 
 TEST_F('PrintPreviewPagesSettingsTest', 'PagesDropdown', function() {
   this.runMochaTest(pages_settings_test.TestNames.PagesDropdown);
+});
+
+TEST_F('PrintPreviewPagesSettingsTest', 'NoParityOptions', function() {
+  this.runMochaTest(pages_settings_test.TestNames.NoParityOptions);
+});
+
+TEST_F('PrintPreviewPagesSettingsTest', 'ParitySelectionMemorized', function() {
+  this.runMochaTest(pages_settings_test.TestNames.ParitySelectionMemorized);
 });
 
 TEST_F('PrintPreviewPagesSettingsTest', 'ValidPageRanges', function() {
@@ -216,7 +231,7 @@ TEST_F('PrintPreviewPolicyTest', 'MediaSizePolicy', function() {
   this.runMochaTest(policy_tests.TestNames.MediaSizePolicy);
 });
 
-GEN('#if BUILDFLAG(IS_CHROMEOS_ASH)');
+GEN('#if defined(OS_CHROMEOS)');
 TEST_F('PrintPreviewPolicyTest', 'SheetsPolicy', function() {
   this.runMochaTest(policy_tests.TestNames.SheetsPolicy);
 });
@@ -334,7 +349,7 @@ TEST_F('PrintPreviewModelTest', 'ChangeDestination', function() {
   this.runMochaTest(model_test.TestNames.ChangeDestination);
 });
 
-GEN('#if BUILDFLAG(IS_CHROMEOS_ASH)');
+GEN('#if defined(OS_CHROMEOS)');
 // eslint-disable-next-line no-var
 var PrintPreviewModelTestCros = class extends PrintPreviewTest {
   /** @override */
@@ -345,16 +360,6 @@ var PrintPreviewModelTestCros = class extends PrintPreviewTest {
   /** @override */
   get suiteName() {
     return model_test.suiteName;
-  }
-
-  /** @override */
-  get featureList() {
-    const kPrintSaveToDrive = ['chromeos::features::kPrintSaveToDrive'];
-    const featureList = super.featureList || [];
-    featureList.enabled = featureList.enabled ?
-        featureList.enabled.concat(kPrintSaveToDrive) :
-        kPrintSaveToDrive;
-    return featureList;
   }
 };
 
@@ -375,7 +380,7 @@ TEST_F('PrintPreviewModelSettingsAvailabilityTest', 'All', function() {
   mocha.run();
 });
 
-GEN('#if BUILDFLAG(IS_CHROMEOS_ASH)');
+GEN('#if defined(OS_CHROMEOS)');
 // eslint-disable-next-line no-var
 var PrintPreviewModelSettingsPolicyTest = class extends PrintPreviewTest {
   /** @override */
@@ -474,7 +479,7 @@ TEST_F(
                             .ZeroDefaultMarginsClearsHeaderFooter);
     });
 
-GEN('#if !BUILDFLAG(IS_CHROMEOS_ASH)');
+GEN('#if !defined(OS_CHROMEOS)');
 // eslint-disable-next-line no-var
 var PrintPreviewLinkContainerTest = class extends PrintPreviewTest {
   /** @override */
@@ -499,7 +504,7 @@ TEST_F('PrintPreviewLinkContainerTest', 'SystemDialogLinkClick', function() {
 TEST_F('PrintPreviewLinkContainerTest', 'InvalidState', function() {
   this.runMochaTest(link_container_test.TestNames.InvalidState);
 });
-GEN('#endif');  // !BUILDFLAG(IS_CHROMEOS_ASH)
+GEN('#endif');  // !defined(OS_CHROMEOS)
 
 GEN('#if defined(OS_MAC)');
 TEST_F('PrintPreviewLinkContainerTest', 'OpenInPreviewLinkClick', function() {
@@ -596,6 +601,12 @@ TEST_F(
     });
 
 TEST_F(
+    'PrintPreviewDestinationStoreTest', 'RecentCloudPrintFallback', function() {
+      this.runMochaTest(
+          destination_store_test.TestNames.RecentCloudPrintFallback);
+    });
+
+TEST_F(
     'PrintPreviewDestinationStoreTest', 'MultipleRecentDestinations',
     function() {
       this.runMochaTest(
@@ -610,13 +621,20 @@ TEST_F(
     });
 
 TEST_F(
+    'PrintPreviewDestinationStoreTest',
+    'MultipleRecentDestinationsAndCloudPrint', function() {
+      this.runMochaTest(destination_store_test.TestNames
+                            .MultipleRecentDestinationsAndCloudPrint);
+    });
+
+TEST_F(
     'PrintPreviewDestinationStoreTest', 'DefaultDestinationSelectionRules',
     function() {
       this.runMochaTest(
           destination_store_test.TestNames.DefaultDestinationSelectionRules);
     });
 
-GEN('#if !BUILDFLAG(IS_CHROMEOS_ASH)');
+GEN('#if !defined(OS_CHROMEOS)');
 TEST_F(
     'PrintPreviewDestinationStoreTest', 'SystemDefaultPrinterPolicy',
     function() {
@@ -653,14 +671,16 @@ TEST_F('PrintPreviewDestinationStoreTest', 'RecentSaveAsPdf', function() {
   this.runMochaTest(destination_store_test.TestNames.RecentSaveAsPdf);
 });
 
+GEN('#if !defined(OS_CHROMEOS)');
 TEST_F(
     'PrintPreviewDestinationStoreTest', 'MultipleRecentDestinationsAccounts',
     function() {
       this.runMochaTest(
           destination_store_test.TestNames.MultipleRecentDestinationsAccounts);
     });
+GEN('#endif');
 
-GEN('#if BUILDFLAG(IS_CHROMEOS_ASH)');
+GEN('#if defined(OS_CHROMEOS)');
 // eslint-disable-next-line no-var
 var PrintPreviewDestinationStoreTestCros = class extends PrintPreviewTest {
   /** @override */
@@ -671,16 +691,6 @@ var PrintPreviewDestinationStoreTestCros = class extends PrintPreviewTest {
   /** @override */
   get suiteName() {
     return destination_store_test.suiteName;
-  }
-
-  /** @override */
-  get featureList() {
-    const kPrintSaveToDrive = ['chromeos::features::kPrintSaveToDrive'];
-    const featureList = super.featureList || [];
-    featureList.enabled = featureList.enabled ?
-        featureList.enabled.concat(kPrintSaveToDrive) :
-        kPrintSaveToDrive;
-    return featureList;
   }
 };
 
@@ -701,7 +711,7 @@ TEST_F('PrintPreviewDestinationStoreTestCros', 'DriveNotMounted', function() {
 });
 GEN('#endif');
 
-GEN('#if BUILDFLAG(IS_CHROMEOS_ASH)');
+GEN('#if defined(OS_CHROMEOS)');
 // eslint-disable-next-line no-var
 var PrintPreviewPrintServerStoreTestCros = class extends PrintPreviewTest {
   /** @override */
@@ -739,7 +749,7 @@ TEST_F(
     });
 GEN('#endif');
 
-GEN('#if !BUILDFLAG(IS_CHROMEOS_ASH)');
+GEN('#if !defined(OS_CHROMEOS)');
 // eslint-disable-next-line no-var
 var PrintPreviewDestinationDialogTest = class extends PrintPreviewTest {
   /** @override */
@@ -773,16 +783,6 @@ var PrintPreviewDestinationDialogCrosTest = class extends PrintPreviewTest {
   /** @override */
   get suiteName() {
     return destination_dialog_cros_test.suiteName;
-  }
-
-  /** @override */
-  get featureList() {
-    const featureList = super.featureList || [];
-    const kPrintServerScaling = ['chromeos::features::kPrintServerScaling'];
-    featureList.enabled = featureList.enabled ?
-        featureList.enabled.concat(kPrintServerScaling) :
-        kPrintServerScaling;
-    return featureList;
   }
 };
 
@@ -959,7 +959,7 @@ TEST_F('PrintPreviewCustomMarginsTest', 'ControlsDisabledOnError', function() {
   this.runMochaTest(custom_margins_test.TestNames.ControlsDisabledOnError);
 });
 
-GEN('#if BUILDFLAG(IS_CHROMEOS_ASH)');
+GEN('#if defined(OS_CHROMEOS)');
 // eslint-disable-next-line no-var
 var PrintPreviewDestinationSearchTestChromeOS = class extends PrintPreviewTest {
   /** @override */
@@ -1115,7 +1115,7 @@ TEST_F('PrintPreviewDestinationItemTest', 'QueryDescription', function() {
   this.runMochaTest(destination_item_test.TestNames.QueryDescription);
 });
 
-GEN('#if BUILDFLAG(IS_CHROMEOS_ASH)');
+GEN('#if defined(OS_CHROMEOS)');
 // eslint-disable-next-line no-var
 var PrintPreviewDestinationItemTestCros = class extends PrintPreviewTest {
   /** @override */
@@ -1126,16 +1126,6 @@ var PrintPreviewDestinationItemTestCros = class extends PrintPreviewTest {
   /** @override */
   get suiteName() {
     return destination_item_test_cros.suiteName;
-  }
-
-  /** @override */
-  get featureList() {
-    const kPrinterStatusDialog = ['chromeos::features::kPrinterStatusDialog'];
-    const featureList = super.featureList || [];
-    featureList.enabled = featureList.enabled ?
-        featureList.enabled.concat(kPrinterStatusDialog) :
-        kPrinterStatusDialog;
-    return featureList;
   }
 };
 
@@ -1241,7 +1231,7 @@ TEST_F('PrintPreviewPrintButtonTest', 'PDFPrintVisiblePreview', function() {
   this.runMochaTest(print_button_test.TestNames.PDFPrintVisiblePreview);
 });
 
-GEN('#if BUILDFLAG(IS_CHROMEOS_ASH)');
+GEN('#if defined(OS_CHROMEOS)');
 // eslint-disable-next-line no-var
 var PrintPreviewPrintButtonTestCros = class extends PrintPreviewTest {
   /** @override */
@@ -1252,16 +1242,6 @@ var PrintPreviewPrintButtonTestCros = class extends PrintPreviewTest {
   /** @override */
   get suiteName() {
     return print_button_test.suiteName;
-  }
-
-  /** @override */
-  get featureList() {
-    const kPrintSaveToDrive = ['chromeos::features::kPrintSaveToDrive'];
-    const featureList = super.featureList || [];
-    featureList.enabled = featureList.enabled ?
-        featureList.enabled.concat(kPrintSaveToDrive) :
-        kPrintSaveToDrive;
-    return featureList;
   }
 };
 
@@ -1324,42 +1304,7 @@ TEST_F('PrintPreviewKeyEventTest', 'CtrlShiftPOpensSystemDialog', function() {
   this.runMochaTest(key_event_test.TestNames.CtrlShiftPOpensSystemDialog);
 });
 
-GEN('#if BUILDFLAG(IS_CHROMEOS_ASH)');
-// eslint-disable-next-line no-var
-var PrintPreviewDestinationSelectTestCrOS = class extends PrintPreviewTest {
-  /** @override */
-  get browsePreload() {
-    return 'chrome://print/test_loader.html?module=print_preview/destination_select_test_cros.js';
-  }
-
-  /** @override */
-  get suiteName() {
-    return destination_select_test_cros.suiteName;
-  }
-
-  /** @override */
-  get featureList() {
-    const kPrinterStatus = ['chromeos::features::kPrinterStatus'];
-    const featureList = super.featureList || [];
-    featureList.disabled = featureList.disabled ?
-        featureList.disabled.concat(kPrinterStatus) :
-        kPrinterStatus;
-    return featureList;
-  }
-};
-
-TEST_F('PrintPreviewDestinationSelectTestCrOS', 'UpdateStatus', function() {
-  this.runMochaTest(destination_select_test_cros.TestNames.UpdateStatus);
-});
-
-TEST_F('PrintPreviewDestinationSelectTestCrOS', 'ChangeIcon', function() {
-  this.runMochaTest(destination_select_test_cros.TestNames.ChangeIcon);
-});
-
-TEST_F('PrintPreviewDestinationSelectTestCrOS', 'EulaIsDisplayed', function() {
-  this.runMochaTest(destination_select_test_cros.TestNames.EulaIsDisplayed);
-});
-
+GEN('#if defined(OS_CHROMEOS)');
 // eslint-disable-next-line no-var
 var PrintPreviewPrinterStatusTestCros = class extends PrintPreviewTest {
   /** @override */
@@ -1370,16 +1315,6 @@ var PrintPreviewPrinterStatusTestCros = class extends PrintPreviewTest {
   /** @override */
   get suiteName() {
     return printer_status_test_cros.suiteName;
-  }
-
-  /** @override */
-  get featureList() {
-    const kPrinterStatus = ['chromeos::features::kPrinterStatus'];
-    const featureList = super.featureList || [];
-    featureList.enabled = featureList.enabled ?
-        featureList.enabled.concat(kPrinterStatus) :
-        kPrinterStatus;
-    return featureList;
   }
 };
 
@@ -1403,6 +1338,13 @@ TEST_F('PrintPreviewPrinterStatusTestCros', 'HiddenStatusText', function() {
 TEST_F('PrintPreviewPrinterStatusTestCros', 'ChangeIcon', function() {
   this.runMochaTest(printer_status_test_cros.TestNames.ChangeIcon);
 });
+
+TEST_F(
+    'PrintPreviewPrinterStatusTestCros', 'SuccessfulPrinterStatusAfterRetry',
+    function() {
+      this.runMochaTest(
+          printer_status_test_cros.TestNames.SuccessfulPrinterStatusAfterRetry);
+    });
 
 // eslint-disable-next-line no-var
 var PrintPreviewDestinationDropdownCrosTest = class extends PrintPreviewTest {
@@ -1573,13 +1515,6 @@ TEST_F(
           destination_settings_test.TestNames.UpdateRecentDestinations);
     });
 
-TEST_F(
-    'PrintPreviewDestinationSettingsTest', 'ResetDestinationOnSignOut',
-    function() {
-      this.runMochaTest(
-          destination_settings_test.TestNames.ResetDestinationOnSignOut);
-    });
-
 TEST_F('PrintPreviewDestinationSettingsTest', 'DisabledSaveAsPdf', function() {
   this.runMochaTest(destination_settings_test.TestNames.DisabledSaveAsPdf);
 });
@@ -1595,7 +1530,7 @@ TEST_F(
       this.runMochaTest(destination_settings_test.TestNames.NoDestinations);
     });
 
-GEN('#if BUILDFLAG(IS_CHROMEOS_ASH)');
+GEN('#if defined(OS_CHROMEOS)');
 // eslint-disable-next-line no-var
 var PrintPreviewDestinationSettingsTestCros = class extends PrintPreviewTest {
   /** @override */
@@ -1606,16 +1541,6 @@ var PrintPreviewDestinationSettingsTestCros = class extends PrintPreviewTest {
   /** @override */
   get suiteName() {
     return destination_settings_test_cros.suiteName;
-  }
-
-  /** @override */
-  get featureList() {
-    const kPrintSaveToDrive = ['chromeos::features::kPrintSaveToDrive'];
-    const featureList = super.featureList || [];
-    featureList.enabled = featureList.enabled ?
-        featureList.enabled.concat(kPrintSaveToDrive) :
-        kPrintSaveToDrive;
-    return featureList;
   }
 };
 
@@ -1771,7 +1696,7 @@ TEST_F('PrintPreviewDuplexSettingsTest', 'All', function() {
   mocha.run();
 });
 
-GEN('#if BUILDFLAG(IS_CHROMEOS_ASH)');
+GEN('#if defined(OS_CHROMEOS)');
 // eslint-disable-next-line no-var
 var PrintPreviewPinSettingsTest = class extends PrintPreviewTest {
   /** @override */

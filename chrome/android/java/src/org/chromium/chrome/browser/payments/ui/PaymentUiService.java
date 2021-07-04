@@ -59,11 +59,9 @@ import org.chromium.components.payments.AbortReason;
 import org.chromium.components.payments.BasicCardUtils;
 import org.chromium.components.payments.CurrencyFormatter;
 import org.chromium.components.payments.ErrorStrings;
-import org.chromium.components.payments.Event;
 import org.chromium.components.payments.JourneyLogger;
 import org.chromium.components.payments.PaymentApp;
 import org.chromium.components.payments.PaymentAppType;
-import org.chromium.components.payments.PaymentDetailsUpdateServiceHelper;
 import org.chromium.components.payments.PaymentFeatureList;
 import org.chromium.components.payments.PaymentOptionsUtils;
 import org.chromium.components.payments.PaymentRequestParams;
@@ -303,7 +301,8 @@ public class PaymentUiService
                 AddressEditor.Purpose.PAYMENT_REQUEST, /*saveToDisk=*/!isOffTheRecord);
         // PaymentRequest card editor does not show the organization name in the dropdown with the
         // billing address labels.
-        mCardEditor = new CardEditor(webContents, mAddressEditor, /*includeOrgLabel=*/false);
+        mCardEditor = new CardEditor(
+                webContents, mAddressEditor, /*includeOrgLabel=*/false, isOffTheRecord);
         mJourneyLogger = journeyLogger;
         mWebContents = webContents;
         mTopLevelOriginFormattedForDisplay = topLevelOrigin;
@@ -692,7 +691,6 @@ public class PaymentUiService
 
         // Go back to the payment sheet
         mPaymentRequestUI.onPayButtonProcessingCancelled();
-        PaymentDetailsUpdateServiceHelper.getInstance().reset();
         if (!TextUtils.isEmpty(errors.error)) {
             mPaymentRequestUI.setRetryErrorMessage(errors.error);
         } else {
@@ -1013,7 +1011,12 @@ public class PaymentUiService
         WebContents paymentHandlerWebContents = paymentHandlerUi.show(
                 /*paymentRequestWebContents=*/mWebContents, url, isOffTheRecord,
                 /*uiObserver=*/this);
-        if (paymentHandlerWebContents != null) mPaymentHandlerUi = paymentHandlerUi;
+        if (paymentHandlerWebContents == null) {
+            paymentHandlerUi.hide();
+            return null;
+        }
+        mPaymentHandlerUi = paymentHandlerUi;
+
         return paymentHandlerWebContents;
     }
 
@@ -1043,6 +1046,14 @@ public class PaymentUiService
         return true;
     }
 
+    // Implements PaymentUiServiceTestInterface:
+    @Override
+    @VisibleForTesting(otherwise = VisibleForTesting.NONE)
+    public boolean closeDialogForTest() {
+        if (!mHasClosed) close();
+        return true;
+    }
+
     /** Provide PaymentInformation to the PaymentRequest UI. */
     public void providePaymentInformationToPaymentRequestUI() {
         // Do not display service worker payment apps summary in single line so as to display its
@@ -1053,7 +1064,6 @@ public class PaymentUiService
                 new PaymentInformation(mUiShoppingCart, mShippingAddressesSection,
                         mUiShippingOptions, mContactSection, mPaymentMethodsSection));
         mPaymentInformationCallback = null;
-        mJourneyLogger.setEventOccurred(Event.SHOWN);
     }
 
     /**
@@ -1268,7 +1278,7 @@ public class PaymentUiService
 
         final FaviconHelper faviconHelper = new FaviconHelper();
         faviconHelper.getLocalFaviconImageForURL(Profile.fromWebContents(mWebContents),
-                mWebContents.getLastCommittedUrl().getSpec(),
+                mWebContents.getLastCommittedUrl(),
                 activity.getResources().getDimensionPixelSize(R.dimen.payments_favicon_size),
                 (bitmap, iconUrl) -> {
                     if (bitmap == null) {

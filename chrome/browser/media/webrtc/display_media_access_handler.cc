@@ -10,6 +10,7 @@
 
 #include "base/bind.h"
 #include "base/callback.h"
+#include "base/containers/cxx20_erase.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
@@ -31,6 +32,7 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom-shared.h"
+#include "third_party/blink/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #include "chrome/browser/chromeos/policy/dlp/dlp_content_manager.h"
@@ -149,7 +151,7 @@ void DisplayMediaAccessHandler::HandleRequest(
       return;
     }
     if (!rfh->IsFeatureEnabled(
-            blink::mojom::FeaturePolicyFeature::kDisplayCapture)) {
+            blink::mojom::PermissionsPolicyFeature::kDisplayCapture)) {
       bad_message::ReceivedBadMessage(
           rfh->GetProcess(), bad_message::BadMessageReason::
                                  RFH_DISPLAY_CAPTURE_PERMISSION_MISSING);
@@ -214,20 +216,24 @@ void DisplayMediaAccessHandler::ProcessQueuedAccessRequest(
   const PendingAccessRequest& pending_request = *queue.front();
   UpdateTrusted(pending_request.request, false /* is_trusted */);
 
-  std::vector<DesktopMediaList::Type> media_types = {
-      DesktopMediaList::Type::kScreen, DesktopMediaList::Type::kWindow,
-      DesktopMediaList::Type::kWebContents};
+  std::vector<DesktopMediaList::Type> media_types;
+  if (pending_request.request.video_type ==
+      blink::mojom::MediaStreamType::DISPLAY_VIDEO_CAPTURE_THIS_TAB) {
+    media_types = {DesktopMediaList::Type::kCurrentTab,
+                   DesktopMediaList::Type::kWebContents,
+                   DesktopMediaList::Type::kWindow,
+                   DesktopMediaList::Type::kScreen};
+  } else {
+    media_types = {DesktopMediaList::Type::kScreen,
+                   DesktopMediaList::Type::kWindow,
+                   DesktopMediaList::Type::kWebContents};
+  }
 
   // Avoid offering window-capture as a separate source, since PipeWire's
   // content-picker will offer both screen and window sources.
   // See crbug.com/1157006.
   if (content::desktop_capture::CanUsePipeWire()) {
     base::Erase(media_types, DesktopMediaList::Type::kWindow);
-  }
-
-  if (pending_request.request.video_type ==
-      blink::mojom::MediaStreamType::DISPLAY_VIDEO_CAPTURE_THIS_TAB) {
-    media_types.push_back(DesktopMediaList::Type::kCurrentTab);
   }
 
   auto source_lists =
@@ -248,7 +254,12 @@ void DisplayMediaAccessHandler::ProcessQueuedAccessRequest(
   picker_params.request_audio =
       pending_request.request.audio_type ==
       blink::mojom::MediaStreamType::DISPLAY_AUDIO_CAPTURE;
-  picker_params.approve_audio_by_default = false;
+  // getDisplayMedia's checkbox state defaults to unchecked, but for
+  // getCurrentBrowsingContextMedia, we default to checked.
+  picker_params.approve_audio_by_default =
+      (picker_params.request_audio &&
+       pending_request.request.video_type ==
+           blink::mojom::MediaStreamType::DISPLAY_VIDEO_CAPTURE_THIS_TAB);
   pending_request.picker->Show(picker_params, std::move(source_lists),
                                std::move(done_callback));
 }
@@ -309,11 +320,16 @@ void DisplayMediaAccessHandler::OnPickerDialogResults(
       const auto& visible_url = url_formatter::FormatUrlForSecurityDisplay(
           web_contents->GetLastCommittedURL(),
           url_formatter::SchemeDisplay::OMIT_CRYPTOGRAPHIC);
+      const bool disable_local_echo =
+          (media_id.type == content::DesktopMediaID::TYPE_WEB_CONTENTS) &&
+          media_id.web_contents_id.disable_local_echo;
       ui = GetDevicesForDesktopCapture(
-          web_contents, &devices, media_id, pending_request.request.video_type,
+          web_contents,
+          url::Origin::Create(pending_request.request.security_origin),
+          &devices, media_id, pending_request.request.video_type,
           blink::mojom::MediaStreamType::DISPLAY_AUDIO_CAPTURE,
-          media_id.audio_share, false /* disable_local_echo */,
-          display_notification_, visible_url, visible_url);
+          media_id.audio_share, disable_local_echo, display_notification_,
+          visible_url, visible_url);
     }
   }
 

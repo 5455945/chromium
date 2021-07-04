@@ -9,7 +9,7 @@
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/feature_list.h"
-#include "base/metrics/histogram_functions.h"
+#include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/sequenced_task_runner_handle.h"
 #include "base/trace_event/memory_usage_estimator.h"
@@ -22,6 +22,7 @@
 #include "components/sync/base/model_type.h"
 #include "components/sync/base/time.h"
 #include "components/sync/engine/commit_queue.h"
+#include "components/sync/engine/model_type_processor_metrics.h"
 #include "components/sync/engine/model_type_processor_proxy.h"
 #include "components/sync/model/data_type_activation_request.h"
 #include "components/sync/model/type_entities_count.h"
@@ -179,6 +180,10 @@ void BookmarkModelTypeProcessor::OnUpdateReceived(
   DCHECK(!model_type_state.cache_guid().empty());
   DCHECK_EQ(model_type_state.cache_guid(), cache_guid_);
   DCHECK(model_type_state.initial_sync_done());
+
+  syncer::LogUpdatesReceivedByProcessorHistogram(
+      syncer::BOOKMARKS,
+      /*is_initial_sync=*/!bookmark_tracker_, updates.size());
 
   if (!bookmark_tracker_) {
     OnInitialUpdateReceived(model_type_state, std::move(updates));
@@ -512,7 +517,8 @@ void BookmarkModelTypeProcessor::AppendNodeAndChildrenForDebugging(
       syncer::ProtoTimeToTime(metadata->modification_time());
   data.name = base::UTF16ToUTF8(node->GetTitle());
   data.is_folder = node->is_folder();
-  data.unique_position = metadata->unique_position();
+  data.unique_position =
+      syncer::UniquePosition::FromProto(metadata->unique_position());
   data.specifics =
       CreateSpecificsFromBookmarkNode(node, bookmark_model_,
                                       /*force_favicon_load=*/false);
@@ -549,7 +555,9 @@ void BookmarkModelTypeProcessor::AppendNodeAndChildrenForDebugging(
   }
   data_dictionary->SetInteger("LOCAL_EXTERNAL_ID", node->id());
   data_dictionary->SetInteger("positionIndex", index);
-  data_dictionary->Set("metadata", syncer::EntityMetadataToValue(*metadata));
+  data_dictionary->SetKey("metadata",
+                          base::Value::FromUniquePtrValue(
+                              syncer::EntityMetadataToValue(*metadata)));
   data_dictionary->SetString("modelType", "Bookmarks");
   all_nodes->Append(std::move(data_dictionary));
 

@@ -185,7 +185,7 @@ bool BaseSearchPrefetchRequest::StartPrefetchRequest(Profile* profile) {
       /*is_ua_override_on=*/false, js_enabled);
 
 #if defined(OS_ANDROID)
-  base::Optional<std::string> geo_header =
+  absl::optional<std::string> geo_header =
       GetGeolocationHeaderIfAllowed(resource_request->url, profile);
   if (geo_header) {
     resource_request->headers.AddHeaderFromString(geo_header.value());
@@ -210,7 +210,7 @@ bool BaseSearchPrefetchRequest::StartPrefetchRequest(Profile* profile) {
   auto* default_search = template_url_service->GetDefaultSearchProvider();
   DCHECK(default_search);
 
-  base::string16 prefetch_url_search_terms;
+  std::u16string prefetch_url_search_terms;
 
   default_search->ExtractSearchTermsFromURL(
       prefetch_url_, template_url_service->search_terms_data(),
@@ -225,11 +225,11 @@ bool BaseSearchPrefetchRequest::StartPrefetchRequest(Profile* profile) {
     // they call into the delegate in the destructor.
     throttle.reset();
 
-    base::string16 new_url_search_terms;
+    std::u16string new_url_search_terms;
 
     // Check that search terms still match. Google URLs can be changed by
-    // AndroidDarkSearch (and in other cases like safe search). Make sure the
-    // URL still has the same search terms for the DSE.
+    // by safe search (and other features as well) Make sure the URL still has
+    // the same search terms for the DSE.
     default_search->ExtractSearchTermsFromURL(
         resource_request->url, template_url_service->search_terms_data(),
         &new_url_search_terms);

@@ -5,7 +5,6 @@
 #include <memory>
 #include <vector>
 
-#include "ash/public/cpp/ash_features.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/wm/desks/desk_mini_view.h"
@@ -20,7 +19,6 @@
 #include "ash/wm/overview/overview_window_drag_controller.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller_test_api.h"
-#include "base/callback_forward.h"
 #include "base/location.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -66,7 +64,7 @@ class OverviewWindowDragHistogramTest : public AshTestBase {
   }
 
   gfx::Point EnterOverviewAndGetItemCenterPoint() {
-    Shell::Get()->overview_controller()->StartOverview();
+    EnterOverview();
     return gfx::ToRoundedPoint(
         GetOverviewItemForWindow(window_.get())->target_bounds().CenterPoint());
   }

@@ -27,6 +27,7 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/back_forward_cache/back_forward_cache_disable.h"
 #include "components/blocked_content/popup_blocker_tab_helper.h"
 #include "components/content_settings/browser/page_specific_content_settings.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
@@ -37,9 +38,9 @@
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
-#include "components/safe_browsing/core/db/safebrowsing.pb.h"
-#include "components/safe_browsing/core/db/v4_embedded_test_server_util.h"
-#include "components/safe_browsing/core/db/v4_test_util.h"
+#include "components/safe_browsing/core/browser/db/safebrowsing.pb.h"
+#include "components/safe_browsing/core/browser/db/v4_embedded_test_server_util.h"
+#include "components/safe_browsing/core/browser/db/v4_test_util.h"
 #include "components/subresource_filter/core/browser/subresource_filter_features.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
@@ -111,8 +112,8 @@ class SafeBrowsingTriggeredPopupBlockerBrowserTest
 
   void SetUpOnMainThread() override {
     base::FilePath test_data_dir;
-    base::PathService::Get(chrome::DIR_TEST_DATA, &test_data_dir);
-    embedded_test_server()->ServeFilesFromDirectory(test_data_dir);
+    embedded_test_server()->ServeFilesFromSourceDirectory(
+        "components/test/data");
     host_resolver()->AddRule("*", "127.0.0.1");
     content::SetupCrossSiteRedirector(embedded_test_server());
 
@@ -718,5 +719,7 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingTriggeredPopupBlockerBrowserTest,
 
   EXPECT_TRUE(back_forward_cache_tester.IsDisabledForFrameWithReason(
       main_frame_process_id, main_frame_routing_id,
-      "SafeBrowsingTriggeredPopupBlocker"));
+      back_forward_cache::DisabledReason(
+          back_forward_cache::DisabledReasonId::
+              kSafeBrowsingTriggeredPopupBlocker)));
 }

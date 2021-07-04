@@ -62,6 +62,14 @@ AtomicString ConsumeStringOrURI(CSSParserTokenStream& stream) {
   return uri.Value().ToAtomicString();
 }
 
+AtomicString ConsumeContainerName(CSSParserTokenRange& range,
+                                  const CSSParserContext& context) {
+  CSSValue* name = css_parsing_utils::ConsumeContainerName(range, context);
+  if (auto* custom_ident = DynamicTo<CSSCustomIdentValue>(name))
+    return custom_ident->Value();
+  return g_null_atom;
+}
+
 }  // namespace
 
 CSSParserImpl::CSSParserImpl(const CSSParserContext* context,
@@ -913,9 +921,6 @@ StyleRuleProperty* CSSParserImpl::ConsumePropertyRule(
     return nullptr;
   CSSParserTokenStream::BlockGuard guard(stream);
 
-  if (!RuntimeEnabledFeatures::CSSVariables2AtPropertyEnabled())
-    return nullptr;
-
   const CSSParserToken& name_token = prelude.ConsumeIncludingWhitespace();
   if (!prelude.AtEnd())
     return nullptr;
@@ -1002,6 +1007,8 @@ StyleRuleContainer* CSSParserImpl::ConsumeContainerRule(
     observer_->StartRuleBody(stream.Offset());
   }
 
+  AtomicString name = ConsumeContainerName(prelude, *context_);
+
   // TODO(crbug.com/1145970): Restrict what is allowed by @container.
   scoped_refptr<MediaQuerySet> media_queries =
       MediaQueryParser::ParseMediaQuerySet(prelude,
@@ -1009,7 +1016,7 @@ StyleRuleContainer* CSSParserImpl::ConsumeContainerRule(
   if (!media_queries)
     return nullptr;
   ContainerQuery* container_query =
-      MakeGarbageCollected<ContainerQuery>(media_queries);
+      MakeGarbageCollected<ContainerQuery>(name, media_queries);
 
   HeapVector<Member<StyleRuleBase>> rules;
   ConsumeRuleList(stream, kRegularRuleList,

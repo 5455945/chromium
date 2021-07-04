@@ -7,7 +7,6 @@
 #include "android_webview/browser/gfx/child_frame.h"
 #include "android_webview/browser/gfx/display_scheduler_webview.h"
 #include "android_webview/browser/gfx/viz_compositor_thread_runner_webview.h"
-#include "base/no_destructor.h"
 #include "base/trace_event/trace_event.h"
 #include "components/viz/common/surfaces/frame_sink_id_allocator.h"
 #include "components/viz/service/frame_sinks/compositor_frame_sink_support.h"
@@ -18,8 +17,8 @@ namespace android_webview {
 namespace {
 
 viz::FrameSinkId AllocateParentSinkId() {
-  static base::NoDestructor<viz::FrameSinkIdAllocator> allocator(0u);
-  return allocator->NextFrameSinkId();
+  static viz::FrameSinkIdAllocator allocator(0u);
+  return allocator.NextFrameSinkId();
 }
 
 }  // namespace
@@ -42,17 +41,18 @@ class RootFrameSink::ChildCompositorFrameSink
   }
 
   void DidReceiveCompositorFrameAck(
-      const std::vector<viz::ReturnedResource>& resources) override {
-    ReclaimResources(resources);
+      std::vector<viz::ReturnedResource> resources) override {
+    ReclaimResources(std::move(resources));
   }
   void OnBeginFrame(const viz::BeginFrameArgs& args,
                     const viz::FrameTimingDetailsMap& feedbacks) override {}
   void OnBeginFramePausedChanged(bool paused) override {}
-  void ReclaimResources(
-      const std::vector<viz::ReturnedResource>& resources) override {
+  void ReclaimResources(std::vector<viz::ReturnedResource> resources) override {
     owner_->ReturnResources(frame_sink_id_, layer_tree_frame_sink_id_,
-                            resources);
+                            std::move(resources));
   }
+  void OnCompositorFrameTransitionDirectiveProcessed(
+      uint32_t sequence_id) override {}
 
   const viz::FrameSinkId frame_sink_id() { return frame_sink_id_; }
 
@@ -64,7 +64,7 @@ class RootFrameSink::ChildCompositorFrameSink
   void SubmitCompositorFrame(
       const viz::LocalSurfaceId& local_surface_id,
       viz::CompositorFrame frame,
-      base::Optional<viz::HitTestRegionList> hit_test_region_list) {
+      absl::optional<viz::HitTestRegionList> hit_test_region_list) {
     size_ = frame.size_in_pixels();
     support()->SubmitCompositorFrame(local_surface_id, std::move(frame),
                                      std::move(hit_test_region_list));
@@ -144,13 +144,13 @@ void RootFrameSink::EvictRootSurface(
 }
 
 void RootFrameSink::DidReceiveCompositorFrameAck(
-    const std::vector<viz::ReturnedResource>& resources) {
+    std::vector<viz::ReturnedResource> resources) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  ReclaimResources(resources);
+  ReclaimResources(std::move(resources));
 }
 
 void RootFrameSink::ReclaimResources(
-    const std::vector<viz::ReturnedResource>& resources) {
+    std::vector<viz::ReturnedResource> resources) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   // Root surface should have no resources to return.
   CHECK(resources.empty());

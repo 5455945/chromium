@@ -7,11 +7,11 @@
  */
 
 // clang-format off
-// #import {assert} from 'chrome://resources/js/assert.m.js';
+import {assert} from 'chrome://resources/js/assert.m.js';
 // clang-format on
 
 /** @polymerBehavior */
-/* #export */ const PrefsBehavior = {
+export const PrefsBehavior = {
   properties: {
     /** Preferences state. */
     prefs: {
@@ -73,3 +73,36 @@
     this.arrayDelete('prefs.' + key + '.value', item);
   },
 };
+
+/** @interface */
+export class PrefsBehaviorInterface {
+  /** @return  {!Object} */
+  get prefs() {}
+
+  /** @param obj {!Object} */
+  set prefs(obj) {}
+
+  /**
+   * @param {string} prefPath
+   * @return {!chrome.settingsPrivate.PrefObject}
+   */
+  getPref(prefPath) {}
+
+  /*
+   * @param {string} prefPath
+   * @param {*} value
+   */
+  setPrefValue(prefPath, value) {}
+
+  /**
+   * @param {string} key
+   * @param {*} item
+   */
+  appendPrefListItem(key, item) {}
+
+  /**
+   * @param {string} key
+   * @param {*} item
+   */
+  deletePrefListItem(key, item) {}
+}

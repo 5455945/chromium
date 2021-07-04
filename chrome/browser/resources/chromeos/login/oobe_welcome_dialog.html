@@ -8,10 +8,13 @@
 <link rel="import" href="chrome://resources/cr_elements/shared_style_css.html">
 <link rel="import" href="chrome://resources/cr_elements/cr_lottie/cr_lottie.html">
 
-<link rel="import" href="/components/oobe_shared_vars_css.html">
-<link rel="import" href="/components/oobe_i18n_behavior.html">
-<link rel="import" href="/components/oobe_dialog.html">
 
+<link rel="import" href="/components/oobe_vars/oobe_shared_vars_css.html">
+<link rel="import" href="/components/behaviors/oobe_i18n_behavior.html">
+<link rel="import" href="/components/buttons/oobe_icon_button.html">
+<link rel="import" href="/components/buttons/oobe_next_button.html">
+<link rel="import" href="/components/buttons/oobe_text_button.html">
+<link rel="import" href="/components/oobe_dialog/oobe_dialog.html">
 
 <!--
   OOBE Welcome screen
@@ -90,7 +93,7 @@
         grid-template-rows: auto auto auto;
       }
       :host-context([orientation=horizontal]) #newContent {
-        grid-template-columns: auto auto;
+        grid-template-columns: auto minmax(0, 1fr);
         grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
       }
 
@@ -108,13 +111,13 @@
         justify-self: start;
       }
 
-      :host-context([orientation=vertical]) #getStarted {
+      :host-context([orientation=vertical]) #bottomButtons {
         align-self: end;
         grid-column: 1 / span 1;
         grid-row: 3 / span 1;
         justify-self: center;
       }
-      :host-context([orientation=horizontal]) #getStarted {
+      :host-context([orientation=horizontal]) #bottomButtons {
         align-self: end;
         grid-column: 1 / span 1;
         grid-row: 2 / span 1;
@@ -125,20 +128,21 @@
         min-height: 0;
         min-width: 0;
       }
-      :host-context([orientation=vertical]) #newWelcomeAnimation {
+      :host-context([orientation=vertical]) #newWelcomeAnimationSlot {
         align-self: end;
         grid-column: 1 / span 1;
         grid-row: 2 / span 1;
         justify-self: stretch;
       }
-      :host-context([orientation=horizontal]) #newWelcomeAnimation {
+      :host-context([orientation=horizontal]) #newWelcomeAnimationSlot {
         align-self: stretch;
         grid-column: 2 / span 1;
         grid-row: 1 / span 2;
       }
 
       #newAccessibilitySettingsButton,
-      #newTimezoneSettingsButton {
+      #newTimezoneSettingsButton,
+      #enableDebuggingButton {
         margin-top: 16px;
       }
 
@@ -159,7 +163,7 @@
       }
 
       #newSubtitle {
-        color: var(--google-grey-refresh-500);
+        color: var(--google-grey-700);
         font-family: var(--oobe-header-font-family);
         font-size: 24px;
         line-height: 32px;
@@ -175,7 +179,7 @@
       }
 
       .new-welcome-header-text {
-        font-weight: 500; /* medium */
+        font-weight: var(--oobe-welcome-header-font-weight);
       }
       :host-context([orientation=vertical]) .new-welcome-header-text {
         align-self: center;
@@ -184,8 +188,28 @@
       :host-context([orientation=horizontal]) .new-welcome-header-text {
         text-align: start;
       }
+
+      #title {
+        align-self: center;
+        color: var(--oobe-header-text-color);
+        margin: 0;
+        user-select: none;
+        @apply --oobe-header-font;
+      }
+
+      .welcome-illustration {
+        user-select: none;
+      }
+
+      video {
+        height: 200px;
+        width: 449px;
+      }
+
+      #enableDebuggingDiv {
+        margin-top: 2px;
+      }
     </style>
-    <link rel="stylesheet" href="oobe_welcome_dialog.css">
     <div id="newDialog" class="layout vertical" hidden="[[!isNewLayout_]]">
       <h1 id="newTitle" class="new-welcome-header-text">
         [[i18nDynamic(locale, 'newWelcomeScreenGreeting')]]
@@ -195,36 +219,54 @@
       </div>
       <div id="newContent">
         <div id="newButtons" class="layout vertical">
-          <oobe-welcome-secondary-button id="newLanguageSelectionButton"
+          <oobe-icon-button id="newLanguageSelectionButton"
               icon1x="oobe-welcome-dialog-20:language"
               icon2x="oobe-welcome-dialog-40:language"
               on-click="onLanguageClicked_"
               label-for-aria="[[i18nDynamic(locale, 'languageButtonLabel',
                   currentLanguage)]]">
             <div slot="text">[[currentLanguage]]</div>
-          </oobe-welcome-secondary-button>
-          <oobe-welcome-secondary-button id="newAccessibilitySettingsButton"
+          </oobe-icon-button>
+          <oobe-icon-button id="newAccessibilitySettingsButton"
               text-key="accessibilityLink"
               icon1x="oobe-welcome-dialog-20:accessibility"
               icon2x="oobe-welcome-dialog-40:accessibility"
               on-click="onAccessibilityClicked_">
-          </oobe-welcome-secondary-button>
-          <oobe-welcome-secondary-button id="newTimezoneSettingsButton"
+          </oobe-icon-button>
+          <oobe-icon-button id="newTimezoneSettingsButton"
               text-key="timezoneButtonText"
-              icon1x="oobe-welcome-32:timezone"
-              icon2x="oobe-welcome-64:timezone"
+              icon1x="oobe-32:timezone"
+              icon2x="oobe-32:timezone"
               on-click="onTimezoneClicked_"
               hidden="[[!timezoneButtonVisible]]">
-          </oobe-welcome-secondary-button>
+          </oobe-icon-button>
+          <oobe-icon-button id="enableDebuggingButton"
+            text-key="debuggingFeaturesLink"
+            icon1x="oobe-32:chromebook"
+            icon2x="oobe-32:chromebook"
+            on-click="onDebuggingLinkClicked_"
+            hidden="[[!debuggingLinkVisible]]">
+          </oobe-icon-button>
         </div>
-        <oobe-text-button id="getStarted"
-            inverse on-click="onNextClicked_"
-            disabled="[[!isNewLayout_]]"
-            text-key="welcomeScreenGetStarted">
-        </oobe-text-button>
-        <cr-lottie id="newWelcomeAnimation"
-                   animation-url="welcome_screen_animation.json">
-        </cr-lottie>
+        <div id="bottomButtons">
+          <oobe-text-button id="osInstall"
+              on-click="onOsInstallClicked_"
+              hidden="[[!osInstallEnabled_]]"
+              text-key="welcomeScreenOsInstall">
+          </oobe-text-button>
+          <oobe-text-button id="getStarted"
+              inverse on-click="onNextClicked_"
+              disabled="[[!isNewLayout_]]"
+              text-key="welcomeScreenGetStarted">
+          </oobe-text-button>
+        </div>
+        <div id="newWelcomeAnimationSlot">
+          <cr-lottie id="newWelcomeAnimation" hidden="[[isMeet_]]"
+              animation-url="welcome_screen_animation.json">
+          </cr-lottie>
+          <img src="images/cfm/welcome.svg" id="remoraWelcomeImage"
+              class="oobe-illustration" hidden="[[!isMeet_]]">
+        </div>
       </div>
     </div>
 
@@ -294,25 +336,25 @@
         </div>
       </div>
       <div slot="back-navigation">
-        <oobe-welcome-secondary-button id="languageSelectionButton"
+        <oobe-icon-button id="languageSelectionButton"
             icon1x="oobe-welcome-dialog-20:language"
             icon2x="oobe-welcome-dialog-40:language"
             on-click="onLanguageClicked_"
             label-for-aria="[[i18nDynamic(locale, 'languageButtonLabel',
                 currentLanguage)]]">
           <div slot="text">[[currentLanguage]]</div>
-        </oobe-welcome-secondary-button>
-        <oobe-welcome-secondary-button id="accessibilitySettingsButton"
+        </oobe-icon-button>
+        <oobe-icon-button id="accessibilitySettingsButton"
             text-key="accessibilityLink"
             icon1x="oobe-welcome-dialog-20:accessibility"
             icon2x="oobe-welcome-dialog-40:accessibility"
-            on-click="onAccessibilityClicked_"></oobe-welcome-secondary-button>
-        <oobe-welcome-secondary-button id="timezoneSettingsButton"
+            on-click="onAccessibilityClicked_"></oobe-icon-button>
+        <oobe-icon-button id="timezoneSettingsButton"
             text-key="timezoneButtonText"
-            icon1x="oobe-welcome-32:timezone"
-            icon2x="oobe-welcome-64:timezone"
+            icon1x="oobe-32:timezone"
+            icon2x="oobe-32:timezone"
             on-click="onTimezoneClicked_"
-            hidden="[[!timezoneButtonVisible]]"></oobe-welcome-secondary-button>
+            hidden="[[!timezoneButtonVisible]]"></oobe-icon-button>
       </div>
       <div slot="bottom-buttons">
         <oobe-next-button id="welcomeNextButton"

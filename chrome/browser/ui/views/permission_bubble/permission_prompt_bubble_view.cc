@@ -22,12 +22,14 @@
 #include "chrome/grit/generated_resources.h"
 #include "components/permissions/features.h"
 #include "components/permissions/permission_request.h"
+#include "components/permissions/permission_uma_util.h"
 #include "components/permissions/request_type.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/url_formatter/elide_url.h"
 #include "components/vector_icons/vector_icons.h"
 #include "extensions/common/constants.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/gfx/text_constants.h"
@@ -41,7 +43,6 @@
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/layout_provider.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/style/platform_style.h"
 #include "ui/views/widget/widget.h"
 
@@ -135,7 +136,7 @@ PermissionPromptBubbleView::PermissionPromptBubbleView(
   for (permissions::PermissionRequest* request : GetVisibleRequests())
     AddRequestLine(request);
 
-  base::Optional<base::string16> extra_text = GetExtraText();
+  absl::optional<std::u16string> extra_text = GetExtraText();
   if (extra_text.has_value()) {
     auto* extra_text_label =
         AddChildView(std::make_unique<views::Label>(extra_text.value()));
@@ -162,6 +163,11 @@ void PermissionPromptBubbleView::Show() {
     widget->ShowInactive();
 
   SizeToContents();
+
+  DCHECK(browser_->window());
+  set_parent_window(
+      platform_util::GetViewForWindow(browser_->window()->GetNativeWindow()));
+
   UpdateAnchorPosition();
   chrome::RecordDialogCreation(chrome::DialogIdentifier::PERMISSIONS);
 }
@@ -214,10 +220,7 @@ void PermissionPromptBubbleView::AddRequestLine(
 }
 
 void PermissionPromptBubbleView::UpdateAnchorPosition() {
-  DCHECK(browser_->window());
-
-  set_parent_window(
-      platform_util::GetViewForWindow(browser_->window()->GetNativeWindow()));
+  DCHECK_EQ(browser_->window()->GetNativeWindow(), parent_window());
 
   bubble_anchor_util::AnchorConfiguration configuration =
       bubble_anchor_util::GetPermissionPromptBubbleAnchorConfiguration(
@@ -231,6 +234,7 @@ void PermissionPromptBubbleView::UpdateAnchorPosition() {
 
 void PermissionPromptBubbleView::SetPromptStyle(
     PermissionPromptStyle prompt_style) {
+  prompt_style_ = prompt_style;
   // If bubble hanging off the padlock icon, with no chip showing, it shouldn't
   // close on deactivate and it should stick until user makes a decision.
   // Otherwise, the chip is indicating the pending permission request and so the
@@ -259,7 +263,7 @@ bool PermissionPromptBubbleView::ShouldShowCloseButton() const {
   return true;
 }
 
-base::string16 PermissionPromptBubbleView::GetWindowTitle() const {
+std::u16string PermissionPromptBubbleView::GetWindowTitle() const {
   int message_id;
   if (GetShowAllowThisTimeButton()) {
     message_id = IDS_PERMISSIONS_BUBBLE_PROMPT_ONE_TIME;
@@ -269,7 +273,7 @@ base::string16 PermissionPromptBubbleView::GetWindowTitle() const {
   return l10n_util::GetStringFUTF16(message_id, GetDisplayName());
 }
 
-base::string16 PermissionPromptBubbleView::GetAccessibleWindowTitle() const {
+std::u16string PermissionPromptBubbleView::GetAccessibleWindowTitle() const {
   // Generate one of:
   //   $origin wants to: $permission
   //   $origin wants to: $permission and $permission
@@ -301,12 +305,12 @@ base::string16 PermissionPromptBubbleView::GetAccessibleWindowTitle() const {
       visible_requests[1]->GetMessageTextFragment());
 }
 
-base::string16 PermissionPromptBubbleView::GetDisplayName() const {
+std::u16string PermissionPromptBubbleView::GetDisplayName() const {
   DCHECK(!delegate_->Requests().empty());
   GURL origin_url = delegate_->GetRequestingOrigin();
 
   if (origin_url.SchemeIs(extensions::kExtensionScheme)) {
-    base::string16 extension_name =
+    std::u16string extension_name =
         extensions::ui_util::GetEnabledExtensionNameForUrl(origin_url,
                                                            browser_->profile());
     if (!extension_name.empty())
@@ -332,7 +336,7 @@ bool PermissionPromptBubbleView::GetDisplayNameIsOrigin() const {
          !origin_url.SchemeIsFile();
 }
 
-base::Optional<base::string16> PermissionPromptBubbleView::GetExtraText()
+absl::optional<std::u16string> PermissionPromptBubbleView::GetExtraText()
     const {
   switch (delegate_->Requests()[0]->GetRequestType()) {
     case permissions::RequestType::kStorageAccess:
@@ -345,33 +349,41 @@ base::Optional<base::string16> PermissionPromptBubbleView::GetExtraText()
               delegate_->GetEmbeddingOrigin(),
               url_formatter::SchemeDisplay::OMIT_CRYPTOGRAPHIC));
     default:
-      return base::nullopt;
+      return absl::nullopt;
   }
 }
 
 void PermissionPromptBubbleView::AcceptPermission() {
-  RecordDecision();
+  RecordDecision(permissions::PermissionAction::GRANTED);
   delegate_->Accept();
 }
 
 void PermissionPromptBubbleView::AcceptPermissionThisTime() {
-  RecordDecision();
+  RecordDecision(permissions::PermissionAction::GRANTED_ONCE);
   delegate_->AcceptThisTime();
 }
 
 void PermissionPromptBubbleView::DenyPermission() {
-  RecordDecision();
+  RecordDecision(permissions::PermissionAction::DENIED);
   delegate_->Deny();
 }
 
 void PermissionPromptBubbleView::ClosingPermission() {
-  RecordDecision();
+  DCHECK_EQ(prompt_style_, PermissionPromptStyle::kBubbleOnly);
+  RecordDecision(permissions::PermissionAction::DISMISSED);
   delegate_->Closing();
 }
 
-void PermissionPromptBubbleView::RecordDecision() {
+void PermissionPromptBubbleView::RecordDecision(
+    permissions::PermissionAction action) {
+  const std::string uma_suffix =
+      permissions::PermissionUmaUtil::GetPermissionActionString(action);
+  std::string time_to_decision_uma_name =
+      prompt_style_ == PermissionPromptStyle::kBubbleOnly
+          ? "Permissions.Prompt.TimeToDecision"
+          : "Permissions.Chip.TimeToDecision";
   base::UmaHistogramLongTimes(
-      "Permissions.Prompt.TimeToDecision",
+      time_to_decision_uma_name + "." + uma_suffix,
       base::TimeTicks::Now() - permission_requested_time_);
 }
 
@@ -388,6 +400,6 @@ bool PermissionPromptBubbleView::GetShowAllowThisTimeButton() const {
 }
 
 BEGIN_METADATA(PermissionPromptBubbleView, views::BubbleDialogDelegateView)
-ADD_READONLY_PROPERTY_METADATA(base::string16, DisplayName)
+ADD_READONLY_PROPERTY_METADATA(std::u16string, DisplayName)
 ADD_READONLY_PROPERTY_METADATA(bool, DisplayNameIsOrigin)
 END_METADATA

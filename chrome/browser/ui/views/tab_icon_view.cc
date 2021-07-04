@@ -17,13 +17,14 @@
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/ui/views/tab_icon_view_model.h"
 #include "chrome/grit/theme_resources.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/theme_provider.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/favicon_size.h"
 #include "ui/gfx/paint_throbber.h"
 #include "ui/native_theme/native_theme.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
+#include "ui/views/image_model_utils.h"
 
 #if defined(OS_WIN)
 #include "chrome/browser/win/app_icon.h"
@@ -93,10 +94,11 @@ void TabIconView::PaintThrobber(gfx::Canvas* canvas) {
   if (throbber_start_time_ == base::TimeTicks())
     throbber_start_time_ = base::TimeTicks::Now();
 
-  gfx::PaintThrobberSpinning(canvas, GetLocalBounds(),
-                             GetNativeTheme()->GetSystemColor(
-                                 ui::NativeTheme::kColorId_ThrobberLightColor),
-                             base::TimeTicks::Now() - throbber_start_time_);
+  gfx::PaintThrobberSpinning(
+      canvas, GetLocalBounds(),
+      GetNativeTheme()->GetSystemColor(
+          ui::NativeTheme::kColorId_ThrobberSpinningColor),
+      base::TimeTicks::Now() - throbber_start_time_);
 }
 
 void TabIconView::PaintFavicon(gfx::Canvas* canvas,
@@ -138,7 +140,8 @@ void TabIconView::PaintButtonContents(gfx::Canvas* canvas) {
       return;
     }
 
-    gfx::ImageSkia favicon = model_->GetFaviconForTabIconView();
+    gfx::ImageSkia favicon = views::GetImageSkiaFromImageModel(
+        model_->GetFaviconForTabIconView(), GetNativeTheme());
     if (!favicon.isNull()) {
       PaintFavicon(canvas, favicon);
       return;

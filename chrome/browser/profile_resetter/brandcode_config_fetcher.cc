@@ -5,11 +5,12 @@
 #include "chrome/browser/profile_resetter/brandcode_config_fetcher.h"
 
 #include <stddef.h>
+
+#include <memory>
 #include <vector>
 
 #include "base/bind.h"
 #include "base/callback_helpers.h"
-#include "base/stl_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profile_resetter/brandcoded_default_settings.h"
@@ -144,8 +145,10 @@ void BrandcodeConfigFetcher::OnXmlConfigParsed(
   // Extract the text JSON data from the "data" node to specify the new
   // settings.
   std::string master_prefs;
-  if (node && data_decoder::GetXmlElementText(*node, &master_prefs))
-    default_settings_.reset(new BrandcodedDefaultSettings(master_prefs));
+  if (node && data_decoder::GetXmlElementText(*node, &master_prefs)) {
+    default_settings_ =
+        std::make_unique<BrandcodedDefaultSettings>(master_prefs);
+  }
 }
 
 void BrandcodeConfigFetcher::OnDownloadTimeout() {

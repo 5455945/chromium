@@ -9,7 +9,7 @@
 #include "base/files/file_util.h"
 #include "base/process/process_handle.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/stringprintf.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/browser/webrtc/webrtc_content_browsertest_base.h"
@@ -20,6 +20,7 @@
 #include "content/shell/browser/shell.h"
 #include "media/base/media_switches.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "third_party/blink/public/common/features.h"
 
 namespace {
 
@@ -80,8 +81,13 @@ class WebRtcAudioDebugRecordingsBrowserTest
   WebRtcAudioDebugRecordingsBrowserTest() {
     // Automatically grant device permission.
     AppendUseFakeUIForMediaStreamFlag();
+    // Allow Plan B.
+    scoped_features_.InitAndEnableFeature(
+        blink::features::kRTCAllowPlanBOutsideDeprecationTrial);
   }
   ~WebRtcAudioDebugRecordingsBrowserTest() override {}
+
+  base::test::ScopedFeatureList scoped_features_;
 };
 
 #if defined(OS_ANDROID) || defined(OS_LINUX) || defined(OS_CHROMEOS)
@@ -277,14 +283,11 @@ IN_PROC_BROWSER_TEST_F(WebRtcAudioDebugRecordingsBrowserTest,
   EXPECT_TRUE(NavigateToURL(shell(), url));
   EXPECT_TRUE(NavigateToURL(shell2, url));
   ExecuteJavascriptAndWaitForOk("call({video: true, audio: true});");
-  std::string result;
-  EXPECT_TRUE(ExecuteScriptAndExtractString(
-      shell2, "call({video: true, audio: true});", &result));
-  ASSERT_STREQ("OK", result.c_str());
+  EXPECT_EQ("OK", EvalJs(shell2, "call({video: true, audio: true});",
+                         EXECUTE_SCRIPT_USE_MANUAL_REPLY));
 
   ExecuteJavascriptAndWaitForOk("hangup();");
-  EXPECT_TRUE(ExecuteScriptAndExtractString(shell2, "hangup();", &result));
-  ASSERT_STREQ("OK", result.c_str());
+  EXPECT_EQ("OK", EvalJs(shell2, "hangup();", EXECUTE_SCRIPT_USE_MANUAL_REPLY));
 
   WebRTCInternals::GetInstance()->DisableAudioDebugRecordings();
 

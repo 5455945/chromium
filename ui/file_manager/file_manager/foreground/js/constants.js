@@ -3,11 +3,6 @@
 // found in the LICENSE file.
 
 /**
- * @fileoverview
- * @suppress {uselessCode} Temporary suppress because of the line exporting.
- */
-
-/**
  * Namespace for common constnats used in Files app.
  * @namespace
  */
@@ -85,6 +80,12 @@ constants.FILES_QUICK_VIEW_HTML = 'foreground/elements/files_quick_view.html';
 constants.DRIVE_WELCOME_CSS = 'foreground/css/drive_welcome.css';
 
 /**
+ * Path for photos_welcome.css file.
+ * @type {string}
+ */
+constants.PHOTOS_WELCOME_CSS = 'foreground/css/photos_welcome.css';
+
+/**
  * Path for holding_space_welcome.css file. Allow override for testing.
  * @type {string}
  */
@@ -109,5 +110,4 @@ constants.PLUGIN_VM = 'PvmDefault';
  */
 constants.CROSTINI_CONNECT_ERR = 'CrostiniConnectErr';
 
-// eslint-disable-next-line semi,no-extra-semi
-/* #export */ {constants};
+export {constants};

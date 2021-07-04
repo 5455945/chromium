@@ -13,7 +13,6 @@
 #include "build/build_config.h"
 #include "content/common/associated_interfaces.mojom.h"
 #include "content/common/frame.mojom.h"
-#include "content/common/frame_messages.h"
 #include "content/common/render_message_filter.mojom.h"
 #include "content/public/renderer/render_thread_observer.h"
 #include "content/renderer/render_thread_impl.h"
@@ -26,6 +25,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/dom_storage/session_storage_namespace_id.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
+#include "third_party/blink/public/mojom/page/widget.mojom.h"
 #include "third_party/blink/public/web/web_script_controller.h"
 
 namespace content {
@@ -310,6 +310,8 @@ void MockRenderThread::OnCreateWindow(
   widget_params->frame_widget_host = blink_frame_widget_host.Unbind();
   widget_params->widget = std::move(blink_widget_receiver);
   widget_params->widget_host = blink_widget_host.Unbind();
+  widget_params->visual_properties.screen_infos =
+      display::ScreenInfos(display::ScreenInfo());
   reply->widget_params = std::move(widget_params);
 }
 

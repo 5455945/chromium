@@ -169,7 +169,7 @@ void ThumbnailMediaParserImpl::RetrieveEncodedVideoFrame() {
 void ThumbnailMediaParserImpl::OnVideoFrameRetrieved(
     bool success,
     chrome::mojom::VideoFrameDataPtr video_frame_data,
-    const base::Optional<media::VideoDecoderConfig>& config) {
+    const absl::optional<media::VideoDecoderConfig>& config) {
   if (!success) {
     RecordVideoThumbnailEvent(VideoThumbnailEvent::kVideoFrameExtractionFailed);
     OnError(MediaParserEvent::kVideoThumbnailFailed);
@@ -219,7 +219,6 @@ void ThumbnailMediaParserImpl::DecodeVideoFrame() {
   auto mojo_decoder = std::make_unique<media::MojoVideoDecoder>(
       base::ThreadTaskRunnerHandle::Get(), gpu_factories_.get(), this,
       std::move(video_decoder_remote),
-      media::VideoDecoderImplementation::kDefault,
       base::BindRepeating(&OnRequestOverlayInfo), gfx::ColorSpace());
 
   decoder_ = std::make_unique<media::VideoThumbnailDecoder>(

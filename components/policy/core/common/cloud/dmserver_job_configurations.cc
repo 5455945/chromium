@@ -5,7 +5,6 @@
 #include "components/policy/core/common/cloud/dmserver_job_configurations.h"
 
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/stringprintf.h"
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "net/base/url_util.h"
@@ -84,6 +83,8 @@ const char* JobTypeToRequestType(
     case DeviceManagementService::JobConfiguration::
         TYPE_PSM_HAS_DEVICE_STATE_REQUEST:
       return dm_protocol::kValueRequestPsmHasDeviceState;
+    case DeviceManagementService::JobConfiguration::TYPE_CHECK_USER_ACCOUNT:
+      return dm_protocol::kValueCheckUserAccount;
     case DeviceManagementService::JobConfiguration::
         TYPE_UPLOAD_ENCRYPTED_REPORT:
       NOTREACHED() << "Not a DMServer request type " << type;
@@ -101,7 +102,7 @@ DMServerJobConfiguration::DMServerJobConfiguration(
     const std::string& client_id,
     bool critical,
     DMAuth auth_data,
-    base::Optional<std::string> oauth_token,
+    absl::optional<std::string> oauth_token,
     scoped_refptr<network::SharedURLLoaderFactory> factory,
     Callback callback)
     : JobConfigurationBase(type, std::move(auth_data), oauth_token, factory),
@@ -126,7 +127,7 @@ DMServerJobConfiguration::DMServerJobConfiguration(
     CloudPolicyClient* client,
     bool critical,
     DMAuth auth_data,
-    base::Optional<std::string> oauth_token,
+    absl::optional<std::string> oauth_token,
     Callback callback)
     : DMServerJobConfiguration(client->service(),
                                type,
@@ -241,14 +242,11 @@ void DMServerJobConfiguration::OnURLLoadComplete(
   DeviceManagementStatus code =
       MapNetErrorAndResponseCodeToDMStatus(net_error, response_code);
 
-  // Parse the response even if |response_code| is not a success since the
-  // response data may contain an error message.
   em::DeviceManagementResponse response;
-  if (code == DM_STATUS_SUCCESS &&
-      (!response.ParseFromString(response_body) ||
-       response_code != DeviceManagementService::kSuccess)) {
+  if (code == DM_STATUS_SUCCESS && !response.ParseFromString(response_body)) {
     code = DM_STATUS_RESPONSE_DECODING_ERROR;
-    em::DeviceManagementResponse response;
+    LOG(WARNING) << "DMServer sent an invalid response";
+  } else if (response_code != DeviceManagementService::kSuccess) {
     if (response.ParseFromString(response_body)) {
       LOG(WARNING) << "DMServer sent an error response: " << response_code
                    << ". " << response.error_message();
@@ -282,7 +280,7 @@ RegistrationJobConfiguration::RegistrationJobConfiguration(
     JobType type,
     CloudPolicyClient* client,
     DMAuth auth_data,
-    base::Optional<std::string> oauth_token,
+    absl::optional<std::string> oauth_token,
     Callback callback)
     : DMServerJobConfiguration(type,
                                client,

@@ -4,8 +4,10 @@
 
 #include "chrome/browser/media/router/discovery/dial/device_description_service.h"
 #include "base/bind.h"
+#include "base/containers/cxx20_erase.h"
 
 #include <map>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -14,7 +16,6 @@
 #endif
 
 #include "base/metrics/histogram_macros.h"
-#include "base/stl_util.h"
 #include "chrome/browser/media/router/discovery/dial/device_description_fetcher.h"
 #include "chrome/browser/media/router/discovery/dial/safe_dial_device_description_parser.h"
 #include "net/base/ip_address.h"
@@ -115,7 +116,7 @@ void DeviceDescriptionService::GetDeviceDescriptions(
 
   // Start a clean up timer.
   if (!clean_up_timer_) {
-    clean_up_timer_.reset(new base::RepeatingTimer());
+    clean_up_timer_ = std::make_unique<base::RepeatingTimer>();
     clean_up_timer_->Start(
         FROM_HERE, base::TimeDelta::FromMinutes(kCacheCleanUpTimeoutMins), this,
         &DeviceDescriptionService::CleanUpCacheEntries);

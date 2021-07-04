@@ -8,7 +8,9 @@
 #include <memory>
 #include <string>
 
-#include "chrome/updater/test/integration_tests.h"
+#include "base/logging.h"
+#include "chrome/updater/test/integration_test_commands.h"
+#include "chrome/updater/test/integration_tests_impl.h"
 #include "net/http/http_status_code.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
@@ -19,12 +21,15 @@
 namespace updater {
 namespace test {
 
-ScopedServer::ScopedServer()
-    : test_server_(std::make_unique<net::test_server::EmbeddedTestServer>()) {
+ScopedServer::ScopedServer(
+    scoped_refptr<IntegrationTestCommands> integration_test_commands)
+    : test_server_(std::make_unique<net::test_server::EmbeddedTestServer>()),
+      integration_test_commands_(integration_test_commands) {
   test_server_->RegisterRequestHandler(base::BindRepeating(
       &ScopedServer::HandleRequest, base::Unretained(this)));
   EXPECT_TRUE((test_server_handle_ = test_server_->StartAndReturnHandle()));
-  EnterTestMode(test_server_->base_url());
+
+  integration_test_commands_->EnterTestMode(test_server_->base_url());
 }
 
 ScopedServer::~ScopedServer() {
@@ -41,6 +46,7 @@ void ScopedServer::ExpectOnce(const std::string& request_body_regex,
 
 std::unique_ptr<net::test_server::HttpResponse> ScopedServer::HandleRequest(
     const net::test_server::HttpRequest& request) {
+  VLOG(0) << "HandleRequest: " << request.content;
   if (request_body_regexes_.empty()) {
     ADD_FAILURE() << "Unexpected request with body: " << request.content;
     auto response = std::make_unique<net::test_server::BasicHttpResponse>();

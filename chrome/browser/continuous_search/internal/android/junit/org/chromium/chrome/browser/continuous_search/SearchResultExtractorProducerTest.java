@@ -22,6 +22,7 @@ import org.mockito.Mock;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.JniMocker;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.components.continuous_search.SearchResultExtractorClientStatus;
 import org.chromium.content_public.browser.WebContents;
@@ -29,6 +30,7 @@ import org.chromium.url.GURL;
 import org.chromium.url.JUnitTestGURLs;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -38,7 +40,8 @@ import java.util.List;
 public class SearchResultExtractorProducerTest {
     private static final long FAKE_NATIVE_ADDRESS = 0x7489;
     private static final String TEST_QUERY = "Bar";
-    private static final int TEST_RESULT_TYPE = 1;
+    private static final int TEST_RESULT_TYPE = 0;
+    private static final String PROVIDER_NAME = "Google Search";
 
     private SearchResultExtractorProducer mSearchResultProducer;
     @Mock
@@ -61,6 +64,9 @@ public class SearchResultExtractorProducerTest {
         mJniMocker.mock(
                 SearchResultExtractorProducerJni.TEST_HOOKS, mSearchResultExtractorProducerJniMock);
         when(mSearchResultExtractorProducerJniMock.create(any())).thenReturn(FAKE_NATIVE_ADDRESS);
+        ChromeFeatureList.setTestFeatures(
+                Collections.singletonMap(ChromeFeatureList.CONTINUOUS_SEARCH, true));
+
         mSearchResultProducer = new SearchResultExtractorProducer(mTabMock, mListenerMock);
         when(mTabMock.getWebContents()).thenReturn(mWebContentsMock);
         when(mWebContentsMock.getLastCommittedUrl()).thenReturn(mTestUrl);
@@ -70,6 +76,7 @@ public class SearchResultExtractorProducerTest {
      * Starts fetching data.
      */
     private void startFetching() {
+        mSearchResultProducer.mMinimumUrlCount = 0;
         mSearchResultProducer.fetchResults(mTestUrl, TEST_QUERY);
 
         verify(mSearchResultExtractorProducerJniMock, times(1))
@@ -85,29 +92,32 @@ public class SearchResultExtractorProducerTest {
         GURL url2 = JUnitTestGURLs.getGURL(JUnitTestGURLs.BLUE_1);
         GURL url3 = JUnitTestGURLs.getGURL(JUnitTestGURLs.BLUE_2);
         GURL url4 = JUnitTestGURLs.getGURL(JUnitTestGURLs.BLUE_3);
+        GURL url5 = JUnitTestGURLs.getGURL(JUnitTestGURLs.EXAMPLE_URL);
 
         mSearchResultProducer.onResultsAvailable(mTestUrl, TEST_QUERY, TEST_RESULT_TYPE,
-                new String[] {"Foo", "Bar"}, new boolean[] {false, true}, new int[] {1, 3},
-                new String[] {"Foo.com 1", "Bar.com 1", "Bar.com 2", "Bar.com 3"},
-                new GURL[] {url1, url2, url3, url4});
+                new String[] {"Foo", "Bar", "Baz"}, new boolean[] {false, false, true},
+                new int[] {1, 3, 1},
+                new String[] {"Foo.com 1", "Bar.com 1", "Bar.com 2", "Bar.com 3", "Baz.com 1"},
+                new GURL[] {url1, url2, url3, url4, url5});
 
         if (cancelled) {
             verify(mListenerMock, never()).onResult(any());
             return;
         }
 
-        List<SearchResultGroup> groups = new ArrayList<SearchResultGroup>();
-        List<SearchResult> results1 = new ArrayList<SearchResult>();
-        results1.add(new SearchResult(url1, "Foo.com 1"));
-        groups.add(new SearchResultGroup("Foo", false, results1));
-        List<SearchResult> results2 = new ArrayList<SearchResult>();
-        results2.add(new SearchResult(url2, "Bar.com 1"));
-        results2.add(new SearchResult(url3, "Bar.com 2"));
-        results2.add(new SearchResult(url4, "Bar.com 3"));
-        groups.add(new SearchResultGroup("Bar", true, results2));
+        List<PageGroup> groups = new ArrayList<PageGroup>();
+        List<PageItem> results1 = new ArrayList<PageItem>();
+        results1.add(new PageItem(url1, "Foo.com 1"));
+        groups.add(new PageGroup("Foo", false, results1));
+        List<PageItem> results2 = new ArrayList<PageItem>();
+        results2.add(new PageItem(url2, "Bar.com 1"));
+        results2.add(new PageItem(url3, "Bar.com 2"));
+        results2.add(new PageItem(url4, "Bar.com 3"));
+        groups.add(new PageGroup("Bar", false, results2));
 
         verify(mListenerMock, times(1))
-                .onResult(new SearchResultMetadata(mTestUrl, TEST_QUERY, TEST_RESULT_TYPE, groups));
+                .onResult(new ContinuousNavigationMetadata(
+                        mTestUrl, TEST_QUERY, getProvider(), groups));
     }
 
     /**
@@ -116,6 +126,19 @@ public class SearchResultExtractorProducerTest {
     private void fetchResultsSuccessfully() {
         startFetching();
         finishFetching(false);
+    }
+
+    /**
+     * Creates {@link ContinuousNavigationMetadata.Provider} based on whether provider icon is
+     * displayed or not.
+     * @return the Provider object configured based on the criteria.
+     */
+    private ContinuousNavigationMetadata.Provider getProvider() {
+        String name = mSearchResultProducer.mUseProviderIcon ? null : PROVIDER_NAME;
+        int iconRes = mSearchResultProducer.mUseProviderIcon
+                ? SearchResultExtractorProducer.PROVIDER_ICON_RESOURCE
+                : 0;
+        return new ContinuousNavigationMetadata.Provider(TEST_RESULT_TYPE, name, iconRes);
     }
 
     /**
@@ -257,7 +280,7 @@ public class SearchResultExtractorProducerTest {
     }
 
     /**
-     * Verify that results can be requested successfully if a pre-emptive cancel is issued.
+     * Verify that no error is reported after cancellation.
      */
     @Test
     public void testOnErrorNoOpOnCancel() {
@@ -265,5 +288,28 @@ public class SearchResultExtractorProducerTest {
         mSearchResultProducer.cancel();
         mSearchResultProducer.onError(SearchResultExtractorClientStatus.WEB_CONTENTS_GONE);
         verify(mListenerMock, never()).onError(anyInt());
+    }
+
+    /**
+     * Verify no result is reported if there are an insufficient number of URLs.
+     */
+    @Test
+    public void testMinimumRequiredResults() {
+        startFetching();
+        mSearchResultProducer.mMinimumUrlCount = 6;
+        // Treat the fetch as being cancelled as no result is returned.
+        finishFetching(true);
+        verify(mListenerMock, times(1))
+                .onError(SearchResultExtractorClientStatus.NOT_ENOUGH_RESULTS);
+    }
+
+    /**
+     * Verify if the metadata provider is set correctly if no provider icon is set.
+     */
+    @Test
+    public void testNoProviderIcon() {
+        startFetching();
+        mSearchResultProducer.mUseProviderIcon = false;
+        finishFetching(false);
     }
 }

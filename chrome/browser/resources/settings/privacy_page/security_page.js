@@ -4,28 +4,28 @@
 
 import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.m.js';
 import 'chrome://resources/cr_elements/cr_radio_group/cr_radio_group.m.js';
-import 'chrome://resources/cr_elements/cr_link_row/cr_link_row.m.js';
+import 'chrome://resources/cr_elements/cr_link_row/cr_link_row.js';
 import 'chrome://resources/cr_elements/shared_style_css.m.js';
 import './collapse_radio_button.js';
-import './disable_safebrowsing_dialog.js';
 import './secure_dns.js';
-import '../controls/settings_toggle_button.m.js';
-import '../icons.m.js';
-import '../prefs/prefs.m.js';
-import '../settings_shared_css.m.js';
+import '../controls/settings_toggle_button.js';
+import '../icons.js';
+import '../prefs/prefs.js';
+import '../settings_shared_css.js';
 
 import {assert} from 'chrome://resources/js/assert.m.js';
 import {focusWithoutInk} from 'chrome://resources/js/cr/ui/focus_without_ink.m.js';
-import {I18nBehavior} from 'chrome://resources/js/i18n_behavior.m.js';
-import {html, Polymer} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {I18nBehavior, I18nBehaviorInterface} from 'chrome://resources/js/i18n_behavior.m.js';
+import {html, mixinBehaviors, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {loadTimeData} from '../i18n_setup.js';
 import {MetricsBrowserProxy, MetricsBrowserProxyImpl, PrivacyElementInteractions, SafeBrowsingInteractions} from '../metrics_browser_proxy.js';
-import {PrefsBehavior} from '../prefs/prefs_behavior.m.js';
+import {PrefsBehavior, PrefsBehaviorInterface} from '../prefs/prefs_behavior.js';
 import {routes} from '../route.js';
-import {Route, RouteObserverBehavior, Router} from '../router.m.js';
+import {Route, RouteObserverBehavior, RouteObserverBehaviorInterface, Router} from '../router.js';
 
-import {PrivacyPageBrowserProxy, PrivacyPageBrowserProxyImpl} from './privacy_page_browser_proxy.m.js';
+import {SettingsDisableSafebrowsingDialogElement} from './disable_safebrowsing_dialog.js';
+import {PrivacyPageBrowserProxy, PrivacyPageBrowserProxyImpl} from './privacy_page_browser_proxy.js';
 
 /**
  * Enumeration of all safe browsing modes. Must be kept in sync with the enum
@@ -39,74 +39,89 @@ export const SafeBrowsingSetting = {
   DISABLED: 2,
 };
 
-Polymer({
-  is: 'settings-security-page',
+/**
+ * @constructor
+ * @extends {PolymerElement}
+ * @implements {I18nBehaviorInterface}
+ * @implements {PrefsBehaviorInterface}
+ * @implements {RouteObserverBehaviorInterface}
+ */
+const SettingsSecurityPageElementBase = mixinBehaviors(
+    [I18nBehavior, PrefsBehavior, RouteObserverBehavior], PolymerElement);
 
-  _template: html`{__html_template__}`,
+/** @polymer */
+export class SettingsSecurityPageElement extends
+    SettingsSecurityPageElementBase {
+  static get is() {
+    return 'settings-security-page';
+  }
 
-  behaviors: [
-    I18nBehavior,
-    PrefsBehavior,
-    RouteObserverBehavior,
-  ],
+  static get template() {
+    return html`{__html_template__}`;
+  }
 
-  properties: {
-    /**
-     * Preferences state.
-     */
-    prefs: {
-      type: Object,
-      notify: true,
-    },
-
-    /**
-     * Whether the secure DNS setting should be displayed.
-     * @private
-     */
-    showSecureDnsSetting_: {
-      type: Boolean,
-      readOnly: true,
-      value: function() {
-        return loadTimeData.getBoolean('showSecureDnsSetting');
+  static get properties() {
+    return {
+      /**
+       * Preferences state.
+       */
+      prefs: {
+        type: Object,
+        notify: true,
       },
-    },
 
-    /**
-     * Valid safe browsing states.
-     * @private
-     */
-    safeBrowsingSettingEnum_: {
-      type: Object,
-      value: SafeBrowsingSetting,
-    },
-
-    /** @private */
-    safeBrowsingEnhancedEnabled_: {
-      type: Boolean,
-      readOnly: true,
-      value: function() {
-        return loadTimeData.getBoolean('safeBrowsingEnhancedEnabled');
+      /**
+       * Whether the HTTPS-Only Mode setting should be displayed.
+       * @private
+       */
+      showHttpsOnlyModeSetting_: {
+        type: Boolean,
+        readOnly: true,
+        value: function() {
+          return loadTimeData.getBoolean('showHttpsOnlyModeSetting');
+        },
       },
-    },
 
-    /** @private */
-    enableSecurityKeysSubpage_: {
-      type: Boolean,
-      readOnly: true,
-      value() {
-        return loadTimeData.getBoolean('enableSecurityKeysSubpage');
-      }
-    },
+      /**
+       * Whether the secure DNS setting should be displayed.
+       * @private
+       */
+      showSecureDnsSetting_: {
+        type: Boolean,
+        readOnly: true,
+        value: function() {
+          return loadTimeData.getBoolean('showSecureDnsSetting');
+        },
+      },
 
-    /** @type {!Map<string, (string|Function)>} */
-    focusConfig: {
-      type: Object,
-      observer: 'focusConfigChanged_',
-    },
+      /**
+       * Valid safe browsing states.
+       * @private
+       */
+      safeBrowsingSettingEnum_: {
+        type: Object,
+        value: SafeBrowsingSetting,
+      },
 
-    /** @private */
-    showDisableSafebrowsingDialog_: Boolean,
-  },
+      /** @private */
+      enableSecurityKeysSubpage_: {
+        type: Boolean,
+        readOnly: true,
+        value() {
+          return loadTimeData.getBoolean('enableSecurityKeysSubpage');
+        }
+      },
+
+      /** @type {!Map<string, (string|Function)>} */
+      focusConfig: {
+        type: Object,
+        observer: 'focusConfigChanged_',
+      },
+
+      /** @private */
+      showDisableSafebrowsingDialog_: Boolean,
+    };
+  }
 
   /*
    * @param {!Map<string, string>} newConfig
@@ -118,26 +133,33 @@ Polymer({
     // <if expr="use_nss_certs">
     if (routes.CERTIFICATES) {
       this.focusConfig.set(routes.CERTIFICATES.path, () => {
-        focusWithoutInk(assert(this.$$('#manageCertificates')));
+        focusWithoutInk(
+            assert(this.shadowRoot.querySelector('#manageCertificates')));
       });
     }
     // </if>
 
     if (routes.SECURITY_KEYS) {
       this.focusConfig.set(routes.SECURITY_KEYS.path, () => {
-        focusWithoutInk(assert(this.$$('#security-keys-subpage-trigger')));
+        focusWithoutInk(assert(
+            this.shadowRoot.querySelector('#security-keys-subpage-trigger')));
       });
     }
-  },
+  }
 
-  /** @private {PrivacyPageBrowserProxy} */
-  browserProxy_: null,
+  constructor() {
+    super();
+    /** @private {?PrivacyPageBrowserProxy} */
+    this.browserProxy_ = null;
 
-  /** @private {MetricsBrowserProxy} */
-  metricsBrowserProxy_: null,
+    /** @private {?MetricsBrowserProxy} */
+    this.metricsBrowserProxy_ = null;
+  }
 
   /** @override */
   ready() {
+    super.ready();
+
     // Expand initial pref value manually because automatic
     // expanding is disabled.
     const prefValue = this.getPref('generated.safe_browsing').value;
@@ -149,7 +171,7 @@ Polymer({
     this.browserProxy_ = PrivacyPageBrowserProxyImpl.getInstance();
 
     this.metricsBrowserProxy_ = MetricsBrowserProxyImpl.getInstance();
-  },
+  }
 
   /**
    * RouteObserverBehavior
@@ -167,7 +189,7 @@ Polymer({
         this.$.safeBrowsingStandard.expanded = false;
       }
     }
-  },
+  }
 
   /**
    * Updates the buttons' expanded status by propagating previous click
@@ -177,14 +199,14 @@ Polymer({
   updateCollapsedButtons_() {
     this.$.safeBrowsingEnhanced.updateCollapsed();
     this.$.safeBrowsingStandard.updateCollapsed();
-  },
+  }
 
   /**
    * Possibly displays the Safe Browsing disable dialog based on the users
    * selection.
    * @private
    */
-  onSafeBrowsingRadioChange_: function() {
+  onSafeBrowsingRadioChange_() {
     const selected =
         Number.parseInt(this.$.safeBrowsingRadioGroup.selected, 10);
     const prefValue = this.getPref('generated.safe_browsing').value;
@@ -200,7 +222,7 @@ Polymer({
       this.updateCollapsedButtons_();
       this.$.safeBrowsingRadioGroup.sendPrefChange();
     }
-  },
+  }
 
   /**
    * @return {boolean}
@@ -209,7 +231,7 @@ Polymer({
   getDisabledExtendedSafeBrowsing_() {
     return this.getPref('generated.safe_browsing').value !==
         SafeBrowsingSetting.STANDARD;
-  },
+  }
 
   /**
    * @return {string}
@@ -218,16 +240,18 @@ Polymer({
   getPasswordsLeakToggleSubLabel_() {
     let subLabel = this.i18n('passwordsLeakDetectionGeneralDescription');
     // If the backing password leak detection preference is enabled, but the
-    // generated preference is disabled, then additional text explaining that
-    // the feature will be enabled if the user signs in is added.
+    // generated preference is off and user control is disabled, then additional
+    // text explaining that the feature will be enabled if the user signs in is
+    // added.
+    const generatedPref = this.getPref('generated.password_leak_detection');
     if (this.getPref('profile.password_manager_leak_detection').value &&
-        !this.getPref('generated.password_leak_detection').value) {
+        !generatedPref.value && generatedPref.userControlDisabled) {
       subLabel +=
           ' ' +  // Whitespace is a valid sentence separator w.r.t. i18n.
           this.i18n('passwordsLeakDetectionSignedOutEnabledDescription');
     }
     return subLabel;
-  },
+  }
 
   /** @private */
   onManageCertificatesClick_() {
@@ -239,23 +263,23 @@ Polymer({
     // </if>
     this.metricsBrowserProxy_.recordSettingsPageHistogram(
         PrivacyElementInteractions.MANAGE_CERTIFICATES);
-  },
+  }
 
   /** @private */
   onAdvancedProtectionProgramLinkClick_() {
     window.open(loadTimeData.getString('advancedProtectionURL'));
-  },
+  }
 
   /** @private */
   onSecurityKeysClick_() {
     Router.getInstance().navigateTo(routes.SECURITY_KEYS);
-  },
+  }
 
   /** @private */
   onSafeBrowsingExtendedReportingChange_() {
     this.metricsBrowserProxy_.recordSettingsPageHistogram(
         PrivacyElementInteractions.IMPROVE_SECURITY);
-  },
+  }
 
   /**
    * Handles the closure of the disable safebrowsing dialog, reselects the
@@ -266,7 +290,8 @@ Polymer({
   onDisableSafebrowsingDialogClose_() {
     const confirmed =
         /** @type {!SettingsDisableSafebrowsingDialogElement} */ (
-            this.$$('settings-disable-safebrowsing-dialog'))
+            this.shadowRoot.querySelector(
+                'settings-disable-safebrowsing-dialog'))
             .wasConfirmed();
     this.recordInteractionHistogramOnSafeBrowsingDialogClose_(confirmed);
     this.recordActionOnSafeBrowsingDialogClose_(confirmed);
@@ -283,21 +308,21 @@ Polymer({
     // Set focus back to the no protection button regardless of user interaction
     // with the dialog, as it was the entry point to the dialog.
     focusWithoutInk(assert(this.$.safeBrowsingDisabled));
-  },
+  }
 
   /** @private */
   onEnhancedProtectionExpandButtonClicked_() {
     this.recordInteractionHistogramOnExpandButtonClicked_(
         SafeBrowsingSetting.ENHANCED);
     this.recordActionOnExpandButtonClicked_(SafeBrowsingSetting.ENHANCED);
-  },
+  }
 
   /** @private */
   onStandardProtectionExpandButtonClicked_() {
     this.recordInteractionHistogramOnExpandButtonClicked_(
         SafeBrowsingSetting.STANDARD);
     this.recordActionOnExpandButtonClicked_(SafeBrowsingSetting.STANDARD);
-  },
+  }
 
   /**
    * @param {!SafeBrowsingSetting} safeBrowsingSetting
@@ -316,7 +341,7 @@ Polymer({
           SafeBrowsingInteractions.SAFE_BROWSING_DISABLE_SAFE_BROWSING_CLICKED;
     }
     this.metricsBrowserProxy_.recordSafeBrowsingInteractionHistogram(action);
-  },
+  }
 
   /**
    * @param {!SafeBrowsingSetting} safeBrowsingSetting
@@ -329,7 +354,7 @@ Polymer({
                 .SAFE_BROWSING_ENHANCED_PROTECTION_EXPAND_ARROW_CLICKED :
             SafeBrowsingInteractions
                 .SAFE_BROWSING_STANDARD_PROTECTION_EXPAND_ARROW_CLICKED);
-  },
+  }
 
   /**
    * @param {boolean} confirmed
@@ -341,7 +366,7 @@ Polymer({
                         .SAFE_BROWSING_DISABLE_SAFE_BROWSING_DIALOG_CONFIRMED :
                     SafeBrowsingInteractions
                         .SAFE_BROWSING_DISABLE_SAFE_BROWSING_DIALOG_DENIED);
-  },
+  }
 
   /**
    * @param {!SafeBrowsingSetting} safeBrowsingSetting
@@ -357,7 +382,7 @@ Polymer({
       actionName = 'SafeBrowsing.Settings.DisableSafeBrowsingClicked';
     }
     this.metricsBrowserProxy_.recordAction(actionName);
-  },
+  }
 
   /**
    * @param {!SafeBrowsingSetting} safeBrowsingSetting
@@ -368,7 +393,7 @@ Polymer({
         safeBrowsingSetting === SafeBrowsingSetting.ENHANCED ?
             'SafeBrowsing.Settings.EnhancedProtectionExpandArrowClicked' :
             'SafeBrowsing.Settings.StandardProtectionExpandArrowClicked');
-  },
+  }
 
   /**
    * @param {boolean} confirmed
@@ -378,5 +403,8 @@ Polymer({
     this.metricsBrowserProxy_.recordAction(
         confirmed ? 'SafeBrowsing.Settings.DisableSafeBrowsingDialogConfirmed' :
                     'SafeBrowsing.Settings.DisableSafeBrowsingDialogDenied');
-  },
-});
+  }
+}
+
+customElements.define(
+    SettingsSecurityPageElement.is, SettingsSecurityPageElement);

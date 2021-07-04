@@ -24,6 +24,8 @@ source_set("authentication") {
     "signin_notification_infobar_delegate.mm",
     "signin_promo_view_mediator.h",
     "signin_promo_view_mediator.mm",
+    "signout_action_sheet_coordinator.h",
+    "signout_action_sheet_coordinator.mm",
   ]
   deps = [
     "resources:signin_confirmation_more",
@@ -50,7 +52,6 @@ source_set("authentication") {
     "//ios/chrome/browser/ui/alert_coordinator",
     "//ios/chrome/browser/ui/authentication/cells",
     "//ios/chrome/browser/ui/authentication/signin:signin_headers",
-    "//ios/chrome/browser/ui/collection_view/cells",
     "//ios/chrome/browser/ui/colors",
     "//ios/chrome/browser/ui/commands",
     "//ios/chrome/browser/ui/settings:settings_root",
@@ -100,6 +101,7 @@ source_set("unit_tests") {
     "re_signin_infobar_delegate_unittest.mm",
     "signed_in_accounts_view_controller_unittest.mm",
     "signin_promo_view_mediator_unittest.mm",
+    "signout_action_sheet_coordinator_unittest.mm",
   ]
   deps = [
     ":authentication",
@@ -111,9 +113,12 @@ source_set("unit_tests") {
     "//components/prefs",
     "//components/signin/public/base",
     "//components/signin/public/identity_manager",
+    "//components/signin/public/identity_manager:test_support",
     "//components/sync/driver:test_support",
     "//components/sync_preferences",
     "//components/sync_preferences:test_support",
+    "//components/variations",
+    "//components/variations:test_support",
     "//components/version_info",
     "//ios/chrome/app/strings",
     "//ios/chrome/browser",
@@ -140,6 +145,7 @@ source_set("unit_tests") {
     "//testing/gtest",
     "//third_party/ocmock",
     "//ui/base",
+    "//ui/strings:ui_strings_grit",
   ]
 }
 
@@ -154,7 +160,10 @@ source_set("eg_app_support+eg2") {
     "signin_earl_grey_app_interface.h",
     "signin_earl_grey_app_interface.mm",
   ]
-  visibility = [ "//ios/chrome/test/earl_grey:eg_app_support+eg2" ]
+  visibility = [
+    "//ios/chrome/test/earl_grey:eg_app_support+eg2",
+    "//ios/chrome/test/earl_grey:hooks",
+  ]
   deps = [
     ":authentication",
     "unified_consent",
@@ -211,14 +220,16 @@ source_set("eg_test_support+eg2") {
     "//base/test:test_support",
     "//ios/chrome/app/strings",
     "//ios/chrome/browser/ui/authentication/cells:constants",
+    "//ios/chrome/browser/ui/authentication/signin:constants",
     "//ios/chrome/browser/ui/authentication/unified_consent:constants",
+    "//ios/chrome/browser/ui/authentication/views:views_constants",
     "//ios/chrome/browser/ui/recent_tabs:recent_tabs_ui_constants",
     "//ios/chrome/browser/ui/settings/google_services:constants",
     "//ios/chrome/test:eg_test_support+eg2",
     "//ios/chrome/test/earl_grey:eg_test_support+eg2",
     "//ios/public/provider/chrome/browser/signin",
+    "//ios/public/provider/chrome/browser/signin:constants",
     "//ios/public/provider/chrome/browser/signin:fake_chrome_identity",
-    "//ios/public/provider/chrome/browser/signin:test_support",
     "//ios/testing/earl_grey:eg_test_support+eg2",
     "//ios/third_party/earl_grey2:test_lib",
     "//ui/base",

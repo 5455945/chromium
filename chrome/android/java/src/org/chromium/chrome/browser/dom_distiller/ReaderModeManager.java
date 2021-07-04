@@ -21,14 +21,16 @@ import org.chromium.base.SysUtils;
 import org.chromium.base.UserData;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.chrome.browser.IntentHandler;
-import org.chromium.chrome.browser.app.ChromeActivity;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsVisibilityManager;
-import org.chromium.chrome.browser.browserservices.BrowserServicesIntentDataProvider.CustomTabsUiType;
+import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider.CustomTabsUiType;
 import org.chromium.chrome.browser.customtabs.CustomTabActivity;
 import org.chromium.chrome.browser.customtabs.CustomTabIntentDataProvider;
+import org.chromium.chrome.browser.customtabs.IncognitoCustomTabIntentDataProvider;
 import org.chromium.chrome.browser.document.ChromeLauncherActivity;
 import org.chromium.chrome.browser.dom_distiller.TabDistillabilityProvider.DistillabilityObserver;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
+import org.chromium.chrome.browser.fullscreen.BrowserControlsManager;
+import org.chromium.chrome.browser.fullscreen.BrowserControlsManagerSupplier;
 import org.chromium.chrome.browser.fullscreen.FullscreenManager;
 import org.chromium.chrome.browser.infobar.ReaderModeInfoBar;
 import org.chromium.chrome.browser.tab.EmptyTabObserver;
@@ -38,6 +40,7 @@ import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tab.TabUtils;
 import org.chromium.components.dom_distiller.core.DomDistillerUrlUtils;
 import org.chromium.components.navigation_interception.InterceptNavigationDelegate;
+import org.chromium.content_public.browser.LoadCommittedDetails;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.NavigationController;
 import org.chromium.content_public.browser.NavigationEntry;
@@ -172,7 +175,8 @@ public class ReaderModeManager extends EmptyTabObserver implements UserData {
                 return false;
             }
 
-            Intent returnIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(navParams.url));
+            Intent returnIntent =
+                    new Intent(Intent.ACTION_VIEW, Uri.parse(navParams.url.getSpec()));
             returnIntent.setClassName(activity, ChromeLauncherActivity.class.getName());
 
             // Set the parent ID of the tab to be created.
@@ -311,7 +315,7 @@ public class ReaderModeManager extends EmptyTabObserver implements UserData {
 
             @Override
             public void didStartNavigation(NavigationHandle navigation) {
-                if (!navigation.isInMainFrame() || navigation.isSameDocument()) return;
+                if (!navigation.isInPrimaryMainFrame() || navigation.isSameDocument()) return;
 
                 // Reader Mode should not pollute the navigation stack. To avoid this, watch for
                 // navigations and prepare to remove any that are "chrome-distiller" urls.
@@ -319,8 +323,7 @@ public class ReaderModeManager extends EmptyTabObserver implements UserData {
                 int index = controller.getLastCommittedEntryIndex();
                 NavigationEntry entry = controller.getEntryAtIndex(index);
 
-                if (entry != null
-                        && DomDistillerUrlUtils.isDistilledPage(entry.getUrl().getSpec())) {
+                if (entry != null && DomDistillerUrlUtils.isDistilledPage(entry.getUrl())) {
                     mShouldRemovePreviousNavigation = true;
                     mLastDistillerPageIndex = index;
                 }
@@ -338,7 +341,7 @@ public class ReaderModeManager extends EmptyTabObserver implements UserData {
             public void didFinishNavigation(NavigationHandle navigation) {
                 // TODO(cjhopman): This should possibly ignore navigations that replace the entry
                 // (like those from history.replaceState()).
-                if (!navigation.hasCommitted() || !navigation.isInMainFrame()
+                if (!navigation.hasCommitted() || !navigation.isInPrimaryMainFrame()
                         || navigation.isSameDocument()) {
                     return;
                 }
@@ -367,7 +370,7 @@ public class ReaderModeManager extends EmptyTabObserver implements UserData {
             }
 
             @Override
-            public void navigationEntryCommitted() {
+            public void navigationEntryCommitted(LoadCommittedDetails details) {
                 if (mIsDestroyed) return;
                 // Reset closed state of reader mode in this tab once we know a navigation is
                 // happening.
@@ -434,32 +437,39 @@ public class ReaderModeManager extends EmptyTabObserver implements UserData {
 
         onStartedReaderMode();
 
-        // Make sure to exit fullscreen mode before navigating.
-        getFullscreenManager().onExitFullscreen(mTab);
+        FullscreenManager fullscreenManager = getFullscreenManager();
+        if (fullscreenManager != null) {
+            // Make sure to exit fullscreen mode before navigating.
+            fullscreenManager.onExitFullscreen(mTab);
+        }
 
         // RenderWidgetHostViewAndroid hides the controls after transitioning to reader mode.
         // See the long history of the issue in https://crbug.com/825765, https://crbug.com/853686,
         // https://crbug.com/861618, https://crbug.com/922388.
         // TODO(pshmakov): find a proper solution instead of this workaround.
-        getBrowserControlsVisibilityManager()
-                .getBrowserVisibilityDelegate()
-                .showControlsTransient();
+        BrowserControlsVisibilityManager browserControlsVisibilityManager =
+                getBrowserControlsVisibilityManager();
+        if (browserControlsVisibilityManager != null) {
+            getBrowserControlsVisibilityManager()
+                    .getBrowserVisibilityDelegate()
+                    .showControlsTransient();
+        }
 
         DomDistillerTabUtils.distillCurrentPageAndView(webContents);
     }
 
-    private BrowserControlsVisibilityManager getBrowserControlsVisibilityManager() {
-        // TODO(1069815): Remove this ChromeActivity cast once BrowserControlsManager is
-        //                accessible via another mechanism.
-        ChromeActivity activity = (ChromeActivity) TabUtils.getActivity(mTab);
-        return activity.getBrowserControlsManager();
+    private @Nullable BrowserControlsManager getBrowserControlsManager() {
+        return BrowserControlsManagerSupplier.getValueOrNullFrom(mTab.getWindowAndroid());
     }
 
-    private FullscreenManager getFullscreenManager() {
-        // TODO(1069815): Remove this ChromeActivity cast once FullscreenManager is
-        //                accessible via another mechanism.
-        ChromeActivity activity = (ChromeActivity) TabUtils.getActivity(mTab);
-        return activity.getFullscreenManager();
+    private @Nullable BrowserControlsVisibilityManager getBrowserControlsVisibilityManager() {
+        return getBrowserControlsManager();
+    }
+
+    private @Nullable FullscreenManager getFullscreenManager() {
+        BrowserControlsManager browserControlsManager = getBrowserControlsManager();
+        return browserControlsManager == null ? null
+                                              : browserControlsManager.getFullscreenManager();
     }
 
     private void distillInCustomTab() {
@@ -493,7 +503,8 @@ public class ReaderModeManager extends EmptyTabObserver implements UserData {
         // Use Incognito CCT if the source page is in Incognito mode. This is gated by
         // flag ChromeFeatureList.CCT_INCOGNITO.
         if (mTab.isIncognito()) {
-            customTabsIntent.intent.putExtra(IntentHandler.EXTRA_OPEN_NEW_INCOGNITO_TAB, true);
+            IncognitoCustomTabIntentDataProvider.addIncognitoExtrasForChromeFeatures(
+                    customTabsIntent.intent, IntentHandler.IncognitoCCTCallerId.READER_MODE);
         }
 
         customTabsIntent.launchUrl(activity, Uri.parse(distillerUrl));

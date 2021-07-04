@@ -7,8 +7,11 @@
 #include <memory>
 #include <string>
 
+#include "chrome/browser/ui/global_media_controls/test_helper.h"
 #include "chrome/browser/ui/views/global_media_controls/media_notification_container_impl_view.h"
 #include "chrome/test/views/chrome_views_test_base.h"
+
+using testing::NiceMock;
 
 namespace {
 
@@ -22,6 +25,9 @@ const char kTestNotificationId3[] = "testid3";
 class MediaNotificationListViewTest : public ChromeViewsTestBase {
  public:
   MediaNotificationListViewTest() = default;
+  MediaNotificationListViewTest(const MediaNotificationListViewTest&) = delete;
+  MediaNotificationListViewTest& operator=(
+      const MediaNotificationListViewTest&) = delete;
   ~MediaNotificationListViewTest() override = default;
 
   // ViewsTestBase:
@@ -33,6 +39,7 @@ class MediaNotificationListViewTest : public ChromeViewsTestBase {
     list_view_ =
         widget_->SetContentsView(std::make_unique<MediaNotificationListView>());
 
+    item_ = std::make_unique<NiceMock<MockMediaNotificationItem>>();
     widget_->Show();
   }
 
@@ -43,8 +50,9 @@ class MediaNotificationListViewTest : public ChromeViewsTestBase {
 
   void ShowNotification(const std::string& id) {
     list_view_->ShowNotification(
-        id, std::make_unique<MediaNotificationContainerImplView>(id, nullptr,
-                                                                 nullptr));
+        id, std::make_unique<MediaNotificationContainerImplView>(
+                id, item_->GetWeakPtr(), nullptr,
+                GlobalMediaControlsEntryPoint::kToolbarIcon));
   }
 
   void HideNotification(const std::string& id) {
@@ -56,8 +64,7 @@ class MediaNotificationListViewTest : public ChromeViewsTestBase {
  private:
   std::unique_ptr<views::Widget> widget_;
   MediaNotificationListView* list_view_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(MediaNotificationListViewTest);
+  std::unique_ptr<MockMediaNotificationItem> item_;
 };
 
 TEST_F(MediaNotificationListViewTest, NoSeparatorForOneNotification) {

@@ -48,9 +48,9 @@ enum class Version {
   WIN10_RS5 = 13,   // Redstone 5: Version 1809, Build 17763.
   WIN10_19H1 = 14,  // 19H1: Version 1903, Build 18362.
   WIN10_19H2 = 15,  // 19H2: Version 1909, Build 18363.
-  WIN10_20H1 = 16,  // 20H1: Version 2004, Build 19041.
-  WIN10_20H2 = 17,  // 20H2: Version 2009, Build 19042.
-  WIN10_21H1 = 18,  // 21H1: Version TBD
+  WIN10_20H1 = 16,  // 20H1: Build 19041.
+  WIN10_20H2 = 17,  // 20H2: Build 19042.
+  WIN10_21H1 = 18,  // 21H1: Build 19043.
   WIN_LAST,         // Indicates error condition.
 };
 
@@ -64,6 +64,7 @@ enum VersionType {
   SUITE_SERVER,
   SUITE_ENTERPRISE,
   SUITE_EDUCATION,
+  SUITE_EDUCATION_PRO,
   SUITE_LAST,
 };
 
@@ -73,10 +74,10 @@ enum VersionType {
 class BASE_EXPORT OSInfo {
  public:
   struct VersionNumber {
-    int major;
-    int minor;
-    int build;
-    int patch;
+    uint32_t major;
+    uint32_t minor;
+    uint32_t build;
+    uint32_t patch;
   };
 
   struct ServicePack {
@@ -167,7 +168,9 @@ class BASE_EXPORT OSInfo {
   ~OSInfo();
 
   // Returns a Version value for a given OS version tuple.
-  static Version MajorMinorBuildToVersion(int major, int minor, int build);
+  static Version MajorMinorBuildToVersion(uint32_t major,
+                                          uint32_t minor,
+                                          uint32_t build);
 
   Version version_;
   VersionNumber version_number_;

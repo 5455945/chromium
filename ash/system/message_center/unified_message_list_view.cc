@@ -4,7 +4,6 @@
 
 #include "ash/system/message_center/unified_message_list_view.h"
 
-#include "ash/public/cpp/ash_features.h"
 #include "ash/system/message_center/message_center_style.h"
 #include "ash/system/message_center/message_center_utils.h"
 #include "ash/system/message_center/metrics_utils.h"
@@ -83,7 +82,7 @@ class UnifiedMessageListView::MessageViewContainer
   // Check if the notification is manually expanded / collapsed before and
   // restores the state.
   void LoadExpandedState(UnifiedSystemTrayModel* model, bool is_latest) {
-    base::Optional<bool> manually_expanded =
+    absl::optional<bool> manually_expanded =
         model->GetNotificationExpanded(GetNotificationId());
     if (manually_expanded.has_value()) {
       message_view_->SetExpanded(manually_expanded.value());
@@ -230,6 +229,11 @@ void UnifiedMessageListView::Init() {
   bool is_latest = true;
   for (auto* notification :
        message_center_utils::GetSortedVisibleNotifications()) {
+    if (notification->group_child()) {
+      // TODO(crbug/1223697): Add grouped notifications to existing parent
+      // message views.
+      continue;
+    }
     auto* view =
         new MessageViewContainer(CreateMessageView(*notification), this);
     view->LoadExpandedState(model_, is_latest);
@@ -286,7 +290,7 @@ std::vector<Notification*> UnifiedMessageListView::GetNotificationsAboveY(
 }
 
 int UnifiedMessageListView::GetTotalNotificationCount() const {
-  return int{children().size()};
+  return static_cast<int>(children().size());
 }
 
 int UnifiedMessageListView::GetTotalPinnedNotificationCount() const {

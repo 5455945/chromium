@@ -14,6 +14,7 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
+#include "base/values.h"
 #include "components/content_settings/core/browser/content_settings_info.h"
 #include "components/content_settings/core/browser/content_settings_registry.h"
 #include "components/content_settings/core/browser/content_settings_rule.h"
@@ -26,6 +27,7 @@
 #include "components/prefs/scoped_user_pref_update.h"
 #include "services/preferences/public/cpp/dictionary_value_update.h"
 #include "services/preferences/public/cpp/scoped_pref_update.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 namespace {
@@ -39,12 +41,11 @@ bool IsValueAllowedForType(const base::Value* value, ContentSettingsType type) {
   const content_settings::ContentSettingsInfo* info =
       content_settings::ContentSettingsRegistry::GetInstance()->Get(type);
   if (info) {
-    int setting;
-    if (!value->GetAsInteger(&setting))
+    if (!value->is_int())
       return false;
-    if (setting == CONTENT_SETTING_DEFAULT)
+    if (value->GetInt() == CONTENT_SETTING_DEFAULT)
       return false;
-    return info->IsSettingValid(IntToContentSetting(setting));
+    return info->IsSettingValid(IntToContentSetting(value->GetInt()));
   }
 
   // TODO(raymes): We should permit different types of base::Value for
@@ -81,8 +82,7 @@ base::Time GetExpiration(const base::DictionaryValue* dictionary) {
 // SessionModel::Durable if no model exists.
 content_settings::SessionModel GetSessionModel(
     const base::DictionaryValue* dictionary) {
-  int model_int = 0;
-  dictionary->GetIntegerWithoutPathExpansion(kSessionModelPath, &model_int);
+  int model_int = dictionary->FindIntKey(kSessionModelPath).value_or(0);
   if ((model_int >
        static_cast<int>(content_settings::SessionModel::kMaxValue)) ||
       (model_int < 0)) {
@@ -320,8 +320,7 @@ void ContentSettingsPref::ReadContentSettingsFromPref() {
       continue;
     }
 
-    const base::Value* value = nullptr;
-    settings_dictionary->GetWithoutPathExpansion(kSettingPath, &value);
+    const base::Value* value = settings_dictionary->FindKey(kSettingPath);
     if (value) {
       base::Time last_modified = GetTimeStamp(settings_dictionary);
       DCHECK(IsValueAllowedForType(value, content_type_));
@@ -411,8 +410,8 @@ void ContentSettingsPref::UpdatePref(
         settings_dictionary->RemoveWithoutPathExpansion(kSessionModelPath,
                                                         nullptr);
       } else {
-        settings_dictionary->SetWithoutPathExpansion(kSettingPath,
-                                                     value->CreateDeepCopy());
+        settings_dictionary->SetWithoutPathExpansion(
+            kSettingPath, base::Value::ToUniquePtrValue(value->Clone()));
         settings_dictionary->SetKey(
             kLastModifiedPath,
             base::Value(base::NumberToString(

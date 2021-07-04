@@ -4,12 +4,12 @@
 
 #include "components/query_tiles/internal/tile_manager.h"
 
+#include <memory>
 #include <utility>
 
 #include "base/bind.h"
 #include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
-#include "base/test/simple_test_clock.h"
 #include "base/test/task_environment.h"
 #include "components/query_tiles/internal/tile_config.h"
 #include "components/query_tiles/internal/tile_store.h"
@@ -54,10 +54,8 @@ class TileManagerTest : public testing::Test {
   void SetUp() override {
     auto tile_store = std::make_unique<StrictMock<MockTileStore>>();
     tile_store_ = tile_store.get();
-    base::Time fake_now;
-    EXPECT_TRUE(base::Time::FromString("03/18/20 01:00:00 AM", &fake_now));
-    clock_.SetNow(fake_now);
-    manager_ = TileManager::Create(std::move(tile_store), &clock_, "en-US");
+    current_time_ = base::Time::Now();
+    manager_ = TileManager::Create(std::move(tile_store), "en-US");
   }
 
   // Initialize the store, compare the |expected_status| to the
@@ -100,7 +98,7 @@ class TileManagerTest : public testing::Test {
   TileGroup CreateValidGroup(const std::string& group_id,
                              const std::string& tile_id) {
     TileGroup group;
-    group.last_updated_ts = clock()->Now();
+    group.last_updated_ts = current_time();
     group.id = group_id;
     group.locale = "en-US";
     Tile tile;
@@ -121,7 +119,7 @@ class TileManagerTest : public testing::Test {
   void SaveTiles(const TileGroup& group, TileGroupStatus expected_status) {
     base::RunLoop loop;
     manager()->SaveTiles(
-        std::unique_ptr<TileGroup>(new TileGroup(group)),
+        std::make_unique<TileGroup>(group),
         base::BindOnce(&TileManagerTest::OnTilesSaved, base::Unretained(this),
                        loop.QuitClosure(), expected_status));
     loop.Run();
@@ -151,7 +149,7 @@ class TileManagerTest : public testing::Test {
     std::move(closure).Run();
   }
 
-  void GetSingleTile(const std::string& id, base::Optional<Tile> expected) {
+  void GetSingleTile(const std::string& id, absl::optional<Tile> expected) {
     base::RunLoop loop;
     manager()->GetTile(
         id, base::BindOnce(&TileManagerTest::OnGetTile, base::Unretained(this),
@@ -160,8 +158,8 @@ class TileManagerTest : public testing::Test {
   }
 
   void OnGetTile(base::RepeatingClosure closure,
-                 base::Optional<Tile> expected,
-                 base::Optional<Tile> actual) {
+                 absl::optional<Tile> expected,
+                 absl::optional<Tile> actual) {
     ASSERT_EQ(expected.has_value(), actual.has_value());
     if (expected.has_value())
       EXPECT_TRUE(test::AreTilesIdentical(expected.value(), actual.value()));
@@ -180,13 +178,13 @@ class TileManagerTest : public testing::Test {
  protected:
   TileManager* manager() { return manager_.get(); }
   MockTileStore* tile_store() { return tile_store_; }
-  const base::SimpleTestClock* clock() const { return &clock_; }
+  const base::Time current_time() const { return current_time_; }
 
  private:
   base::test::TaskEnvironment task_environment_;
   std::unique_ptr<TileManager> manager_;
   MockTileStore* tile_store_;
-  base::SimpleTestClock clock_;
+  base::Time current_time_;
 };
 
 TEST_F(TileManagerTest, InitAndLoadWithDbOperationFailed) {
@@ -203,7 +201,7 @@ TEST_F(TileManagerTest, InitWithEmptyDb) {
 TEST_F(TileManagerTest, InitAndLoadWithInvalidGroup) {
   // Create an expired group.
   auto expired_group = CreateValidGroup("expired_group_id", "tile_id");
-  expired_group.last_updated_ts = clock()->Now() - base::TimeDelta::FromDays(3);
+  expired_group.last_updated_ts = current_time() - base::TimeDelta::FromDays(3);
 
   // Locale mismatch group.
   auto locale_mismatch_group =
@@ -310,10 +308,10 @@ TEST_F(TileManagerTest, SaveTilesStillReturnOldTiles) {
 // Verifies GetTile(tile_id) API can return the right thing.
 TEST_F(TileManagerTest, GetTileById) {
   TileGroup group;
-  test::ResetTestGroup(&group);
+  test::ResetTestGroup(&group, current_time());
   InitWithData(TileGroupStatus::kSuccess, {group});
   GetSingleTile("guid-1-1", *group.tiles[0]);
-  GetSingleTile("id_not_exist", base::nullopt);
+  GetSingleTile("id_not_exist", absl::nullopt);
 }
 
 // Verify that GetTiles will return empty result if no matching AcceptLanguages
@@ -321,7 +319,7 @@ TEST_F(TileManagerTest, GetTileById) {
 TEST_F(TileManagerTest, GetTilesWithoutMatchingAcceptLanguages) {
   manager()->SetAcceptLanguagesForTesting("zh");
   TileGroup group;
-  test::ResetTestGroup(&group);
+  test::ResetTestGroup(&group, current_time());
 
   EXPECT_CALL(*tile_store(), Delete("group_guid", _));
   InitWithData(TileGroupStatus::kNoTiles, {group});
@@ -341,7 +339,7 @@ TEST_F(TileManagerTest, GetTilesWithMatchingAcceptLanguages) {
 
 TEST_F(TileManagerTest, PurgeDb) {
   TileGroup group;
-  test::ResetTestGroup(&group);
+  test::ResetTestGroup(&group, current_time());
   InitWithData(TileGroupStatus::kSuccess, {group});
   EXPECT_CALL(*tile_store(), Delete(group.id, _));
   manager()->PurgeDb();
@@ -350,7 +348,7 @@ TEST_F(TileManagerTest, PurgeDb) {
 
 TEST_F(TileManagerTest, GetTileGroup) {
   TileGroup expected;
-  test::ResetTestGroup(&expected);
+  test::ResetTestGroup(&expected, current_time());
   InitWithData(TileGroupStatus::kSuccess, {expected});
 
   TileGroup* actual = manager()->GetTileGroup();
@@ -418,7 +416,7 @@ TEST_F(TileManagerTest, GetSingleTileWithTrendingSubTiles) {
 
   parent_tile->sub_tiles = test::GetTestTrendingTileList();
 
-  base::Optional<Tile> parent_tile2 = base::make_optional(*parent_tile.get());
+  absl::optional<Tile> parent_tile2 = absl::make_optional(*parent_tile.get());
   parent_tile2->sub_tiles.pop_back();
 
   std::vector<std::unique_ptr<Tile>> tiles_to_save;
@@ -537,8 +535,8 @@ TEST_F(TileManagerTest, GetSingleTileAfterOnTileClicked) {
   expected.emplace_back(*parent_tile.get());
   Tile trending_3 = *(expected[0].sub_tiles[2]).get();
 
-  base::Optional<Tile> get_single_tile_expected =
-      base::make_optional(*parent_tile.get());
+  absl::optional<Tile> get_single_tile_expected =
+      absl::make_optional(*parent_tile.get());
   get_single_tile_expected->sub_tiles.pop_back();
 
   std::vector<std::unique_ptr<Tile>> tiles_to_save;

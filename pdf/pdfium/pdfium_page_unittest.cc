@@ -9,8 +9,6 @@
 
 #include "base/check.h"
 #include "base/files/file_path.h"
-#include "base/optional.h"
-#include "base/path_service.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/gtest_util.h"
@@ -21,9 +19,10 @@
 #include "pdf/pdfium/pdfium_test_base.h"
 #include "pdf/ppapi_migration/geometry_conversions.h"
 #include "pdf/test/test_client.h"
-#include "pdf/thumbnail.h"
-#include "ppapi/c/private/ppb_pdf.h"
+#include "pdf/test/test_helpers.h"
+#include "pdf/ui/thumbnail.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/pdfium/public/fpdf_formfill.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/geometry/rect.h"
@@ -86,13 +85,7 @@ base::FilePath GetThumbnailTestData(const std::string& expectation_file_prefix,
   std::string file_dir = base::StringPrintf("%.1fx", device_pixel_ratio);
   std::string file_name = base::StringPrintf(
       "%s_expected.pdf.%zu.png", expectation_file_prefix.c_str(), page_index);
-  base::FilePath root_path;
-  if (!base::PathService::Get(base::DIR_SOURCE_ROOT, &root_path))
-    return base::FilePath();
-  return root_path.Append(FILE_PATH_LITERAL("pdf"))
-      .Append(FILE_PATH_LITERAL("test"))
-      .Append(FILE_PATH_LITERAL("data"))
-      .Append(FILE_PATH_LITERAL("thumbnail"))
+  return base::FilePath(FILE_PATH_LITERAL("thumbnail"))
       .AppendASCII(file_dir)
       .AppendASCII(file_name);
 }
@@ -268,7 +261,7 @@ TEST_F(PDFiumPageTextTest, TestTextRunBounds) {
   constexpr int kFirstRunStartIndex = 0;
   constexpr int kFirstRunEndIndex = 20;
   constexpr int kPageIndex = 0;
-  base::Optional<AccessibilityTextRunInfo> text_run_info_1 =
+  absl::optional<AccessibilityTextRunInfo> text_run_info_1 =
       engine->GetTextRunInfo(kPageIndex, kFirstRunStartIndex);
   ASSERT_TRUE(text_run_info_1.has_value());
 
@@ -304,7 +297,7 @@ TEST_F(PDFiumPageTextTest, TestTextRunBounds) {
   // Test the properties of second text run.
   // Note: The leading spaces in second text run are accounted for in the end
   // of first text run. Hence we won't see a space leading the second text run.
-  base::Optional<AccessibilityTextRunInfo> text_run_info_2 =
+  absl::optional<AccessibilityTextRunInfo> text_run_info_2 =
       engine->GetTextRunInfo(kPageIndex, kSecondRunStartIndex);
   ASSERT_TRUE(text_run_info_2.has_value());
 
@@ -385,7 +378,7 @@ TEST_F(PDFiumPageTextTest, GetTextRunInfo) {
   }
 
   // Test negative char index returns nullopt
-  base::Optional<AccessibilityTextRunInfo> text_run_info_result =
+  absl::optional<AccessibilityTextRunInfo> text_run_info_result =
       engine->GetTextRunInfo(0, -1);
   ASSERT_FALSE(text_run_info_result.has_value());
 
@@ -439,7 +432,7 @@ TEST_F(PDFiumPageTextTest, TestHighlightTextRunInfo) {
 
   int current_char_index = 0;
   for (const auto& expected_text_run : expected_text_runs) {
-    base::Optional<AccessibilityTextRunInfo> text_run_info_result =
+    absl::optional<AccessibilityTextRunInfo> text_run_info_result =
         engine->GetTextRunInfo(0, current_char_index);
     ASSERT_TRUE(text_run_info_result.has_value());
     const auto& actual_text_run = text_run_info_result.value();
@@ -743,8 +736,10 @@ class PDFiumPageThumbnailTest : public PDFiumTestBase {
     base::FilePath expectation_png_file_path = GetThumbnailTestData(
         expectation_file_prefix, page_index, device_pixel_ratio);
 
-    cc::MatchesPNGFile(thumbnail.bitmap(), expectation_png_file_path,
-                       cc::ExactPixelComparator(/*discard_alpha=*/false));
+    EXPECT_TRUE(cc::MatchesPNGFile(
+        thumbnail.bitmap(), GetTestDataFilePath(expectation_png_file_path),
+        cc::ExactPixelComparator(/*discard_alpha=*/false)))
+        << "Reference: " << expectation_png_file_path;
   }
 };
 

@@ -21,15 +21,15 @@
 #include "chrome/browser/ash/login/demo_mode/demo_resources.h"
 #include "chrome/browser/ash/login/demo_mode/demo_session.h"
 #include "chrome/browser/ash/login/enrollment/auto_enrollment_controller.h"
+#include "chrome/browser/ash/login/startup_utils.h"
+#include "chrome/browser/ash/login/wizard_controller.h"
+#include "chrome/browser/ash/policy/core/browser_policy_connector_chromeos.h"
+#include "chrome/browser/ash/policy/core/device_local_account.h"
+#include "chrome/browser/ash/policy/core/device_local_account_policy_service.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/chromeos/login/startup_utils.h"
-#include "chrome/browser/chromeos/login/wizard_controller.h"
-#include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
-#include "chrome/browser/chromeos/policy/device_local_account.h"
-#include "chrome/browser/chromeos/policy/device_local_account_policy_service.h"
-#include "chrome/browser/chromeos/policy/enrollment_config.h"
-#include "chrome/browser/chromeos/policy/enrollment_requisition_manager.h"
+#include "chrome/browser/chromeos/policy/enrollment/enrollment_config.h"
+#include "chrome/browser/chromeos/policy/enrollment/enrollment_requisition_manager.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
@@ -42,10 +42,11 @@
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "ui/base/l10n/l10n_util.h"
 
-namespace chromeos {
-
+namespace ash {
 namespace {
 
+// TODO(https://crbug.com/1164001): remove after moving to ash::
+using ::chromeos::InstallAttributes;
 using ErrorCode = DemoSetupController::DemoSetupError::ErrorCode;
 using RecoveryMethod = DemoSetupController::DemoSetupError::RecoveryMethod;
 
@@ -101,10 +102,10 @@ policy::CloudPolicyStore* GetDeviceLocalAccountPolicyStore(
 // A utility function of base::ReadFileToString which returns an optional
 // string.
 // TODO(mukai): move this to base/files.
-base::Optional<std::string> ReadFileToOptionalString(
+absl::optional<std::string> ReadFileToOptionalString(
     const base::FilePath& file_path) {
   std::string content;
-  base::Optional<std::string> result;
+  absl::optional<std::string> result;
   if (base::ReadFileToString(file_path, &content))
     result = std::move(content);
   return result;
@@ -350,7 +351,7 @@ DemoSetupController::DemoSetupError::DemoSetupError(
 
 DemoSetupController::DemoSetupError::~DemoSetupError() = default;
 
-base::string16 DemoSetupController::DemoSetupError::GetLocalizedErrorMessage()
+std::u16string DemoSetupController::DemoSetupError::GetLocalizedErrorMessage()
     const {
   switch (error_code_) {
     case ErrorCode::kOfflinePolicyError:
@@ -428,10 +429,10 @@ base::string16 DemoSetupController::DemoSetupError::GetLocalizedErrorMessage()
       return l10n_util::GetStringUTF16(IDS_DEMO_SETUP_UNEXPECTED_ERROR);
   }
   NOTREACHED() << "No localized error message available for demo setup error.";
-  return base::string16();
+  return std::u16string();
 }
 
-base::string16
+std::u16string
 DemoSetupController::DemoSetupError::GetLocalizedRecoveryMessage() const {
   switch (recovery_method_) {
     case RecoveryMethod::kRetry:
@@ -449,7 +450,7 @@ DemoSetupController::DemoSetupError::GetLocalizedRecoveryMessage() const {
   }
   NOTREACHED()
       << "No localized error message available for demo setup recovery method.";
-  return base::string16();
+  return std::u16string();
 }
 
 std::string DemoSetupController::DemoSetupError::GetDebugDescription() const {
@@ -742,10 +743,6 @@ void DemoSetupController::OnDeviceAttributeUpdatePermission(bool granted) {
   NOTREACHED();
 }
 
-void DemoSetupController::OnRestoreAfterRollbackCompleted() {
-  NOTREACHED();
-}
-
 void DemoSetupController::SetCrOSComponentLoadErrorForTest(
     component_updater::CrOSComponentManager::Error error) {
   component_error_for_tests_ = error;
@@ -762,7 +759,7 @@ void DemoSetupController::SetDeviceLocalAccountPolicyStoreForTest(
 }
 
 void DemoSetupController::OnDeviceLocalAccountPolicyLoaded(
-    base::Optional<std::string> blob) {
+    absl::optional<std::string> blob) {
   if (!blob.has_value()) {
     // This is very unlikely to happen since the file existence is already
     // checked as CheckOfflinePolicyFilesExist.
@@ -878,4 +875,4 @@ void DemoSetupController::OnStoreError(policy::CloudPolicyStore* store) {
                      "Failed to store the local account policy"));
 }
 
-}  //  namespace chromeos
+}  //  namespace ash

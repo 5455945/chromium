@@ -38,6 +38,7 @@
 <translation id="1662989795263954667">Se detuvo: sin tinta</translation>
 <translation id="1703835215927279855">Letter</translation>
 <translation id="1706391837335750954">Agente de resolución de DNS disponible</translation>
+<translation id="1715359911173058521">Hay un problema de comunicación con el escáner. Revisa la conexión de red o USB y vuelve a intentarlo.</translation>
 <translation id="1717874160321062422">Administrado por <ph name="FIRST_MANAGER" /> y <ph name="SECOND_MANAGER" />.</translation>
 <translation id="1758018619400202187">EAP-TLS</translation>
 <translation id="1792647875738159689">Cancelando el escaneo</translation>
@@ -51,16 +52,18 @@
 <translation id="1999615961760456652">Portal cautivo</translation>
 <translation id="2008685064673031089">Búsqueda de números primos</translation>
 <translation id="2080070583977670716">Más opciones de configuración</translation>
+<translation id="2119172414412204879"><ph name="BOARD_NAME" />, versión <ph name="MILESTONE_VERSION" /></translation>
+<translation id="2126937207024182736"><ph name="AVAILABLE_MEMORY" /> GB de <ph name="TOTAL_MEMORY" /> GB de memoria disponible</translation>
 <translation id="2141644705054017895"><ph name="PERCENTAGE_VALUE" />%</translation>
 <translation id="2157959690810728433">EN COLA</translation>
 <translation id="2161394479394250669">Cancelar el trabajo de impresión</translation>
+<translation id="2217935453350629363">Velocidad actual</translation>
 <translation id="2224337661447660594">Sin Internet</translation>
 <translation id="2230051135190148440">CHAP</translation>
 <translation id="225692081236532131">Estado de activación</translation>
 <translation id="2326139988748364651"><ph name="RESOLUTION_VALUE" /> DPI</translation>
 <translation id="2338501278241028356">Activar Bluetooth para buscar los dispositivos cercanos</translation>
 <translation id="2364498172489649528">Aprobado</translation>
-<translation id="2365324413026422635">No se puede realizar la prueba de la carga de la batería cuando está completa.</translation>
 <translation id="2391082728065870591">Enviar informe de comentarios</translation>
 <translation id="2418150275289244458">Abrir en la configuración</translation>
 <translation id="2446553403094072641">Exactitud del punto flotante</translation>
@@ -73,11 +76,13 @@
 <translation id="2620436844016719705">Sistema</translation>
 <translation id="2740531572673183784">Aceptar</translation>
 <translation id="2751739896257479635">Autenticación de fase 2 EAP</translation>
+<translation id="2783010256799387990">APROBADO</translation>
 <translation id="2789486458103222910">Aceptar</translation>
 <translation id="2805756323405976993">Aplicaciones</translation>
 <translation id="2862104018715411648">Para comenzar, coloca el documento en el escáner y selecciona Escanear</translation>
 <translation id="2872961005593481000">Apagar</translation>
 <translation id="2878387241690264070">Se descargó el <ph name="RATE" /> en <ph name="NUM_SECONDS" /> segundos.</translation>
+<translation id="2983662233540284543">Aprende de un creador de videojuegos, obtén apps diseñadas para juegos y mucho más.</translation>
 <translation id="3008341117444806826">ACTUALIZAR</translation>
 <translation id="3009958530611748826">Seleccionar una carpeta de destino</translation>
 <translation id="3054177598518735801"><ph name="CURRENT_VALUE" /> mA</translation>
@@ -93,6 +98,7 @@
 <translation id="3226405216343213872">Buscando escáneres</translation>
 <translation id="3246869037381808805">Se quitarán los trabajos de impresión que tengan más de 1 día</translation>
 <translation id="3268178239013324452">Error: La tapa está abierta</translation>
+<translation id="3283504360622356314">{0,plural, =1{Editar archivo}other{Editar archivos}}</translation>
 <translation id="3286515922899063534"><ph name="CURRENT" /> GHz</translation>
 <translation id="3310640316857623290">La latencia de DNS supera significativamente el umbral permitido</translation>
 <translation id="3328783797891415197">Prueba en ejecución</translation>
@@ -105,6 +111,7 @@
 <translation id="3459509316159669723">Impresión</translation>
 <translation id="3488065109653206955">Parcialmente activado</translation>
 <translation id="3527036260304016759">Error: Problema desconocido</translation>
+<translation id="3532980081107202182">Quedan aproximadamente <ph name="MIN_REMAINING" /> minutos</translation>
 <translation id="357889014807611375">Wi-Fi de uso medido</translation>
 <translation id="3595596368722241419">Batería completa</translation>
 <translation id="360565022852130722">la red Wi-Fi está protegida con el protocolo WEP 802.1x (poco seguro)</translation>
@@ -116,6 +123,7 @@
 <translation id="3820172043799983114">PIN no válido</translation>
 <translation id="3838338534323494292">Nueva contraseña</translation>
 <translation id="3865414814144988605">Resolución</translation>
+<translation id="387301095347517405">El número de veces que la batería ha completado un ciclo de carga</translation>
 <translation id="3941014780699102620">no se pudo resolver el host</translation>
 <translation id="3942420633017001071">Diagnóstico</translation>
 <translation id="3967822245660637423">Descarga completa</translation>
@@ -128,15 +136,15 @@
 <translation id="4155551848414053977">Asegúrate de que el escáner esté encendido y disponible a través de tu red o una conexión directa.</translation>
 <translation id="4170700058716978431">ERROR</translation>
 <translation id="4176463684765177261">Inhabilitado</translation>
-<translation id="4222698289790462549">Velocidad actual</translation>
 <translation id="4227825898293920515">La contraseña caduca en <ph name="TIME" /></translation>
-<translation id="4228041325992544252"><ph name="AVAILABLE_MEMORY" /> GB de <ph name="TOTAL_MEMORY" /> GB de memoria disponible.</translation>
 <translation id="4238516577297848345">No hay trabajos de impresión en curso</translation>
 <translation id="4297501883039923494">Se detuvo: error desconocido</translation>
+<translation id="4300073214558989"><ph name="IMAGE_COUNT" /> Imágenes</translation>
 <translation id="4378373042927530923">No se ejecutó la rutina</translation>
 <translation id="4382484599443659549">PDF</translation>
 <translation id="4425149324548788773">Mi unidad</translation>
 <translation id="4429881212383817840">El ticket de Kerberos caducará pronto</translation>
+<translation id="4431821876790500265">Ver el informe</translation>
 <translation id="445059817448385655">Contraseña anterior</translation>
 <translation id="4453205916657964690">Máscara de subred</translation>
 <translation id="4454245904991689773">Destino del escaneo</translation>
@@ -158,8 +166,12 @@
 <translation id="469379815867856270">Intensidad de la señal</translation>
 <translation id="4707579418881001319">L2TP/IPsec + certificado de usuario</translation>
 <translation id="4731797938093519117">Acceso parental</translation>
+<translation id="475869545581454722">Se actualizó la contraseña de Chrome OS</translation>
 <translation id="4773299976671772492">Detenida</translation>
+<translation id="4794140124556169553">Ejecutar una prueba de CPU puede afectar el rendimiento de tu sistema.</translation>
 <translation id="4808449224298348341">Se canceló el trabajo de impresión <ph name="DOCUMENT_TITLE" /></translation>
+<translation id="4813136279048157860">Mis imágenes</translation>
+<translation id="4813345808229079766">Conexión</translation>
 <translation id="4832079907277790330">Seleccionar carpeta en la app de Archivos…</translation>
 <translation id="4835901797422965222">No hay redes activas</translation>
 <translation id="4848429997038228357">EN EJECUCIÓN</translation>
@@ -174,6 +186,8 @@
 <translation id="4932733599132424254">Fecha</translation>
 <translation id="498186245079027698">Revisa el escáner y vuelve a intentarlo. Asegúrate de que haya espacio suficiente en el almacenamiento local para guardar los archivos escaneados.</translation>
 <translation id="4985509611418653372">Ejecutar</translation>
+<translation id="4987769320337599931">Firewall</translation>
+<translation id="4999333166442584738">Ocultar informe</translation>
 <translation id="500920857929044050">Detener la prueba</translation>
 <translation id="5017508259293544172">LEAP</translation>
 <translation id="5050042263972837708">Nombre del grupo</translation>
@@ -182,6 +196,8 @@
 <translation id="5142961317498132443">Autenticación</translation>
 <translation id="5154917547274118687">Memoria</translation>
 <translation id="5168185087976003268">Estado de la batería</translation>
+<translation id="5170568018924773124">Mostrar en carpeta</translation>
+<translation id="519607504553633437">Diseña y compila tus propios juegos</translation>
 <translation id="5212543919916444558">No hay nada en la pantalla con lo que pueda ayudarte.
 Intenta presionar el micrófono para hacerme una pregunta.</translation>
 <translation id="5222676887888702881">Salir</translation>
@@ -190,6 +206,8 @@ Intenta presionar el micrófono para hacerme una pregunta.</translation>
 <translation id="5267975978099728568"><ph name="DOCUMENT_TITLE" />, <ph name="PRINTER_NAME" />, <ph name="CREATION_TIME" />, <ph name="ERROR_STATUS" /></translation>
 <translation id="5275828089655680674">Volver a ejecutar las rutinas</translation>
 <translation id="5286252187236914003">L2TP/IPsec</translation>
+<translation id="5294769550414936029">versión <ph name="MILESTONE_VERSION" /></translation>
+<translation id="5300814202279832142">Mover la ventana al escritorio</translation>
 <translation id="5315873049536339193">Identidad</translation>
 <translation id="5317780077021120954">Guardar</translation>
 <translation id="5318334351163689047">Fallos de solicitudes de TCP</translation>
@@ -206,13 +224,13 @@ Intenta presionar el micrófono para hacerme una pregunta.</translation>
 <translation id="54609108002486618">Gestionado</translation>
 <translation id="5478289488939624992">{ATTEMPTS_LEFT,plural, =1{Queda {0} intento.}other{Quedan {0} intentos.}}</translation>
 <translation id="5493614766091057239"><ph name="VERDICT" />: <ph name="PROBLEMS" /></translation>
+<translation id="5499114900554609492">No se pudo completar el escaneo</translation>
 <translation id="554517032089923082">GTC</translation>
-<translation id="5635169860413004179">Ver el informe</translation>
 <translation id="5669267381087807207">Activando</translation>
 <translation id="5670702108860320605">BSSID</translation>
 <translation id="5691511426247308406">Familia</translation>
+<translation id="5752751666635965375">Hacer tu propio juego</translation>
 <translation id="5760715441271661976">Estado del portal</translation>
-<translation id="5797428682393400134">COMPLETA</translation>
 <translation id="5832805196449965646">Agregar a una persona</translation>
 <translation id="583281660410589416">Desconocido</translation>
 <translation id="5849570051105887917">Código del proveedor de origen</translation>
@@ -221,7 +239,7 @@ Intenta presionar el micrófono para hacerme una pregunta.</translation>
 <translation id="5916084858004523819">Prohibido</translation>
 <translation id="5921506667911082617">{COUNT,plural, =1{Tu archivo se escaneó correctamente y se guardó en <ph name="LINK_BEGIN" /><ph name="FOLDER_NAME" /><ph name="LINK_END" />.}other{Tus archivos se escanearon correctamente y se guardaron en <ph name="LINK_BEGIN" /><ph name="FOLDER_NAME" /><ph name="LINK_END" />.}}</translation>
 <translation id="5931523347251946569">No se encontró el archivo</translation>
-<translation id="5982592372228113572">(<ph name="BOARD_NAME" />, versión <ph name="MILESTONE_VERSION" />)</translation>
+<translation id="6037291330010597344">El alimentador de documentos del escáner está vacío. Agrega documentos y vuelve a intentarlo.</translation>
 <translation id="6040143037577758943">Cerrar</translation>
 <translation id="6040852767465482106">Identidad anónima</translation>
 <translation id="604124094241169006">Automático</translation>
@@ -241,18 +259,20 @@ Intenta presionar el micrófono para hacerme una pregunta.</translation>
 <translation id="6191293864534840972">el formato de los servidores de nombres es incorrecto</translation>
 <translation id="6223752125779001553">No hay escáneres disponibles</translation>
 <translation id="6232017090690406397">Batería</translation>
+<translation id="6243280677745499710">Establecido actualmente</translation>
 <translation id="6302401976930124515">Se canceló la prueba de <ph name="TEST_NAME" /></translation>
 <translation id="6325525973963619867">Se ha producido un error.</translation>
 <translation id="636850387210749493">Registro de empresa</translation>
+<translation id="6388847657025262518">Se atascó el alimentador de documentos del escáner. Revisa el alimentador y vuelve a intentarlo.</translation>
 <translation id="641081527798843608">Coincidencia de asunto</translation>
 <translation id="6423239382391657905">VPN abierto</translation>
 <translation id="6456394469623773452">Regular</translation>
 <translation id="6472207088655375767">OTP</translation>
 <translation id="6480327114083866287">Administrador: <ph name="MANAGER" /></translation>
 <translation id="649050271426829538">Se detuvo: se atascó el papel</translation>
+<translation id="6516990319416533844">Para probar la velocidad de carga de la batería, deja que esta se descargue un poco.</translation>
 <translation id="6517239166834772319">Explorar</translation>
 <translation id="6527081081771465939">el protocolo de seguridad Wi-Fi es desconocido</translation>
-<translation id="6532051501443766164">Ocultar informe</translation>
 <translation id="65587193855025101">Cristal del escáner</translation>
 <translation id="6564646048574748301">Error: No se puede acceder a la impresora</translation>
 <translation id="6618744767048954150">En ejecución</translation>
@@ -265,7 +285,7 @@ Intenta presionar el micrófono para hacerme una pregunta.</translation>
 <translation id="6766275201586212568">Resoluciones DNS con error</translation>
 <translation id="6768237774506518020">Tasa alta de errores para la resolución de DNS</translation>
 <translation id="6853312040151791195">Velocidad de descarga</translation>
-<translation id="6898743098396957679">No se pudo completar el escaneo</translation>
+<translation id="6910312834584889076">La tapa del escáner está abierta. Ciérrala y vuelve a intentarlo.</translation>
 <translation id="6911383237894364323">No es posible conectarse a los servidores de medios</translation>
 <translation id="6957231940976260713">Nombre del servicio</translation>
 <translation id="6977381486153291903">Revisión de firmware</translation>
@@ -273,13 +293,17 @@ Intenta presionar el micrófono para hacerme una pregunta.</translation>
 <translation id="7040230719604914234">Operador</translation>
 <translation id="7059230779847288458">Cargando, <ph name="TIME_VALUE" /> para completar la carga</translation>
 <translation id="708426984172631313">DETENIDA</translation>
+<translation id="7086440545492620869"><ph name="VALUE" /> <ph name="DISPLAY_NAME" /></translation>
 <translation id="7143207342074048698">Conectando</translation>
 <translation id="7144878232160441200">Volver a intentar</translation>
 <translation id="714876143603641390">Conectividad LAN</translation>
 <translation id="7162487448488904999">Galería</translation>
+<translation id="7172721935181587524">1 imagen</translation>
 <translation id="7177485034254901881"><ph name="MANAGER" /> administra el dispositivo <ph name="DEVICE_TYPE" />. Los administradores pueden configurarlo de forma remota.</translation>
 <translation id="7216409898977639127">Proveedor de red celular</translation>
+<translation id="7271040990581020067">El escáner está en uso. Vuelve a intentarlo más tarde.</translation>
 <translation id="7274587244503383581"><ph name="PRINTED_PAGES_NUMBER" />/<ph name="TOTAL_PAGES_NUMBER" /></translation>
+<translation id="7302860742311162920">ICCID</translation>
 <translation id="7343649194310845056">Dispositivos de red</translation>
 <translation id="7359657277149375382">Tipo de archivo</translation>
 <translation id="7375053625150546623">EAP</translation>
@@ -301,9 +325,11 @@ Intenta presionar el micrófono para hacerme una pregunta.</translation>
 <translation id="7701040980221191251">Ninguna</translation>
 <translation id="7705524343798198388">VPN</translation>
 <translation id="773153675489693198">Conteo de ciclos</translation>
+<translation id="7762130827864645708">El cambio de contraseña se hizo correctamente. De ahora en más, utiliza la nueva contraseña.</translation>
 <translation id="7769672763586021400">ID del modelo</translation>
 <translation id="7805768142964895445">Estado</translation>
 <translation id="7819857487979277519">PSK (WPA o RSN)</translation>
+<translation id="7881066108824108340">DNS</translation>
 <translation id="7882358943899516840">Tipo de proveedor</translation>
 <translation id="7936303884198020182">no se encontraron servidores de nombres</translation>
 <translation id="7960831585769876809">Temperatura</translation>
@@ -315,25 +341,31 @@ Intenta presionar el micrófono para hacerme una pregunta.</translation>
 <translation id="8129620843620772246"><ph name="TEMPERATURE_C" /> °C</translation>
 <translation id="8206859287963243715">Celular</translation>
 <translation id="8208861521865154048">Beneficios</translation>
+<translation id="8214184102975786227">Escanear varias páginas en un PDF</translation>
 <translation id="8230672074305416752">no se pudo hacer ping en la puerta de enlace de la red predeterminada</translation>
 <translation id="8246209727385807362">El proveedor es desconocido</translation>
 <translation id="8291967909914612644">País del proveedor de origen</translation>
 <translation id="8294431847097064396">Fuente</translation>
 <translation id="8297006494302853456">Débil</translation>
 <translation id="8302368968391049045">Firewall de HTTPS</translation>
+<translation id="8318753676953949627">No hay imágenes</translation>
 <translation id="8347227221149377169">Trabajos de impresión</translation>
 <translation id="8352772353338965963">Agrega una cuenta para el acceso múltiple. Puedes acceder a todas las cuentas abiertas sin una contraseña, por lo que esta función solo debe utilizarse con cuentas de confianza.</translation>
 <translation id="8364946094152050673">los servidores de nombres están vacíos</translation>
 <translation id="8372477600026034341">Hosts adicionales</translation>
 <translation id="8395584934117017006">Una empresa administra el dispositivo <ph name="DEVICE_TYPE" /></translation>
 <translation id="8398927464629426868">La tasa a la que el dispositivo se está cargando o descargando</translation>
+<translation id="8422748173858722634">IMEI</translation>
 <translation id="8461329675984532579">Nombre del proveedor de origen</translation>
 <translation id="8475690821716466388">la red Wi-Fi está protegida con el protocolo de PSK WEP (poco seguro)</translation>
 <translation id="8477551185774834963">la latencia de DNS supera ligeramente el umbral permitido</translation>
 <translation id="8483248364096924578">Dirección IP</translation>
 <translation id="8503813439785031346">Nombre de usuario</translation>
+<translation id="8503836310948963452">Solo unos minutos más…</translation>
+<translation id="8575298406870537639">Es posible que tu proveedor necesite que esta opción esté habilitada para que puedas conectarte a su red. Comunícate con el proveedor para obtener más detalles.</translation>
 <translation id="8576249514688522074">No se inicializó</translation>
 <translation id="8620617069779373398">Estado de roaming</translation>
+<translation id="8660881923941176839">libras</translation>
 <translation id="8675354002693747642">Clave compartida previamente</translation>
 <translation id="871560550817059752">Error: Sin tinta</translation>
 <translation id="8723108084122415655">la red no predeterminada supera el umbral de latencia</translation>
@@ -343,17 +375,19 @@ Intenta presionar el micrófono para hacerme una pregunta.</translation>
 <translation id="877985182522063539">A4</translation>
 <translation id="8798099450830957504">Predeterminado</translation>
 <translation id="8798441408945964110">Nombre del proveedor</translation>
-<translation id="880791622116642296">Indica la cantidad de veces que la batería ha completado un ciclo de carga.</translation>
 <translation id="8814190375133053267">Wi-Fi</translation>
+<translation id="8818152010000655963">Fondo de pantalla</translation>
 <translation id="8845001906332463065">Obtener ayuda</translation>
 <translation id="8881098542468797602">Se completó correctamente la prueba</translation>
 <translation id="8898840733695078011">Intensidad de la señal</translation>
 <translation id="8910721771319628100">la red predeterminada supera el umbral de latencia</translation>
+<translation id="8918637186205009138"><ph name="DEVICE_TYPE" /> de <ph name="GIVEN_NAME" /></translation>
 <translation id="8919837981463578619">Error: Falta la bandeja</translation>
 <translation id="8928727111548978589">Error: No hay papel</translation>
 <translation id="8930622219860340959">Inalámbrico</translation>
 <translation id="8968751544471797276">Velocidad de carga</translation>
 <translation id="8970109610781093811">Volver a ejecutar</translation>
+<translation id="8987565828374052507">{NUMBER_OF_PAGES,plural, =0{Analizar}=1{Analizar {NUMBER_OF_PAGES} página}other{Analizar {NUMBER_OF_PAGES} páginas}}</translation>
 <translation id="9003704114456258138">Frecuencia</translation>
 <translation id="9039663905644212491">PEAP</translation>
 <translation id="9073281213608662541">PAP</translation>
@@ -362,8 +396,11 @@ Intenta presionar el micrófono para hacerme una pregunta.</translation>
 <translation id="910415269708673980">Actualizar ticket para <ph name="PRINCIPAL_NAME" /></translation>
 <translation id="9106415115617144481">Escaneando página <ph name="PAGE_NUMBER" /></translation>
 <translation id="9111102763498581341">Desbloquear</translation>
+<translation id="9137526406337347448">Servicios de Google</translation>
 <translation id="9149391708638971077">Ejecutar prueba de memoria</translation>
+<translation id="9173638680043580060">Queda menos de un minuto</translation>
 <translation id="9190063653747922532">L2TP/IPsec + clave previamente compartida</translation>
+<translation id="9211490828691860325">Todos los escritorios</translation>
 <translation id="939519157834106403">SSID</translation>
 <translation id="952992212772159698">No activado</translation>
 <translation id="960719561871045870">Código del operador</translation>

@@ -9,20 +9,25 @@
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/root_window_controller.h"
+#include "ash/shelf/hotseat_widget.h"
+#include "ash/shelf/shelf.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/ash_color_provider.h"
 #include "ash/wm/work_area_insets.h"
+#include "base/bind.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/compositor/layer.h"
 #include "ui/display/display_observer.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/font_list.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/paint_vector_icon.h"
+#include "ui/views/animation/ink_drop.h"
 #include "ui/views/animation/ink_drop_highlight.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
@@ -52,16 +57,25 @@ constexpr int kToastButtonMaximumWidth = 160;
 
 // Returns the work area bounds for the root window where new windows are added
 // (including new toasts).
-gfx::Rect GetUserWorkAreaBounds() {
-  return WorkAreaInsets::ForWindow(Shell::GetRootWindowForNewWindows())
-      ->user_work_area_bounds();
+gfx::Rect GetUserWorkAreaBounds(aura::Window* window) {
+  return WorkAreaInsets::ForWindow(window)->user_work_area_bounds();
+}
+
+// Offsets the bottom of bounds for toast to accommodate the hotseat, based on
+// the current hotseat state
+void AdjustWorkAreaBoundsForHotseatState(gfx::Rect& bounds,
+                                         const HotseatWidget* hotseat_widget) {
+  if (hotseat_widget->state() == HotseatState::kExtended)
+    bounds.set_height(bounds.height() - hotseat_widget->GetHotseatSize());
+  if (hotseat_widget->state() == HotseatState::kShownHomeLauncher)
+    bounds.set_height(hotseat_widget->GetTargetBounds().y() - bounds.y());
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 //  ToastOverlayLabel
 class ToastOverlayLabel : public views::Label {
  public:
-  explicit ToastOverlayLabel(const base::string16& label)
+  explicit ToastOverlayLabel(const std::u16string& label)
       : Label(label, CONTEXT_TOAST_OVERLAY) {
     SetHorizontalAlignment(gfx::ALIGN_LEFT);
     SetAutoColorReadabilityEnabled(false);
@@ -94,13 +108,9 @@ class ToastOverlayLabel : public views::Label {
 //  ToastDisplayObserver
 class ToastOverlay::ToastDisplayObserver : public display::DisplayObserver {
  public:
-  ToastDisplayObserver(ToastOverlay* overlay) : overlay_(overlay) {
-    display::Screen::GetScreen()->AddObserver(this);
-  }
+  ToastDisplayObserver(ToastOverlay* overlay) : overlay_(overlay) {}
 
-  ~ToastDisplayObserver() override {
-    display::Screen::GetScreen()->RemoveObserver(this);
-  }
+  ~ToastDisplayObserver() override {}
 
   void OnDisplayMetricsChanged(const display::Display& display,
                                uint32_t changed_metrics) override {
@@ -109,6 +119,9 @@ class ToastOverlay::ToastDisplayObserver : public display::DisplayObserver {
 
  private:
   ToastOverlay* const overlay_;
+
+  display::ScopedDisplayObserver display_observer_{this};
+
   DISALLOW_COPY_AND_ASSIGN(ToastDisplayObserver);
 };
 
@@ -116,10 +129,17 @@ class ToastOverlay::ToastDisplayObserver : public display::DisplayObserver {
 //  ToastOverlayButton
 class ToastOverlayButton : public views::LabelButton {
  public:
-  ToastOverlayButton(PressedCallback callback, const base::string16& text)
+  ToastOverlayButton(PressedCallback callback, const std::u16string& text)
       : views::LabelButton(std::move(callback), text, CONTEXT_TOAST_OVERLAY) {
-    SetInkDropMode(InkDropMode::ON);
+    views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::ON);
     SetHasInkDropActionOnClick(true);
+    views::InkDrop::Get(this)->SetCreateHighlightCallback(base::BindRepeating(
+        [](Button* host) {
+          return std::make_unique<views::InkDropHighlight>(
+              gfx::SizeF(host->GetLocalBounds().size()),
+              views::InkDrop::Get(host)->GetBaseColor());
+        },
+        this));
 
     // Treat the space below the baseline as a margin.
     int vertical_spacing =
@@ -136,14 +156,6 @@ class ToastOverlayButton : public views::LabelButton {
   ToastOverlayButton& operator=(const ToastOverlayButton&) = delete;
   ~ToastOverlayButton() override = default;
 
- protected:
-  // views::LabelButton:
-  std::unique_ptr<views::InkDropHighlight> CreateInkDropHighlight()
-      const override {
-    return std::make_unique<views::InkDropHighlight>(
-        gfx::SizeF(GetLocalBounds().size()), GetInkDropBaseColor());
-  }
-
  private:
   friend class ToastOverlay;  // for ToastOverlay::ClickDismissButtonForTesting.
 
@@ -151,7 +163,8 @@ class ToastOverlayButton : public views::LabelButton {
   void OnThemeChanged() override {
     views::LabelButton::OnThemeChanged();
     const auto* color_provider = AshColorProvider::Get();
-    SetInkDropBaseColor(color_provider->GetRippleAttributes().base_color);
+    views::InkDrop::Get(this)->SetBaseColor(
+        color_provider->GetRippleAttributes().base_color);
     SetEnabledTextColors(color_provider->GetContentLayerColor(
         AshColorProvider::ContentLayerType::kButtonLabelColorBlue));
   }
@@ -163,8 +176,8 @@ class ToastOverlayView : public views::View {
  public:
   // This object is not owned by the views hierarchy or by the widget.
   ToastOverlayView(ToastOverlay* overlay,
-                   const base::string16& text,
-                   const base::Optional<base::string16>& dismiss_text,
+                   const std::u16string& text,
+                   const absl::optional<std::u16string>& dismiss_text,
                    const bool is_managed) {
     SetPaintToLayer();
     layer()->SetFillsBoundsOpaquely(false);
@@ -220,8 +233,10 @@ class ToastOverlayView : public views::View {
   }
 
   gfx::Size GetMaximumSize() const override {
-    return gfx::Size(kToastMaximumWidth, GetUserWorkAreaBounds().height() -
-                                             ToastOverlay::kOffset * 2);
+    return gfx::Size(
+        kToastMaximumWidth,
+        GetUserWorkAreaBounds(Shell::GetRootWindowForNewWindows()).height() -
+            ToastOverlay::kOffset * 2);
   }
 
   void OnThemeChanged() override {
@@ -245,8 +260,8 @@ class ToastOverlayView : public views::View {
 ///////////////////////////////////////////////////////////////////////////////
 //  ToastOverlay
 ToastOverlay::ToastOverlay(Delegate* delegate,
-                           const base::string16& text,
-                           base::Optional<base::string16> dismiss_text,
+                           const std::u16string& text,
+                           absl::optional<std::u16string> dismiss_text,
                            bool show_on_lock_screen,
                            bool is_managed)
     : delegate_(delegate),
@@ -318,7 +333,20 @@ void ToastOverlay::UpdateOverlayBounds() {
 }
 
 gfx::Rect ToastOverlay::CalculateOverlayBounds() {
-  gfx::Rect bounds = GetUserWorkAreaBounds();
+  // If the native window has not been initialized, as in the first call, get
+  // the default root window. Otherwise get the window for this overlay_widget
+  // to handle multiple monitors properly.
+  auto* window = overlay_widget_->IsNativeWidgetInitialized()
+                     ? overlay_widget_->GetNativeWindow()
+                     : Shell::GetRootWindowForNewWindows();
+  auto* window_controller = RootWindowController::ForWindow(window);
+  auto* hotseat_widget = window_controller->shelf()->hotseat_widget();
+
+  gfx::Rect bounds = GetUserWorkAreaBounds(window);
+
+  if (hotseat_widget)
+    AdjustWorkAreaBoundsForHotseatState(bounds, hotseat_widget);
+
   int target_y =
       bounds.bottom() - widget_size_.height() - ToastOverlay::kOffset;
   bounds.ClampToCenteredSize(widget_size_);

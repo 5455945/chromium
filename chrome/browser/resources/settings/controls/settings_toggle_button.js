@@ -6,42 +6,98 @@
  * @fileoverview
  * `settings-toggle-button` is a toggle that controls a supplied preference.
  */
-Polymer({
-  is: 'settings-toggle-button',
+import '//resources/cr_elements/shared_vars_css.m.js';
+import '//resources/cr_elements/cr_toggle/cr_toggle.m.js';
+import '//resources/cr_elements/policy/cr_policy_pref_indicator.m.js';
+import '//resources/polymer/v3_0/iron-flex-layout/iron-flex-layout-classes.js';
+import '../settings_shared_css.js';
 
-  behaviors: [SettingsBooleanControlBehavior],
+import {afterNextRender, html, mixinBehaviors, PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+// <if expr="chromeos">
+import {sanitizeInnerHtml} from 'chrome://resources/js/parse_html_subset.m.js';
+// </if>
 
-  properties: {
-    ariaLabel: {
-      type: String,
-      reflectToAttribute: false,  // Handled by #control.
-      observer: 'onAriaLabelSet_',
-      value: '',
-    },
+import {SettingsBooleanControlBehavior, SettingsBooleanControlBehaviorInterface} from './settings_boolean_control_behavior.js';
 
-    elideLabel: {
-      type: Boolean,
-      reflectToAttribute: true,
-    },
 
-    learnMoreUrl: {
-      type: String,
-      reflectToAttribute: true,
-    },
-  },
+/**
+ * @constructor
+ * @extends {PolymerElement}
+ * @implements {SettingsBooleanControlBehaviorInterface}
+ */
+const SettingsToggleButtonElementBase =
+    mixinBehaviors([SettingsBooleanControlBehavior], PolymerElement);
 
-  listeners: {
-    'click': 'onHostTap_',
-  },
+/** @polymer */
+export class SettingsToggleButtonElement extends
+    SettingsToggleButtonElementBase {
+  static get is() {
+    return 'settings-toggle-button';
+  }
 
-  observers: [
-    'onDisableOrPrefChange_(disabled, pref.*)',
-  ],
+  static get template() {
+    return html`{__html_template__}`;
+  }
+
+  static get properties() {
+    return {
+      ariaLabel: {
+        type: String,
+        reflectToAttribute: false,  // Handled by #control.
+        observer: 'onAriaLabelSet_',
+        value: '',
+      },
+
+      elideLabel: {
+        type: Boolean,
+        reflectToAttribute: true,
+      },
+
+      learnMoreUrl: {
+        type: String,
+        reflectToAttribute: true,
+      },
+
+      // <if expr="chromeos">
+      subLabelWithLink: {
+        type: String,
+        reflectToAttribute: true,
+      },
+      // </if>
+
+      subLabelIcon: {
+        type: String,
+      },
+    };
+  }
+
+  static get observers() {
+    return [
+      'onDisableOrPrefChange_(disabled, pref.*)',
+    ];
+  }
+
+
+  /** @override */
+  ready() {
+    super.ready();
+
+    this.addEventListener('click', this.onHostTap_);
+  }
+
+  /**
+   * @param {string} eventName
+   * @private
+   */
+  fire_(eventName) {
+    this.dispatchEvent(
+        new CustomEvent(eventName, {bubbles: true, composed: true}));
+  }
 
   /** @override */
   focus() {
     this.$.control.focus();
-  },
+  }
 
   /**
    * Removes the aria-label attribute if it's added by $i18n{...}.
@@ -53,7 +109,7 @@ Polymer({
       this.removeAttribute('aria-label');
       this.ariaLabel = ariaLabel;
     }
-  },
+  }
 
   /**
    * @return {string}
@@ -61,16 +117,12 @@ Polymer({
    */
   getAriaLabel_() {
     return this.label || this.ariaLabel;
-  },
+  }
 
   /** @private */
   onDisableOrPrefChange_() {
-    if (this.controlDisabled()) {
-      this.removeAttribute('actionable');
-    } else {
-      this.setAttribute('actionable', '');
-    }
-  },
+    this.toggleAttribute('effectively-disabled_', this.controlDisabled());
+  }
 
   /**
    * Handles non cr-toggle button clicks (cr-toggle handles its own click events
@@ -86,17 +138,42 @@ Polymer({
 
     this.checked = !this.checked;
     this.notifyChangedByUserInteraction();
-    this.fire('change');
-  },
+    this.fire_('change');
+  }
 
   /**
    * @param {!CustomEvent<boolean>} e
    * @private
    */
-  onLearnMoreClicked_(e) {
+  onLearnMoreClick_(e) {
     e.stopPropagation();
-    this.fire('learn-more-clicked');
-  },
+    this.fire_('learn-more-clicked');
+  }
+
+  // <if expr="chromeos">
+  /**
+   * Set up the contents of sub label with link.
+   * @param {string} contents
+   * @private
+   */
+  getSubLabelWithLinkContent_(contents) {
+    return sanitizeInnerHtml(
+        contents,
+        {attrs: ['id', 'aria-hidden', 'aria-labelledby', 'tabindex']});
+  }
+
+  /**
+   * @param {!Event} e
+   * @private
+   */
+  onSubLabelTextWithLinkClick_(e) {
+    if (e.target.tagName === 'A') {
+      this.fire_('sub-label-link-clicked');
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }
+  // </if>
 
   /**
    * @param {!CustomEvent<boolean>} e
@@ -105,5 +182,8 @@ Polymer({
   onChange_(e) {
     this.checked = e.detail;
     this.notifyChangedByUserInteraction();
-  },
-});
+  }
+}
+
+customElements.define(
+    SettingsToggleButtonElement.is, SettingsToggleButtonElement);

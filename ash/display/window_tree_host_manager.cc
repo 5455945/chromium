@@ -10,15 +10,15 @@
 #include <memory>
 #include <utility>
 
+#include "ash/accessibility/magnifier/fullscreen_magnifier_controller.h"
+#include "ash/accessibility/magnifier/partial_magnifier_controller.h"
 #include "ash/display/cursor_window_controller.h"
 #include "ash/display/mirror_window_controller.h"
 #include "ash/display/root_window_transformers.h"
+#include "ash/frame_throttler/frame_throttling_controller.h"
 #include "ash/host/ash_window_tree_host.h"
 #include "ash/host/ash_window_tree_host_init_params.h"
 #include "ash/host/root_window_transformer.h"
-#include "ash/magnifier/magnification_controller.h"
-#include "ash/magnifier/partial_magnification_controller.h"
-#include "ash/public/cpp/ash_features.h"
 #include "ash/root_window_controller.h"
 #include "ash/root_window_settings.h"
 #include "ash/session/session_controller_impl.h"
@@ -26,6 +26,7 @@
 #include "ash/system/status_area_widget.h"
 #include "ash/system/unified/unified_system_tray.h"
 #include "ash/wm/window_util.h"
+#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/metrics/histogram.h"
 #include "base/metrics/histogram_functions.h"
@@ -234,7 +235,7 @@ WindowTreeHostManager::WindowTreeHostManager()
 WindowTreeHostManager::~WindowTreeHostManager() = default;
 
 void WindowTreeHostManager::Start() {
-  display::Screen::GetScreen()->AddObserver(this);
+  display_observer_.emplace(this);
   Shell::Get()
       ->display_configurator()
       ->content_protection_manager()
@@ -268,7 +269,7 @@ void WindowTreeHostManager::Shutdown() {
       ->display_configurator()
       ->content_protection_manager()
       ->RemoveObserver(this);
-  display::Screen::GetScreen()->RemoveObserver(this);
+  display_observer_.reset();
 
   int64_t primary_id = display::Screen::GetScreen()->GetPrimaryDisplay().id();
 
@@ -535,10 +536,10 @@ void WindowTreeHostManager::OnDisplayAdded(const display::Display& display) {
 
     // Magnifier controllers keep pointers to the current root window.
     // Update them here to avoid accessing them later.
-    Shell::Get()->magnification_controller()->SwitchTargetRootWindow(
+    Shell::Get()->fullscreen_magnifier_controller()->SwitchTargetRootWindow(
         ash_host->AsWindowTreeHost()->window(), false);
     Shell::Get()
-        ->partial_magnification_controller()
+        ->partial_magnifier_controller()
         ->SwitchTargetRootWindowIfNeeded(
             ash_host->AsWindowTreeHost()->window());
 
@@ -790,7 +791,7 @@ void WindowTreeHostManager::SetPrimaryDisplayId(int64_t id) {
   GetRootWindowSettings(non_primary_window)->display_id =
       old_primary_display.id();
 
-  base::string16 old_primary_title = primary_window->GetTitle();
+  std::u16string old_primary_title = primary_window->GetTitle();
   primary_window->SetTitle(non_primary_window->GetTitle());
   non_primary_window->SetTitle(old_primary_title);
 
@@ -868,6 +869,7 @@ AshWindowTreeHost* WindowTreeHostManager::AddWindowTreeHostForDisplay(
   AshWindowTreeHost* ash_host =
       AshWindowTreeHost::Create(params_with_bounds).release();
   aura::WindowTreeHost* host = ash_host->AsWindowTreeHost();
+  Shell::Get()->frame_throttling_controller()->OnWindowTreeHostCreated(host);
   DCHECK(!host->has_input_method());
   if (!input_method_) {  // Singleton input method instance for Ash.
     input_method_ = ui::CreateInputMethod(this, host->GetAcceleratedWidget());

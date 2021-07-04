@@ -6,6 +6,7 @@
 #define COMPONENTS_PERMISSIONS_FEATURES_H_
 
 #include "base/feature_list.h"
+#include "base/metrics/field_trial_params.h"
 
 namespace permissions {
 namespace features {
@@ -15,6 +16,10 @@ extern const base::Feature kBlockPromptsIfIgnoredOften;
 extern const base::Feature kBlockRepeatedNotificationPermissionPrompts;
 extern const base::Feature kOneTimeGeolocationPermission;
 extern const base::Feature kPermissionChip;
+extern const base::Feature kPermissionChipAutoDismiss;
+extern const base::FeatureParam<int> kPermissionChipAutoDismissDelay;
+extern const base::Feature kPermissionChipGestureSensitive;
+extern const base::Feature kPermissionChipRequestTypeSensitive;
 extern const base::Feature kPermissionPredictionServiceUseUrlOverride;
 
 }  // namespace features

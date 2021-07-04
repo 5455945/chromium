@@ -12,7 +12,6 @@
 #include "base/guid.h"
 #include "base/i18n/rtl.h"
 #include "base/logging.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
@@ -176,6 +175,10 @@ bool CastMetricsServiceClient::GetBrand(std::string* brand_code) {
 #endif  // defined(OS_ANDROID) || defined(OS_FUCHSIA)
 }
 
+bool CastMetricsServiceClient::IsExtendedStableChannel() {
+  return false;  // Not supported on Chromecast.
+}
+
 std::string CastMetricsServiceClient::GetVersionString() {
   int build_number;
   if (!base::StringToInt(CAST_BUILD_INCREMENTAL, &build_number))
@@ -291,6 +294,7 @@ void CastMetricsServiceClient::SetForceClientId(const std::string& client_id) {
   DCHECK(!client_info_loaded_)
       << "Force client ID must be set before client info is loaded.";
   force_client_id_ = client_id;
+  SetMetricsClientId(force_client_id_);
 }
 
 void CastMetricsServiceClient::InitializeMetricsService() {
@@ -322,8 +326,10 @@ void CastMetricsServiceClient::StartMetricsService() {
 
   metrics_service_->InitializeMetricsRecordingState();
 #if !defined(OS_ANDROID)
-  // Reset clean_shutdown bit after InitializeMetricsRecordingState().
-  metrics_service_->LogNeedForCleanShutdown();
+  // Signal that the session has not yet exited cleanly. We later signal that
+  // the session exited cleanly via MetricsService::RecordCompletedSessionEnd().
+  // TODO(crbug.com/1208587): See whether this can be called even earlier.
+  metrics_state_manager_->LogHasSessionShutdownCleanly(false);
 #endif  // !defined(OS_ANDROID)
 
   if (IsReportingEnabled())

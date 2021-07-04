@@ -30,6 +30,7 @@
 #include "storage/browser/quota/quota_manager.h"
 #include "storage/common/file_system/file_system_types.h"
 #include "storage/common/file_system/file_system_util.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "url/origin.h"
 
 using content::BrowserContext;
@@ -97,8 +98,8 @@ SyncFileSystemDeleteFileSystemFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(args_->GetString(0, &url));
 
   scoped_refptr<storage::FileSystemContext> file_system_context =
-      BrowserContext::GetStoragePartition(
-          browser_context(), render_frame_host()->GetSiteInstance())
+      browser_context()
+          ->GetStoragePartition(render_frame_host()->GetSiteInstance())
           ->GetFileSystemContext();
   storage::FileSystemURL file_system_url(
       file_system_context->CrackURL(GURL(url)));
@@ -108,8 +109,8 @@ SyncFileSystemDeleteFileSystemFunction::Run() {
       BindOnce(
           &storage::FileSystemContext::DeleteFileSystem, file_system_context,
           url::Origin::Create(source_url().GetOrigin()), file_system_url.type(),
-          Bind(&SyncFileSystemDeleteFileSystemFunction::DidDeleteFileSystem,
-               this)));
+          BindOnce(&SyncFileSystemDeleteFileSystemFunction::DidDeleteFileSystem,
+                   this)));
   return RespondLater();
 }
 
@@ -162,8 +163,8 @@ SyncFileSystemRequestFileSystemFunction::Run() {
 storage::FileSystemContext*
 SyncFileSystemRequestFileSystemFunction::GetFileSystemContext() {
   DCHECK(render_frame_host());
-  return BrowserContext::GetStoragePartition(
-             browser_context(), render_frame_host()->GetSiteInstance())
+  return browser_context()
+      ->GetStoragePartition(render_frame_host()->GetSiteInstance())
       ->GetFileSystemContext();
 }
 
@@ -199,8 +200,8 @@ ExtensionFunction::ResponseAction SyncFileSystemGetFileStatusFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(args_->GetString(0, &url));
 
   scoped_refptr<storage::FileSystemContext> file_system_context =
-      BrowserContext::GetStoragePartition(
-          browser_context(), render_frame_host()->GetSiteInstance())
+      browser_context()
+          ->GetStoragePartition(render_frame_host()->GetSiteInstance())
           ->GetFileSystemContext();
   storage::FileSystemURL file_system_url(
       file_system_context->CrackURL(GURL(url)));
@@ -212,7 +213,7 @@ ExtensionFunction::ResponseAction SyncFileSystemGetFileStatusFunction::Run() {
 
   sync_file_system_service->GetFileSyncStatus(
       file_system_url,
-      Bind(&SyncFileSystemGetFileStatusFunction::DidGetFileStatus, this));
+      BindOnce(&SyncFileSystemGetFileStatusFunction::DidGetFileStatus, this));
   return RespondLater();
 }
 
@@ -237,18 +238,19 @@ SyncFileSystemGetFileStatusesFunction::
     ~SyncFileSystemGetFileStatusesFunction() {}
 
 ExtensionFunction::ResponseAction SyncFileSystemGetFileStatusesFunction::Run() {
+  base::Value::ConstListView args_list = args_->GetList();
   // All FileEntries converted into array of URL Strings in JS custom bindings.
-  base::ListValue* file_entry_urls = NULL;
-  EXTENSION_FUNCTION_VALIDATE(args_->GetList(0, &file_entry_urls));
+  EXTENSION_FUNCTION_VALIDATE(!args_list.empty() && args_list[0].is_list());
+  base::Value::ConstListView file_entry_urls = args_list[0].GetList();
 
   scoped_refptr<storage::FileSystemContext> file_system_context =
-      BrowserContext::GetStoragePartition(
-          browser_context(), render_frame_host()->GetSiteInstance())
+      browser_context()
+          ->GetStoragePartition(render_frame_host()->GetSiteInstance())
           ->GetFileSystemContext();
 
   // Map each file path->SyncFileStatus in the callback map.
   // TODO(calvinlo): Overload GetFileSyncStatus to take in URL array.
-  num_expected_results_ = file_entry_urls->GetSize();
+  num_expected_results_ = file_entry_urls.size();
   num_results_received_ = 0;
   file_sync_statuses_.clear();
   ::sync_file_system::SyncFileSystemService* sync_file_system_service =
@@ -258,14 +260,15 @@ ExtensionFunction::ResponseAction SyncFileSystemGetFileStatusesFunction::Run() {
 
   for (unsigned int i = 0; i < num_expected_results_; i++) {
     std::string url;
-    file_entry_urls->GetString(i, &url);
+    if (file_entry_urls[i].is_string())
+      url = file_entry_urls[i].GetString();
     storage::FileSystemURL file_system_url(
         file_system_context->CrackURL(GURL(url)));
 
     sync_file_system_service->GetFileSyncStatus(
         file_system_url,
-        Bind(&SyncFileSystemGetFileStatusesFunction::DidGetFileStatus, this,
-             file_system_url));
+        BindOnce(&SyncFileSystemGetFileStatusesFunction::DidGetFileStatus, this,
+                 file_system_url));
   }
 
   return RespondLater();
@@ -322,25 +325,25 @@ SyncFileSystemGetUsageAndQuotaFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(args_->GetString(0, &url));
 
   scoped_refptr<storage::FileSystemContext> file_system_context =
-      BrowserContext::GetStoragePartition(
-          browser_context(), render_frame_host()->GetSiteInstance())
+      browser_context()
+          ->GetStoragePartition(render_frame_host()->GetSiteInstance())
           ->GetFileSystemContext();
   storage::FileSystemURL file_system_url(
       file_system_context->CrackURL(GURL(url)));
 
   scoped_refptr<storage::QuotaManager> quota_manager =
-      BrowserContext::GetStoragePartition(
-          browser_context(), render_frame_host()->GetSiteInstance())
+      browser_context()
+          ->GetStoragePartition(render_frame_host()->GetSiteInstance())
           ->GetQuotaManager();
 
   content::GetIOThreadTaskRunner({})->PostTask(
       FROM_HERE,
       BindOnce(
           &storage::QuotaManager::GetUsageAndQuotaForWebApps, quota_manager,
-          url::Origin::Create(source_url()),
+          blink::StorageKey(url::Origin::Create(source_url())),
           storage::FileSystemTypeToQuotaStorageType(file_system_url.type()),
-          Bind(&SyncFileSystemGetUsageAndQuotaFunction::DidGetUsageAndQuota,
-               this)));
+          BindOnce(&SyncFileSystemGetUsageAndQuotaFunction::DidGetUsageAndQuota,
+                   this)));
 
   return RespondLater();
 }

@@ -34,6 +34,7 @@
 #include "ui/base/ime/text_input_client.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/compositor/compositor.h"
+#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_type.h"
 #include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/compositor/test/layer_animator_test_controller.h"
@@ -218,8 +219,7 @@ class KeyboardUIControllerTest : public aura::test::AuraTestBase,
   }
 
   void AddTimeToTransientBlurCounter(double seconds) {
-    controller_.time_of_last_blur_ -=
-        base::TimeDelta::FromMilliseconds(int{1000 * seconds});
+    controller_.time_of_last_blur_ -= base::TimeDelta::FromSecondsD(seconds);
   }
 
   void SetFocus(ui::TextInputClient* client) {

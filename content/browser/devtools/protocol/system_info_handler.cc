@@ -22,9 +22,11 @@
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/child_process_data.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/common/content_features.h"
 #include "gpu/config/gpu_feature_type.h"
 #include "gpu/config/gpu_info.h"
 #include "gpu/config/gpu_switches.h"
+#include "media/base/video_codecs.h"
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #include "gpu/config/gpu_util.h"
 #endif
@@ -52,10 +54,11 @@ std::unique_ptr<SystemInfo::Size> GfxSizeToSystemInfoSize(
 // ASAN builds need more time -- see Issue 1167875.
 #if ((defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_MAC)) && \
      !defined(NDEBUG)) ||                                              \
-    defined(OS_WIN) || defined(ADDRESS_SANITIZER)
+    defined(OS_WIN) || defined(ADDRESS_SANITIZER) || defined(USE_OZONE)
 const int kGPUInfoWatchdogTimeoutMs = 30000;
 #else
-const int kGPUInfoWatchdogTimeoutMs = 5000;
+// Increased from 5000 to 10000 -- see Issue 1220072.
+const int kGPUInfoWatchdogTimeoutMs = 10000;
 #endif
 
 class AuxGPUInfoEnumerator : public gpu::GPUInfo::Enumerator {
@@ -229,7 +232,8 @@ void SendGetInfoResponse(std::unique_ptr<GetInfoCallback> callback) {
   enumerator.EndAuxAttributes();
 
   std::unique_ptr<base::DictionaryValue> base_feature_status =
-      GetFeatureStatus();
+      base::DictionaryValue::From(
+          std::make_unique<base::Value>(GetFeatureStatus()));
   std::unique_ptr<protocol::DictionaryValue> feature_status =
       protocol::DictionaryValue::cast(
           protocol::toProtocolValue(base_feature_status.get(), 1000));
@@ -404,7 +408,9 @@ std::unique_ptr<protocol::Array<protocol::SystemInfo::ProcessInfo>>
 AddChildProcessInfo(
     std::unique_ptr<protocol::Array<protocol::SystemInfo::ProcessInfo>>
         process_info) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  DCHECK_CURRENTLY_ON(base::FeatureList::IsEnabled(features::kProcessHostOnUI)
+                          ? BrowserThread::UI
+                          : BrowserThread::IO);
 
   for (BrowserChildProcessHostIterator it; !it.Done(); ++it) {
     const ChildProcessData& process_data = it.GetData();
@@ -430,7 +436,10 @@ void SystemInfoHandler::GetProcessInfo(
   AddRendererProcessInfo(process_info.get());
 
   // Collect child processes info on the IO thread.
-  GetIOThreadTaskRunner({})->PostTaskAndReplyWithResult(
+  auto task_runner = base::FeatureList::IsEnabled(features::kProcessHostOnUI)
+                         ? GetUIThreadTaskRunner({})
+                         : GetIOThreadTaskRunner({});
+  task_runner->PostTaskAndReplyWithResult(
       FROM_HERE, base::BindOnce(&AddChildProcessInfo, std::move(process_info)),
       base::BindOnce(&GetProcessInfoCallback::sendSuccess,
                      std::move(callback)));

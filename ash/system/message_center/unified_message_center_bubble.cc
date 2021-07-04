@@ -19,6 +19,7 @@
 #include "ash/system/unified/unified_system_tray_bubble.h"
 #include "ash/system/unified/unified_system_tray_view.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/compositor/layer.h"
 #include "ui/compositor/paint_recorder.h"
 #include "ui/views/focus/focus_search.h"
 #include "ui/views/widget/widget.h"
@@ -96,26 +97,14 @@ void UnifiedMessageCenterBubble::ShowBubble() {
   tray_->bubble()->unified_view()->AddObserver(this);
 
   ui::Layer* widget_layer = bubble_widget_->GetLayer();
-  int radius = kUnifiedTrayCornerRadius;
+  float radius = kUnifiedTrayCornerRadius;
   widget_layer->SetRoundedCornerRadius({radius, radius, radius, radius});
   widget_layer->SetIsFastRoundedCorner(true);
   widget_layer->Add(border_->layer());
 
   bubble_view_->InitializeAndShowBubble();
 
-  // Check if the message center bubble should be collapsed or expanded
-  // when it is initially opened.
-  if (CalculateAvailableHeight() < kMessageCenterCollapseThreshold &&
-      message_center_view_->GetPreferredSize().height()) {
-    if (tray_->IsQuickSettingsExplicitlyExpanded()) {
-      message_center_view_->SetCollapsed(false /*animate*/);
-    } else {
-      message_center_view_->SetExpanded();
-      tray_->EnsureQuickSettingsCollapsed(false /*animate*/);
-    }
-  }
-
-  UpdatePosition();
+  UpdateBubbleState();
 }
 
 UnifiedMessageCenterBubble::~UnifiedMessageCenterBubble() {
@@ -130,12 +119,6 @@ UnifiedMessageCenterBubble::~UnifiedMessageCenterBubble() {
     bubble_widget_->CloseNow();
   }
   CHECK(!views::WidgetObserver::IsInObserverList());
-}
-
-int UnifiedMessageCenterBubble::CalculateAvailableHeight() {
-  return tray_->bubble()->CalculateMaxHeight() -
-         tray_->bubble()->GetCurrentTrayHeight() -
-         kUnifiedMessageCenterBubbleSpacing;
 }
 
 void UnifiedMessageCenterBubble::CollapseMessageCenter() {
@@ -220,7 +203,7 @@ views::Widget* UnifiedMessageCenterBubble::GetBubbleWidget() const {
   return bubble_widget_;
 }
 
-base::string16 UnifiedMessageCenterBubble::GetAccessibleNameForBubble() {
+std::u16string UnifiedMessageCenterBubble::GetAccessibleNameForBubble() {
   return l10n_util::GetStringUTF16(IDS_ASH_MESSAGE_CENTER_ACCESSIBLE_NAME);
 }
 
@@ -253,6 +236,33 @@ void UnifiedMessageCenterBubble::OnWidgetActivationChanged(
     bool active) {
   if (active)
     tray_->bubble()->OnMessageCenterActivated();
+}
+
+void UnifiedMessageCenterBubble::OnDisplayConfigurationChanged() {
+  UpdateBubbleState();
+}
+
+void UnifiedMessageCenterBubble::UpdateBubbleState() {
+  if (CalculateAvailableHeight() < kMessageCenterCollapseThreshold &&
+      message_center_view_->GetPreferredSize().height()) {
+    if (tray_->IsQuickSettingsExplicitlyExpanded()) {
+      message_center_view_->SetCollapsed(false /*animate*/);
+    } else {
+      message_center_view_->SetExpanded();
+      tray_->EnsureQuickSettingsCollapsed(false /*animate*/);
+    }
+  } else if (message_center_view_->collapsed()) {
+    message_center_view_->SetExpanded();
+  }
+
+  UpdatePosition();
+}
+
+int UnifiedMessageCenterBubble::CalculateAvailableHeight() {
+  return tray_->bubble()->CalculateMaxHeight() -
+         tray_->bubble()->GetCurrentTrayHeight() -
+         GetBubbleInsetHotseatCompensation() -
+         kUnifiedMessageCenterBubbleSpacing;
 }
 
 void UnifiedMessageCenterBubble::RecordTimeToClick() {

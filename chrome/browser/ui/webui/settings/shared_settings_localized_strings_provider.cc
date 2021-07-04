@@ -20,6 +20,7 @@
 #include "chrome/grit/chromium_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/google/core/common/google_util.h"
+#include "components/soda/constants.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/browser/web_ui_data_source.h"
@@ -41,7 +42,7 @@ namespace {
 // Generates a Google Help URL which includes a "board type" parameter. Some
 // help pages need to be adjusted depending on the type of CrOS device that is
 // accessing the page.
-base::string16 GetHelpUrlWithBoard(const std::string& original_url) {
+std::u16string GetHelpUrlWithBoard(const std::string& original_url) {
   return base::ASCIIToUTF16(original_url +
                             "&b=" + base::SysInfo::GetLsbReleaseBoard());
 }
@@ -82,15 +83,66 @@ void AddCaptionSubpageStrings(content::WebUIDataSource* html_source) {
       {"captionsColorCyan", IDS_SETTINGS_CAPTIONS_COLOR_CYAN},
       {"captionsColorMagenta", IDS_SETTINGS_CAPTIONS_COLOR_MAGENTA},
       {"captionsDefaultSetting", IDS_SETTINGS_CAPTIONS_DEFAULT_SETTING},
-      {"captionsEnableLiveCaptionTitle",
-       IDS_SETTINGS_CAPTIONS_ENABLE_LIVE_CAPTION_TITLE},
-      {"captionsEnableLiveCaptionSubtitle",
-       IDS_SETTINGS_CAPTIONS_ENABLE_LIVE_CAPTION_SUBTITLE},
   };
   html_source->AddLocalizedStrings(kLocalizedStrings);
 
+  AddLiveCaptionSectionStrings(html_source);
+}
+
+void AddLiveCaptionSectionStrings(content::WebUIDataSource* html_source) {
+  html_source->AddLocalizedString(
+      "captionsEnableLiveCaptionTitle",
+      IDS_SETTINGS_CAPTIONS_ENABLE_LIVE_CAPTION_TITLE);
+
+  const bool liveCaptionMultiLanguageEnabled =
+      base::FeatureList::IsEnabled(media::kLiveCaptionMultiLanguage) &&
+      base::FeatureList::IsEnabled(media::kUseSodaForLiveCaption);
+  const int live_caption_subtitle_message =
+      liveCaptionMultiLanguageEnabled
+          ? IDS_SETTINGS_CAPTIONS_ENABLE_LIVE_CAPTION_SUBTITLE
+          : IDS_SETTINGS_CAPTIONS_ENABLE_LIVE_CAPTION_SUBTITLE_ENGLISH_ONLY;
+  html_source->AddLocalizedString("captionsEnableLiveCaptionSubtitle",
+                                  live_caption_subtitle_message);
+
+  absl::optional<speech::SodaLanguagePackComponentConfig> englishConfig =
+      speech::GetLanguageComponentConfig(speech::LanguageCode::kEnUs);
+  html_source->AddString("sodaLanguageCodeEnglish",
+                         englishConfig->language_name);
+  html_source->AddLocalizedString("sodaLanguageDisplayNameEnglish",
+                                  englishConfig->display_name);
+  absl::optional<speech::SodaLanguagePackComponentConfig> frenchConfig =
+      speech::GetLanguageComponentConfig(speech::LanguageCode::kFrFr);
+  html_source->AddString("sodaLanguageCodeFrench", frenchConfig->language_name);
+  html_source->AddLocalizedString("sodaLanguageDisplayNameFrench",
+                                  frenchConfig->display_name);
+  absl::optional<speech::SodaLanguagePackComponentConfig> germanConfig =
+      speech::GetLanguageComponentConfig(speech::LanguageCode::kDeDe);
+  html_source->AddString("sodaLanguageCodeGerman", germanConfig->language_name);
+  html_source->AddLocalizedString("sodaLanguageDisplayNameGerman",
+                                  germanConfig->display_name);
+  absl::optional<speech::SodaLanguagePackComponentConfig> italianConfig =
+      speech::GetLanguageComponentConfig(speech::LanguageCode::kItIt);
+  html_source->AddString("sodaLanguageCodeItalian",
+                         italianConfig->language_name);
+  html_source->AddLocalizedString("sodaLanguageDisplayNameItalian",
+                                  italianConfig->display_name);
+  absl::optional<speech::SodaLanguagePackComponentConfig> japaneseConfig =
+      speech::GetLanguageComponentConfig(speech::LanguageCode::kJaJp);
+  html_source->AddString("sodaLanguageCodeJapanese",
+                         japaneseConfig->language_name);
+  html_source->AddLocalizedString("sodaLanguageDisplayNameJapanese",
+                                  japaneseConfig->display_name);
+  absl::optional<speech::SodaLanguagePackComponentConfig> spanishConfig =
+      speech::GetLanguageComponentConfig(speech::LanguageCode::kEsEs);
+  html_source->AddString("sodaLanguageCodeSpanish",
+                         spanishConfig->language_name);
+  html_source->AddLocalizedString("sodaLanguageDisplayNameSpanish",
+                                  spanishConfig->display_name);
+
   html_source->AddBoolean("enableLiveCaption",
-                          base::FeatureList::IsEnabled(media::kLiveCaption));
+                          media::IsLiveCaptionFeatureEnabled());
+  html_source->AddBoolean("enableLiveCaptionMultiLanguage",
+                          liveCaptionMultiLanguageEnabled);
 }
 
 void AddPersonalizationOptionsStrings(content::WebUIDataSource* html_source) {
@@ -205,7 +257,12 @@ void AddSyncPageStrings(content::WebUIDataSource* html_source) {
        IDS_SETTINGS_PERSONALIZE_GOOGLE_SERVICES_TITLE},
       {"manageSyncedDataTitle",
        IDS_SETTINGS_NEW_MANAGE_SYNCED_DATA_TITLE_UNIFIED_CONSENT},
-  };
+      {"enterPassphraseLabel", IDS_SYNC_ENTER_PASSPHRASE_BODY},
+      {"enterPassphraseLabelWithDate",
+       IDS_SYNC_ENTER_PASSPHRASE_BODY_WITH_DATE},
+      {"existingPassphraseLabelWithDate",
+       IDS_SYNC_FULL_ENCRYPTION_BODY_CUSTOM_WITH_DATE},
+      {"existingPassphraseLabel", IDS_SYNC_FULL_ENCRYPTION_BODY_CUSTOM}};
   html_source->AddLocalizedStrings(kLocalizedStrings);
 
   std::string sync_dashboard_url =
@@ -238,6 +295,7 @@ void AddSyncPageStrings(content::WebUIDataSource* html_source) {
 #else
           base::ASCIIToUTF16(chrome::kSyncEncryptionHelpURL)));
 #endif
+  html_source->AddString("syncErrorsHelpUrl", chrome::kSyncErrorsHelpURL);
 }
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
@@ -255,6 +313,8 @@ void AddNearbyShareData(content::WebUIDataSource* html_source) {
       {"nearbyShareEditDeviceName", IDS_SETTINGS_NEARBY_SHARE_EDIT_DEVICE_NAME},
       {"nearbyShareDeviceNameAriaDescription",
        IDS_SETTINGS_NEARBY_SHARE_DEVICE_NAME_ARIA_DESCRIPTION},
+      {"nearbyShareConfirmDeviceName",
+       IDS_SETTINGS_NEARBY_SHARE_CONFIRM_DEVICE_NAME},
       {"nearbyShareManageContactsLabel",
        IDS_SETTINGS_NEARBY_SHARE_MANAGE_CONTACTS_LABEL},
       {"nearbyShareManageContactsRowTitle",
@@ -295,13 +355,11 @@ void AddNearbyShareData(content::WebUIDataSource* html_source) {
       {"nearbyShareHighVisibilityOn",
        IDS_SETTINGS_NEARBY_SHARE_HIGH_VISIBILITY_ON},
       {"nearbyShareHighVisibilityOff",
-       IDS_SETTINGS_NEARBY_SHARE_HIGH_VISIBILITY_OFF}};
+       IDS_SETTINGS_NEARBY_SHARE_HIGH_VISIBILITY_OFF},
+      {"nearbyShareVisibilityDialogSave",
+       IDS_SETTINGS_NEARBY_SHARE_VISIBILITY_DIALOG_SAVE}};
 
   html_source->AddLocalizedStrings(kLocalizedStrings);
-
-  html_source->AddBoolean(
-      "nearbySharingFeatureFlag",
-      base::FeatureList::IsEnabled(features::kNearbySharing));
 
   // To use lottie, the worker-src CSP needs to be updated for the web ui that
   // is using it. Since as of now there are only a couple of webuis using
@@ -312,5 +370,35 @@ void AddNearbyShareData(content::WebUIDataSource* html_source) {
       network::mojom::CSPDirectiveName::WorkerSrc, "worker-src blob: 'self';");
 }
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+
+void AddSecureDnsStrings(content::WebUIDataSource* html_source) {
+  static constexpr webui::LocalizedString kLocalizedStrings[] = {
+      {"secureDns", IDS_SETTINGS_SECURE_DNS},
+      {"secureDnsDescription", IDS_SETTINGS_SECURE_DNS_DESCRIPTION},
+      {"secureDnsDisabledForManagedEnvironment",
+       IDS_SETTINGS_SECURE_DNS_DISABLED_FOR_MANAGED_ENVIRONMENT},
+      {"secureDnsDisabledForParentalControl",
+       IDS_SETTINGS_SECURE_DNS_DISABLED_FOR_PARENTAL_CONTROL},
+      {"secureDnsAutomaticModeDescription",
+       IDS_SETTINGS_AUTOMATIC_MODE_DESCRIPTION},
+      {"secureDnsAutomaticModeDescriptionSecondary",
+       IDS_SETTINGS_AUTOMATIC_MODE_DESCRIPTION_SECONDARY},
+      {"secureDnsSecureModeA11yLabel",
+       IDS_SETTINGS_SECURE_MODE_DESCRIPTION_ACCESSIBILITY_LABEL},
+      {"secureDnsDropdownA11yLabel",
+       IDS_SETTINGS_SECURE_DNS_DROPDOWN_ACCESSIBILITY_LABEL},
+      {"secureDnsSecureDropdownModeDescription",
+       IDS_SETTINGS_SECURE_DROPDOWN_MODE_DESCRIPTION},
+      {"secureDnsSecureDropdownModePrivacyPolicy",
+       IDS_SETTINGS_SECURE_DROPDOWN_MODE_PRIVACY_POLICY},
+      {"secureDnsCustomPlaceholder",
+       IDS_SETTINGS_SECURE_DNS_CUSTOM_PLACEHOLDER},
+      {"secureDnsCustomFormatError",
+       IDS_SETTINGS_SECURE_DNS_CUSTOM_FORMAT_ERROR},
+      {"secureDnsCustomConnectionError",
+       IDS_SETTINGS_SECURE_DNS_CUSTOM_CONNECTION_ERROR},
+  };
+  html_source->AddLocalizedStrings(kLocalizedStrings);
+}
 
 }  // namespace settings

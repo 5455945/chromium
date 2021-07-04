@@ -11,7 +11,6 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/run_loop.h"
-#include "base/stl_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/task_environment.h"
@@ -22,8 +21,6 @@
 #include "components/password_manager/core/browser/password_store_change.h"
 #include "components/password_manager/core/browser/password_store_consumer.h"
 #include "components/password_manager/core/browser/password_store_origin_unittest.h"
-#include "components/prefs/pref_service.h"
-#include "components/prefs/testing_pref_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -65,11 +62,11 @@ PasswordFormData CreateTestPasswordFormData() {
                            "http://bar.example.com",
                            "http://bar.example.com/origin",
                            "http://bar.example.com/action",
-                           L"submit_element",
-                           L"username_element",
-                           L"password_element",
-                           L"username_value",
-                           L"password_value",
+                           u"submit_element",
+                           u"username_element",
+                           u"password_element",
+                           u"username_value",
+                           u"password_value",
                            true,
                            1};
   return data;
@@ -81,6 +78,10 @@ class PasswordStoreImplTestDelegate {
   explicit PasswordStoreImplTestDelegate(
       std::unique_ptr<LoginDatabase> database);
   ~PasswordStoreImplTestDelegate();
+
+  PasswordStoreImplTestDelegate(const PasswordStoreImplTestDelegate&) = delete;
+  PasswordStoreImplTestDelegate operator=(
+      const PasswordStoreImplTestDelegate&) = delete;
 
   PasswordStoreImpl* store() { return store_.get(); }
 
@@ -99,10 +100,7 @@ class PasswordStoreImplTestDelegate {
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::MainThreadType::UI};
   base::ScopedTempDir temp_dir_;
-  TestingPrefServiceSimple prefs_;
   scoped_refptr<PasswordStoreImpl> store_;
-
-  DISALLOW_COPY_AND_ASSIGN(PasswordStoreImplTestDelegate);
 };
 
 PasswordStoreImplTestDelegate::PasswordStoreImplTestDelegate() {
@@ -143,7 +141,7 @@ PasswordStoreImplTestDelegate::CreateInitializedStore(
     std::unique_ptr<LoginDatabase> database) {
   scoped_refptr<PasswordStoreImpl> store(
       new PasswordStoreImpl(std::move(database)));
-  store->Init(&prefs_);
+  store->Init(/*prefs=*/nullptr);
 
   return store;
 }
@@ -166,7 +164,7 @@ TEST(PasswordStoreImplTest, NonASCIIData) {
   static const PasswordFormData form_data[] = {
       {PasswordForm::Scheme::kHtml, "http://foo.example.com",
        "http://foo.example.com/origin", "http://foo.example.com/action",
-       L"มีสีสัน", L"お元気ですか?", L"盆栽", L"أحب كرة", L"£éä국수çà", true, 1},
+       u"มีสีสัน", u"お元気ですか?", u"盆栽", u"أحب كرة", u"£éä국수çà", true, 1},
   };
 
   // Build the expected forms vector and add the forms to the store.
@@ -203,20 +201,20 @@ TEST(PasswordStoreImplTest, Notifications) {
   };
 
   EXPECT_CALL(observer,
-              OnLoginsChanged(ElementsAreArray(expected_add_changes)));
+              OnLoginsChanged(_, ElementsAreArray(expected_add_changes)));
 
   // Adding a login should trigger a notification.
   store->AddLogin(*form);
 
   // Change the password.
-  form->password_value = base::ASCIIToUTF16("a different password");
+  form->password_value = u"a different password";
 
   const PasswordStoreChange expected_update_changes[] = {
       PasswordStoreChange(PasswordStoreChange::UPDATE, *form),
   };
 
   EXPECT_CALL(observer,
-              OnLoginsChanged(ElementsAreArray(expected_update_changes)));
+              OnLoginsChanged(_, ElementsAreArray(expected_update_changes)));
 
   // Updating the login with the new password should trigger a notification.
   store->UpdateLogin(*form);
@@ -226,7 +224,7 @@ TEST(PasswordStoreImplTest, Notifications) {
   };
 
   EXPECT_CALL(observer,
-              OnLoginsChanged(ElementsAreArray(expected_delete_changes)));
+              OnLoginsChanged(_, ElementsAreArray(expected_delete_changes)));
 
   // Deleting the login should trigger a notification.
   store->RemoveLogin(*form);
@@ -263,7 +261,7 @@ TEST(PasswordStoreImplTest, OperationsOnABadDatabaseSilentlyFail) {
   // Get all logins; autofillable logins; blocked logins.
   testing::StrictMock<MockPasswordStoreConsumer> mock_consumer;
   EXPECT_CALL(mock_consumer, OnGetPasswordStoreResultsConstRef(IsEmpty()));
-  bad_store->GetLogins(PasswordStore::FormDigest(*form), &mock_consumer);
+  bad_store->GetLogins(PasswordFormDigest(*form), &mock_consumer);
   delegate.FinishAsyncProcessing();
   testing::Mock::VerifyAndClearExpectations(&mock_consumer);
   EXPECT_CALL(mock_consumer, OnGetPasswordStoreResultsConstRef(IsEmpty()));
@@ -280,7 +278,7 @@ TEST(PasswordStoreImplTest, OperationsOnABadDatabaseSilentlyFail) {
   delegate.FinishAsyncProcessing();
 
   // Change the login.
-  form->password_value = base::ASCIIToUTF16("a different password");
+  form->password_value = u"a different password";
   bad_store->UpdateLogin(*form);
   delegate.FinishAsyncProcessing();
 

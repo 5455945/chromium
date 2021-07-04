@@ -26,6 +26,7 @@ export class TestSiteSettingsPrefsBrowserProxy extends TestBrowserProxy {
       'fetchBlockAutoplayStatus',
       'fetchZoomLevels',
       'getAllSites',
+      'getCategoryList',
       'getChooserExceptionList',
       'getDefaultValueForContentType',
       'getFormattedBytes',
@@ -44,6 +45,7 @@ export class TestSiteSettingsPrefsBrowserProxy extends TestBrowserProxy {
       'setDefaultValueForContentType',
       'setOriginPermissions',
       'setProtocolDefault',
+      'setProtocolHandlerDefault',
       'updateIncognitoStatus',
       'clearEtldPlus1DataAndCookies',
       'clearOriginDataAndCookies',
@@ -54,6 +56,38 @@ export class TestSiteSettingsPrefsBrowserProxy extends TestBrowserProxy {
 
     /** @private {boolean} */
     this.hasIncognito_ = false;
+
+    this.categoryList_ = [
+      ContentSettingsTypes.ADS,
+      ContentSettingsTypes.AR,
+      ContentSettingsTypes.AUTOMATIC_DOWNLOADS,
+      ContentSettingsTypes.BACKGROUND_SYNC,
+      ContentSettingsTypes.BLUETOOTH_DEVICES,
+      ContentSettingsTypes.BLUETOOTH_SCANNING,
+      ContentSettingsTypes.CAMERA,
+      ContentSettingsTypes.CLIPBOARD,
+      ContentSettingsTypes.FILE_HANDLING,
+      ContentSettingsTypes.FILE_SYSTEM_WRITE,
+      ContentSettingsTypes.FONT_ACCESS,
+      ContentSettingsTypes.GEOLOCATION,
+      ContentSettingsTypes.HID_DEVICES,
+      ContentSettingsTypes.IDLE_DETECTION,
+      ContentSettingsTypes.IMAGES,
+      ContentSettingsTypes.JAVASCRIPT,
+      ContentSettingsTypes.MIC,
+      ContentSettingsTypes.MIDI_DEVICES,
+      ContentSettingsTypes.MIXEDSCRIPT,
+      ContentSettingsTypes.NOTIFICATIONS,
+      ContentSettingsTypes.PAYMENT_HANDLER,
+      ContentSettingsTypes.POPUPS,
+      ContentSettingsTypes.PROTECTED_CONTENT,
+      ContentSettingsTypes.SENSORS,
+      ContentSettingsTypes.SERIAL_PORTS,
+      ContentSettingsTypes.SOUND,
+      ContentSettingsTypes.USB_DEVICES,
+      ContentSettingsTypes.VR,
+      ContentSettingsTypes.WINDOW_PLACEMENT,
+    ];
 
     /** @private {!SiteSettingsPref} */
     this.prefs_ = createSiteSettingsPrefs([], [], []);
@@ -78,6 +112,18 @@ export class TestSiteSettingsPrefsBrowserProxy extends TestBrowserProxy {
 
     /** @private {!Array<!RecentSitePermissions>} */
     this.recentSitePermissions_ = [];
+  }
+
+  /**
+   * Test/fake implementation for {@link getCategoryList}.
+   * @param {!string} origin the origin for the list of visible permissions.
+   */
+  getCategoryListForTest(origin) {
+    return this.categoryList_;
+  }
+
+  setCategoryList(list) {
+    this.categoryList_ = list;
   }
 
   /**
@@ -171,7 +217,9 @@ export class TestSiteSettingsPrefsBrowserProxy extends TestBrowserProxy {
   }
 
   /** @override */
-  setOriginPermissions(origin, contentTypes, blanketSetting) {
+  setOriginPermissions(origin, category, blanketSetting) {
+    const contentTypes =
+        category ? [category] : this.getCategoryListForTest(origin);
     for (let i = 0; i < contentTypes.length; ++i) {
       const type = contentTypes[i];
       const exceptionList = this.prefs_.exceptions[type];
@@ -187,12 +235,13 @@ export class TestSiteSettingsPrefsBrowserProxy extends TestBrowserProxy {
 
     this.setPrefs(this.prefs_);
     this.methodCalled(
-        'setOriginPermissions', [origin, contentTypes, blanketSetting]);
+        'setOriginPermissions', [origin, category, blanketSetting]);
   }
 
   /** @override */
-  getAllSites(contentTypes) {
-    this.methodCalled('getAllSites', contentTypes);
+  getAllSites() {
+    this.methodCalled('getAllSites');
+    const contentTypes = this.getCategoryListForTest('https://example.com');
     const origins_set = new Set();
 
     contentTypes.forEach((contentType) => {
@@ -232,6 +281,12 @@ export class TestSiteSettingsPrefsBrowserProxy extends TestBrowserProxy {
     });
 
     return Promise.resolve(result);
+  }
+
+  /** @override */
+  getCategoryList(origin) {
+    this.methodCalled('getCategoryList', origin);
+    return Promise.resolve(this.getCategoryListForTest(origin));
   }
 
   /** @override */
@@ -501,5 +556,7 @@ export class TestSiteSettingsPrefsBrowserProxy extends TestBrowserProxy {
   setDefaultCaptureDevice() {}
 
   /** @override */
-  setProtocolHandlerDefault() {}
+  setProtocolHandlerDefault(value) {
+    this.methodCalled('setProtocolHandlerDefault', value);
+  }
 }

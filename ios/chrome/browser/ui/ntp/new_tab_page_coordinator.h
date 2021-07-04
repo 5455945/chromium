@@ -15,6 +15,7 @@ class WebState;
 
 @class BubblePresenter;
 @protocol NewTabPageControllerDelegate;
+@protocol ThumbStripSupporting;
 @class ViewRevealingVerticalPanHandler;
 
 // Coordinator handling the NTP.
@@ -41,6 +42,10 @@ class WebState;
 
 // The pan gesture handler for the view controller.
 @property(nonatomic, weak) ViewRevealingVerticalPanHandler* panGestureHandler;
+
+// Allows for the in-flight enabling/disabling of the thumb strip.
+@property(nonatomic, weak, readonly) id<ThumbStripSupporting>
+    thumbStripSupporting;
 
 // Exposes content inset of contentSuggestions collectionView to ensure all of
 // content is visible under the bottom toolbar.
@@ -79,10 +84,6 @@ class WebState;
 
 // Constrains the named layout guide for the Discover header menu button.
 - (void)constrainDiscoverHeaderMenuButtonNamedGuide;
-
-// Handles device rotation logic.
-// TODO(crbug.com/1177953): Detect device rotation in NewTabPageViewController.
-- (void)handleDeviceRotation;
 
 @end
 

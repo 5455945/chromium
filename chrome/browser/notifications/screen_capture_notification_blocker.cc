@@ -45,9 +45,9 @@ ScreenCaptureNotificationBlocker::ScreenCaptureNotificationBlocker(
     NotificationDisplayService* notification_display_service)
     : notification_display_service_(notification_display_service) {
   DCHECK(notification_display_service_);
-  observer_.Add(MediaCaptureDevicesDispatcher::GetInstance()
-                    ->GetMediaStreamCaptureIndicator()
-                    .get());
+  observation_.Observe(MediaCaptureDevicesDispatcher::GetInstance()
+                           ->GetMediaStreamCaptureIndicator()
+                           .get());
 }
 
 ScreenCaptureNotificationBlocker::~ScreenCaptureNotificationBlocker() = default;
@@ -178,7 +178,7 @@ void ScreenCaptureNotificationBlocker::DisplayMuteNotification() {
                                        total_notification_count),
       l10n_util::GetStringUTF16(IDS_NOTIFICATION_MUTED_MESSAGE),
       /*icon=*/gfx::Image(),
-      /*display_source=*/base::string16(),
+      /*display_source=*/std::u16string(),
       /*origin_url=*/GURL(), message_center::NotifierId(),
       rich_notification_data,
       /*delegate=*/nullptr);

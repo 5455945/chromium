@@ -4,6 +4,7 @@
 
 #include <stddef.h>
 
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -11,8 +12,6 @@
 #include "base/containers/circular_deque.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
-#include "base/stl_util.h"
-#include "base/strings/stringprintf.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
@@ -145,7 +144,6 @@ class FakeWebMediaPlayerDelegate
   }
 
   bool IsFrameHidden() override { return is_hidden_; }
-  bool IsFrameClosed() override { return false; }
 
   void set_hidden(bool is_hidden) { is_hidden_ = is_hidden; }
 
@@ -173,12 +171,12 @@ class ReusableMessageLoopEvent {
 
   void RunAndWait() {
     event_->RunAndWait();
-    event_.reset(new media::WaitableMessageLoopEvent());
+    event_ = std::make_unique<media::WaitableMessageLoopEvent>();
   }
 
   void RunAndWaitForStatus(media::PipelineStatus expected) {
     event_->RunAndWaitForStatus(expected);
-    event_.reset(new media::WaitableMessageLoopEvent());
+    event_ = std::make_unique<media::WaitableMessageLoopEvent>();
   }
 
  private:
@@ -556,7 +554,6 @@ class WebMediaPlayerMSTest
   void MediaSourceOpened(WebMediaSource*) override {}
   void RemotePlaybackCompatibilityChanged(const WebURL& url,
                                           bool is_compatible) override {}
-  void OnBecamePersistentVideo(bool) override {}
   bool WasAlwaysMuted() override { return false; }
   bool HasSelectedVideoTrack() override { return false; }
   WebMediaPlayer::TrackId GetSelectedVideoTrackId() override {
@@ -579,8 +576,10 @@ class WebMediaPlayerMSTest
       media::MediaContentType media_content_type) override {}
   void DidPlayerMediaPositionStateChange(double playback_rate,
                                          base::TimeDelta duration,
-                                         base::TimeDelta position) override {}
+                                         base::TimeDelta position,
+                                         bool end_of_media) override {}
   void DidDisableAudioOutputSinkChanges() override {}
+  void DidUseAudioServiceChange(bool uses_audio_service) override {}
   void DidPlayerSizeChange(const gfx::Size& size) override {}
   void DidBufferUnderflow() override {}
   void DidSeek() override {}
@@ -1344,7 +1343,7 @@ TEST_P(WebMediaPlayerMSTest, HiddenPlayerTests) {
   EXPECT_FALSE(player_->Paused());
 
   // An OnSuspendRequested() with forced suspension should pause playback.
-  player_->OnFrameClosed();
+  player_->SuspendForFrameClosed();
   EXPECT_TRUE(player_->Paused());
 
   // OnShown() should restart after a forced suspension.
@@ -1443,6 +1442,34 @@ TEST_P(WebMediaPlayerMSTest, GetVideoFramePresentationMetadata) {
         media::PipelineStatus::PIPELINE_OK);
   }
   testing::Mock::VerifyAndClearExpectations(this);
+}
+
+TEST_P(WebMediaPlayerMSTest, ValidPreferredInterval) {
+  InitializeWebMediaPlayerMS();
+  LoadAndGetFrameProvider(true);
+
+  const bool opaque_frame = testing::get<1>(GetParam());
+  const bool odd_size_frame = testing::get<2>(GetParam());
+
+  gfx::Size frame_size(kStandardWidth - (odd_size_frame ? kOddSizeOffset : 0),
+                       kStandardHeight - (odd_size_frame ? kOddSizeOffset : 0));
+
+  auto frame = media::VideoFrame::CreateZeroInitializedFrame(
+      opaque_frame ? media::PIXEL_FORMAT_I420 : media::PIXEL_FORMAT_I420A,
+      frame_size, gfx::Rect(frame_size), frame_size,
+      base::TimeDelta::FromSeconds(10));
+
+  compositor_->EnqueueFrame(std::move(frame), true);
+  base::RunLoop().RunUntilIdle();
+  EXPECT_GE(compositor_->GetPreferredRenderInterval(), base::TimeDelta());
+
+  frame = media::VideoFrame::CreateZeroInitializedFrame(
+      opaque_frame ? media::PIXEL_FORMAT_I420 : media::PIXEL_FORMAT_I420A,
+      frame_size, gfx::Rect(frame_size), frame_size,
+      base::TimeDelta::FromSeconds(1));
+  compositor_->EnqueueFrame(std::move(frame), true);
+  base::RunLoop().RunUntilIdle();
+  EXPECT_GE(compositor_->GetPreferredRenderInterval(), base::TimeDelta());
 }
 
 INSTANTIATE_TEST_SUITE_P(All,

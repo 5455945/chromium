@@ -4,28 +4,29 @@
 
 #include "chrome/browser/web_applications/web_app_install_task.h"
 
+#include <array>
 #include <memory>
 #include <set>
 #include <utility>
 
 #include "base/bind.h"
 #include "base/callback.h"
-#include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
-#include "base/optional.h"
 #include "base/run_loop.h"
-#include "base/stl_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/chromeos_buildflags.h"
+#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/web_applications/components/web_app_constants.h"
 #include "chrome/browser/web_applications/components/web_app_helpers.h"
 #include "chrome/browser/web_applications/components/web_app_icon_generator.h"
+#include "chrome/browser/web_applications/components/web_app_install_utils.h"
 #include "chrome/browser/web_applications/components/web_app_utils.h"
 #include "chrome/browser/web_applications/components/web_application_info.h"
+#include "chrome/browser/web_applications/policy/web_app_policy_manager.h"
 #include "chrome/browser/web_applications/test/test_data_retriever.h"
 #include "chrome/browser/web_applications/test/test_file_handler_manager.h"
 #include "chrome/browser/web_applications/test/test_file_utils.h"
@@ -37,6 +38,7 @@
 #include "chrome/browser/web_applications/test/test_web_app_url_loader.h"
 #include "chrome/browser/web_applications/test/web_app_icon_test_utils.h"
 #include "chrome/browser/web_applications/test/web_app_test.h"
+#include "chrome/browser/web_applications/test/web_app_test_utils.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
 #include "chrome/browser/web_applications/web_app_install_finalizer.h"
@@ -47,11 +49,17 @@
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/content_settings/core/common/content_settings.h"
+#include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/webapps/browser/installable/installable_data.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/manifest/manifest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
@@ -70,7 +78,7 @@ namespace web_app {
 namespace {
 
 WebAppInstallManager::InstallParams MakeParams(
-    web_app::DisplayMode display_mode = DisplayMode::kUndefined) {
+    DisplayMode display_mode = DisplayMode::kUndefined) {
   WebAppInstallManager::InstallParams params;
   params.fallback_start_url = GURL("https://example.com/fallback");
   params.user_display_mode = display_mode;
@@ -94,11 +102,12 @@ class WebAppInstallTaskTest : public WebAppTest {
     icon_manager_ = std::make_unique<WebAppIconManager>(profile(), registrar(),
                                                         std::move(file_utils));
 
+    policy_manager_ = std::make_unique<WebAppPolicyManager>(profile());
+
     ui_manager_ = std::make_unique<TestWebAppUiManager>();
 
-    install_finalizer_ =
-        std::make_unique<WebAppInstallFinalizer>(profile(), icon_manager_.get(),
-                                                 /*legacy_finalizer=*/nullptr);
+    install_finalizer_ = std::make_unique<WebAppInstallFinalizer>(
+        profile(), icon_manager_.get(), policy_manager_.get());
 
     install_finalizer_->SetSubsystems(&registrar(), ui_manager_.get(),
                                       &test_registry_controller_->sync_bridge(),
@@ -144,6 +153,7 @@ class WebAppInstallTaskTest : public WebAppTest {
     install_task_.reset();
     install_finalizer_.reset();
     ui_manager_.reset();
+    policy_manager_.reset();
     icon_manager_.reset();
 
     test_registry_controller_.reset();
@@ -155,7 +165,7 @@ class WebAppInstallTaskTest : public WebAppTest {
                              const std::string name,
                              const std::string description,
                              const GURL& scope,
-                             base::Optional<SkColor> theme_color,
+                             absl::optional<SkColor> theme_color,
                              bool open_as_window) {
     auto web_app_info = std::make_unique<WebApplicationInfo>();
 
@@ -172,7 +182,7 @@ class WebAppInstallTaskTest : public WebAppTest {
   void CreateRendererAppInfo(const GURL& url,
                              const std::string name,
                              const std::string description) {
-    CreateRendererAppInfo(url, name, description, GURL(), base::nullopt,
+    CreateRendererAppInfo(url, name, description, GURL(), absl::nullopt,
                           /*open_as_window*/ true);
   }
 
@@ -211,7 +221,7 @@ class WebAppInstallTaskTest : public WebAppTest {
 
     auto manifest = std::make_unique<blink::Manifest>();
     manifest->start_url = url;
-    manifest->short_name = base::ASCIIToUTF16("Manifest Name");
+    manifest->short_name = u"Manifest Name";
     data_retriever_->SetManifest(std::move(manifest), /*is_installable=*/true);
 
     data_retriever_->SetIcons(IconsMap{});
@@ -239,7 +249,7 @@ class WebAppInstallTaskTest : public WebAppTest {
     install_task_->InstallWebAppFromManifestWithFallback(
         web_contents(), force_shortcut_app,
         webapps::WebappInstallSource::MENU_BROWSER_TAB,
-        base::BindOnce(TestAcceptDialogCallback),
+        base::BindOnce(test::TestAcceptDialogCallback),
         base::BindLambdaForTesting(
             [&](const AppId& installed_app_id, InstallResultCode code) {
               result.app_id = installed_app_id;
@@ -330,6 +340,7 @@ class WebAppInstallTaskTest : public WebAppTest {
   }
 
   std::unique_ptr<WebAppIconManager> icon_manager_;
+  std::unique_ptr<WebAppPolicyManager> policy_manager_;
   std::unique_ptr<WebAppInstallTask> install_task_;
   std::unique_ptr<TestWebAppUiManager> ui_manager_;
   std::unique_ptr<InstallFinalizer> install_finalizer_;
@@ -364,7 +375,7 @@ class WebAppInstallTaskWithRunOnOsLoginTest : public WebAppInstallTaskTest {
                              const std::string name,
                              const std::string description,
                              const GURL& scope,
-                             base::Optional<SkColor> theme_color,
+                             absl::optional<SkColor> theme_color,
                              bool open_as_window,
                              bool run_on_os_login) {
     auto web_app_info = std::make_unique<WebApplicationInfo>();
@@ -391,7 +402,7 @@ TEST_F(WebAppInstallTaskTest, InstallFromWebContents) {
   const std::string manifest_name = "Manifest Name";
   const std::string description = "Description";
   const GURL scope = GURL("https://example.com/scope");
-  const base::Optional<SkColor> theme_color = 0xFFAABBCC;
+  const absl::optional<SkColor> theme_color = 0xFFAABBCC;
 
   const AppId app_id = GenerateAppIdFromURL(url);
 
@@ -414,7 +425,7 @@ TEST_F(WebAppInstallTaskTest, InstallFromWebContents) {
   install_task_->InstallWebAppFromManifestWithFallback(
       web_contents(), force_shortcut_app,
       webapps::WebappInstallSource::MENU_BROWSER_TAB,
-      base::BindOnce(TestAcceptDialogCallback),
+      base::BindOnce(test::TestAcceptDialogCallback),
       base::BindLambdaForTesting(
           [&](const AppId& installed_app_id, InstallResultCode code) {
             EXPECT_EQ(InstallResultCode::kSuccessNewInstall, code);
@@ -455,7 +466,7 @@ TEST_F(WebAppInstallTaskTest, ForceReinstall) {
     auto manifest = std::make_unique<blink::Manifest>();
     manifest->start_url = url;
     manifest->scope = url;
-    manifest->short_name = base::ASCIIToUTF16("Manifest Name2");
+    manifest->short_name = u"Manifest Name2";
 
     data_retriever().SetManifest(std::move(manifest), /*is_installable=*/true);
   }
@@ -467,7 +478,7 @@ TEST_F(WebAppInstallTaskTest, ForceReinstall) {
   install_task_->InstallWebAppFromManifestWithFallback(
       web_contents(), force_shortcut_app,
       webapps::WebappInstallSource::MENU_BROWSER_TAB,
-      base::BindOnce(TestAcceptDialogCallback),
+      base::BindOnce(test::TestAcceptDialogCallback),
       base::BindLambdaForTesting(
           [&](const AppId& force_installed_app_id, InstallResultCode code) {
             EXPECT_EQ(InstallResultCode::kSuccessNewInstall, code);
@@ -493,7 +504,7 @@ TEST_F(WebAppInstallTaskTest, GetWebApplicationInfoFailed) {
   install_task_->InstallWebAppFromManifestWithFallback(
       web_contents(), force_shortcut_app,
       webapps::WebappInstallSource::MENU_BROWSER_TAB,
-      base::BindOnce(TestAcceptDialogCallback),
+      base::BindOnce(test::TestAcceptDialogCallback),
       base::BindLambdaForTesting(
           [&](const AppId& installed_app_id, InstallResultCode code) {
             EXPECT_EQ(InstallResultCode::kGetWebApplicationInfoFailed, code);
@@ -518,7 +529,7 @@ TEST_F(WebAppInstallTaskTest, WebContentsDestroyed) {
   install_task_->InstallWebAppFromManifestWithFallback(
       web_contents(), force_shortcut_app,
       webapps::WebappInstallSource::MENU_BROWSER_TAB,
-      base::BindOnce(TestAcceptDialogCallback),
+      base::BindOnce(test::TestAcceptDialogCallback),
       base::BindLambdaForTesting(
           [&](const AppId& installed_app_id, InstallResultCode code) {
             EXPECT_EQ(InstallResultCode::kWebContentsDestroyed, code);
@@ -546,13 +557,13 @@ TEST_F(WebAppInstallTaskTest, InstallableCheck) {
   const AppId app_id = GenerateAppIdFromURL(manifest_start_url);
   const std::string manifest_name = "Name from Manifest";
   const GURL manifest_scope = GURL("https://example.com/scope");
-  const base::Optional<SkColor> manifest_theme_color = 0xAABBCCDD;
-  const base::Optional<SkColor> expected_theme_color = 0xFFBBCCDD;  // Opaque.
+  const absl::optional<SkColor> manifest_theme_color = 0xAABBCCDD;
+  const absl::optional<SkColor> expected_theme_color = 0xFFBBCCDD;  // Opaque.
   const auto display_mode = DisplayMode::kMinimalUi;
 
   {
     auto manifest = std::make_unique<blink::Manifest>();
-    manifest->short_name = base::ASCIIToUTF16("Short Name from Manifest");
+    manifest->short_name = u"Short Name from Manifest";
     manifest->name = base::ASCIIToUTF16(manifest_name);
     manifest->start_url = manifest_start_url;
     manifest->scope = manifest_scope;
@@ -569,7 +580,7 @@ TEST_F(WebAppInstallTaskTest, InstallableCheck) {
   install_task_->InstallWebAppFromManifestWithFallback(
       web_contents(), force_shortcut_app,
       webapps::WebappInstallSource::MENU_BROWSER_TAB,
-      base::BindOnce(TestAcceptDialogCallback),
+      base::BindOnce(test::TestAcceptDialogCallback),
       base::BindLambdaForTesting(
           [&](const AppId& installed_app_id, InstallResultCode code) {
             EXPECT_EQ(InstallResultCode::kSuccessNewInstall, code);
@@ -616,7 +627,7 @@ TEST_F(WebAppInstallTaskTest, GetIcons) {
       test_install_finalizer().web_app_info();
 
   // Make sure that icons have been generated for all sub sizes.
-  EXPECT_TRUE(ContainsOneIconOfEachSize(web_app_info->icon_bitmaps_any));
+  EXPECT_TRUE(ContainsOneIconOfEachSize(web_app_info->icon_bitmaps.any));
 
   // Generated icons are not considered part of the manifest icons.
   EXPECT_TRUE(web_app_info->icon_infos.empty());
@@ -641,7 +652,7 @@ TEST_F(WebAppInstallTaskTest, GetIcons_NoIconsProvided) {
       test_install_finalizer().web_app_info();
 
   // Make sure that icons have been generated for all sizes.
-  EXPECT_TRUE(ContainsOneIconOfEachSize(web_app_info->icon_bitmaps_any));
+  EXPECT_TRUE(ContainsOneIconOfEachSize(web_app_info->icon_bitmaps.any));
 
   // Generated icons are not considered part of the manifest icons.
   EXPECT_TRUE(web_app_info->icon_infos.empty());
@@ -652,8 +663,62 @@ TEST_F(WebAppInstallTaskTest, GetIcons_NoIconsProvided) {
 
 TEST_F(WebAppInstallTaskTest, WriteDataToDisk) {
   const GURL url = GURL("https://example.com/path");
-  CreateDefaultDataToRetrieve(url);
-  CreateRendererAppInfo(url, "Name", "Description");
+
+  struct TestIconInfo {
+    IconPurpose purpose;
+    std::string icon_url_name;
+    SkColor color;
+    std::vector<SquareSizePx> sizes_px;
+    std::string dir;
+  };
+
+  const std::array<TestIconInfo, 3> purpose_infos = {
+      TestIconInfo{IconPurpose::ANY,
+                   "any",
+                   SK_ColorGREEN,
+                   {icon_size::k16, icon_size::k512},
+                   "Icons"},
+      TestIconInfo{IconPurpose::MONOCHROME,
+                   "monochrome",
+                   SkColorSetARGB(0x80, 0x00, 0x00, 0x00),
+                   {icon_size::k32, icon_size::k256},
+                   "Icons Monochrome"},
+      TestIconInfo{IconPurpose::MASKABLE,
+                   "maskable",
+                   SK_ColorRED,
+                   {icon_size::k64, icon_size::k96, icon_size::k128},
+                   "Icons Maskable"}};
+
+  static_assert(
+      purpose_infos.size() == static_cast<int>(IconPurpose::kMaxValue) -
+                                  static_cast<int>(IconPurpose::kMinValue) + 1,
+      "All purposes covered");
+
+  // Prepare all the data to be fetched or downloaded.
+  {
+    auto manifest = std::make_unique<blink::Manifest>();
+    manifest->start_url = url;
+    manifest->short_name = u"Manifest Name";
+
+    IconsMap icons_map;
+
+    for (const TestIconInfo& purpose_info : purpose_infos) {
+      for (SquareSizePx s : purpose_info.sizes_px) {
+        std::string size_str = base::NumberToString(s);
+        GURL icon_url =
+            url.Resolve(purpose_info.icon_url_name + size_str + ".png");
+
+        manifest->icons.push_back(
+            CreateSquareImageResource(icon_url, s, {purpose_info.purpose}));
+
+        icons_map[icon_url] = {CreateSquareIcon(s, purpose_info.color)};
+      }
+    }
+
+    data_retriever().SetEmptyRendererWebApplicationInfo();
+    data_retriever().SetManifest(std::move(manifest), /*is_installable=*/true);
+    data_retriever().SetIcons(std::move(icons_map));
+  }
 
   // TestingProfile creates temp directory if TestingProfile::path_ is empty
   // (i.e. if TestingProfile::Builder::SetPath was not called by a test fixture)
@@ -661,13 +726,6 @@ TEST_F(WebAppInstallTaskTest, WriteDataToDisk) {
   const base::FilePath manifest_resources_directory =
       GetManifestResourcesDirectory(web_apps_dir);
   EXPECT_FALSE(file_utils_->DirectoryExists(manifest_resources_directory));
-
-  const SkColor color = SK_ColorGREEN;
-  const int original_icon_size_px = icon_size::k512;
-
-  // Generate one icon as if it was fetched from renderer.
-  AddGeneratedIcon(&data_retriever_->web_app_info().icon_bitmaps_any,
-                   original_icon_size_px, color);
 
   const AppId app_id = InstallWebAppFromManifestWithFallback();
 
@@ -681,41 +739,41 @@ TEST_F(WebAppInstallTaskTest, WriteDataToDisk) {
       manifest_resources_directory.AppendASCII(app_id);
   EXPECT_TRUE(file_utils_->DirectoryExists(app_dir));
 
-  const base::FilePath icons_dir = app_dir.AppendASCII("Icons");
-  EXPECT_TRUE(file_utils_->DirectoryExists(icons_dir));
+  for (const TestIconInfo& purpose_info : purpose_infos) {
+    SCOPED_TRACE(purpose_info.purpose);
 
-  std::set<int> written_sizes_px;
+    const base::FilePath icons_dir = app_dir.AppendASCII(purpose_info.dir);
+    EXPECT_TRUE(file_utils_->DirectoryExists(icons_dir));
 
-  base::FileEnumerator enumerator(icons_dir, true, base::FileEnumerator::FILES);
-  for (base::FilePath path = enumerator.Next(); !path.empty();
-       path = enumerator.Next()) {
-    EXPECT_TRUE(path.MatchesExtension(FILE_PATH_LITERAL(".png")));
+    std::map<SquareSizePx, SkBitmap> pngs =
+        ReadPngsFromDirectory(file_utils_, icons_dir);
 
-    SkBitmap bitmap;
-    EXPECT_TRUE(ReadBitmap(file_utils_, path, &bitmap));
+    // The install does ResizeIconsAndGenerateMissing() only for ANY icons.
+    if (purpose_info.purpose == IconPurpose::ANY) {
+      // Icons are generated for all mandatory sizes in GetIconSizes() in
+      // addition to the input k16 and k512 sizes.
+      EXPECT_EQ(GetIconSizes().size() + 2UL, pngs.size());
+      // Excludes autogenerated sizes.
+      for (SquareSizePx s : GetIconSizes()) {
+        pngs.erase(s);
+      }
+    } else {
+      EXPECT_EQ(purpose_info.sizes_px.size(), pngs.size());
+    }
 
-    EXPECT_EQ(bitmap.width(), bitmap.height());
+    for (SquareSizePx size_px : purpose_info.sizes_px) {
+      SCOPED_TRACE(size_px);
+      ASSERT_TRUE(base::Contains(pngs, size_px));
 
-    const int size_px = bitmap.width();
-    EXPECT_EQ(0UL, written_sizes_px.count(size_px));
+      SkBitmap icon_bitmap = pngs[size_px];
+      EXPECT_EQ(icon_bitmap.width(), icon_bitmap.height());
+      EXPECT_EQ(size_px, icon_bitmap.height());
+      EXPECT_EQ(purpose_info.color, pngs[size_px].getColor(0, 0));
+      pngs.erase(size_px);
+    }
 
-    base::FilePath size_file_name;
-    size_file_name =
-        size_file_name.AppendASCII(base::StringPrintf("%i.png", size_px));
-    EXPECT_EQ(size_file_name, path.BaseName());
-
-    written_sizes_px.insert(size_px);
-
-    EXPECT_EQ(color, bitmap.getColor(0, 0));
+    EXPECT_TRUE(pngs.empty());
   }
-
-  EXPECT_EQ(GetIconSizes().size() + 1UL, written_sizes_px.size());
-
-  for (int size_px : GetIconSizes())
-    written_sizes_px.erase(size_px);
-  written_sizes_px.erase(original_icon_size_px);
-
-  EXPECT_TRUE(written_sizes_px.empty());
 }
 
 TEST_F(WebAppInstallTaskTest, WriteDataToDiskFailed) {
@@ -744,7 +802,7 @@ TEST_F(WebAppInstallTaskTest, WriteDataToDiskFailed) {
   install_task_->InstallWebAppFromManifestWithFallback(
       web_contents(), force_shortcut_app,
       webapps::WebappInstallSource::MENU_BROWSER_TAB,
-      base::BindOnce(TestAcceptDialogCallback),
+      base::BindOnce(test::TestAcceptDialogCallback),
       base::BindLambdaForTesting(
           [&](const AppId& installed_app_id, InstallResultCode code) {
             EXPECT_EQ(InstallResultCode::kWriteDataFailed, code);
@@ -779,7 +837,7 @@ TEST_F(WebAppInstallTaskTest, UserInstallDeclined) {
   install_task_->InstallWebAppFromManifestWithFallback(
       web_contents(), force_shortcut_app,
       webapps::WebappInstallSource::MENU_BROWSER_TAB,
-      base::BindOnce(TestDeclineDialogCallback),
+      base::BindOnce(test::TestDeclineDialogCallback),
       base::BindLambdaForTesting(
           [&](const AppId& installed_app_id, InstallResultCode code) {
             EXPECT_EQ(InstallResultCode::kUserInstallDeclined, code);
@@ -837,7 +895,7 @@ TEST_F(WebAppInstallTaskTest, InstallWebAppFromManifest_Success) {
 
   auto manifest = std::make_unique<blink::Manifest>();
   manifest->start_url = url;
-  manifest->short_name = base::ASCIIToUTF16("Server Name");
+  manifest->short_name = u"Server Name";
 
   data_retriever_->SetManifest(std::move(manifest), /*is_installable=*/true);
 
@@ -846,7 +904,7 @@ TEST_F(WebAppInstallTaskTest, InstallWebAppFromManifest_Success) {
   install_task_->InstallWebAppFromManifest(
       web_contents(), /*bypass_service_worker_check=*/false,
       webapps::WebappInstallSource::MENU_BROWSER_TAB,
-      base::BindOnce(TestAcceptDialogCallback),
+      base::BindOnce(test::TestAcceptDialogCallback),
       base::BindLambdaForTesting(
           [&](const AppId& installed_app_id, InstallResultCode code) {
             EXPECT_EQ(InstallResultCode::kSuccessNewInstall, code);
@@ -866,7 +924,7 @@ TEST_F(WebAppInstallTaskTest, InstallWebAppFromInfo_Success) {
   auto web_app_info = std::make_unique<WebApplicationInfo>();
   web_app_info->start_url = url;
   web_app_info->open_as_window = true;
-  web_app_info->title = base::ASCIIToUTF16("App Name");
+  web_app_info->title = u"App Name";
 
   base::RunLoop run_loop;
 
@@ -894,10 +952,10 @@ TEST_F(WebAppInstallTaskTest, InstallWebAppFromInfo_GenerateIcons) {
   auto web_app_info = std::make_unique<WebApplicationInfo>();
   web_app_info->start_url = GURL("https://example.com/path");
   web_app_info->open_as_window = false;
-  web_app_info->title = base::ASCIIToUTF16("App Name");
+  web_app_info->title = u"App Name";
 
   // Add square yellow icon.
-  AddGeneratedIcon(&web_app_info->icon_bitmaps_any, icon_size::k256,
+  AddGeneratedIcon(&web_app_info->icon_bitmaps.any, icon_size::k256,
                    SK_ColorYELLOW);
 
   base::RunLoop run_loop;
@@ -912,11 +970,11 @@ TEST_F(WebAppInstallTaskTest, InstallWebAppFromInfo_GenerateIcons) {
 
         // Make sure that icons have been generated for all sub sizes.
         EXPECT_TRUE(
-            ContainsOneIconOfEachSize(final_web_app_info->icon_bitmaps_any));
+            ContainsOneIconOfEachSize(final_web_app_info->icon_bitmaps.any));
 
         // Make sure they're all derived from the yellow icon.
         for (const std::pair<const SquareSizePx, SkBitmap>& icon :
-             final_web_app_info->icon_bitmaps_any) {
+             final_web_app_info->icon_bitmaps.any) {
           EXPECT_FALSE(icon.second.drawsNothing());
           EXPECT_EQ(SK_ColorYELLOW, icon.second.getColor(0, 0));
         }
@@ -940,7 +998,7 @@ TEST_F(WebAppInstallTaskTest, InstallWebAppFromManifestWithFallback_NoIcons) {
   install_task_->InstallWebAppFromManifestWithFallback(
       web_contents(), /*force_shortcut_app=*/true,
       webapps::WebappInstallSource::MENU_BROWSER_TAB,
-      base::BindOnce(TestAcceptDialogCallback),
+      base::BindOnce(test::TestAcceptDialogCallback),
       base::BindLambdaForTesting([&](const AppId& installed_app_id,
                                      InstallResultCode code) {
         EXPECT_EQ(InstallResultCode::kSuccessNewInstall, code);
@@ -949,9 +1007,9 @@ TEST_F(WebAppInstallTaskTest, InstallWebAppFromManifestWithFallback_NoIcons) {
             test_install_finalizer().web_app_info();
         // Make sure that icons have been generated for all sub sizes.
         EXPECT_TRUE(
-            ContainsOneIconOfEachSize(final_web_app_info->icon_bitmaps_any));
+            ContainsOneIconOfEachSize(final_web_app_info->icon_bitmaps.any));
         for (const std::pair<const SquareSizePx, SkBitmap>& icon :
-             final_web_app_info->icon_bitmaps_any) {
+             final_web_app_info->icon_bitmaps.any) {
           EXPECT_FALSE(icon.second.drawsNothing());
         }
 
@@ -971,7 +1029,7 @@ TEST_F(WebAppInstallTaskTest, IntentToPlayStore) {
   const std::string name = "Name";
   const std::string description = "Description";
   const GURL scope("https://example.com/scope");
-  const base::Optional<SkColor> theme_color = 0xAABBCCDD;
+  const absl::optional<SkColor> theme_color = 0xAABBCCDD;
 
   CreateRendererAppInfo(url, name, description, /*scope*/ GURL{}, theme_color,
                         /*open_as_window*/ true);
@@ -980,8 +1038,8 @@ TEST_F(WebAppInstallTaskTest, IntentToPlayStore) {
     manifest->start_url = url;
     manifest->scope = scope;
     blink::Manifest::RelatedApplication related_app;
-    related_app.platform = base::ASCIIToUTF16("chromeos_play");
-    related_app.id = base::ASCIIToUTF16("com.app.id");
+    related_app.platform = u"chromeos_play";
+    related_app.id = u"com.app.id";
     manifest->related_applications.push_back(std::move(related_app));
 
     data_retriever_->SetManifest(std::move(manifest), /*is_installable=*/true);
@@ -993,7 +1051,7 @@ TEST_F(WebAppInstallTaskTest, IntentToPlayStore) {
   install_task_->InstallWebAppFromManifestWithFallback(
       web_contents(), /*force_shortcut_app=*/false,
       webapps::WebappInstallSource::MENU_BROWSER_TAB,
-      base::BindOnce(TestAcceptDialogCallback),
+      base::BindOnce(test::TestAcceptDialogCallback),
       base::BindLambdaForTesting(
           [&](const AppId& installed_app_id, InstallResultCode code) {
             EXPECT_EQ(InstallResultCode::kIntentToPlayStore, code);
@@ -1196,7 +1254,7 @@ TEST_F(WebAppInstallTaskTest, LoadAndRetrieveWebApplicationInfoWithIcons) {
     EXPECT_TRUE(result);
     EXPECT_EQ(result->start_url, start_url);
     EXPECT_TRUE(result->icon_infos.empty());
-    EXPECT_FALSE(result->icon_bitmaps_any.empty());
+    EXPECT_FALSE(result->icon_bitmaps.any.empty());
   }
   ResetInstallTask();
   {
@@ -1223,6 +1281,46 @@ TEST_F(WebAppInstallTaskTest, LoadAndRetrieveWebApplicationInfoWithIcons) {
   }
 }
 
+TEST_F(WebAppInstallTaskTest, StorageIsolationFlagSaved) {
+  const GURL manifest_start_url = GURL("https://example.com/start");
+  const AppId app_id = GenerateAppIdFromURL(manifest_start_url);
+
+  auto manifest = std::make_unique<blink::Manifest>();
+  manifest->short_name = u"Short Name from Manifest";
+  manifest->name = u"Name from Manifest";
+  manifest->start_url = GURL("https://example.com/start");
+  manifest->isolated_storage = true;
+
+  auto web_app_info = std::make_unique<WebApplicationInfo>();
+  UpdateWebAppInfoFromManifest(*manifest, manifest_start_url,
+                               web_app_info.get());
+
+  data_retriever_->SetManifest(std::move(manifest), /*is_installable=*/true);
+  data_retriever_->SetRendererWebApplicationInfo(std::move(web_app_info));
+
+  base::RunLoop run_loop;
+  bool callback_called = false;
+
+  install_task_->InstallWebAppFromManifestWithFallback(
+      web_contents(), /*force_shortcut_app=*/false,
+      webapps::WebappInstallSource::MENU_BROWSER_TAB,
+      base::BindOnce(test::TestAcceptDialogCallback),
+      base::BindLambdaForTesting(
+          [&](const AppId& installed_app_id, InstallResultCode code) {
+            EXPECT_EQ(InstallResultCode::kSuccessNewInstall, code);
+            EXPECT_EQ(app_id, installed_app_id);
+            callback_called = true;
+            run_loop.Quit();
+          }));
+  run_loop.Run();
+
+  EXPECT_TRUE(callback_called);
+
+  const WebApp* web_app = registrar().GetAppById(app_id);
+  EXPECT_NE(nullptr, web_app);
+  EXPECT_TRUE(web_app->IsStorageIsolated());
+}
+
 TEST_F(WebAppInstallTaskWithRunOnOsLoginTest,
        InstallFromWebContentsRunOnOsLogin) {
   EXPECT_TRUE(AreWebAppsUserInstallable(profile()));
@@ -1231,7 +1329,7 @@ TEST_F(WebAppInstallTaskWithRunOnOsLoginTest,
   const std::string name = "Name";
   const std::string description = "Description";
   const GURL scope = GURL("https://example.com/scope");
-  const base::Optional<SkColor> theme_color = 0xFFAABBCC;
+  const absl::optional<SkColor> theme_color = 0xFFAABBCC;
 
   const AppId app_id = GenerateAppIdFromURL(url);
 
@@ -1246,7 +1344,7 @@ TEST_F(WebAppInstallTaskWithRunOnOsLoginTest,
   install_task_->InstallWebAppFromManifestWithFallback(
       web_contents(), force_shortcut_app,
       webapps::WebappInstallSource::MENU_BROWSER_TAB,
-      base::BindOnce(TestAcceptDialogCallback),
+      base::BindOnce(test::TestAcceptDialogCallback),
       base::BindLambdaForTesting(
           [&](const AppId& installed_app_id, InstallResultCode code) {
             EXPECT_EQ(InstallResultCode::kSuccessNewInstall, code);
@@ -1278,7 +1376,7 @@ TEST_F(WebAppInstallTaskWithRunOnOsLoginTest,
   const std::string name = "Name";
   const std::string description = "Description";
   const GURL scope = GURL("https://example.com/scope");
-  const base::Optional<SkColor> theme_color = 0xFFAABBCC;
+  const absl::optional<SkColor> theme_color = 0xFFAABBCC;
 
   const AppId app_id = GenerateAppIdFromURL(url);
 
@@ -1293,7 +1391,7 @@ TEST_F(WebAppInstallTaskWithRunOnOsLoginTest,
   install_task_->InstallWebAppFromManifestWithFallback(
       web_contents(), force_shortcut_app,
       webapps::WebappInstallSource::MENU_BROWSER_TAB,
-      base::BindOnce(TestAcceptDialogCallback),
+      base::BindOnce(test::TestAcceptDialogCallback),
       base::BindLambdaForTesting(
           [&](const AppId& installed_app_id, InstallResultCode code) {
             EXPECT_EQ(InstallResultCode::kSuccessNewInstall, code);
@@ -1345,7 +1443,7 @@ class WebAppInstallTaskTestWithShortcutsMenu : public WebAppInstallTaskTest {
     auto manifest = std::make_unique<blink::Manifest>();
     manifest->start_url = start_url;
     manifest->theme_color = theme_color;
-    manifest->name = base::ASCIIToUTF16("Manifest Name");
+    manifest->name = u"Manifest Name";
 
     // Add shortcuts to manifest.
     blink::Manifest::ShortcutItem shortcut_item;
@@ -1354,6 +1452,7 @@ class WebAppInstallTaskTestWithShortcutsMenu : public WebAppInstallTaskTest {
     blink::Manifest::ImageResource icon;
     icon.src = icon_src;
     icon.sizes.emplace_back(gfx::Size(icon_size, icon_size));
+    icon.purpose.emplace_back(IconPurpose::ANY);
     shortcut_item.icons.emplace_back(icon);
     manifest->shortcuts.emplace_back(shortcut_item);
 
@@ -1367,7 +1466,7 @@ class WebAppInstallTaskTestWithShortcutsMenu : public WebAppInstallTaskTest {
     install_task_->InstallWebAppFromManifest(
         web_contents(), /*bypass_service_worker_check=*/false,
         webapps::WebappInstallSource::MENU_BROWSER_TAB,
-        base::BindOnce(TestAcceptDialogCallback),
+        base::BindOnce(test::TestAcceptDialogCallback),
         base::BindLambdaForTesting([&](const AppId& installed_app_id,
                                        InstallResultCode code) {
           result.app_id = installed_app_id;
@@ -1381,13 +1480,20 @@ class WebAppInstallTaskTestWithShortcutsMenu : public WebAppInstallTaskTest {
           EXPECT_EQ(shortcut_url,
                     final_web_app_info->shortcuts_menu_item_infos[0].url);
           EXPECT_EQ(1u, final_web_app_info->shortcuts_menu_item_infos[0]
-                            .shortcut_icon_infos.size());
-          EXPECT_EQ(icon_size, final_web_app_info->shortcuts_menu_item_infos[0]
-                                   .shortcut_icon_infos[0]
-                                   .square_size_px);
-          EXPECT_EQ(icon_src, final_web_app_info->shortcuts_menu_item_infos[0]
-                                  .shortcut_icon_infos[0]
-                                  .url);
+                            .GetShortcutIconInfosForPurpose(IconPurpose::ANY)
+                            .size());
+          EXPECT_EQ(icon_size,
+                    final_web_app_info->shortcuts_menu_item_infos[0]
+                        .GetShortcutIconInfosForPurpose(IconPurpose::ANY)[0]
+                        .square_size_px);
+          EXPECT_EQ(icon_src,
+                    final_web_app_info->shortcuts_menu_item_infos[0]
+                        .GetShortcutIconInfosForPurpose(IconPurpose::ANY)[0]
+                        .url);
+          EXPECT_EQ(0u,
+                    final_web_app_info->shortcuts_menu_item_infos[0]
+                        .GetShortcutIconInfosForPurpose(IconPurpose::MASKABLE)
+                        .size());
 
           callback_called = true;
           run_loop.Quit();
@@ -1416,7 +1522,7 @@ class WebAppInstallTaskTestWithShortcutsMenu : public WebAppInstallTaskTest {
     web_app_info->start_url = url;
     web_app_info->open_as_window = true;
     web_app_info->theme_color = theme_color;
-    web_app_info->title = base::ASCIIToUTF16("App Name");
+    web_app_info->title = u"App Name";
 
     WebApplicationShortcutsMenuItemInfo shortcut_item;
     WebApplicationShortcutsMenuItemInfo::Icon icon;
@@ -1425,7 +1531,8 @@ class WebAppInstallTaskTestWithShortcutsMenu : public WebAppInstallTaskTest {
 
     icon.url = icon_src;
     icon.square_size_px = icon_size;
-    shortcut_item.shortcut_icon_infos.emplace_back(std::move(icon));
+    shortcut_item.SetShortcutIconInfosForPurpose(IconPurpose::MASKABLE,
+                                                 {std::move(icon)});
     web_app_info->shortcuts_menu_item_infos.emplace_back(
         std::move(shortcut_item));
 
@@ -1436,6 +1543,7 @@ class WebAppInstallTaskTestWithShortcutsMenu : public WebAppInstallTaskTest {
 
     install_task_->UpdateWebAppFromInfo(
         web_contents(), app_id, std::move(web_app_info),
+        /*redownload_app_icons=*/false,
         base::BindLambdaForTesting([&](const AppId& installed_app_id,
                                        InstallResultCode code) {
           result.app_id = installed_app_id;
@@ -1448,13 +1556,20 @@ class WebAppInstallTaskTestWithShortcutsMenu : public WebAppInstallTaskTest {
                     final_web_app_info->shortcuts_menu_item_infos[0].name);
           EXPECT_EQ(shortcut_url,
                     final_web_app_info->shortcuts_menu_item_infos[0].url);
-          EXPECT_EQ(1u, final_web_app_info->shortcuts_menu_item_infos[0]
-                            .shortcut_icon_infos.size());
+          EXPECT_EQ(0u, final_web_app_info->shortcuts_menu_item_infos[0]
+                            .GetShortcutIconInfosForPurpose(IconPurpose::ANY)
+                            .size());
+          EXPECT_EQ(1u,
+                    final_web_app_info->shortcuts_menu_item_infos[0]
+                        .GetShortcutIconInfosForPurpose(IconPurpose::MASKABLE)
+                        .size());
           EXPECT_EQ(icon_size, final_web_app_info->shortcuts_menu_item_infos[0]
-                                   .shortcut_icon_infos[0]
+                                   .GetShortcutIconInfosForPurpose(
+                                       IconPurpose::MASKABLE)[0]
                                    .square_size_px);
           EXPECT_EQ(icon_src, final_web_app_info->shortcuts_menu_item_infos[0]
-                                  .shortcut_icon_infos[0]
+                                  .GetShortcutIconInfosForPurpose(
+                                      IconPurpose::MASKABLE)[0]
                                   .url);
 
           callback_called = true;
@@ -1571,6 +1686,197 @@ TEST_F(WebAppInstallTaskTestWithShortcutsMenu,
     EXPECT_EQ(InstallResultCode::kSuccessAlreadyInstalled, result.code);
     EXPECT_EQ(app_id, result.app_id);
   }
+}
+
+class WebAppInstallTaskTestWithFileHandlers : public WebAppInstallTaskTest {
+ public:
+  WebAppInstallTaskTestWithFileHandlers() {
+    scoped_feature_list_.InitWithFeatures({blink::features::kFileHandlingAPI},
+                                          {});
+  }
+
+  void SetUp() override {
+    WebAppInstallTaskTest::SetUp();
+
+    HostContentSettingsMapFactory::GetForProfile(profile())
+        ->SetContentSettingCustomScope(ContentSettingsPattern::Wildcard(),
+                                       ContentSettingsPattern::Wildcard(),
+                                       ContentSettingsType::FILE_HANDLING,
+                                       ContentSetting::CONTENT_SETTING_ALLOW);
+  }
+
+  std::unique_ptr<blink::Manifest> CreateManifest(const GURL& url) {
+    auto manifest = std::make_unique<blink::Manifest>();
+    manifest->start_url = url;
+    manifest->name = u"Manifest Name";
+    return manifest;
+  }
+
+  std::unique_ptr<WebApplicationInfo> CreateWebApplicationInfo(
+      const GURL& url) {
+    auto app_info = std::make_unique<WebApplicationInfo>();
+    app_info->title = u"Test App";
+    app_info->start_url = url;
+    app_info->scope = url;
+    return app_info;
+  }
+
+  void AddFileHandler(
+      std::vector<blink::Manifest::FileHandler>* file_handlers) {
+    blink::Manifest::FileHandler file_handler;
+    file_handler.action = GURL("https://example.com/action");
+    file_handler.name = u"Test handler";
+    file_handler.accept[u"application/pdf"].emplace_back(u".pdf");
+    file_handlers->emplace_back(file_handler);
+  }
+
+  InstallResult InstallWebAppFromManifest(
+      std::unique_ptr<blink::Manifest> manifest,
+      webapps::WebappInstallSource source) {
+    data_retriever_->SetManifest(std::move(manifest), /*is_installable=*/true);
+
+    base::RunLoop run_loop;
+    bool callback_called = false;
+    InstallResult result;
+
+    install_task_->InstallWebAppFromManifest(
+        web_contents(), /*bypass_service_worker_check=*/false, source,
+        base::BindOnce(test::TestAcceptDialogCallback),
+        base::BindLambdaForTesting(
+            [&](const AppId& installed_app_id, InstallResultCode code) {
+              result.app_id = installed_app_id;
+              result.code = code;
+
+              callback_called = true;
+              run_loop.Quit();
+            }));
+
+    run_loop.Run();
+    EXPECT_TRUE(callback_called);
+    return result;
+  }
+
+  InstallResult UpdateWebAppFromInfo(
+      const AppId& app_id,
+      std::unique_ptr<WebApplicationInfo> app_info) {
+    base::RunLoop run_loop;
+    bool callback_called = false;
+    InstallResult result;
+
+    install_task_->UpdateWebAppFromInfo(
+        web_contents(), app_id, std::move(app_info),
+        /*redownload_app_icons=*/false,
+        base::BindLambdaForTesting(
+            [&](const AppId& installed_app_id, InstallResultCode code) {
+              result.app_id = installed_app_id;
+              result.code = code;
+
+              callback_called = true;
+              run_loop.Quit();
+            }));
+
+    run_loop.Run();
+    EXPECT_TRUE(callback_called);
+    return result;
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+TEST_F(WebAppInstallTaskTestWithFileHandlers,
+       InstallWebAppFromManifest_OsIntegrationEnabledForUserInstalledApps) {
+  const GURL url = GURL("https://example.com/path");
+  const AppId app_id = GenerateAppIdFromURL(url);
+  auto manifest = CreateManifest(url);
+  AddFileHandler(&manifest->file_handlers);
+
+  InstallResult install_result = InstallWebAppFromManifest(
+      CreateManifest(url), webapps::WebappInstallSource::MENU_BROWSER_TAB);
+
+  EXPECT_EQ(InstallResultCode::kSuccessNewInstall, install_result.code);
+  EXPECT_EQ(app_id, install_result.app_id);
+  EXPECT_EQ(1u, test_os_integration_manager().num_create_file_handlers_calls());
+}
+
+TEST_F(WebAppInstallTaskTestWithFileHandlers,
+       InstallWebAppFromManifest_OsIntegrationDisabledForDefaultApps) {
+  const GURL url = GURL("https://example.com/path");
+  const AppId app_id = GenerateAppIdFromURL(url);
+  auto manifest = CreateManifest(url);
+  AddFileHandler(&manifest->file_handlers);
+
+  InstallResult install_result = InstallWebAppFromManifest(
+      CreateManifest(url), webapps::WebappInstallSource::EXTERNAL_DEFAULT);
+
+  EXPECT_EQ(InstallResultCode::kSuccessNewInstall, install_result.code);
+  EXPECT_EQ(app_id, install_result.app_id);
+#if defined(OS_CHROMEOS)
+  // OS integration is always enabled in ChromeOS
+  EXPECT_EQ(1u, test_os_integration_manager().num_create_file_handlers_calls());
+#else
+  EXPECT_EQ(0u, test_os_integration_manager().num_create_file_handlers_calls());
+#endif  // defined(OS_CHROMEOS)
+}
+
+TEST_F(WebAppInstallTaskTestWithFileHandlers,
+       UpdateWebAppFromInfo_OsIntegrationEnabledForUserInstalledApps) {
+  const GURL url = GURL("https://example.com/path");
+  const AppId app_id = GenerateAppIdFromURL(url);
+
+  // Install the app.
+  InstallResult install_result = InstallWebAppFromManifest(
+      CreateManifest(url), webapps::WebappInstallSource::MENU_BROWSER_TAB);
+  EXPECT_EQ(InstallResultCode::kSuccessNewInstall, install_result.code);
+  EXPECT_EQ(app_id, install_result.app_id);
+  EXPECT_EQ(1u, test_os_integration_manager().num_create_file_handlers_calls());
+
+  ResetInstallTask();
+
+  // Update the app, adding a file handler.
+  auto app_info = CreateWebApplicationInfo(url);
+  AddFileHandler(&app_info->file_handlers);
+
+  InstallResult update_result =
+      UpdateWebAppFromInfo(app_id, std::move(app_info));
+  EXPECT_EQ(InstallResultCode::kSuccessAlreadyInstalled, update_result.code);
+  EXPECT_EQ(app_id, update_result.app_id);
+  EXPECT_EQ(1u, test_os_integration_manager().num_update_file_handlers_calls());
+}
+
+TEST_F(WebAppInstallTaskTestWithFileHandlers,
+       UpdateWebAppFromInfo_OsIntegrationDisabledForDefaultApps) {
+  const GURL url = GURL("https://example.com/path");
+  const AppId app_id = GenerateAppIdFromURL(url);
+
+  // Install the app.
+  InstallResult install_result = InstallWebAppFromManifest(
+      CreateManifest(url), webapps::WebappInstallSource::EXTERNAL_DEFAULT);
+  EXPECT_EQ(InstallResultCode::kSuccessNewInstall, install_result.code);
+  EXPECT_EQ(app_id, install_result.app_id);
+#if defined(OS_CHROMEOS)
+  // OS integration is always enabled in ChromeOS
+  EXPECT_EQ(1u, test_os_integration_manager().num_create_file_handlers_calls());
+#else
+  EXPECT_EQ(0u, test_os_integration_manager().num_create_file_handlers_calls());
+#endif  // defined(OS_CHROMEOS)
+
+  ResetInstallTask();
+
+  // Update the app, adding a file handler.
+  auto app_info = CreateWebApplicationInfo(url);
+  AddFileHandler(&app_info->file_handlers);
+
+  InstallResult update_result =
+      UpdateWebAppFromInfo(app_id, std::move(app_info));
+  EXPECT_EQ(InstallResultCode::kSuccessAlreadyInstalled, update_result.code);
+  EXPECT_EQ(app_id, update_result.app_id);
+#if defined(OS_CHROMEOS)
+  // OS integration is always enabled in ChromeOS
+  EXPECT_EQ(1u, test_os_integration_manager().num_update_file_handlers_calls());
+#else
+  EXPECT_EQ(0u, test_os_integration_manager().num_update_file_handlers_calls());
+#endif  // defined(OS_CHROMEOS)
 }
 
 }  // namespace web_app

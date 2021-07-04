@@ -21,9 +21,9 @@
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/app_service_test.h"
+#include "chrome/browser/ash/arc/icon_decode_request.h"
+#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/chromeos/arc/icon_decode_request.h"
-#include "chrome/browser/chromeos/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/extensions/menu_manager_factory.h"
@@ -48,6 +48,7 @@
 #include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/display/test/scoped_screen_override.h"
 #include "ui/display/test/test_screen.h"
 
 namespace {
@@ -110,11 +111,10 @@ std::unique_ptr<KeyedService> MenuManagerFactory(
 
 std::unique_ptr<AppServiceAppItem> GetAppListItem(Profile* profile,
                                                   const std::string& app_id) {
-  apps::AppServiceProxy* proxy =
-      apps::AppServiceProxyFactory::GetForProfile(profile);
   std::unique_ptr<AppServiceAppItem> item;
-  proxy->AppRegistryCache().ForOneApp(
-      app_id, [profile, &item](const apps::AppUpdate& update) {
+  apps::AppServiceProxyFactory::GetForProfile(profile)
+      ->AppRegistryCache()
+      .ForOneApp(app_id, [profile, &item](const apps::AppUpdate& update) {
         item = std::make_unique<AppServiceAppItem>(profile, nullptr, nullptr,
                                                    update);
       });
@@ -151,14 +151,13 @@ std::unique_ptr<ui::SimpleMenuModel> GetMenuModel(
 
 class AppContextMenuTest : public AppListTestBase {
  public:
-  AppContextMenuTest() = default;
+  AppContextMenuTest() : screen_override_(&test_screen_) {}
   AppContextMenuTest(const AppContextMenuTest&) = delete;
   AppContextMenuTest& operator=(const AppContextMenuTest&) = delete;
   ~AppContextMenuTest() override = default;
 
   void SetUp() override {
     AppListTestBase::SetUp();
-    display::Screen::SetScreenInstance(&test_screen_);
     extensions::MenuManagerFactory::GetInstance()->SetTestingFactory(
         profile(), base::BindRepeating(&MenuManagerFactory));
     controller_ = std::make_unique<FakeAppListControllerDelegate>();
@@ -250,8 +249,8 @@ class AppContextMenuTest : public AppListTestBase {
     value.GetAsDictionary(&dictionary_manifest);
     std::string error;
     return extensions::Extension::Create(
-        path.DirName(), extensions::Manifest::INTERNAL, *dictionary_manifest,
-        extensions::Extension::NO_FLAGS, app_id, &error);
+        path.DirName(), extensions::mojom::ManifestLocation::kInternal,
+        *dictionary_manifest, extensions::Extension::NO_FLAGS, app_id, &error);
   }
 
   void TestExtensionApp(const std::string& app_id,
@@ -299,7 +298,7 @@ class AppContextMenuTest : public AppListTestBase {
     value.SetString("version", "0.0");
     value.SetString("app.launch.web_url", "http://google.com");
     scoped_refptr<extensions::Extension> app = extensions::Extension::Create(
-        base::FilePath(), extensions::Manifest::INTERNAL, value,
+        base::FilePath(), extensions::mojom::ManifestLocation::kInternal, value,
         extensions::Extension::WAS_INSTALLED_BY_DEFAULT,
         extension_misc::kChromeAppId, &err);
     EXPECT_EQ(err, "");
@@ -332,6 +331,7 @@ class AppContextMenuTest : public AppListTestBase {
  private:
   data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
   display::test::TestScreen test_screen_;
+  display::test::ScopedScreenOverride screen_override_;
   std::unique_ptr<KeyedService> menu_manager_;
   std::unique_ptr<FakeAppListControllerDelegate> controller_;
   std::unique_ptr<FakeAppContextMenuDelegate> menu_delegate_;
@@ -675,7 +675,7 @@ class AppContextMenuLacrosTest : public AppContextMenuTest {
 
   // testing::Test:
   void SetUp() override {
-    auto user_manager = std::make_unique<chromeos::FakeChromeUserManager>();
+    auto user_manager = std::make_unique<ash::FakeChromeUserManager>();
     auto* fake_user_manager = user_manager.get();
     scoped_user_manager_ = std::make_unique<user_manager::ScopedUserManager>(
         std::move(user_manager));
@@ -708,8 +708,12 @@ TEST_F(AppContextMenuLacrosTest, LacrosApp) {
   ASSERT_NE(menu_model, nullptr);
 
   // Verify expected menu items.
-  EXPECT_EQ(menu_model->GetItemCount(), 1);
+  // It should have, Open new window, Open incognito window, and app info.
+  EXPECT_EQ(menu_model->GetItemCount(), 3);
   std::vector<MenuState> states;
   AddToStates(menu, MenuState(ash::APP_CONTEXT_MENU_NEW_WINDOW), &states);
+  AddToStates(menu, MenuState(ash::APP_CONTEXT_MENU_NEW_INCOGNITO_WINDOW),
+              &states);
+  AddToStates(menu, MenuState(ash::SHOW_APP_INFO), &states);
   ValidateMenuState(menu_model.get(), states);
 }

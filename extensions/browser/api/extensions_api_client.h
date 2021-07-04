@@ -52,7 +52,6 @@ class MessagingDelegate;
 class MetricsPrivateDelegate;
 class MimeHandlerViewGuest;
 class MimeHandlerViewGuestDelegate;
-class NetworkingCastPrivateDelegate;
 class NonNativeFileSystemDelegate;
 class RulesCacheDelegate;
 class SettingsObserver;
@@ -188,9 +187,6 @@ class ExtensionsAPIClient {
   // MetricsPrivateAPI behavior.
   virtual MetricsPrivateDelegate* GetMetricsPrivateDelegate();
 
-  // Creates a delegate for networking.castPrivate's API behavior.
-  virtual NetworkingCastPrivateDelegate* GetNetworkingCastPrivateDelegate();
-
   // Returns a delegate for embedder-specific chrome.fileSystem behavior.
   virtual FileSystemDelegate* GetFileSystemDelegate();
 
@@ -208,7 +204,9 @@ class ExtensionsAPIClient {
   // Returns a delegate for embedder-specific chrome.mediaPerceptionPrivate API
   // behavior.
   virtual MediaPerceptionAPIDelegate* GetMediaPerceptionAPIDelegate();
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
+#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
   // Saves image data on clipboard.
   virtual void SaveImageDataToClipboard(
       const std::vector<char>& image_data,
@@ -216,7 +214,7 @@ class ExtensionsAPIClient {
       AdditionalDataItemList additional_items,
       base::OnceClosure success_callback,
       base::OnceCallback<void(const std::string&)> error_callback);
-#endif
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
 
   virtual AutomationInternalApiDelegate* GetAutomationInternalApiDelegate();
 

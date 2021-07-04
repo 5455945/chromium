@@ -14,6 +14,7 @@
 #include "base/component_export.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
+#include "base/observer_list.h"
 #include "chromeos/network/managed_network_configuration_handler.h"
 #include "chromeos/network/network_handler_callbacks.h"
 #include "chromeos/network/network_profile_observer.h"
@@ -183,21 +184,21 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) ManagedNetworkConfigurationHandlerImpl
                              const std::string& userhash,
                              network_handler::PropertiesCallback callback,
                              const std::string& service_path,
-                             base::Optional<base::Value> shill_properties);
+                             absl::optional<base::Value> shill_properties);
 
   void OnGetDeviceProperties(PropertiesType properties_type,
                              const std::string& userhash,
                              const std::string& service_path,
                              network_handler::PropertiesCallback callback,
-                             base::Optional<base::Value> network_properties,
+                             absl::optional<base::Value> network_properties,
                              const std::string& device_path,
-                             base::Optional<base::Value> device_properties);
+                             absl::optional<base::Value> device_properties);
 
   void SendProperties(PropertiesType properties_type,
                       const std::string& userhash,
                       const std::string& service_path,
                       network_handler::PropertiesCallback callback,
-                      base::Optional<base::Value> shill_properties);
+                      absl::optional<base::Value> shill_properties);
 
   // Called from SetProperties, calls NCH::SetShillProperties.
   void SetShillProperties(

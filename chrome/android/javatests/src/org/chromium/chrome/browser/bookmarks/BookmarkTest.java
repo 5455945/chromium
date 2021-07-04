@@ -17,6 +17,7 @@ import static org.mockito.Mockito.when;
 import static org.chromium.components.browser_ui.widget.highlight.ViewHighlighterTestUtils.checkHighlightOff;
 import static org.chromium.components.browser_ui.widget.highlight.ViewHighlighterTestUtils.checkHighlightPulse;
 
+import android.content.Intent;
 import android.support.test.InstrumentationRegistry;
 import android.support.test.runner.lifecycle.Stage;
 import android.text.TextUtils;
@@ -61,6 +62,7 @@ import org.chromium.base.test.util.Restriction;
 import org.chromium.base.test.util.UserActionTester;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
+import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.app.metrics.LaunchCauseMetrics;
 import org.chromium.chrome.browser.bookmarks.BookmarkBridge.BookmarkItem;
 import org.chromium.chrome.browser.bookmarks.BookmarkBridge.BookmarkModelObserver;
@@ -75,18 +77,17 @@ import org.chromium.chrome.browser.partnerbookmarks.PartnerBookmarksShim;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.SharedPreferencesManager;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.sync.ProfileSyncService;
+import org.chromium.chrome.browser.sync.SyncService;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
 import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
-import org.chromium.chrome.test.util.ActivityUtils;
+import org.chromium.chrome.test.util.ActivityTestUtils;
 import org.chromium.chrome.test.util.BookmarkTestUtil;
 import org.chromium.chrome.test.util.ChromeRenderTestRule;
 import org.chromium.chrome.test.util.MenuUtils;
 import org.chromium.chrome.test.util.browser.Features;
-import org.chromium.chrome.test.util.browser.Features.EnableFeatures;
 import org.chromium.components.bookmarks.BookmarkId;
 import org.chromium.components.bookmarks.BookmarkType;
 import org.chromium.components.browser_ui.widget.RecyclerViewTestUtils;
@@ -94,6 +95,7 @@ import org.chromium.components.browser_ui.widget.listmenu.ListMenuButton;
 import org.chromium.components.browser_ui.widget.selectable_list.SelectableListToolbar;
 import org.chromium.components.browser_ui.widget.selectable_list.SelectableListToolbar.ViewType;
 import org.chromium.components.embedder_support.util.UrlConstants;
+import org.chromium.components.profile_metrics.BrowserProfileType;
 import org.chromium.content_public.browser.test.util.TestThreadUtils;
 import org.chromium.content_public.browser.test.util.TouchCommon;
 import org.chromium.net.test.EmbeddedTestServer;
@@ -145,7 +147,7 @@ public class BookmarkTest {
     private EmbeddedTestServer mTestServer;
     private @Nullable BookmarkActivity mBookmarkActivity;
     @Mock
-    private ProfileSyncService mProfileSyncService;
+    private SyncService mSyncService;
     private UserActionTester mActionTester;
 
     @BeforeClass
@@ -167,10 +169,10 @@ public class BookmarkTest {
                     mActivityTestRule.getActivity().getActivityTab().getWebContents()));
             mBookmarkBridge = mActivityTestRule.getActivity().getBookmarkBridgeForTesting();
 
-            // Stub ProfileSyncService state to make sure promos aren't suppressed.
-            when(mProfileSyncService.isSyncAllowedByPlatform()).thenReturn(true);
-            when(mProfileSyncService.isSyncRequested()).thenReturn(false);
-            ProfileSyncService.overrideForTests(mProfileSyncService);
+            // Stub SyncService state to make sure promos aren't suppressed.
+            when(mSyncService.isSyncAllowedByPlatform()).thenReturn(true);
+            when(mSyncService.isSyncRequested()).thenReturn(false);
+            SyncService.overrideForTests(mSyncService);
         });
         mTestServer = EmbeddedTestServer.createAndStartServer(InstrumentationRegistry.getContext());
         mTestUrlA = new GURL("http://a.com");
@@ -230,7 +232,7 @@ public class BookmarkTest {
                                .getManagerForTesting();
         } else {
             // phone
-            mBookmarkActivity = ActivityUtils.waitForActivity(
+            mBookmarkActivity = ActivityTestUtils.waitForActivity(
                     InstrumentationRegistry.getInstrumentation(), BookmarkActivity.class,
                     new MenuUtils.MenuActivityTrigger(InstrumentationRegistry.getInstrumentation(),
                             mActivityTestRule.getActivity(), R.id.all_bookmarks_menu_id));
@@ -408,9 +410,9 @@ public class BookmarkTest {
 
     @Test
     @SmallTest
-    @FlakyTest(message = "crbug.com/879803")
     public void testOpenBookmarkManager() throws InterruptedException {
         openBookmarkManager();
+        BookmarkTestUtil.waitForBookmarkModelLoaded();
         BookmarkDelegate delegate = getBookmarkManager();
 
         Assert.assertEquals(BookmarkUIState.STATE_FOLDER, delegate.getCurrentState());
@@ -1029,7 +1031,8 @@ public class BookmarkTest {
 
     @Test
     @SmallTest
-    @Features.EnableFeatures({ChromeFeatureList.READ_LATER})
+    @Features.
+    EnableFeatures({ChromeFeatureList.BOOKMARK_BOTTOM_SHEET, ChromeFeatureList.READ_LATER})
     public void testReadingListItemsInSelectionMode() throws Exception {
         addReadingListBookmark(TEST_PAGE_TITLE_GOOGLE, mTestUrlA);
         BookmarkPromoHeader.forcePromoStateForTests(PromoState.PROMO_NONE);
@@ -1058,7 +1061,8 @@ public class BookmarkTest {
 
     @Test
     @SmallTest
-    @Features.EnableFeatures({ChromeFeatureList.READ_LATER})
+    @Features.
+    EnableFeatures({ChromeFeatureList.BOOKMARK_BOTTOM_SHEET, ChromeFeatureList.READ_LATER})
     public void testReadingListItemMenuItems() throws Exception {
         addReadingListBookmark(TEST_PAGE_TITLE_GOOGLE, mTestUrlA);
         BookmarkPromoHeader.forcePromoStateForTests(PromoState.PROMO_NONE);
@@ -1099,7 +1103,8 @@ public class BookmarkTest {
 
     @Test
     @SmallTest
-    @Features.EnableFeatures({ChromeFeatureList.READ_LATER})
+    @Features.
+    EnableFeatures({ChromeFeatureList.BOOKMARK_BOTTOM_SHEET, ChromeFeatureList.READ_LATER})
     public void testReadingListDeletion() throws Exception {
         addReadingListBookmark(TEST_PAGE_TITLE_GOOGLE, mTestUrlA);
         BookmarkPromoHeader.forcePromoStateForTests(PromoState.PROMO_NONE);
@@ -1122,7 +1127,8 @@ public class BookmarkTest {
 
     @Test
     @SmallTest
-    @Features.EnableFeatures({ChromeFeatureList.READ_LATER})
+    @Features.
+    EnableFeatures({ChromeFeatureList.BOOKMARK_BOTTOM_SHEET, ChromeFeatureList.READ_LATER})
     public void testSearchReadingList_Deletion() throws Exception {
         addReadingListBookmark(TEST_PAGE_TITLE_GOOGLE, mTestUrlA);
         BookmarkPromoHeader.forcePromoStateForTests(PromoState.PROMO_NONE);
@@ -1152,7 +1158,8 @@ public class BookmarkTest {
 
     @Test
     @SmallTest
-    @Features.EnableFeatures({ChromeFeatureList.READ_LATER})
+    @Features.
+    EnableFeatures({ChromeFeatureList.BOOKMARK_BOTTOM_SHEET, ChromeFeatureList.READ_LATER})
     public void testReadingListEmptyView() throws Exception {
         BookmarkPromoHeader.forcePromoStateForTests(PromoState.PROMO_NONE);
         openBookmarkManager();
@@ -1174,7 +1181,8 @@ public class BookmarkTest {
 
     @Test
     @SmallTest
-    @Features.EnableFeatures({ChromeFeatureList.READ_LATER})
+    @Features.
+    EnableFeatures({ChromeFeatureList.BOOKMARK_BOTTOM_SHEET, ChromeFeatureList.READ_LATER})
     public void testReadingListOpenInCCT() throws Exception {
         addReadingListBookmark(TEST_PAGE_TITLE_GOOGLE, mTestUrlA);
         BookmarkPromoHeader.forcePromoStateForTests(PromoState.PROMO_NONE);
@@ -1194,6 +1202,8 @@ public class BookmarkTest {
         CustomTabActivity activity = ApplicationTestUtils.waitForActivityWithClass(
                 CustomTabActivity.class, Stage.CREATED, () -> { readingListRow.performClick(); });
         CriteriaHelper.pollUiThread(() -> activity.getActivityTab() != null);
+        Intent customTabIntent = activity.getInitialIntent();
+        Assert.assertFalse(customTabIntent.hasExtra(IntentHandler.EXTRA_OPEN_NEW_INCOGNITO_TAB));
         TestThreadUtils.runOnUiThreadBlocking(
                 () -> { Assert.assertTrue(activity.getActivityTab().getUrl().equals(mTestUrlA)); });
         activity.finish();
@@ -1679,7 +1689,8 @@ public class BookmarkTest {
      */
     @Test
     @SmallTest
-    @Features.EnableFeatures({ChromeFeatureList.READ_LATER})
+    @Features.
+    EnableFeatures({ChromeFeatureList.BOOKMARK_BOTTOM_SHEET, ChromeFeatureList.READ_LATER})
     public void testReadingListFolderShown() throws Exception {
         BookmarkPromoHeader.forcePromoStateForTests(PromoState.PROMO_NONE);
         openBookmarkManager();
@@ -1703,12 +1714,37 @@ public class BookmarkTest {
                 BookmarkListEntry.ViewType.FOLDER, getAdapter().getItemViewType(2));
     }
 
+    /**
+     * Verifies the bottom sheet will shown without reading list enabled if
+     * {@link ChromeFeatureList#BOOKMARK_BOTTOM_SHEET} is enabled.
+     */
     @Test
     @SmallTest
-    @Features.EnableFeatures({ChromeFeatureList.READ_LATER})
+    @Features.EnableFeatures({ChromeFeatureList.BOOKMARK_BOTTOM_SHEET})
+    @Features.DisableFeatures({ChromeFeatureList.READ_LATER})
+    public void testBookmarkBottomSheetShownWithoutReadingList() throws Exception {
+        BookmarkPromoHeader.forcePromoStateForTests(PromoState.PROMO_NONE);
+        openBookmarkManager();
+        BookmarkTestUtil.waitForBookmarkModelLoaded();
+        TestThreadUtils.runOnUiThreadBlocking(
+                () -> mManager.openFolder(mBookmarkModel.getRootFolderId()));
+        RecyclerViewTestUtils.waitForStableRecyclerView(mItemsContainer);
+        Assert.assertEquals("Wrong number of top level elements.", 1, getAdapter().getItemCount());
+
+        // Reading list should show in the root folder.
+        onView(withText("Reading list")).check(doesNotExist());
+        Assert.assertEquals("The 1st view should be a normal folder.",
+                BookmarkListEntry.ViewType.FOLDER, getAdapter().getItemViewType(0));
+    }
+
+    @Test
+    @SmallTest
+    @Features.
+    EnableFeatures({ChromeFeatureList.BOOKMARK_BOTTOM_SHEET, ChromeFeatureList.READ_LATER})
     public void testReadingListFolderShownOneUnreadPage() throws Exception {
         BookmarkPromoHeader.forcePromoStateForTests(PromoState.PROMO_NONE);
         openBookmarkManager();
+        BookmarkTestUtil.waitForBookmarkModelLoaded();
         TestThreadUtils.runOnUiThreadBlocking(() -> {
             mBookmarkModel.addToReadingList("a", new GURL("https://a.com/reading_list_0"));
             mManager.openFolder(mBookmarkModel.getRootFolderId());
@@ -1719,10 +1755,12 @@ public class BookmarkTest {
 
     @Test
     @SmallTest
-    @Features.EnableFeatures({ChromeFeatureList.READ_LATER})
+    @Features.
+    EnableFeatures({ChromeFeatureList.BOOKMARK_BOTTOM_SHEET, ChromeFeatureList.READ_LATER})
     public void testReadingListFolderShownMultipleUnreadPages() throws Exception {
         BookmarkPromoHeader.forcePromoStateForTests(PromoState.PROMO_NONE);
         openBookmarkManager();
+        BookmarkTestUtil.waitForBookmarkModelLoaded();
         TestThreadUtils.runOnUiThreadBlocking(() -> {
             mBookmarkModel.addToReadingList("a", new GURL("https://a.com/reading_list_0"));
             mBookmarkModel.addToReadingList("b", new GURL("https://a.com/reading_list_1"));
@@ -1734,7 +1772,8 @@ public class BookmarkTest {
 
     @Test
     @MediumTest
-    @Features.EnableFeatures({ChromeFeatureList.READ_LATER})
+    @Features.
+    EnableFeatures({ChromeFeatureList.BOOKMARK_BOTTOM_SHEET, ChromeFeatureList.READ_LATER})
     public void testAddReadingListItemFromBottomSheet() throws Exception {
         mActivityTestRule.loadUrl(mTestPage);
         TestThreadUtils.runOnUiThreadBlocking(
@@ -1773,43 +1812,9 @@ public class BookmarkTest {
     }
 
     @Test
-    @MediumTest
-    @EnableFeatures({ChromeFeatureList.READ_LATER,
-            ChromeFeatureList.TABBED_APP_OVERFLOW_MENU_THREE_BUTTON_ACTIONBAR + "<Study"})
-    @CommandLineFlags.Add({"force-fieldtrials=Study/Group",
-            "force-fieldtrial-params=Study.Group:three_button_action_bar/add_to_option"})
-    public void
-    testAddReadingListItemFromAddToOption() throws Exception {
-        mActivityTestRule.loadUrl(mTestPage);
-        TestThreadUtils.runOnUiThreadBlocking(
-                () -> mBookmarkModel.loadEmptyPartnerBookmarkShimForTesting());
-        BookmarkTestUtil.waitForBookmarkModelLoaded();
-
-        mActionTester = new UserActionTester();
-        MenuUtils.invokeCustomMenuActionSync(InstrumentationRegistry.getInstrumentation(),
-                mActivityTestRule.getActivity(), R.id.add_to_reading_list_menu_id);
-        CriteriaHelper.pollUiThread(() -> mBookmarkModel.getReadingListItem(mTestPage) != null);
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            // Check reading list item states.
-            BookmarkItem readingListItem = mBookmarkModel.getReadingListItem(mTestPage);
-            Assert.assertEquals(mTestPage, readingListItem.getUrl());
-            Assert.assertEquals(TEST_PAGE_TITLE_GOOGLE, readingListItem.getTitle());
-            Assert.assertFalse(readingListItem.isRead());
-
-            // Reading list snackbar has shown.
-            SnackbarManager snackbarManager = mActivityTestRule.getActivity().getSnackbarManager();
-            Snackbar currentSnackbar = snackbarManager.getCurrentSnackbarForTesting();
-            Assert.assertEquals("Add to reading list snackbar not shown.",
-                    Snackbar.UMA_READING_LIST_BOOKMARK_ADDED,
-                    currentSnackbar.getIdentifierForTesting());
-        });
-        Assert.assertThat(
-                mActionTester.getActions(), Matchers.hasItem("MobileMenuAddToReadingList"));
-    }
-
-    @Test
     @SmallTest
-    @Features.EnableFeatures({ChromeFeatureList.READ_LATER})
+    @Features.
+    EnableFeatures({ChromeFeatureList.BOOKMARK_BOTTOM_SHEET, ChromeFeatureList.READ_LATER})
     public void testShowBookmarkManagerReadingListPage() {
         BookmarkPromoHeader.forcePromoStateForTests(PromoState.PROMO_NONE);
         TestThreadUtils.runOnUiThreadBlocking(
@@ -1819,13 +1824,14 @@ public class BookmarkTest {
         if (mActivityTestRule.getActivity().isTablet()) {
             TestThreadUtils.runOnUiThreadBlocking(() -> {
                 BookmarkUtils.showBookmarkManager(
-                        null, new BookmarkId(0, BookmarkType.READING_LIST));
+                        null, new BookmarkId(0, BookmarkType.READING_LIST), /*isIncognito=*/false);
             });
         } else {
             mBookmarkActivity = ApplicationTestUtils.waitForActivityWithClass(
                     BookmarkActivity.class, Stage.CREATED, () -> {
-                        BookmarkUtils.showBookmarkManager(
-                                null, new BookmarkId(0, BookmarkType.READING_LIST));
+                        BookmarkUtils.showBookmarkManager(null,
+                                new BookmarkId(0, BookmarkType.READING_LIST),
+                                /*isIncognito=*/false);
                     });
         }
 
@@ -1853,6 +1859,69 @@ public class BookmarkTest {
         Assert.assertEquals(1,
                 RecordHistogram.getHistogramTotalCountForTesting(
                         LaunchCauseMetrics.LAUNCH_CAUSE_HISTOGRAM));
+    }
+
+    /**
+     * Test that we record Bookmarks.OpenBookmarkManager.PerProfileType when
+     * R.id.all_bookmarks_menu_id is clicked in regular mode.
+     *
+     * Please note that this test doesn't run for tablet because of the way bookmark manager is
+     * opened for tablets via openBookmarkManager test method which circumvents the click of
+     * R.id.all_bookmarks_menu_id, this doesn't happen in actual case and the metric indeed gets
+     * recorded in tablets.
+     */
+    @Test
+    @MediumTest
+    @Restriction({UiRestriction.RESTRICTION_TYPE_PHONE})
+    public void testRecordsHistogramWhenBookmarkManagerOpened_InRegular() throws Throwable {
+        Assert.assertEquals(0,
+                RecordHistogram.getHistogramTotalCountForTesting(
+                        "Bookmarks.OpenBookmarkManager.PerProfileType"));
+
+        openBookmarkManager();
+        pressBack();
+        waitForTabbedActivity();
+
+        Assert.assertEquals(1,
+                RecordHistogram.getHistogramTotalCountForTesting(
+                        "Bookmarks.OpenBookmarkManager.PerProfileType"));
+
+        Assert.assertEquals(1,
+                RecordHistogram.getHistogramValueCountForTesting(
+                        "Bookmarks.OpenBookmarkManager.PerProfileType",
+                        BrowserProfileType.REGULAR));
+    }
+
+    /**
+     * Test that we record Bookmarks.OpenBookmarkManager.PerProfileType when
+     * R.id.all_bookmarks_menu_id is clicked in Incognito mode.
+     *
+     * Please note that this test doesn't run for tablet because of the way bookmark manager is
+     * opened for tablets via openBookmarkManager test method which circumvents the click of
+     * R.id.all_bookmarks_menu_id. This doesn't happen in actual case and the metric indeed gets
+     * recorded in tablets.
+     */
+    @Test
+    @MediumTest
+    @Restriction({UiRestriction.RESTRICTION_TYPE_PHONE})
+    public void testRecordsHistogramWhenBookmarkManagerOpened_InIncognito() throws Throwable {
+        Assert.assertEquals(0,
+                RecordHistogram.getHistogramTotalCountForTesting(
+                        "Bookmarks.OpenBookmarkManager.PerProfileType"));
+
+        mActivityTestRule.loadUrlInNewTab("about:blank", /*incognito=*/true);
+        openBookmarkManager();
+        pressBack();
+        waitForTabbedActivity();
+
+        Assert.assertEquals(1,
+                RecordHistogram.getHistogramTotalCountForTesting(
+                        "Bookmarks.OpenBookmarkManager.PerProfileType"));
+
+        Assert.assertEquals(1,
+                RecordHistogram.getHistogramValueCountForTesting(
+                        "Bookmarks.OpenBookmarkManager.PerProfileType",
+                        BrowserProfileType.INCOGNITO));
     }
 
     /**

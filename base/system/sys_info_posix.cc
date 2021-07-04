@@ -102,8 +102,8 @@ bool IsStatsZeroIfUnlimited(const base::FilePath& path) {
 
   switch (stats.f_type) {
     case TMPFS_MAGIC:
-    case HUGETLBFS_MAGIC:
-    case RAMFS_MAGIC:
+    case static_cast<int>(HUGETLBFS_MAGIC):
+    case static_cast<int>(RAMFS_MAGIC):
       return true;
   }
   return false;
@@ -226,7 +226,7 @@ void SysInfo::OperatingSystemVersionNumbers(int32_t* major_version,
 }
 #endif
 
-#if !defined(OS_MAC)
+#if !defined(OS_MAC) && !defined(OS_IOS)
 // static
 std::string SysInfo::OperatingSystemArchitecture() {
   struct utsname info;
@@ -244,7 +244,7 @@ std::string SysInfo::OperatingSystemArchitecture() {
   }
   return arch;
 }
-#endif  // !defined(OS_MAC)
+#endif  // !defined(OS_MAC) && !defined(OS_IOS)
 
 // static
 size_t SysInfo::VMAllocationGranularity() {

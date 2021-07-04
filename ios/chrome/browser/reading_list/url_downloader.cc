@@ -9,13 +9,14 @@
 
 #include "base/base64.h"
 #include "base/bind.h"
+#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/json/json_writer.h"
 #include "base/memory/ptr_util.h"
 #include "base/path_service.h"
-#include "base/stl_util.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
 #include "components/reading_list/core/offline_url_utils.h"
@@ -299,12 +300,10 @@ void URLDownloader::DistillerCallback(
     return;
   }
 
-  std::vector<dom_distiller::DistillerViewer::ImageInfo> images_block = images;
-  std::string block_html = html;
   task_tracker_.PostTaskAndReplyWithResult(
       task_runner_.get(), FROM_HERE,
       base::BindOnce(&URLDownloader::SaveDistilledHTML, base::Unretained(this),
-                     page_url, images_block, block_html),
+                     page_url, images, html),
       base::BindOnce(&URLDownloader::DownloadCompletionHandler,
                      base::Unretained(this), page_url, title,
                      reading_list::OfflinePagePath(

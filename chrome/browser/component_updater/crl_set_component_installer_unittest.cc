@@ -18,6 +18,7 @@
 #include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom.h"
 #include "services/network/network_service.h"
 #include "services/network/public/mojom/network_context.mojom.h"
+#include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "services/network/test/test_url_loader_client.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
@@ -67,7 +68,7 @@ class CRLSetComponentInstallerTest : public PlatformTest {
         loader_factory.BindNewPipeAndPassReceiver(), std::move(params));
     loader_.reset();
     loader_factory->CreateLoaderAndStart(
-        loader_.BindNewPipeAndPassReceiver(), 1, 1,
+        loader_.BindNewPipeAndPassReceiver(), 1,
         network::mojom::kURLLoadOptionSendSSLInfoWithResponse |
             network::mojom::kURLLoadOptionSendSSLInfoForCertificateError,
         request, client_->CreateRemote(),

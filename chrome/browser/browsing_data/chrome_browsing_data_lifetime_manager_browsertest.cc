@@ -9,7 +9,6 @@
 #include "base/files/file_path.h"
 #include "base/guid.h"
 #include "base/json/json_reader.h"
-#include "base/optional.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
@@ -58,6 +57,7 @@
 #include "storage/browser/quota/special_storage_policy.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 namespace {
@@ -87,8 +87,7 @@ class ChromeBrowsingDataLifetimeManagerTest
             GetBrowser()->profile());
     browsing_data_lifetime_manager->SetEndTimeForTesting(base::Time::Max());
     content::BrowsingDataRemover* remover =
-        content::BrowserContext::GetBrowsingDataRemover(
-            GetBrowser()->profile());
+        GetBrowser()->profile()->GetBrowsingDataRemover();
     content::BrowsingDataRemoverCompletionObserver completion_observer(remover);
     browsing_data_lifetime_manager->SetBrowsingDataRemoverObserverForTesting(
         &completion_observer);
@@ -287,7 +286,7 @@ class ChromeBrowsingDataLifetimeManagerShutdownTest
     base::RunLoop run_loop;
     base::CancelableTaskTracker tracker;
     history_service()->QueryHistory(
-        base::string16(), history::QueryOptions(),
+        std::u16string(), history::QueryOptions(),
         base::BindLambdaForTesting([&](history::QueryResults results) {
           history_query_results = std::move(results);
           run_loop.QuitClosure().Run();

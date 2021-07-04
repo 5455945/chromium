@@ -9,6 +9,7 @@
 
 #include "base/component_export.h"
 #include "services/network/public/mojom/cross_origin_opener_policy.mojom-shared.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace network {
 
@@ -25,10 +26,10 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE) CrossOriginOpenerPolicy final {
 
   mojom::CrossOriginOpenerPolicyValue value =
       mojom::CrossOriginOpenerPolicyValue::kUnsafeNone;
-  base::Optional<std::string> reporting_endpoint;
+  absl::optional<std::string> reporting_endpoint;
   mojom::CrossOriginOpenerPolicyValue report_only_value =
       mojom::CrossOriginOpenerPolicyValue::kUnsafeNone;
-  base::Optional<std::string> report_only_reporting_endpoint;
+  absl::optional<std::string> report_only_reporting_endpoint;
 };
 
 COMPONENT_EXPORT(NETWORK_CPP_BASE)

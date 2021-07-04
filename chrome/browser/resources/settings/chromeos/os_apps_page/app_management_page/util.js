@@ -6,9 +6,9 @@
 // #import {assert} from 'chrome://resources/js/assert.m.js';
 // #import {assertNotReached} from 'chrome://resources/js/assert.m.js';
 // #import {loadTimeData} from 'chrome://resources/js/load_time_data.m.js';
-// #import {Route, Router} from '../../../router.m.js';
+// #import {Route, Router} from '../../../router.js';
 // #import {routes} from '../../os_route.m.js';
-// #import {AppType, AppManagementUserAction, ArcPermissionType, OptionalBool, PermissionValueType, Bool, PwaPermissionType, TriState, PluginVmPermissionType} from "./constants.m.js";
+// #import {AppType, AppManagementUserAction, ArcPermissionType, OptionalBool, PermissionValueType, Bool, PwaPermissionType, TriState, PluginVmPermissionType, WindowMode} from "./constants.m.js";
 // clang-format on
 
 /**
@@ -22,7 +22,6 @@ cr.define('app_management.util', function() {
   /* #export */ function createEmptyState() {
     return {
       apps: {},
-      arcSupported: false,
       selectedAppId: null,
     };
   }
@@ -33,10 +32,6 @@ cr.define('app_management.util', function() {
    */
   /* #export */ function createInitialState(apps) {
     const initialState = createEmptyState();
-
-    initialState.arcSupported =
-        loadTimeData.valueExists('isSupportedArcVersion') &&
-        loadTimeData.getBoolean('isSupportedArcVersion');
 
     for (const app of apps) {
       initialState.apps[app.id] = app;
@@ -230,6 +225,7 @@ cr.define('app_management.util', function() {
       case AppType.kArc:
         return 'AppManagement.AppDetailViews.ArcApp';
       case AppType.kExtension:
+      case AppType.kStandaloneBrowser:
         return 'AppManagement.AppDetailViews.ChromeApp';
       case AppType.kWeb:
         return 'AppManagement.AppDetailViews.WebApp';

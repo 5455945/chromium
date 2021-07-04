@@ -9,14 +9,13 @@
 
 #include "base/bind.h"
 #include "base/logging.h"
+#include "chrome/browser/ash/arc/arc_optin_uma.h"
+#include "chrome/browser/ash/policy/core/browser_policy_connector_chromeos.h"
+#include "chrome/browser/ash/policy/core/device_local_account.h"
 #include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/chromeos/arc/arc_optin_uma.h"
-#include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
-#include "chrome/browser/chromeos/policy/device_local_account.h"
-#include "chrome/browser/chromeos/policy/dm_token_storage.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chromeos/tpm/install_attributes.h"
 #include "components/account_id/account_id.h"
@@ -75,7 +74,7 @@ void PublicSamlUrlFetcher::Fetch(base::OnceClosure callback) {
       policy::DMAuth::FromDMToken(chromeos::DeviceSettingsService::Get()
                                       ->policy_data()
                                       ->request_token()),
-      /*oauth_token=*/base::nullopt,
+      /*oauth_token=*/absl::nullopt,
       g_browser_process->system_network_context_manager()
           ->GetSharedURLLoaderFactory(),
       base::BindOnce(&PublicSamlUrlFetcher::OnPublicSamlUrlReceived,

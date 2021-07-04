@@ -9,8 +9,7 @@
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
-#include "base/observer_list.h"
+#include "base/observer_list_types.h"
 #include "components/autofill_assistant/browser/details.h"
 #include "components/autofill_assistant/browser/info_box.h"
 #include "components/autofill_assistant/browser/metrics.h"
@@ -20,7 +19,6 @@
 #include "components/autofill_assistant/browser/user_action.h"
 #include "components/autofill_assistant/browser/user_data.h"
 #include "components/autofill_assistant/browser/viewport_mode.h"
-#include "third_party/blink/public/mojom/payments/payment_request.mojom.h"
 
 namespace autofill_assistant {
 
@@ -84,10 +82,6 @@ class ControllerObserver : public base::CheckedObserver {
   // Updates the area of the visible viewport that is accessible when the
   // overlay state is OverlayState::PARTIAL.
   //
-  // |visual_viewport| contains the position and size of the visual viewport in
-  // the layout viewport. It might be empty if not known or the touchable area
-  // is empty.
-  //
   // |touchable_areas| contains one element per configured rectangle that should
   // be visible/touchable, though these can correspond to empty rectangles.
   //
@@ -97,7 +91,6 @@ class ControllerObserver : public base::CheckedObserver {
   //
   // All rectangles are expressed in absolute CSS coordinates.
   virtual void OnTouchableAreaChanged(
-      const RectF& visual_viewport,
       const std::vector<RectF>& touchable_areas,
       const std::vector<RectF>& restricted_areas) = 0;
 
@@ -127,6 +120,11 @@ class ControllerObserver : public base::CheckedObserver {
 
   // Called when the generic user interface to show has been changed or cleared.
   virtual void OnGenericUserInterfaceChanged(
+      const GenericUserInterfaceProto* generic_ui) = 0;
+
+  // Called when the persistent generic user interface to show has been changed
+  // or cleared.
+  virtual void OnPersistentGenericUserInterfaceChanged(
       const GenericUserInterfaceProto* generic_ui) = 0;
 
   // Called when the desired overlay behavior has changed.

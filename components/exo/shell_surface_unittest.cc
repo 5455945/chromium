@@ -10,12 +10,14 @@
 #include "ash/public/cpp/test/shell_test_api.h"
 #include "ash/public/cpp/window_properties.h"
 #include "ash/shell.h"
+#include "ash/test/test_widget_builder.h"
+#include "ash/wm/resize_shadow.h"
+#include "ash/wm/resize_shadow_controller.h"
 #include "ash/wm/window_state.h"
 #include "ash/wm/wm_event.h"
 #include "ash/wm/workspace_controller_test_api.h"
 #include "base/bind.h"
 #include "base/callback.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "components/exo/buffer.h"
@@ -25,6 +27,7 @@
 #include "components/exo/surface.h"
 #include "components/exo/test/exo_test_base.h"
 #include "components/exo/test/exo_test_helper.h"
+#include "components/exo/test/shell_surface_builder.h"
 #include "components/exo/wm_helper.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/aura/client/aura_constants.h"
@@ -40,12 +43,10 @@
 #include "ui/display/test/display_manager_test_api.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/event.h"
+#include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/widget/widget.h"
 #include "ui/wm/core/shadow_types.h"
 #include "ui/wm/core/window_util.h"
-
-#include "ash/wm/resize_shadow.h"
-#include "ash/wm/resize_shadow_controller.h"
 
 namespace exo {
 
@@ -154,24 +155,29 @@ TEST_F(ShellSurfaceTest, SetParent) {
 
 TEST_F(ShellSurfaceTest, DeleteShellSurfaceWithTransientChildren) {
   gfx::Size buffer_size(256, 256);
-  auto parent_info = CreateShellSurfaceHolder(buffer_size, nullptr);
-  auto child1_info =
-      CreateShellSurfaceHolder(buffer_size, parent_info->shell_surface());
-  auto child2_info =
-      CreateShellSurfaceHolder(buffer_size, parent_info->shell_surface());
-  auto child3_info =
-      CreateShellSurfaceHolder(buffer_size, parent_info->shell_surface());
-  EXPECT_EQ(parent_info->shell_surface()->GetWidget()->GetNativeWindow(),
-            wm::GetTransientParent(
-                child1_info->shell_surface()->GetWidget()->GetNativeWindow()));
-  EXPECT_EQ(parent_info->shell_surface()->GetWidget()->GetNativeWindow(),
-            wm::GetTransientParent(
-                child2_info->shell_surface()->GetWidget()->GetNativeWindow()));
-  EXPECT_EQ(parent_info->shell_surface()->GetWidget()->GetNativeWindow(),
-            wm::GetTransientParent(
-                child3_info->shell_surface()->GetWidget()->GetNativeWindow()));
+  auto parent_shell_surface =
+      test::ShellSurfaceBuilder(buffer_size).BuildShellSurface();
 
-  parent_info.reset();
+  auto child1_shell_surface = test::ShellSurfaceBuilder(buffer_size)
+                                  .SetParent(parent_shell_surface.get())
+                                  .BuildShellSurface();
+  auto child2_shell_surface = test::ShellSurfaceBuilder(buffer_size)
+                                  .SetParent(parent_shell_surface.get())
+                                  .BuildShellSurface();
+  auto child3_shell_surface = test::ShellSurfaceBuilder(buffer_size)
+                                  .SetParent(parent_shell_surface.get())
+                                  .BuildShellSurface();
+
+  EXPECT_EQ(parent_shell_surface->GetWidget()->GetNativeWindow(),
+            wm::GetTransientParent(
+                child1_shell_surface->GetWidget()->GetNativeWindow()));
+  EXPECT_EQ(parent_shell_surface->GetWidget()->GetNativeWindow(),
+            wm::GetTransientParent(
+                child2_shell_surface->GetWidget()->GetNativeWindow()));
+  EXPECT_EQ(parent_shell_surface->GetWidget()->GetNativeWindow(),
+            wm::GetTransientParent(
+                child3_shell_surface->GetWidget()->GetNativeWindow()));
+  parent_shell_surface.reset();
 }
 
 TEST_F(ShellSurfaceTest, Maximize) {
@@ -341,14 +347,13 @@ TEST_F(ShellSurfaceTest, SetTitle) {
   std::unique_ptr<Surface> surface(new Surface);
   std::unique_ptr<ShellSurface> shell_surface(new ShellSurface(surface.get()));
 
-  shell_surface->SetTitle(base::string16(base::ASCIIToUTF16("test")));
+  shell_surface->SetTitle(std::u16string(u"test"));
   surface->Attach(buffer.get());
   surface->Commit();
 
   // NativeWindow's title is used within the overview mode, so it should
   // have the specified title.
-  EXPECT_EQ(base::ASCIIToUTF16("test"),
-            shell_surface->GetWidget()->GetNativeWindow()->GetTitle());
+  EXPECT_EQ(u"test", shell_surface->GetWidget()->GetNativeWindow()->GetTitle());
   // The titlebar shouldn't show the title.
   EXPECT_FALSE(
       shell_surface->GetWidget()->widget_delegate()->ShouldShowWindowTitle());
@@ -477,7 +482,7 @@ TEST_F(ShellSurfaceTest, EmulateOverrideRedirect) {
   // manager.
   EXPECT_TRUE(ash::WindowState::Get(child_window)->allow_set_bounds_direct());
   EXPECT_EQ(ash::kShellWindowId_ShelfBubbleContainer,
-            child_window->parent()->id());
+            child_window->parent()->GetId());
 
   // NONE/SHADOW frame type should work on override redirect.
   child_surface->SetFrame(SurfaceFrameType::SHADOW);
@@ -824,6 +829,45 @@ TEST_F(ShellSurfaceTest, ConfigureCallback) {
   EXPECT_TRUE(is_resizing);
 }
 
+TEST_F(ShellSurfaceTest, CreateMinimizedWindow) {
+  // Must be before shell_surface so it outlives it, for shell_surface's
+  // destructor calls Configure() referencing these 4 variables.
+  gfx::Size suggested_size;
+  chromeos::WindowStateType has_state_type = chromeos::WindowStateType::kNormal;
+  bool is_resizing = false;
+  bool is_active = false;
+
+  std::unique_ptr<Surface> surface(new Surface);
+  std::unique_ptr<ShellSurface> shell_surface(new ShellSurface(surface.get()));
+
+  shell_surface->set_configure_callback(base::BindRepeating(
+      &Configure, base::Unretained(&suggested_size),
+      base::Unretained(&has_state_type), base::Unretained(&is_resizing),
+      base::Unretained(&is_active)));
+
+  gfx::Rect geometry(0, 0, 1, 1);
+  shell_surface->SetGeometry(geometry);
+
+  // Commit without contents should result in a configure callback with empty
+  // suggested size as a mechanims to ask the client size itself.
+  surface->Commit();
+  EXPECT_TRUE(suggested_size.IsEmpty());
+
+  // Geometry should not be committed until surface has contents.
+  EXPECT_TRUE(shell_surface->CalculatePreferredSize().IsEmpty());
+
+  shell_surface->Minimize();
+  shell_surface->AcknowledgeConfigure(0);
+  // Commit without contents should result in a configure callback with empty
+  // suggested size as a mechanims to ask the client size itself.
+  surface->Commit();
+
+  EXPECT_TRUE(shell_surface->GetWidget());
+  EXPECT_TRUE(shell_surface->GetWidget()->IsMinimized());
+  EXPECT_TRUE(suggested_size.IsEmpty());
+  EXPECT_EQ(geometry.size(), shell_surface->CalculatePreferredSize());
+}
+
 TEST_F(ShellSurfaceTest, ToggleFullscreen) {
   gfx::Size buffer_size(256, 256);
   std::unique_ptr<Buffer> buffer(
@@ -897,7 +941,7 @@ TEST_F(ShellSurfaceTest, CycleSnap) {
   EXPECT_EQ(buffer_size,
             shell_surface->GetWidget()->GetWindowBoundsInScreen().size());
 
-  ash::WMEvent event(ash::WM_EVENT_CYCLE_SNAP_LEFT);
+  ash::WMEvent event(ash::WM_EVENT_CYCLE_SNAP_PRIMARY);
   aura::Window* window = shell_surface->GetWidget()->GetNativeWindow();
 
   // Enter snapped mode.
@@ -973,7 +1017,7 @@ TEST_F(ShellSurfaceTest, Popup) {
 
   // Verify that created shell surface is popup and has capture.
   EXPECT_EQ(aura::client::WINDOW_TYPE_POPUP,
-            popup_shell_surface->GetWidget()->GetNativeWindow()->type());
+            popup_shell_surface->GetWidget()->GetNativeWindow()->GetType());
   EXPECT_EQ(WMHelper::GetInstance()->GetCaptureClient()->GetCaptureWindow(),
             popup_shell_surface->GetWidget()->GetNativeWindow());
 
@@ -997,7 +1041,7 @@ TEST_F(ShellSurfaceTest, Popup) {
   // The capture should be on sub_popup_shell_surface.
   EXPECT_EQ(WMHelper::GetInstance()->GetCaptureClient()->GetCaptureWindow(),
             target);
-  EXPECT_EQ(aura::client::WINDOW_TYPE_POPUP, target->type());
+  EXPECT_EQ(aura::client::WINDOW_TYPE_POPUP, target->GetType());
 
   {
     // Mouse is on the top most popup.
@@ -1071,7 +1115,7 @@ TEST_F(ShellSurfaceTest, PopupWithInputRegion) {
 
   // Verify that created shell surface is popup and has capture.
   EXPECT_EQ(aura::client::WINDOW_TYPE_POPUP,
-            popup_shell_surface->GetWidget()->GetNativeWindow()->type());
+            popup_shell_surface->GetWidget()->GetNativeWindow()->GetType());
   EXPECT_EQ(WMHelper::GetInstance()->GetCaptureClient()->GetCaptureWindow(),
             popup_shell_surface->GetWidget()->GetNativeWindow());
 
@@ -1246,33 +1290,25 @@ TEST_F(ShellSurfaceTest, CaptionWithPopup) {
 }
 
 TEST_F(ShellSurfaceTest, SkipImeProcessingPropagateToSurface) {
-  gfx::Size buffer_size(256, 256);
-  auto buffer = std::make_unique<Buffer>(
-      exo_test_helper()->CreateGpuMemoryBuffer(buffer_size));
-  auto surface = std::make_unique<Surface>();
-  auto shell_surface = std::make_unique<ShellSurface>(surface.get());
-
-  surface->Attach(buffer.get());
-  surface->Commit();
+  std::unique_ptr<ShellSurface> shell_surface =
+      test::ShellSurfaceBuilder({256, 256}).BuildShellSurface();
   shell_surface->GetWidget()->SetBounds(gfx::Rect(0, 0, 256, 256));
   shell_surface->OnSetFrame(SurfaceFrameType::NORMAL);
 
   aura::Window* window = shell_surface->GetWidget()->GetNativeWindow();
   ASSERT_FALSE(window->GetProperty(aura::client::kSkipImeProcessing));
-  ASSERT_FALSE(
-      surface->window()->GetProperty(aura::client::kSkipImeProcessing));
+  ASSERT_FALSE(shell_surface->root_surface()->window()->GetProperty(
+      aura::client::kSkipImeProcessing));
 
   window->SetProperty(aura::client::kSkipImeProcessing, true);
   EXPECT_TRUE(window->GetProperty(aura::client::kSkipImeProcessing));
-  EXPECT_TRUE(surface->window()->GetProperty(aura::client::kSkipImeProcessing));
+  EXPECT_TRUE(shell_surface->root_surface()->window()->GetProperty(
+      aura::client::kSkipImeProcessing));
 }
 
 TEST_F(ShellSurfaceTest, NotifyLeaveEnter) {
-  gfx::Size buffer_size(256, 256);
-  auto buffer = std::make_unique<Buffer>(
-      exo_test_helper()->CreateGpuMemoryBuffer(buffer_size));
-  auto surface = std::make_unique<Surface>();
-  auto shell_surface = std::make_unique<ShellSurface>(surface.get());
+  std::unique_ptr<ShellSurface> shell_surface =
+      test::ShellSurfaceBuilder({256, 256}).SetNoCommit().BuildShellSurface();
 
   auto func = [](int64_t* old_display_id, int64_t* new_display_id,
                  int64_t old_id, int64_t new_id) {
@@ -1284,13 +1320,12 @@ TEST_F(ShellSurfaceTest, NotifyLeaveEnter) {
 
   int64_t old_display_id = 0, new_display_id = 0;
 
-  surface->set_leave_enter_callback(
+  shell_surface->root_surface()->set_leave_enter_callback(
       base::BindRepeating(func, &old_display_id, &new_display_id));
-  ;
+
   // Creating a new shell surface should notify on which display
   // it is created.
-  surface->Attach(buffer.get());
-  surface->Commit();
+  shell_surface->root_surface()->Commit();
   EXPECT_EQ(display::kInvalidDisplayId, old_display_id);
   EXPECT_EQ(display::Screen::GetScreen()->GetPrimaryDisplay().id(),
             new_display_id);
@@ -1328,15 +1363,10 @@ TEST_F(ShellSurfaceTest, NotifyLeaveEnter) {
 // set_server_start_resize is called, and the resize shadow is created for the
 // window.
 TEST_F(ShellSurfaceTest, ServerStartResize) {
-  gfx::Size buffer_size(64, 64);
-  std::unique_ptr<Buffer> buffer(
-      new Buffer(exo_test_helper()->CreateGpuMemoryBuffer(buffer_size)));
-  std::unique_ptr<Surface> surface(new Surface);
-  std::unique_ptr<ShellSurface> shell_surface(new ShellSurface(surface.get()));
+  std::unique_ptr<ShellSurface> shell_surface =
+      test::ShellSurfaceBuilder({64, 64}).SetNoCommit().BuildShellSurface();
   shell_surface->OnSetServerStartResize();
-
-  surface->Attach(buffer.get());
-  surface->Commit();
+  shell_surface->root_surface()->Commit();
   ASSERT_TRUE(shell_surface->GetWidget());
 
   auto* widget = shell_surface->GetWidget();
@@ -1369,14 +1399,12 @@ TEST_F(ShellSurfaceTest, PropertyResolverTest) {
     TestPropertyResolver() = default;
     ~TestPropertyResolver() override = default;
     void PopulateProperties(
-        const std::string& app_id,
-        const std::string& startup_id,
-        bool for_creation,
+        const Params& params,
         ui::PropertyHandler& out_properties_container) override {
-      if (expected_app_id == app_id) {
+      if (expected_app_id == params.app_id) {
         out_properties_container.AcquireAllPropertiesFrom(
-            std::move(for_creation ? properties_for_creation
-                                   : properties_after_creation));
+            std::move(params.for_creation ? properties_for_creation
+                                          : properties_after_creation));
       }
     }
     std::string expected_app_id;
@@ -1443,6 +1471,130 @@ TEST_F(ShellSurfaceTest, PropertyResolverTest) {
     EXPECT_EQ(2, shell_surface->GetWidget()->GetNativeWindow()->GetProperty(
                      ash::kShelfItemTypeKey));
   }
+}
+
+TEST_F(ShellSurfaceTest, Overlay) {
+  auto shell_surface =
+      test::ShellSurfaceBuilder({100, 100}).BuildShellSurface();
+  shell_surface->GetWidget()->GetNativeWindow()->SetProperty(
+      aura::client::kSkipImeProcessing, true);
+
+  EXPECT_FALSE(shell_surface->HasOverlay());
+
+  auto textfield = std::make_unique<views::Textfield>();
+  auto* textfield_ptr = textfield.get();
+
+  ShellSurfaceBase::OverlayParams params(std::move(textfield));
+  shell_surface->AddOverlay(std::move(params));
+  EXPECT_TRUE(shell_surface->HasOverlay());
+  EXPECT_NE(shell_surface->GetWidget()->GetFocusManager()->GetFocusedView(),
+            textfield_ptr);
+
+  EXPECT_TRUE(shell_surface->GetWidget()->widget_delegate()->CanResize());
+  EXPECT_EQ(gfx::Size(100, 100), shell_surface->overlay_widget_for_testing()
+                                     ->GetWindowBoundsInScreen()
+                                     .size());
+
+  ui::test::EventGenerator* generator = GetEventGenerator();
+  generator->PressKey(ui::VKEY_X, 0);
+  generator->ReleaseKey(ui::VKEY_X, 0);
+  EXPECT_EQ(textfield_ptr->GetText(), u"");
+
+  generator->MoveMouseToCenterOf(shell_surface->GetWidget()->GetNativeWindow());
+  generator->ClickLeftButton();
+
+  // Test normal key input, which should go through IME.
+  EXPECT_EQ(shell_surface->GetWidget()->GetFocusManager()->GetFocusedView(),
+            textfield_ptr);
+  generator->PressKey(ui::VKEY_X, 0);
+  generator->ReleaseKey(ui::VKEY_X, 0);
+  EXPECT_EQ(textfield_ptr->GetText(), u"x");
+  EXPECT_TRUE(textfield_ptr->GetSelectedText().empty());
+
+  // Controls (Select all) should work.
+  generator->PressKey(ui::VKEY_A, ui::EF_CONTROL_DOWN);
+  generator->ReleaseKey(ui::VKEY_A, ui::EF_CONTROL_DOWN);
+
+  EXPECT_EQ(textfield_ptr->GetText(), u"x");
+  EXPECT_EQ(textfield_ptr->GetSelectedText(), u"x");
+
+  auto* widget = ash::TestWidgetBuilder()
+                     .SetBounds(gfx::Rect(200, 200))
+                     .BuildOwnedByNativeWidget();
+  ASSERT_TRUE(widget->IsActive());
+
+  generator->PressKey(ui::VKEY_Y, 0);
+  generator->ReleaseKey(ui::VKEY_Y, 0);
+
+  EXPECT_EQ(textfield_ptr->GetText(), u"x");
+  EXPECT_EQ(textfield_ptr->GetSelectedText(), u"x");
+
+  // Re-activate the surface and make sure that the overlay can still handle
+  // keys.
+  shell_surface->GetWidget()->Activate();
+  // The current text will be replaced with new character because
+  // the text is selected.
+  generator->PressKey(ui::VKEY_Y, 0);
+  generator->ReleaseKey(ui::VKEY_Y, 0);
+  EXPECT_EQ(textfield_ptr->GetText(), u"y");
+  EXPECT_TRUE(textfield_ptr->GetSelectedText().empty());
+}
+
+TEST_F(ShellSurfaceTest, OverlayOverlapsFrame) {
+  auto shell_surface =
+      test::ShellSurfaceBuilder({100, 100}).BuildShellSurface();
+  shell_surface->GetWidget()->GetNativeWindow()->SetProperty(
+      aura::client::kSkipImeProcessing, true);
+  shell_surface->OnSetFrame(SurfaceFrameType::NORMAL);
+
+  EXPECT_FALSE(shell_surface->HasOverlay());
+
+  ShellSurfaceBase::OverlayParams params(std::make_unique<views::View>());
+  params.overlaps_frame = false;
+  shell_surface->AddOverlay(std::move(params));
+  EXPECT_TRUE(shell_surface->HasOverlay());
+
+  {
+    gfx::Size overlay_size =
+        shell_surface->GetWidget()->GetWindowBoundsInScreen().size();
+    overlay_size.set_height(overlay_size.height() - views::kCaptionButtonWidth);
+    EXPECT_EQ(overlay_size, shell_surface->overlay_widget_for_testing()
+                                ->GetWindowBoundsInScreen()
+                                .size());
+  }
+
+  shell_surface->OnSetFrame(SurfaceFrameType::NONE);
+  {
+    gfx::Size overlay_size =
+        shell_surface->GetWidget()->GetWindowBoundsInScreen().size();
+    EXPECT_EQ(overlay_size, shell_surface->overlay_widget_for_testing()
+                                ->GetWindowBoundsInScreen()
+                                .size());
+  }
+}
+
+TEST_F(ShellSurfaceTest, OverlayCanResize) {
+  auto shell_surface =
+      test::ShellSurfaceBuilder({100, 100}).BuildShellSurface();
+  shell_surface->GetWidget()->GetNativeWindow()->SetProperty(
+      aura::client::kSkipImeProcessing, true);
+  shell_surface->OnSetFrame(SurfaceFrameType::NORMAL);
+
+  EXPECT_FALSE(shell_surface->HasOverlay());
+  {
+    ShellSurfaceBase::OverlayParams params(std::make_unique<views::View>());
+    params.can_resize = false;
+    shell_surface->AddOverlay(std::move(params));
+  }
+  EXPECT_FALSE(shell_surface->GetWidget()->widget_delegate()->CanResize());
+
+  shell_surface->RemoveOverlay();
+  {
+    ShellSurfaceBase::OverlayParams params(std::make_unique<views::View>());
+    params.can_resize = true;
+    shell_surface->AddOverlay(std::move(params));
+  }
+  EXPECT_TRUE(shell_surface->GetWidget()->widget_delegate()->CanResize());
 }
 
 }  // namespace exo

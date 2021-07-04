@@ -57,6 +57,9 @@ class URLLoaderFactoryParamsHelper {
 
   // Creates URLLoaderFactoryParams to be used by |isolated_world_origin| hosted
   // within the |frame|.
+  //
+  // TODO(https://crbug.com/1098410): Remove the CreateForIsolatedWorld method
+  // once Chrome Platform Apps are gone.
   static network::mojom::URLLoaderFactoryParamsPtr CreateForIsolatedWorld(
       RenderFrameHostImpl* frame,
       const url::Origin& isolated_world_origin,
@@ -77,15 +80,10 @@ class URLLoaderFactoryParamsHelper {
       const net::IsolationInfo& isolation_info,
       mojo::PendingRemote<network::mojom::CrossOriginEmbedderPolicyReporter>
           coep_reporter,
-      mojo::PendingRemote<network::mojom::AuthenticationAndCertificateObserver>
-          auth_cert_observer,
+      mojo::PendingRemote<network::mojom::URLLoaderNetworkServiceObserver>
+          url_loader_network_observer,
+      mojo::PendingRemote<network::mojom::DevToolsObserver> devtools_observer,
       base::StringPiece debug_tag);
-
-  // TODO(https://crbug.com/1114822): CreateForRendererProcess is unused and can
-  // be removed.  (It is probably prudent to wait with the removal until M90
-  // reaches the Stable channel.)
-  static network::mojom::URLLoaderFactoryParamsPtr CreateForRendererProcess(
-      RenderProcessHost* process);
 
  private:
   // Only static methods.

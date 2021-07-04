@@ -75,6 +75,9 @@ public class DefaultBrowserPromoUtilsTest {
         List<ResolveInfo> infoList = new ArrayList<>();
         ShadowPackageManager packageManager =
                 Shadows.shadowOf(RuntimeEnvironment.application.getPackageManager());
+        // Setting android_manifest in the junit_binary build rule causes the current package to
+        // appear in the PackageManager.
+        packageManager.deletePackage(RuntimeEnvironment.application.getPackageName());
 
         DefaultBrowserPromoDeps deps = DefaultBrowserPromoDeps.getInstance();
         infoList.add(createResolveInfo(DefaultBrowserPromoDeps.CHROME_STABLE_PACKAGE_NAME, 1));
@@ -146,8 +149,7 @@ public class DefaultBrowserPromoUtilsTest {
         when(mDeps.getSDKInt()).thenReturn(Build.VERSION_CODES.P);
         when(mDeps.isRoleAvailable(any())).thenCallRealMethod();
         Assert.assertFalse(
-                "Should promo system settings when there is another default browser on P-.",
-                DefaultBrowserPromoUtils.shouldShowPromo(mDeps, null));
+                "Should not promo on P-.", DefaultBrowserPromoUtils.shouldShowPromo(mDeps, null));
     }
 
     // --- prerequisites ---
@@ -173,7 +175,7 @@ public class DefaultBrowserPromoUtilsTest {
     public void testNoPromo_featureDisabled() {
         setDepsMockWithDefaultValues();
         when(mDeps.isFeatureEnabled()).thenReturn(false);
-        Assert.assertFalse("Should not promo when the fearure is disabled.",
+        Assert.assertFalse("Should not promo when the feature is disabled.",
                 DefaultBrowserPromoUtils.shouldShowPromo(mDeps, null));
     }
 

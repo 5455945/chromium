@@ -8,7 +8,8 @@
 #include <string>
 #include <utility>
 
-#include "ash/public/cpp/app_types.h"
+#include "ash/constants/app_types.h"
+#include "ash/public/cpp/app_types_util.h"
 #include "ash/public/cpp/window_properties.h"
 #include "ash/shelf/shelf_window_watcher.h"
 #include "ash/shell.h"
@@ -33,7 +34,7 @@ using DemoModeApp = DemoSessionMetricsRecorder::DemoModeApp;
 // How often to sample.
 constexpr auto kSamplePeriod = base::TimeDelta::FromSeconds(1);
 
-// Redefining chromeos::default_web_apps::kHelpAppId as ash can't depend on
+// Redefining chromeos::preinstalled_web_apps::kHelpAppId as ash can't depend on
 // chrome.
 constexpr char kHelpAppId[] = "nbljnnecbjbmifnoehiemkgefbnpoeak";
 
@@ -48,18 +49,14 @@ constexpr int kMaxPeriodsWithoutActivity =
 DemoModeApp GetAppFromAppId(const std::string& app_id) {
   // Each version of the Highlights app is bucketed into the same value.
   if (app_id == extension_misc::kHighlightsAppId ||
-      app_id == extension_misc::kHighlightsEveAppId ||
-      app_id == extension_misc::kHighlightsNocturneAppId ||
       app_id == extension_misc::kHighlightsAtlasAppId) {
     return DemoModeApp::kHighlights;
   }
 
   // Each version of the Screensaver app is bucketed into the same value.
   if (app_id == extension_misc::kScreensaverAppId ||
-      app_id == extension_misc::kScreensaverEveAppId ||
-      app_id == extension_misc::kScreensaverNocturneAppId ||
       app_id == extension_misc::kScreensaverAtlasAppId ||
-      app_id == extension_misc::kScreensaverKukuiAppId) {
+      app_id == extension_misc::kScreensaverKraneZdksAppId) {
     return DemoModeApp::kScreensaver;
   }
 
@@ -75,8 +72,14 @@ DemoModeApp GetAppFromAppId(const std::string& app_id) {
     return DemoModeApp::kCalendar;
   if (app_id == extension_misc::kGoogleDocsDemoAppId)
     return DemoModeApp::kGoogleDocsChromeApp;
+  if (app_id == extension_misc::kGoogleDocsPwaAppId)
+    return DemoModeApp::kGoogleDocsPwa;
+  if (app_id == extension_misc::kGoogleMeetPwaAppId)
+    return DemoModeApp::kGoogleMeetPwa;
   if (app_id == extension_misc::kGoogleSheetsDemoAppId)
     return DemoModeApp::kGoogleSheetsChromeApp;
+  if (app_id == extension_misc::kGoogleSheetsPwaAppId)
+    return DemoModeApp::kGoogleSheetsPwa;
   if (app_id == extension_misc::kGoogleSlidesDemoAppId)
     return DemoModeApp::kGoogleSlidesChromeApp;
   if (app_id == kHelpAppId)
@@ -87,6 +90,19 @@ DemoModeApp GetAppFromAppId(const std::string& app_id) {
     return DemoModeApp::kWebStore;
   if (app_id == extension_misc::kYoutubeAppId)
     return DemoModeApp::kYouTube;
+  if (app_id == extension_misc::kYoutubePwaAppId)
+    return DemoModeApp::kYoutubePwa;
+  if (app_id == extension_misc::kSpotifyAppId)
+    return DemoModeApp::kSpotify;
+  if (app_id == extension_misc::kBeFunkyAppId)
+    return DemoModeApp::kBeFunky;
+  if (app_id == extension_misc::kClipchampAppId)
+    return DemoModeApp::kClipchamp;
+  if (app_id == extension_misc::kGeForceNowAppId)
+    return DemoModeApp::kGeForceNow;
+  if (app_id == extension_misc::kZoomAppId)
+    return DemoModeApp::kZoom;
+
   return DemoModeApp::kOtherChromeApp;
 }
 
@@ -116,9 +132,11 @@ DemoModeApp GetAppFromPackageName(const std::string& package_name) {
   if (package_name == "com.chucklefish.stardewvalley" ||
       package_name == "com.chucklefish.stardewvalleydemo")
     return DemoModeApp::kStardewValley;
-  if (package_name == "com.nexstreaming.app.kinemasterfree" ||
-      package_name == "com.nexstreaming.app.kinemasterfree.demo.chromebook")
-    return DemoModeApp::kKinemaster;
+  if (package_name == "com.nexstreaming.app.kinemasterfree" ||  // nocheck
+      package_name ==
+          "com.nexstreaming.app.kinemasterfree.demo.chromebook") {  // nocheck
+    return DemoModeApp::kKinemaster;                                // nocheck
+  }
   if (package_name == "com.pixlr.express" ||
       package_name == "com.pixlr.express.chromebook.demo")
     return DemoModeApp::kPixlr;
@@ -370,7 +388,7 @@ void DemoSessionMetricsRecorder::OnWindowActivated(ActivationReason reason,
     return;
 
   // Don't count popup windows.
-  if (gained_active->type() != aura::client::WINDOW_TYPE_NORMAL)
+  if (gained_active->GetType() != aura::client::WINDOW_TYPE_NORMAL)
     return;
 
   AppType app_type = GetAppType(gained_active);
@@ -450,7 +468,7 @@ void DemoSessionMetricsRecorder::TakeSampleOrPause() {
     return;
   }
 
-  DemoModeApp app = window->type() == aura::client::WINDOW_TYPE_NORMAL
+  DemoModeApp app = window->GetType() == aura::client::WINDOW_TYPE_NORMAL
                         ? GetAppFromWindow(window)
                         : DemoModeApp::kOtherWindow;
   RecordActiveAppSample(app);

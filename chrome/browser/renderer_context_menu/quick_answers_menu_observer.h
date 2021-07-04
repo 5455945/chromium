@@ -20,9 +20,7 @@ class QuickAnswersController;
 class RenderViewContextMenuProxy;
 
 // A class that implements the quick answers menu.
-class QuickAnswersMenuObserver
-    : public RenderViewContextMenuObserver,
-      public chromeos::quick_answers::QuickAnswersDelegate {
+class QuickAnswersMenuObserver : public RenderViewContextMenuObserver {
  public:
   QuickAnswersMenuObserver(const QuickAnswersMenuObserver&) = delete;
   QuickAnswersMenuObserver& operator=(const QuickAnswersMenuObserver&) = delete;
@@ -38,12 +36,6 @@ class QuickAnswersMenuObserver
       const gfx::Rect& bounds_in_screen) override;
   void OnMenuClosed() override;
 
-  // QuickAnswersDelegate implementation.
-  void OnQuickAnswerReceived(
-      std::unique_ptr<chromeos::quick_answers::QuickAnswer> answer) override {}
-  void OnEligibilityChanged(bool eligible) override;
-  void OnNetworkError() override {}
-
   void SetQuickAnswerControllerForTesting(
       ash::QuickAnswersController* controller) {
     quick_answers_controller_ = controller;
@@ -53,19 +45,12 @@ class QuickAnswersMenuObserver
   std::string GetDeviceLanguage();
   void OnTextSurroundingSelectionAvailable(
       const std::string& selected_text,
-      const base::string16& surrounding_text,
+      const std::u16string& surrounding_text,
       uint32_t start_offset,
       uint32_t end_offset);
 
   // The interface to add a context-menu item and update it.
   RenderViewContextMenuProxy* proxy_;
-
-  std::unique_ptr<chromeos::quick_answers::QuickAnswersClient>
-      quick_answers_client_;
-
-  // Whether the feature is enabled and all eligibility criteria are met (
-  // locale, consents, etc).
-  bool is_eligible_ = false;
 
   gfx::Rect bounds_in_screen_;
 

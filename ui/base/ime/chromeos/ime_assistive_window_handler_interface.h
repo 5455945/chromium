@@ -7,8 +7,9 @@
 
 #include <stdint.h>
 
+#include <string>
+
 #include "base/component_export.h"
-#include "base/strings/string16.h"
 #include "ui/gfx/geometry/rect.h"
 
 namespace ui {
@@ -28,6 +29,8 @@ struct Bounds {
   gfx::Rect caret;
   // Position of the autocorrect span, empty if not present.
   gfx::Rect autocorrect;
+  // Position of the current composition text in screen
+  gfx::Rect composition_text;
 };
 
 // A interface to handle the assistive windows related method call.
@@ -48,12 +51,12 @@ class COMPONENT_EXPORT(UI_BASE_IME_CHROMEOS)
       const ui::ime::AssistiveWindowButton& button,
       bool highlighted) {}
 
-  virtual void AcceptSuggestion(const base::string16& suggestion) {}
+  virtual void AcceptSuggestion(const std::u16string& suggestion) {}
 
   virtual void HideSuggestion() {}
 
   // Called to get the current suggestion text.
-  virtual base::string16 GetSuggestionText() const = 0;
+  virtual std::u16string GetSuggestionText() const = 0;
 
   // Called to get length of the confirmed part of suggestion text.
   virtual size_t GetConfirmedLength() const = 0;

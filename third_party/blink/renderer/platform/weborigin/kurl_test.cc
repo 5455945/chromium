@@ -35,12 +35,13 @@
 
 #include <stdint.h>
 
-#include "base/stl_util.h"
+#include "base/cxx17_backports.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread.h"
 #include "third_party/blink/renderer/platform/weborigin/scheme_registry.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "url/gurl.h"
 #include "url/gurl_abstract_tests.h"
 #include "url/url_util.h"
 
@@ -773,10 +774,12 @@ TEST(KURLTest, DeepCopyInnerURL) {
 
 TEST(KURLTest, LastPathComponent) {
   const KURL url1("http://host/path/to/file.txt");
+  EXPECT_TRUE(url1.IsValid());
   EXPECT_EQ("file.txt", url1.LastPathComponent());
 
   const KURL invalid_utf8("http://a@9%aa%:/path/to/file.txt");
-  EXPECT_EQ(String(), invalid_utf8.LastPathComponent());
+  EXPECT_FALSE(invalid_utf8.IsValid());
+  EXPECT_EQ("", invalid_utf8.LastPathComponent());
 }
 
 TEST(KURLTest, IsHierarchical) {
@@ -785,6 +788,7 @@ TEST(KURLTest, IsHierarchical) {
   // url never has a valid hostname (the inner URL does)."
   const char* standard_urls[] = {
       "http://host/path/to/file.txt",
+      "http://a@9%aa%:/path/to/file.txt",  // Invalid, but hierarchical.
       "ftp://andrew.cmu.edu/foo",
       "file:///path/to/resource",
       "file://hostname/etc/",
@@ -803,7 +807,6 @@ TEST(KURLTest, IsHierarchical) {
   const char* nonstandard_urls[] = {
       "blob:null/guid-goes-here",
       "blob:http://example.com/guid-goes-here",
-      "http://a@9%aa%:/path/to/file.txt",
       "about:blank://hostname",
       "about:blank",
       "javascript:void(0);",
@@ -824,7 +827,7 @@ TEST(KURLTest, PathAfterLastSlash) {
   EXPECT_EQ(20u, url1.PathAfterLastSlash());
 
   KURL invalid_utf8("http://a@9%aa%:/path/to/file.txt");
-  EXPECT_EQ(0u, invalid_utf8.PathAfterLastSlash());
+  EXPECT_EQ(22u, invalid_utf8.PathAfterLastSlash());
 }
 
 TEST(KURLTest, ProtocolIsInHTTPFamily) {
@@ -1061,18 +1064,46 @@ TEST(KURLTest, SetFileProtocolToNonSpecial) {
   EXPECT_EQ(url.GetPath(), "///path");
 }
 
+TEST(KURLTest, InvalidKURLToGURL) {
+  // This contains an invalid percent escape (%T%) and also a valid
+  // percent escape that's not 7-bit ascii (%ae), so that the unescaped
+  // host contains both an invalid percent escape and invalid UTF-8.
+  KURL kurl("http://%T%Ae");
+  EXPECT_FALSE(kurl.IsValid());
+
+  // KURL returns empty strings for components on invalid urls.
+  EXPECT_EQ(kurl.Protocol(), "");
+  EXPECT_EQ(kurl.Host(), "");
+
+  // This passes the original internal url to GURL, check that it arrives
+  // in an internally self-consistent state.
+  GURL gurl = kurl;
+  EXPECT_FALSE(gurl.is_valid());
+  EXPECT_TRUE(gurl.SchemeIs(url::kHttpScheme));
+
+  // GURL exposes host for invalid hosts. The invalid percent escape
+  // becomes an escaped percent sign (%25), and the invalid UTF-8
+  // character becomes REPLACEMENT CHARACTER' (U+FFFD) encoded as UTF-8.
+  EXPECT_EQ(gurl.host_piece(), "%25t%EF%BF%BD");
+}
+
 enum class PortIsValid {
   // The constructor does strict checking. Ports which are considered valid by
   // the constructor are kAlways valid.
   kAlways,
 
   // SetHostAndPort() truncates to the initial numerical prefix, and then does
-  // strict checking. kInSetHostAndPort is used for ports which are considered
-  // valid by SetHostAndPort() but not by the constructor. In this case, the
-  // expected value is the same as for SetPort().
+  // strict checking. However, unlike the constructor, invalid ports are
+  // ignored.
+  //
+  // kInSetHostAndPort is used for ports which are considered valid by
+  // SetHostAndPort() but not by the constructor. In this case, the expected
+  // value is the same as for SetPort().
   kInSetHostAndPort,
 
-  // SetPort() considers all input valid.
+  // SetPort() truncates to the initial numerical prefix, and then truncates
+  // the numerical port value to a uint16_t. If such a prefix is empty, then
+  // the call is ignored.
   kInSetPort
 };
 
@@ -1083,6 +1114,9 @@ struct PortTestCase {
   const PortIsValid is_valid;
 };
 
+// port used if SetHostAndPort/SetPort is a no-op
+constexpr int kNoopPort = 8888;
+
 // The tested behaviour matches the implementation. It doesn't necessarily match
 // the URL Standard.
 const PortTestCase port_test_cases[] = {
@@ -1092,18 +1126,20 @@ const PortTestCase port_test_cases[] = {
     {"0", 0, 0, PortIsValid::kAlways},
     {"1", 1, 1, PortIsValid::kAlways},
     {"00000000000000000000000000000000000443", 443, 443, PortIsValid::kAlways},
-    {"+80", 0, 8888, PortIsValid::kInSetHostAndPort},
-    {"-80", 0, 8888, PortIsValid::kInSetHostAndPort},
+    {"+80", 0, kNoopPort, PortIsValid::kInSetPort},
+    {"-80", 0, kNoopPort, PortIsValid::kInSetPort},
     {"443e0", 0, 443, PortIsValid::kInSetHostAndPort},
     {"0x80", 0, 0, PortIsValid::kInSetHostAndPort},
     {"8%30", 0, 8, PortIsValid::kInSetHostAndPort},
-    {" 443", 0, 8888, PortIsValid::kInSetHostAndPort},
+    {" 443", 0, kNoopPort, PortIsValid::kInSetPort},
     {"443 ", 0, 443, PortIsValid::kInSetHostAndPort},
-    {":443", 0, 8888, PortIsValid::kInSetHostAndPort},
-    {"65535", 65535, 65535, PortIsValid::kAlways},
+    {":443", 0, kNoopPort, PortIsValid::kInSetPort},
     {"65534", 65534, 65534, PortIsValid::kAlways},
+    {"65535", 65535, 65535, PortIsValid::kAlways},
+    {"65535junk", 0, 65535, PortIsValid::kInSetHostAndPort},
     {"65536", 0, 0, PortIsValid::kInSetPort},
     {"65537", 0, 1, PortIsValid::kInSetPort},
+    {"65537junk", 0, 1, PortIsValid::kInSetPort},
     {"2147483647", 0, 65535, PortIsValid::kInSetPort},
     {"2147483648", 0, 0, PortIsValid::kInSetPort},
     {"2147483649", 0, 1, PortIsValid::kInSetPort},
@@ -1147,7 +1183,7 @@ TEST_P(KURLPortTest, ConstructRelative) {
 
 TEST_P(KURLPortTest, SetPort) {
   const auto& param = GetParam();
-  KURL url("http://a:8888/");
+  KURL url("http://a:" + String::Number(kNoopPort) + "/");
   url.SetPort(param.input);
   EXPECT_EQ(url.Port(), param.set_port_output);
   EXPECT_EQ(url.IsValid(), true);
@@ -1155,24 +1191,22 @@ TEST_P(KURLPortTest, SetPort) {
 
 TEST_P(KURLPortTest, SetHostAndPort) {
   const auto& param = GetParam();
-  KURL url("http://a:8888/");
+  KURL url("http://a:" + String::Number(kNoopPort) + "/");
   url.SetHostAndPort(String("a:") + param.input);
   switch (param.is_valid) {
     case PortIsValid::kAlways:
       EXPECT_EQ(url.Port(), param.constructor_output);
-      EXPECT_EQ(url.IsValid(), true);
       break;
 
     case PortIsValid::kInSetHostAndPort:
       EXPECT_EQ(url.Port(), param.set_port_output);
-      EXPECT_EQ(url.IsValid(), true);
       break;
 
     case PortIsValid::kInSetPort:
-      EXPECT_EQ(url.Port(), param.constructor_output);
-      EXPECT_EQ(url.IsValid(), false);
+      EXPECT_EQ(url.Port(), kNoopPort);
       break;
   }
+  EXPECT_EQ(url.IsValid(), true);
 }
 
 INSTANTIATE_TEST_SUITE_P(All,

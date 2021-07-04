@@ -42,7 +42,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Login.BrowserShutdownTime" units="ms"
-    expires_after="2021-08-09">
+    expires_after="2021-12-12">
   <owner>xiyuan@chromium.org</owner>
   <summary>
     Tracks the browser process shutdown time from when SIGTERM is sent to the
@@ -77,7 +77,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Login.FailureReason" enum="LoginFailureReason"
-    expires_after="2021-08-15">
+    expires_after="2021-12-19">
   <owner>achuith@chromium.org</owner>
   <summary>Chrome OS login failure reason.</summary>
 </histogram>
@@ -92,7 +92,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Login.MountNamespaceCreationSuccess" enum="Boolean"
-    expires_after="2021-08-09">
+    expires_after="2021-10-10">
   <owner>betuls@chromium.org</owner>
   <owner>jorgelo@chromium.org</owner>
   <owner>chromeos-security-core@google.com</owner>
@@ -138,7 +138,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Login.OfflineSuccess.Attempts" units="units"
-    expires_after="2021-07-18">
+    expires_after="2021-11-21">
   <owner>rsorokin@chromium.org</owner>
   <owner>cros-oac@google.com</owner>
   <summary>
@@ -157,7 +157,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Login.PasswordChanged.ReauthReason" enum="LoginReauthReasons"
-    expires_after="2021-07-18">
+    expires_after="2021-11-21">
   <owner>rsorokin@chromium.org</owner>
   <owner>cros-oac@google.com</owner>
   <summary>
@@ -167,7 +167,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Login.PasswordChangeFlow" enum="LoginPasswordChangeFlow"
-    expires_after="2021-08-09">
+    expires_after="2021-10-10">
   <owner>xiyuan@chromium.org</owner>
   <owner>omrilio@chromium.org</owner>
   <summary>
@@ -176,7 +176,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Login.PasswordNotChanged.ReauthReason"
-    enum="LoginReauthReasons" expires_after="2021-07-18">
+    enum="LoginReauthReasons" expires_after="2021-11-21">
   <owner>rsorokin@chromium.org</owner>
   <owner>cros-oac@google.com</owner>
   <summary>
@@ -204,7 +204,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Login.PromptToCompleteLoginTime" units="ms"
-    expires_after="2021-07-11">
+    expires_after="2021-11-14">
   <owner>rsorokin@chromium.org</owner>
   <owner>achuith@chromium.org</owner>
   <owner>cros-oac@google.com</owner>
@@ -214,7 +214,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
   </summary>
 </histogram>
 
-<histogram name="Login.PromptToLoginTime" units="ms" expires_after="2021-07-18">
+<histogram name="Login.PromptToLoginTime" units="ms" expires_after="2021-11-21">
   <owner>elijahtaylor@google.com</owner>
   <owner>yusukes@chromium.org</owner>
   <owner>rsorokin@chromium.org</owner>
@@ -226,7 +226,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Login.SessionExitType" enum="LoginSessionExitType"
-    expires_after="2021-08-22">
+    expires_after="2021-12-26">
   <owner>iby@chromium.org</owner>
   <summary>
     Tracks whether a ChromeOS user was logged out because Chrome repeatedly
@@ -241,13 +241,26 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Login.SuccessReason" enum="LoginSuccessReason"
-    expires_after="2021-08-22">
+    expires_after="2021-12-26">
   <owner>achuith@chromium.org</owner>
   <summary>Chrome OS login success reason.</summary>
 </histogram>
 
+<histogram name="Login.SwitchToFeatureFlagMappingStatus"
+    enum="LoginFeatureFlagMappingStatus" expires_after="2021-11-30">
+  <owner>mnissler@chromium.org</owner>
+  <owner>xiyuan@chromium.org</owner>
+  <summary>
+    Tracks whether switches were mapped to feature flags in session_manager for
+    compatibility. session_manager does this and emits UMA samples when
+    encountering old device settings files that still contain feature
+    configuration in command line switch representation. This data will inform
+    the decision when to remove this compatibility code.
+  </summary>
+</histogram>
+
 <histogram name="Login.TokenCheckResponseTime" units="ms"
-    expires_after="2021-08-09">
+    expires_after="2021-12-12">
   <owner>rsorokin@chromium.org</owner>
   <owner>cros-oac@google.com</owner>
   <summary>
@@ -269,7 +282,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Login.UsersActive28Days" units="users"
-    expires_after="2021-07-04">
+    expires_after="2021-11-07">
   <owner>alemate@chromium.org</owner>
   <owner>achuith@chromium.org</owner>
   <summary>
@@ -279,7 +292,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Login.UsersActiveDaily" units="users"
-    expires_after="2021-07-04">
+    expires_after="2021-11-07">
   <owner>alemate@chromium.org</owner>
   <owner>achuith@chromium.org</owner>
   <summary>
@@ -289,7 +302,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Login.UsersActiveWeekly" units="users"
-    expires_after="2021-08-09">
+    expires_after="2021-12-12">
   <owner>alemate@chromium.org</owner>
   <owner>achuith@chromium.org</owner>
   <summary>
@@ -310,7 +323,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Login.UserType" enum="LoginUserType"
-    expires_after="2021-08-15">
+    expires_after="2021-12-19">
   <owner>cmasone@chromium.org</owner>
   <summary>
     Chrome OS histogram that keeps track of the way a user logs in and whether

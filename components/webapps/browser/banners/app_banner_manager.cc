@@ -5,17 +5,18 @@
 #include "components/webapps/browser/banners/app_banner_manager.h"
 
 #include <algorithm>
+#include <string>
 #include <utility>
 
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
+#include "base/containers/cxx20_erase.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/optional.h"
-#include "base/stl_util.h"
-#include "base/strings/string16.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
+#include "components/back_forward_cache/back_forward_cache_disable.h"
 #include "components/site_engagement/content/site_engagement_service.h"
 #include "components/webapps/browser/banners/app_banner_metrics.h"
 #include "components/webapps/browser/banners/app_banner_settings_helper.h"
@@ -32,6 +33,7 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/installation/installation.mojom.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
@@ -275,7 +277,7 @@ bool AppBannerManager::ShouldDeferToRelatedNonWebApp() const {
   for (const auto& related_app : manifest_.related_applications) {
     if (manifest_.prefer_related_applications &&
         IsSupportedNonWebAppPlatform(
-            related_app.platform.value_or(base::string16()))) {
+            related_app.platform.value_or(std::u16string()))) {
       return true;
     }
     if (IsRelatedNonWebAppInstalled(related_app))
@@ -289,8 +291,8 @@ std::string AppBannerManager::GetAppIdentifier() {
   return manifest_.start_url.spec();
 }
 
-base::string16 AppBannerManager::GetAppName() const {
-  return manifest_.name.value_or(base::string16());
+std::u16string AppBannerManager::GetAppName() const {
+  return manifest_.name.value_or(std::u16string());
 }
 
 std::string AppBannerManager::GetBannerType() {
@@ -304,10 +306,6 @@ bool AppBannerManager::HasSufficientEngagement() const {
 bool AppBannerManager::ShouldBypassEngagementChecks() const {
   return base::CommandLine::ForCurrentProcess()->HasSwitch(
       switches::kBypassAppBannerEngagementChecks);
-}
-
-bool AppBannerManager::IsExternallyInstalledWebApp() {
-  return false;
 }
 
 bool AppBannerManager::ShouldAllowWebAppReplacementInstall() {
@@ -467,6 +465,7 @@ void AppBannerManager::ResetCurrentPageData() {
   validated_url_ = GURL();
   UpdateState(State::INACTIVE);
   SetInstallableWebAppCheckResult(InstallableWebAppCheckResult::kUnknown);
+  install_path_tracker_.Reset();
 }
 
 void AppBannerManager::Terminate() {
@@ -540,6 +539,15 @@ void AppBannerManager::SetInstallableWebAppCheckResult(
     observer.OnInstallableWebAppStatusUpdated();
 }
 
+void AppBannerManager::TrackInstallPath(bool bottom_sheet,
+                                        WebappInstallSource install_source) {
+  install_path_tracker_.TrackInstallPath(bottom_sheet, install_source);
+}
+
+void AppBannerManager::TrackIphWasShown() {
+  install_path_tracker_.TrackIphWasShown();
+}
+
 void AppBannerManager::Stop(InstallableStatusCode code) {
   ReportStatus(code);
 
@@ -595,7 +603,9 @@ void AppBannerManager::DidFinishNavigation(content::NavigationHandle* handle) {
   if (installable_web_app_check_result_ != InstallableWebAppCheckResult::kNo &&
       state_ != State::INACTIVE) {
     content::BackForwardCache::DisableForRenderFrameHost(
-        handle->GetPreviousRenderFrameHostId(), "banners::AppBannerManager");
+        handle->GetPreviousRenderFrameHostId(),
+        back_forward_cache::DisabledReason(
+            back_forward_cache::DisabledReasonId::kAppBannerManager));
   }
 
   if (state_ != State::COMPLETE && state_ != State::INACTIVE)
@@ -640,7 +650,7 @@ void AppBannerManager::DidActivatePortal(
 
 void AppBannerManager::DidUpdateWebManifestURL(
     content::RenderFrameHost* target_frame,
-    const base::Optional<GURL>& manifest_url) {
+    const GURL& manifest_url) {
   GURL url = validated_url_;
   switch (state_) {
     case State::INACTIVE:
@@ -656,7 +666,7 @@ void AppBannerManager::DidUpdateWebManifestURL(
       Terminate();
       FALLTHROUGH;
     case State::COMPLETE:
-      if (manifest_url.has_value()) {
+      if (!manifest_url.is_empty()) {
         // This call resets has_sufficient_engagement_data_. In order to
         // re-compute that, instead of calling RequestAppBanner, DidFinishLoad
         // is called. That method will re-fetch the engagement data and re-set
@@ -730,16 +740,16 @@ bool AppBannerManager::IsRunning() const {
 }
 
 // static
-base::string16 AppBannerManager::GetInstallableWebAppName(
+std::u16string AppBannerManager::GetInstallableWebAppName(
     content::WebContents* web_contents) {
   AppBannerManager* manager = FromWebContents(web_contents);
   if (!manager)
-    return base::string16();
+    return std::u16string();
   switch (manager->installable_web_app_check_result_) {
     case InstallableWebAppCheckResult::kUnknown:
     case InstallableWebAppCheckResult::kNo:
     case InstallableWebAppCheckResult::kNoAlreadyInstalled:
-      return base::string16();
+      return std::u16string();
     case InstallableWebAppCheckResult::kByUserRequest:
     case InstallableWebAppCheckResult::kPromotable:
       return manager->GetAppName();
@@ -870,7 +880,7 @@ void AppBannerManager::ShowBanner() {
 
   // If this is the first time that we are showing the banner for this site,
   // record how long it's been since the first visit.
-  base::Optional<base::Time> did_show_time =
+  absl::optional<base::Time> did_show_time =
       AppBannerSettingsHelper::GetSingleBannerEvent(
           web_contents(), validated_url_, GetAppIdentifier(),
           AppBannerSettingsHelper::APP_BANNER_EVENT_DID_SHOW);

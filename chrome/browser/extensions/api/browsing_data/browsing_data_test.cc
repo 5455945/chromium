@@ -14,7 +14,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/account_reconcilor_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/sync/profile_sync_service_factory.h"
+#include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/sync/sync_ui_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -69,7 +69,7 @@ bool SetGaiaCookieForProfile(Profile* profile) {
             std::move(loop_quit).Run();
           });
   network::mojom::CookieManager* cookie_manager =
-      content::BrowserContext::GetDefaultStoragePartition(profile)
+      profile->GetDefaultStoragePartition()
           ->GetCookieManagerForBrowserProcess();
   cookie_manager->SetCanonicalCookie(
       *cookie, google_url, net::CookieOptions::MakeAllInclusive(),
@@ -97,18 +97,18 @@ IN_PROC_BROWSER_TEST_F(ExtensionBrowsingDataTest, Syncing) {
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile);
   AccountInfo primary_account_info = signin::MakePrimaryAccountAvailable(
-      identity_manager, kPrimaryAccountEmail);
+      identity_manager, kPrimaryAccountEmail, signin::ConsentLevel::kSync);
   AccountInfo secondary_account_info =
       signin::MakeAccountAvailable(identity_manager, kSecondaryAccountEmail);
 
   // Sync is running.
   syncer::SyncService* sync_service =
-      ProfileSyncServiceFactory::GetForProfile(profile);
+      SyncServiceFactory::GetForProfile(profile);
   sync_service->GetUserSettings()->SetSyncRequested(true);
   sync_service->GetUserSettings()->SetFirstSetupComplete(
       syncer::SyncFirstSetupCompleteSource::BASIC_FLOW);
 
-  ASSERT_EQ(sync_ui_util::SYNCED, sync_ui_util::GetStatus(profile));
+  ASSERT_EQ(SyncStatusMessageType::kSynced, GetSyncStatusMessageType(profile));
   // Clear browsing data.
   auto function = base::MakeRefCounted<BrowsingDataRemoveFunction>();
   EXPECT_EQ(NULL, RunFunctionAndReturnSingleResult(
@@ -134,8 +134,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionBrowsingDataTest, SyncError) {
   const char kAccountEmail[] = "account@email.com";
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile);
-  AccountInfo account_info =
-      signin::MakePrimaryAccountAvailable(identity_manager, kAccountEmail);
+  AccountInfo account_info = signin::MakePrimaryAccountAvailable(
+      identity_manager, kAccountEmail, signin::ConsentLevel::kSync);
   signin::UpdatePersistentErrorOfRefreshTokenForAccount(
       identity_manager, account_info.account_id,
       GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
@@ -143,7 +143,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionBrowsingDataTest, SyncError) {
               CREDENTIALS_REJECTED_BY_SERVER));
 
   // Sync is not running.
-  ASSERT_NE(sync_ui_util::SYNCED, sync_ui_util::GetStatus(profile));
+  ASSERT_NE(SyncStatusMessageType::kSynced, GetSyncStatusMessageType(profile));
   // Clear browsing data.
   auto function = base::MakeRefCounted<BrowsingDataRemoveFunction>();
   EXPECT_EQ(NULL, RunFunctionAndReturnSingleResult(

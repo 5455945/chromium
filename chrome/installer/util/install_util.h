@@ -18,13 +18,13 @@
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/macros.h"
-#include "base/optional.h"
 #include "base/strings/string_piece.h"
 #include "base/types/strong_alias.h"
 #include "base/version.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_handle.h"
 #include "chrome/installer/util/util_constants.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class WorkItemList;
 
@@ -171,15 +171,7 @@ class InstallUtil {
 
   // Returns the highest Chrome version that was installed prior to a downgrade,
   // or no value if Chrome was not previously downgraded from a newer version.
-  static base::Optional<base::Version> GetDowngradeVersion();
-
-  // Adds or removes downgrade version registry value. This function should only
-  // be used for Chrome install.
-  static void AddUpdateDowngradeVersionItem(
-      HKEY root,
-      const base::Version& current_version,
-      const base::Version& new_version,
-      WorkItemList* list);
+  static absl::optional<base::Version> GetDowngradeVersion();
 
   // Returns pairs of registry key paths and value names where the enrollment
   // token is stored for machine level user cloud policies. The locations are

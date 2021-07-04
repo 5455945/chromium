@@ -8,7 +8,6 @@
 #include <windows.h>
 #include <wrl/implements.h>
 
-#include "base/containers/flat_map.h"
 #include "base/no_destructor.h"
 #include "base/synchronization/waitable_event.h"
 
@@ -89,7 +88,7 @@ class ServiceMain {
   void SignalExit();
 
   // Registers |factory| as the factory for the elevator identified by |id|.
-  void RegisterElevatorFactory(const base::string16& id,
+  void RegisterElevatorFactory(const std::u16string& id,
                                IClassFactory* factory);
 
   // The action routine to be executed.

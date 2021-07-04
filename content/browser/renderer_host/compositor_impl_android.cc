@@ -430,7 +430,8 @@ void CompositorImpl::CreateLayerTreeHost() {
   params.client = this;
   params.task_graph_runner =
       CompositorDependenciesAndroid::Get().GetTaskGraphRunner();
-  params.main_task_runner = base::ThreadTaskRunnerHandle::Get();
+  params.main_task_runner =
+      content::GetUIThreadTaskRunner({BrowserTaskType::kUserInput});
   params.settings = &settings;
   params.mutator_host = animation_host_.get();
   host_ = cc::LayerTreeHost::CreateSingleThreaded(this, std::move(params));
@@ -487,8 +488,11 @@ void CompositorImpl::TearDownDisplayAndUnregisterRootFrameSink() {
     // execution of this call.
     display_private_->ForceImmediateDrawAndSwapIfPossible();
   }
-  GetHostFrameSinkManager()->InvalidateFrameSinkId(frame_sink_id_);
+  // Reset |display_private_| first since InvalidateFrameSinkId() will send a
+  // sync IPC. This guards against reentrant code using |display_private_|
+  // before it can be reset.
   display_private_.reset();
+  GetHostFrameSinkManager()->InvalidateFrameSinkId(frame_sink_id_);
 }
 
 void CompositorImpl::RegisterRootFrameSink() {
@@ -809,7 +813,7 @@ void CompositorImpl::InitializeVizLayerTreeFrameSink(
   pending_frames_ = 0;
   gpu_capabilities_ = context_provider->ContextCapabilities();
   scoped_refptr<base::SingleThreadTaskRunner> task_runner =
-      base::ThreadTaskRunnerHandle::Get();
+      content::GetUIThreadTaskRunner({BrowserTaskType::kUserInput});
 
   auto root_params = viz::mojom::RootCompositorFrameSinkParams::New();
 
@@ -915,6 +919,11 @@ void CompositorImpl::CacheBackBufferForCurrentSurface() {
 
 void CompositorImpl::EvictCachedBackBuffer() {
   cached_back_buffer_.reset();
+}
+
+void CompositorImpl::PreserveChildSurfaceControls() {
+  if (display_private_)
+    display_private_->PreserveChildSurfaceControls();
 }
 
 void CompositorImpl::RequestPresentationTimeForNextFrame(

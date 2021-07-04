@@ -13,11 +13,10 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/content_settings/mixed_content_settings_tab_helper.h"
 #include "chrome/browser/content_settings/page_specific_content_settings_delegate.h"
-#include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ssl/security_state_tab_helper.h"
-#include "chrome/browser/subresource_filter/chrome_subresource_filter_client.h"
+#include "chrome/browser/subresource_filter/chrome_content_subresource_filter_throttle_manager_factory.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/ui/autofill/chrome_autofill_client.h"
 #include "chrome/browser/ui/blocked_content/framebust_block_tab_helper.h"
@@ -29,19 +28,20 @@
 #include "chrome/browser/ui/views/exclusive_access_bubble_views.h"
 #include "chrome/browser/ui/views/media_router/presentation_receiver_window_frame.h"
 #include "components/autofill/content/browser/content_autofill_driver_factory.h"
-#include "components/autofill/core/browser/autofill_manager.h"
+#include "components/autofill/core/browser/browser_autofill_manager.h"
 #include "components/blocked_content/popup_blocker_tab_helper.h"
 #include "components/content_settings/browser/page_specific_content_settings.h"
+#include "components/infobars/content/content_infobar_manager.h"
 #include "components/omnibox/browser/location_bar_model_impl.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_constants.h"
 #include "ui/base/accelerators/accelerator_manager.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/layout/box_layout.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/widget/widget.h"
 
 #if defined(OS_MAC)
@@ -116,6 +116,19 @@ PresentationReceiverWindowView::PresentationReceiverWindowView(
       command_updater_(this),
       exclusive_access_manager_(this) {
   SetHasWindowSizeControls(true);
+
+  // TODO(pbos): See if this can retain SetOwnedByWidget(true) and get deleted
+  // through WidgetDelegate::DeleteDelegate(). This requires confirming that
+  // delegate_->WindowClosed() is safe to call before this deletes.
+  SetOwnedByWidget(false);
+  RegisterDeleteDelegateCallback(base::BindOnce(
+      [](PresentationReceiverWindowView* dialog) {
+        auto* const delegate = dialog->delegate_;
+        delete dialog;
+        delegate->WindowClosed();
+      },
+      this));
+
   DCHECK(frame);
   DCHECK(delegate);
 }
@@ -149,6 +162,10 @@ void PresentationReceiverWindowView::Init() {
   auto* const web_contents = GetWebContents();
   DCHECK(web_contents);
 
+  // ContentInfoBarManager comes before common tab helpers since
+  // ContentSubresourceFilterThrottleManager has it as a dependency.
+  infobars::ContentInfoBarManager::CreateForWebContents(web_contents);
+
   SecurityStateTabHelper::CreateForWebContents(web_contents);
   ChromeTranslateClient::CreateForWebContents(web_contents);
   autofill::ChromeAutofillClient::CreateForWebContents(web_contents);
@@ -156,7 +173,7 @@ void PresentationReceiverWindowView::Init() {
       web_contents,
       autofill::ChromeAutofillClient::FromWebContents(web_contents),
       g_browser_process->GetApplicationLocale(),
-      autofill::AutofillManager::ENABLE_AUTOFILL_DOWNLOAD_MANAGER);
+      autofill::BrowserAutofillManager::ENABLE_AUTOFILL_DOWNLOAD_MANAGER);
   ChromePasswordManagerClient::CreateForWebContentsWithAutofillClient(
       web_contents,
       autofill::ChromeAutofillClient::FromWebContents(web_contents));
@@ -164,9 +181,7 @@ void PresentationReceiverWindowView::Init() {
   SearchTabHelper::CreateForWebContents(web_contents);
   TabDialogs::CreateForWebContents(web_contents);
   FramebustBlockTabHelper::CreateForWebContents(web_contents);
-  ChromeSubresourceFilterClient::CreateThrottleManagerWithClientForWebContents(
-      web_contents);
-  InfoBarService::CreateForWebContents(web_contents);
+  CreateSubresourceFilterThrottleManagerForWebContents(web_contents);
   MixedContentSettingsTabHelper::CreateForWebContents(web_contents);
   blocked_content::PopupBlockerTabHelper::CreateForWebContents(web_contents);
   content_settings::PageSpecificContentSettings::CreateForWebContents(
@@ -262,13 +277,7 @@ WebContents* PresentationReceiverWindowView::GetActiveWebContents() const {
   return delegate_->web_contents();
 }
 
-void PresentationReceiverWindowView::DeleteDelegate() {
-  auto* const delegate = delegate_;
-  delete this;
-  delegate->WindowClosed();
-}
-
-base::string16 PresentationReceiverWindowView::GetWindowTitle() const {
+std::u16string PresentationReceiverWindowView::GetWindowTitle() const {
   return delegate_->web_contents()->GetTitle();
 }
 

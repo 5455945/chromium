@@ -9,7 +9,10 @@
 #include "base/strings/stringprintf.h"
 #include "chromeos/components/sync_wifi/network_type_conversions.h"
 #include "chromeos/login/login_state/login_state.h"
+#include "chromeos/network/cellular_esim_profile_handler_impl.h"
+#include "chromeos/network/cellular_metrics_logger.h"
 #include "chromeos/network/network_handler.h"
+#include "chromeos/network/network_handler_test_helper.h"
 #include "chromeos/network/network_metadata_store.h"
 #include "chromeos/services/network_config/in_process_instance.h"
 #include "components/account_id/account_id.h"
@@ -30,6 +33,8 @@ NetworkTestHelper::NetworkTestHelper()
   PrefProxyConfigTrackerImpl::RegisterPrefs(local_state_.registry());
   ::onc::RegisterProfilePrefs(user_prefs_.registry());
   ::onc::RegisterPrefs(local_state_.registry());
+  CellularESimProfileHandlerImpl::RegisterLocalStatePrefs(
+      local_state_.registry());
   NetworkMetadataStore::RegisterPrefs(user_prefs_.registry());
   NetworkMetadataStore::RegisterPrefs(local_state_.registry());
 
@@ -67,12 +72,13 @@ NetworkTestHelper::NetworkTestHelper()
 }
 
 NetworkTestHelper::~NetworkTestHelper() {
+  network_handler_test_helper_.reset();
   LoginState::Shutdown();
   ui_proxy_config_service_.reset();
 }
 
 void NetworkTestHelper::SetUp() {
-  NetworkHandler::Initialize();
+  network_handler_test_helper_ = std::make_unique<NetworkHandlerTestHelper>();
   NetworkHandler::Get()->InitializePrefServices(&user_prefs_, &local_state_);
   network_state_helper_.ResetDevicesAndServices();
   network_state_helper_.profile_test()->AddProfile(
@@ -97,7 +103,8 @@ std::string NetworkTestHelper::ConfigureWiFiNetwork(const std::string& ssid,
                                                     bool owned_by_user,
                                                     bool configured_by_sync,
                                                     bool is_from_policy,
-                                                    bool is_hidden) {
+                                                    bool is_hidden,
+                                                    bool auto_connect) {
   std::string security_entry =
       is_secured ? R"("SecurityClass": "psk", "Passphrase": "secretsauce", )"
                  : R"("SecurityClass": "none", )";
@@ -119,9 +126,10 @@ std::string NetworkTestHelper::ConfigureWiFiNetwork(const std::string& ssid,
       network_state_helper_.ConfigureService(base::StringPrintf(
           R"({"GUID": "%s", "Type": "wifi", "SSID": "%s",
             %s "State": "ready", "Strength": 100,
-            %s "AutoConnect": true, "Connectable": true%s%s})",
+            %s "AutoConnect": %s, "Connectable": true%s%s})",
           guid.c_str(), ssid.c_str(), security_entry.c_str(),
-          profile_entry.c_str(), ui_data.c_str(), hidden.c_str()));
+          profile_entry.c_str(), auto_connect ? "true" : "false",
+          ui_data.c_str(), hidden.c_str()));
 
   base::RunLoop().RunUntilIdle();
 

@@ -63,6 +63,9 @@ TEST(AccountConsistencyModeManagerTest, DefaultValue) {
 }
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
+#if !BUILDFLAG(IS_CHROMEOS_LACROS)
+// TODO(crbug.com/1220066): Remove the lacros exclusion when DICE is disabled on
+// Lacros.
 // Checks that changing the signin-allowed pref changes the Dice state on next
 // startup.
 TEST(AccountConsistencyModeManagerTest, SigninAllowedChangesDiceState) {
@@ -135,6 +138,7 @@ TEST(AccountConsistencyModeManagerTest, AllowBrowserSigninSwitch) {
               manager.GetAccountConsistencyMethod());
   }
 }
+#endif  // !BUILDFLAG(IS_CHROMEOS_LACROS)
 
 // Checks that Dice migration happens when the manager is created.
 TEST(AccountConsistencyModeManagerTest, MigrateAtCreation) {
@@ -187,7 +191,8 @@ TEST(AccountConsistencyModeManagerTest,
         AccountConsistencyModeManager::ShouldBuildServiceForProfile(&profile));
 
     // Incognito profile.
-    Profile* incognito_profile = profile.GetPrimaryOTRProfile();
+    Profile* incognito_profile =
+        profile.GetPrimaryOTRProfile(/*create_if_needed=*/true);
     EXPECT_FALSE(AccountConsistencyModeManager::IsDiceEnabledForProfile(
         incognito_profile));
     EXPECT_FALSE(
@@ -200,7 +205,8 @@ TEST(AccountConsistencyModeManagerTest,
 
     // Non-primary off-the-record profile.
     Profile* otr_profile = profile.GetOffTheRecordProfile(
-        Profile::OTRProfileID("Test::AccountConsistency"));
+        Profile::OTRProfileID::CreateUniqueForTesting(),
+        /*create_if_needed=*/true);
     EXPECT_FALSE(
         AccountConsistencyModeManager::IsDiceEnabledForProfile(otr_profile));
     EXPECT_FALSE(AccountConsistencyModeManager::GetForProfile(otr_profile));
@@ -284,7 +290,8 @@ TEST(AccountConsistencyModeManagerTest, MirrorDisabledForOffTheRecordProfile) {
   content::BrowserTaskEnvironment task_environment;
 
   TestingProfile profile;
-  Profile* incognito_profile = profile.GetPrimaryOTRProfile();
+  Profile* incognito_profile =
+      profile.GetPrimaryOTRProfile(/*create_if_needed=*/true);
   EXPECT_FALSE(AccountConsistencyModeManager::IsMirrorEnabledForProfile(
       incognito_profile));
   EXPECT_FALSE(AccountConsistencyModeManager::IsDiceEnabledForProfile(
@@ -294,7 +301,8 @@ TEST(AccountConsistencyModeManagerTest, MirrorDisabledForOffTheRecordProfile) {
       AccountConsistencyModeManager::GetMethodForProfile(incognito_profile));
 
   Profile* otr_profile = profile.GetOffTheRecordProfile(
-      Profile::OTRProfileID("Test::AccountConsistency"));
+      Profile::OTRProfileID::CreateUniqueForTesting(),
+      /*create_if_needed=*/true);
   EXPECT_FALSE(
       AccountConsistencyModeManager::IsMirrorEnabledForProfile(otr_profile));
   EXPECT_FALSE(

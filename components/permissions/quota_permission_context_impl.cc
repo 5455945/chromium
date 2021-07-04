@@ -54,10 +54,12 @@ class QuotaPermissionRequest : public PermissionRequest {
  private:
   // PermissionRequest:
   RequestType GetRequestType() const override;
+  bool IsDuplicateOf(PermissionRequest* other_request) const override;
 #if defined(OS_ANDROID)
-  base::string16 GetMessageText() const override;
+  std::u16string GetMessageText() const override;
+#else
+  std::u16string GetMessageTextFragment() const override;
 #endif
-  base::string16 GetMessageTextFragment() const override;
   GURL GetOrigin() const override;
   void PermissionGranted(bool is_one_time) override;
   void PermissionDenied() override;
@@ -91,8 +93,18 @@ RequestType QuotaPermissionRequest::GetRequestType() const {
   return RequestType::kDiskQuota;
 }
 
+bool QuotaPermissionRequest::IsDuplicateOf(
+    PermissionRequest* other_request) const {
+  // The downcast here is safe because PermissionRequest::IsDuplicateOf ensures
+  // that both requests are of type kDiskQuota.
+  return permissions::PermissionRequest::IsDuplicateOf(other_request) &&
+         is_large_quota_request_ ==
+             static_cast<QuotaPermissionRequest*>(other_request)
+                 ->is_large_quota_request_;
+}
+
 #if defined(OS_ANDROID)
-base::string16 QuotaPermissionRequest::GetMessageText() const {
+std::u16string QuotaPermissionRequest::GetMessageText() const {
   // If the site requested larger quota than this threshold, show a different
   // message to the user.
   return l10n_util::GetStringFUTF16(
@@ -100,11 +112,11 @@ base::string16 QuotaPermissionRequest::GetMessageText() const {
                                : IDS_REQUEST_QUOTA_INFOBAR_TEXT),
       url_formatter::FormatUrlForSecurityDisplay(origin_url_));
 }
-#endif
-
-base::string16 QuotaPermissionRequest::GetMessageTextFragment() const {
+#else
+std::u16string QuotaPermissionRequest::GetMessageTextFragment() const {
   return l10n_util::GetStringUTF16(IDS_REQUEST_QUOTA_PERMISSION_FRAGMENT);
 }
+#endif  // !defined(OS_ANDROID)
 
 GURL QuotaPermissionRequest::GetOrigin() const {
   return origin_url_;

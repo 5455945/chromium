@@ -80,8 +80,8 @@ enum class MultiProfileUserBehavior {
   OWNER_PRIMARY_ONLY = 3,
 };
 
-// Easy unlock icon choices.
-enum class EasyUnlockIconId {
+// Easy unlock icon states.
+enum class EasyUnlockIconState {
   // No icon shown.
   NONE,
   // The user has clicked the easy unlock icon and disabled easy unlock for this
@@ -122,22 +122,22 @@ enum class FingerprintState {
 };
 
 // Information about the custom icon in the user pod.
-struct ASH_PUBLIC_EXPORT EasyUnlockIconOptions {
-  EasyUnlockIconOptions();
-  EasyUnlockIconOptions(const EasyUnlockIconOptions& other);
-  EasyUnlockIconOptions(EasyUnlockIconOptions&& other);
-  ~EasyUnlockIconOptions();
+struct ASH_PUBLIC_EXPORT EasyUnlockIconInfo {
+  EasyUnlockIconInfo();
+  EasyUnlockIconInfo(const EasyUnlockIconInfo& other);
+  EasyUnlockIconInfo(EasyUnlockIconInfo&& other);
+  ~EasyUnlockIconInfo();
 
-  EasyUnlockIconOptions& operator=(const EasyUnlockIconOptions& other);
-  EasyUnlockIconOptions& operator=(EasyUnlockIconOptions&& other);
+  EasyUnlockIconInfo& operator=(const EasyUnlockIconInfo& other);
+  EasyUnlockIconInfo& operator=(EasyUnlockIconInfo&& other);
 
   // Icon that should be displayed.
-  EasyUnlockIconId icon = EasyUnlockIconId::NONE;
+  EasyUnlockIconState icon_state = EasyUnlockIconState::NONE;
   // Tooltip that is associated with the icon. This is shown automatically if
   // |autoshow_tooltip| is true. The user can always see the tooltip if they
   // hover over the icon. The tooltip should be used for the accessibility label
   // if it is present.
-  base::string16 tooltip;
+  std::u16string tooltip;
   // If true, the tooltip should be displayed (even if the user is not currently
   // hovering over the icon, ie, this makes |tooltip| act like a little like a
   // notification).
@@ -145,7 +145,7 @@ struct ASH_PUBLIC_EXPORT EasyUnlockIconOptions {
   // Accessibility label. Only used if |tooltip| is empty.
   // TODO(jdufault): Always populate and use |aria_label|, even if |tooltip| is
   // non-empty.
-  base::string16 aria_label;
+  std::u16string aria_label;
   // If true, clicking the easy unlock icon should fire a hardlock event which
   // will disable easy unlock. The hardlock event will request a new icon
   // display via a separate EasyUnlockIconsOption update. See
@@ -195,7 +195,7 @@ struct ASH_PUBLIC_EXPORT LocaleItem {
   std::string title;
 
   // Group name of the locale.
-  base::Optional<std::string> group_name;
+  absl::optional<std::string> group_name;
 };
 
 // Information about a public account user.
@@ -211,7 +211,7 @@ struct ASH_PUBLIC_EXPORT PublicAccountInfo {
   // The name of the device manager displayed in the login screen UI for
   // device-level management. May be either a domain (foo.com) or an email
   // address (user@foo.com).
-  base::Optional<std::string> device_enterprise_manager;
+  absl::optional<std::string> device_enterprise_manager;
 
   // A list of available user locales.
   std::vector<LocaleItem> available_locales;
@@ -283,10 +283,10 @@ struct ASH_PUBLIC_EXPORT LoginUserInfo {
   // login screen UI for user-level management. Will be either a domain name
   // (foo.com) or the email address of the admin (some_user@foo.com).
   // This is only set if the relevant user is managed.
-  base::Optional<std::string> user_account_manager;
+  absl::optional<std::string> user_account_manager;
 
   // Contains the public account information if user type is PUBLIC_ACCOUNT.
-  base::Optional<PublicAccountInfo> public_account_info;
+  absl::optional<PublicAccountInfo> public_account_info;
 
   // True if this user chooses to use 24 hour clock in preference.
   bool use_24hour_clock = false;

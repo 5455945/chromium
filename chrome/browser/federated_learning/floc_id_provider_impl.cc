@@ -23,13 +23,10 @@ namespace {
 
 constexpr int kQueryHistoryWindowInDays = 7;
 
-// The placeholder sorting-lsh version when the sorting-lsh feature is disabled.
-constexpr uint32_t kSortingLshVersionPlaceholder = 0;
-
 struct StartupComputeDecision {
   bool invalidate_existing_floc = true;
-  // Will be base::nullopt if should recompute immediately.
-  base::Optional<base::TimeDelta> next_compute_delay;
+  // Will be absl::nullopt if should recompute immediately.
+  absl::optional<base::TimeDelta> next_compute_delay;
 };
 
 // Determine whether we can keep using the previous floc and/or when should the
@@ -42,7 +39,7 @@ StartupComputeDecision GetStartupComputeDecision(
   // never been ready).
   if (last_floc.compute_time().is_null()) {
     return StartupComputeDecision{.invalidate_existing_floc = true,
-                                  .next_compute_delay = base::nullopt};
+                                  .next_compute_delay = absl::nullopt};
   }
 
   // The browser started with a kFlocIdFinchConfigVersion param different from
@@ -56,7 +53,7 @@ StartupComputeDecision GetStartupComputeDecision(
   if (last_floc.finch_config_version() !=
       static_cast<uint32_t>(kFlocIdFinchConfigVersion.Get())) {
     return StartupComputeDecision{.invalidate_existing_floc = true,
-                                  .next_compute_delay = base::nullopt};
+                                  .next_compute_delay = absl::nullopt};
   }
 
   base::TimeDelta presumed_next_compute_delay =
@@ -66,7 +63,7 @@ StartupComputeDecision GetStartupComputeDecision(
   // The last floc has expired.
   if (presumed_next_compute_delay <= base::TimeDelta()) {
     return StartupComputeDecision{.invalidate_existing_floc = true,
-                                  .next_compute_delay = base::nullopt};
+                                  .next_compute_delay = absl::nullopt};
   }
 
   // This could happen if the machine time has changed since the last
@@ -74,7 +71,7 @@ StartupComputeDecision GetStartupComputeDecision(
   // rather than potentially stop computing for a very long time.
   if (presumed_next_compute_delay >= 2 * kFlocIdScheduledUpdateInterval.Get()) {
     return StartupComputeDecision{.invalidate_existing_floc = true,
-                                  .next_compute_delay = base::nullopt};
+                                  .next_compute_delay = absl::nullopt};
   }
 
   // Normally "floc_accessible_since <= last_floc.history_begin_time()" is an
@@ -112,14 +109,23 @@ FlocIdProviderImpl::FlocIdProviderImpl(
   StartupComputeDecision decision = GetStartupComputeDecision(
       floc_id_, privacy_sandbox_settings->FlocDataAccessibleSince());
 
-  // If the previous floc has expired, invalidate it; otherwise, keep using the
-  // previous floc though it may already be invalid.
-  if (decision.invalidate_existing_floc)
-    floc_id_.InvalidateIdAndSaveToPrefs(prefs_);
+  // Invalidate the expired floc and/or assign a better invalid reason.
+  if (decision.invalidate_existing_floc) {
+    // We only switch from one invalid status to another invalid status when
+    // the next cohort computation becomes ready to run (i.e.
+    // kInvalidWaitingToStart).
+    FlocId::Status maybe_new_status =
+        decision.next_compute_delay.has_value()
+            ? (floc_id_.status() == FlocId::Status::kValid)
+                  ? FlocId::Status::kInvalidReset
+                  : floc_id_.status()
+            : FlocId::Status::kInvalidWaitingToStart;
+
+    floc_id_.UpdateStatusAndSaveToPrefs(prefs_, maybe_new_status);
+  }
 
   // Schedule the next floc computation if a delay is needed; otherwise, the
-  // next computation will occur immediately, or as soon as the sorting-lsh file
-  // is loaded when the sorting-lsh feature is enabled.
+  // next computation will occur as soon as the sorting-lsh file is loaded.
   if (decision.next_compute_delay.has_value())
     ScheduleFlocComputation(decision.next_compute_delay.value());
 
@@ -127,8 +133,6 @@ FlocIdProviderImpl::FlocIdProviderImpl(
           ->IsSortingLshClustersFileReady()) {
     OnSortingLshClustersFileReady();
   }
-
-  MaybeTriggerImmediateComputation();
 }
 
 FlocIdProviderImpl::~FlocIdProviderImpl() {
@@ -137,14 +141,16 @@ FlocIdProviderImpl::~FlocIdProviderImpl() {
 
 blink::mojom::InterestCohortPtr FlocIdProviderImpl::GetInterestCohortForJsApi(
     const GURL& url,
-    const base::Optional<url::Origin>& top_frame_origin) const {
-  // Check the Privacy Sandbox general settings.
-  if (!IsPrivacySandboxAllowed())
+    const absl::optional<url::Origin>& top_frame_origin) const {
+  // Check the general floc setting.
+  if (!IsFlocAllowed())
     return blink::mojom::InterestCohort::New();
 
-  // Check the Privacy Sandbox context specific settings.
-  if (!privacy_sandbox_settings_->IsFlocAllowed(url, top_frame_origin))
+  // Check the context specific floc setting.
+  if (!privacy_sandbox_settings_->IsFlocAllowedForContext(url,
+                                                          top_frame_origin)) {
     return blink::mojom::InterestCohort::New();
+  }
 
   if (!floc_id_.IsValid())
     return blink::mojom::InterestCohort::New();
@@ -165,6 +171,15 @@ void FlocIdProviderImpl::MaybeRecordFlocToUkm(ukm::SourceId source_id) {
   builder.Record(ukm_recorder->Get());
 
   need_ukm_recording_ = false;
+}
+
+base::Time FlocIdProviderImpl::GetApproximateNextComputeTime() const {
+  if (!compute_floc_timer_.IsRunning())
+    return base::Time::Now();
+
+  // Convert the TimeTicks type the timer provides to base::Time.
+  return base::Time::Now() +
+         (compute_floc_timer_.desired_run_time() - base::TimeTicks::Now());
 }
 
 void FlocIdProviderImpl::OnComputeFlocCompleted(ComputeFlocResult result) {
@@ -201,13 +216,26 @@ void FlocIdProviderImpl::Shutdown() {
   g_browser_process->floc_sorting_lsh_clusters_service()->RemoveObserver(this);
 }
 
-void FlocIdProviderImpl::OnFlocDataAccessibleSinceUpdated() {
+void FlocIdProviderImpl::OnFlocDataAccessibleSinceUpdated(
+    bool reset_compute_timer) {
   // Set the |need_recompute_| flag so that we will recompute the floc
   // immediately after the in-progress one finishes, so as to avoid potential
-  // data races.
+  // data races. This function maybe have been called in response to a user
+  // deliberately resetting floc, in this case the recomputed floc should be
+  // invalid as the floc-accessible timestamp was just updated to now. The
+  // floc computation is fast so it's exceedingly unlikely to populate enough
+  // history for the recomputed ID to be valid between one floc calculation and
+  // the next.
   if (floc_computation_in_progress_) {
     need_recompute_ = true;
     return;
+  }
+
+  // Clear any pending computes and re-schedule if requested.
+  if (reset_compute_timer) {
+    compute_floc_timer_.AbandonAndStop();
+    ScheduleFlocComputation(kFlocIdScheduledUpdateInterval.Get());
+    floc_id_.ResetComputeTimeAndSaveToPrefs(base::Time::Now(), prefs_);
   }
 
   // Note: we only invalidate the floc rather than recomputing, because we don't
@@ -221,7 +249,7 @@ void FlocIdProviderImpl::OnFlocDataAccessibleSinceUpdated() {
   // the begin time of the history used to compute the current floc.
   if (privacy_sandbox_settings_->FlocDataAccessibleSince() >
       floc_id_.history_begin_time()) {
-    floc_id_.InvalidateIdAndSaveToPrefs(prefs_);
+    floc_id_.UpdateStatusAndSaveToPrefs(prefs_, FlocId::Status::kInvalidReset);
   }
 }
 
@@ -253,31 +281,18 @@ void FlocIdProviderImpl::OnURLsDeleted(
   // We log the invalidation event although it's technically not a recompute.
   // It'd give us a better idea how often the floc is invalidated due to
   // history-delete.
-  LogFlocComputedEvent(ComputeFlocResult());
+  LogFlocComputedEvent(
+      ComputeFlocResult(FlocId::Status::kInvalidHistoryDeleted));
 
-  floc_id_.InvalidateIdAndSaveToPrefs(prefs_);
+  floc_id_.UpdateStatusAndSaveToPrefs(prefs_,
+                                      FlocId::Status::kInvalidHistoryDeleted);
 }
 
 void FlocIdProviderImpl::OnSortingLshClustersFileReady() {
-  if (first_sorting_lsh_file_ready_seen_)
-    return;
-
-  first_sorting_lsh_file_ready_seen_ = true;
-
-  MaybeTriggerImmediateComputation();
-}
-
-void FlocIdProviderImpl::MaybeTriggerImmediateComputation() {
-  // If the floc computation is neither in progress nor scheduled, it means we
-  // want to trigger an immediate computation, or as soon as the sorting-lsh
-  // file is loaded when the sorting-lsh feature is enabled.
+  // If the floc computation is happening now or is scheduled, no-op; otherwise,
+  // we want to trigger a computation as soon as the sorting-lsh file is loaded.
   if (floc_computation_in_progress_ || compute_floc_timer_.IsRunning())
     return;
-
-  if (!first_sorting_lsh_file_ready_seen_ &&
-      base::FeatureList::IsEnabled(kFlocIdSortingLshBasedComputation)) {
-    return;
-  }
 
   ComputeFloc();
 }
@@ -298,7 +313,7 @@ void FlocIdProviderImpl::ComputeFloc() {
 }
 
 void FlocIdProviderImpl::CheckCanComputeFloc(CanComputeFlocCallback callback) {
-  if (!IsPrivacySandboxAllowed()) {
+  if (!IsFlocAllowed()) {
     std::move(callback).Run(false);
     return;
   }
@@ -310,7 +325,8 @@ void FlocIdProviderImpl::OnCheckCanComputeFlocCompleted(
     ComputeFlocCompletedCallback callback,
     bool can_compute_floc) {
   if (!can_compute_floc) {
-    std::move(callback).Run(ComputeFlocResult());
+    std::move(callback).Run(
+        ComputeFlocResult(FlocId::Status::kInvalidDisallowedByUserSettings));
     return;
   }
 
@@ -319,8 +335,8 @@ void FlocIdProviderImpl::OnCheckCanComputeFlocCompleted(
                      weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
 }
 
-bool FlocIdProviderImpl::IsPrivacySandboxAllowed() const {
-  return privacy_sandbox_settings_->IsPrivacySandboxAllowed();
+bool FlocIdProviderImpl::IsFlocAllowed() const {
+  return privacy_sandbox_settings_->IsFlocAllowed();
 }
 
 void FlocIdProviderImpl::GetRecentlyVisitedURLs(
@@ -334,7 +350,7 @@ void FlocIdProviderImpl::GetRecentlyVisitedURLs(
   options.end_time = now;
   options.duplicate_policy = history::QueryOptions::KEEP_ALL_DUPLICATES;
 
-  history_service_->QueryHistory(base::string16(), options, std::move(callback),
+  history_service_->QueryHistory(std::u16string(), options, std::move(callback),
                                  &history_task_tracker_);
 }
 
@@ -347,8 +363,10 @@ void FlocIdProviderImpl::OnGetRecentlyVisitedURLsCompleted(
   base::Time history_end_time = base::Time::Min();
 
   for (const history::URLResult& url_result : results) {
-    if (!url_result.floc_allowed())
+    if (!(url_result.content_annotations().annotation_flags &
+          history::VisitContentAnnotationFlag::kFlocEligibleRelaxed)) {
       continue;
+    }
 
     if (url_result.visit_time() < history_begin_time)
       history_begin_time = url_result.visit_time();
@@ -363,27 +381,16 @@ void FlocIdProviderImpl::OnGetRecentlyVisitedURLsCompleted(
 
   if (domains.size() <
       static_cast<size_t>(kFlocIdMinimumHistoryDomainSizeRequired.Get())) {
-    std::move(callback).Run(ComputeFlocResult());
-    return;
-  }
-
-  ApplySortingLshPostProcessing(std::move(callback),
-                                FlocId::SimHashHistory(domains),
-                                history_begin_time, history_end_time);
-}
-
-void FlocIdProviderImpl::ApplySortingLshPostProcessing(
-    ComputeFlocCompletedCallback callback,
-    uint64_t sim_hash,
-    base::Time history_begin_time,
-    base::Time history_end_time) {
-  if (!base::FeatureList::IsEnabled(kFlocIdSortingLshBasedComputation)) {
     std::move(callback).Run(ComputeFlocResult(
-        sim_hash, FlocId(sim_hash, history_begin_time, history_end_time,
-                         kSortingLshVersionPlaceholder)));
+        FlocId::Status::kInvalidNotEnoughElgibleHistoryDomains));
     return;
   }
 
+  uint64_t sim_hash = FlocId::SimHashHistory(domains);
+
+  // Apply the sorting-lsh post processing to compute the final versioned floc.
+  // The final floc may be invalid if the file is corrupted or the floc is in
+  // the block list.
   g_browser_process->floc_sorting_lsh_clusters_service()->ApplySortingLsh(
       sim_hash,
       base::BindOnce(&FlocIdProviderImpl::DidApplySortingLshPostProcessing,
@@ -396,16 +403,18 @@ void FlocIdProviderImpl::DidApplySortingLshPostProcessing(
     uint64_t sim_hash,
     base::Time history_begin_time,
     base::Time history_end_time,
-    base::Optional<uint64_t> final_hash,
+    absl::optional<uint64_t> final_hash,
     base::Version version) {
   if (!final_hash) {
-    std::move(callback).Run(ComputeFlocResult(sim_hash, FlocId()));
+    std::move(callback).Run(ComputeFlocResult(
+        sim_hash, FlocId::CreateInvalid(FlocId::Status::kInvalidBlocked)));
     return;
   }
 
   std::move(callback).Run(ComputeFlocResult(
-      sim_hash, FlocId(final_hash.value(), history_begin_time, history_end_time,
-                       version.components().front())));
+      sim_hash,
+      FlocId::CreateValid(final_hash.value(), history_begin_time,
+                          history_end_time, version.components().front())));
 }
 
 void FlocIdProviderImpl::ScheduleFlocComputation(base::TimeDelta delay) {

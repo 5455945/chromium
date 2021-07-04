@@ -11,6 +11,7 @@
 #include "base/bind.h"
 #include "base/containers/flat_set.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/trace_event/trace_event.h"
 #include "base/win/win_util.h"
@@ -22,11 +23,14 @@
 #include "ui/aura/client/focus_client.h"
 #include "ui/aura/window_event_dispatcher.h"
 #include "ui/base/class_property.h"
+#include "ui/base/cursor/cursor.h"
+#include "ui/base/cursor/platform_cursor.h"
 #include "ui/base/cursor/win/win_cursor.h"
 #include "ui/base/ime/input_method.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/base/win/event_creation_utils.h"
 #include "ui/base/win/shell.h"
+#include "ui/compositor/layer.h"
 #include "ui/compositor/paint_context.h"
 #include "ui/display/win/dpi.h"
 #include "ui/display/win/screen_win.h"
@@ -62,6 +66,14 @@ namespace views {
 
 namespace {
 
+// While the mouse is locked we want the invisible mouse to stay within the
+// confines of the screen so we keep it in a capture region the size of the
+// screen.  However, on windows when the mouse hits the edge of the screen some
+// events trigger and cause strange issues to occur. To stop those events from
+// occurring we add a small border around the edge of the capture region.
+// This constant controls how many pixels wide that border is.
+const int kMouseCaptureRegionBorder = 5;
+
 gfx::Size GetExpandedWindowSize(bool is_translucent, gfx::Size size) {
   if (!is_translucent || !ui::win::IsAeroGlassEnabled())
     return size;
@@ -74,6 +86,24 @@ gfx::Size GetExpandedWindowSize(bool is_translucent, gfx::Size size) {
 
 void InsetBottomRight(gfx::Rect* rect, const gfx::Vector2d& vector) {
   rect->Inset(0, 0, vector.x(), vector.y());
+}
+
+// Updates the cursor clip region. Used for mouse locking.
+void UpdateMouseLockRegion(aura::Window* window, bool locked) {
+  if (!locked) {
+    ::ClipCursor(nullptr);
+    return;
+  }
+
+  RECT window_rect =
+      display::Screen::GetScreen()
+          ->DIPToScreenRectInWindow(window, window->GetBoundsInScreen())
+          .ToRECT();
+  window_rect.left += kMouseCaptureRegionBorder;
+  window_rect.right -= kMouseCaptureRegionBorder;
+  window_rect.top += kMouseCaptureRegionBorder;
+  window_rect.bottom -= kMouseCaptureRegionBorder;
+  ::ClipCursor(&window_rect);
 }
 
 }  // namespace
@@ -151,7 +181,7 @@ void DesktopWindowTreeHostWin::Init(const Widget::InitParams& params) {
   gfx::Rect pixel_bounds =
       display::win::ScreenWin::DIPToScreenRect(nullptr, params.bounds);
   message_handler_->Init(parent_hwnd, pixel_bounds);
-  CreateCompositor(viz::FrameSinkId(), params.force_software_compositing);
+  CreateCompositor(params.force_software_compositing);
   OnAcceleratedWidgetAvailable();
   InitHost();
   window()->Show();
@@ -169,7 +199,7 @@ void DesktopWindowTreeHostWin::OnNativeWidgetCreated(
   window()->SetProperty(kDesktopWindowTreeHostKey, this);
 
   should_animate_window_close_ =
-      content_window()->type() != aura::client::WINDOW_TYPE_NORMAL &&
+      content_window()->GetType() != aura::client::WINDOW_TYPE_NORMAL &&
       !wm::WindowAnimationsDisabled(content_window());
 }
 
@@ -195,15 +225,16 @@ DesktopWindowTreeHostWin::CreateDragDropClient() {
 }
 
 void DesktopWindowTreeHostWin::Close() {
+  // Calling Hide() can detach the content window's layer, so store it
+  // beforehand so we can access it below.
+  auto* window_layer = content_window()->layer();
+
   content_window()->Hide();
   // TODO(beng): Move this entire branch to DNWA so it can be shared with X11.
   if (should_animate_window_close_) {
     pending_close_ = true;
-    const bool is_animating =
-        content_window()->layer()->GetAnimator()->IsAnimatingProperty(
-            ui::LayerAnimationElement::VISIBILITY);
     // Animation may not start for a number of reasons.
-    if (!is_animating)
+    if (!window_layer->GetAnimator()->is_animating())
       message_handler_->Close();
     // else case, OnWindowHidingAnimationCompleted does the actual Close.
   } else {
@@ -407,7 +438,7 @@ bool DesktopWindowTreeHostWin::IsVisibleOnAllWorkspaces() const {
   return false;
 }
 
-bool DesktopWindowTreeHostWin::SetWindowTitle(const base::string16& title) {
+bool DesktopWindowTreeHostWin::SetWindowTitle(const std::u16string& title) {
   return message_handler_->SetTitle(title);
 }
 
@@ -422,8 +453,8 @@ Widget::MoveLoopResult DesktopWindowTreeHostWin::RunMoveLoop(
   const bool hide_on_escape =
       escape_behavior == Widget::MoveLoopEscapeBehavior::kHide;
   return message_handler_->RunMoveLoop(drag_offset, hide_on_escape)
-             ? Widget::MOVE_LOOP_SUCCESSFUL
-             : Widget::MOVE_LOOP_CANCELED;
+             ? Widget::MoveLoopResult::kSuccessful
+             : Widget::MoveLoopResult::kCanceled;
 }
 
 void DesktopWindowTreeHostWin::EndMoveLoop() {
@@ -462,7 +493,10 @@ void DesktopWindowTreeHostWin::FrameTypeChanged() {
 }
 
 void DesktopWindowTreeHostWin::SetFullscreen(bool fullscreen) {
+  auto weak_ptr = GetWeakPtr();
   message_handler_->SetFullscreen(fullscreen);
+  if (!weak_ptr)
+    return;
   // TODO(sky): workaround for ScopedFullscreenVisibility showing window
   // directly. Instead of this should listen for visibility changes and then
   // update window.
@@ -602,7 +636,7 @@ void DesktopWindowTreeHostWin::ReleaseCapture() {
 }
 
 bool DesktopWindowTreeHostWin::CaptureSystemKeyEventsImpl(
-    base::Optional<base::flat_set<ui::DomCode>> dom_codes) {
+    absl::optional<base::flat_set<ui::DomCode>> dom_codes) {
   // Only one KeyboardHook should be active at a time, otherwise there will be
   // problems with event routing (i.e. which Hook takes precedence) and
   // destruction ordering.
@@ -632,10 +666,8 @@ void DesktopWindowTreeHostWin::SetCursorNative(gfx::NativeCursor cursor) {
   TRACE_EVENT1("ui,input", "DesktopWindowTreeHostWin::SetCursorNative",
                "cursor", cursor.type());
 
-  ui::WinCursor* platform_cursor =
-      static_cast<ui::WinCursor*>(cursor.platform());
-  DCHECK(platform_cursor);
-  message_handler_->SetCursor(platform_cursor->hcursor());
+  message_handler_->SetCursor(
+      ui::WinCursor::FromPlatformCursor(cursor.platform()));
 }
 
 void DesktopWindowTreeHostWin::OnCursorVisibilityChangedNative(bool show) {
@@ -655,6 +687,16 @@ void DesktopWindowTreeHostWin::MoveCursorToScreenLocationInPixels(
 std::unique_ptr<aura::ScopedEnableUnadjustedMouseEvents>
 DesktopWindowTreeHostWin::RequestUnadjustedMovement() {
   return message_handler_->RegisterUnadjustedMouseEvent();
+}
+
+void DesktopWindowTreeHostWin::LockMouse(aura::Window* window) {
+  UpdateMouseLockRegion(window, true /*locked*/);
+  WindowTreeHost::LockMouse(window);
+}
+
+void DesktopWindowTreeHostWin::UnlockMouse(aura::Window* window) {
+  UpdateMouseLockRegion(window, false /*locked*/);
+  WindowTreeHost::UnlockMouse(window);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -878,7 +920,6 @@ void DesktopWindowTreeHostWin::HandleEndWMSizeMove() {
 
 void DesktopWindowTreeHostWin::HandleMove() {
   CheckForMonitorChange();
-  native_widget_delegate_->OnNativeWidgetMove();
   OnHostMovedInPixels(GetBoundsInPixels().origin());
 }
 

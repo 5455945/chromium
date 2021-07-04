@@ -31,17 +31,8 @@ class SearchIPCRouterPolicyImpl : public SearchIPCRouter::Policy {
   bool ShouldProcessDeleteMostVisitedItem() override;
   bool ShouldProcessUndoMostVisitedDeletion() override;
   bool ShouldProcessUndoAllMostVisitedDeletions() override;
-  bool ShouldProcessAddCustomLink() override;
-  bool ShouldProcessUpdateCustomLink() override;
-  bool ShouldProcessReorderCustomLink() override;
-  bool ShouldProcessDeleteCustomLink() override;
-  bool ShouldProcessUndoCustomLinkAction() override;
-  bool ShouldProcessResetCustomLinks() override;
-  bool ShouldProcessToggleMostVisitedOrCustomLinks() override;
-  bool ShouldProcessToggleShortcutsVisibility() override;
   bool ShouldProcessLogEvent() override;
   bool ShouldProcessLogSuggestionEventWithValue() override;
-  bool ShouldProcessPasteIntoOmnibox(bool is_active_tab) override;
   bool ShouldSendSetInputInProgress(bool is_active_tab) override;
   bool ShouldSendOmniboxFocusChanged() override;
   bool ShouldSendMostVisitedInfo() override;
@@ -54,17 +45,8 @@ class SearchIPCRouterPolicyImpl : public SearchIPCRouter::Policy {
   bool ShouldProcessSearchSuggestionSelected() override;
   bool ShouldProcessOptOutOfSearchSuggestions() override;
   bool ShouldProcessThemeChangeMessages() override;
-  bool ShouldProcessAutocompleteResultChanged(bool is_active_tab) override;
-  bool ShouldProcessAutocompleteMatchImageAvailable(
-      bool is_active_tab) override;
-  bool ShouldProcessQueryAutocomplete(bool is_active_tab) override;
-  bool ShouldProcessStopAutocomplete() override;
-  bool ShouldProcessLogCharTypedToRepaintLatency() override;
   bool ShouldProcessBlocklistPromo() override;
   bool ShouldProcessOpenExtensionsPage() override;
-  bool ShouldProcessOpenAutocompleteMatch(bool is_active_tab) override;
-  bool ShouldProcessDeleteAutocompleteMatch() override;
-  bool ShouldProcessToggleSuggestionGroupIdVisibility() override;
 
   // Used by unit tests.
   void set_is_incognito(bool is_incognito) {

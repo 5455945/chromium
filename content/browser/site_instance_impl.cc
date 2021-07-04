@@ -8,6 +8,7 @@
 #include <tuple>
 
 #include "base/command_line.h"
+#include "base/containers/contains.h"
 #include "base/debug/crash_logging.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/lazy_instance.h"
@@ -34,6 +35,8 @@
 #include "content/public/common/url_constants.h"
 #include "content/public/common/url_utils.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
+#include "third_party/blink/public/common/chrome_debug_urls.h"
+#include "third_party/perfetto/include/perfetto/tracing/traced_value.h"
 #include "url/origin.h"
 #include "url/url_constants.h"
 
@@ -106,41 +109,53 @@ const GURL& SiteInstanceImpl::GetDefaultSiteURL() {
 
 // static
 SiteInfo SiteInfo::CreateForErrorPage(
-    const CoopCoepCrossOriginIsolatedInfo& cross_origin_isolated_info) {
+    const WebExposedIsolationInfo& web_exposed_isolation_info) {
   return SiteInfo(GetErrorPageSiteAndLockURL(), GetErrorPageSiteAndLockURL(),
-                  false /* is_origin_keyed */, cross_origin_isolated_info,
-                  false /* is_guest */);
+                  false /* is_origin_keyed */, web_exposed_isolation_info,
+                  false /* is_guest */,
+                  false /* does_site_request_dedicated_process_for_coop */,
+                  false /* is_jit_disabled */);
 }
 
 // static
 SiteInfo SiteInfo::CreateForDefaultSiteInstance(
-    const CoopCoepCrossOriginIsolatedInfo& cross_origin_isolated_info) {
+    BrowserContext* browser_context,
+    const WebExposedIsolationInfo& web_exposed_isolation_info) {
+  // Get default JIT policy for this browser_context by passing in an empty
+  // site_url.
+  bool is_jit_disabled = GetContentClient()->browser()->IsJitDisabledForSite(
+      browser_context, GURL());
+
   return SiteInfo(SiteInstanceImpl::GetDefaultSiteURL(),
                   SiteInstanceImpl::GetDefaultSiteURL(),
-                  false /* is_origin_keyed */, cross_origin_isolated_info,
-                  false /* is_guest */);
+                  false /* is_origin_keyed */, web_exposed_isolation_info,
+                  false /* is_guest */,
+                  false /* does_site_request_dedicated_process_for_coop */,
+                  is_jit_disabled);
 }
 
 // static
-SiteInfo SiteInfo::CreateForGuest(const GURL& guest_site_url) {
-  DCHECK(!guest_site_url.SchemeIs(kChromeErrorScheme));
+SiteInfo SiteInfo::CreateForGuest(BrowserContext* browser_context,
+                                  const GURL& guest_site_url) {
   // Setting site and lock directly without the site URL conversions we
   // do for user provided URLs. Callers expect GetSiteURL() to return the
   // value they provide in |guest_site_url|.
   return SiteInfo(guest_site_url, guest_site_url, false /* is_origin_keyed */,
-                  CoopCoepCrossOriginIsolatedInfo::CreateNonIsolated(),
-                  true /* is_guest */);
+                  WebExposedIsolationInfo::CreateNonIsolated(),
+                  true /* is_guest */,
+                  false /* does_site_request_dedicated_process_for_coop */,
+                  false /* is_jit_disabled */);
 }
 
 // static
 SiteInfo SiteInfo::Create(
     const IsolationContext& isolation_context,
     const UrlInfo& url_info,
-    const CoopCoepCrossOriginIsolatedInfo& cross_origin_isolated_info) {
+    const WebExposedIsolationInfo& web_exposed_isolation_info) {
   // The call to GetSiteForURL() below is only allowed on the UI thread, due to
   // its possible use of effective urls.
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  return CreateInternal(isolation_context, url_info, cross_origin_isolated_info,
+  return CreateInternal(isolation_context, url_info, web_exposed_isolation_info,
                         /*compute_site_url=*/true);
 }
 
@@ -148,9 +163,9 @@ SiteInfo SiteInfo::Create(
 SiteInfo SiteInfo::CreateOnIOThread(
     const IsolationContext& isolation_context,
     const UrlInfo& url_info,
-    const CoopCoepCrossOriginIsolatedInfo& cross_origin_isolated_info) {
+    const WebExposedIsolationInfo& web_exposed_isolation_info) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  return CreateInternal(isolation_context, url_info, cross_origin_isolated_info,
+  return CreateInternal(isolation_context, url_info, web_exposed_isolation_info,
                         /*compute_site_url=*/false);
 }
 
@@ -158,31 +173,45 @@ SiteInfo SiteInfo::CreateOnIOThread(
 SiteInfo SiteInfo::CreateInternal(
     const IsolationContext& isolation_context,
     const UrlInfo& url_info,
-    const CoopCoepCrossOriginIsolatedInfo& cross_origin_isolated_info,
+    const WebExposedIsolationInfo& web_exposed_isolation_info,
     bool compute_site_url) {
   if (url_info.url.SchemeIs(kChromeErrorScheme))
-    return CreateForErrorPage(cross_origin_isolated_info);
+    return CreateForErrorPage(web_exposed_isolation_info);
 
   GURL lock_url = DetermineProcessLockURL(isolation_context, url_info);
   GURL site_url = lock_url;
+  bool is_jitless = false;
   if (compute_site_url) {
+    DCHECK_CURRENTLY_ON(BrowserThread::UI);
     site_url = GetSiteForURLInternal(isolation_context, url_info,
                                      true /* should_use_effective_urls */);
+
+    is_jitless = GetContentClient()->browser()->IsJitDisabledForSite(
+        isolation_context.browser_or_resource_context().ToBrowserContext(),
+        lock_url);
   }
   bool is_origin_keyed =
       ChildProcessSecurityPolicyImpl::GetInstance()
-          ->ShouldOriginGetOptInIsolation(isolation_context,
-                                          url::Origin::Create(url_info.url),
-                                          url_info.origin_requests_isolation);
+          ->ShouldOriginGetOptInIsolation(
+              isolation_context, url::Origin::Create(url_info.url),
+              url_info.requests_origin_agent_cluster_isolation());
+
+  // If there is a COOP isolation request, propagate it to SiteInfo.  This will
+  // be used later when determining a suitable SiteInstance and
+  // BrowsingInstance for this SiteInfo.
+  bool does_site_request_dedicated_process_for_coop =
+      url_info.requests_coop_isolation();
+
   return SiteInfo(site_url, lock_url, is_origin_keyed,
-                  cross_origin_isolated_info);
+                  web_exposed_isolation_info, false /* is_guest */,
+                  does_site_request_dedicated_process_for_coop, is_jitless);
 }
 
 // static
 SiteInfo SiteInfo::CreateForTesting(const IsolationContext& isolation_context,
                                     const GURL& url) {
   return Create(isolation_context, UrlInfo::CreateForTesting(url),
-                CoopCoepCrossOriginIsolatedInfo::CreateNonIsolated());
+                WebExposedIsolationInfo::CreateNonIsolated());
 }
 
 SiteInfo::SiteInfo() = default;
@@ -190,39 +219,73 @@ SiteInfo::SiteInfo(const SiteInfo& rhs) = default;
 
 SiteInfo::~SiteInfo() = default;
 
-SiteInfo::SiteInfo(
-    const GURL& site_url,
-    const GURL& process_lock_url,
-    bool is_origin_keyed,
-    const CoopCoepCrossOriginIsolatedInfo& cross_origin_isolated_info,
-    bool is_guest)
+SiteInfo::SiteInfo(const GURL& site_url,
+                   const GURL& process_lock_url,
+                   bool is_origin_keyed,
+                   const WebExposedIsolationInfo& web_exposed_isolation_info,
+                   bool is_guest,
+                   bool does_site_request_dedicated_process_for_coop,
+                   bool is_jit_disabled)
     : site_url_(site_url),
       process_lock_url_(process_lock_url),
       is_origin_keyed_(is_origin_keyed),
-      coop_coep_cross_origin_isolated_info_(cross_origin_isolated_info),
-      is_guest_(is_guest) {}
+      web_exposed_isolation_info_(web_exposed_isolation_info),
+      is_guest_(is_guest),
+      does_site_request_dedicated_process_for_coop_(
+          does_site_request_dedicated_process_for_coop),
+      is_jit_disabled_(is_jit_disabled) {}
 
 // static
-auto SiteInfo::MakeTie(const SiteInfo& site_info) {
+auto SiteInfo::MakeSecurityPrincipalKey(const SiteInfo& site_info) {
+  // Note: `does_site_request_dedicated_process_for_coop_` is intentionally
+  // excluded here, as a difference solely in that field should not cause a
+  // different SiteInstance to be created.  A document that has been
+  // site-isolated due to COOP should still share a SiteInstance with other
+  // same-site frames in the BrowsingInstance, even if those frames lack the
+  // COOP isolation request.
   return std::tie(site_info.site_url_.possibly_invalid_spec(),
                   site_info.process_lock_url_.possibly_invalid_spec(),
                   site_info.is_origin_keyed_,
-                  site_info.coop_coep_cross_origin_isolated_info_,
-                  site_info.is_guest_);
+                  site_info.web_exposed_isolation_info_, site_info.is_guest_,
+                  site_info.is_jit_disabled_);
 }
 
 SiteInfo& SiteInfo::operator=(const SiteInfo& rhs) = default;
 
+bool SiteInfo::IsSamePrincipalWith(const SiteInfo& other) const {
+  return MakeSecurityPrincipalKey(*this) == MakeSecurityPrincipalKey(other);
+}
+
+bool SiteInfo::IsExactMatch(const SiteInfo& other) const {
+  bool is_match =
+      site_url_ == other.site_url_ &&
+      process_lock_url_ == other.process_lock_url_ &&
+      is_origin_keyed_ == other.is_origin_keyed_ &&
+      web_exposed_isolation_info_ == other.web_exposed_isolation_info_ &&
+      is_guest_ == other.is_guest_ &&
+      does_site_request_dedicated_process_for_coop_ ==
+          other.does_site_request_dedicated_process_for_coop_ &&
+      is_jit_disabled_ == other.is_jit_disabled_;
+
+  if (is_match) {
+    // If all the fields match, then the "same principal" subset must also
+    // match. This is used to ensure these 2 methods stay in sync and all fields
+    // used by IsSamePrincipalWith() are used by this function.
+    DCHECK(IsSamePrincipalWith(other));
+  }
+  return is_match;
+}
+
 bool SiteInfo::operator==(const SiteInfo& other) const {
-  return MakeTie(*this) == MakeTie(other);
+  return IsSamePrincipalWith(other);
 }
 
 bool SiteInfo::operator!=(const SiteInfo& other) const {
-  return MakeTie(*this) != MakeTie(other);
+  return !IsSamePrincipalWith(other);
 }
 
 bool SiteInfo::operator<(const SiteInfo& other) const {
-  return MakeTie(*this) < MakeTie(other);
+  return MakeSecurityPrincipalKey(*this) < MakeSecurityPrincipalKey(other);
 }
 
 std::string SiteInfo::GetDebugString() const {
@@ -237,12 +300,22 @@ std::string SiteInfo::GetDebugString() const {
   if (is_origin_keyed_)
     debug_string += ", origin-keyed";
 
-  if (coop_coep_cross_origin_isolated_info_.is_isolated()) {
+  if (web_exposed_isolation_info_.is_isolated()) {
     debug_string += ", cross-origin isolated";
-    debug_string +=
-        ", coi-origin='" +
-        coop_coep_cross_origin_isolated_info_.origin().GetDebugString() + "'";
+    if (web_exposed_isolation_info_.is_isolated_application())
+      debug_string += " application";
+    debug_string += ", coi-origin='" +
+                    web_exposed_isolation_info_.origin().GetDebugString() + "'";
   }
+
+  if (is_guest_)
+    debug_string += ", guest";
+
+  if (does_site_request_dedicated_process_for_coop_)
+    debug_string += ", requests coop isolation";
+
+  if (is_jit_disabled_)
+    debug_string += ", jitless";
 
   return debug_string;
 }
@@ -258,6 +331,12 @@ bool SiteInfo::RequiresDedicatedProcess(
 
   // If --site-per-process is enabled, site isolation is enabled everywhere.
   if (SiteIsolationPolicy::UseDedicatedProcessesForAllSites())
+    return true;
+
+  // If there is a COOP header request to require a dedicated process for this
+  // SiteInfo, honor it.  Note that we have already checked other eligibility
+  // criteria such as memory thresholds prior to setting this bit on SiteInfo.
+  if (does_site_request_dedicated_process_for_coop_)
     return true;
 
   // Always require a dedicated process for isolated origins.
@@ -359,6 +438,53 @@ bool SiteInfo::ShouldUseProcessPerSite(BrowserContext* browser_context) const {
                                                                 site_url_);
 }
 
+StoragePartitionId SiteInfo::GetStoragePartitionId(
+    BrowserContext* browser_context) const {
+  if (site_url().is_empty())
+    return StoragePartitionId(browser_context);
+
+  return GetContentClient()->browser()->GetStoragePartitionIdForSite(
+      browser_context, site_url());
+}
+
+StoragePartitionConfig SiteInfo::GetStoragePartitionConfig(
+    BrowserContext* browser_context) const {
+  return GetStoragePartitionConfigForUrl(browser_context, site_url(),
+                                         /*is_site_url=*/true);
+}
+
+// static
+StoragePartitionConfig SiteInfo::GetStoragePartitionConfigForUrl(
+    BrowserContext* browser_context,
+    const GURL& url,
+    bool is_site_url) {
+  if (url.is_empty())
+    return StoragePartitionConfig::CreateDefault(browser_context);
+
+  if (!is_site_url && url.SchemeIs(kGuestScheme)) {
+    // Guest schemes should only appear in site URLs. Generate a crash
+    // dump to help debug unexpected callers that might not be setting
+    // |is_site_url| correctly.
+    // TODO(acolwell): Once we have confidence all callers are setting
+    // |is_site_url| correctly, replace crash reporting with code that returns a
+    // default config for this scheme in the non-site URL case.
+    SCOPED_CRASH_KEY_STRING256("StoragePartitionConfigForUrl", "guest_url",
+                               url.possibly_invalid_spec());
+    base::debug::DumpWithoutCrashing();
+  }
+
+  return GetContentClient()->browser()->GetStoragePartitionConfigForSite(
+      browser_context, url);
+}
+
+void SiteInfo::WriteIntoTrace(perfetto::TracedValue context) const {
+  auto dict = std::move(context).WriteDictionary();
+  dict.Add("site_url", site_url());
+  dict.Add("process_lock_url", process_lock_url());
+  dict.Add("is_origin_keyed", is_origin_keyed_);
+  dict.Add("is_guest", is_guest_);
+}
+
 bool SiteInfo::is_error_page() const {
   return !is_guest_ && site_url_ == GetErrorPageSiteAndLockURL();
 }
@@ -445,9 +571,10 @@ GURL SiteInfo::GetSiteForURLInternal(const IsolationContext& isolation_context,
     // resolved prior to the isolated origin lookup.
     auto* policy = ChildProcessSecurityPolicyImpl::GetInstance();
     url::Origin isolated_origin;
-    if (policy->GetMatchingIsolatedOrigin(
-            isolation_context, origin, real_url_info.origin_requests_isolation,
-            site_url, &isolated_origin)) {
+    if (policy->GetMatchingProcessIsolatedOrigin(
+            isolation_context, origin,
+            real_url_info.requests_origin_agent_cluster_isolation(), site_url,
+            &isolated_origin)) {
       return isolated_origin.GetURL();
     }
   } else {
@@ -557,18 +684,18 @@ scoped_refptr<SiteInstanceImpl> SiteInstanceImpl::Create(
     BrowserContext* browser_context) {
   DCHECK(browser_context);
   return base::WrapRefCounted(new SiteInstanceImpl(new BrowsingInstance(
-      browser_context, CoopCoepCrossOriginIsolatedInfo::CreateNonIsolated())));
+      browser_context, WebExposedIsolationInfo::CreateNonIsolated())));
 }
 
 // static
 scoped_refptr<SiteInstanceImpl> SiteInstanceImpl::CreateForUrlInfo(
     BrowserContext* browser_context,
     const UrlInfo& url_info,
-    const CoopCoepCrossOriginIsolatedInfo& cross_origin_isolated_info) {
+    const WebExposedIsolationInfo& web_exposed_isolation_info) {
   DCHECK(browser_context);
   // This will create a new SiteInstance and BrowsingInstance.
   scoped_refptr<BrowsingInstance> instance(
-      new BrowsingInstance(browser_context, cross_origin_isolated_info));
+      new BrowsingInstance(browser_context, web_exposed_isolation_info));
 
   // Note: The |allow_default_instance| value used here MUST match the value
   // used in DoesSiteForURLMatch().
@@ -580,7 +707,7 @@ scoped_refptr<SiteInstanceImpl> SiteInstanceImpl::CreateForUrlInfo(
 scoped_refptr<SiteInstanceImpl> SiteInstanceImpl::CreateForServiceWorker(
     BrowserContext* browser_context,
     const GURL& url,
-    const CoopCoepCrossOriginIsolatedInfo& cross_origin_isolated_info,
+    const WebExposedIsolationInfo& web_exposed_isolation_info,
     bool can_reuse_process,
     bool is_guest) {
   DCHECK(!url.SchemeIs(kChromeErrorScheme));
@@ -591,12 +718,12 @@ scoped_refptr<SiteInstanceImpl> SiteInstanceImpl::CreateForServiceWorker(
   } else {
     // This will create a new SiteInstance and BrowsingInstance.
     scoped_refptr<BrowsingInstance> instance(
-        new BrowsingInstance(browser_context, cross_origin_isolated_info));
+        new BrowsingInstance(browser_context, web_exposed_isolation_info));
 
     // We do NOT want to allow the default site instance here because workers
     // need to be kept separate from other sites.
     site_instance = instance->GetSiteInstanceForURL(
-        UrlInfo(url, false /* origin_requests_isolation */),
+        UrlInfo(url, UrlInfo::OriginIsolationRequest::kNone),
         /* allow_default_instance */ false);
   }
   DCHECK(!site_instance->GetSiteInfo().is_error_page());
@@ -623,11 +750,11 @@ scoped_refptr<SiteInstanceImpl> SiteInstanceImpl::CreateForGuest(
   DCHECK(browser_context);
   DCHECK_NE(guest_site_url, GetDefaultSiteURL());
 
-  auto guest_site_info = SiteInfo::CreateForGuest(guest_site_url);
+  auto guest_site_info =
+      SiteInfo::CreateForGuest(browser_context, guest_site_url);
   scoped_refptr<SiteInstanceImpl> site_instance =
       base::WrapRefCounted(new SiteInstanceImpl(new BrowsingInstance(
-          browser_context,
-          guest_site_info.coop_coep_cross_origin_isolated_info())));
+          browser_context, guest_site_info.web_exposed_isolation_info())));
 
   site_instance->SetSiteInfoInternal(guest_site_info);
 
@@ -642,13 +769,23 @@ SiteInstanceImpl::CreateReusableInstanceForTesting(
   DCHECK(browser_context);
   // This will create a new SiteInstance and BrowsingInstance.
   scoped_refptr<BrowsingInstance> instance(new BrowsingInstance(
-      browser_context, CoopCoepCrossOriginIsolatedInfo::CreateNonIsolated()));
+      browser_context, WebExposedIsolationInfo::CreateNonIsolated()));
   auto site_instance = instance->GetSiteInstanceForURL(
-      UrlInfo(url, false /* origin_requests_isolation */),
+      UrlInfo(url, UrlInfo::OriginIsolationRequest::kNone),
       /* allow_default_instance */ false);
   site_instance->set_process_reuse_policy(
       SiteInstanceImpl::ProcessReusePolicy::REUSE_PENDING_OR_COMMITTED_SITE);
   return site_instance;
+}
+
+// static
+scoped_refptr<SiteInstanceImpl> SiteInstanceImpl::CreateForTesting(
+    BrowserContext* browser_context,
+    const GURL& url) {
+  DCHECK(browser_context);
+  return SiteInstanceImpl::CreateForUrlInfo(
+      browser_context, UrlInfo::CreateForTesting(url),
+      WebExposedIsolationInfo::CreateNonIsolated());
 }
 
 // static
@@ -680,14 +817,9 @@ const IsolationContext& SiteInstanceImpl::GetIsolationContext() {
   return browsing_instance_->isolation_context();
 }
 
-RenderProcessHost* SiteInstanceImpl::GetDefaultProcessIfUsable() {
-  if (!base::FeatureList::IsEnabled(
-          features::kProcessSharingWithStrictSiteInstances)) {
-    return nullptr;
-  }
-  if (RequiresDedicatedProcess())
-    return nullptr;
-  return browsing_instance_->default_process();
+RenderProcessHost* SiteInstanceImpl::GetSiteInstanceGroupProcessIfAvailable() {
+  return browsing_instance_->site_instance_group_manager()
+      .GetExistingGroupProcess(this);
 }
 
 bool SiteInstanceImpl::IsDefaultSiteInstance() const {
@@ -702,23 +834,6 @@ void SiteInstanceImpl::AddSiteInfoToDefault(const SiteInfo& site_info) {
 bool SiteInstanceImpl::IsSiteInDefaultSiteInstance(const GURL& site_url) const {
   DCHECK(IsDefaultSiteInstance());
   return default_site_instance_state_->ContainsSite(site_url);
-}
-
-void SiteInstanceImpl::MaybeSetBrowsingInstanceDefaultProcess() {
-  if (!base::FeatureList::IsEnabled(
-          features::kProcessSharingWithStrictSiteInstances)) {
-    return;
-  }
-  // Wait until this SiteInstance both has a site and a process
-  // assigned, so that we can be sure that RequiresDedicatedProcess()
-  // is accurate and we actually have a process to set.
-  if (!process_ || !has_site_ || RequiresDedicatedProcess())
-    return;
-  if (browsing_instance_->default_process()) {
-    DCHECK_EQ(process_, browsing_instance_->default_process());
-    return;
-  }
-  browsing_instance_->SetDefaultProcess(process_);
 }
 
 // static
@@ -825,7 +940,7 @@ void SiteInstanceImpl::SetProcessInternal(RenderProcessHost* process) {
   agent_scheduling_group_ =
       AgentSchedulingGroupHost::GetOrCreate(*this, *process_);
 
-  MaybeSetBrowsingInstanceDefaultProcess();
+  LockProcessIfNeeded();
 
   // If we are using process-per-site, we need to register this process
   // for the current site so that we can find it again.  (If no site is set
@@ -839,7 +954,10 @@ void SiteInstanceImpl::SetProcessInternal(RenderProcessHost* process) {
                id_, "process id", process_->GetID());
   GetContentClient()->browser()->SiteInstanceGotProcess(this);
 
-  LockProcessIfNeeded();
+  // Notify SiteInstanceGroupManager that the process was set on this
+  // SiteInstance. This must be called after LockProcessIfNeeded() because
+  // the SiteInstanceGroupManager does suitability checks that use the lock.
+  browsing_instance_->site_instance_group_manager().OnProcessSet(this);
 }
 
 bool SiteInstanceImpl::CanAssociateWithSpareProcess() {
@@ -878,15 +996,26 @@ void SiteInstanceImpl::SetSiteInfoToDefault() {
   default_site_instance_state_ = std::make_unique<DefaultSiteInstanceState>();
   original_url_ = GetDefaultSiteURL();
   SetSiteInfoInternal(SiteInfo::CreateForDefaultSiteInstance(
-      browsing_instance_->coop_coep_cross_origin_isolated_info()));
+      GetBrowserContext(), browsing_instance_->web_exposed_isolation_info()));
 }
 
 void SiteInstanceImpl::SetSiteInfoInternal(const SiteInfo& site_info) {
   // TODO(acolwell): Add logic to validate |site_url| and |lock_url| are valid.
   DCHECK(!has_site_);
-  CHECK_EQ(site_info.coop_coep_cross_origin_isolated_info(),
-           browsing_instance_->coop_coep_cross_origin_isolated_info());
+  CHECK_EQ(site_info.web_exposed_isolation_info(),
+           browsing_instance_->web_exposed_isolation_info());
 
+  if (verify_storage_partition_info_) {
+    auto* browser_context = browsing_instance_->GetBrowserContext();
+    auto old_partition_id = site_info_.GetStoragePartitionId(browser_context);
+    auto old_partition_config =
+        site_info_.GetStoragePartitionConfig(browser_context);
+    auto new_partition_id = site_info.GetStoragePartitionId(browser_context);
+    auto new_partition_config =
+        site_info.GetStoragePartitionConfig(browser_context);
+    CHECK_EQ(old_partition_id, new_partition_id);
+    CHECK_EQ(old_partition_config, new_partition_config);
+  }
   // Remember that this SiteInstance has been used to load a URL, even if the
   // URL is invalid.
   has_site_ = true;
@@ -904,9 +1033,36 @@ void SiteInstanceImpl::SetSiteInfoInternal(const SiteInfo& site_info) {
     // BrowsingInstance, even if its opt-in status changes later.
     ChildProcessSecurityPolicyImpl* policy =
         ChildProcessSecurityPolicyImpl::GetInstance();
-    url::Origin site_origin(url::Origin::Create(site_info_.process_lock_url()));
-    policy->AddOptInIsolatedOriginForBrowsingInstance(
-        browsing_instance_->isolation_context(), site_origin);
+    url::Origin origin(url::Origin::Create(site_info_.process_lock_url()));
+    // This is one of two places that origins can be marked as opted-in, the
+    // other is
+    // NavigationRequest::AddSameProcessOriginAgentClusterOptInIfNecessary().
+    // This site handles the case where OAC isolation gets a separate process.
+    // In future, when SiteInstance Groups are complete, this may revert to
+    // being the only call site.
+    policy->AddIsolatedOriginForBrowsingInstance(
+        browsing_instance_->isolation_context(), origin,
+        true /* is_origin_keyed */,
+        ChildProcessSecurityPolicy::IsolatedOriginSource::WEB_TRIGGERED);
+  }
+
+  if (site_info_.does_site_request_dedicated_process_for_coop()) {
+    // If there was a request to process-isolate `site_info_` from COOP
+    // headers, notify ChildProcessSecurityPolicy about the new isolated origin
+    // in the current BrowsingInstance.  Note that we must convert the origin
+    // to a site to avoid breaking document.domain.  Typically, the process
+    // lock URL would already correspond to a site (since we isolate sites, not
+    // origins, by default), but this isn't always the case.  For example, this
+    // SiteInstance could be isolated with the origin granularity due to
+    // Origin-Agent-Cluster (see site_info_.is_origin_keyed() above).
+    url::Origin origin(url::Origin::Create(site_info_.process_lock_url()));
+    GURL site(SiteInfo::GetSiteForOrigin(origin));
+    ChildProcessSecurityPolicyImpl* policy =
+        ChildProcessSecurityPolicyImpl::GetInstance();
+    policy->AddIsolatedOriginForBrowsingInstance(
+        browsing_instance_->isolation_context(), url::Origin::Create(site),
+        false /* is_origin_keyed */,
+        ChildProcessSecurityPolicy::IsolatedOriginSource::WEB_TRIGGERED);
   }
 
   // Update the process reuse policy based on the site.
@@ -920,17 +1076,21 @@ void SiteInstanceImpl::SetSiteInfoInternal(const SiteInfo& site_info) {
     // Ensure the process is registered for this site if necessary.
     if (should_use_process_per_site)
       RenderProcessHostImpl::RegisterSoleProcessHostForSite(process_, this);
-
-    MaybeSetBrowsingInstanceDefaultProcess();
   }
+
+  // Notify SiteInstanceGroupManager that the SiteInfo was set on this
+  // SiteInstance. This must be called after LockProcessIfNeeded() because
+  // the SiteInstanceGroupManager does suitability checks that use the lock.
+  browsing_instance_->site_instance_group_manager().OnSiteInfoSet(
+      this, process_ != nullptr);
 }
 
 void SiteInstanceImpl::ConvertToDefaultOrSetSite(const UrlInfo& url_info) {
   DCHECK(!has_site_);
 
   if (!browsing_instance_->HasDefaultSiteInstance()) {
-    const SiteInfo site_info = SiteInfo::Create(
-        GetIsolationContext(), url_info, GetCoopCoepCrossOriginIsolatedInfo());
+    const SiteInfo site_info = SiteInfo::Create(GetIsolationContext(), url_info,
+                                                GetWebExposedIsolationInfo());
     if (CanBePlacedInDefaultSiteInstance(GetIsolationContext(), url_info.url,
                                          site_info)) {
       SetSiteInfoToDefault();
@@ -957,6 +1117,19 @@ const SiteInfo& SiteInstanceImpl::GetSiteInfo() {
   return site_info_;
 }
 
+const SiteInfo& SiteInstanceImpl::GetSiteInfoForRenderViewHost() {
+  if (!has_site_) {
+    // Note: `site_info_` has not been set yet. When the RenderViewHost uses
+    // this SiteInfo to generate a partition ID it will be using an empty
+    // SiteInfo. This is ok as long as the ID does not change when `site_info_`
+    // is actually set. Enable the verification code in SetSiteInfoInternal() to
+    // verify that the partition info does not change.
+    verify_storage_partition_info_ = true;
+  }
+
+  return site_info_;
+}
+
 SiteInfo SiteInstanceImpl::DeriveSiteInfo(const UrlInfo& url_info,
                                           bool is_related) {
   if (IsGuest()) {
@@ -971,7 +1144,7 @@ SiteInfo SiteInstanceImpl::DeriveSiteInfo(const UrlInfo& url_info,
   }
 
   return SiteInfo::Create(GetIsolationContext(), url_info,
-                          GetCoopCoepCrossOriginIsolatedInfo());
+                          GetWebExposedIsolationInfo());
 }
 
 const ProcessLock SiteInstanceImpl::GetProcessLock() const {
@@ -989,7 +1162,7 @@ bool SiteInstanceImpl::HasRelatedSiteInstance(const SiteInfo& site_info) {
 scoped_refptr<SiteInstance> SiteInstanceImpl::GetRelatedSiteInstance(
     const GURL& url) {
   return GetRelatedSiteInstanceImpl(
-      UrlInfo(url, false /* origin_requests_isolation */));
+      UrlInfo(url, UrlInfo::OriginIsolationRequest::kNone));
 }
 
 scoped_refptr<SiteInstanceImpl> SiteInstanceImpl::GetRelatedSiteInstanceImpl(
@@ -1013,7 +1186,7 @@ bool SiteInstanceImpl::IsSuitableForUrlInfo(const UrlInfo& url_info) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   // If the URL to navigate to can be associated with any site instance,
   // we want to keep it in the same process.
-  if (IsRendererDebugURL(url))
+  if (blink::IsRendererDebugURL(url))
     return true;
 
   // Any process can host an about:blank URL, except the one used for error
@@ -1137,8 +1310,8 @@ scoped_refptr<SiteInstance> SiteInstance::CreateForURL(
     const GURL& url) {
   DCHECK(browser_context);
   return SiteInstanceImpl::CreateForUrlInfo(
-      browser_context, UrlInfo(url, false /* origin_requests_isolation */),
-      CoopCoepCrossOriginIsolatedInfo::CreateNonIsolated());
+      browser_context, UrlInfo(url, UrlInfo::OriginIsolationRequest::kNone),
+      WebExposedIsolationInfo::CreateNonIsolated());
 }
 
 // static
@@ -1156,7 +1329,7 @@ bool SiteInstance::ShouldAssignSiteForURL(const GURL& url) {
 
 bool SiteInstanceImpl::IsSameSiteWithURL(const GURL& url) {
   return IsSameSiteWithURLInfo(
-      UrlInfo(url, false /* origin_requests_isolation */));
+      UrlInfo(url, UrlInfo::OriginIsolationRequest::kNone));
 }
 
 bool SiteInstanceImpl::IsSameSiteWithURLInfo(const UrlInfo& url_info) {
@@ -1175,7 +1348,7 @@ bool SiteInstanceImpl::IsSameSiteWithURLInfo(const UrlInfo& url_info) {
     // that should be routed to the default SiteInstance.
     DCHECK_EQ(site_info_.site_url(), GetDefaultSiteURL());
     auto site_info = SiteInfo::Create(GetIsolationContext(), url_info,
-                                      GetCoopCoepCrossOriginIsolatedInfo());
+                                      GetWebExposedIsolationInfo());
     return CanBePlacedInDefaultSiteInstance(GetIsolationContext(), url,
                                             site_info) &&
            !browsing_instance_->HasSiteInstance(site_info);
@@ -1183,7 +1356,7 @@ bool SiteInstanceImpl::IsSameSiteWithURLInfo(const UrlInfo& url_info) {
 
   return SiteInstanceImpl::IsSameSite(
       GetIsolationContext(),
-      UrlInfo(site_info_.site_url(), false /* origin_requests_isolation */),
+      UrlInfo(site_info_.site_url(), UrlInfo::OriginIsolationRequest::kNone),
       url_info, true /* should_compare_effective_urls */);
 }
 
@@ -1191,11 +1364,14 @@ bool SiteInstanceImpl::IsGuest() {
   return site_info_.is_guest();
 }
 
+bool SiteInstanceImpl::IsJitDisabled() {
+  return site_info_.is_jit_disabled();
+}
+
 std::string SiteInstanceImpl::GetPartitionDomain(
     StoragePartitionImpl* storage_partition) {
   auto storage_partition_config =
-      GetContentClient()->browser()->GetStoragePartitionConfigForSite(
-          GetBrowserContext(), GetSiteURL());
+      site_info_.GetStoragePartitionConfig(GetBrowserContext());
 
   // The DCHECK here is to allow the trybots to detect any attempt to introduce
   // new code that violates this assumption.
@@ -1206,17 +1382,10 @@ std::string SiteInstanceImpl::GetPartitionDomain(
       storage_partition_config.partition_domain()) {
     // Trigger crash logging if we encounter a case that violates our
     // assumptions.
-    static auto* storage_partition_domain_key =
-        base::debug::AllocateCrashKeyString("storage_partition_domain",
-                                            base::debug::CrashKeySize::Size256);
-    static auto* storage_partition_config_domain_key =
-        base::debug::AllocateCrashKeyString(
-            "storage_partition_config_domain_key",
-            base::debug::CrashKeySize::Size256);
-    base::debug::SetCrashKeyString(storage_partition_domain_key,
-                                   storage_partition->GetPartitionDomain());
-    base::debug::SetCrashKeyString(storage_partition_config_domain_key,
-                                   storage_partition_config.partition_domain());
+    SCOPED_CRASH_KEY_STRING256("GetPartitionDomain", "domain",
+                               storage_partition->GetPartitionDomain());
+    SCOPED_CRASH_KEY_STRING256("GetPartitionDomain", "config_domain_key",
+                               storage_partition_config.partition_domain());
 
     base::debug::DumpWithoutCrashing();
 
@@ -1233,16 +1402,16 @@ bool SiteInstanceImpl::IsOriginalUrlSameSite(
   if (IsDefaultSiteInstance())
     return IsSameSiteWithURLInfo(dest_url_info);
 
-  // Here we use |origin_requests_isolation| when converting |original_url_| to
-  // UrlInfo, since (i) the isolation status of this SiteInstance was determined
-  // at the time |original_url_| was set, and in this case it is |dest_url_info|
-  // that is currently navigating, and that's where the current isolation
-  // request (if any) is stored. Whether or not this SiteInstance has origin
-  // isolation is a separate question, and not what the UrlInfo for
-  // |original_url_| is supposed to reflect.
+  // Here we use an |origin_isolation_request| of kNone when converting
+  // |original_url_| to UrlInfo, since (i) the isolation status of this
+  // SiteInstance was determined at the time |original_url_| was set, and in
+  // this case it is |dest_url_info| that is currently navigating, and that's
+  // where the current isolation request (if any) is stored. Whether or not
+  // this SiteInstance has origin isolation is a separate question, and not
+  // what the UrlInfo for |original_url_| is supposed to reflect.
   return IsSameSite(
       GetIsolationContext(),
-      UrlInfo(original_url_, false /* origin_requests_isolation */),
+      UrlInfo(original_url_, UrlInfo::OriginIsolationRequest::kNone),
       dest_url_info, should_compare_effective_urls);
 }
 
@@ -1294,10 +1463,11 @@ bool SiteInstanceImpl::IsNavigationSameSite(
   // In the common case, we use the last successful URL. Thus, we compare
   // against the last successful commit when deciding whether to swap this time.
   // We convert |last_successful_url| to UrlInfo with
-  // |origin_requests_isolation| = false since it isn't currently navigating.
+  // |origin_isolation_request| set to kNone since it isn't currently
+  // navigating.
   if (IsSameSite(
           GetIsolationContext(),
-          UrlInfo(last_successful_url, false /* origin_requests_isolation */),
+          UrlInfo(last_successful_url, UrlInfo::OriginIsolationRequest::kNone),
           dest_url_info, should_compare_effective_urls)) {
     return true;
   }
@@ -1306,11 +1476,11 @@ bool SiteInstanceImpl::IsNavigationSameSite(
   // example, "about:blank"). If so, examine the last committed origin to
   // determine the site.
   // Similar to above, convert |last_committed_origin| to UrlInfo with
-  // |origin_requests_isolation| = false.
+  // |origin_isolation_request| set to kNone.
   if (!last_committed_origin.opaque() &&
       IsSameSite(GetIsolationContext(),
                  UrlInfo(GURL(last_committed_origin.Serialize()),
-                         false /* origin_requests_isolation */),
+                         UrlInfo::OriginIsolationRequest::kNone),
                  dest_url_info, should_compare_effective_urls)) {
     return true;
   }
@@ -1361,7 +1531,7 @@ bool SiteInstanceImpl::IsSameSite(const IsolationContext& isolation_context,
   // Some special URLs will match the site instance of any other URL. This is
   // done before checking both of them for validity, since we want these URLs
   // to have the same site instance as even an invalid one.
-  if (IsRendererDebugURL(src_url) || IsRendererDebugURL(dest_url))
+  if (blink::IsRendererDebugURL(src_url) || blink::IsRendererDebugURL(dest_url))
     return true;
 
   // If either URL is invalid, they aren't part of the same site.
@@ -1404,12 +1574,14 @@ bool SiteInstanceImpl::IsSameSite(const IsolationContext& isolation_context,
   auto* policy = ChildProcessSecurityPolicyImpl::GetInstance();
   url::Origin src_isolated_origin;
   url::Origin dest_isolated_origin;
-  bool src_origin_is_isolated = policy->GetMatchingIsolatedOrigin(
+  bool src_origin_is_isolated = policy->GetMatchingProcessIsolatedOrigin(
       isolation_context, src_origin,
-      real_src_url_info.origin_requests_isolation, &src_isolated_origin);
-  bool dest_origin_is_isolated = policy->GetMatchingIsolatedOrigin(
+      real_src_url_info.requests_origin_agent_cluster_isolation(),
+      &src_isolated_origin);
+  bool dest_origin_is_isolated = policy->GetMatchingProcessIsolatedOrigin(
       isolation_context, dest_origin,
-      real_dest_url_info.origin_requests_isolation, &dest_isolated_origin);
+      real_dest_url_info.requests_origin_agent_cluster_isolation(),
+      &dest_isolated_origin);
   if (src_origin_is_isolated || dest_origin_is_isolated) {
     // Compare most specific matching origins to ensure that a subdomain of an
     // isolated origin (e.g., https://subdomain.isolated.foo.com) also matches
@@ -1425,15 +1597,15 @@ bool SiteInstanceImpl::DoesSiteInfoForURLMatch(const UrlInfo& url_info) {
   // this method. The code is currently safe because the caller checks to make
   // sure the COOP/COEP info matches on this object before calling this method.
   auto site_info = SiteInfo::Create(GetIsolationContext(), url_info,
-                                    GetCoopCoepCrossOriginIsolatedInfo());
+                                    GetWebExposedIsolationInfo());
   if (kCreateForURLAllowsDefaultSiteInstance &&
       CanBePlacedInDefaultSiteInstance(GetIsolationContext(), url_info.url,
                                        site_info)) {
     site_info = SiteInfo::CreateForDefaultSiteInstance(
-        GetCoopCoepCrossOriginIsolatedInfo());
+        GetBrowserContext(), GetWebExposedIsolationInfo());
   }
 
-  return site_info_ == site_info;
+  return site_info_.IsExactMatch(site_info);
 }
 
 void SiteInstanceImpl::PreventOptInOriginIsolation(
@@ -1534,7 +1706,7 @@ void SiteInstanceImpl::LockProcessIfNeeded() {
     // https://crbug.com/1135539.
     if (process_lock.is_invalid()) {
       auto new_process_lock =
-          ProcessLock::CreateAllowAnySite(GetCoopCoepCrossOriginIsolatedInfo());
+          ProcessLock::CreateAllowAnySite(GetWebExposedIsolationInfo());
       process_->SetProcessLock(GetIsolationContext(), new_process_lock);
     } else {
       CHECK(process_lock.allows_any_site())
@@ -1598,7 +1770,7 @@ void SiteInstanceImpl::LockProcessIfNeeded() {
       // Update the process lock state to signal that the process has been
       // associated with a SiteInstance that is not locked to a site yet.
       auto new_process_lock =
-          ProcessLock::CreateAllowAnySite(GetCoopCoepCrossOriginIsolatedInfo());
+          ProcessLock::CreateAllowAnySite(GetWebExposedIsolationInfo());
       process_->SetProcessLock(GetIsolationContext(), new_process_lock);
     } else {
       CHECK(process_lock.allows_any_site())
@@ -1613,24 +1785,27 @@ void SiteInstanceImpl::LockProcessIfNeeded() {
   policy->IncludeIsolationContext(process_->GetID(), GetIsolationContext());
 }
 
-const CoopCoepCrossOriginIsolatedInfo&
-SiteInstanceImpl::GetCoopCoepCrossOriginIsolatedInfo() const {
-  return browsing_instance_->coop_coep_cross_origin_isolated_info();
+const WebExposedIsolationInfo& SiteInstanceImpl::GetWebExposedIsolationInfo()
+    const {
+  return browsing_instance_->web_exposed_isolation_info();
 }
 
-bool SiteInstanceImpl::IsCoopCoepCrossOriginIsolated() const {
-  return GetCoopCoepCrossOriginIsolatedInfo().is_isolated();
+bool SiteInstanceImpl::IsCrossOriginIsolated() const {
+  return GetWebExposedIsolationInfo().is_isolated();
 }
 
 // static
-void SiteInstance::StartIsolatingSite(BrowserContext* context,
-                                      const GURL& url) {
+void SiteInstance::StartIsolatingSite(
+    BrowserContext* context,
+    const GURL& url,
+    ChildProcessSecurityPolicy::IsolatedOriginSource source,
+    bool should_persist) {
   if (!SiteIsolationPolicy::AreDynamicIsolatedOriginsEnabled())
     return;
 
   // Ignore attempts to isolate origins that are not supported.  Do this here
-  // instead of relying on AddIsolatedOrigins()'s internal validation, to avoid
-  // the runtime warning generated by the latter.
+  // instead of relying on AddFutureIsolatedOrigins()'s internal validation, to
+  // avoid the runtime warning generated by the latter.
   url::Origin origin(url::Origin::Create(url));
   if (!IsolatedOriginUtil::IsValidIsolatedOrigin(origin))
     return;
@@ -1643,16 +1818,24 @@ void SiteInstance::StartIsolatingSite(BrowserContext* context,
   ChildProcessSecurityPolicyImpl* policy =
       ChildProcessSecurityPolicyImpl::GetInstance();
   url::Origin site_origin(url::Origin::Create(site));
-  policy->AddIsolatedOrigins(
-      {site_origin},
-      ChildProcessSecurityPolicy::IsolatedOriginSource::USER_TRIGGERED,
-      context);
+  policy->AddFutureIsolatedOrigins({site_origin}, source, context);
 
   // This function currently assumes the new isolated site should persist
   // across restarts, so ask the embedder to save it, excluding off-the-record
   // profiles.
-  if (!context->IsOffTheRecord())
-    GetContentClient()->browser()->PersistIsolatedOrigin(context, site_origin);
+  if (!context->IsOffTheRecord() && should_persist) {
+    GetContentClient()->browser()->PersistIsolatedOrigin(context, site_origin,
+                                                         source);
+  }
+}
+
+void SiteInstanceImpl::WriteIntoTrace(perfetto::TracedValue context) {
+  auto dict = std::move(context).WriteDictionary();
+  dict.Add("id", GetId());
+  dict.Add("browsing_instance_id", GetBrowsingInstanceId());
+  dict.Add("is_default", IsDefaultSiteInstance());
+  dict.Add("site_info", site_info_);
+  dict.Add("active_frame_count", active_frame_count_);
 }
 
 }  // namespace content

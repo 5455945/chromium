@@ -14,6 +14,8 @@
 
 namespace autofill {
 
+struct AutofillOfferData;
+
 // Implementation of per-tab class to control the offer notification bubble and
 // Omnibox icon.
 class OfferNotificationBubbleControllerImpl
@@ -37,20 +39,18 @@ class OfferNotificationBubbleControllerImpl
       const OfferNotificationBubbleControllerImpl&) = delete;
 
   // OfferBubbleController:
-  base::string16 GetWindowTitle() const override;
-  base::string16 GetOkButtonLabel() const override;
+  std::u16string GetWindowTitle() const override;
+  std::u16string GetOkButtonLabel() const override;
   AutofillBubbleBase* GetOfferNotificationBubbleView() const override;
   const CreditCard* GetLinkedCard() const override;
   bool IsIconVisible() const override;
   void OnBubbleClosed(PaymentsBubbleClosedReason closed_reason) override;
 
-  // Displays an offer notification on current page. Populates the value for
-  // |origins_to_display_bubble_|, since the bubble and icon are sticky over a
-  // given set of origins. For a card linked offer, The information of the
-  // |card| will be displayed in the bubble.
-  void ShowOfferNotificationIfApplicable(
-      const std::vector<GURL>& origins_to_display_bubble,
-      const CreditCard* card);
+  // Displays an offer notification for the given |offer| on the current page.
+  // The information of the |card|, if present, will be displayed in the bubble
+  // for a card-linked offer.
+  void ShowOfferNotificationIfApplicable(const AutofillOfferData* offer,
+                                         const CreditCard* card);
 
   // Called when user clicks on omnibox icon.
   void ReshowBubble();
@@ -70,19 +70,21 @@ class OfferNotificationBubbleControllerImpl
       OfferNotificationBubbleControllerImpl>;
   friend class OfferNotificationBubbleViewsTestBase;
 
-  // Updates the visibility of the icon as per IsIconVisible().
-  void UpdateOfferIcon();
+  // Returns whether the web content associated with this controller is active.
+  bool IsWebContentsActive();
 
   // For testing.
   void SetEventObserverForTesting(ObserverForTest* observer) {
     observer_for_testing_ = observer;
   }
 
+  // Denotes whether the bubble is shown due to user gesture. If this is true,
+  // it means the bubble is a reshown bubble.
   bool is_user_gesture_ = false;
 
   // The related credit card for a card linked offer. This can be nullopt for
   // offer types other than card linked offers.
-  base::Optional<CreditCard> card_;
+  absl::optional<CreditCard> card_;
 
   // The bubble and icon are sticky over a given set of origins. This is
   // populated when ShowOfferNotificationIfApplicable() is called and is cleared

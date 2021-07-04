@@ -5,9 +5,9 @@
 #include "chrome/browser/renderer_context_menu/render_view_context_menu.h"
 
 #include "base/bind.h"
-#include "base/optional.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry.h"
@@ -21,8 +21,12 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
+#include "chrome/test/base/scoped_testing_local_state.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_settings.h"
+#include "components/policy/core/common/policy_pref_names.h"
+#include "components/lens/lens_features.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/proxy_config/proxy_config_pref_names.h"
@@ -37,10 +41,18 @@
 #include "extensions/common/url_pattern.h"
 #include "services/network/test/test_shared_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/navigation/impression.h"
 #include "third_party/blink/public/mojom/context_menu/context_menu.mojom.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "url/gurl.h"
+
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+#include "chrome/browser/chromeos/policy/dlp/dlp_policy_constants.h"
+#include "chrome/browser/chromeos/policy/dlp/dlp_rules_manager.h"
+#include "chrome/browser/chromeos/policy/dlp/dlp_rules_manager_impl.h"
+#include "chrome/browser/chromeos/policy/dlp/dlp_rules_manager_test_utils.h"
+#endif
 
 using extensions::Extension;
 using extensions::MenuItem;
@@ -57,7 +69,7 @@ static content::ContextMenuParams CreateParams(int contexts) {
   rv.media_type = blink::mojom::ContextMenuDataMediaType::kNone;
   rv.page_url = GURL("http://test.page/");
 
-  static const base::char16 selected_text[] = { 's', 'e', 'l', 0 };
+  static constexpr char16_t selected_text[] = u"sel";
   if (contexts & MenuItem::SELECTION)
     rv.selection_text = selected_text;
 
@@ -113,13 +125,21 @@ class TestNavigationDelegate : public content::WebContentsDelegate {
     return nullptr;
   }
 
-  const base::Optional<content::OpenURLParams>& last_navigation_params() {
+  const absl::optional<content::OpenURLParams>& last_navigation_params() {
     return last_navigation_params_;
   }
 
  private:
-  base::Optional<content::OpenURLParams> last_navigation_params_;
+  absl::optional<content::OpenURLParams> last_navigation_params_;
 };
+
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+class MockDlpRulesManager : public policy::DlpRulesManagerImpl {
+ public:
+  explicit MockDlpRulesManager(PrefService* local_state)
+      : DlpRulesManagerImpl(local_state) {}
+};
+#endif
 
 }  // namespace
 
@@ -390,7 +410,7 @@ TEST_F(RenderViewContextMenuExtensionsTest,
       CreateContextMenu(web_contents.get(), registry_.get()));
 
   const ui::MenuModel& model = menu->menu_model();
-  base::string16 expected_title = base::ASCIIToUTF16("Added by an extension");
+  std::u16string expected_title = u"Added by an extension";
   int num_items_found = 0;
   for (int i = 0; i < model.GetItemCount(); ++i) {
     if (expected_title == model.GetLabelAt(i))
@@ -463,6 +483,46 @@ TEST_F(RenderViewContextMenuPrefsTest,
       menu->IsCommandIdEnabled(IDC_CONTENT_CONTEXT_OPENLINKOFFTHERECORD));
 }
 
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+// Verifies that SearchWebFor field is enabled/disabled based on DLP rules.
+TEST_F(RenderViewContextMenuPrefsTest,
+       DisableSearchWebForWhenClipboardIsBlocked) {
+  ScopedTestingLocalState testing_local_state(
+      TestingBrowserProcess::GetGlobal());
+  content::ContextMenuParams params = CreateParams(MenuItem::SELECTION);
+  params.page_url = GURL("http://www.foo.com/");
+  auto menu = std::make_unique<TestRenderViewContextMenu>(
+      web_contents()->GetMainFrame(), params);
+  menu->set_dlp_rules_manager(nullptr);
+  menu->set_selection_navigation_url(GURL("http://www.bar.com/"));
+
+  EXPECT_TRUE(menu->IsCommandIdEnabled(IDC_CONTENT_CONTEXT_SEARCHWEBFOR));
+
+  MockDlpRulesManager mock_dlp_rules_manager(testing_local_state.Get());
+  menu->set_dlp_rules_manager(&mock_dlp_rules_manager);
+  EXPECT_TRUE(menu->IsCommandIdEnabled(IDC_CONTENT_CONTEXT_SEARCHWEBFOR));
+
+  base::Value rules(base::Value::Type::LIST);
+  base::Value src_urls(base::Value::Type::LIST);
+  src_urls.Append("http://www.foo.com/");
+
+  base::Value dst_urls(base::Value::Type::LIST);
+  dst_urls.Append("http://www.bar.com/");
+
+  base::Value restrictions(base::Value::Type::LIST);
+  restrictions.Append(policy::dlp_test_util::CreateRestrictionWithLevel(
+      policy::dlp::kClipboardRestriction, policy::dlp::kBlockLevel));
+
+  rules.Append(policy::dlp_test_util::CreateRule(
+      "rule #1", "Block", std::move(src_urls), std::move(dst_urls),
+      /*dst_components=*/base::Value(base::Value::Type::LIST),
+      std::move(restrictions)));
+  testing_local_state.Get()->Set(policy::policy_prefs::kDlpRulesList,
+                                 std::move(rules));
+  EXPECT_FALSE(menu->IsCommandIdEnabled(IDC_CONTENT_CONTEXT_SEARCHWEBFOR));
+}
+#endif
+
 // Verifies Incognito Mode is not enabled for links disallowed in Incognito.
 TEST_F(RenderViewContextMenuPrefsTest,
        DisableOpenInIncognitoWindowForDisallowedUrls) {
@@ -518,7 +578,7 @@ TEST_F(RenderViewContextMenuPrefsTest, LoadBrokenImage) {
 // Verify that the suggested file name is propagated to web contents when save a
 // media file in context menu.
 TEST_F(RenderViewContextMenuPrefsTest, SaveMediaSuggestedFileName) {
-  const base::string16 kTestSuggestedFileName = base::ASCIIToUTF16("test_file");
+  const std::u16string kTestSuggestedFileName = u"test_file";
   content::ContextMenuParams params = CreateParams(MenuItem::VIDEO);
   params.suggested_filename = kTestSuggestedFileName;
   auto menu = std::make_unique<TestRenderViewContextMenu>(
@@ -526,7 +586,7 @@ TEST_F(RenderViewContextMenuPrefsTest, SaveMediaSuggestedFileName) {
   menu->ExecuteCommand(IDC_CONTENT_CONTEXT_SAVEAVAS, 0 /* event_flags */);
 
   // Video item should have suggested file name.
-  base::string16 suggested_filename =
+  std::u16string suggested_filename =
       content::WebContentsTester::For(web_contents())->GetSuggestedFileName();
   EXPECT_EQ(kTestSuggestedFileName, suggested_filename);
 
@@ -610,7 +670,7 @@ TEST_F(RenderViewContextMenuPrefsTest, ShowAllPasswords) {
 TEST_F(RenderViewContextMenuPrefsTest, ShowAllPasswordsIncognito) {
   std::unique_ptr<content::WebContents> incognito_web_contents(
       content::WebContentsTester::CreateTestWebContents(
-          profile()->GetPrimaryOTRProfile(), nullptr));
+          profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true), nullptr));
 
   // Set up password manager stuff.
   ChromePasswordManagerClient::CreateForWebContentsWithAutofillClient(
@@ -628,6 +688,26 @@ TEST_F(RenderViewContextMenuPrefsTest, ShowAllPasswordsIncognito) {
   EXPECT_TRUE(menu->IsItemPresent(IDC_CONTENT_CONTEXT_SHOWALLSAVEDPASSWORDS));
 }
 
+// Verify that the Lens Region Search menu item is displayed when the feature
+// is enabled.
+TEST_F(RenderViewContextMenuPrefsTest, LensRegionSearch) {
+  base::test::ScopedFeatureList features;
+  features.InitAndEnableFeature(lens::features::kLensRegionSearch);
+  std::unique_ptr<TestRenderViewContextMenu> menu(CreateContextMenu());
+
+  EXPECT_TRUE(menu->IsItemPresent(IDC_CONTENT_CONTEXT_LENS_REGION_SEARCH));
+}
+
+// Verify that the Lens Region Search menu item is disabled when the feature
+// is disabled.
+TEST_F(RenderViewContextMenuPrefsTest, LensRegionSearchDisabled) {
+  base::test::ScopedFeatureList features;
+  features.InitAndDisableFeature(lens::features::kLensRegionSearch);
+  std::unique_ptr<TestRenderViewContextMenu> menu(CreateContextMenu());
+
+  EXPECT_FALSE(menu->IsItemPresent(IDC_CONTENT_CONTEXT_LENS_REGION_SEARCH));
+}
+
 // Test FormatUrlForClipboard behavior
 // -------------------------------------------
 
@@ -640,7 +720,7 @@ struct FormatUrlForClipboardTestData {
 class FormatUrlForClipboardTest
     : public testing::TestWithParam<FormatUrlForClipboardTestData> {
  public:
-  static base::string16 FormatUrl(const GURL& url) {
+  static std::u16string FormatUrl(const GURL& url) {
     return RenderViewContextMenu::FormatURLForClipboard(url);
   }
 };
@@ -679,6 +759,6 @@ INSTANTIATE_TEST_SUITE_P(
 TEST_P(FormatUrlForClipboardTest, FormatUrlForClipboard) {
   auto param = GetParam();
   GURL url(param.input);
-  const base::string16 result = FormatUrl(url);
+  const std::u16string result = FormatUrl(url);
   DCHECK_EQ(base::UTF8ToUTF16(param.output), result);
 }

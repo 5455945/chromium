@@ -9,7 +9,6 @@
 #include <string>
 
 #include "base/callback.h"
-#include "base/strings/string16.h"
 #include "base/time/time.h"
 #include "content/browser/service_worker/service_worker_info.h"
 #include "content/browser/service_worker/service_worker_version.h"
@@ -70,7 +69,7 @@ class ServiceWorkerContextCoreObserver {
   virtual void OnControlleeNavigationCommitted(
       int64_t version_id,
       const std::string& uuid,
-      GlobalFrameRoutingId render_frame_host_id) {}
+      GlobalRenderFrameHostId render_frame_host_id) {}
   // Called when the ServiceWorkerContainer.register() promise is resolved.
   //
   // This is called before the service worker registration is persisted to

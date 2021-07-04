@@ -10,11 +10,11 @@
 
 #include "base/command_line.h"
 #include "base/macros.h"
-#include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/avatar_menu_observer.h"
 #include "chrome/browser/profiles/profile_attributes_entry.h"
+#include "chrome/browser/profiles/profile_attributes_init_params.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/profiles/profile_list.h"
 #include "chrome/browser/profiles/profiles_state.h"
@@ -77,14 +77,12 @@ class ProfileListDesktopTest : public testing::Test {
   void AddOmittedProfile(const std::string& name) {
     ProfileAttributesStorage* storage = manager()->profile_attributes_storage();
     base::FilePath profile_path = manager()->profiles_dir().AppendASCII(name);
-    storage->AddProfile(profile_path, ASCIIToUTF16(name), std::string(),
-                        base::string16(), false, 0, std::string(),
-                        EmptyAccountId());
-    ProfileAttributesEntry* entry =
-        storage->GetProfileAttributesWithPath(profile_path);
-    ASSERT_NE(entry, nullptr);
-    entry->SetIsEphemeral(true);
-    entry->SetIsOmitted(true);
+    ProfileAttributesInitParams params;
+    params.profile_path = profile_path;
+    params.profile_name = ASCIIToUTF16(name);
+    params.is_ephemeral = true;
+    params.is_omitted = true;
+    storage->AddProfile(std::move(params));
   }
 
   int change_count() const { return mock_observer_->change_count(); }
@@ -109,11 +107,11 @@ TEST_F(ProfileListDesktopTest, InitialCreation) {
 
   const AvatarMenu::Item& item1 = menu->GetItemAt(0);
   EXPECT_EQ(0U, item1.menu_index);
-  EXPECT_EQ(ASCIIToUTF16("Test 1"), item1.name);
+  EXPECT_EQ(u"Test 1", item1.name);
 
   const AvatarMenu::Item& item2 = menu->GetItemAt(1);
   EXPECT_EQ(1U, item2.menu_index);
-  EXPECT_EQ(ASCIIToUTF16("Test 2"), item2.name);
+  EXPECT_EQ(u"Test 2", item2.name);
 }
 
 TEST_F(ProfileListDesktopTest, NoOmittedProfiles) {
@@ -257,15 +255,15 @@ TEST_F(ProfileListDesktopTest, ChangeOnNotify) {
 
   const AvatarMenu::Item& item1 = menu->GetItemAt(0u);
   EXPECT_EQ(0u, item1.menu_index);
-  EXPECT_EQ(ASCIIToUTF16("Test 1"), item1.name);
+  EXPECT_EQ(u"Test 1", item1.name);
 
   const AvatarMenu::Item& item2 = menu->GetItemAt(1u);
   EXPECT_EQ(1u, item2.menu_index);
-  EXPECT_EQ(ASCIIToUTF16("Test 2"), item2.name);
+  EXPECT_EQ(u"Test 2", item2.name);
 
   const AvatarMenu::Item& item3 = menu->GetItemAt(2u);
   EXPECT_EQ(2u, item3.menu_index);
-  EXPECT_EQ(ASCIIToUTF16("Test 3"), item3.name);
+  EXPECT_EQ(u"Test 3", item3.name);
 }
 
 }  // namespace

@@ -21,7 +21,7 @@
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
-#include "chrome/browser/chromeos/file_manager/file_manager_test_util.h"
+#include "chrome/browser/ash/file_manager/file_manager_test_util.h"
 #include "chrome/browser/chromeos/file_manager/volume_manager.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/profiles/profile.h"
@@ -247,15 +247,15 @@ class BaseSelectFileDialogExtensionBrowserTest
 
     std::unique_ptr<ExtensionTestMessageListener> additional_listener;
     if (!additional_message.empty()) {
-      additional_listener.reset(
-          new ExtensionTestMessageListener(additional_message, will_reply));
+      additional_listener = std::make_unique<ExtensionTestMessageListener>(
+          additional_message, will_reply);
     }
 
     // Include a file type filter. This triggers additional functionality within
     // the Files app.
     ui::SelectFileDialog::FileTypeInfo file_types;
     file_types.extensions = {{"html"}};
-    dialog_->SelectFile(dialog_type, base::string16() /* title */, file_path,
+    dialog_->SelectFile(dialog_type, std::u16string() /* title */, file_path,
                         UseFileTypeFilter() ? &file_types : nullptr,
                         0 /* file_type_index */,
                         FILE_PATH_LITERAL("") /* default_extension */,
@@ -291,14 +291,11 @@ class BaseSelectFileDialogExtensionBrowserTest
 
     // The dialog type is not relevant for this test but is required: use the
     // open file dialog type.
-    second_dialog_->SelectFile(ui::SelectFileDialog::SELECT_OPEN_FILE,
-                               base::string16() /* title */,
-                               base::FilePath() /* default_path */,
-                               NULL /* file_types */,
-                               0 /* file_type_index */,
-                               FILE_PATH_LITERAL("") /* default_extension */,
-                               owning_window,
-                               this /* params */);
+    second_dialog_->SelectFile(
+        ui::SelectFileDialog::SELECT_OPEN_FILE, std::u16string() /* title */,
+        base::FilePath() /* default_path */, NULL /* file_types */,
+        0 /* file_type_index */, FILE_PATH_LITERAL("") /* default_extension */,
+        owning_window, this /* params */);
   }
 
   void CloseDialog(DialogButtonType button_type,
@@ -308,9 +305,10 @@ class BaseSelectFileDialogExtensionBrowserTest
     std::string button_class =
         (button_type == DIALOG_BTN_OK) ? ".button-panel .ok" :
                                          ".button-panel .cancel";
-    base::string16 script = base::ASCIIToUTF16(
+    std::u16string script = base::ASCIIToUTF16(
         "console.log(\'Test JavaScript injected.\');"
-        "document.querySelector(\'" + button_class + "\').click();");
+        "document.querySelector(\'" +
+        button_class + "\').click();");
     // The file selection handler code closes the dialog but does not return
     // control to JavaScript, so do not wait for the script return value.
     frame_host->ExecuteJavaScriptForTests(script, base::NullCallback());
@@ -595,18 +593,12 @@ INSTANTIATE_TEST_SUITE_P(SelectFileDialogExtensionBrowserTest,
                          SelectFileDialogExtensionBrowserTest,
                          testing::Bool());
 
-// Tests that depend on state of flag on and off.
+// Tests that ash window has correct colors for GM2.
+// TODO(adanilo) factor out the unnecessary override of Setup().
 class SelectFileDialogExtensionFlagTest
     : public BaseSelectFileDialogExtensionBrowserTest,
       public testing::WithParamInterface<bool> {
   void SetUp() override {
-    // Use the GetParam to define the state of the feature flags.
-    if (GetParam()) {
-      feature_list_.InitAndEnableFeature(chromeos::features::kFilesNG);
-    } else {
-      feature_list_.InitAndDisableFeature(chromeos::features::kFilesNG);
-    }
-
     BaseSelectFileDialogExtensionBrowserTest::SetUp();
   }
 };
@@ -627,16 +619,10 @@ IN_PROC_BROWSER_TEST_P(SelectFileDialogExtensionFlagTest, DialogColoredTitle) {
       dialog_window->GetProperty(chromeos::kFrameInactiveColorKey);
 
   constexpr SkColor kFilesNgTitleColor = gfx::kGoogleGrey200;
-  if (GetParam()) {
-    // FilesNG enabled the title should be Google Grey 200.
-    EXPECT_EQ(active_color, kFilesNgTitleColor);
-    // Active and Inactive should have the same color.
-    EXPECT_EQ(active_color, inactive_color);
-  } else {
-    // FilesNG disabled the title should be the original color.
-    EXPECT_NE(active_color, kFilesNgTitleColor);
-    EXPECT_NE(inactive_color, kFilesNgTitleColor);
-  }
+  // FilesNG enabled the title should be Google Grey 200.
+  EXPECT_EQ(active_color, kFilesNgTitleColor);
+  // Active and Inactive should have the same color.
+  EXPECT_EQ(active_color, inactive_color);
 
   CloseDialog(DIALOG_BTN_CANCEL, owning_window);
 }

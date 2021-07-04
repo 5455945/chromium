@@ -124,10 +124,15 @@ void AppUpdate::Merge(apps::mojom::App* state, const apps::mojom::App* delta) {
   if (delta->paused != apps::mojom::OptionalBool::kUnknown) {
     state->paused = delta->paused;
   }
-
   if (!delta->intent_filters.empty()) {
     state->intent_filters.clear();
     CloneIntentFilters(delta->intent_filters, &state->intent_filters);
+  }
+  if (delta->resize_locked != apps::mojom::OptionalBool::kUnknown) {
+    state->resize_locked = delta->resize_locked;
+  }
+  if (delta->window_mode != apps::mojom::WindowMode::kUnknown) {
+    state->window_mode = delta->window_mode;
   }
 
   // When adding new fields to the App Mojo type, this function should also be
@@ -522,6 +527,37 @@ std::vector<apps::mojom::IntentFilterPtr> AppUpdate::IntentFilters() const {
 bool AppUpdate::IntentFiltersChanged() const {
   return delta_ && !delta_->intent_filters.empty() &&
          (!state_ || (delta_->intent_filters != state_->intent_filters));
+}
+
+apps::mojom::OptionalBool AppUpdate::ResizeLocked() const {
+  if (delta_ &&
+      (delta_->resize_locked != apps::mojom::OptionalBool::kUnknown)) {
+    return delta_->resize_locked;
+  }
+  if (state_)
+    return state_->resize_locked;
+  return apps::mojom::OptionalBool::kUnknown;
+}
+
+bool AppUpdate::ResizeLockedChanged() const {
+  return delta_ &&
+         (delta_->resize_locked != apps::mojom::OptionalBool::kUnknown) &&
+         (!state_ || (delta_->resize_locked != state_->resize_locked));
+}
+
+apps::mojom::WindowMode AppUpdate::WindowMode() const {
+  if (delta_ && (delta_->window_mode != apps::mojom::WindowMode::kUnknown)) {
+    return delta_->window_mode;
+  }
+  if (state_) {
+    return state_->window_mode;
+  }
+  return apps::mojom::WindowMode::kUnknown;
+}
+
+bool AppUpdate::WindowModeChanged() const {
+  return delta_ && (delta_->window_mode != apps::mojom::WindowMode::kUnknown) &&
+         (!state_ || (delta_->window_mode != state_->window_mode));
 }
 
 const ::AccountId& AppUpdate::AccountId() const {

@@ -8,18 +8,22 @@
 #include <memory>
 #include <string>
 #include <utility>
-#include <vector>
 
-#include "ash/app_list/app_list_export.h"
 #include "ash/app_list/model/app_list_item_observer.h"
+#include "ash/ash_export.h"
 #include "base/memory/ref_counted.h"
-#include "base/strings/string16.h"
 #include "base/timer/timer.h"
 #include "ui/compositor/layer_animation_observer.h"
 #include "ui/views/context_menu_controller.h"
 #include "ui/views/controls/button/button.h"
 
+namespace gfx {
+class Point;
+class Rect;
+}  // namespace gfx
+
 namespace ui {
+class LocatedEvent;
 class SimpleMenuModel;
 }  // namespace ui
 
@@ -33,19 +37,58 @@ class AppListConfig;
 class AppListItem;
 class AppListMenuModelAdapter;
 class AppListViewDelegate;
-class AppsGridView;
 
-class APP_LIST_EXPORT AppListItemView : public views::Button,
-                                        public views::ContextMenuController,
-                                        public AppListItemObserver,
-                                        public ui::ImplicitAnimationObserver {
+// An application icon and title. Commonly part of the AppsGridView, but may be
+// used in other contexts. Supports dragging and keyboard selection via the
+// GridDelegate interface.
+class ASH_EXPORT AppListItemView : public views::Button,
+                                   public views::ContextMenuController,
+                                   public AppListItemObserver,
+                                   public ui::ImplicitAnimationObserver {
  public:
   METADATA_HEADER(AppListItemView);
 
-  AppListItemView(AppsGridView* apps_grid_view,
+  // The parent apps grid (AppsGridView) or a stub. Not named "Delegate" to
+  // differentiate it from AppListViewDelegate.
+  class GridDelegate {
+   public:
+    virtual ~GridDelegate() = default;
+
+    // Whether the parent apps grid (if any) is a folder.
+    virtual bool IsInFolder() const = 0;
+
+    // Methods for keyboard selection.
+    virtual void SetSelectedView(AppListItemView* view) = 0;
+    virtual void ClearSelectedView() = 0;
+    virtual bool IsSelectedView(const AppListItemView* view) const = 0;
+
+    virtual void InitiateDrag(AppListItemView* view,
+                              const gfx::Point& location,
+                              const gfx::Point& root_location) = 0;
+    virtual void StartDragAndDropHostDragAfterLongPress() = 0;
+    // Called from AppListItemView when it receives a drag event. Returns true
+    // if the drag is still happening.
+    virtual bool UpdateDragFromItem(bool is_touch,
+                                    const ui::LocatedEvent& event) = 0;
+    virtual void EndDrag(bool cancel) = 0;
+    virtual bool IsDragging() const = 0;
+    virtual bool IsDraggedView(const AppListItemView* view) const = 0;
+
+    // Whether |view| is being dragged and is not in its drag start position.
+    virtual bool IsDragViewMoved(const AppListItemView& view) const = 0;
+
+    // Provided as a callback for AppListItemView to notify of activation via
+    // press/click/return key.
+    virtual void OnAppListItemViewActivated(AppListItemView* pressed_item_view,
+                                            const ui::Event& event) = 0;
+
+    // TODO(crbug.com/1211592): Eliminate this method.
+    virtual const AppListConfig& GetAppListConfig() const = 0;
+  };
+
+  AppListItemView(GridDelegate* grid_delegate,
                   AppListItem* item,
-                  AppListViewDelegate* delegate,
-                  bool is_in_folder);
+                  AppListViewDelegate* view_delegate);
   AppListItemView(const AppListItemView&) = delete;
   AppListItemView& operator=(const AppListItemView&) = delete;
   ~AppListItemView() override;
@@ -57,8 +100,8 @@ class APP_LIST_EXPORT AppListItemView : public views::Button,
   // config state.
   void RefreshIcon();
 
-  void SetItemName(const base::string16& display_name,
-                   const base::string16& full_name);
+  void SetItemName(const std::u16string& display_name,
+                   const std::u16string& full_name);
 
   void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
 
@@ -98,10 +141,12 @@ class APP_LIST_EXPORT AppListItemView : public views::Button,
 
   // Sets UI state to dragging state.
   void SetDragUIState();
-  // Sets UI state to cardify state.
-  void SetCardifyUIState();
   // Sets UI state to normal state.
   void SetNormalUIState();
+
+  // Handles the icon's scaling and animation for a cardified grid.
+  void EnterCardifyState();
+  void ExitCardifyState();
 
   // Returns the icon bounds for with |target_bounds| as the bounds of this view
   // and given |icon_size| and the |icon_scale| if the icon was scaled from the
@@ -126,7 +171,7 @@ class APP_LIST_EXPORT AppListItemView : public views::Button,
   void OnThemeChanged() override;
 
   // views::View overrides:
-  base::string16 GetTooltipText(const gfx::Point& p) const override;
+  std::u16string GetTooltipText(const gfx::Point& p) const override;
 
   // When a dragged view enters this view, a preview circle is shown for
   // non-folder item while the icon is enlarged for folder item. When a
@@ -149,6 +194,7 @@ class APP_LIST_EXPORT AppListItemView : public views::Button,
   bool is_folder() const { return is_folder_; }
 
   bool IsNotificationIndicatorShownForTest() const;
+  GridDelegate* grid_delegate_for_test() { return grid_delegate_; }
 
  private:
   class IconImageView;
@@ -158,7 +204,6 @@ class APP_LIST_EXPORT AppListItemView : public views::Button,
     UI_STATE_NORMAL,              // Normal UI (icon + label)
     UI_STATE_DRAGGING,            // Dragging UI (scaled icon only)
     UI_STATE_DROPPING_IN_FOLDER,  // Folder dropping preview UI
-    UI_STATE_CARDIFY,             // Cardify UI (scaled icon + label)
   };
 
   // gfx::AnimationDelegate:
@@ -254,8 +299,13 @@ class APP_LIST_EXPORT AppListItemView : public views::Button,
 
   AppListItem* item_weak_;  // Owned by AppListModel. Can be nullptr.
 
-  AppListViewDelegate* delegate_;               // Unowned.
-  AppsGridView* apps_grid_view_;                // Parent view, owns this.
+  // Handles dragging and item selection. Might be a stub for items that are not
+  // part of an apps grid.
+  GridDelegate* const grid_delegate_;
+
+  // AppListControllerImpl by another name.
+  AppListViewDelegate* const view_delegate_;
+
   IconImageView* icon_ = nullptr;               // Strongly typed child view.
   views::Label* title_ = nullptr;               // Strongly typed child view.
 
@@ -273,6 +323,9 @@ class APP_LIST_EXPORT AppListItemView : public views::Button,
   // A11y alerts and a focus ring.
   bool focus_silently_ = false;
 
+  // Whether AppsGridView is in cardified state.
+  bool in_cardified_grid_ = false;
+
   // The animation that runs when dragged view enters or exits this view.
   std::unique_ptr<gfx::SlideAnimation> dragged_view_hover_animation_;
 
@@ -286,7 +339,7 @@ class APP_LIST_EXPORT AppListItemView : public views::Button,
   // Whether |context_menu_| was shown via key event.
   bool menu_show_initiated_from_key_ = false;
 
-  base::string16 tooltip_text_;
+  std::u16string tooltip_text_;
 
   // A timer to defer showing drag UI when mouse is pressed.
   base::OneShotTimer mouse_drag_timer_;

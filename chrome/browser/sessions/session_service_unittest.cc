@@ -14,7 +14,6 @@
 #include "base/containers/contains.h"
 #include "base/files/file_util.h"
 #include "base/location.h"
-#include "base/optional.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
@@ -24,12 +23,14 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/buildflags.h"
 #include "chrome/browser/defaults.h"
 #include "chrome/browser/profiles/profile_attributes_entry.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/sessions/session_service_log.h"
 #include "chrome/browser/sessions/session_service_test_helper.h"
+#include "chrome/browser/signin/signin_util.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
@@ -48,6 +49,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/web_contents_tester.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/page_state/page_state.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -80,14 +82,14 @@ class SessionServiceTest : public BrowserWithTestWindowTest {
     BrowserWithTestWindowTest::TearDown();
   }
 
-  base::Optional<SessionServiceEvent> FindMostRecentEventOfType(
+  absl::optional<SessionServiceEvent> FindMostRecentEventOfType(
       SessionServiceEventLogType type) {
     auto events = GetSessionServiceEvents(browser()->profile());
     for (auto i = events.rbegin(); i != events.rend(); ++i) {
       if (i->type == type)
         return *i;
     }
-    return base::nullopt;
+    return absl::nullopt;
   }
 
   void DestroySessionService() {
@@ -484,6 +486,7 @@ TEST_F(SessionServiceTest, ClosingSecondWindowClosesTabs) {
 }
 
 TEST_F(SessionServiceTest, LockingWindowRemembersAll) {
+  signin_util::ScopedForceSigninSetterForTesting force_signin_setter(true);
   SessionID window2_id = SessionID::NewUnique();
   SessionID tab1_id = SessionID::NewUnique();
   SessionID tab2_id = SessionID::NewUnique();
@@ -500,7 +503,7 @@ TEST_F(SessionServiceTest, LockingWindowRemembersAll) {
       manager->GetProfileAttributesStorage().GetProfileAttributesWithPath(
           service()->profile()->GetPath());
   ASSERT_NE(entry, nullptr);
-  entry->SetIsSigninRequired(true);
+  entry->LockForceSigninProfile(true);
 
   service()->WindowClosing(window_id);
   service()->WindowClosed(window_id);
@@ -566,7 +569,7 @@ TEST_F(SessionServiceTest, RemoveUnusedRestoreWindowsTest) {
   EXPECT_EQ(sessions::SessionWindow::TYPE_NORMAL, windows_list[0]->type);
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS_ASH) && !BUILDFLAG(ENABLE_APP_SESSION_SERVICE)
 // Makes sure we track apps. Only applicable on chromeos.
 TEST_F(SessionServiceTest, RestoreApp) {
   SessionID window2_id = SessionID::NewUnique();
@@ -888,6 +891,8 @@ TEST_F(SessionServiceTest, PersistUserAgentOverrides) {
   client_hints_override.full_version = "18.0.1025.45";
   client_hints_override.platform = "Linux";
   client_hints_override.architecture = "x86_64";
+  // Doesn't have to match, just needs to be different than the default
+  client_hints_override.bitness = "8";
 
   SerializedNavigationEntry nav1 =
       ContentTestHelper::CreateNavigation("http://google.com", "abc");
@@ -942,7 +947,7 @@ TEST_F(SessionServiceTest, KeepPostDataWithoutPasswords) {
   std::unique_ptr<content::NavigationEntry> entry1 =
       content::NavigationEntry::Create();
   entry1->SetURL(GURL("http://google.com"));
-  entry1->SetTitle(base::UTF8ToUTF16("title1"));
+  entry1->SetTitle(u"title1");
   entry1->SetHasPostData(true);
   entry1->SetPostData(network::ResourceRequestBody::CreateFromBytes(
       post_data.data(), post_data.size()));
@@ -955,7 +960,7 @@ TEST_F(SessionServiceTest, KeepPostDataWithoutPasswords) {
   std::unique_ptr<content::NavigationEntry> entry2 =
       content::NavigationEntry::Create();
   entry2->SetURL(GURL("http://google.com/nopost"));
-  entry2->SetTitle(base::UTF8ToUTF16("title2"));
+  entry2->SetTitle(u"title2");
   entry2->SetHasPostData(false);
   SerializedNavigationEntry nav2 =
       sessions::ContentSerializedNavigationBuilder::FromNavigationEntry(
@@ -1170,15 +1175,15 @@ TEST_F(SessionServiceTest, TabGroupDefaultsToNone) {
 
   // Verify that the recorded tab has no group.
   sessions::SessionTab* tab = windows[0]->tabs[0].get();
-  EXPECT_EQ(base::nullopt, tab->group);
+  EXPECT_EQ(absl::nullopt, tab->group);
 }
 
 TEST_F(SessionServiceTest, TabGroupsSaved) {
   const tab_groups::TabGroupId group1 = tab_groups::TabGroupId::GenerateNew();
   const tab_groups::TabGroupId group2 = tab_groups::TabGroupId::GenerateNew();
   constexpr int kNumTabs = 5;
-  const std::array<base::Optional<tab_groups::TabGroupId>, kNumTabs> groups = {
-      base::nullopt, group1, group1, base::nullopt, group2};
+  const std::array<absl::optional<tab_groups::TabGroupId>, kNumTabs> groups = {
+      absl::nullopt, group1, group1, absl::nullopt, group2};
 
   // Create |kNumTabs| tabs with group IDs in |groups|.
   for (int tab_ndx = 0; tab_ndx < kNumTabs; ++tab_ndx) {
@@ -1206,9 +1211,9 @@ TEST_F(SessionServiceTest, TabGroupMetadataSaved) {
       tab_groups::TabGroupId::GenerateNew(),
       tab_groups::TabGroupId::GenerateNew()};
   const std::array<tab_groups::TabGroupVisualData, kNumGroups> visual_data = {
-      tab_groups::TabGroupVisualData(base::ASCIIToUTF16("Foo"),
+      tab_groups::TabGroupVisualData(u"Foo",
                                      tab_groups::TabGroupColorId::kBlue),
-      tab_groups::TabGroupVisualData(base::ASCIIToUTF16("Bar"),
+      tab_groups::TabGroupVisualData(u"Bar",
                                      tab_groups::TabGroupColorId::kGreen)};
 
   // Create |kNumGroups| tab groups, each with one tab.

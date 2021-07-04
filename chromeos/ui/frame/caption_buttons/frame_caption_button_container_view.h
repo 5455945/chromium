@@ -12,8 +12,9 @@
 #include "chromeos/ui/frame/caption_buttons/caption_button_model.h"
 #include "chromeos/ui/frame/caption_buttons/frame_size_button_delegate.h"
 #include "chromeos/ui/frame/caption_buttons/snap_controller.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/animation/animation_delegate_views.h"
-#include "ui/views/metadata/metadata_header_macros.h"
+#include "ui/views/layout/box_layout_view.h"
 #include "ui/views/view.h"
 #include "ui/views/window/frame_caption_button.h"
 
@@ -35,7 +36,7 @@ namespace chromeos {
 // is in //ash because it needs ash test support (AshTestBase and its
 // utilities).
 class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) FrameCaptionButtonContainerView
-    : public views::View,
+    : public views::BoxLayoutView,
       public FrameSizeButtonDelegate,
       public views::AnimationDelegateViews {
  public:
@@ -110,6 +111,13 @@ class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) FrameCaptionButtonContainerView
   void SetModel(std::unique_ptr<CaptionButtonModel> model);
   const CaptionButtonModel* model() const { return model_.get(); }
 
+  // Sets the callback that will be invoked when any size button is pressed. If
+  // the callback is set, the default behavior (e.g. maximize |frame_|) will be
+  // skipped so caller must be responsible for the action. If the callback
+  // returns false, it will fall back to the default dehavior.
+  void SetOnSizeButtonPressedCallback(base::RepeatingCallback<bool()> callback);
+  void ClearOnSizeButtonPressedCallback();
+
   // views::View:
   void Layout() override;
   void ChildPreferredSizeChanged(View* child) override;
@@ -122,8 +130,8 @@ class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) FrameCaptionButtonContainerView
  private:
   friend class FrameCaptionButtonContainerViewTest;
 
-  // Sets |button|'s icon to |icon|. If |animate| is ANIMATE_YES, the button
-  // will crossfade to the new icon. If |animate| is ANIMATE_NO and
+  // Sets |button|'s icon to |icon|. If |animate| is Animate::kYes, the button
+  // will crossfade to the new icon. If |animate| is Animate::kNo and
   // |icon| == |button|->icon(), the crossfade animation is progressed to the
   // end.
   void SetButtonIcon(views::FrameCaptionButton* button,
@@ -170,6 +178,10 @@ class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) FrameCaptionButtonContainerView
   std::unique_ptr<gfx::SlideAnimation> tablet_mode_animation_;
 
   std::unique_ptr<CaptionButtonModel> model_;
+
+  // Callback for the size button action, which overrides the default behavior.
+  // If the callback returns false, it will fall back to the default dehavior.
+  base::RepeatingCallback<bool()> on_size_button_pressed_callback_;
 };
 
 }  // namespace chromeos

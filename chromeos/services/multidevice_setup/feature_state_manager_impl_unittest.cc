@@ -9,7 +9,6 @@
 
 #include "base/containers/contains.h"
 #include "base/macros.h"
-#include "base/optional.h"
 #include "chromeos/components/multidevice/remote_device_test_util.h"
 #include "chromeos/services/device_sync/public/cpp/fake_device_sync_client.h"
 #include "chromeos/services/multidevice_setup/fake_feature_state_manager.h"
@@ -19,6 +18,7 @@
 #include "chromeos/services/multidevice_setup/public/cpp/prefs.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace chromeos {
 
@@ -136,7 +136,7 @@ class MultiDeviceSetupFeatureStateManagerImplTest : public testing::Test {
         num_observer_events_before_call + (was_previously_verified ? 1u : 0u);
 
     fake_host_status_provider_->SetHostWithStatus(
-        mojom::HostStatus::kNoEligibleHosts, base::nullopt /* host_device */);
+        mojom::HostStatus::kNoEligibleHosts, absl::nullopt /* host_device */);
     if (was_previously_verified) {
       VerifyFeatureStateChange(num_observer_events_before_call, feature,
                                mojom::FeatureState::kUnavailableNoVerifiedHost);
@@ -148,7 +148,7 @@ class MultiDeviceSetupFeatureStateManagerImplTest : public testing::Test {
 
     fake_host_status_provider_->SetHostWithStatus(
         mojom::HostStatus::kEligibleHostExistsButNoHostSet,
-        base::nullopt /* host_device */);
+        absl::nullopt /* host_device */);
     EXPECT_EQ(mojom::FeatureState::kUnavailableNoVerifiedHost,
               manager_->GetFeatureStates()[feature]);
     EXPECT_EQ(expected_num_observer_events_after_call,
@@ -570,8 +570,8 @@ TEST_F(MultiDeviceSetupFeatureStateManagerImplTest,
                        phone_hub_feature);
   }
 
-  // This pref should is disabled for existing Better Together users;
-  // they must go to settings to explicitly enable PhoneHub.
+  // This pref is disabled for existing Better Together users; they must go to
+  // settings to explicitly enable PhoneHub.
   test_pref_service()->SetBoolean(kPhoneHubEnabledPrefName, true);
   SetSoftwareFeatureState(false /* use_local_device */,
                           multidevice::SoftwareFeature::kPhoneHubHost,
@@ -717,9 +717,12 @@ TEST_F(MultiDeviceSetupFeatureStateManagerImplTest, PhoneHub) {
   VerifyFeatureStateChange(1u /* expected_index */, mojom::Feature::kPhoneHub,
                            mojom::FeatureState::kNotSupportedByPhone);
 
-  // This pref should is disabled for existing Better Together users;
-  // they must go to settings to explicitly enable PhoneHub.
+  // The top-level Phone Hub enabled pref is disabled for existing Better
+  // Together users; they must go to settings to explicitly enable PhoneHub.
+  // Likewise, the Phone Hub notifications enabled pref is disabled by default
+  // to ensure the phone grants access.
   test_pref_service()->SetBoolean(kPhoneHubEnabledPrefName, true);
+  test_pref_service()->SetBoolean(kPhoneHubNotificationsEnabledPrefName, true);
   SetSoftwareFeatureState(false /* use_local_device */,
                           multidevice::SoftwareFeature::kPhoneHubHost,
                           multidevice::SoftwareFeatureState::kEnabled);

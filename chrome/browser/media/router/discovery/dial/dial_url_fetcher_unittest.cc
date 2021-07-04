@@ -20,6 +20,7 @@
 #include "net/base/load_flags.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -46,7 +47,7 @@ class DialURLFetcherTest : public testing::Test {
 
  protected:
   MOCK_METHOD(void, OnSuccess, (const std::string&));
-  MOCK_METHOD(void, OnError, (const std::string&, base::Optional<int>));
+  MOCK_METHOD(void, OnError, (const std::string&, absl::optional<int>));
 
   base::test::TaskEnvironment environment_;
   network::TestURLLoaderFactory loader_factory_;
@@ -86,7 +87,7 @@ TEST_F(DialURLFetcherTest, FetchFailsOnMissingAppInfo) {
 
   EXPECT_CALL(*this, OnError(HasSubstr(base::NumberToString(
                                  net::ERR_HTTP_RESPONSE_CODE_FAILURE)),
-                             base::Optional<int>(404)));
+                             absl::optional<int>(404)));
   loader_factory_.AddResponse(
       url_, std::move(head), "",
       network::URLLoaderCompletionStatus(net::ERR_HTTP_RESPONSE_CODE_FAILURE),

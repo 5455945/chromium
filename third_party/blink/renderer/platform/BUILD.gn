@@ -16,7 +16,6 @@ import("//third_party/blink/public/public_features.gni")
 import("//third_party/blink/renderer/build/scripts/scripts.gni")
 import("//third_party/blink/renderer/config.gni")
 import("//third_party/blink/renderer/platform/platform_generated.gni")
-import("//third_party/webrtc/webrtc.gni")
 import("//v8/gni/v8.gni")
 
 # Most targets in this file are private actions so use that as the default.
@@ -102,7 +101,7 @@ executable("character_data_generator") {
   ]
   configs += [ "//third_party/blink/renderer:config" ]
   deps = [
-    # Default manifest on Windows (a no-op elsewhere).
+    # Default manifest on Windows(a no-op elsewhere).
     "//base",
     "//build/win:default_exe_manifest",
     "//third_party/icu",
@@ -166,6 +165,7 @@ group("blink_platform_public_deps") {
     "//third_party:jpeg",
     "//third_party/blink/public:blink_headers",
     "//third_party/blink/public/common",
+    "//third_party/blink/public/common:buildflags",
     "//third_party/blink/public/common:font_enumeration_table_proto",
     "//third_party/blink/public/mojom:mojom_platform_blink",
     "//third_party/blink/public/mojom:web_bluetooth_mojo_bindings_blink",
@@ -233,7 +233,7 @@ config("blink_platform_pch") {
 
       # Force include the header.
       cflags = [ "/FI$precompiled_header" ]
-    } else if (is_mac) {
+    } else if (is_mac || is_linux) {
       precompiled_source =
           "//third_party/blink/renderer/platform/precompile_platform.h"
     }
@@ -253,7 +253,6 @@ source_set("platform_export") {
 component("platform") {
   visibility = []  # Allow re-assignment of list.
   visibility = [
-    "//components/pdf/common:interfaces_blink",
     "//services/device/public/mojom:mojom_blink",
     "//services/media_session/public/mojom:mojom_blink",
     "//third_party/blink/*",
@@ -416,6 +415,7 @@ component("platform") {
     "bindings/callback_method_retriever.cc",
     "bindings/callback_method_retriever.h",
     "bindings/custom_wrappable.h",
+    "bindings/dictionary_base.cc",
     "bindings/dictionary_base.h",
     "bindings/dom_data_store.cc",
     "bindings/dom_data_store.h",
@@ -433,6 +433,10 @@ component("platform") {
     "bindings/microtask.cc",
     "bindings/microtask.h",
     "bindings/name_client.h",
+    "bindings/no_alloc_direct_call_exception_state.cc",
+    "bindings/no_alloc_direct_call_exception_state.h",
+    "bindings/no_alloc_direct_call_host.cc",
+    "bindings/no_alloc_direct_call_host.h",
     "bindings/origin_trial_features.cc",
     "bindings/origin_trial_features.h",
     "bindings/parkable_string.cc",
@@ -615,6 +619,8 @@ component("platform") {
     "fonts/font_optical_sizing.h",
     "fonts/font_orientation.cc",
     "fonts/font_orientation.h",
+    "fonts/font_performance.cc",
+    "fonts/font_performance.h",
     "fonts/font_platform_data.cc",
     "fonts/font_platform_data.h",
     "fonts/font_selection_algorithm.cc",
@@ -838,6 +844,8 @@ component("platform") {
     "graphics/compositing/paint_artifact_compositor.h",
     "graphics/compositing/paint_chunks_to_cc_layer.cc",
     "graphics/compositing/paint_chunks_to_cc_layer.h",
+    "graphics/compositing/pending_layer.cc",
+    "graphics/compositing/pending_layer.h",
     "graphics/compositing/property_tree_manager.cc",
     "graphics/compositing/property_tree_manager.h",
     "graphics/compositing_reasons.cc",
@@ -848,8 +856,6 @@ component("platform") {
     "graphics/compositor_filter_operations.h",
     "graphics/compositor_mutator_client.cc",
     "graphics/compositor_mutator_client.h",
-    "graphics/contiguous_container.cc",
-    "graphics/contiguous_container.h",
     "graphics/cpu/arm/webgl_image_conversion_neon.h",
     "graphics/cpu/mips/webgl_image_conversion_msa.h",
     "graphics/cpu/x86/webgl_image_conversion_sse.h",
@@ -878,6 +884,7 @@ component("platform") {
     "graphics/decoding_image_generator.h",
     "graphics/deferred_image_decoder.cc",
     "graphics/deferred_image_decoder.h",
+    "graphics/document_transition_shared_element_id.h",
     "graphics/dom_node_id.h",
     "graphics/draw_looper_builder.cc",
     "graphics/draw_looper_builder.h",
@@ -959,6 +966,8 @@ component("platform") {
     "graphics/gpu/webgpu_image_bitmap_handler.h",
     "graphics/gpu/webgpu_mailbox_texture.cc",
     "graphics/gpu/webgpu_mailbox_texture.h",
+    "graphics/gpu/webgpu_resource_provider_cache.cc",
+    "graphics/gpu/webgpu_resource_provider_cache.h",
     "graphics/gpu/webgpu_swap_buffer_provider.cc",
     "graphics/gpu/webgpu_swap_buffer_provider.h",
     "graphics/gpu/xr_frame_transport.cc",
@@ -1076,6 +1085,8 @@ component("platform") {
     "graphics/paint/paint_record_builder.h",
     "graphics/paint/paint_recorder.h",
     "graphics/paint/paint_shader.h",
+    "graphics/paint/paint_under_invalidation_checker.cc",
+    "graphics/paint/paint_under_invalidation_checker.h",
     "graphics/paint/painted_selection_bound.h",
     "graphics/paint/property_tree_state.cc",
     "graphics/paint/property_tree_state.h",
@@ -1085,6 +1096,7 @@ component("platform") {
     "graphics/paint/raster_invalidator.h",
     "graphics/paint/ref_counted_property_tree_state.h",
     "graphics/paint/scoped_display_item_fragment.h",
+    "graphics/paint/scoped_effectively_invisible.h",
     "graphics/paint/scoped_paint_chunk_hint.h",
     "graphics/paint/scoped_paint_chunk_properties.h",
     "graphics/paint/scroll_paint_property_node.cc",
@@ -1161,6 +1173,8 @@ component("platform") {
     "graphics/web_graphics_context_3d_provider_util.h",
     "graphics/web_graphics_context_3d_provider_wrapper.cc",
     "graphics/web_graphics_context_3d_provider_wrapper.h",
+    "graphics/web_graphics_context_3d_video_frame_pool.cc",
+    "graphics/web_graphics_context_3d_video_frame_pool.h",
     "heap_observer_set.h",
     "image-decoders/bmp/bmp_image_decoder.cc",
     "image-decoders/bmp/bmp_image_decoder.h",
@@ -1250,8 +1264,6 @@ component("platform") {
     "mojo/bluetooth_mojom_traits.h",
     "mojo/drag_mojom_traits.cc",
     "mojo/drag_mojom_traits.h",
-    "mojo/features.cc",
-    "mojo/features.h",
     "mojo/fetch_api_request_headers_mojom_traits.h",
     "mojo/heap_mojo_associated_receiver.h",
     "mojo/heap_mojo_associated_receiver_set.h",
@@ -1334,6 +1346,8 @@ component("platform") {
     "peerconnection/rtc_video_decoder_adapter.h",
     "peerconnection/rtc_video_decoder_factory.cc",
     "peerconnection/rtc_video_decoder_factory.h",
+    "peerconnection/rtc_video_decoder_fallback_recorder.cc",
+    "peerconnection/rtc_video_decoder_fallback_recorder.h",
     "peerconnection/rtc_video_decoder_stream_adapter.cc",
     "peerconnection/rtc_video_decoder_stream_adapter.h",
     "peerconnection/rtc_video_encoder.cc",
@@ -1341,15 +1355,16 @@ component("platform") {
     "peerconnection/rtc_video_encoder_factory.cc",
     "peerconnection/rtc_video_encoder_factory.h",
     "peerconnection/rtc_void_request.h",
-    "peerconnection/stun_field_trial.cc",
-    "peerconnection/stun_field_trial.h",
-    "peerconnection/transmission_encoding_info_handler.cc",
-    "peerconnection/transmission_encoding_info_handler.h",
     "peerconnection/two_keys_adapter_map.h",
     "peerconnection/video_codec_factory.cc",
     "peerconnection/video_codec_factory.h",
     "peerconnection/webrtc_audio_sink.cc",
     "peerconnection/webrtc_audio_sink.h",
+    "peerconnection/webrtc_decoding_info_handler.cc",
+    "peerconnection/webrtc_decoding_info_handler.h",
+    "peerconnection/webrtc_encoding_info_handler.cc",
+    "peerconnection/webrtc_encoding_info_handler.h",
+    "peerconnection/webrtc_util.cc",
     "peerconnection/webrtc_util.h",
     "peerconnection/webrtc_video_track_source.cc",
     "peerconnection/webrtc_video_track_source.h",
@@ -1424,6 +1439,10 @@ component("platform") {
     "text/writing_mode.cc",
     "text/writing_mode.h",
     "text/writing_mode_utils.h",
+    "theme/web_theme_engine_conversions.cc",
+    "theme/web_theme_engine_conversions.h",
+    "theme/web_theme_engine_helper.cc",
+    "theme/web_theme_engine_helper.h",
     "timer.cc",
     "timer.h",
     "transforms/affine_transform.cc",
@@ -1450,8 +1469,6 @@ component("platform") {
     "transforms/transformation_matrix.h",
     "transforms/translate_transform_operation.cc",
     "transforms/translate_transform_operation.h",
-    "video_capture/local_video_capturer_source.cc",
-    "video_capture/local_video_capturer_source.h",
     "video_capture/video_capture_impl.cc",
     "video_capture/video_capture_impl.h",
     "web_test_support.cc",
@@ -1472,6 +1489,8 @@ component("platform") {
     "weborigin/security_origin_hash.h",
     "weborigin/security_policy.cc",
     "weborigin/security_policy.h",
+    "webrtc/convert_to_webrtc_video_frame_buffer.cc",
+    "webrtc/convert_to_webrtc_video_frame_buffer.h",
     "webrtc/peer_connection_remote_audio_source.cc",
     "webrtc/peer_connection_remote_audio_source.h",
     "webrtc/track_observer.cc",
@@ -1574,12 +1593,12 @@ component("platform") {
       "mac/color_mac.mm",
       "mac/graphics_context_canvas.h",
       "mac/graphics_context_canvas.mm",
-      "mac/local_current_graphics_context.h",
-      "mac/local_current_graphics_context.mm",
       "mac/web_core_ns_cell_extras.h",
       "mac/web_core_ns_cell_extras.mm",
       "text/locale_mac.h",
       "text/locale_mac.mm",
+      "theme/web_theme_engine_mac.cc",
+      "theme/web_theme_engine_mac.h",
     ]
   }
 
@@ -1697,6 +1716,19 @@ component("platform") {
     "//ui/native_theme",
   ]
 
+  if (is_android) {
+    deps += [ "//third_party/android_ndk:cpu_features" ]
+    sources += [
+      "theme/web_theme_engine_android.cc",
+      "theme/web_theme_engine_android.h",
+    ]
+  } else {
+    sources += [
+      "theme/web_theme_engine_default.cc",
+      "theme/web_theme_engine_default.h",
+    ]
+  }
+
   if (is_mac) {
     sources -= [
       "fonts/skia/font_cache_skia.cc",
@@ -1773,6 +1805,15 @@ component("platform") {
     ]
 
     deps += [ "//third_party/libavif" ]
+  }
+
+  if (enable_jxl_decoder) {
+    sources += [
+      "image-decoders/jxl/jxl_image_decoder.cc",
+      "image-decoders/jxl/jxl_image_decoder.h",
+    ]
+
+    deps += [ "//third_party/libjxl:libjxl" ]
   }
 
   if (current_cpu == "x86" || current_cpu == "x64") {
@@ -1873,6 +1914,7 @@ static_library("test_support") {
     "testing/weburl_loader_mock.h",
     "testing/weburl_loader_mock_factory_impl.cc",
     "testing/weburl_loader_mock_factory_impl.h",
+    "webrtc/testing/mock_webrtc_video_frame_adapter_shared_resources.h",
   ]
 
   # fuzzed_data_provider may not work with a custom toolchain.
@@ -1902,6 +1944,7 @@ static_library("test_support") {
     "//third_party/blink/renderer/platform/blob:test_support",
     "//third_party/blink/renderer/platform/heap:test_support",
     "//third_party/blink/renderer/platform/loader:test_support",
+    "//third_party/blink/renderer/platform/media:test_support",
     "//third_party/blink/renderer/platform/scheduler:test_support",
   ]
 
@@ -1926,21 +1969,25 @@ static_library("test_support") {
 
 test("blink_platform_unittests") {
   deps = [ ":blink_platform_unittests_sources" ]
+
+  if (is_fuchsia && enable_blink_heap_use_v8_oilpan) {
+    # Oilpan reuses V8's v8::PageAllocator which generally requires JIT
+    # permissions.
+    additional_manifest_fragments =
+        [ "//build/config/fuchsia/test/jit_capabilities.test-cmx" ]
+  }
+
+  if (is_android) {
+    # Required because of an indirect dependency on //media/base/android via
+    # platform/media:unit_tests.
+    deps += [ "//media/base/android:media_java" ]
+  }
 }
 
 source_set("blink_platform_unittests_sources") {
   visibility = []  # Allow re-assignment of list.
   visibility = [ "*" ]
   testonly = true
-
-  # TODO(crbug.com/1173961): avoid depending on testonly webrtc targets.
-  if (rtc_include_tests) {
-    # This target uses some webrtc targets that are not part of
-    # "webrtc_component". This target relies on the fact that including a header
-    # that is not tracked by GN works without raising any warning. However it
-    # leads to build errors if rtc_include_tests = true.
-    check_includes = false
-  }
 
   sources = [
     "animation/animation_translation_util_test.cc",
@@ -2012,7 +2059,6 @@ source_set("blink_platform_unittests_sources") {
     "geometry/geometry_test_helpers.h",
     "geometry/int_rect_test.cc",
     "geometry/layout_rect_test.cc",
-    "geometry/layout_size_test.cc",
     "geometry/layout_unit_test.cc",
     "geometry/length_functions_test.cc",
     "geometry/length_test.cc",
@@ -2022,8 +2068,8 @@ source_set("blink_platform_unittests_sources") {
     "graphics/compositing/chunk_to_layer_mapper_test.cc",
     "graphics/compositing/paint_artifact_compositor_test.cc",
     "graphics/compositing/paint_chunks_to_cc_layer_test.cc",
+    "graphics/compositing/pending_layer_test.cc",
     "graphics/compositor_element_id_test.cc",
-    "graphics/contiguous_container_test.cc",
     "graphics/dark_mode_color_classifier_test.cc",
     "graphics/dark_mode_filter_test.cc",
     "graphics/dark_mode_image_cache_test.cc",
@@ -2037,6 +2083,7 @@ source_set("blink_platform_unittests_sources") {
     "graphics/gpu/shared_gpu_context_test.cc",
     "graphics/gpu/webgl_image_conversion_test.cc",
     "graphics/gpu/webgpu_image_bitmap_handler_test.cc",
+    "graphics/gpu/webgpu_resource_provider_cache_test.cc",
     "graphics/gpu/webgpu_swap_buffer_provider_test.cc",
     "graphics/graphics_context_test.cc",
     "graphics/identifiability_paint_op_digest_unittest.cc",
@@ -2054,6 +2101,7 @@ source_set("blink_platform_unittests_sources") {
     "graphics/paint/paint_controller_test.cc",
     "graphics/paint/paint_property_node_test.cc",
     "graphics/paint/paint_record_builder_test.cc",
+    "graphics/paint/paint_under_invalidation_checker_test.cc",
     "graphics/paint/raster_invalidator_test.cc",
     "graphics/paint/scrollbar_display_item_test.cc",
     "graphics/paint_invalidation_reason_test.cc",
@@ -2077,6 +2125,7 @@ source_set("blink_platform_unittests_sources") {
     "image-decoders/image_frame_test.cc",
     "image-decoders/jpeg/jpeg_image_decoder_test.cc",
     "image-decoders/png/png_image_decoder_test.cc",
+    "image-decoders/segment_reader_test.cc",
     "image-decoders/segment_stream_test.cc",
     "image-decoders/webp/webp_image_decoder_test.cc",
     "json/json_parser_test.cc",
@@ -2084,6 +2133,7 @@ source_set("blink_platform_unittests_sources") {
     "media/webaudiosourceprovider_impl_test.cc",
     "mediastream/media_stream_audio_processor_options_test.cc",
     "mediastream/media_stream_audio_test.cc",
+    "mediastream/media_stream_source_test.cc",
     "mediastream/webrtc_uma_histograms_test.cc",
     "mhtml/mhtml_parser_test.cc",
     "mojo/big_string_mojom_traits_test.cc",
@@ -2102,15 +2152,17 @@ source_set("blink_platform_unittests_sources") {
     "p2p/ipc_network_manager_test.cc",
     "peerconnection/rtc_encoded_audio_stream_transformer_test.cc",
     "peerconnection/rtc_encoded_video_stream_transformer_test.cc",
+    "peerconnection/rtc_rtp_source_test.cc",
     "peerconnection/rtc_stats_test.cc",
     "peerconnection/rtc_video_decoder_adapter_test.cc",
     "peerconnection/rtc_video_decoder_stream_adapter_test.cc",
+    "peerconnection/rtc_video_encoder_factory_test.cc",
     "peerconnection/rtc_video_encoder_test.cc",
-    "peerconnection/stun_field_trial_test.cc",
     "peerconnection/task_queue_factory_test.cc",
-    "peerconnection/transmission_encoding_info_handler_test.cc",
     "peerconnection/two_keys_adapter_map_unittest.cc",
     "peerconnection/webrtc_audio_sink_test.cc",
+    "peerconnection/webrtc_decoding_info_handler_test.cc",
+    "peerconnection/webrtc_encoding_info_handler_test.cc",
     "peerconnection/webrtc_video_track_source_test.cc",
     "runtime_enabled_features_test.cc",
     "text/bidi_resolver_test.cc",
@@ -2125,12 +2177,12 @@ source_set("blink_platform_unittests_sources") {
     "text/platform_locale_test.cc",
     "text/segmented_string_test.cc",
     "text/suffix_tree_test.cc",
-    "text/text_boundaries_test.cc",
     "text/text_break_iterator_test.cc",
     "text/text_encoding_detector_test.cc",
     "text/text_run_test.cc",
     "text/unicode_utilities_test.cc",
     "text/writing_mode_utils_test.cc",
+    "theme/web_theme_engine_test.cc",
     "timer_test.cc",
     "transforms/affine_transform_test.cc",
     "transforms/rotation_test.cc",
@@ -2145,6 +2197,7 @@ source_set("blink_platform_unittests_sources") {
     "weborigin/scheme_registry_test.cc",
     "weborigin/security_origin_test.cc",
     "weborigin/security_policy_test.cc",
+    "webrtc/convert_to_webrtc_video_frame_buffer_test.cc",
     "webrtc/webrtc_video_frame_adapter_test.cc",
     "widget/compositing/layer_tree_settings_unittest.cc",
     "widget/compositing/layer_tree_view_unittest.cc",
@@ -2183,6 +2236,10 @@ source_set("blink_platform_unittests_sources") {
     sources += [ "image-decoders/avif/avif_image_decoder_test.cc" ]
   }
 
+  if (enable_jxl_decoder) {
+    sources += [ "image-decoders/jxl/jxl_image_decoder_test.cc" ]
+  }
+
   sources += [ "testing/run_all_tests.cc" ]
 
   configs += [
@@ -2217,10 +2274,12 @@ source_set("blink_platform_unittests_sources") {
     "//third_party/blink/renderer/platform/blob:unit_tests",
     "//third_party/blink/renderer/platform/instrumentation:unit_tests",
     "//third_party/blink/renderer/platform/loader:unit_tests",
+    "//third_party/blink/renderer/platform/media:unit_tests",
     "//third_party/blink/renderer/platform/network:unit_tests",
     "//third_party/blink/renderer/platform/scheduler:unit_tests",
     "//third_party/blink/renderer/platform/wtf",
     "//third_party/libavif:libavif",
+    "//third_party/libjxl:libjxl",
     "//third_party/libyuv",
     "//third_party/webrtc/api/task_queue:task_queue_test",
     "//third_party/webrtc_overrides:webrtc_component",
@@ -2450,7 +2509,7 @@ fuzzer_test("blink_json_parser_fuzzer") {
   dict = "//testing/libfuzzer/fuzzers/dicts/json.dict"
 }
 
-# Fuzzer for blink::SecurityOrigin
+# Fuzzer for blink::SecurityOrigin.
 fuzzer_test("blink_security_origin_fuzzer") {
   sources = [ "weborigin/security_origin_fuzzer.cc" ]
   deps = [
@@ -2540,10 +2599,31 @@ source_set("unit_tests") {
   ]
 
   deps = [
+    ":platform",
     ":test_support",
+    "//base",
+    "//base/test:test_support",
+    "//cc",
+    "//components/viz/test:test_support",
     "//testing/gmock",
     "//testing/gtest",
     "//third_party/blink/public:test_headers",
   ]
   public_deps = [ "//gpu:raster" ]
+
+  if (media_use_ffmpeg || !is_android) {
+    sources += [ "media/web_media_player_impl_unittest.cc" ]
+    data = [ "//media/test/data/" ]
+    deps += [
+      "//media",
+      "//media:test_support",
+      "//media/mojo/services",
+      "//third_party/blink/public:blink",
+      "//third_party/blink/public:test_support",
+      "//third_party/blink/public/common/tokens:tokens_headers",
+      "//third_party/blink/public/platform/media",
+      "//third_party/blink/renderer/platform/media",
+      "//ui/gfx/geometry",
+    ]
+  }
 }

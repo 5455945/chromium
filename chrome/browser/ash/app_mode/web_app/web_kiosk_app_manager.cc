@@ -2,14 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <chrome/browser/ash/app_mode/web_app/web_kiosk_app_manager.h>
+#include "chrome/browser/ash/app_mode/web_app/web_kiosk_app_manager.h"
 
 #include <map>
 
 #include "base/bind.h"
 #include "chrome/browser/ash/app_mode/app_session.h"
 #include "chrome/browser/ash/app_mode/kiosk_cryptohome_remover.h"
-#include "chrome/browser/chromeos/policy/device_local_account.h"
+#include "chrome/browser/ash/policy/core/device_local_account.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/web_applications/components/web_app_helpers.h"
 #include "chrome/browser/web_applications/components/web_application_info.h"

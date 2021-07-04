@@ -70,8 +70,9 @@ class U2FClientImpl : public U2FClient {
   void GetAssertion(
       const u2f::GetAssertionRequest& request,
       DBusMethodCallback<u2f::GetAssertionResponse> callback) override;
-  base::Optional<u2f::HasCredentialsResponse> HasCredentialsBlocking(
-      const u2f::HasCredentialsRequest& request) override;
+  void HasCredentials(
+      const u2f::HasCredentialsRequest& request,
+      DBusMethodCallback<u2f::HasCredentialsResponse> callback) override;
   void HasLegacyU2FCredentials(
       const u2f::HasCredentialsRequest& request,
       DBusMethodCallback<u2f::HasCredentialsResponse> callback) override;
@@ -89,13 +90,13 @@ template <typename ResponseProto>
 void U2FClientImpl::HandleResponse(DBusMethodCallback<ResponseProto> callback,
                                    dbus::Response* response) {
   if (!response) {
-    std::move(callback).Run(base::nullopt);
+    std::move(callback).Run(absl::nullopt);
     return;
   }
   dbus::MessageReader reader(response);
   ResponseProto response_proto;
   if (!reader.PopArrayOfBytesAsProto(&response_proto)) {
-    std::move(callback).Run(base::nullopt);
+    std::move(callback).Run(absl::nullopt);
     return;
   }
   std::move(callback).Run(std::move(response_proto));
@@ -137,7 +138,7 @@ void U2FClientImpl::MakeCredential(
   writer.AppendProtoAsArrayOfBytes(request);
   auto uma_callback_wrapper = base::BindOnce(
       [](DBusMethodCallback<u2f::MakeCredentialResponse> callback,
-         base::Optional<u2f::MakeCredentialResponse> response) {
+         absl::optional<u2f::MakeCredentialResponse> response) {
         if (response) {
           base::UmaHistogramEnumeration(
               kMakeCredentialStatusHistogram, response->status(),
@@ -162,7 +163,7 @@ void U2FClientImpl::GetAssertion(
   writer.AppendProtoAsArrayOfBytes(request);
   auto uma_callback_wrapper = base::BindOnce(
       [](DBusMethodCallback<u2f::GetAssertionResponse> callback,
-         base::Optional<u2f::GetAssertionResponse> response) {
+         absl::optional<u2f::GetAssertionResponse> response) {
         if (response) {
           base::UmaHistogramEnumeration(
               kGetAssertionStatusHistogram, response->status(),
@@ -179,27 +180,17 @@ void U2FClientImpl::GetAssertion(
                      std::move(uma_callback_wrapper)));
 }
 
-base::Optional<u2f::HasCredentialsResponse>
-U2FClientImpl::HasCredentialsBlocking(
-    const u2f::HasCredentialsRequest& request) {
+void U2FClientImpl::HasCredentials(
+    const u2f::HasCredentialsRequest& request,
+    DBusMethodCallback<u2f::HasCredentialsResponse> callback) {
   dbus::MethodCall method_call(u2f::kU2FInterface, u2f::kU2FHasCredentials);
   dbus::MessageWriter writer(&method_call);
   writer.AppendProtoAsArrayOfBytes(request);
-
-  std::unique_ptr<dbus::Response> dbus_response =
-      proxy_->CallMethodAndBlock(&method_call, kU2FShortTimeout);
-
-  if (!dbus_response) {
-    return base::nullopt;
-  }
-
-  dbus::MessageReader reader(dbus_response.get());
-  u2f::HasCredentialsResponse response;
-  if (!reader.PopArrayOfBytesAsProto(&response)) {
-    return base::nullopt;
-  }
-
-  return response;
+  proxy_->CallMethod(
+      &method_call, kU2FShortTimeout,
+      base::BindOnce(
+          &U2FClientImpl::HandleResponse<u2f::HasCredentialsResponse>,
+          weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void U2FClientImpl::HasLegacyU2FCredentials(

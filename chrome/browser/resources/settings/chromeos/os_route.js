@@ -6,7 +6,7 @@
 // #import '../constants/routes.mojom-lite.js';
 
 // #import {OsSettingsRoutes} from './os_settings_routes.m.js';
-// #import {Route, Router} from '../router.m.js';
+// #import {Route, Router} from '../router.js';
 // #import {loadTimeData} from 'chrome://resources/js/load_time_data.m.js';
 
 cr.define('settings', function() {
@@ -81,7 +81,7 @@ cr.define('settings', function() {
       r.SMART_LOCK = createSubpage(
           r.MULTIDEVICE_FEATURES, mojom.SMART_LOCK_SUBPAGE_PATH,
           Subpage.kSmartLock);
-      if (loadTimeData.getBoolean('nearbySharingFeatureFlag')) {
+      if (loadTimeData.getBoolean('isNearbyShareSupported')) {
         r.NEARBY_SHARE = createSubpage(
             r.MULTIDEVICE, mojom.NEARBY_SHARE_SUBPAGE_PATH,
             Subpage.kNearbyShare);
@@ -117,19 +117,11 @@ cr.define('settings', function() {
             r.OS_PEOPLE, mojom.MANAGE_OTHER_PEOPLE_SUBPAGE_PATH,
             Subpage.kManageOtherPeople);
       }
-      r.KERBEROS_ACCOUNTS = createSubpage(
-          r.OS_PEOPLE, mojom.KERBEROS_ACCOUNTS_SUBPAGE_PATH,
-          Subpage.kKerberosAccounts);
     }
 
-    const isKerberosEnabled = loadTimeData.valueExists('isKerberosEnabled') &&
-        loadTimeData.getBoolean('isKerberosEnabled');
-    const isKerberosSettingsSectionEnabled =
-        loadTimeData.valueExists('isKerberosSettingsSectionEnabled') &&
-        loadTimeData.getBoolean('isKerberosSettingsSectionEnabled');
-
     // Kerberos section.
-    if (isKerberosEnabled && isKerberosSettingsSectionEnabled) {
+    if (loadTimeData.valueExists('isKerberosEnabled') &&
+        loadTimeData.getBoolean('isKerberosEnabled')) {
       r.KERBEROS = createSection(
           r.BASIC, mojom.KERBEROS_SECTION_PATH, Section.kKerberos);
       r.KERBEROS_ACCOUNTS_V2 = createSubpage(
@@ -163,8 +155,6 @@ cr.define('settings', function() {
       r.CHANGE_PICTURE = createSubpage(
           r.PERSONALIZATION, mojom.CHANGE_PICTURE_SUBPAGE_PATH,
           Subpage.kChangePicture);
-      r.WALLPAPER = createSubpage(
-          r.PERSONALIZATION, mojom.WALLPAPER_SUBPAGE_PATH, Subpage.kWallpaper);
       r.AMBIENT_MODE = createSubpage(
           r.PERSONALIZATION, mojom.AMBIENT_MODE_SUBPAGE_PATH,
           Subpage.kAmbientMode);
@@ -174,6 +164,8 @@ cr.define('settings', function() {
       r.AMBIENT_MODE_PHOTOS = createSubpage(
           r.AMBIENT_MODE, 'ambientMode/photos',
           Subpage.kAmbientModeGooglePhotosAlbum);
+      r.DARK_MODE = createSubpage(
+          r.PERSONALIZATION, mojom.DARK_MODE_SUBPAGE_PATH, Subpage.kDarkMode);
     }
 
     // Search and Assistant section.
@@ -182,9 +174,14 @@ cr.define('settings', function() {
         Section.kSearchAndAssistant);
     r.GOOGLE_ASSISTANT = createSubpage(
         r.OS_SEARCH, mojom.ASSISTANT_SUBPAGE_PATH, Subpage.kAssistant);
+    r.SEARCH_SUBPAGE =
+        createSubpage(r.OS_SEARCH, mojom.SEARCH_SUBPAGE_PATH, Subpage.kSearch);
 
     // Apps section.
     r.APPS = createSection(r.BASIC, mojom.APPS_SECTION_PATH, Section.kApps);
+    r.APP_NOTIFICATIONS = createSubpage(
+        r.APPS, mojom.APP_NOTIFICATIONS_SUBPAGE_PATH,
+        Subpage.kAppNotifications);
     r.APP_MANAGEMENT = createSubpage(
         r.APPS, mojom.APP_MANAGEMENT_SUBPAGE_PATH, Subpage.kAppManagement);
     r.APP_MANAGEMENT_DETAIL = createSubpage(
@@ -233,10 +230,6 @@ cr.define('settings', function() {
           Subpage.kCrostiniPortForwarding);
     }
 
-    // On Startup section.
-    r.ON_STARTUP = createSection(
-        r.BASIC, mojom.ON_STARTUP_SECTION_PATH, Section.kOnStartup);
-
     // Date and Time section.
     r.DATETIME = createSection(
         r.ADVANCED, mojom.DATE_AND_TIME_SECTION_PATH, Section.kDateAndTime);
@@ -268,28 +261,16 @@ cr.define('settings', function() {
     r.OS_LANGUAGES = createSection(
         r.ADVANCED, mojom.LANGUAGES_AND_INPUT_SECTION_PATH,
         Section.kLanguagesAndInput);
-    if (loadTimeData.getBoolean('enableLanguageSettingsV2')) {
-      r.OS_LANGUAGES_LANGUAGES = createSubpage(
-          r.OS_LANGUAGES, mojom.LANGUAGES_SUBPAGE_PATH, Subpage.kLanguages);
-      r.OS_LANGUAGES_INPUT = createSubpage(
-          r.OS_LANGUAGES, mojom.INPUT_SUBPAGE_PATH, Subpage.kInput);
-      r.OS_LANGUAGES_INPUT_METHOD_OPTIONS = createSubpage(
-          r.OS_LANGUAGES_INPUT, mojom.INPUT_METHOD_OPTIONS_SUBPAGE_PATH,
-          Subpage.kInputMethodOptions);
-      r.OS_LANGUAGES_EDIT_DICTIONARY = createSubpage(
-          r.OS_LANGUAGES_INPUT, mojom.EDIT_DICTIONARY_SUBPAGE_PATH,
-          Subpage.kEditDictionary);
-    } else {
-      r.OS_LANGUAGES_DETAILS = createSubpage(
-          r.OS_LANGUAGES, mojom.LANGUAGES_AND_INPUT_DETAILS_SUBPAGE_PATH,
-          Subpage.kLanguagesAndInputDetails);
-      r.OS_LANGUAGES_INPUT_METHODS = createSubpage(
-          r.OS_LANGUAGES_DETAILS, mojom.MANAGE_INPUT_METHODS_SUBPAGE_PATH,
-          Subpage.kManageInputMethods);
-      r.OS_LANGUAGES_INPUT_METHOD_OPTIONS = createSubpage(
-          r.OS_LANGUAGES_DETAILS, mojom.INPUT_METHOD_OPTIONS_SUBPAGE_PATH,
-          Subpage.kInputMethodOptions);
-    }
+    r.OS_LANGUAGES_LANGUAGES = createSubpage(
+        r.OS_LANGUAGES, mojom.LANGUAGES_SUBPAGE_PATH, Subpage.kLanguages);
+    r.OS_LANGUAGES_INPUT =
+        createSubpage(r.OS_LANGUAGES, mojom.INPUT_SUBPAGE_PATH, Subpage.kInput);
+    r.OS_LANGUAGES_INPUT_METHOD_OPTIONS = createSubpage(
+        r.OS_LANGUAGES_INPUT, mojom.INPUT_METHOD_OPTIONS_SUBPAGE_PATH,
+        Subpage.kInputMethodOptions);
+    r.OS_LANGUAGES_EDIT_DICTIONARY = createSubpage(
+        r.OS_LANGUAGES_INPUT, mojom.EDIT_DICTIONARY_SUBPAGE_PATH,
+        Subpage.kEditDictionary);
     r.OS_LANGUAGES_SMART_INPUTS = createSubpage(
         r.OS_LANGUAGES, mojom.SMART_INPUTS_SUBPAGE_PATH, Subpage.kSmartInputs);
 

@@ -7,17 +7,22 @@
 
 #include <stdint.h>
 
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
 
+#include "base/containers/flat_map.h"
 #include "base/macros.h"
 #include "base/sequence_checker.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "build/build_config.h"
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service_observer.h"
 #include "components/signin/public/base/persistent_repeating_timer.h"
 
+class AccountCapabilities;
+class AccountCapabilitiesFetcher;
 class AccountInfoFetcher;
 class AccountTrackerService;
 class ProfileOAuth2TokenService;
@@ -59,11 +64,10 @@ class AccountFetcherService : public ProfileOAuth2TokenServiceObserver {
                   AccountTrackerService* account_tracker_service,
                   std::unique_ptr<image_fetcher::ImageDecoder> image_decoder);
 
-  void Shutdown();
-
   // Indicates if all user information has been fetched. If the result is false,
   // there are still unfininshed fetchers.
   virtual bool IsAllUserInfoFetched() const;
+  virtual bool AreAllAccountCapabilitiesFetched() const;
 
   void ForceRefreshOfAccountInfo(const CoreAccountId& account_id);
 
@@ -86,6 +90,11 @@ class AccountFetcherService : public ProfileOAuth2TokenServiceObserver {
   // network requests.
   void EnableAccountRemovalForTest();
 
+  // Force-enables Account Capabilities fetches. For use in testing contexts.
+  // Passing the false value doesn't necessary disables fetches, it just turns
+  // force-enable off.
+  void EnableAccountCapabilitiesFetcherForTest(bool enabled);
+
 #if defined(OS_ANDROID)
   // Called by ChildAccountInfoFetcherAndroid.
   void SetIsChildAccount(const CoreAccountId& account_id,
@@ -99,6 +108,7 @@ class AccountFetcherService : public ProfileOAuth2TokenServiceObserver {
 
  private:
   friend class AccountInfoFetcher;
+  friend class AccountCapabilitiesFetcher;
 
   void RefreshAllAccountInfo(bool only_fetch_if_invalid);
 
@@ -122,6 +132,9 @@ class AccountFetcherService : public ProfileOAuth2TokenServiceObserver {
   void ResetChildInfo();
 #endif
 
+  bool IsAccountCapabilitiesFetcherEnabled();
+  void StartFetchingAccountCapabilities(const CoreAccountId& account_id);
+
   // Refreshes the AccountInfo associated with |account_id|.
   void RefreshAccountInfo(const CoreAccountId& account_id,
                           bool only_fetch_if_invalid);
@@ -130,6 +143,12 @@ class AccountFetcherService : public ProfileOAuth2TokenServiceObserver {
   void OnUserInfoFetchSuccess(const CoreAccountId& account_id,
                               std::unique_ptr<base::DictionaryValue> user_info);
   void OnUserInfoFetchFailure(const CoreAccountId& account_id);
+
+  // Called by AccountCapabilitiesFetcher.
+  void OnAccountCapabilitiesFetchSuccess(
+      const CoreAccountId& account_id,
+      const AccountCapabilities& account_capabilities);
+  void OnAccountCapabilitiesFetchFailure(const CoreAccountId& account_id);
 
   image_fetcher::ImageFetcherImpl* GetOrCreateImageFetcher();
 
@@ -147,8 +166,8 @@ class AccountFetcherService : public ProfileOAuth2TokenServiceObserver {
   bool network_fetches_enabled_ = false;
   bool network_initialized_ = false;
   bool refresh_tokens_loaded_ = false;
-  bool shutdown_called_ = false;
   bool enable_account_removal_for_test_ = false;
+  bool enable_account_capabilities_fetcher_for_test_ = false;
   std::unique_ptr<signin::PersistentRepeatingTimer> repeating_timer_;
 
 #if defined(OS_ANDROID)
@@ -159,6 +178,14 @@ class AccountFetcherService : public ProfileOAuth2TokenServiceObserver {
   // Holds references to account info fetchers keyed by account_id.
   std::unordered_map<CoreAccountId, std::unique_ptr<AccountInfoFetcher>>
       user_info_requests_;
+
+  std::map<CoreAccountId, std::unique_ptr<AccountCapabilitiesFetcher>>
+      account_capabilities_requests_;
+
+  // CoreAccountId and the corresponding fetch start time. These two member
+  // variables are only used to record account information fetch duration.
+  base::flat_map<CoreAccountId, base::TimeTicks> user_info_fetch_start_times_;
+  base::flat_map<CoreAccountId, base::TimeTicks> user_avatar_fetch_start_times_;
 
   // Used for fetching the account images.
   std::unique_ptr<image_fetcher::ImageFetcherImpl> image_fetcher_;

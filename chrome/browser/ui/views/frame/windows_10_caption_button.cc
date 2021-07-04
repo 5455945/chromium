@@ -9,19 +9,21 @@
 #include "chrome/browser/ui/frame/window_frame_util.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/glass_browser_frame_view.h"
+#include "chrome/browser/ui/views/frame/windows_10_tab_search_caption_button.h"
 #include "chrome/grit/theme_resources.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/theme_provider.h"
 #include "ui/gfx/animation/tween.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/scoped_canvas.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
+#include "ui/gfx/skia_util.h"
 
 Windows10CaptionButton::Windows10CaptionButton(
     PressedCallback callback,
     GlassBrowserFrameView* frame_view,
     ViewID button_type,
-    const base::string16& accessible_name)
+    const std::u16string& accessible_name)
     : views::Button(std::move(callback)),
       frame_view_(frame_view),
       button_type_(button_type) {
@@ -144,16 +146,22 @@ int Windows10CaptionButton::GetBetweenButtonSpacing() const {
 
 int Windows10CaptionButton::GetButtonDisplayOrderIndex() const {
   int button_display_order = 0;
+  const bool tab_search_enabled =
+      Windows10TabSearchCaptionButton::IsTabSearchCaptionButtonEnabled(
+          frame_view_);
   switch (button_type_) {
-    case VIEW_ID_MINIMIZE_BUTTON:
+    case VIEW_ID_TAB_SEARCH_BUTTON:
       button_display_order = 0;
+      break;
+    case VIEW_ID_MINIMIZE_BUTTON:
+      button_display_order = 0 + (tab_search_enabled ? 1 : 0);
       break;
     case VIEW_ID_MAXIMIZE_BUTTON:
     case VIEW_ID_RESTORE_BUTTON:
-      button_display_order = 1;
+      button_display_order = 1 + (tab_search_enabled ? 1 : 0);
       break;
     case VIEW_ID_CLOSE_BUTTON:
-      button_display_order = 2;
+      button_display_order = 2 + (tab_search_enabled ? 1 : 0);
       break;
     default:
       NOTREACHED();
@@ -161,8 +169,10 @@ int Windows10CaptionButton::GetButtonDisplayOrderIndex() const {
   }
 
   // Reverse the ordering if we're in RTL mode
-  if (base::i18n::IsRTL())
-    button_display_order = 2 - button_display_order;
+  if (base::i18n::IsRTL()) {
+    const int max_index = tab_search_enabled ? 3 : 2;
+    button_display_order = max_index - button_display_order;
+  }
 
   return button_display_order;
 }
@@ -263,6 +273,20 @@ void Windows10CaptionButton::PaintSymbol(gfx::Canvas* canvas) {
       return;
     }
 
+    case VIEW_ID_TAB_SEARCH_BUTTON: {
+      flags.setAntiAlias(true);
+      canvas->ClipRect(symbol_rect);
+      // The chevron should occupy the space between the upper and lower quarter
+      // of the `symbol_rect` bounds.
+      symbol_rect.Inset(0, symbol_rect.height() / 4);
+      SkPath path;
+      path.moveTo(gfx::PointToSkPoint(symbol_rect.origin()));
+      path.lineTo(gfx::PointToSkPoint(symbol_rect.bottom_center()));
+      path.lineTo(gfx::PointToSkPoint(symbol_rect.top_right()));
+      canvas->DrawPath(path, flags);
+      return;
+    }
+
     default:
       NOTREACHED();
       return;
@@ -274,5 +298,5 @@ ADD_READONLY_PROPERTY_METADATA(int, BetweenButtonSpacing)
 ADD_READONLY_PROPERTY_METADATA(int, ButtonDisplayOrderIndex)
 ADD_READONLY_PROPERTY_METADATA(SkColor,
                                BaseColor,
-                               views::metadata::SkColorConverter)
+                               ui::metadata::SkColorConverter)
 END_METADATA

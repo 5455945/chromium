@@ -132,7 +132,7 @@
           } else if (charCode == 0xE008) {
             eventSenderKeys = "ShiftLeft";
             modifierValue = "shiftKey";
-          } else if (charCode == 0xE006) {
+          } else if (charCode == 0xE006 || charCode == 0xE007) {
             eventSenderKeys = "Enter";
             modifierValue = "enter";
           } else if (charCode >= 0xE000 && charCode <= 0xF8FF) {
@@ -358,6 +358,7 @@
     mojoOptions.hasResidentKey = options.hasResidentKey;
     mojoOptions.hasUserVerification = options.hasUserVerification;
     mojoOptions.hasLargeBlob = options.extensions.indexOf("largeBlob") !== -1;
+    mojoOptions.hasCredBlob = options.extensions.indexOf("credBlob") !== -1;
     mojoOptions.isUserPresent = options.isUserConsenting;
 
     let authenticator = (await manager.createAuthenticator(mojoOptions)).authenticator;

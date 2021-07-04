@@ -18,12 +18,12 @@
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/password_manager/core/browser/hash_password_manager.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
-#include "components/password_manager/core/browser/password_reuse_detector.h"
+#include "components/password_manager/core/browser/password_reuse_manager.h"
 #include "components/password_manager/core/browser/password_store.h"
 #include "components/password_manager/core/common/password_manager_pref_names.h"
 #include "components/safe_browsing/buildflags.h"
-#include "components/safe_browsing/content/password_protection/password_protection_service.h"
-#include "components/safe_browsing/core/triggers/trigger_manager.h"
+#include "components/safe_browsing/content/browser/password_protection/password_protection_service.h"
+#include "components/safe_browsing/content/browser/triggers/trigger_manager.h"
 #include "components/sessions/core/session_id.h"
 #include "components/sync/protocol/gaia_password_reuse.pb.h"
 #include "components/sync/protocol/user_event_specifics.pb.h"
@@ -43,7 +43,6 @@ class WebContents;
 namespace safe_browsing {
 
 class SafeBrowsingService;
-class SafeBrowsingNavigationObserverManager;
 class SafeBrowsingUIManager;
 class ChromePasswordProtectionService;
 class VerdictCacheManager;
@@ -166,13 +165,13 @@ class ChromePasswordProtectionService : public PasswordProtectionService,
   // and page info bubble. |placeholder_offsets| are the start points/indices of
   // the placeholders that are passed into the resource string. It is only set
   // for saved passwords.
-  base::string16 GetWarningDetailText(
+  std::u16string GetWarningDetailText(
       ReusedPasswordAccountType password_type,
       std::vector<size_t>* placeholder_offsets) const;
 
   // Get placeholders for the warning detail text for saved password reuse
   // warnings.
-  std::vector<base::string16> GetPlaceholdersForSavedPasswordWarningText()
+  std::vector<std::u16string> GetPlaceholdersForSavedPasswordWarningText()
       const;
 
   // If password protection trigger is configured via enterprise policy, gets
@@ -240,6 +239,8 @@ class ChromePasswordProtectionService : public PasswordProtectionService,
   LoginReputationClientRequest::ReferringAppInfo GetReferringAppInfo(
       content::WebContents* web_contents) override;
 #endif
+  // Returns the PasswordReuseManager associated with this instance.
+  password_manager::PasswordReuseManager* GetPasswordReuseManager() const;
 
   // Returns the profile PasswordStore associated with this instance.
   password_manager::PasswordStore* GetProfilePasswordStore() const;
@@ -501,14 +502,14 @@ class ChromePasswordProtectionService : public PasswordProtectionService,
   // Gets the warning text for saved password reuse warnings.
   // |placeholder_offsets| are the start points/indices of the placeholders that
   // are passed into the resource string.
-  base::string16 GetWarningDetailTextForSavedPasswords(
+  std::u16string GetWarningDetailTextForSavedPasswords(
       std::vector<size_t>* placeholder_offsets) const;
 
   // Gets the warning text of the saved password reuse warnings that tells the
   // user to check their saved passwords. |placeholder_offsets| are the start
   // points/indices of the placeholders that are passed into the resource
   // string.
-  base::string16 GetWarningDetailTextToCheckSavedPasswords(
+  std::u16string GetWarningDetailTextToCheckSavedPasswords(
       std::vector<size_t>* placeholder_offsets) const;
 
   // Informs PasswordReuseDetector that enterprise password URLs (login URL or
@@ -562,8 +563,6 @@ class ChromePasswordProtectionService : public PasswordProtectionService,
   Profile* profile_;
   // Current sync password hash.
   std::string sync_password_hash_;
-  scoped_refptr<SafeBrowsingNavigationObserverManager>
-      navigation_observer_manager_;
   base::ObserverList<Observer>::Unchecked observer_list_;
   std::unique_ptr<PrefChangeRegistrar> pref_change_registrar_;
   std::set<content::WebContents*>

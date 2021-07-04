@@ -88,7 +88,7 @@ void VRDeviceBase::SetArBlendModeSupported(bool is_ar_blend_mode_supported) {
 void VRDeviceBase::SetLuid(const LUID& luid) {
   if (luid.HighPart != 0 || luid.LowPart != 0) {
     // Only set the LUID if it exists and is nonzero.
-    device_data_.luid = base::make_optional<LUID>(luid);
+    device_data_.luid = absl::make_optional<LUID>(luid);
   }
 }
 #endif
@@ -100,6 +100,11 @@ mojo::PendingRemote<mojom::XRRuntime> VRDeviceBase::BindXRRuntime() {
 
 void LogViewerType(VrViewerType type) {
   base::UmaHistogramSparse("VRViewerType", static_cast<int>(type));
+}
+
+void VRDeviceBase::SetSupportedFeatures(
+        const std::vector<mojom::XRSessionFeature>& features) {
+  device_data_.supported_features = features;
 }
 
 }  // namespace device

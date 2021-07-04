@@ -8,12 +8,12 @@
 
 #include "base/bind.h"
 #include "base/containers/circular_deque.h"
+#include "base/cxx17_backports.h"
 #include "base/location.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "base/scoped_clear_last_error.h"
 #include "base/single_thread_task_runner.h"
-#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/threading/thread.h"
@@ -679,6 +679,13 @@ TEST_F(UDPSocketTest, MAYBE_SharedMulticastAddress) {
 
   NetworkInterfaceList interfaces;
   ASSERT_TRUE(GetNetworkList(&interfaces, 0));
+  // The test fails with the Hyper-V switch interface (on the host side).
+  interfaces.erase(std::remove_if(interfaces.begin(), interfaces.end(),
+                                  [](const auto& iface) {
+                                    return iface.friendly_name.rfind(
+                                               "vEthernet", 0) == 0;
+                                  }),
+                   interfaces.end());
   ASSERT_FALSE(interfaces.empty());
 
   // Setup first receiving socket.

@@ -7,33 +7,43 @@
 
 #include <string>
 
-#include "base/optional.h"
-#include "chromeos/services/libassistant/public/mojom/android_app_info.mojom.h"
-#include "chromeos/services/libassistant/public/mojom/conversation_controller.mojom.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
+
+namespace assistant {
+namespace api {
+class Interaction;
+}  // namespace api
+}  // namespace assistant
 
 namespace base {
 class FilePath;
 }  // namespace base
 
 namespace chromeos {
+namespace assistant {
+struct AndroidAppInfo;
+struct DeviceSetting;
+}  // namespace assistant
+}  // namespace chromeos
+
+namespace chromeos {
 namespace libassistant {
 
 // Creates the configuration for libassistant.
 std::string CreateLibAssistantConfig(
-    base::Optional<std::string> s3_server_uri_override,
-    base::Optional<std::string> device_id_override,
-    bool log_in_home_dir);
+    absl::optional<std::string> s3_server_uri_override,
+    absl::optional<std::string> device_id_override);
 
 // Returns the path where all downloaded LibAssistant resources are stored.
 base::FilePath GetBaseAssistantDir();
 
-std::string CreateVerifyProviderResponseInteraction(
+::assistant::api::Interaction CreateVerifyProviderResponseInteraction(
     const int interaction_id,
-    const std::vector<libassistant::mojom::AndroidAppInfoPtr>& apps_info);
+    const std::vector<chromeos::assistant::AndroidAppInfo>& apps_info);
 
 std::string CreateGetDeviceSettingInteraction(
     int interaction_id,
-    const std::vector<libassistant::mojom::DeviceSettingPtr>& device_settings);
+    const std::vector<chromeos::assistant::DeviceSetting>& device_settings);
 
 }  // namespace libassistant
 }  // namespace chromeos

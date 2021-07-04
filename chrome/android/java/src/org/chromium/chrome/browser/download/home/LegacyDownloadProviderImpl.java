@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.download.home;
 import android.text.TextUtils;
 
 import org.chromium.base.Callback;
+import org.chromium.base.ContextUtils;
 import org.chromium.base.ObserverList;
 import org.chromium.base.task.PostTask;
 import org.chromium.chrome.browser.download.DownloadInfo;
@@ -16,7 +17,11 @@ import org.chromium.chrome.browser.download.DownloadManagerService.DownloadObser
 import org.chromium.chrome.browser.download.DownloadMetrics;
 import org.chromium.chrome.browser.download.DownloadOpenSource;
 import org.chromium.chrome.browser.download.DownloadUtils;
+import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.profiles.OTRProfileID;
+import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.profiles.ProfileKey;
+import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.components.offline_items_collection.ContentId;
 import org.chromium.components.offline_items_collection.LegacyHelpers;
 import org.chromium.components.offline_items_collection.OfflineContentProvider;
@@ -30,6 +35,7 @@ import org.chromium.content_public.browser.UiThreadTaskTraits;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 
 /**
@@ -38,10 +44,10 @@ import java.util.List;
  * that need to happen in Java before hitting the service and (2) converting from
  * {@link DownloadItem}s to {@link OfflineItem}s.
  */
-class LegacyDownloadProviderImpl implements DownloadObserver, LegacyDownloadProvider {
-    private final ArrayList<Callback<ArrayList<OfflineItem>>> mRequests = new ArrayList<>();
-    private final ArrayList<Callback<ArrayList<OfflineItem>>> mOffTheRecordRequests =
-            new ArrayList<>();
+class LegacyDownloadProviderImpl
+        implements DownloadObserver, LegacyDownloadProvider, ProfileManager.Observer {
+    private HashMap<ProfileKey, ArrayList<Callback<ArrayList<OfflineItem>>>> mRequestsMap =
+            new HashMap<>();
 
     private final ObserverList<OfflineContentProvider.Observer> mObservers = new ObserverList<>();
 
@@ -77,16 +83,15 @@ class LegacyDownloadProviderImpl implements DownloadObserver, LegacyDownloadProv
 
     /** @see OfflineContentProvider.Observer#onItemRemoved(ContentId) */
     @Override
-    public void onDownloadItemRemoved(String guid, boolean isOffTheRecord) {
+    public void onDownloadItemRemoved(String guid) {
         for (OfflineContentProvider.Observer observer : mObservers) {
             observer.onItemRemoved(LegacyHelpers.buildLegacyContentId(false, guid));
         }
     }
 
     @Override
-    public void onAllDownloadsRetrieved(List<DownloadItem> items, boolean offTheRecord) {
-        List<Callback<ArrayList<OfflineItem>>> list =
-                offTheRecord ? mOffTheRecordRequests : mRequests;
+    public void onAllDownloadsRetrieved(List<DownloadItem> items, ProfileKey profileKey) {
+        List<Callback<ArrayList<OfflineItem>>> list = getRequestList(profileKey);
         if (list.isEmpty()) return;
 
         ArrayList<OfflineItem> offlineItems = new ArrayList<>();
@@ -98,6 +103,7 @@ class LegacyDownloadProviderImpl implements DownloadObserver, LegacyDownloadProv
         // Copy the list and clear the original in case the callbacks are reentrant.
         List<Callback<ArrayList<OfflineItem>>> listCopy = new ArrayList<>(list);
         list.clear();
+        mRequestsMap.remove(profileKey);
 
         for (Callback<ArrayList<OfflineItem>> callback : listCopy) callback.onResult(offlineItems);
     }
@@ -125,7 +131,8 @@ class LegacyDownloadProviderImpl implements DownloadObserver, LegacyDownloadProv
     public void openItem(OfflineItem item) {
         // TODO(shaktisahu): May be pass metrics as a param.
         DownloadManagerService.getDownloadManagerService().openDownload(item.id,
-                OTRProfileID.deserialize(item.otrProfileId), DownloadOpenSource.DOWNLOAD_HOME);
+                OTRProfileID.deserialize(item.otrProfileId), DownloadOpenSource.DOWNLOAD_HOME,
+                ContextUtils.getApplicationContext());
     }
 
     @Override
@@ -176,12 +183,11 @@ class LegacyDownloadProviderImpl implements DownloadObserver, LegacyDownloadProv
 
     @Override
     public void getAllItems(Callback<ArrayList<OfflineItem>> callback, OTRProfileID otrProfileID) {
-        // TODO(crbug.com/1145502): Create a map to hold OTRProfileID as key and list of callbacks
-        // as value.
-        List<Callback<ArrayList<OfflineItem>>> list =
-                otrProfileID != null ? mOffTheRecordRequests : mRequests;
+        ProfileKey profileKey = IncognitoUtils.getProfileKeyFromOTRProfileID(otrProfileID);
+        ArrayList<Callback<ArrayList<OfflineItem>>> list = getRequestList(profileKey);
 
         list.add(callback);
+        mRequestsMap.put(profileKey, list);
         if (list.size() > 1) return;
         DownloadManagerService.getDownloadManagerService().getAllDownloads(otrProfileID);
     }
@@ -221,5 +227,18 @@ class LegacyDownloadProviderImpl implements DownloadObserver, LegacyDownloadProv
         if (TextUtils.isEmpty(item.getDownloadInfo().getFilePath())) return false;
         if (TextUtils.isEmpty(item.getDownloadInfo().getFileName())) return false;
         return true;
+    }
+
+    private ArrayList getRequestList(ProfileKey profileKey) {
+        return mRequestsMap.get(profileKey) == null ? new ArrayList<>()
+                                                    : mRequestsMap.get(profileKey);
+    }
+
+    @Override
+    public void onProfileAdded(Profile profile) {}
+
+    @Override
+    public void onProfileDestroyed(Profile profile) {
+        mRequestsMap.remove(profile.getProfileKey());
     }
 }

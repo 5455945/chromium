@@ -48,9 +48,14 @@ void FakeRenderWidgetHost::IntrinsicSizingInfoChanged(
 
 void FakeRenderWidgetHost::SetCursor(const ui::Cursor& cursor) {}
 
-void FakeRenderWidgetHost::SetToolTipText(
-    const base::string16& tooltip_text,
+void FakeRenderWidgetHost::UpdateTooltipUnderCursor(
+    const std::u16string& tooltip_text,
     base::i18n::TextDirection text_direction_hint) {}
+
+void FakeRenderWidgetHost::UpdateTooltipFromKeyboard(
+    const std::u16string& tooltip_text,
+    base::i18n::TextDirection text_direction_hint,
+    const gfx::Rect& bounds) {}
 
 void FakeRenderWidgetHost::TextInputStateChanged(
     ui::mojom::TextInputStatePtr state) {}
@@ -60,6 +65,7 @@ void FakeRenderWidgetHost::SelectionBoundsChanged(
     base::i18n::TextDirection anchor_dir,
     const gfx::Rect& focus_rect,
     base::i18n::TextDirection focus_dir,
+    const gfx::Rect& bounding_box,
     bool is_anchor_first) {}
 
 void FakeRenderWidgetHost::CreateFrameSink(

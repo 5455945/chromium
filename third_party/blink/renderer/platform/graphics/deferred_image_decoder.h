@@ -28,7 +28,7 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/renderer/platform/geometry/int_size.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_image.h"
 #include "third_party/blink/renderer/platform/graphics/rw_buffer.h"
@@ -59,6 +59,8 @@ class PLATFORM_EXPORT DeferredImageDecoder final {
   static std::unique_ptr<DeferredImageDecoder> CreateForTesting(
       std::unique_ptr<ImageDecoder>);
 
+  DeferredImageDecoder(const DeferredImageDecoder&) = delete;
+  DeferredImageDecoder& operator=(const DeferredImageDecoder&) = delete;
   ~DeferredImageDecoder();
 
   String FilenameExtension() const;
@@ -120,7 +122,7 @@ class PLATFORM_EXPORT DeferredImageDecoder final {
   sk_sp<SkColorSpace> color_space_for_sk_images_;
   IntPoint hot_spot_;
   const PaintImage::ContentId complete_frame_content_id_;
-  base::Optional<bool> incremental_decode_needed_;
+  absl::optional<bool> incremental_decode_needed_;
 
   // Set to true if the image is detected to be invalid after parsing the
   // metadata.
@@ -128,7 +130,7 @@ class PLATFORM_EXPORT DeferredImageDecoder final {
 
   // Caches an image's metadata so it can outlive |metadata_decoder_| after all
   // data is received in cases where multiple generators are created.
-  base::Optional<cc::ImageHeaderMetadata> image_metadata_;
+  absl::optional<cc::ImageHeaderMetadata> image_metadata_;
 
   // Caches frame state information.
   Vector<DeferredFrameData> frame_data_;
@@ -136,8 +138,6 @@ class PLATFORM_EXPORT DeferredImageDecoder final {
   // the index of the first unreceived/incomplete frame in |frame_data_|.
   size_t received_frame_count_ = 0;
   scoped_refptr<ImageFrameGenerator> frame_generator_;
-
-  DISALLOW_COPY_AND_ASSIGN(DeferredImageDecoder);
 };
 
 }  // namespace blink

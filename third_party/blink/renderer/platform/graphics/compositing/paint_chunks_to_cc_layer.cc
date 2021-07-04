@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/platform/graphics/compositing/paint_chunks_to_cc_layer.h"
 
 #include "base/containers/adapters.h"
+#include "base/logging.h"
 #include "base/numerics/safe_conversions.h"
 #include "cc/base/features.h"
 #include "cc/input/layer_selection_bound.h"
@@ -242,7 +243,7 @@ class ConversionContext {
     // The transform space when the SaveLayer[Alpha]Op was emitted.
     const TransformPaintPropertyNode* transform;
     // Records the bounds of the effect which initiated the entry. Note that
-    // the effect is not |this->effect| (which is the previous effect), but the
+    // the effect is not |effect| (which is the previous effect), but the
     // |current_effect_| when this entry is the top of the stack.
     FloatRect bounds;
   };
@@ -535,11 +536,10 @@ void ConversionContext::StartEffect(const EffectPaintPropertyNode& effect) {
   // effects, so we can handle them separately.
   bool has_filter = !effect.Filter().IsEmpty();
   bool has_opacity = effect.Opacity() != 1.f;
-  bool has_other_effects = effect.BlendMode() != SkBlendMode::kSrcOver ||
-                           effect.GetColorFilter() != kColorFilterNone;
+  bool has_other_effects = effect.BlendMode() != SkBlendMode::kSrcOver;
   DCHECK(!has_filter || !(has_opacity || has_other_effects));
   // We always composite backdrop filters.
-  DCHECK(effect.BackdropFilter().IsEmpty());
+  DCHECK(!effect.BackdropFilter());
 
   // Apply effects.
   cc_list_.StartPaint();
@@ -551,8 +551,6 @@ void ConversionContext::StartEffect(const EffectPaintPropertyNode& effect) {
       PaintFlags flags;
       flags.setBlendMode(effect.BlendMode());
       flags.setAlpha(alpha);
-      flags.setColorFilter(GraphicsContext::WebCoreColorFilterToSkiaColorFilter(
-          effect.GetColorFilter()));
       save_layer_id = cc_list_.push<cc::SaveLayerOp>(nullptr, &flags);
     } else {
       save_layer_id = cc_list_.push<cc::SaveLayerAlphaOp>(nullptr, alpha);
@@ -710,15 +708,17 @@ void ConversionContext::EndTransform() {
 void ConversionContext::Convert(const PaintChunkSubset& chunks) {
   for (auto it = chunks.begin(); it != chunks.end(); ++it) {
     const auto& chunk = *it;
+    if (chunk.effectively_invisible)
+      continue;
     const auto& chunk_state = chunk.properties;
     bool switched_to_chunk_state = false;
 
     for (const auto& item : it.DisplayItems()) {
       sk_sp<const PaintRecord> record;
-      if (item.IsScrollbar())
-        record = static_cast<const ScrollbarDisplayItem&>(item).Paint();
-      else if (item.IsDrawing())
-        record = static_cast<const DrawingDisplayItem&>(item).GetPaintRecord();
+      if (auto* scrollbar = DynamicTo<ScrollbarDisplayItem>(item))
+        record = scrollbar->Paint();
+      else if (auto* drawing = DynamicTo<DrawingDisplayItem>(item))
+        record = drawing->GetPaintRecord();
       else
         continue;
 
@@ -910,7 +910,6 @@ static void UpdateNonFastScrollableRegion(
     const PropertyTreeState& layer_state,
     const PropertyTreeState& chunk_state,
     const FloatPoint& layer_offset,
-    PropertyTreeManager* property_tree_manager,
     cc::Region& non_fast_scrollable_region) {
   if (hit_test_data.scroll_hit_test_rect.IsEmpty())
     return;
@@ -925,16 +924,6 @@ static void UpdateNonFastScrollableRegion(
       auto scroll_element_id = scroll_node.GetCompositorElementId();
       if (layer.element_id() == scroll_element_id)
         return;
-      // Ensure the cc scroll node to prepare for possible descendant nodes
-      // referenced by later composited layers. This can't be done by ensuring
-      // parent transform node in EnsureCompositorTransformNode() if the
-      // transform tree and the scroll tree have different topologies.
-      // This is not necessary with ScrollUnification which ensures the
-      // complete scroll tree.
-      if (!RuntimeEnabledFeatures::ScrollUnificationEnabled()) {
-        DCHECK(property_tree_manager);
-        property_tree_manager->EnsureCompositorScrollNode(*scroll_translation);
-      }
     }
   }
 
@@ -950,8 +939,7 @@ static void UpdateNonFastScrollableRegion(
 static void UpdateTouchActionWheelEventHandlerAndNonFastScrollableRegions(
     cc::Layer& layer,
     const PropertyTreeState& layer_state,
-    const PaintChunkSubset& chunks,
-    PropertyTreeManager* property_tree_manager) {
+    const PaintChunkSubset& chunks) {
   gfx::Vector2dF cc_layer_offset = layer.offset_to_transform_parent();
   FloatPoint layer_offset(cc_layer_offset.x(), cc_layer_offset.y());
   cc::TouchActionRegion touch_action_region;
@@ -971,9 +959,9 @@ static void UpdateTouchActionWheelEventHandlerAndNonFastScrollableRegions(
       UpdateWheelEventRegion(*chunk.hit_test_data, layer_state, chunk_state,
                              layer_offset, wheel_event_region);
     }
-    UpdateNonFastScrollableRegion(
-        layer, *chunk.hit_test_data, layer_state, chunk_state, layer_offset,
-        property_tree_manager, non_fast_scrollable_region);
+    UpdateNonFastScrollableRegion(layer, *chunk.hit_test_data, layer_state,
+                                  chunk_state, layer_offset,
+                                  non_fast_scrollable_region);
   }
   layer.SetTouchActionRegion(std::move(touch_action_region));
   // TODO(https://crbug.com/841364): Fist condition in the "if" statement below
@@ -1049,11 +1037,10 @@ void PaintChunksToCcLayer::UpdateLayerProperties(
     cc::Layer& layer,
     const PropertyTreeState& layer_state,
     const PaintChunkSubset& chunks,
-    cc::LayerSelection& layer_selection,
-    PropertyTreeManager* property_tree_manager) {
+    cc::LayerSelection& layer_selection) {
   UpdateBackgroundColor(layer, layer_state.Effect(), chunks);
   UpdateTouchActionWheelEventHandlerAndNonFastScrollableRegions(
-      layer, layer_state, chunks, property_tree_manager);
+      layer, layer_state, chunks);
   UpdateLayerSelection(layer, layer_state, chunks, layer_selection);
 }
 

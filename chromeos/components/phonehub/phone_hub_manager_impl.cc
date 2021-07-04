@@ -8,6 +8,7 @@
 #include "chromeos/components/phonehub/browser_tabs_metadata_fetcher.h"
 #include "chromeos/components/phonehub/browser_tabs_model_controller.h"
 #include "chromeos/components/phonehub/browser_tabs_model_provider.h"
+#include "chromeos/components/phonehub/camera_roll_manager.h"
 #include "chromeos/components/phonehub/connection_scheduler_impl.h"
 #include "chromeos/components/phonehub/cros_state_sender.h"
 #include "chromeos/components/phonehub/do_not_disturb_controller_impl.h"
@@ -54,8 +55,8 @@ PhoneHubManagerImpl::PhoneHubManagerImpl(
               secure_channel_client,
               kSecureChannelFeatureName,
               kConnectionResultMetricName,
-              kConnectionDurationMetricName,
-              kConnectionLatencyMetricName)),
+              kConnectionLatencyMetricName,
+              kConnectionDurationMetricName)),
       feature_status_provider_(std::make_unique<FeatureStatusProviderImpl>(
           device_sync_client,
           multidevice_setup_client,
@@ -131,7 +132,12 @@ PhoneHubManagerImpl::PhoneHubManagerImpl(
       invalid_connection_disconnector_(
           std::make_unique<InvalidConnectionDisconnector>(
               connection_manager_.get(),
-              phone_model_.get())) {}
+              phone_model_.get())),
+      camera_roll_manager_(
+          features::IsPhoneHubCameraRollEnabled()
+              ? std::make_unique<CameraRollManager>(message_receiver_.get(),
+                                                    message_sender_.get())
+              : nullptr) {}
 
 PhoneHubManagerImpl::~PhoneHubManagerImpl() = default;
 
@@ -187,6 +193,7 @@ UserActionRecorder* PhoneHubManagerImpl::GetUserActionRecorder() {
 // These should be destroyed in the opposite order of how these objects are
 // initialized in the constructor.
 void PhoneHubManagerImpl::Shutdown() {
+  camera_roll_manager_.reset();
   invalid_connection_disconnector_.reset();
   multidevice_setup_state_updater_.reset();
   browser_tabs_model_controller_.reset();

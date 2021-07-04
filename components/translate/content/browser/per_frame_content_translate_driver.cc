@@ -63,7 +63,7 @@ static const char kTranslateSubframeErrorType[] =
 // TODO(dougarnett): Factor this out into a utility class that can be
 // shared here and with the original macos copy.
 void AddTextNodesToVector(const ui::AXNode* node,
-                          std::vector<base::string16>* strings) {
+                          std::vector<std::u16string>* strings) {
   const ui::AXNodeData& node_data = node->data();
 
   if (node_data.role == ax::mojom::Role::kStaticText) {
@@ -78,22 +78,21 @@ void AddTextNodesToVector(const ui::AXNode* node,
     AddTextNodesToVector(child, strings);
 }
 
-using PageContentsCallback = base::OnceCallback<void(const base::string16&)>;
+using PageContentsCallback = base::OnceCallback<void(const std::u16string&)>;
 void CombineTextNodesAndMakeCallback(PageContentsCallback callback,
                                      const ui::AXTreeUpdate& update) {
   ui::AXTree tree;
   if (!tree.Unserialize(update)) {
-    std::move(callback).Run(base::ASCIIToUTF16(""));
+    std::move(callback).Run(u"");
     return;
   }
 
-  std::vector<base::string16> text_node_contents;
+  std::vector<std::u16string> text_node_contents;
   text_node_contents.reserve(update.nodes.size());
 
   AddTextNodesToVector(tree.root(), &text_node_contents);
 
-  std::move(callback).Run(
-      base::JoinString(text_node_contents, base::ASCIIToUTF16("\n")));
+  std::move(callback).Run(base::JoinString(text_node_contents, u"\n"));
 }
 }  // namespace
 
@@ -256,10 +255,10 @@ void PerFrameContentTranslateDriver::InitiateTranslationIfReload(
   // an infobar, it must be done after that.
   base::ThreadTaskRunnerHandle::Get()->PostTask(
       FROM_HERE,
-      base::BindOnce(
-          &PerFrameContentTranslateDriver::InitiateTranslation,
-          weak_pointer_factory_.GetWeakPtr(),
-          translate_manager()->GetLanguageState()->original_language(), 0));
+      base::BindOnce(&PerFrameContentTranslateDriver::InitiateTranslation,
+                     weak_pointer_factory_.GetWeakPtr(),
+                     translate_manager()->GetLanguageState()->source_language(),
+                     0));
 }
 
 // content::WebContentsObserver methods
@@ -278,7 +277,7 @@ void PerFrameContentTranslateDriver::DidFinishNavigation(
       navigation_handle->GetReloadType() != content::ReloadType::NONE ||
       navigation_handle->IsSameDocument();
 
-  const base::Optional<url::Origin>& initiator_origin =
+  const absl::optional<url::Origin>& initiator_origin =
       navigation_handle->GetInitiatorOrigin();
 
   bool navigation_from_google =
@@ -312,7 +311,8 @@ void PerFrameContentTranslateDriver::DOMContentLoaded(
   }
 }
 
-void PerFrameContentTranslateDriver::DocumentOnLoadCompletedInMainFrame() {
+void PerFrameContentTranslateDriver::DocumentOnLoadCompletedInMainFrame(
+    content::RenderFrameHost* render_frame_host) {
   if (translate::IsSubFrameLanguageDetectionEnabled() &&
       translate::IsTranslatableURL(web_contents()->GetURL())) {
     StartLanguageDetection();
@@ -385,7 +385,7 @@ void PerFrameContentTranslateDriver::OnWebLanguageDetectionDetails(
 
 void PerFrameContentTranslateDriver::OnPageContents(
     base::TimeTicks capture_begin_time,
-    const base::string16& contents) {
+    const std::u16string& contents) {
   details_.contents = contents;
   UMA_HISTOGRAM_TIMES(kTranslateCaptureText,
                       base::TimeTicks::Now() - capture_begin_time);
@@ -436,7 +436,7 @@ void PerFrameContentTranslateDriver::OnFrameTranslated(
     bool is_main_frame,
     mojo::AssociatedRemote<mojom::TranslateAgent> translate_agent,
     bool cancelled,
-    const std::string& original_lang,
+    const std::string& source_lang,
     const std::string& translated_lang,
     TranslateErrors::Type error_type) {
   if (cancelled)
@@ -461,10 +461,10 @@ void PerFrameContentTranslateDriver::OnFrameTranslated(
     // Post the callback on the thread's task runner in case the
     // info bar is in the process of going away.
     base::ThreadTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, base::BindOnce(&ContentTranslateDriver::OnPageTranslated,
-                                  weak_pointer_factory_.GetWeakPtr(), cancelled,
-                                  original_lang, translated_lang,
-                                  stats_.main_frame_error));
+        FROM_HERE,
+        base::BindOnce(&ContentTranslateDriver::OnPageTranslated,
+                       weak_pointer_factory_.GetWeakPtr(), cancelled,
+                       source_lang, translated_lang, stats_.main_frame_error));
     stats_.Report();
     stats_.Clear();
   }

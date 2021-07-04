@@ -33,7 +33,6 @@ constexpr mojom::NetworkState DeviceStateToNetworkState(
       // UI, but not for purposes of network health, we can treat as Disabled.
       return mojom::NetworkState::kDisabled;
     case network_config::mojom::DeviceStateType::kEnabled:
-    case network_config::mojom::DeviceStateType::kInhibited:
       return mojom::NetworkState::kNotConnected;
     case network_config::mojom::DeviceStateType::kProhibited:
       return mojom::NetworkState::kProhibited;
@@ -137,6 +136,7 @@ void NetworkHealth::OnActiveNetworksChanged(
     std::vector<network_config::mojom::NetworkStatePropertiesPtr>
         active_networks) {
   HandleNetworkEventsForActiveNetworks(std::move(active_networks));
+  RequestNetworkStateList();
 }
 
 void NetworkHealth::OnNetworkStateChanged(
@@ -145,6 +145,7 @@ void NetworkHealth::OnNetworkStateChanged(
     return;
   }
   HandleNetworkEventsForInactiveNetworks(std::move(network_state));
+  RequestNetworkStateList();
 }
 
 void NetworkHealth::OnVpnProvidersChanged() {}
@@ -246,28 +247,22 @@ const mojom::NetworkPtr* NetworkHealth::FindMatchingNetwork(
 void NetworkHealth::HandleNetworkEventsForActiveNetworks(
     std::vector<network_config::mojom::NetworkStatePropertiesPtr>
         active_networks) {
-  bool refresh_network_health_state = false;
   for (const auto& network_state : active_networks) {
     const mojom::NetworkPtr* const network =
         FindMatchingNetwork(network_state->guid);
     // Fire an event if the network is new or a connection state change
     // occurred.
     if (!network || ConnectionStateChanged(*network, network_state)) {
-      refresh_network_health_state = true;
       NotifyObserversConnectionStateChanged(
           network_state->guid,
           ConnectionStateToNetworkState(network_state->connection_state));
     }
     // Fire an event if the network is new or a signal strength change occurred.
     if (!network || SignalStrengthChanged(*network, network_state)) {
-      refresh_network_health_state = true;
       NotifyObserversSignalStrengthChanged(
           network_state->guid,
           network_config::GetWirelessSignalStrength(network_state.get()));
     }
-  }
-  if (refresh_network_health_state) {
-    RefreshNetworkHealthState();
   }
 }
 
@@ -288,7 +283,6 @@ void NetworkHealth::HandleNetworkEventsForInactiveNetworks(
     NotifyObserversConnectionStateChanged(
         network_state->guid,
         ConnectionStateToNetworkState(network_state->connection_state));
-    RefreshNetworkHealthState();
   }
 }
 

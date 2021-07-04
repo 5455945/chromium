@@ -34,7 +34,9 @@ namespace ash {
 namespace {
 
 const char kTestAdapterName[] = "Chromebook";
+const char16_t kTestAdapterName16[] = u"Chromebook";
 const char kTestAdapterAddress[] = "01:23:45:67:89:AB";
+const char16_t kTestAdapterAddress16[] = u"01:23:45:67:89:AB";
 
 class TestMessageCenter : public message_center::FakeMessageCenter {
  public:
@@ -45,7 +47,7 @@ class TestMessageCenter : public message_center::FakeMessageCenter {
     message_center::Notification* notification =
         FindVisibleNotificationById(id);
     DCHECK(notification);
-    notification->delegate()->Click(base::nullopt, base::nullopt);
+    notification->delegate()->Click(absl::nullopt, absl::nullopt);
   }
 
  private:
@@ -109,11 +111,10 @@ class BluetoothNotificationControllerTest : public AshTestBase {
             BluetoothNotificationController::
                 kBluetoothDeviceDiscoverableNotificationId);
     EXPECT_TRUE(visible_notification);
-    EXPECT_EQ(base::string16(), visible_notification->title());
+    EXPECT_EQ(std::u16string(), visible_notification->title());
     EXPECT_EQ(
         l10n_util::GetStringFUTF16(IDS_ASH_STATUS_TRAY_BLUETOOTH_DISCOVERABLE,
-                                   base::UTF8ToUTF16(kTestAdapterName),
-                                   base::UTF8ToUTF16(kTestAdapterAddress)),
+                                   kTestAdapterName16, kTestAdapterAddress16),
         visible_notification->message());
   }
 
@@ -129,7 +130,7 @@ class BluetoothNotificationControllerTest : public AshTestBase {
         test_message_center_.FindVisibleNotificationById(
             BluetoothNotificationController::GetPairedNotificationId(device));
     EXPECT_TRUE(visible_notification);
-    EXPECT_EQ(base::string16(), visible_notification->title());
+    EXPECT_EQ(std::u16string(), visible_notification->title());
     EXPECT_EQ(l10n_util::GetStringFUTF16(IDS_ASH_STATUS_TRAY_BLUETOOTH_PAIRED,
                                          device->GetNameForDisplay()),
               visible_notification->message());

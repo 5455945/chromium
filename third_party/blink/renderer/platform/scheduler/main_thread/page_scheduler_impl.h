@@ -7,12 +7,10 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "base/observer_list.h"
-#include "base/optional.h"
 #include "base/task/sequence_manager/task_queue.h"
 #include "base/time/time.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/scheduler/common/throttling/task_queue_throttler.h"
 #include "third_party/blink/renderer/platform/scheduler/common/tracing_helper.h"
@@ -50,11 +48,17 @@ class WakeUpBudgetPool;
 
 class PLATFORM_EXPORT PageSchedulerImpl : public PageScheduler {
  public:
-  // Interval between throttled wake ups, when intensive throttling is disabled.
+  // Interval between throttled wake ups, without intensive throttling.
   static constexpr base::TimeDelta kDefaultThrottledWakeUpInterval =
       base::TimeDelta::FromSeconds(1);
 
+  // Interval between throttled wake ups, with intensive throttling.
+  static constexpr base::TimeDelta kIntensiveThrottledWakeUpInterval =
+      base::TimeDelta::FromMinutes(1);
+
   PageSchedulerImpl(PageScheduler::Delegate*, AgentGroupSchedulerImpl&);
+  PageSchedulerImpl(const PageSchedulerImpl&) = delete;
+  PageSchedulerImpl& operator=(const PageSchedulerImpl&) = delete;
 
   ~PageSchedulerImpl() override;
 
@@ -63,7 +67,6 @@ class PLATFORM_EXPORT PageSchedulerImpl : public PageScheduler {
   void SetPageVisible(bool page_visible) override;
   void SetPageFrozen(bool) override;
   void SetPageBackForwardCached(bool) override;
-  void OnFocusChanged(bool focused) override;
   void SetKeepActive(bool) override;
   bool IsMainFrameLocal() const override;
   void SetIsMainFrameLocal(bool is_local) override;
@@ -127,7 +130,7 @@ class PLATFORM_EXPORT PageSchedulerImpl : public PageScheduler {
 
   void OnTraceLogEnabled();
 
-  bool IsPageFocused() const;
+  void OnFirstContentfulPaintInMainFrame();
 
   // Virtual for testing.
   virtual bool IsWaitingForMainFrameContentfulPaint() const;
@@ -151,7 +154,7 @@ class PLATFORM_EXPORT PageSchedulerImpl : public PageScheduler {
   // frame it not a local one.
   FrameSchedulerImpl* SelectFrameForUkmAttribution();
 
-  void WriteIntoTracedValue(perfetto::TracedValue context) const;
+  void WriteIntoTrace(perfetto::TracedValue context) const;
 
   base::WeakPtr<PageSchedulerImpl> GetWeakPtr() {
     return weak_factory_.GetWeakPtr();
@@ -196,13 +199,16 @@ class PLATFORM_EXPORT PageSchedulerImpl : public PageScheduler {
 
    public:
     explicit PageLifecycleStateTracker(PageSchedulerImpl*, PageLifecycleState);
+    PageLifecycleStateTracker(const PageLifecycleStateTracker&) = delete;
+    PageLifecycleStateTracker& operator=(const PageLifecycleStateTracker&) =
+        delete;
     ~PageLifecycleStateTracker() = default;
 
     void SetPageLifecycleState(PageLifecycleState);
     PageLifecycleState GetPageLifecycleState() const;
 
    private:
-    static base::Optional<PageLifecycleStateTransition>
+    static absl::optional<PageLifecycleStateTransition>
     ComputePageLifecycleStateTransition(PageLifecycleState old_state,
                                         PageLifecycleState new_state);
 
@@ -211,8 +217,6 @@ class PLATFORM_EXPORT PageSchedulerImpl : public PageScheduler {
 
     PageSchedulerImpl* page_scheduler_impl_;
     PageLifecycleState current_state_;
-
-    DISALLOW_COPY_AND_ASSIGN(PageLifecycleStateTracker);
   };
 
   void RegisterFrameSchedulerImpl(FrameSchedulerImpl* frame_scheduler);
@@ -319,7 +323,6 @@ class PLATFORM_EXPORT PageSchedulerImpl : public PageScheduler {
   bool are_wake_ups_intensively_throttled_;
   bool keep_active_;
   bool had_recent_title_or_favicon_update_;
-  bool focused_;
   CPUTimeBudgetPool* cpu_time_budget_pool_ = nullptr;
 
   // Wake up budget pools for each throttling scenario:
@@ -366,8 +369,6 @@ class PLATFORM_EXPORT PageSchedulerImpl : public PageScheduler {
 
   std::unique_ptr<PageLifecycleStateTracker> page_lifecycle_state_tracker_;
   base::WeakPtrFactory<PageSchedulerImpl> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(PageSchedulerImpl);
 };
 
 }  // namespace scheduler

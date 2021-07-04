@@ -20,10 +20,13 @@
 #include "components/strings/grit/components_strings.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/image/image_skia_operations.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/animation/ink_drop.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/image_button_factory.h"
@@ -31,8 +34,6 @@
 #include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
-#include "ui/views/metadata/metadata_header_macros.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/metadata/type_conversion.h"
 #include "ui/views/style/typography.h"
 
@@ -66,12 +67,12 @@ class OmniboxRowView::HeaderView : public views::View {
     views::InstallCircleHighlightPathGenerator(header_toggle_button_);
     header_toggle_button_->SetFocusBehavior(FocusBehavior::ACCESSIBLE_ONLY);
 
-    header_toggle_button_focus_ring_ =
-        views::FocusRing::Install(header_toggle_button_);
-    header_toggle_button_focus_ring_->SetHasFocusPredicate([&](View* view) {
-      return view->GetVisible() &&
-             row_view_->popup_model_->selection() == GetHeaderSelection();
-    });
+    views::FocusRing::Install(header_toggle_button_);
+    views::FocusRing::Get(header_toggle_button_)
+        ->SetHasFocusPredicate([&](View* view) {
+          return view->GetVisible() &&
+                 row_view_->popup_model_->selection() == GetHeaderSelection();
+        });
 
     if (row_view_->pref_service_) {
       pref_change_registrar_.Init(row_view_->pref_service_);
@@ -82,7 +83,7 @@ class OmniboxRowView::HeaderView : public views::View {
     }
   }
 
-  void SetHeader(int suggestion_group_id, const base::string16& header_text) {
+  void SetHeader(int suggestion_group_id, const std::u16string& header_text) {
     suggestion_group_id_ = suggestion_group_id;
     header_text_ = header_text;
 
@@ -158,7 +159,7 @@ class OmniboxRowView::HeaderView : public views::View {
 
     SkColor icon_color = GetOmniboxColor(GetThemeProvider(),
                                          OmniboxPart::RESULTS_ICON, part_state);
-    header_toggle_button_->SetInkDropBaseColor(icon_color);
+    views::InkDrop::Get(header_toggle_button_)->SetBaseColor(icon_color);
 
     int dip_size = GetLayoutConstant(LOCATION_BAR_ICON_SIZE);
     const gfx::ImageSkia arrow_down =
@@ -184,7 +185,7 @@ class OmniboxRowView::HeaderView : public views::View {
     header_toggle_button_->SetToggledAccessibleName(l10n_util::GetStringFUTF16(
         IDS_ACC_HEADER_SHOW_SUGGESTIONS_BUTTON, header_text_));
 
-    header_toggle_button_focus_ring_->SchedulePaint();
+    views::FocusRing::Get(header_toggle_button_)->SchedulePaint();
 
     // It's a little hokey that we're stealing the logic for the background
     // color from OmniboxResultView. If we start doing this is more than just
@@ -237,13 +238,12 @@ class OmniboxRowView::HeaderView : public views::View {
 
   // The button used to toggle hiding suggestions with this header.
   views::ToggleImageButton* header_toggle_button_;
-  views::FocusRing* header_toggle_button_focus_ring_ = nullptr;
 
   // The group ID associated with this header.
   int suggestion_group_id_ = 0;
 
   // The unmodified header text for this header.
-  base::string16 header_text_;
+  std::u16string header_text_;
 
   // Stores whether or not the group was hidden. This is used to fire correct
   // accessibility change events.
@@ -259,58 +259,54 @@ class OmniboxRowView::HeaderView : public views::View {
 
 DEFINE_ENUM_CONVERTERS(OmniboxPopupModel::LineState,
                        {OmniboxPopupModel::FOCUSED_BUTTON_HEADER,
-                        base::ASCIIToUTF16("FOCUSED_BUTTON_HEADER")},
-                       {OmniboxPopupModel::NORMAL,
-                        base::ASCIIToUTF16("NORMAL")},
-                       {OmniboxPopupModel::KEYWORD_MODE,
-                        base::ASCIIToUTF16("KEYWORD_MODE")},
+                        u"FOCUSED_BUTTON_HEADER"},
+                       {OmniboxPopupModel::NORMAL, u"NORMAL"},
+                       {OmniboxPopupModel::KEYWORD_MODE, u"KEYWORD_MODE"},
                        {OmniboxPopupModel::FOCUSED_BUTTON_TAB_SWITCH,
-                        base::ASCIIToUTF16("FOCUSED_BUTTON_TAB_SWITCH")},
-                       {OmniboxPopupModel::FOCUSED_BUTTON_PEDAL,
-                        base::ASCIIToUTF16("FOCUSED_BUTTON_PEDAL")},
+                        u"FOCUSED_BUTTON_TAB_SWITCH"},
+                       {OmniboxPopupModel::FOCUSED_BUTTON_ACTION,
+                        u"FOCUSED_BUTTON_ACTION"},
                        {OmniboxPopupModel::FOCUSED_BUTTON_REMOVE_SUGGESTION,
-                        base::ASCIIToUTF16("FOCUSED_BUTTON_REMOVE_SUGGESTION")})
+                        u"FOCUSED_BUTTON_REMOVE_SUGGESTION"})
 
 template <>
-struct views::metadata::TypeConverter<OmniboxPopupModel::Selection>
-    : public views::metadata::BaseTypeConverter<true> {
-  static base::string16 ToString(
-      views::metadata::ArgType<OmniboxPopupModel::Selection> source_value);
-  static base::Optional<OmniboxPopupModel::Selection> FromString(
-      const base::string16& source_value);
-  static views::metadata::ValidStrings GetValidStrings() { return {}; }
+struct ui::metadata::TypeConverter<OmniboxPopupModel::Selection>
+    : public ui::metadata::BaseTypeConverter<true> {
+  static std::u16string ToString(
+      ui::metadata::ArgType<OmniboxPopupModel::Selection> source_value);
+  static absl::optional<OmniboxPopupModel::Selection> FromString(
+      const std::u16string& source_value);
+  static ui::metadata::ValidStrings GetValidStrings() { return {}; }
 };
 
 // static
-base::string16
-views::metadata::TypeConverter<OmniboxPopupModel::Selection>::ToString(
-    views::metadata::ArgType<OmniboxPopupModel::Selection> source_value) {
-  return STRING16_LITERAL("{") + base::NumberToString16(source_value.line) +
-         STRING16_LITERAL(",") +
+std::u16string
+ui::metadata::TypeConverter<OmniboxPopupModel::Selection>::ToString(
+    ui::metadata::ArgType<OmniboxPopupModel::Selection> source_value) {
+  return u"{" + base::NumberToString16(source_value.line) + u"," +
          TypeConverter<OmniboxPopupModel::LineState>::ToString(
              source_value.state) +
-         STRING16_LITERAL("}");
+         u"}";
 }
 
 // static
-base::Optional<OmniboxPopupModel::Selection>
-views::metadata::TypeConverter<OmniboxPopupModel::Selection>::FromString(
-    const base::string16& source_value) {
-  const auto values =
-      base::SplitString(source_value, base::ASCIIToUTF16("{,}"),
-                        base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+absl::optional<OmniboxPopupModel::Selection>
+ui::metadata::TypeConverter<OmniboxPopupModel::Selection>::FromString(
+    const std::u16string& source_value) {
+  const auto values = base::SplitString(
+      source_value, u"{,}", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
   if (values.size() != 2)
-    return base::nullopt;
+    return absl::nullopt;
   // TODO(pkasting): This should be size_t, but for some reason that won't link
   // on Mac.
-  const base::Optional<uint32_t> line =
+  const absl::optional<uint32_t> line =
       TypeConverter<uint32_t>::FromString(values[0]);
-  const base::Optional<OmniboxPopupModel::LineState> state =
+  const absl::optional<OmniboxPopupModel::LineState> state =
       TypeConverter<OmniboxPopupModel::LineState>::FromString(values[1]);
   return (line.has_value() && state.has_value())
-             ? base::make_optional<OmniboxPopupModel::Selection>(line.value(),
+             ? absl::make_optional<OmniboxPopupModel::Selection>(line.value(),
                                                                  state.value())
-             : base::nullopt;
+             : absl::nullopt;
 }
 
 BEGIN_METADATA(OmniboxRowView, HeaderView, views::View)
@@ -331,7 +327,7 @@ OmniboxRowView::OmniboxRowView(size_t line,
 }
 
 void OmniboxRowView::ShowHeader(int suggestion_group_id,
-                                const base::string16& header_text) {
+                                const std::u16string& header_text) {
   // Create the header (at index 0) if it doesn't exist.
   if (header_view_ == nullptr)
     header_view_ = AddChildViewAt(std::make_unique<HeaderView>(this), 0);

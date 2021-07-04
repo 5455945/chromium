@@ -7,6 +7,7 @@
 #include "base/check.h"
 #include "base/strings/sys_string_conversions.h"
 #include "components/signin/public/identity_manager/account_info.h"
+#import "ios/chrome/browser/signin/chrome_account_manager_service.h"
 #include "ios/chrome/browser/signin/constants.h"
 #include "ios/chrome/browser/signin/signin_util.h"
 #import "ios/public/provider/chrome/browser/chrome_browser_provider.h"
@@ -43,9 +44,13 @@ DeviceAccountsProvider::AccountInfo GetAccountInfo(
 }
 }
 
-DeviceAccountsProviderImpl::DeviceAccountsProviderImpl() {}
+DeviceAccountsProviderImpl::DeviceAccountsProviderImpl(
+    ChromeAccountManagerService* account_manager_service)
+    : account_manager_service_(account_manager_service) {
+  DCHECK(account_manager_service_);
+}
 
-DeviceAccountsProviderImpl::~DeviceAccountsProviderImpl() {}
+DeviceAccountsProviderImpl::~DeviceAccountsProviderImpl() = default;
 
 void DeviceAccountsProviderImpl::GetAccessToken(
     const std::string& gaia_id,
@@ -62,8 +67,8 @@ void DeviceAccountsProviderImpl::GetAccessToken(
   // types and Objective-C blocks.
   __block AccessTokenCallback scopedCallback = std::move(callback);
   identity_service->GetAccessToken(
-      identity_service->GetIdentityWithGaiaID(gaia_id), client_id, scopes,
-      ^(NSString* token, NSDate* expiration, NSError* error) {
+      account_manager_service_->GetIdentityWithGaiaID(gaia_id), client_id,
+      scopes, ^(NSString* token, NSDate* expiration, NSError* error) {
         std::move(scopedCallback).Run(token, expiration, error);
       });
 }
@@ -73,7 +78,7 @@ DeviceAccountsProviderImpl::GetAllAccounts() const {
   std::vector<AccountInfo> accounts;
   ios::ChromeIdentityService* identity_service =
       ios::GetChromeBrowserProvider()->GetChromeIdentityService();
-  NSArray* identities = identity_service->GetAllIdentities();
+  NSArray* identities = account_manager_service_->GetAllIdentities();
   for (ChromeIdentity* identity in identities) {
     accounts.push_back(GetAccountInfo(identity, identity_service));
   }
@@ -93,7 +98,7 @@ DeviceAccountsProviderImpl::GetAuthenticationErrorCategory(
   ios::ChromeIdentityService* identity_service =
       ios::GetChromeBrowserProvider()->GetChromeIdentityService();
   if (identity_service->IsMDMError(
-          identity_service->GetIdentityWithGaiaID(gaia_id), error)) {
+          account_manager_service_->GetIdentityWithGaiaID(gaia_id), error)) {
     return kAuthenticationErrorCategoryAuthorizationErrors;
   }
 

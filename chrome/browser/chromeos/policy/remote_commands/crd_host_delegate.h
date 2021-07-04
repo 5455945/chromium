@@ -14,43 +14,38 @@
 #include "base/values.h"
 #include "chrome/browser/chromeos/policy/remote_commands/device_command_start_crd_session_job.h"
 #include "extensions/browser/api/messaging/native_message_host.h"
-#include "google_apis/gaia/oauth2_access_token_manager.h"
-
-class Profile;
 
 namespace policy {
 
-// An implementation of the |DeviceCommandStartCRDSessionJob::Delegate|.
+// Delegate that will start a session with the CRD native host.
+// Will keep the session alive and active as long as this class lives.
+// Deleting this class object will forcefully interrupt the active CRD session.
 class CRDHostDelegate : public DeviceCommandStartCRDSessionJob::Delegate,
-                        public OAuth2AccessTokenManager::Consumer,
                         public extensions::NativeMessageHost::Client {
  public:
+  class NativeMessageHostFactory {
+   public:
+    virtual ~NativeMessageHostFactory() = default;
+
+    virtual std::unique_ptr<extensions::NativeMessageHost>
+    CreateNativeMessageHostHost() = 0;
+  };
+
   CRDHostDelegate();
+  explicit CRDHostDelegate(std::unique_ptr<NativeMessageHostFactory> factory);
   ~CRDHostDelegate() override;
 
- private:
-  // DeviceCommandScreenshotJob::Delegate:
+  // DeviceCommandStartCRDSessionJob::Delegate:
   bool HasActiveSession() const override;
   void TerminateSession(base::OnceClosure callback) override;
-  bool AreServicesReady() const override;
-  bool IsRunningKiosk() const override;
-  base::TimeDelta GetIdlenessPeriod() const override;
-  void FetchOAuthToken(
-      DeviceCommandStartCRDSessionJob::OAuthTokenCallback success_callback,
-      DeviceCommandStartCRDSessionJob::ErrorCallback error_callback) override;
   void StartCRDHostAndGetCode(
       const std::string& oauth_token,
+      const std::string& user_name,
       bool terminate_upon_input,
       DeviceCommandStartCRDSessionJob::AccessCodeCallback success_callback,
       DeviceCommandStartCRDSessionJob::ErrorCallback error_callback) override;
 
-  // OAuth2AccessTokenManager::Consumer:
-  void OnGetTokenSuccess(
-      const OAuth2AccessTokenManager::Request* request,
-      const OAuth2AccessTokenConsumer::TokenResponse& token_response) override;
-  void OnGetTokenFailure(const OAuth2AccessTokenManager::Request* request,
-                         const GoogleServiceAuthError& error) override;
-
+ private:
   // extensions::NativeMessageHost::Client:
   // Invoked when native host sends a message
   void PostMessageFromNativeHost(const std::string& message) override;
@@ -70,18 +65,16 @@ class CRDHostDelegate : public DeviceCommandStartCRDSessionJob::Delegate,
   void OnHelloResponse();
   void OnDisconnectResponse();
 
-  void OnStateError(std::string error_state, base::Value& message);
-  void OnStateRemoteConnected(base::Value& message);
+  void OnStateError(const std::string& error_state, const base::Value& message);
+  void OnStateRemoteConnected(const base::Value& message);
   void OnStateRemoteDisconnected();
-  void OnStateReceivedAccessCode(base::Value& message);
+  void OnStateReceivedAccessCode(const base::Value& message);
 
-  Profile* GetKioskProfile() const;
+  std::unique_ptr<NativeMessageHostFactory> factory_;
 
-  DeviceCommandStartCRDSessionJob::OAuthTokenCallback oauth_success_callback_;
   DeviceCommandStartCRDSessionJob::AccessCodeCallback code_success_callback_;
   DeviceCommandStartCRDSessionJob::ErrorCallback error_callback_;
 
-  std::unique_ptr<OAuth2AccessTokenManager::Request> oauth_request_;
   std::unique_ptr<extensions::NativeMessageHost> host_;
 
   // Filled structure with parameters for "connect" message.

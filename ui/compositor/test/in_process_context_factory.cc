@@ -133,7 +133,8 @@ class DirectOutputSurface : public viz::OutputSurface {
     // so we provide dummy values here.
     base::TimeTicks now = base::TimeTicks::Now();
     gfx::SwapTimings timings = {now, now};
-    client_->DidReceiveSwapBuffersAck(timings);
+    client_->DidReceiveSwapBuffersAck(timings,
+                                      /*release_fence=*/gfx::GpuFenceHandle());
     client_->DidReceivePresentationFeedback(gfx::PresentationFeedback());
   }
 
@@ -145,7 +146,7 @@ class DirectOutputSurface : public viz::OutputSurface {
 
 }  // namespace
 
-// TODO(sgilhuly): This class is managed heavily by InProcessTransportFactory.
+// TODO(rivr): This class is managed heavily by InProcessTransportFactory.
 // Move some of the logic in here and simplify the interface.
 class InProcessContextFactory::PerCompositorData
     : public viz::mojom::DisplayPrivate {
@@ -187,10 +188,11 @@ class InProcessContextFactory::PerCompositorData
   void UpdateRefreshRate(float refresh_rate) override {}
   void SetSupportedRefreshRates(
       const std::vector<float>& refresh_rates) override {}
+  void PreserveChildSurfaceControls() override {}
 #endif
 
   void SetDelegatedInkPointRenderer(
-      mojo::PendingReceiver<viz::mojom::DelegatedInkPointRenderer> receiver)
+      mojo::PendingReceiver<gfx::mojom::DelegatedInkPointRenderer> receiver)
       override {}
 
   void SetSurfaceHandle(gpu::SurfaceHandle surface_handle) {
@@ -217,7 +219,7 @@ class InProcessContextFactory::PerCompositorData
   }
   viz::Display* display() { return display_.get(); }
 
-  SkMatrix44 output_color_matrix() { return output_color_matrix_; }
+  skia::Matrix44 output_color_matrix() { return output_color_matrix_; }
   gfx::DisplayColorSpaces display_color_spaces() {
     return display_color_spaces_;
   }
@@ -229,7 +231,7 @@ class InProcessContextFactory::PerCompositorData
   std::unique_ptr<viz::BeginFrameSource> begin_frame_source_;
   std::unique_ptr<viz::Display> display_;
 
-  SkMatrix44 output_color_matrix_;
+  skia::Matrix44 output_color_matrix_;
   gfx::DisplayColorSpaces display_color_spaces_;
   base::TimeTicks vsync_timebase_;
   base::TimeDelta vsync_interval_;
@@ -363,7 +365,8 @@ void InProcessContextFactory::CreateLayerTreeFrameSink(
   }
   auto scheduler = std::make_unique<viz::DisplayScheduler>(
       begin_frame_source.get(), compositor->task_runner().get(),
-      display_output_surface->capabilities().max_frames_pending);
+      display_output_surface->capabilities().max_frames_pending,
+      display_output_surface->capabilities().max_frames_pending_120hz);
 
   data->SetDisplay(std::make_unique<viz::Display>(
       &shared_bitmap_manager_, renderer_settings_, &debug_settings_,
@@ -445,11 +448,11 @@ viz::HostFrameSinkManager* InProcessContextFactory::GetHostFrameSinkManager() {
   return host_frame_sink_manager_;
 }
 
-SkMatrix44 InProcessContextFactory::GetOutputColorMatrix(
+skia::Matrix44 InProcessContextFactory::GetOutputColorMatrix(
     Compositor* compositor) const {
   auto iter = per_compositor_data_.find(compositor);
   if (iter == per_compositor_data_.end())
-    return SkMatrix44(SkMatrix44::kIdentity_Constructor);
+    return skia::Matrix44(skia::Matrix44::kIdentity_Constructor);
 
   return iter->second->output_color_matrix();
 }

@@ -9,12 +9,13 @@
 #include <unordered_set>
 
 #include "base/base64.h"
+#include "base/containers/cxx20_erase.h"
 #include "base/guid.h"
 #include "base/hash/hash.h"
 #include "base/hash/sha1.h"
+#include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/stl_util.h"
 #include "base/trace_event/memory_usage_estimator.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_node.h"
@@ -83,7 +84,7 @@ bool SyncedBookmarkTracker::Entity::MatchesDataIgnoringParent(
     return metadata_->is_deleted() == data.is_deleted();
   }
   if (!syncer::UniquePosition::FromProto(metadata_->unique_position())
-           .Equals(syncer::UniquePosition::FromProto(data.unique_position))) {
+           .Equals(data.unique_position)) {
     return false;
   }
   return MatchesSpecificsHash(data.specifics);
@@ -143,13 +144,9 @@ syncer::ClientTagHash SyncedBookmarkTracker::GetClientTagHashFromGUID(
 std::unique_ptr<SyncedBookmarkTracker> SyncedBookmarkTracker::CreateEmpty(
     sync_pb::ModelTypeState model_type_state) {
   // base::WrapUnique() used because the constructor is private.
-  auto tracker = base::WrapUnique(new SyncedBookmarkTracker(
+  return base::WrapUnique(new SyncedBookmarkTracker(
       std::move(model_type_state), /*bookmarks_full_title_reuploaded=*/false,
       /*last_sync_time=*/base::Time::Now()));
-  tracker->bookmark_client_tags_in_protocol_enabled_ =
-      base::FeatureList::IsEnabled(
-          switches::kSyncUseClientTagForBookmarkCommits);
-  return tracker;
 }
 
 // static
@@ -178,27 +175,6 @@ SyncedBookmarkTracker::CreateFromBookmarkModelAndMetadata(
   auto tracker = base::WrapUnique(new SyncedBookmarkTracker(
       model_metadata.model_type_state(), bookmarks_full_title_reuploaded,
       last_sync_time));
-
-  // Read |bookmark_client_tags_in_protocol_enabled_| while honoring the
-  // corresponding feature toggle too.
-  if (model_metadata.bookmark_client_tags_in_protocol_enabled()) {
-    // If the feature used to be enabled, it can continue to do so as long as
-    // the feature toggle is still enabled. If it becomes disabled, the boolean
-    // transitions to false immediately (independently of in-flight local
-    // changes) to guarantee that there is an effective kill switch.
-    tracker->bookmark_client_tags_in_protocol_enabled_ =
-        base::FeatureList::IsEnabled(
-            switches::kSyncUseClientTagForBookmarkCommits);
-  } else {
-    // If the feature used to be disabled, transitioning to true requires *NOT*
-    // having pending local changes (in-flight creations, strictly speaking, but
-    // that's too complex to implement), to avoid creating duplicates on the
-    // server (the same bookmark with and without a client tag).
-    tracker->bookmark_client_tags_in_protocol_enabled_ =
-        !tracker->HasLocalChanges() &&
-        base::FeatureList::IsEnabled(
-            switches::kSyncUseClientTagForBookmarkCommits);
-  }
 
   const CorruptionReason corruption_reason =
       tracker->InitEntitiesFromModelAndMetadata(model,
@@ -255,7 +231,7 @@ const SyncedBookmarkTracker::Entity* SyncedBookmarkTracker::Add(
     const std::string& sync_id,
     int64_t server_version,
     base::Time creation_time,
-    const sync_pb::UniquePosition& unique_position,
+    const syncer::UniquePosition& unique_position,
     const sync_pb::EntitySpecifics& specifics) {
   DCHECK_GT(specifics.ByteSize(), 0);
   DCHECK(bookmark_node);
@@ -272,7 +248,7 @@ const SyncedBookmarkTracker::Entity* SyncedBookmarkTracker::Add(
   metadata->set_modification_time(syncer::TimeToProtoTime(creation_time));
   metadata->set_sequence_number(0);
   metadata->set_acked_sequence_number(0);
-  metadata->mutable_unique_position()->CopyFrom(unique_position);
+  *metadata->mutable_unique_position() = unique_position.ToProto();
   metadata->set_client_tag_hash(client_tag_hash.value());
   HashSpecifics(specifics, metadata->mutable_specifics_hash());
   metadata->set_bookmark_favicon_hash(
@@ -297,7 +273,7 @@ void SyncedBookmarkTracker::Update(
     const Entity* entity,
     int64_t server_version,
     base::Time modification_time,
-    const sync_pb::UniquePosition& unique_position,
+    const syncer::UniquePosition& unique_position,
     const sync_pb::EntitySpecifics& specifics) {
   DCHECK_GT(specifics.ByteSize(), 0);
   DCHECK(entity);
@@ -306,7 +282,8 @@ void SyncedBookmarkTracker::Update(
   mutable_entity->metadata()->set_server_version(server_version);
   mutable_entity->metadata()->set_modification_time(
       syncer::TimeToProtoTime(modification_time));
-  *mutable_entity->metadata()->mutable_unique_position() = unique_position;
+  *mutable_entity->metadata()->mutable_unique_position() =
+      unique_position.ToProto();
   HashSpecifics(specifics,
                 mutable_entity->metadata()->mutable_specifics_hash());
   mutable_entity->metadata()->set_bookmark_favicon_hash(
@@ -390,8 +367,6 @@ SyncedBookmarkTracker::BuildBookmarkModelMetadata() const {
   model_metadata.set_bookmarks_full_title_reuploaded(
       bookmarks_full_title_reuploaded_);
   model_metadata.set_last_sync_time(syncer::TimeToProtoTime(last_sync_time_));
-  model_metadata.set_bookmark_client_tags_in_protocol_enabled(
-      bookmark_client_tags_in_protocol_enabled_);
 
   for (const std::pair<const std::string, std::unique_ptr<Entity>>& pair :
        sync_id_to_entities_map_) {
@@ -510,21 +485,18 @@ SyncedBookmarkTracker::InitEntitiesFromModelAndMetadata(
       return CorruptionReason::DUPLICATED_SERVER_ID;
     }
 
-    // Note that currently the client tag hash is persisted for permanent nodes
-    // too, although it's irrelevant (and even subject to change value upon
-    // restart if the code changes).
-    if (!bookmark_metadata.metadata().has_client_tag_hash()) {
-      DLOG(ERROR) << "Error when decoding sync metadata: "
-                  << "Bookmark client tag hash is missing.";
-      return CorruptionReason::MISSING_CLIENT_TAG_HASH;
-    }
-
     // Handle tombstones.
     if (bookmark_metadata.metadata().is_deleted()) {
       if (bookmark_metadata.has_id()) {
         DLOG(ERROR) << "Error when decoding sync metadata: Tombstones "
                        "shouldn't have a bookmark id.";
         return CorruptionReason::BOOKMARK_ID_IN_TOMBSTONE;
+      }
+
+      if (!bookmark_metadata.metadata().has_client_tag_hash()) {
+        DLOG(ERROR) << "Error when decoding sync metadata: "
+                    << "Tombstone client tag hash is missing.";
+        return CorruptionReason::MISSING_CLIENT_TAG_HASH;
       }
 
       const syncer::ClientTagHash client_tag_hash =
@@ -566,6 +538,16 @@ SyncedBookmarkTracker::InitEntitiesFromModelAndMetadata(
     if (!node) {
       DLOG(ERROR) << "Error when decoding sync metadata: unknown Bookmark id.";
       return CorruptionReason::UNKNOWN_BOOKMARK_ID;
+    }
+
+    // Note that currently the client tag hash is persisted for permanent nodes
+    // too, although it's irrelevant (and even subject to change value upon
+    // restart if the code changes).
+    if (!bookmark_metadata.metadata().has_client_tag_hash() &&
+        !node->is_permanent_node()) {
+      DLOG(ERROR) << "Error when decoding sync metadata: "
+                  << "Bookmark client tag hash is missing.";
+      return CorruptionReason::MISSING_CLIENT_TAG_HASH;
     }
 
     // The client-tag-hash is expected to be equal to the hash of the bookmark's
@@ -689,7 +671,8 @@ bool SyncedBookmarkTracker::ReuploadBookmarksOnLoadIfNeeded() {
 }
 
 bool SyncedBookmarkTracker::bookmark_client_tags_in_protocol_enabled() const {
-  return bookmark_client_tags_in_protocol_enabled_;
+  return base::FeatureList::IsEnabled(
+      switches::kSyncUseClientTagForBookmarkCommits);
 }
 
 void SyncedBookmarkTracker::TraverseAndAppend(

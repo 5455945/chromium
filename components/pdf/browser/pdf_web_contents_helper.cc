@@ -33,7 +33,9 @@ PDFWebContentsHelper::PDFWebContentsHelper(
     content::WebContents* web_contents,
     std::unique_ptr<PDFWebContentsHelperClient> client)
     : content::WebContentsObserver(web_contents),
-      pdf_service_receivers_(web_contents, this),
+      pdf_service_receivers_(web_contents,
+                             this,
+                             content::WebContentsFrameReceiverSetPassKey()),
       client_(std::move(client)) {}
 
 PDFWebContentsHelper::~PDFWebContentsHelper() {
@@ -166,7 +168,7 @@ void PDFWebContentsHelper::OnDragUpdate(
 std::unique_ptr<ui::TouchHandleDrawable>
 PDFWebContentsHelper::CreateDrawable() {
   // We can return null here, as the manager will look after this.
-  return std::unique_ptr<ui::TouchHandleDrawable>();
+  return nullptr;
 }
 
 void PDFWebContentsHelper::OnManagerWillDestroy(
@@ -235,8 +237,8 @@ bool PDFWebContentsHelper::ShouldShowQuickMenu() {
   return false;
 }
 
-base::string16 PDFWebContentsHelper::GetSelectedText() {
-  return base::string16();
+std::u16string PDFWebContentsHelper::GetSelectedText() {
+  return std::u16string();
 }
 
 void PDFWebContentsHelper::InitTouchSelectionClientManager() {
@@ -258,9 +260,16 @@ void PDFWebContentsHelper::HasUnsupportedFeature() {
 }
 
 void PDFWebContentsHelper::SaveUrlAs(const GURL& url,
-                                     blink::mojom::ReferrerPtr referrer) {
+                                     network::mojom::ReferrerPolicy policy) {
   client_->OnSaveURL(web_contents());
-  web_contents()->SaveFrame(url, referrer.To<content::Referrer>());
+
+  content::RenderFrameHost* rfh = web_contents()->GetOuterWebContentsFrame();
+  if (!rfh)
+    return;
+
+  content::Referrer referrer(url, policy);
+  referrer = content::Referrer::SanitizeForRequest(url, referrer);
+  web_contents()->SaveFrame(url, referrer, rfh);
 }
 
 void PDFWebContentsHelper::UpdateContentRestrictions(

@@ -17,7 +17,7 @@
 #include "chromeos/components/multidevice/logging/logging.h"
 #include "components/account_id/account_id.h"
 
-namespace chromeos {
+namespace ash {
 
 EasyUnlockKeyManager::EasyUnlockKeyManager() {}
 
@@ -97,9 +97,8 @@ void EasyUnlockKeyManager::DeviceDataToRemoteDeviceDictionary(
     base::DictionaryValue* dict) {
   dict->SetString(key_names::kKeyBluetoothAddress, data.bluetooth_address);
   dict->SetString(key_names::kKeyPsk, data.psk);
-  std::unique_ptr<base::DictionaryValue> permit_record(
-      new base::DictionaryValue);
-  dict->Set(key_names::kKeyPermitRecord, std::move(permit_record));
+  base::DictionaryValue permit_record;
+  dict->SetKey(key_names::kKeyPermitRecord, std::move(permit_record));
   dict->SetString(key_names::kKeyPermitId, data.public_key);
   dict->SetString(key_names::kKeyPermitData, data.public_key);
   dict->SetString(key_names::kKeyPermitType, key_names::kPermitTypeLicence);
@@ -171,10 +170,9 @@ bool EasyUnlockKeyManager::RemoteDeviceRefListToDeviceDataList(
     const base::ListValue& device_list,
     EasyUnlockDeviceKeyDataList* data_list) {
   EasyUnlockDeviceKeyDataList parsed_devices;
-  for (base::ListValue::const_iterator it = device_list.begin();
-       it != device_list.end(); ++it) {
+  for (const auto& entry : device_list.GetList()) {
     const base::DictionaryValue* dict;
-    if (!it->GetAsDictionary(&dict) || !dict)
+    if (!entry.GetAsDictionary(&dict) || !dict)
       return false;
 
     EasyUnlockDeviceKeyData data;
@@ -230,4 +228,4 @@ void EasyUnlockKeyManager::OnKeysFetched(
   RunNextOperation();
 }
 
-}  // namespace chromeos
+}  // namespace ash

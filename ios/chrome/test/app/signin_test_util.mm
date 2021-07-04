@@ -5,7 +5,6 @@
 #include "ios/chrome/test/app/signin_test_util.h"
 
 #include "base/check.h"
-#include "base/strings/stringprintf.h"
 #import "base/test/ios/wait_util.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/base/signin_pref_names.h"
@@ -14,6 +13,8 @@
 #include "ios/chrome/browser/pref_names.h"
 #import "ios/chrome/browser/signin/authentication_service.h"
 #include "ios/chrome/browser/signin/authentication_service_factory.h"
+#import "ios/chrome/browser/signin/chrome_account_manager_service.h"
+#import "ios/chrome/browser/signin/chrome_account_manager_service_factory.h"
 #include "ios/chrome/browser/signin/gaia_auth_fetcher_ios.h"
 #import "ios/chrome/browser/ui/authentication/cells/signin_promo_view.h"
 #import "ios/chrome/test/app/chrome_test_util.h"
@@ -29,15 +30,16 @@ namespace chrome_test_util {
 
 namespace {
 
-// Starts forgetting all identities from the ChromeIdentity services.
+// Starts forgetting all identities from the ChromeAccountManagerService.
 //
 // Note: Forgetting an identity is a asynchronous operation. This function does
 // not wait for the forget identity operation to finish.
-void StartForgetAllIdentities() {
+void StartForgetAllIdentities(ChromeBrowserState* browser_state) {
+  ChromeAccountManagerService* account_manager_service =
+      ChromeAccountManagerServiceFactory::GetForBrowserState(browser_state);
+  NSArray* identities_to_remove = account_manager_service->GetAllIdentities();
   ios::ChromeIdentityService* identity_service =
       ios::GetChromeBrowserProvider()->GetChromeIdentityService();
-  NSArray* identities_to_remove =
-      [NSArray arrayWithArray:identity_service->GetAllIdentities()];
   for (ChromeIdentity* identity in identities_to_remove) {
     identity_service->ForgetIdentity(identity, ^(NSError* error) {
       if (error) {
@@ -76,12 +78,12 @@ void SignOutAndClearIdentities() {
     ChromeBrowserState* browser_state = GetOriginalBrowserState();
     DCHECK(browser_state);
 
-    // Sign out current user.
+    // Sign out current user and clear all browsing data on the device.
     AuthenticationService* authentication_service =
         AuthenticationServiceFactory::GetForBrowserState(browser_state);
     if (authentication_service->IsAuthenticated()) {
       authentication_service->SignOut(signin_metrics::SIGNOUT_TEST,
-                                      /*force_clear_browsing_data=*/false, nil);
+                                      /*force_clear_browsing_data=*/true, nil);
     }
 
     // Clear last signed in user preference.
@@ -95,14 +97,15 @@ void SignOutAndClearIdentities() {
 
     // Once the browser was signed out, start clearing all identities from the
     // ChromeIdentityService.
-    StartForgetAllIdentities();
+    StartForgetAllIdentities(browser_state);
   }
 }
 
 bool HasIdentities() {
-  ios::ChromeIdentityService* identity_service =
-      ios::GetChromeBrowserProvider()->GetChromeIdentityService();
-  return identity_service->HasIdentities();
+  ChromeAccountManagerService* account_manager_service =
+      ChromeAccountManagerServiceFactory::GetForBrowserState(
+          GetOriginalBrowserState());
+  return account_manager_service->HasIdentities();
 }
 
 void ResetMockAuthentication() {
@@ -118,6 +121,18 @@ void ResetSigninPromoPreferences() {
   prefs->SetInteger(prefs::kIosSettingsSigninPromoDisplayedCount, 0);
   prefs->SetBoolean(prefs::kIosSettingsPromoAlreadySeen, false);
   prefs->SetBoolean(prefs::kSigninShouldPromptForSigninAgain, false);
+}
+
+void ResetUserApprovedAccountListManager() {
+  ChromeBrowserState* browser_state = GetOriginalBrowserState();
+  PrefService* prefs = browser_state->GetPrefs();
+  prefs->ClearPref(prefs::kSigninLastAccounts);
+}
+
+void RevokeSyncConsent() {
+  ChromeBrowserState* browser_state = GetOriginalBrowserState();
+  PrefService* prefs = browser_state->GetPrefs();
+  prefs->SetBoolean(prefs::kGoogleServicesConsentedToSync, false);
 }
 
 }  // namespace chrome_test_util

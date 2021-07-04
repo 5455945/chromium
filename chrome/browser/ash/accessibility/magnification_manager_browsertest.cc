@@ -4,8 +4,8 @@
 
 #include <string>
 
+#include "ash/accessibility/magnifier/fullscreen_magnifier_controller.h"
 #include "ash/constants/ash_switches.h"
-#include "ash/magnifier/magnification_controller.h"
 #include "ash/public/cpp/ash_pref_names.h"
 #include "ash/shell.h"
 #include "base/bind.h"
@@ -13,10 +13,10 @@
 #include "base/macros.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chrome/browser/ash/accessibility/magnification_manager.h"
+#include "chrome/browser/ash/login/helper.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_notification_types.h"
-#include "chrome/browser/chromeos/login/helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/chrome_switches.h"
@@ -41,11 +41,11 @@ void SetMagnifierEnabled(bool enabled) {
 }
 
 void SetFullScreenMagnifierScale(double scale) {
-  Shell::Get()->magnification_controller()->SetScale(scale, false);
+  Shell::Get()->fullscreen_magnifier_controller()->SetScale(scale, false);
 }
 
 double GetFullScreenMagnifierScale() {
-  return Shell::Get()->magnification_controller()->GetScale();
+  return Shell::Get()->fullscreen_magnifier_controller()->GetScale();
 }
 
 void SetSavedFullScreenMagnifierScale(double scale) {

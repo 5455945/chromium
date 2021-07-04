@@ -9,9 +9,8 @@
 #include <vector>
 
 #include "base/callback.h"
-#include "base/files/file_path.h"
 #include "base/macros.h"
-#include "base/observer_list.h"
+#include "base/observer_list_types.h"
 #include "chrome/browser/safe_browsing/chrome_cleaner/chrome_cleaner_scanner_results_win.h"
 #include "chrome/browser/safe_browsing/chrome_cleaner/sw_reporter_invocation_win.h"
 #include "components/prefs/pref_registry_simple.h"

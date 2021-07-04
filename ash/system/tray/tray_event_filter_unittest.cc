@@ -4,7 +4,6 @@
 
 #include "ash/system/tray/tray_event_filter.h"
 
-#include "ash/public/cpp/ash_features.h"
 #include "ash/root_window_controller.h"
 #include "ash/shelf/shelf.h"
 #include "ash/shell.h"
@@ -62,16 +61,14 @@ class TrayEventFilterTest : public AshTestBase {
     std::string notification_id = base::NumberToString(notification_id_++);
     MessageCenter::Get()->AddNotification(std::make_unique<Notification>(
         message_center::NOTIFICATION_TYPE_BASE_FORMAT, notification_id,
-        base::UTF8ToUTF16("test title"), base::UTF8ToUTF16("test message"),
-        gfx::Image(), base::string16() /* display_source */, GURL(),
+        u"test title", u"test message", gfx::Image(),
+        std::u16string() /* display_source */, GURL(),
         message_center::NotifierId(), message_center::RichNotificationData(),
         new message_center::NotificationDelegate()));
     return notification_id;
   }
 
-  void ShowSystemTrayMainView() {
-    GetPrimaryUnifiedSystemTray()->ShowBubble(false /* show_by_click */);
-  }
+  void ShowSystemTrayMainView() { GetPrimaryUnifiedSystemTray()->ShowBubble(); }
 
   bool IsBubbleShown() {
     return GetPrimaryUnifiedSystemTray()->IsBubbleShown();

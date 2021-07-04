@@ -12,7 +12,7 @@
 #include "base/files/file_util.h"
 #include "base/memory/ptr_util.h"
 #include "base/path_service.h"
-#include "base/scoped_observer.h"
+#include "base/scoped_observation.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/post_task.h"
@@ -27,11 +27,8 @@
 #include "chrome/browser/search/chrome_colors/chrome_colors_service.h"
 #include "chrome/browser/search/instant_service_factory.h"
 #include "chrome/browser/search/instant_service_observer.h"
-#include "chrome/browser/search/local_ntp_source.h"
 #include "chrome/browser/search/most_visited_iframe_source.h"
-#include "chrome/browser/search/ntp_icon_source.h"
 #include "chrome/browser/search/search.h"
-#include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
@@ -83,9 +80,9 @@ base::DictionaryValue GetBackgroundInfoAsDict(
     const std::string& attribution_line_1,
     const std::string& attribution_line_2,
     const GURL& action_url,
-    const base::Optional<std::string>& collection_id,
-    const base::Optional<std::string>& resume_token,
-    const base::Optional<int> refresh_timestamp) {
+    const absl::optional<std::string>& collection_id,
+    const absl::optional<std::string>& resume_token,
+    const absl::optional<int> refresh_timestamp) {
   base::DictionaryValue background_info;
   background_info.SetKey(kNtpCustomBackgroundURL,
                          base::Value(background_url.spec()));
@@ -167,7 +164,7 @@ void CopyFileToProfilePath(const base::FilePath& from_path,
                            const base::FilePath& profile_path) {
   base::CopyFile(from_path,
                  profile_path.AppendASCII(
-                     chrome::kChromeSearchLocalNtpBackgroundFilename));
+                     chrome::kChromeUIUntrustedNewTabPageBackgroundFilename));
 }
 
 // |GetBitmapMainColor| just wraps |CalculateKMeanColorOfBitmap|.
@@ -202,43 +199,24 @@ InstantService::InstantService(Profile* profile)
 
   most_visited_sites_ = ChromeMostVisitedSitesFactory::NewForProfile(profile_);
   if (most_visited_sites_) {
-    // Determine if we are using a third-party NTP. Custom links should only be
-    // enabled for the default NTP.
-    TemplateURLService* template_url_service =
-        TemplateURLServiceFactory::GetForProfile(profile_);
-    if (template_url_service) {
-      search_provider_observer_ = std::make_unique<SearchProviderObserver>(
-          template_url_service,
-          base::BindRepeating(&InstantService::OnSearchProviderChanged,
-                              weak_ptr_factory_.GetWeakPtr()));
-    }
-
-    // If custom links are enabled, an additional tile may be returned making up
-    // to ntp_tiles::kMaxNumCustomLinks custom links including the
-    // "Add shortcut" button.
-    most_visited_sites_->SetMostVisitedURLsObserver(
+    most_visited_sites_->EnableCustomLinks(false);
+    most_visited_sites_->AddMostVisitedURLsObserver(
         this, ntp_tiles::kMaxNumMostVisited);
-    most_visited_sites_->EnableCustomLinks(IsCustomLinksEnabled());
   }
-
-  most_visited_info_->use_most_visited = !IsCustomLinksEnabled();
-  most_visited_info_->is_visible =
-      pref_service_->GetBoolean(prefs::kNtpShortcutsVisible);
 
   background_service_ = NtpBackgroundServiceFactory::GetForProfile(profile_);
 
   // Listen for theme installation.
-  registrar_.Add(this, chrome::NOTIFICATION_BROWSER_THEME_CHANGED,
-                 content::Source<ThemeService>(
-                     ThemeServiceFactory::GetForProfile(profile_)));
+  ThemeServiceFactory::GetForProfile(profile_)->AddObserver(this);
 
-  // Set up the data sources that Instant uses on the NTP.
+  // TODO(crbug.com/1192394): multiple WebUI pages depend on the theme source
+  // without adding it themselves. This is not causing an issue because the
+  // theme source is being added here. The source should be added where it is
+  // used and then the following can be removed.
   content::URLDataSource::Add(profile_,
                               std::make_unique<ThemeSource>(profile_));
-  content::URLDataSource::Add(profile_,
-                              std::make_unique<LocalNtpSource>(profile_));
-  content::URLDataSource::Add(profile_,
-                              std::make_unique<NtpIconSource>(profile_));
+
+  // Set up the data sources that Instant uses on the NTP.
   content::URLDataSource::Add(
       profile_, std::make_unique<FaviconSource>(
                     profile_, chrome::FaviconUrlFormat::kFaviconLegacy));
@@ -254,13 +232,13 @@ InstantService::InstantService(Profile* profile)
 
   image_fetcher_ = std::make_unique<image_fetcher::ImageFetcherImpl>(
       std::make_unique<ImageDecoderImpl>(),
-      content::BrowserContext::GetDefaultStoragePartition(profile_)
+      profile_->GetDefaultStoragePartition()
           ->GetURLLoaderFactoryForBrowserProcess());
 
-  theme_observer_.Add(native_theme_);
+  theme_observation_.Observe(native_theme_);
 
   if (background_service_)
-    background_service_observer_.Add(background_service_);
+    background_service_observation_.Observe(background_service_);
 }
 
 InstantService::~InstantService() = default;
@@ -287,6 +265,11 @@ void InstantService::OnNewTabPageOpened() {
   }
 }
 
+void InstantService::OnThemeChanged() {
+  theme_ = nullptr;
+  UpdateNtpTheme();
+}
+
 void InstantService::DeleteMostVisitedItem(const GURL& url) {
   if (most_visited_sites_) {
     most_visited_sites_->AddOrRemoveBlockedUrl(url, true);
@@ -303,102 +286,6 @@ void InstantService::UndoAllMostVisitedDeletions() {
   if (most_visited_sites_) {
     most_visited_sites_->ClearBlockedUrls();
   }
-}
-
-bool InstantService::AddCustomLink(const GURL& url, const std::string& title) {
-  return most_visited_sites_ &&
-         most_visited_sites_->AddCustomLink(url, base::UTF8ToUTF16(title));
-}
-
-bool InstantService::UpdateCustomLink(const GURL& url,
-                                      const GURL& new_url,
-                                      const std::string& new_title) {
-  return most_visited_sites_ && most_visited_sites_->UpdateCustomLink(
-                                    url, new_url, base::UTF8ToUTF16(new_title));
-}
-
-bool InstantService::ReorderCustomLink(const GURL& url, int new_pos) {
-  return most_visited_sites_ &&
-         most_visited_sites_->ReorderCustomLink(url, new_pos);
-}
-
-bool InstantService::DeleteCustomLink(const GURL& url) {
-  return most_visited_sites_ && most_visited_sites_->DeleteCustomLink(url);
-}
-
-bool InstantService::UndoCustomLinkAction() {
-  // Non-Google NTPs are not supported.
-  if (!most_visited_sites_ || !search_provider_observer_ ||
-      !search_provider_observer_->is_google()) {
-    return false;
-  }
-  most_visited_sites_->UndoCustomLinkAction();
-  return true;
-}
-
-bool InstantService::ResetCustomLinks() {
-  // Non-Google NTPs are not supported.
-  if (!most_visited_sites_ || !search_provider_observer_ ||
-      !search_provider_observer_->is_google()) {
-    return false;
-  }
-  most_visited_sites_->UninitializeCustomLinks();
-  return true;
-}
-
-bool InstantService::ToggleMostVisitedOrCustomLinks() {
-  // Non-Google NTPs are not supported.
-  if (!most_visited_sites_ || !search_provider_observer_ ||
-      !search_provider_observer_->is_google()) {
-    return false;
-  }
-  bool use_most_visited =
-      !pref_service_->GetBoolean(prefs::kNtpUseMostVisitedTiles);
-  pref_service_->SetBoolean(prefs::kNtpUseMostVisitedTiles, use_most_visited);
-  most_visited_info_->use_most_visited = use_most_visited;
-  bool was_initialized = most_visited_sites_->IsCustomLinksInitialized();
-
-  // Custom links is enabled if Most Visited is disabled.
-  // Note: This will eventually call |NotifyAboutMostVisitedInfo|, except in the
-  // case below.
-  most_visited_sites_->EnableCustomLinks(!use_most_visited);
-
-  // If custom links is enabled but not initialized, MostVisitedSites will not
-  // notify |OnURLsAvailable| and |NotifyAboutMostVisitedInfo| will not be
-  // called.
-  //
-  // This is because custom links are considered Most Visited items before
-  // initialization. As such their NTPTile metadata is the same, and observers
-  // are not notified if the list of NTPTiles was not changed.
-  //
-  // Therefore, we need to manually call |NotifyAboutMostVisitedInfo| if the
-  // user has never customized their shortcuts.
-  //
-  // For more details, see custom_links_mananger.h and most_visited_sites.h.
-  if ((!was_initialized && !most_visited_sites_->IsCustomLinksInitialized()) ||
-      // Ensure that the add shortcut button status is correct when there is no
-      // custom link.
-      most_visited_sites_->GetCustomLinkNum() == 0) {
-    NotifyAboutMostVisitedInfo();
-  }
-
-  return true;
-}
-
-bool InstantService::ToggleShortcutsVisibility(bool do_notify) {
-  // Non-Google NTPs are not supported.
-  if (!most_visited_sites_ || !search_provider_observer_ ||
-      !search_provider_observer_->is_google()) {
-    return false;
-  }
-  bool is_visible = !pref_service_->GetBoolean(prefs::kNtpShortcutsVisible);
-  pref_service_->SetBoolean(prefs::kNtpShortcutsVisible, is_visible);
-  most_visited_info_->is_visible = is_visible;
-
-  if (do_notify) {
-    NotifyAboutMostVisitedInfo();
-  }
-  return true;
 }
 
 void InstantService::UpdateNtpTheme() {
@@ -454,7 +341,7 @@ void InstantService::SetCustomBackgroundInfo(
   background_updated_timestamp_ = base::TimeTicks::Now();
 
   if (!collection_id.empty() && is_backdrop_collection) {
-    background_service_->FetchNextCollectionImage(collection_id, base::nullopt);
+    background_service_->FetchNextCollectionImage(collection_id, absl::nullopt);
   } else if (background_url.is_valid() && is_backdrop_url) {
     const GURL& thumbnail_url =
         background_service_->GetThumbnailUrl(background_url);
@@ -464,7 +351,7 @@ void InstantService::SetCustomBackgroundInfo(
 
     base::DictionaryValue background_info = GetBackgroundInfoAsDict(
         background_url, attribution_line_1, attribution_line_2, action_url,
-        base::nullopt, base::nullopt, base::nullopt);
+        absl::nullopt, absl::nullopt, absl::nullopt);
     pref_service_->Set(prefs::kNtpCustomBackgroundDict, background_info);
   } else {
     pref_service_->ClearPref(prefs::kNtpCustomBackgroundDict);
@@ -504,9 +391,9 @@ NtpTheme* InstantService::GetInitializedNtpTheme() {
 }
 
 void InstantService::SetNativeThemeForTesting(ui::NativeTheme* theme) {
-  theme_observer_.RemoveAll();
+  theme_observation_.Reset();
   native_theme_ = theme;
-  theme_observer_.Add(native_theme_);
+  theme_observation_.Observe(native_theme_);
 }
 
 void InstantService::Shutdown() {
@@ -515,6 +402,8 @@ void InstantService::Shutdown() {
   if (most_visited_sites_) {
     most_visited_sites_.reset();
   }
+
+  ThemeServiceFactory::GetForProfile(profile_)->RemoveObserver(this);
 }
 
 void InstantService::OnNextCollectionImageAvailable() {
@@ -539,7 +428,7 @@ void InstantService::OnNextCollectionImageAvailable() {
 
 void InstantService::OnNtpBackgroundServiceShuttingDown() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  background_service_observer_.RemoveAll();
+  background_service_observation_.Reset();
   background_service_ = nullptr;
 }
 
@@ -559,10 +448,6 @@ void InstantService::Observe(int type,
         OnRendererProcessTerminated(rph->GetID());
       break;
     }
-    case chrome::NOTIFICATION_BROWSER_THEME_CHANGED:
-      theme_ = nullptr;
-      UpdateNtpTheme();
-      break;
     default:
       NOTREACHED() << "Unexpected notification type in InstantService.";
   }
@@ -578,11 +463,6 @@ void InstantService::OnNativeThemeUpdated(ui::NativeTheme* observed_theme) {
   // value is sent to the renderer.
   BuildNtpTheme();
   UpdateNtpTheme();
-}
-
-void InstantService::OnSearchProviderChanged() {
-  DCHECK(most_visited_sites_);
-  most_visited_sites_->EnableCustomLinks(IsCustomLinksEnabled());
 }
 
 void InstantService::OnURLsAvailable(
@@ -603,8 +483,6 @@ void InstantService::OnURLsAvailable(
     item.data_generation_time = tile.data_generation_time;
     most_visited_info_->items.push_back(item);
   }
-  most_visited_info_->items_are_custom_links =
-      (most_visited_sites_ && most_visited_sites_->IsCustomLinksInitialized());
 
   NotifyAboutMostVisitedInfo();
 }
@@ -619,11 +497,6 @@ void InstantService::NotifyAboutMostVisitedInfo() {
 void InstantService::NotifyAboutNtpTheme() {
   for (InstantServiceObserver& observer : observers_)
     observer.NtpThemeChanged(*theme_);
-}
-
-bool InstantService::IsCustomLinksEnabled() {
-  return search_provider_observer_ && search_provider_observer_->is_google() &&
-         !pref_service_->GetBoolean(prefs::kNtpUseMostVisitedTiles);
 }
 
 void InstantService::BuildNtpTheme() {
@@ -757,7 +630,7 @@ void InstantService::ApplyOrResetCustomBackgroundNtpTheme() {
     // Add a timestamp to the url to prevent the browser from using a cached
     // version when "Upload an image" is used multiple times.
     std::string time_string = std::to_string(base::Time::Now().ToTimeT());
-    std::string local_string(chrome::kChromeSearchLocalNtpBackgroundUrl);
+    std::string local_string(chrome::kChromeUIUntrustedNewTabPageBackgroundUrl);
     GURL timestamped_url(local_string + "?ts=" + time_string);
     GetInitializedNtpTheme()->custom_background_url = timestamped_url;
     GetInitializedNtpTheme()->custom_background_attribution_line_1 =
@@ -851,7 +724,7 @@ bool InstantService::IsCustomBackgroundDisabledByPolicy() {
       pref_service_->IsManagedPreference(prefs::kNtpCustomBackgroundDict);
   if (managed) {
     DCHECK(
-        pref_service_->GetDictionary(prefs::kNtpCustomBackgroundDict)->empty());
+        pref_service_->GetDictionary(prefs::kNtpCustomBackgroundDict)->DictEmpty());
   }
   return managed;
 }
@@ -867,22 +740,8 @@ bool InstantService::IsCustomBackgroundSet() {
   return true;
 }
 
-bool InstantService::AreShortcutsCustomized() {
-  return most_visited_info_->items_are_custom_links;
-}
-
-std::pair<bool, bool> InstantService::GetCurrentShortcutSettings() {
-  bool using_most_visited =
-      pref_service_->GetBoolean(prefs::kNtpUseMostVisitedTiles);
-  bool is_visible = pref_service_->GetBoolean(prefs::kNtpShortcutsVisible);
-  return std::make_pair(using_most_visited, is_visible);
-}
-
 void InstantService::ResetToDefault() {
-  ResetCustomLinks();
   ResetCustomBackgroundNtpTheme();
-  pref_service_->SetBoolean(prefs::kNtpUseMostVisitedTiles, false);
-  pref_service_->SetBoolean(prefs::kNtpShortcutsVisible, true);
 }
 
 void InstantService::UpdateCustomBackgroundColorAsync(
@@ -951,7 +810,7 @@ bool InstantService::IsCustomBackgroundPrefValid(GURL& custom_background_url) {
 
 void InstantService::RemoveLocalBackgroundImageCopy() {
   base::FilePath path = profile_->GetPath().AppendASCII(
-      chrome::kChromeSearchLocalNtpBackgroundFilename);
+      chrome::kChromeUIUntrustedNewTabPageBackgroundFilename);
   base::ThreadPool::PostTask(
       FROM_HERE, {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
       base::BindOnce(base::GetDeleteFileCallback(), path));
@@ -978,8 +837,6 @@ void InstantService::RegisterProfilePrefs(PrefRegistrySimple* registry) {
       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
   registry->RegisterBooleanPref(prefs::kNtpCustomBackgroundLocalToDevice,
                                 false);
-  registry->RegisterBooleanPref(prefs::kNtpUseMostVisitedTiles, false);
-  registry->RegisterBooleanPref(prefs::kNtpShortcutsVisible, true);
 }
 
 // static

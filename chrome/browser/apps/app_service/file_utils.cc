@@ -5,8 +5,8 @@
 #include "chrome/browser/apps/app_service/file_utils.h"
 
 #include "base/files/file_path.h"
+#include "chrome/browser/ash/file_manager/fileapi_util.h"
 #include "chrome/browser/chromeos/file_manager/app_id.h"
-#include "chrome/browser/chromeos/file_manager/fileapi_util.h"
 #include "storage/browser/file_system/file_system_context.h"
 #include "storage/browser/file_system/file_system_url.h"
 #include "url/gurl.h"
@@ -17,8 +17,7 @@ std::vector<storage::FileSystemURL> GetFileSystemURL(
     Profile* profile,
     const std::vector<GURL>& file_urls) {
   storage::FileSystemContext* file_system_context =
-      file_manager::util::GetFileSystemContextForExtensionId(
-          profile, file_manager::kFileManagerAppId);
+      file_manager::util::GetFileManagerFileSystemContext(profile);
 
   std::vector<storage::FileSystemURL> file_system_urls;
   for (const GURL& file_url : file_urls) {
@@ -33,7 +32,8 @@ std::vector<GURL> GetFileUrls(Profile* profile,
   for (auto& file_path : file_paths) {
     GURL file_url;
     if (file_manager::util::ConvertAbsoluteFilePathToFileSystemUrl(
-            profile, file_path, file_manager::kFileManagerAppId, &file_url)) {
+            profile, file_path, file_manager::util::GetFileManagerURL(),
+            &file_url)) {
       file_urls.push_back(file_url);
     }
   }

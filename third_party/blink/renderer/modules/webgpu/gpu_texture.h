@@ -11,6 +11,7 @@
 namespace blink {
 
 class ExceptionState;
+class HTMLCanvasElement;
 class HTMLVideoElement;
 class GPUTextureDescriptor;
 class GPUTextureView;
@@ -29,20 +30,33 @@ class GPUTexture : public DawnObject<WGPUTexture> {
                                HTMLVideoElement* video,
                                WGPUTextureUsage usage,
                                ExceptionState& exception_state);
+  static GPUTexture* FromCanvas(GPUDevice* device,
+                                HTMLCanvasElement* canvas,
+                                WGPUTextureUsage usage,
+                                ExceptionState& exception_state);
 
-  GPUTexture(GPUDevice* device, WGPUTexture texture, WGPUTextureFormat format);
+  GPUTexture(GPUDevice* device,
+             WGPUTexture texture,
+             WGPUTextureDimension dimension,
+             WGPUTextureFormat format,
+             WGPUTextureUsage usage);
   GPUTexture(GPUDevice* device,
              WGPUTextureFormat format,
+             WGPUTextureUsage usage,
              scoped_refptr<WebGPUMailboxTexture> mailbox_texture);
 
   // gpu_texture.idl
   GPUTextureView* createView(const GPUTextureViewDescriptor* webgpu_desc);
   void destroy();
 
+  WGPUTextureDimension Dimension() { return dimension_; }
   WGPUTextureFormat Format() { return format_; }
+  WGPUTextureUsage Usage() { return usage_; }
 
  private:
+  WGPUTextureDimension dimension_;
   WGPUTextureFormat format_;
+  WGPUTextureUsage usage_;
   scoped_refptr<WebGPUMailboxTexture> mailbox_texture_;
   DISALLOW_COPY_AND_ASSIGN(GPUTexture);
 };

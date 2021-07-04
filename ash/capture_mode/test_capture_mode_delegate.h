@@ -12,10 +12,13 @@
 #include "base/files/file_path.h"
 #include "components/viz/common/surfaces/frame_sink_id.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/gfx/image/image_skia.h"
+
+namespace recording {
+class RecordingServiceTestApi;
+}  // namespace recording
 
 namespace ash {
-
-class FakeRecordingService;
 
 class TestCaptureModeDelegate : public CaptureModeDelegate {
  public:
@@ -24,17 +27,29 @@ class TestCaptureModeDelegate : public CaptureModeDelegate {
   TestCaptureModeDelegate& operator=(const TestCaptureModeDelegate&) = delete;
   ~TestCaptureModeDelegate() override;
 
-  // Gets the current frame sink id being captured by the fake service.
+  recording::RecordingServiceTestApi* recording_service() const {
+    return recording_service_.get();
+  }
+
+  // Gets the current frame sink id being captured by the service.
   viz::FrameSinkId GetCurrentFrameSinkId() const;
 
   // Gets the current size of the frame sink being recorded.
   gfx::Size GetCurrentFrameSinkSize() const;
 
-  // Gets the current video size being captured by the fake service.
+  // Gets the current video size being captured by the service.
   gfx::Size GetCurrentVideoSize() const;
 
+  // Gets the thumbnail image that will be used by the service to provide it to
+  // the client.
+  gfx::ImageSkia GetVideoThumbnail() const;
+
+  // Requests a video frame from the video capturer and waits for it to be
+  // delivered to the service.
+  void RequestAndWaitForVideoFrame();
+
   // CaptureModeDelegate:
-  base::FilePath GetActiveUserDownloadsDir() const override;
+  base::FilePath GetScreenCaptureDir() const override;
   void ShowScreenCaptureItemInFolder(const base::FilePath& file_path) override;
   void OpenScreenshotInImageEditor(const base::FilePath& file_path) override;
   bool Uses24HourFormat() const override;
@@ -51,11 +66,13 @@ class TestCaptureModeDelegate : public CaptureModeDelegate {
   mojo::Remote<recording::mojom::RecordingService> LaunchRecordingService()
       override;
   void BindAudioStreamFactory(
-      mojo::PendingReceiver<audio::mojom::StreamFactory> receiver) override;
+      mojo::PendingReceiver<media::mojom::AudioStreamFactory> receiver)
+      override;
   void OnSessionStateChanged(bool started) override;
+  void OnServiceRemoteReset() override;
 
  private:
-  std::unique_ptr<FakeRecordingService> fake_service_;
+  std::unique_ptr<recording::RecordingServiceTestApi> recording_service_;
   base::FilePath fake_downloads_dir_;
 };
 

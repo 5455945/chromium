@@ -4,13 +4,12 @@
 
 #include "chrome/browser/chromeos/full_restore/full_restore_prefs.h"
 
-#include "ash/public/cpp/ash_features.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/common/pref_names.h"
+#include "components/full_restore/features.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
-#include "components/user_manager/user_manager.h"
 
 namespace chromeos {
 namespace full_restore {
@@ -25,11 +24,12 @@ const char kRestoreSelectedCountPrefName[] =
     "full_restore.restore_selected_count";
 
 void RegisterProfilePrefs(PrefRegistrySimple* registry) {
-  if (!ash::features::IsFullRestoreEnabled())
+  if (!::full_restore::features::IsFullRestoreEnabled())
     return;
 
   registry->RegisterIntegerPref(
-      kRestoreAppsAndPagesPrefName, static_cast<int>(RestoreOption::kAlways),
+      kRestoreAppsAndPagesPrefName,
+      static_cast<int>(RestoreOption::kAskEveryTime),
       user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF);
 
   registry->RegisterIntegerPref(kRestoreSelectedCountPrefName, 0);
@@ -39,11 +39,24 @@ bool HasRestorePref(PrefService* prefs) {
   return prefs->HasPrefPath(kRestoreAppsAndPagesPrefName);
 }
 
+bool HasSessionStartupPref(PrefService* prefs) {
+  return prefs->HasPrefPath(prefs::kRestoreOnStartup);
+}
+
+bool CanPerformRestore(PrefService* prefs) {
+  if (!HasRestorePref(prefs))
+    return true;
+
+  return static_cast<RestoreOption>(prefs->GetInteger(
+             kRestoreAppsAndPagesPrefName)) == RestoreOption::kDoNotRestore
+             ? false
+             : true;
+}
+
 void SetDefaultRestorePrefIfNecessary(PrefService* prefs) {
   DCHECK(!HasRestorePref(prefs));
 
-  if (user_manager::UserManager::Get()->IsCurrentUserNew() ||
-      !prefs->HasPrefPath(prefs::kRestoreOnStartup)) {
+  if (!HasSessionStartupPref(prefs)) {
     prefs->SetInteger(kRestoreAppsAndPagesPrefName,
                       static_cast<int>(RestoreOption::kAskEveryTime));
     return;

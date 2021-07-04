@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <string>
 
+#include "components/translate/core/browser/translate_browser_metrics.h"
 #include "components/translate/core/common/translate_errors.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 
@@ -84,7 +85,9 @@ enum class TriggerDecision {
   kShowUI = 13,
   kAutomaticTranslationByLink = 14,
   kAutomaticTranslationByPref = 15,
-  kMaxValue = kAutomaticTranslationByPref,
+  kShowUIFromHref = 16,
+  kAutomaticTranslationByHref = 17,
+  kMaxValue = kAutomaticTranslationByHref,
 };
 
 // These values are persisted to logs. Entries should not be renumbered and
@@ -124,8 +127,11 @@ class TranslateMetricsLogger {
   // Sets the UKM source ID for the current page load.
   virtual void SetUkmSourceId(ukm::SourceId ukm_source_id) = 0;
 
+  // Tracks information about the Translate Ranker.
   virtual void LogRankerMetrics(RankerDecision ranker_decision,
                                 uint32_t ranker_version) = 0;
+  virtual void LogRankerStart() = 0;
+  virtual void LogRankerFinish() = 0;
 
   // Records trigger decision that impacts the initial state of Translate. The
   // highest priority trigger decision will be logged to UMA at the end of the
@@ -147,13 +153,34 @@ class TranslateMetricsLogger {
   virtual void LogInitialSourceLanguage(const std::string& source_language_code,
                                         bool is_in_users_content_language) = 0;
   virtual void LogSourceLanguage(const std::string& source_language_code) = 0;
-  virtual void LogTargetLanguage(const std::string& target_language_code) = 0;
+  virtual void LogTargetLanguage(
+      const std::string& target_language_code,
+      TranslateBrowserMetrics::TargetLanguageOrigin target_language_origin) = 0;
+
+  // Used to record the language attributes specified by the HTML document.
+  // Recorded for each language detection.
+  virtual void LogHTMLDocumentLanguage(
+      const std::string& html_doc_language) = 0;
+  virtual void LogHTMLContentLanguage(
+      const std::string& html_content_language) = 0;
+
+  // Used to record the language detection model's prediction and reliability
+  // based on the page content's text. Recorded for each language detection.
+  virtual void LogDetectedLanguage(const std::string& detected_language) = 0;
+  virtual void LogDetectionReliabilityScore(
+      const float& model_detection_reliability_score) = 0;
 
   // Records the user's high level interactions with the Translate UI.
   virtual void LogUIInteraction(UIInteraction ui_interaction) = 0;
 
   // Returns the translation type of the next manual translation.
   virtual TranslationType GetNextManualTranslationType() = 0;
+
+  virtual void SetHasHrefTranslateTarget(bool has_href_translate_target) = 0;
+
+  // Records whether the page content used to detect the page language
+  // was empty or not.
+  virtual void LogWasContentEmpty(bool was_content_empty) = 0;
 };
 
 }  // namespace translate

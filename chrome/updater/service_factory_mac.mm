@@ -5,16 +5,16 @@
 #include "base/memory/ref_counted.h"
 #include "chrome/updater/mac/update_service_internal_proxy.h"
 #include "chrome/updater/mac/update_service_proxy.h"
-#include "chrome/updater/service_scope.h"
+#include "chrome/updater/updater_scope.h"
 
 namespace updater {
 
 scoped_refptr<UpdateService> CreateUpdateService() {
-  return base::MakeRefCounted<UpdateServiceProxy>(GetProcessScope());
+  return base::MakeRefCounted<UpdateServiceProxy>(GetUpdaterScope());
 }
 
 scoped_refptr<UpdateServiceInternal> CreateUpdateServiceInternal() {
-  return base::MakeRefCounted<UpdateServiceInternalProxy>(GetProcessScope());
+  return base::MakeRefCounted<UpdateServiceInternalProxy>(GetUpdaterScope());
 }
 
 }  // namespace updater

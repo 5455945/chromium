@@ -10,7 +10,6 @@
 #include <utility>
 
 #include "base/memory/scoped_refptr.h"
-#include "base/optional.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
@@ -21,6 +20,7 @@
 #include "services/device/public/cpp/test/fake_usb_device_info.h"
 #include "services/device/public/mojom/usb_device.mojom.h"
 #include "services/device/public/mojom/usb_manager.mojom.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace device {
 
@@ -73,6 +73,7 @@ class FakeUsbDeviceManager : public mojom::UsbDeviceManager {
                   GetDevicesCallback callback) override;
   void GetDevice(
       const std::string& guid,
+      const std::vector<uint8_t>& blocked_interface_classes,
       mojo::PendingReceiver<device::mojom::UsbDevice> device_receiver,
       mojo::PendingRemote<mojom::UsbDeviceClient> device_client) override;
   void GetSecurityKeyDevice(

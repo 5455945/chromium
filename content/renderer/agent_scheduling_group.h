@@ -9,7 +9,6 @@
 #include "content/common/agent_scheduling_group.mojom.h"
 #include "content/common/associated_interfaces.mojom.h"
 #include "content/common/content_export.h"
-#include "content/common/frame_replication_state.mojom-forward.h"
 #include "content/public/common/content_features.h"
 #include "ipc/ipc.mojom.h"
 #include "ipc/ipc_listener.h"
@@ -21,6 +20,7 @@
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/associated_interfaces/associated_interfaces.mojom.h"
 #include "third_party/blink/public/mojom/browser_interface_broker.mojom.h"
+#include "third_party/blink/public/mojom/frame/frame_replication_state.mojom-forward.h"
 #include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
 
 namespace IPC {
@@ -93,11 +93,14 @@ class CONTENT_EXPORT AgentSchedulingGroup
   void CreateFrameProxy(
       const blink::RemoteFrameToken& token,
       int32_t routing_id,
-      const base::Optional<blink::FrameToken>& opener_frame_token,
+      const absl::optional<blink::FrameToken>& opener_frame_token,
       int32_t view_routing_id,
       int32_t parent_routing_id,
-      mojom::FrameReplicationStatePtr replicated_state,
-      const base::UnguessableToken& devtools_frame_token) override;
+      blink::mojom::TreeScopeType tree_scope_type,
+      blink::mojom::FrameReplicationStatePtr replicated_state,
+      const base::UnguessableToken& devtools_frame_token,
+      mojom::RemoteMainFrameInterfacesPtr remote_main_frame_interfaces)
+      override;
 
   // mojom::RouteProvider
   void GetRoute(
@@ -152,4 +155,4 @@ class CONTENT_EXPORT AgentSchedulingGroup
 
 }  // namespace content
 
-#endif
+#endif  // CONTENT_RENDERER_AGENT_SCHEDULING_GROUP_H_

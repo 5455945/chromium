@@ -279,7 +279,7 @@ VideoTransformation MP4StreamParser::CalculateRotation(
 }
 
 bool MP4StreamParser::ParseMoov(BoxReader* reader) {
-  moov_.reset(new Movie);
+  moov_ = std::make_unique<Movie>();
   RCHECK(moov_->Parse(reader));
   runs_.reset();
   audio_track_ids_.clear();
@@ -504,16 +504,16 @@ bool MP4StreamParser::ParseMoov(BoxReader* reader) {
 
       // If PASP is available, use the coded size and PASP to calculate the
       // natural size. Otherwise, use the size in track header for natural size.
-      gfx::Size natural_size(visible_rect.size());
+      VideoAspectRatio aspect_ratio;
       if (entry.pixel_aspect.h_spacing != 1 ||
           entry.pixel_aspect.v_spacing != 1) {
-        natural_size =
-            GetNaturalSize(visible_rect.size(), entry.pixel_aspect.h_spacing,
-                           entry.pixel_aspect.v_spacing);
+        aspect_ratio = VideoAspectRatio::PAR(entry.pixel_aspect.h_spacing,
+                                             entry.pixel_aspect.v_spacing);
       } else if (track->header.width && track->header.height) {
-        natural_size =
-            gfx::Size(track->header.width, track->header.height);
+        aspect_ratio =
+            VideoAspectRatio::DAR(track->header.width, track->header.height);
       }
+      gfx::Size natural_size = aspect_ratio.GetNaturalSize(visible_rect);
 
       uint32_t video_track_id = track->header.track_id;
       if (video_track_ids_.find(video_track_id) != video_track_ids_.end()) {
@@ -537,6 +537,7 @@ bool MP4StreamParser::ParseMoov(BoxReader* reader) {
                               // No decoder-specific buffer needed for AVC;
                               // SPS/PPS are embedded in the video stream
                               EmptyExtraData(), scheme);
+      video_config.set_aspect_ratio(aspect_ratio);
       video_config.set_level(entry.video_codec_level);
 
       if (entry.video_color_space.IsSpecified())
@@ -652,7 +653,7 @@ bool MP4StreamParser::ParseMoof(BoxReader* reader) {
   MovieFragment moof;
   RCHECK(moof.Parse(reader));
   if (!runs_)
-    runs_.reset(new TrackRunIterator(moov_.get(), media_log_));
+    runs_ = std::make_unique<TrackRunIterator>(moov_.get(), media_log_);
   RCHECK(runs_->Init(moof));
   RCHECK(ComputeHighestEndOffset(moof));
 
@@ -872,10 +873,10 @@ ParseResult MP4StreamParser::EnqueueSample(BufferQueueMap* buffers) {
   if (decrypt_config) {
     if (!subsamples.empty()) {
       // Create a new config with the updated subsamples.
-      decrypt_config.reset(
-          new DecryptConfig(decrypt_config->encryption_scheme(),
-                            decrypt_config->key_id(), decrypt_config->iv(),
-                            subsamples, decrypt_config->encryption_pattern()));
+      decrypt_config = std::make_unique<DecryptConfig>(
+          decrypt_config->encryption_scheme(), decrypt_config->key_id(),
+          decrypt_config->iv(), subsamples,
+          decrypt_config->encryption_pattern());
     }
     // else, use the existing config.
   }

@@ -13,11 +13,13 @@ import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabHidingType;
 import org.chromium.chrome.browser.tab.TabSelectionType;
+import org.chromium.content_public.browser.LoadCommittedDetails;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.NavigationController;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.WebContentsObserver;
 import org.chromium.ui.base.PageTransition;
+import org.chromium.url.GURL;
 
 /**
  * Records stats related to a page visit, such as the time spent on the website, or if the user
@@ -57,9 +59,9 @@ public class NavigationRecorder extends EmptyTabObserver {
             int startStackIndex = navController.getLastCommittedEntryIndex();
             mWebContentsObserver = new WebContentsObserver() {
                 @Override
-                public void navigationEntryCommitted() {
+                public void navigationEntryCommitted(LoadCommittedDetails details) {
                     if (startStackIndex != navController.getLastCommittedEntryIndex()) return;
-                    endRecording(tab, tab.getUrlString());
+                    endRecording(tab, tab.getUrl());
                 }
             };
             webContents.addObserver(mWebContentsObserver);
@@ -96,7 +98,7 @@ public class NavigationRecorder extends EmptyTabObserver {
         if ((params.getTransitionType() & transitionTypeMask) != 0) endRecording(tab, null);
     }
 
-    private void endRecording(@Nullable Tab removeObserverFromTab, @Nullable String endUrl) {
+    private void endRecording(@Nullable Tab removeObserverFromTab, @Nullable GURL endUrl) {
         if (removeObserverFromTab != null) {
             removeObserverFromTab.removeObserver(this);
             if (removeObserverFromTab.getWebContents() != null && mWebContentsObserver != null) {
@@ -111,9 +113,9 @@ public class NavigationRecorder extends EmptyTabObserver {
     /** Plain holder for the data of a recorded visit. */
     public static class VisitData {
         public final long duration;
-        public final String endUrl;
+        public final GURL endUrl;
 
-        public VisitData(long duration, String endUrl) {
+        public VisitData(long duration, GURL endUrl) {
             this.duration = duration;
             this.endUrl = endUrl;
         }

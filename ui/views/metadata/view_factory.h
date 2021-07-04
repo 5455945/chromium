@@ -10,9 +10,8 @@
 #include <memory>
 #include <utility>
 
-#include "base/strings/string16.h"
 #include "ui/base/class_property.h"
-#include "ui/views/metadata/type_conversion.h"
+#include "ui/base/metadata/base_type_conversion.h"
 #include "ui/views/metadata/view_factory_internal.h"
 #include "ui/views/views_export.h"
 
@@ -28,21 +27,23 @@ class BaseViewBuilderT : public internal::ViewBuilderCore {
   BaseViewBuilderT& operator=(BaseViewBuilderT&&) = default;
   ~BaseViewBuilderT() override = default;
 
-  Builder& CopyAddressTo(ViewClass_** view_address) {
+  template <typename View>
+  Builder& CopyAddressTo(View** view_address) {
     *view_address = view_ ? view_.get() : root_view_;
     return *static_cast<Builder*>(this);
   }
 
   template <typename Child>
-  Builder& AddChild(Child& child) {
-    children_.push_back(child);
+  Builder& AddChild(Child&& child) {
+    children_.emplace_back(child.Release());
     return *static_cast<Builder*>(this);
   }
 
   Builder& AddChildren(
       const std::initializer_list<
           std::reference_wrapper<internal::ViewBuilderCore>>& children) {
-    children_.insert(children_.end(), children.begin(), children.end());
+    for (auto& builder : children)
+      children_.emplace_back(builder.get().Release());
     return *static_cast<Builder*>(this);
   }
 
@@ -63,7 +64,7 @@ class BaseViewBuilderT : public internal::ViewBuilderCore {
 
   template <typename T>
   Builder& SetProperty(const ui::ClassProperty<T>* property,
-                       metadata::ArgType<T> value) {
+                       ui::metadata::ArgType<T> value) {
     auto setter =
         std::make_unique<internal::ClassPropertyValueSetter<ViewClass_, T>>(
             property, value);
@@ -73,7 +74,7 @@ class BaseViewBuilderT : public internal::ViewBuilderCore {
 
   template <typename T>
   Builder& SetProperty(const ui::ClassProperty<T*>* property,
-                       metadata::ArgType<T> value) {
+                       ui::metadata::ArgType<T> value) {
     auto setter =
         std::make_unique<internal::ClassPropertyMoveSetter<ViewClass_, T>>(
             property, value);
@@ -110,9 +111,9 @@ class BaseViewBuilderT : public internal::ViewBuilderCore {
 // class ViewBuilderT : public BaseViewBuilderT<Builder, ViewClass> {
 //  public:
 //   ViewBuilderT() = default;
-//   ViewBuilderT(const ViewBuilderT&) = default;
+//   ViewBuilderT(const ViewBuilderT&&) = default;
+//   ViewBuilderT& operator=(const ViewBuilderT&&) = default;
 //   ~ViewBuilderT() override = default;
-//   ViewBuilderT& operator=(const ViewBuilderT&) = default;
 //
 //   Builder& SetEnabled(bool value) {
 //     auto setter = std::make_unique<
@@ -138,8 +139,8 @@ class BaseViewBuilderT : public internal::ViewBuilderCore {
 //  public:
 //   LabelButtonBuilderT() = default;
 //   LabelButtonBuilderT(LabelButtonBuilderT&&) = default;
-//   ~LabelButtonBuilderT() override = default;
 //   LabelButtonBuilderT& operator=(LabelButtonBuilderT&&) = default;
+//   ~LabelButtonBuilderT() override = default;
 //
 //   Builder& SetIsDefault(bool value) {
 //     auto setter = std::make_unique<
@@ -172,14 +173,13 @@ class BaseViewBuilderT : public internal::ViewBuilderCore {
     view_class##BuilderT& operator=(view_class##BuilderT&&) = default;      \
     ~view_class##BuilderT() override = default;
 
-#define VIEW_BUILDER_PROPERTY(property_type, property_name)                   \
-  BuilderT& Set##property_name(                                               \
-      ::views::metadata::ArgType<property_type> value) {                      \
-    auto setter = std::make_unique<::views::internal::PropertySetter<         \
-        ViewClass_, property_type, decltype(&ViewClass_::Set##property_name), \
-        &ViewClass_::Set##property_name>>(std::move(value));                  \
-    ::views::internal::ViewBuilderCore::AddPropertySetter(std::move(setter)); \
-    return *static_cast<BuilderT*>(this);                                     \
+#define VIEW_BUILDER_PROPERTY(property_type, property_name)                    \
+  BuilderT& Set##property_name(::ui::metadata::ArgType<property_type> value) { \
+    auto setter = std::make_unique<::views::internal::PropertySetter<          \
+        ViewClass_, property_type, decltype(&ViewClass_::Set##property_name),  \
+        &ViewClass_::Set##property_name>>(std::move(value));                   \
+    ::views::internal::ViewBuilderCore::AddPropertySetter(std::move(setter));  \
+    return *static_cast<BuilderT*>(this);                                      \
   }
 
 #define VIEW_BUILDER_METHOD(method_name)                                      \
@@ -213,8 +213,8 @@ class BaseViewBuilderT : public internal::ViewBuilderCore {
   }
 
 #define VIEW_BUILDER_PROPERTY_DEFAULT(property_type, property_name, default)  \
-  BuilderT& Set##property_name(                                               \
-      ::views::metadata::ArgType<property_type> value = default) {            \
+  BuilderT& Set##property_name(::ui::metadata::ArgType<property_type> value = \
+                                   default) {                                 \
     auto setter = std::make_unique<::views::internal::PropertySetter<         \
         ViewClass_, property_type, decltype(&ViewClass_::Set##property_name), \
         &ViewClass_::Set##property_name>>(std::move(value));                  \
@@ -232,21 +232,24 @@ class BaseViewBuilderT : public internal::ViewBuilderCore {
 // namespace. Unless 'view_class' is already in the 'views' namespace, it should
 // be fully qualified with the namespace in which it lives.
 
-#define DEFINE_VIEW_BUILDER(export, view_class)                      \
-namespace views {                                                    \
-  template <>                                                        \
-  class export Builder<view_class>                                   \
-      : public view_class##BuilderT<Builder<view_class>> {           \
-   private:                                                          \
-    using ViewClass_ = view_class;                                   \
-   public:                                                           \
-    Builder<ViewClass_>() = default;                                 \
-    explicit Builder<ViewClass_>(ViewClass_* root_view)              \
-        : view_class##BuilderT<Builder<ViewClass_>>(root_view) {}    \
-    Builder<ViewClass_>(Builder&&) = default;                        \
-    Builder<ViewClass_>& operator=(Builder<ViewClass_>&&) = default; \
-    ~Builder<ViewClass_>() = default;                                \
-  };                                                                 \
+#define DEFINE_VIEW_BUILDER(export, view_class)                       \
+namespace views {                                                     \
+  template <>                                                         \
+  class export Builder<view_class>                                    \
+      : public view_class##BuilderT<Builder<view_class>> {            \
+   private:                                                           \
+    using ViewClass_ = view_class;                                    \
+   public:                                                            \
+    Builder<ViewClass_>() = default;                                  \
+    explicit Builder<ViewClass_>(ViewClass_* root_view)               \
+        : view_class##BuilderT<Builder<ViewClass_>>(root_view) {}     \
+    Builder<ViewClass_>(Builder&&) = default;                         \
+    Builder<ViewClass_>& operator=(Builder<ViewClass_>&&) = default;  \
+    ~Builder<ViewClass_>() = default;                                 \
+    std::unique_ptr<internal::ViewBuilderCore> Release() override {   \
+      return std::make_unique<Builder<view_class>>(std::move(*this)); \
+    }                                                                 \
+  };                                                                  \
 }  // namespace views
 
 // clang-format on

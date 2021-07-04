@@ -8,7 +8,6 @@
 #include <memory>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "components/payments/content/payment_app.h"
@@ -58,6 +57,9 @@ class PaymentAppFactory {
     // null if the RenderFrameHost has been deleted, which can happen when the
     // RenderFrameHost is being unloaded, for example.
     virtual content::RenderFrameHost* GetInitiatorRenderFrameHost() const = 0;
+
+    virtual content::GlobalRenderFrameHostId GetInitiatorRenderFrameHostId()
+        const = 0;
 
     virtual const std::vector<mojom::PaymentMethodDataPtr>& GetMethodData()
         const = 0;

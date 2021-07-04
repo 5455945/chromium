@@ -5,15 +5,17 @@
 #include "components/policy/core/common/cloud/cloud_policy_validator.h"
 
 #include <stddef.h>
+
+#include <memory>
 #include <utility>
 
 #include "base/callback_helpers.h"
+#include "base/cxx17_backports.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/sequenced_task_runner.h"
 #include "base/single_thread_task_runner.h"
-#include "base/stl_util.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
@@ -26,24 +28,6 @@ namespace em = enterprise_management;
 namespace policy {
 
 namespace {
-
-const char kMetricPolicyKeyVerification[] = "Enterprise.PolicyKeyVerification";
-
-enum MetricPolicyKeyVerification {
-  // Obsolete. Kept to avoid reuse, as this is used in histograms.
-  // UMA metric recorded when the client has no verification key.
-  METRIC_POLICY_KEY_VERIFICATION_KEY_MISSING_DEPRECATED,
-  // Recorded when the policy being verified has no key signature (e.g. policy
-  // fetched before the server supported the verification key).
-  METRIC_POLICY_KEY_VERIFICATION_SIGNATURE_MISSING,
-  // Recorded when the key signature did not match the expected value (in
-  // theory, this should only happen after key rotation or if the policy cached
-  // on disk has been modified).
-  METRIC_POLICY_KEY_VERIFICATION_FAILED,
-  // Recorded when key verification succeeded.
-  METRIC_POLICY_KEY_VERIFICATION_SUCCEEDED,
-  METRIC_POLICY_KEY_VERIFICATION_SIZE  // Must be the last.
-};
 
 const char kMetricPolicyUserVerification[] =
     "Enterprise.PolicyUserVerification";
@@ -322,7 +306,7 @@ void CloudPolicyValidatorBase::ReportCompletion(
 }
 
 void CloudPolicyValidatorBase::RunValidation() {
-  policy_data_.reset(new em::PolicyData());
+  policy_data_ = std::make_unique<em::PolicyData>();
   RunChecks();
 }
 
@@ -392,9 +376,6 @@ bool CloudPolicyValidatorBase::CheckNewPublicKeyVerificationSignature() {
   if (!policy_->has_new_public_key_verification_signature_deprecated()) {
     // Policy does not contain a verification signature, so log an error.
     LOG(ERROR) << "Policy is missing public_key_verification_signature";
-    UMA_HISTOGRAM_ENUMERATION(kMetricPolicyKeyVerification,
-                              METRIC_POLICY_KEY_VERIFICATION_SIGNATURE_MISSING,
-                              METRIC_POLICY_KEY_VERIFICATION_SIZE);
     return false;
   }
 
@@ -402,16 +383,10 @@ bool CloudPolicyValidatorBase::CheckNewPublicKeyVerificationSignature() {
           policy_->new_public_key(), verification_key_,
           policy_->new_public_key_verification_signature_deprecated())) {
     LOG(ERROR) << "Signature verification failed";
-    UMA_HISTOGRAM_ENUMERATION(kMetricPolicyKeyVerification,
-                              METRIC_POLICY_KEY_VERIFICATION_FAILED,
-                              METRIC_POLICY_KEY_VERIFICATION_SIZE);
     return false;
   }
   // Signature verification succeeded - return success to the caller.
   DVLOG(1) << "Signature verification succeeded";
-  UMA_HISTOGRAM_ENUMERATION(kMetricPolicyKeyVerification,
-                            METRIC_POLICY_KEY_VERIFICATION_SUCCEEDED,
-                            METRIC_POLICY_KEY_VERIFICATION_SIZE);
   return true;
 }
 

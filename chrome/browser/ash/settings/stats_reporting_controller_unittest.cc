@@ -10,11 +10,11 @@
 #include "base/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/values.h"
+#include "chrome/browser/ash/ownership/owner_settings_service_ash.h"
+#include "chrome/browser/ash/ownership/owner_settings_service_ash_factory.h"
+#include "chrome/browser/ash/policy/core/device_policy_builder.h"
 #include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/ash/settings/device_settings_cache.h"
-#include "chrome/browser/chromeos/ownership/owner_settings_service_chromeos.h"
-#include "chrome/browser/chromeos/ownership/owner_settings_service_chromeos_factory.h"
-#include "chrome/browser/chromeos/policy/device_policy_builder.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/testing_profile.h"
@@ -26,7 +26,7 @@
 #include "content/public/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace chromeos {
+namespace ash {
 
 TestingPrefServiceSimple* RegisterPrefs(TestingPrefServiceSimple* local_state) {
   StatsReportingController::RegisterLocalStatePrefs(local_state->registry());
@@ -57,10 +57,10 @@ class StatsReportingControllerTest : public testing::Test {
 
   std::unique_ptr<TestingProfile> CreateUser(
       scoped_refptr<ownership::MockOwnerKeyUtil> keys) {
-    OwnerSettingsServiceChromeOSFactory::GetInstance()
-        ->SetOwnerKeyUtilForTesting(keys);
+    OwnerSettingsServiceAshFactory::GetInstance()->SetOwnerKeyUtilForTesting(
+        keys);
     std::unique_ptr<TestingProfile> user = std::make_unique<TestingProfile>();
-    OwnerSettingsServiceChromeOSFactory::GetForBrowserContext(user.get())
+    OwnerSettingsServiceAshFactory::GetForBrowserContext(user.get())
         ->OnTPMTokenReady(true);
     content::RunAllTasksUntilIdle();
     return user;
@@ -95,7 +95,7 @@ class StatsReportingControllerTest : public testing::Test {
   content::BrowserTaskEnvironment task_environment_{
       content::BrowserTaskEnvironment::IO_MAINLOOP};
   TestingPrefServiceSimple local_state_;
-  ScopedStubInstallAttributes scoped_install_attributes_;
+  chromeos::ScopedStubInstallAttributes scoped_install_attributes_;
   FakeSessionManagerClient fake_session_manager_client_;
   ScopedTestDeviceSettingsService scoped_device_settings_;
   ScopedTestCrosSettings scoped_cros_settings_{RegisterPrefs(&local_state_)};
@@ -122,7 +122,9 @@ TEST_F(StatsReportingControllerTest, GetAndSet_OwnershipUnknown) {
 
   std::unique_ptr<TestingProfile> user = CreateUser(no_keys);
   StatsReportingController::Get()->SetEnabled(user.get(), true);
-  // Read from the pending value when ownership is not taken.
+  // A pending value is written in case there is no owner. It will be cleared
+  // and written properly when ownership is taken. We will read from the
+  // pending value before ownership is taken (pending value exists).
   EXPECT_TRUE(StatsReportingController::Get()->IsEnabled());
   ExpectThatPendingValueIs(true);
   ExpectThatSignedStoredValueIs(false);
@@ -243,7 +245,7 @@ TEST_F(StatsReportingControllerTest, SetBeforeOwnershipTaken) {
 
   // After device is owned, the value is written to Cros settings.
   StatsReportingController::Get()->OnOwnershipTaken(
-      OwnerSettingsServiceChromeOSFactory::GetForBrowserContext(owner.get()));
+      OwnerSettingsServiceAshFactory::GetForBrowserContext(owner.get()));
   EXPECT_TRUE(StatsReportingController::Get()->IsEnabled());
   EXPECT_TRUE(value_at_last_notification_);
   ExpectThatPendingValueIs(true);
@@ -255,4 +257,4 @@ TEST_F(StatsReportingControllerTest, SetBeforeOwnershipTaken) {
   ExpectThatSignedStoredValueIs(true);
 }
 
-}  // namespace chromeos
+}  // namespace ash

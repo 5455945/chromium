@@ -79,6 +79,8 @@ void FakeSkiaOutputSurface::Reshape(const gfx::Size& size,
 
 void FakeSkiaOutputSurface::SwapBuffers(OutputSurfaceFrame frame) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  if (frame.delegated_ink_metadata)
+    last_delegated_ink_metadata_ = std::move(frame.delegated_ink_metadata);
   base::ThreadTaskRunnerHandle::Get()->PostTask(
       FROM_HERE, base::BindOnce(&FakeSkiaOutputSurface::SwapBuffersAck,
                                 weak_ptr_factory_.GetWeakPtr()));
@@ -180,7 +182,7 @@ FakeSkiaOutputSurface::CreateImageContext(
     const gfx::Size& size,
     ResourceFormat format,
     bool concurrent_reads,
-    const base::Optional<gpu::VulkanYCbCrInfo>& ycbcr_info,
+    const absl::optional<gpu::VulkanYCbCrInfo>& ycbcr_info,
     sk_sp<SkColorSpace> color_space) {
   return std::make_unique<ExternalUseClient::ImageContext>(
       holder, size, format, ycbcr_info, std::move(color_space));
@@ -263,7 +265,7 @@ void FakeSkiaOutputSurface::CopyOutput(
   }
 
   if (request->result_format() == CopyOutputResult::Format::RGBA_TEXTURE) {
-    // TODO(sgilhuly): This implementation is incomplete and doesn't copy
+    // TODO(rivr): This implementation is incomplete and doesn't copy
     // anything into the mailbox, but currently the only tests that use this
     // don't actually check the returned texture data.
     auto* sii = context_provider_->SharedImageInterface();
@@ -300,7 +302,7 @@ void FakeSkiaOutputSurface::CopyOutput(
                  bitmap.rowBytes());
   bitmap.setPixelRef(std::move(pixels), origin.x(), origin.y());
   request->SendResult(std::make_unique<CopyOutputSkBitmapResult>(
-      geometry.result_bounds, bitmap));
+      geometry.result_bounds, std::move(bitmap)));
 }
 
 void FakeSkiaOutputSurface::AddContextLostObserver(
@@ -364,7 +366,8 @@ bool FakeSkiaOutputSurface::GetGrBackendTexture(
 
 void FakeSkiaOutputSurface::SwapBuffersAck() {
   base::TimeTicks now = base::TimeTicks::Now();
-  client_->DidReceiveSwapBuffersAck({now, now});
+  client_->DidReceiveSwapBuffersAck({now, now},
+                                    /*release_fence=*/gfx::GpuFenceHandle());
   client_->DidReceivePresentationFeedback({now, base::TimeDelta(), 0});
 }
 
@@ -372,6 +375,12 @@ void FakeSkiaOutputSurface::ScheduleGpuTaskForTesting(
     base::OnceClosure callback,
     std::vector<gpu::SyncToken> sync_tokens) {
   NOTIMPLEMENTED();
+}
+
+void FakeSkiaOutputSurface::InitDelegatedInkPointRendererReceiver(
+    mojo::PendingReceiver<gfx::mojom::DelegatedInkPointRenderer>
+        pending_receiver) {
+  delegated_ink_renderer_receiver_arrived_ = true;
 }
 
 }  // namespace viz

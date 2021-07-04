@@ -10,16 +10,17 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
 
 #include "base/bind.h"
+#include "base/cxx17_backports.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/numerics/ranges.h"
 #include "base/run_loop.h"
-#include "base/stl_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/thread_task_runner_handle.h"
@@ -83,8 +84,8 @@ class GLHelperTest : public testing::Test {
     gl_ = context_->GetImplementation();
     ContextSupport* support = context_->GetImplementation();
 
-    helper_.reset(new GLHelper(gl_, support));
-    helper_scaling_.reset(new GLHelperScaling(gl_, helper_.get()));
+    helper_ = std::make_unique<GLHelper>(gl_, support);
+    helper_scaling_ = std::make_unique<GLHelperScaling>(gl_, helper_.get());
   }
 
   void TearDown() override {

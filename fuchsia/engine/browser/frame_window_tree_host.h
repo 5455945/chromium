@@ -33,7 +33,9 @@ class FrameWindowTreeHost : public aura::WindowTreeHostPlatform {
 
   // aura::WindowTreeHostPlatform overrides.
   void OnActivationChanged(bool active) final;
-  void OnWindowStateChanged(ui::PlatformWindowState new_state) final;
+  void OnWindowStateChanged(ui::PlatformWindowState old_state,
+                            ui::PlatformWindowState new_state) final;
+  void OnWindowBoundsChanged(const BoundsChange& bounds);
 
   const fuchsia::ui::views::ViewRef view_ref_;
   std::unique_ptr<WindowParentingClientImpl> window_parenting_client_;

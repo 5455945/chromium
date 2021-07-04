@@ -4,6 +4,8 @@
 
 #include "extensions/test/extension_test_notification_observer.h"
 
+#include <memory>
+
 #include "base/bind.h"
 #include "base/containers/contains.h"
 #include "content/public/browser/browser_context.h"
@@ -73,14 +75,14 @@ void ExtensionTestNotificationObserver::NotificationSet::Add(int type) {
 
 void ExtensionTestNotificationObserver::NotificationSet::
     AddExtensionFrameUnregistration(ProcessManager* manager) {
-  process_manager_observer_.Add(manager);
+  process_manager_observation_.Observe(manager);
 }
 
 void ExtensionTestNotificationObserver::NotificationSet::Observe(
     int type,
     const content::NotificationSource& source,
     const content::NotificationDetails& details) {
-  callback_list_.Notify();
+  closure_list_.Notify();
 }
 
 void ExtensionTestNotificationObserver::NotificationSet::
@@ -98,13 +100,13 @@ void ExtensionTestNotificationObserver::NotificationSet::
 void ExtensionTestNotificationObserver::NotificationSet::
     OnExtensionFrameUnregistered(const std::string& extension_id,
                                  content::RenderFrameHost* render_frame_host) {
-  callback_list_.Notify();
+  closure_list_.Notify();
 }
 
 void ExtensionTestNotificationObserver::NotificationSet::WebContentsDestroyed(
     content::WebContents* web_contents) {
   web_contents_observers_.erase(web_contents);
-  callback_list_.Notify();
+  closure_list_.Notify();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -113,10 +115,9 @@ void ExtensionTestNotificationObserver::NotificationSet::WebContentsDestroyed(
 ExtensionTestNotificationObserver::ExtensionTestNotificationObserver(
     content::BrowserContext* context)
     : context_(context),
-      extension_load_errors_observed_(0),
       crx_installers_done_observed_(0) {
   if (context_)
-    registry_observer_.Add(ExtensionRegistry::Get(context_));
+    registry_observation_.Observe(ExtensionRegistry::Get(context_));
 }
 
 ExtensionTestNotificationObserver::~ExtensionTestNotificationObserver() {}
@@ -132,12 +133,6 @@ void ExtensionTestNotificationObserver::WaitForNotification(
   content::WindowedNotificationObserver(
       notification_type, content::NotificationService::AllSources())
       .Wait();
-}
-
-bool ExtensionTestNotificationObserver::WaitForExtensionLoadError() {
-  int before = extension_load_errors_observed_;
-  WaitForNotification(NOTIFICATION_EXTENSION_LOAD_ERROR);
-  return extension_load_errors_observed_ != before;
 }
 
 bool ExtensionTestNotificationObserver::WaitForExtensionCrash(
@@ -169,7 +164,8 @@ void ExtensionTestNotificationObserver::Watch(
     int type,
     const content::NotificationSource& source) {
   CHECK(!observer_);
-  observer_.reset(new content::WindowedNotificationObserver(type, source));
+  observer_ =
+      std::make_unique<content::WindowedNotificationObserver>(type, source);
   registrar_.Add(this, type, source);
 }
 
@@ -198,11 +194,6 @@ void ExtensionTestNotificationObserver::Observe(
       ++crx_installers_done_observed_;
       break;
 
-    case NOTIFICATION_EXTENSION_LOAD_ERROR:
-      VLOG(1) << "Got EXTENSION_LOAD_ERROR notification.";
-      ++extension_load_errors_observed_;
-      break;
-
     default:
       NOTREACHED();
       break;
@@ -218,7 +209,7 @@ void ExtensionTestNotificationObserver::OnExtensionLoaded(
 
 void ExtensionTestNotificationObserver::OnShutdown(
     ExtensionRegistry* registry) {
-  registry_observer_.RemoveAll();
+  registry_observation_.Reset();
 }
 
 void ExtensionTestNotificationObserver::WaitForCondition(
@@ -233,7 +224,7 @@ void ExtensionTestNotificationObserver::WaitForCondition(
 
   base::CallbackListSubscription subscription;
   if (notification_set) {
-    subscription = notification_set->callback_list().Add(base::BindRepeating(
+    subscription = notification_set->closure_list().Add(base::BindRepeating(
         &ExtensionTestNotificationObserver::MaybeQuit, base::Unretained(this)));
   }
   run_loop.Run();

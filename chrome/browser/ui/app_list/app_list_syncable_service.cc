@@ -11,6 +11,7 @@
 
 #include "ash/constants/ash_switches.h"
 #include "base/bind.h"
+#include "base/check.h"
 #include "base/command_line.h"
 #include "base/containers/contains.h"
 #include "base/feature_list.h"
@@ -19,13 +20,13 @@
 #include "build/build_config.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
-#include "chrome/browser/chromeos/arc/arc_util.h"
-#include "chrome/browser/chromeos/crostini/crostini_features.h"
-#include "chrome/browser/chromeos/crostini/crostini_util.h"
+#include "chrome/browser/ash/arc/arc_util.h"
+#include "chrome/browser/ash/crostini/crostini_features.h"
+#include "chrome/browser/ash/crostini/crostini_util.h"
 #include "chrome/browser/chromeos/file_manager/app_id.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/sync/profile_sync_service_factory.h"
+#include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/ui/app_list/app_list_client_impl.h"
 #include "chrome/browser/ui/app_list/app_list_model_updater.h"
 #include "chrome/browser/ui/app_list/app_service/app_service_app_model_builder.h"
@@ -35,13 +36,15 @@
 #include "chrome/browser/ui/app_list/chrome_app_list_model_updater.h"
 #include "chrome/browser/ui/app_list/page_break_app_item.h"
 #include "chrome/browser/ui/app_list/page_break_constants.h"
+#include "chrome/browser/web_applications/components/app_registrar.h"
 #include "chrome/browser/web_applications/components/web_app_id_constants.h"
+#include "chrome/browser/web_applications/components/web_app_provider_base.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/pref_registry/pref_registry_syncable.h"
-#include "components/sync/driver/profile_sync_service.h"
+#include "components/sync/driver/sync_service.h"
 #include "components/sync/model/sync_change_processor.h"
 #include "components/sync/model/sync_data.h"
 #include "components/sync/protocol/sync.pb.h"
@@ -197,7 +200,7 @@ bool IsSystemCreatedSyncFolder(AppListSyncableService::SyncItem* folder_item) {
   if (folder_item->item_type != sync_pb::AppListSpecifics::TYPE_FOLDER)
     return false;
   return (folder_item->item_id == ash::kOemFolderId ||
-          folder_item->item_id == crostini::kCrostiniFolderId);
+          folder_item->item_id == ash::kCrostiniFolderId);
 }
 
 }  // namespace
@@ -225,6 +228,12 @@ AppListSyncableService::SyncItem::SyncItem(
     : item_id(id), item_type(type) {}
 
 AppListSyncableService::SyncItem::~SyncItem() = default;
+
+// AppListSyncableService::Observer
+
+AppListSyncableService::Observer::~Observer() {
+  CHECK(!IsInObserverList());
+}
 
 // AppListSyncableService::ModelUpdaterObserver
 
@@ -435,9 +444,9 @@ void AppListSyncableService::BuildModel() {
   // Install default page brakes for tablet form factor devices here as
   // these devices do not have app list sync turned on.
   if (chromeos::switches::IsTabletFormFactor() && profile_->IsNewProfile()) {
-    DCHECK(!ProfileSyncServiceFactory::GetForProfile(profile_)
-                ->GetActiveDataTypes()
-                .Has(syncer::APP_LIST));
+    DCHECK(
+        !SyncServiceFactory::GetForProfile(profile_)->GetActiveDataTypes().Has(
+            syncer::APP_LIST));
     // Create call back to create the default page break items at later time so
     // that default page break items are not removed by
     // |PruneRedundantPageBreakItems|
@@ -937,7 +946,7 @@ void AppListSyncableService::WaitUntilReadyToSync(base::OnceClosure done) {
   }
 }
 
-base::Optional<syncer::ModelError>
+absl::optional<syncer::ModelError>
 AppListSyncableService::MergeDataAndStartSyncing(
     syncer::ModelType type,
     const syncer::SyncDataList& initial_sync_data,
@@ -1047,7 +1056,7 @@ AppListSyncableService::MergeDataAndStartSyncing(
     on_initialized_.Signal();
   }
 
-  return base::nullopt;
+  return absl::nullopt;
 }
 
 void AppListSyncableService::StopSyncing(syncer::ModelType type) {
@@ -1067,7 +1076,7 @@ syncer::SyncDataList AppListSyncableService::GetAllSyncDataForTesting() const {
   return list;
 }
 
-base::Optional<syncer::ModelError> AppListSyncableService::ProcessSyncChanges(
+absl::optional<syncer::ModelError> AppListSyncableService::ProcessSyncChanges(
     const base::Location& from_here,
     const syncer::SyncChangeList& change_list) {
   if (!sync_processor_.get()) {
@@ -1098,7 +1107,7 @@ base::Optional<syncer::ModelError> AppListSyncableService::ProcessSyncChanges(
 
   GetModelUpdater()->NotifyProcessSyncChangesFinished();
 
-  return base::nullopt;
+  return absl::nullopt;
 }
 
 void AppListSyncableService::Shutdown() {
@@ -1316,6 +1325,10 @@ syncer::StringOrdinal AppListSyncableService::GetPreferredOemFolderPos() {
 bool AppListSyncableService::AppIsOem(const std::string& id) {
   const ArcAppListPrefs* arc_prefs = ArcAppListPrefs::Get(profile_);
   if (arc_prefs && arc_prefs->IsOem(id))
+    return true;
+
+  auto* provider = web_app::WebAppProviderBase::GetProviderBase(profile_);
+  if (provider && provider->registrar().WasInstalledByOem(id))
     return true;
 
   if (!extension_system_->extension_service())

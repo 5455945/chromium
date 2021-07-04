@@ -42,24 +42,26 @@ class VIZ_SERVICE_EXPORT SkiaOutputDeviceBufferQueue : public SkiaOutputDevice {
   // SkiaOutputDevice overrides.
   void Submit(bool sync_cpu, base::OnceClosure callback) override;
   void SwapBuffers(BufferPresentedCallback feedback,
-                   std::vector<ui::LatencyInfo> latency_info) override;
+                   OutputSurfaceFrame frame) override;
   void PostSubBuffer(const gfx::Rect& rect,
                      BufferPresentedCallback feedback,
-                     std::vector<ui::LatencyInfo> latency_info) override;
+                     OutputSurfaceFrame frame) override;
   void CommitOverlayPlanes(BufferPresentedCallback feedback,
-                           std::vector<ui::LatencyInfo> latency_info) override;
+                           OutputSurfaceFrame frame) override;
   bool Reshape(const gfx::Size& size,
                float device_scale_factor,
                const gfx::ColorSpace& color_space,
                gfx::BufferFormat format,
                gfx::OverlayTransform transform) override;
   SkSurface* BeginPaint(
+      bool allocate_frame_buffer,
       std::vector<GrBackendSemaphore>* end_semaphores) override;
   void EndPaint() override;
+  void ReleaseOneFrameBuffer() override;
 
   bool IsPrimaryPlaneOverlay() const override;
   void SchedulePrimaryPlane(
-      const base::Optional<
+      const absl::optional<
           OverlayProcessorInterface::OutputSurfaceOverlayPlane>& plane)
       override;
   void ScheduleOverlays(SkiaOutputSurface::OverlayList overlays) override;
@@ -71,12 +73,13 @@ class VIZ_SERVICE_EXPORT SkiaOutputDeviceBufferQueue : public SkiaOutputDevice {
       base::CancelableOnceCallback<void(gfx::SwapCompletionResult)>;
 
   OutputPresenter::Image* GetNextImage();
-  void PageFlipComplete(OutputPresenter::Image* image);
+  void PageFlipComplete(OutputPresenter::Image* image,
+                        gfx::GpuFenceHandle release_fence);
   void FreeAllSurfaces();
   // Used as callback for SwapBuffersAsync and PostSubBufferAsync to finish
   // operation
   void DoFinishSwapBuffers(const gfx::Size& size,
-                           std::vector<ui::LatencyInfo> latency_info,
+                           OutputSurfaceFrame frame,
                            const base::WeakPtr<OutputPresenter::Image>& image,
                            std::vector<gpu::Mailbox> overlay_mailboxes,
                            gfx::SwapCompletionResult result);
@@ -132,7 +135,7 @@ class VIZ_SERVICE_EXPORT SkiaOutputDeviceBufferQueue : public SkiaOutputDevice {
   // for opaque accelerated widgets and event wiring.
   bool needs_background_image_ = false;
   // A 4x4 small image that will be scaled to cover an opaque region.
-  std::unique_ptr<OutputPresenter::Image> background_image_ = nullptr;
+  std::unique_ptr<OutputPresenter::Image> background_image_;
   // Set to true if background has been scheduled in a frame.
   bool background_image_is_scheduled_ = false;
   // Whether |SchedulePrimaryPlane| needs to wait for a paint before scheduling

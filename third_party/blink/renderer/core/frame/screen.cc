@@ -30,7 +30,6 @@
 
 #include "third_party/blink/public/common/privacy_budget/identifiability_metric_builder.h"
 #include "third_party/blink/public/common/privacy_budget/identifiability_metrics.h"
-#include "third_party/blink/public/common/widget/screen_info.h"
 #include "third_party/blink/renderer/core/event_target_names.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
@@ -38,12 +37,14 @@
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_statics.h"
+#include "ui/display/screen_info.h"
 
 namespace blink {
 
 namespace {
 
-const ScreenInfo& GetScreenInfo(LocalFrame& frame) {
+const display::ScreenInfo& GetScreenInfo(LocalFrame& frame) {
   return frame.GetChromeClient().GetScreenInfo(frame);
 }
 
@@ -57,7 +58,7 @@ int Screen::height() const {
   if (!DomWindow())
     return 0;
   LocalFrame* frame = DomWindow()->GetFrame();
-  const ScreenInfo& screen_info = GetScreenInfo(*frame);
+  const display::ScreenInfo& screen_info = GetScreenInfo(*frame);
   if (frame->GetSettings()->GetReportScreenSizeInPhysicalPixelsQuirk()) {
     return static_cast<int>(
         lroundf(screen_info.rect.height() * screen_info.device_scale_factor));
@@ -71,7 +72,7 @@ int Screen::width() const {
   if (!DomWindow())
     return 0;
   LocalFrame* frame = DomWindow()->GetFrame();
-  const ScreenInfo& screen_info = GetScreenInfo(*frame);
+  const display::ScreenInfo& screen_info = GetScreenInfo(*frame);
   if (frame->GetSettings()->GetReportScreenSizeInPhysicalPixelsQuirk()) {
     return static_cast<int>(
         lroundf(screen_info.rect.width() * screen_info.device_scale_factor));
@@ -97,7 +98,7 @@ int Screen::availLeft() const {
   if (!DomWindow())
     return 0;
   LocalFrame* frame = DomWindow()->GetFrame();
-  const ScreenInfo& screen_info = GetScreenInfo(*frame);
+  const display::ScreenInfo& screen_info = GetScreenInfo(*frame);
   if (frame->GetSettings()->GetReportScreenSizeInPhysicalPixelsQuirk()) {
     return static_cast<int>(lroundf(screen_info.available_rect.x() *
                                     screen_info.device_scale_factor));
@@ -111,7 +112,7 @@ int Screen::availTop() const {
   if (!DomWindow())
     return 0;
   LocalFrame* frame = DomWindow()->GetFrame();
-  const ScreenInfo& screen_info = GetScreenInfo(*frame);
+  const display::ScreenInfo& screen_info = GetScreenInfo(*frame);
   if (frame->GetSettings()->GetReportScreenSizeInPhysicalPixelsQuirk()) {
     return static_cast<int>(lroundf(screen_info.available_rect.y() *
                                     screen_info.device_scale_factor));
@@ -125,7 +126,7 @@ int Screen::availHeight() const {
   if (!DomWindow())
     return 0;
   LocalFrame* frame = DomWindow()->GetFrame();
-  const ScreenInfo& screen_info = GetScreenInfo(*frame);
+  const display::ScreenInfo& screen_info = GetScreenInfo(*frame);
   if (frame->GetSettings()->GetReportScreenSizeInPhysicalPixelsQuirk()) {
     return static_cast<int>(lroundf(screen_info.available_rect.height() *
                                     screen_info.device_scale_factor));
@@ -139,7 +140,7 @@ int Screen::availWidth() const {
   if (!DomWindow())
     return 0;
   LocalFrame* frame = DomWindow()->GetFrame();
-  const ScreenInfo& screen_info = GetScreenInfo(*frame);
+  const display::ScreenInfo& screen_info = GetScreenInfo(*frame);
   if (frame->GetSettings()->GetReportScreenSizeInPhysicalPixelsQuirk()) {
     return static_cast<int>(lroundf(screen_info.available_rect.width() *
                                     screen_info.device_scale_factor));
@@ -165,6 +166,13 @@ bool Screen::isExtended() const {
   if (!DomWindow())
     return false;
   LocalFrame* frame = DomWindow()->GetFrame();
+
+  auto* context = GetExecutionContext();
+  if (!context->IsFeatureEnabled(
+          mojom::blink::PermissionsPolicyFeature::kWindowPlacement)) {
+    return false;
+  }
+
   return GetScreenInfo(*frame).is_extended;
 }
 
@@ -184,7 +192,7 @@ int Screen::left() const {
   if (!DomWindow())
     return 0;
   LocalFrame* frame = DomWindow()->GetFrame();
-  const ScreenInfo& screen_info = GetScreenInfo(*frame);
+  const display::ScreenInfo& screen_info = GetScreenInfo(*frame);
   if (frame->GetSettings()->GetReportScreenSizeInPhysicalPixelsQuirk()) {
     return static_cast<int>(
         lroundf(screen_info.rect.x() * screen_info.device_scale_factor));
@@ -198,7 +206,7 @@ int Screen::top() const {
   if (!DomWindow())
     return 0;
   LocalFrame* frame = DomWindow()->GetFrame();
-  const ScreenInfo& screen_info = GetScreenInfo(*frame);
+  const display::ScreenInfo& screen_info = GetScreenInfo(*frame);
   if (frame->GetSettings()->GetReportScreenSizeInPhysicalPixelsQuirk()) {
     return static_cast<int>(
         lroundf(screen_info.rect.y() * screen_info.device_scale_factor));
@@ -232,13 +240,13 @@ float Screen::scaleFactor() const {
   return GetScreenInfo(*DomWindow()->GetFrame()).device_scale_factor;
 }
 
-const String Screen::id() const {
+const String& Screen::id() const {
   if (display_)
     return id_;
   // TODO(crbug.com/1116528): Move permission-gated attributes to an interface
   // that inherits from Screen: https://github.com/webscreens/window-placement
   NOTIMPLEMENTED_LOG_ONCE();
-  return String();
+  return g_empty_string;
 }
 
 bool Screen::touchSupport() const {
@@ -255,7 +263,9 @@ bool Screen::touchSupport() const {
 int64_t Screen::DisplayId() const {
   if (display_)
     return display_->id;
-  return kInvalidDisplayId;
+  if (!DomWindow())
+    return kInvalidDisplayId;
+  return GetScreenInfo(*DomWindow()->GetFrame()).display_id;
 }
 
 }  // namespace blink

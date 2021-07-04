@@ -32,7 +32,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="WebAudio.AudioBuffer.NumberOfChannels" units="units"
-    expires_after="2021-07-06">
+    expires_after="2021-11-14">
   <owner>rtoy@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <summary>
@@ -42,7 +42,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="WebAudio.AudioBuffer.SampleRate384kHz" units="Hz"
-    expires_after="2021-08-22">
+    expires_after="2021-12-26">
   <owner>rtoy@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <summary>
@@ -52,7 +52,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="WebAudio.AudioBuffer.SampleRateRatio384kHz" units="units"
-    expires_after="2021-07-06">
+    expires_after="2021-10-25">
   <owner>rtoy@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <summary>
@@ -63,7 +63,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="WebAudio.AudioContext.HardwareSampleRate" units="Hz"
-    expires_after="2021-07-04">
+    expires_after="2021-09-05">
   <owner>rtoy@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <summary>
@@ -73,7 +73,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="WebAudio.AudioContext.latencyHintCategory" units="units"
-    expires_after="2021-06-30">
+    expires_after="2021-10-31">
   <owner>rtoy@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <summary>
@@ -86,7 +86,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="WebAudio.AudioContext.latencyHintMilliSeconds" units="ms"
-    expires_after="2021-06-30">
+    expires_after="2021-10-31">
   <owner>rtoy@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <summary>
@@ -97,7 +97,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="WebAudio.AudioContext.MaxChannelsAvailable" units="units"
-    expires_after="2021-07-06">
+    expires_after="2022-01-06">
   <owner>rtoy@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <summary>
@@ -130,7 +130,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="WebAudio.AudioDestination.CallbackBufferSize" units="units"
-    expires_after="2021-07-04">
+    expires_after="2021-09-05">
   <owner>rtoy@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <summary>
@@ -142,7 +142,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="WebAudio.AudioDestination.HardwareBufferSize" units="units"
-    expires_after="2021-08-09">
+    expires_after="2021-12-12">
   <owner>rtoy@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <summary>
@@ -153,10 +153,9 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram name="WebAudio.Autoplay" enum="WebAudioAutoplayStatus"
     expires_after="2021-08-09">
-  <owner>mlamouri@google.com</owner>
+  <owner>hongchan@chromium.org</owner>
   <owner>media-dev@chromium.org</owner>
   <owner>rtoy@chromium.org</owner>
-  <owner>hongchan@chromium.org</owner>
   <summary>
     The autoplay status of an AudioContext when destroyed. This include all
     types of frames. In order to know the value only for main frames, the
@@ -165,11 +164,10 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="WebAudio.Autoplay.CrossOrigin" enum="WebAudioAutoplayStatus"
-    expires_after="2021-08-01">
-  <owner>mlamouri@google.com</owner>
+    expires_after="2021-10-04">
+  <owner>hongchan@chromium.org</owner>
   <owner>media-dev@chromium.org</owner>
   <owner>rtoy@chromium.org</owner>
-  <owner>hongchan@chromium.org</owner>
   <summary>
     The autoplay status of an AudioContext when destroyed in a cross-origin
     frame.
@@ -178,10 +176,9 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram name="WebAudio.Autoplay.UnlockType"
     enum="WebAudioAutoplayUnlockType" expires_after="2021-06-01">
-  <owner>mlamouri@google.com</owner>
+  <owner>hongchan@chromium.org</owner>
   <owner>media-dev@chromium.org</owner>
   <owner>rtoy@chromium.org</owner>
-  <owner>hongchan@chromium.org</owner>
   <summary>
     Records how an AudioContext was unlocked (if it was). This is recorded when
     the AudioContext is destroyed.
@@ -189,7 +186,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="WebAudio.BiquadFilter.Type" enum="BiquadFilterType"
-    expires_after="2021-07-06">
+    expires_after="2022-01-06">
   <owner>rtoy@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <summary>
@@ -201,7 +198,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="WebAudio.ConvolverNode.ImpulseResponseLength" units="ms"
-    expires_after="2021-08-18">
+    expires_after="2021-12-19">
   <owner>rtoy@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <summary>
@@ -211,7 +208,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="WebAudio.IIRFilterNode.Order" units="units"
-    expires_after="2021-07-06">
+    expires_after="2022-01-06">
   <owner>rtoy@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <summary>
@@ -222,7 +219,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="WebAudio.OfflineAudioContext.ChannelCount" units="units"
-    expires_after="2021-07-06">
+    expires_after="2022-01-06">
   <obsolete>
     Removed 2021-01-12. See crbug.com/1165240.
   </obsolete>
@@ -264,7 +261,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="WebAudio.PannerNode.PanningModel" enum="PanningModelType"
-    expires_after="2021-07-06">
+    expires_after="2022-01-06">
   <owner>rtoy@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <summary>
@@ -277,7 +274,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="WebAudio.PushPullFIFO.UnderflowGlitches" enum="Boolean"
-    expires_after="2021-07-06">
+    expires_after="2022-01-06">
   <owner>rtoy@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <summary>
@@ -288,7 +285,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="WebAudio.PushPullFIFO.UnderflowPercentage" units="%"
-    expires_after="2021-07-06">
+    expires_after="2022-01-06">
   <owner>rtoy@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <summary>

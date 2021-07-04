@@ -22,14 +22,16 @@
 #include "base/threading/thread_task_runner_handle.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+using PressureLevel = chromeos::ResourcedClient::PressureLevel;
+
 namespace chromeos {
 namespace memory {
 
 namespace {
 
-// Processes OnMemoryPressure calls by just storing the sequence of events so we
+// Processes PressureCallback calls by just storing the sequence of events so we
 // can validate that we received the expected pressure levels as the test runs.
-void OnMemoryPressure(
+void PressureCallback(
     std::vector<base::MemoryPressureListener::MemoryPressureLevel>* history,
     base::MemoryPressureListener::MemoryPressureLevel level) {
   history->push_back(level);
@@ -40,16 +42,13 @@ void OnMemoryPressure(
 class TestSystemMemoryPressureEvaluator : public SystemMemoryPressureEvaluator {
  public:
   TestSystemMemoryPressureEvaluator(
-      bool disable_timer_for_testing,
+      bool for_testing,
       std::unique_ptr<util::MemoryPressureVoter> voter)
-      : SystemMemoryPressureEvaluator(disable_timer_for_testing,
-                                      std::move(voter)) {}
+      : SystemMemoryPressureEvaluator(for_testing, std::move(voter)) {}
 
-  void CheckMemoryPressureImpl(uint64_t moderate_avail_mb,
-                               uint64_t critical_avail_mb,
-                               uint64_t mem_avail_mb) {
-    SystemMemoryPressureEvaluator::CheckMemoryPressureImpl(
-        moderate_avail_mb, critical_avail_mb, mem_avail_mb);
+  void OnMemoryPressure(PressureLevel level,
+                        uint64_t reclaim_target_kb) override {
+    SystemMemoryPressureEvaluator::OnMemoryPressure(level, reclaim_target_kb);
   }
 
   ~TestSystemMemoryPressureEvaluator() override = default;
@@ -59,9 +58,6 @@ class TestSystemMemoryPressureEvaluator : public SystemMemoryPressureEvaluator {
 };
 
 TEST(ChromeOSSystemMemoryPressureEvaluatorTest, CheckMemoryPressure) {
-  uint64_t moderate_avail_mb = 1000;
-  uint64_t critical_avail_mb = 500;
-
   base::test::TaskEnvironment task_environment(
       base::test::TaskEnvironment::MainThreadType::UI);
 
@@ -72,45 +68,44 @@ TEST(ChromeOSSystemMemoryPressureEvaluatorTest, CheckMemoryPressure) {
   std::vector<base::MemoryPressureListener::MemoryPressureLevel>
       pressure_events;
   auto listener = std::make_unique<base::MemoryPressureListener>(
-      FROM_HERE, base::BindRepeating(&OnMemoryPressure, &pressure_events));
+      FROM_HERE, base::BindRepeating(&PressureCallback, &pressure_events));
 
   util::MultiSourceMemoryPressureMonitor monitor;
   monitor.ResetSystemEvaluatorForTesting();
 
   auto evaluator = std::make_unique<TestSystemMemoryPressureEvaluator>(
-      /*disable_timer_for_testing=*/true, monitor.CreateVoter());
+      /*for_testing=*/true, monitor.CreateVoter());
 
   // At this point we have no memory pressure.
   ASSERT_EQ(base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_NONE,
             evaluator->current_vote());
 
   // Moderate Pressure.
-  evaluator->CheckMemoryPressureImpl(moderate_avail_mb, critical_avail_mb, 900);
+  evaluator->OnMemoryPressure(PressureLevel::MODERATE, 1000);
   base::RunLoop().RunUntilIdle();
   ASSERT_EQ(base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE,
             evaluator->current_vote());
 
   // Critical Pressure.
-  evaluator->CheckMemoryPressureImpl(moderate_avail_mb, critical_avail_mb, 450);
+  evaluator->OnMemoryPressure(PressureLevel::CRITICAL, 1000);
   base::RunLoop().RunUntilIdle();
   ASSERT_EQ(base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_CRITICAL,
             evaluator->current_vote());
 
   // Moderate Pressure.
-  evaluator->CheckMemoryPressureImpl(moderate_avail_mb, critical_avail_mb, 550);
+  evaluator->OnMemoryPressure(PressureLevel::MODERATE, 1000);
   base::RunLoop().RunUntilIdle();
   ASSERT_EQ(base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE,
             evaluator->current_vote());
 
   // No pressure, note: this will not cause any event.
-  evaluator->CheckMemoryPressureImpl(moderate_avail_mb, critical_avail_mb,
-                                     1150);
+  evaluator->OnMemoryPressure(PressureLevel::NONE, 0);
   base::RunLoop().RunUntilIdle();
   ASSERT_EQ(base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_NONE,
             evaluator->current_vote());
 
   // Back into moderate.
-  evaluator->CheckMemoryPressureImpl(moderate_avail_mb, critical_avail_mb, 950);
+  evaluator->OnMemoryPressure(PressureLevel::MODERATE, 1000);
   base::RunLoop().RunUntilIdle();
   ASSERT_EQ(base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE,
             evaluator->current_vote());

@@ -39,27 +39,22 @@ Polymer({
     },
 
     /**
-     * Text key of the next button.
-     */
-    nextButtonKey_: {
-      type: String,
-      value: 'next',
-    },
-
-    /**
-     * Text key of the skip button.
-     */
-    skipButtonKey_: {
-      type: String,
-      value: 'assistantOptinSkipButton',
-    },
-
-    /**
      * Whether activity control consent is skipped.
      */
     skipActivityControl_: {
       type: Boolean,
       value: false,
+    },
+
+    /**
+     * Indicates whether user is minor mode user (e.g. under age of 18).
+     */
+    isMinorMode_: {
+      type: Boolean,
+      value() {
+        return loadTimeData.valueExists('isMinorMode') &&
+            loadTimeData.getBoolean('isMinorMode');
+      }
     },
   },
 
@@ -234,12 +229,8 @@ Polymer({
   reloadContent(data) {
     if (data['activityControlNeeded']) {
       this.titleKey_ = 'assistantRelatedInfoTitle';
-      this.nextButtonKey_ = 'next';
-      this.skipButtonKey_ = 'assistantOptinSkipButton';
     } else {
       this.titleKey_ = 'assistantRelatedInfoReturnedUserTitle';
-      this.nextButtonKey_ = 'assistantOptinAgreeButton';
-      this.skipButtonKey_ = 'assistantOptinNoThanksButton';
     }
     this.skipActivityControl_ = !data['activityControlNeeded'];
     this.$.zippy.setAttribute(
@@ -301,5 +292,12 @@ Polymer({
    */
   getDefaultAnimationUrl_() {
     return this.urlTemplate_.replace('$', 'en_us');
+  },
+
+  /**
+   * Returns the webview animation container.
+   */
+  getAnimationContainer() {
+    return this.$['animation-container'];
   },
 });

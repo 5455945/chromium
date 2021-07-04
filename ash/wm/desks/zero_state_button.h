@@ -20,7 +20,8 @@ class ASH_EXPORT DeskButtonBase
     : public views::LabelButton,
       public OverviewHighlightController::OverviewHighlightableView {
  public:
-  DeskButtonBase(const base::string16& text,
+  explicit DeskButtonBase(const std::u16string& text);
+  DeskButtonBase(const std::u16string& text,
                  int border_corder_radius,
                  int corner_radius);
   ~DeskButtonBase() override = default;
@@ -28,10 +29,6 @@ class ASH_EXPORT DeskButtonBase
   // LabelButton:
   const char* GetClassName() const override;
   void OnPaintBackground(gfx::Canvas* canvas) override;
-  std::unique_ptr<views::InkDrop> CreateInkDrop() override;
-  std::unique_ptr<views::InkDropHighlight> CreateInkDropHighlight()
-      const override;
-  SkColor GetInkDropBaseColor() const override;
   void OnThemeChanged() override;
 
   // OverviewHighlightController::OverviewHighlightableView:
@@ -48,17 +45,19 @@ class ASH_EXPORT DeskButtonBase
   // showing the desk's name, which should be updated on desk name changes.
   virtual void UpdateLabelText() {}
 
-  SkColor GetBackgroundColorForTesting() const { return background_color_; }
+  // Sets `should_paint_background_` and repaints the button so that the button
+  // may or may not have the background.
+  void SetShouldPaintBackground(bool should_paint_background);
 
  protected:
   virtual void OnButtonPressed() = 0;
 
   SkColor background_color_;
 
-  // If true, paints the button with the background of |background_color_|. The
+  // If true, paints a background of the button with `background_color_`. The
   // button is painted with the background by default, exception like
   // ZeroStateNewDeskButton only wants to be painted when the mouse hovers.
-  bool highlight_on_hover_ = true;
+  bool should_paint_background_ = true;
 
   // Paints the background within the button's bounds by default. But if true,
   // paints the contents' bounds of the button only. For example,
@@ -67,6 +66,8 @@ class ASH_EXPORT DeskButtonBase
   bool paint_contents_only_ = false;
 
  private:
+  friend class DesksTestApi;
+
   void UpdateBorderState();
 
   // Owned by this View via `View::border_`. This is just a convenient pointer
@@ -108,7 +109,7 @@ class ASH_EXPORT ZeroStateDefaultDeskButton : public DeskButtonBase {
 // ExpandedStateNewDeskButton.
 class ASH_EXPORT ZeroStateNewDeskButton : public DeskButtonBase {
  public:
-  ZeroStateNewDeskButton();
+  ZeroStateNewDeskButton(DesksBarView* bar_view);
   ZeroStateNewDeskButton(const ZeroStateNewDeskButton&) = delete;
   ZeroStateNewDeskButton& operator=(const ZeroStateNewDeskButton&) = delete;
   ~ZeroStateNewDeskButton() override = default;
@@ -122,6 +123,9 @@ class ASH_EXPORT ZeroStateNewDeskButton : public DeskButtonBase {
   // views::Button:
   void OnMouseEntered(const ui::MouseEvent& event) override;
   void OnMouseExited(const ui::MouseEvent& event) override;
+
+ private:
+  DesksBarView* bar_view_;
 };
 
 }  // namespace ash

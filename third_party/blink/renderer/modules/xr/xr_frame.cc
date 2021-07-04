@@ -43,6 +43,15 @@ const char kSpacesSequenceTooLarge[] =
 
 const char kMismatchedBufferSizes[] = "Buffer sizes must be equal";
 
+absl::optional<uint64_t> GetPlaneId(
+    const device::mojom::blink::XRNativeOriginInformation& native_origin) {
+  if (native_origin.is_plane_id()) {
+    return native_origin.get_plane_id();
+  }
+
+  return absl::nullopt;
+}
+
 }  // namespace
 
 constexpr char XRFrame::kInactiveFrame[];
@@ -53,8 +62,11 @@ XRFrame::XRFrame(XRSession* session, bool is_animation_frame)
 
 XRViewerPose* XRFrame::getViewerPose(XRReferenceSpace* reference_space,
                                      ExceptionState& exception_state) {
+  DCHECK(reference_space);
+
   DVLOG(3) << __func__ << ": is_active_=" << is_active_
-           << ", is_animation_frame_=" << is_animation_frame_;
+           << ", is_animation_frame_=" << is_animation_frame_
+           << ", reference_space->ToString()=" << reference_space->ToString();
 
   if (!is_active_) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
@@ -65,11 +77,6 @@ XRViewerPose* XRFrame::getViewerPose(XRReferenceSpace* reference_space,
   if (!is_animation_frame_) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       kNonAnimationFrame);
-    return nullptr;
-  }
-
-  if (!reference_space) {
-    DVLOG(1) << __func__ << ": reference space not present, returning null";
     return nullptr;
   }
 
@@ -87,7 +94,8 @@ XRViewerPose* XRFrame::getViewerPose(XRReferenceSpace* reference_space,
 
   session_->LogGetPose();
 
-  base::Optional<TransformationMatrix> offset_space_from_viewer =
+  device::mojom::blink::XRReferenceSpaceType type = reference_space->GetType();
+  absl::optional<TransformationMatrix> offset_space_from_viewer =
       reference_space->OffsetFromViewer();
 
   // Can only update an XRViewerPose's views with an invertible matrix.
@@ -99,7 +107,13 @@ XRViewerPose* XRFrame::getViewerPose(XRReferenceSpace* reference_space,
     return nullptr;
   }
 
-  return MakeGarbageCollected<XRViewerPose>(this, *offset_space_from_viewer);
+  // If the |reference_space| type is kViewer, we know that the pose is not
+  // emulated. Otherwise, ask the session if the poses are emulated or not.
+  return MakeGarbageCollected<XRViewerPose>(
+      this, *offset_space_from_viewer,
+      (type == device::mojom::blink::XRReferenceSpaceType::kViewer)
+          ? false
+          : session_->EmulatedPosition());
 }
 
 XRAnchorSet* XRFrame::trackedAnchors() const {
@@ -108,15 +122,6 @@ XRAnchorSet* XRFrame::trackedAnchors() const {
 
 XRPlaneSet* XRFrame::detectedPlanes(ExceptionState& exception_state) const {
   DVLOG(3) << __func__;
-
-  if (!session_->IsFeatureEnabled(
-          device::mojom::XRSessionFeature::PLANE_DETECTION)) {
-    DVLOG(2) << __func__
-             << ": plane detection feature not enabled on a session";
-    exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
-                                      XRSession::kPlanesFeatureNotSupported);
-    return {};
-  }
 
   if (!is_active_) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
@@ -199,17 +204,16 @@ XRCPUDepthInformation* XRFrame::getDepthInformation(
 XRPose* XRFrame::getPose(XRSpace* space,
                          XRSpace* basespace,
                          ExceptionState& exception_state) {
-  DVLOG(2) << __func__;
+  DCHECK(space);
+  DCHECK(basespace);
+
+  DVLOG(2) << __func__ << ": is_active=" << is_active_
+           << ", space->ToString()=" << space->ToString()
+           << ", basespace->ToString()=" << basespace->ToString();
 
   if (!is_active_) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       kInactiveFrame);
-    return nullptr;
-  }
-
-  if (!space || !basespace) {
-    DVLOG(2) << __func__ << " : space or basespace is null, space =" << space
-             << ", basespace = " << basespace;
     return nullptr;
   }
 
@@ -228,6 +232,26 @@ XRPose* XRFrame::getPose(XRSpace* space,
   if (!session_->CanReportPoses()) {
     exception_state.ThrowSecurityError(kCannotReportPoses);
     return nullptr;
+  }
+
+  // If the addresses match, the pose between the spaces is definitely an
+  // identity & we can skip the rest of the logic. The pose is not emulated.
+  if (space == basespace) {
+    DVLOG(3) << __func__ << ": addresses match, returning identity";
+    return MakeGarbageCollected<XRPose>(TransformationMatrix{}, false);
+  }
+
+  // If the native origins match, the pose between the spaces is fixed and
+  // depends only on their offsets from the same native origin - we can compute
+  // it here and skip the rest of the logic. The pose is not emulated.
+  if (space->NativeOrigin() == basespace->NativeOrigin()) {
+    DVLOG(3) << __func__
+             << ": native origins match, returning a pose based on offesets";
+    auto basespace_from_native_origin = basespace->OffsetFromNativeMatrix();
+    auto native_origin_from_space = space->NativeFromOffsetMatrix();
+
+    return MakeGarbageCollected<XRPose>(
+        basespace_from_native_origin * native_origin_from_space, false);
   }
 
   return space->getPose(basespace);
@@ -307,8 +331,8 @@ ScriptPromise XRFrame::createAnchor(ScriptState* script_state,
     return {};
   }
 
-  base::Optional<device::mojom::blink::XRNativeOriginInformation>
-      maybe_native_origin = space->NativeOrigin();
+  device::mojom::blink::XRNativeOriginInformationPtr maybe_native_origin =
+      space->NativeOrigin();
   if (!maybe_native_origin) {
     DVLOG(2) << __func__ << ": native origin not set, failing anchor creation";
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
@@ -317,6 +341,7 @@ ScriptPromise XRFrame::createAnchor(ScriptState* script_state,
   }
 
   DVLOG(3) << __func__ << ": space->ToString()=" << space->ToString();
+  auto maybe_plane_id = GetPlaneId(*maybe_native_origin);
 
   // The passed in space may be an offset space, we need to transform the pose
   // to account for origin-offset:
@@ -335,23 +360,26 @@ ScriptPromise XRFrame::createAnchor(ScriptState* script_state,
   if (space->IsStationary()) {
     // Space is considered stationary, no adjustments are needed.
     return session_->CreateAnchorHelper(script_state, native_origin_from_anchor,
-                                        *maybe_native_origin, exception_state);
+                                        maybe_native_origin, maybe_plane_id,
+                                        exception_state);
   }
 
-  return CreateAnchorFromNonStationarySpace(
-      script_state, native_origin_from_anchor, space, exception_state);
+  return CreateAnchorFromNonStationarySpace(script_state,
+                                            native_origin_from_anchor, space,
+                                            maybe_plane_id, exception_state);
 }
 
 ScriptPromise XRFrame::CreateAnchorFromNonStationarySpace(
     ScriptState* script_state,
     const blink::TransformationMatrix& native_origin_from_anchor,
     XRSpace* space,
+    absl::optional<uint64_t> maybe_plane_id,
     ExceptionState& exception_state) {
   DVLOG(2) << __func__;
 
   // Space is not considered stationary - need to adjust the app-provided pose.
   // Let's ask the session about the appropriate stationary reference space:
-  base::Optional<XRSession::ReferenceSpaceInformation>
+  absl::optional<XRSession::ReferenceSpaceInformation>
       reference_space_information = session_->GetStationaryReferenceSpace();
 
   if (!reference_space_information) {
@@ -386,7 +414,8 @@ ScriptPromise XRFrame::CreateAnchorFromNonStationarySpace(
   // Conversion done, make the adjusted call:
   return session_->CreateAnchorHelper(
       script_state, stationary_space_from_anchor,
-      reference_space_information->native_origin, exception_state);
+      reference_space_information->native_origin, maybe_plane_id,
+      exception_state);
 }
 
 HeapVector<Member<XRImageTrackingResult>> XRFrame::getImageTrackingResults(

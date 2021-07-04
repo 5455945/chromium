@@ -8,10 +8,12 @@
 #include "ash/public/cpp/network_config_service.h"
 #include "ash/public/cpp/notification_utils.h"
 #include "ash/public/cpp/system_tray_client.h"
+#include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/system/model/system_tray_model.h"
+#include "base/bind.h"
 #include "base/timer/timer.h"
 #include "components/onc/onc_constants.h"
 #include "components/prefs/pref_registry_simple.h"
@@ -176,14 +178,14 @@ void CellularSetupNotifier::ShowCellularSetupNotification() {
               IDS_ASH_NETWORK_CELLULAR_SETUP_NOTIFICATION_TITLE),
           l10n_util::GetStringUTF16(
               IDS_ASH_NETWORK_CELLULAR_SETUP_NOTIFICATION_MESSAGE),
-          /*display_source=*/base::string16(), GURL(),
+          /*display_source=*/std::u16string(), GURL(),
           message_center::NotifierId(
               message_center::NotifierType::SYSTEM_COMPONENT,
               kNotifierCellularSetup),
           message_center::RichNotificationData(),
           base::MakeRefCounted<message_center::HandleNotificationClickDelegate>(
               base::BindRepeating(&OnCellularSetupNotificationClicked)),
-          vector_icons::kAddCellularNetworkIcon,
+          kAddCellularNetworkIcon,
           message_center::SystemNotificationWarningLevel::NORMAL);
 
   message_center::MessageCenter* message_center =

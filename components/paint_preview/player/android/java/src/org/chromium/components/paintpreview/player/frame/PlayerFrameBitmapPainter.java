@@ -13,6 +13,8 @@ import android.util.Size;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import org.chromium.base.TraceEvent;
+
 import java.util.HashSet;
 import java.util.Set;
 
@@ -49,6 +51,10 @@ class PlayerFrameBitmapPainter {
      * to keep {@link onDraw(Canvas)} performant.
      */
     private Set<CompressibleBitmap> mInflatedBitmaps = new HashSet<>();
+    /**
+     * Keeps track of which bitmaps are locked.
+     */
+    private Set<CompressibleBitmap> mLockedBitmaps = new HashSet<>();
 
     PlayerFrameBitmapPainter(@NonNull Runnable invalidateCallback,
             @Nullable Runnable firstPaintListener) {
@@ -79,6 +85,7 @@ class PlayerFrameBitmapPainter {
         if (mViewPort.isEmpty()) return;
 
         if (mTileSize.getWidth() <= 0 || mTileSize.getHeight() <= 0) return;
+        TraceEvent.begin("PlayerFrameBitmapPainter.onDraw");
 
         final int rowStart = mViewPort.top / mTileSize.getHeight();
         int rowEnd = (int) Math.ceil((double) mViewPort.bottom / mTileSize.getHeight());
@@ -88,24 +95,26 @@ class PlayerFrameBitmapPainter {
         rowEnd = Math.min(rowEnd, mBitmapMatrix.length);
         colEnd = Math.min(colEnd, rowEnd >= 1 ? mBitmapMatrix[rowEnd - 1].length : 0);
 
-        mInflatingBitmaps.clear();
         mBitmapsToKeep.clear();
+        boolean needsInvalidate = false;
         for (int row = rowStart; row < rowEnd; row++) {
             for (int col = colStart; col < colEnd; col++) {
                 CompressibleBitmap compressibleBitmap = mBitmapMatrix[row][col];
                 if (compressibleBitmap == null) continue;
                 mBitmapsToKeep.add(compressibleBitmap);
 
-                if (!compressibleBitmap.lock()) {
+                if (!mLockedBitmaps.contains(compressibleBitmap) && !compressibleBitmap.lock()) {
                     // Re-issue an invalidation on the chance access was blocked due to being
                     // discarded.
-                    mHandler.post(mInvalidateCallback);
+                    needsInvalidate = true;
                     continue;
                 }
+                mLockedBitmaps.add(compressibleBitmap);
+
+                if (mInflatingBitmaps.contains(compressibleBitmap)) continue;
 
                 Bitmap tileBitmap = compressibleBitmap.getBitmap();
                 if (tileBitmap == null) {
-                    compressibleBitmap.unlock();
                     mInflatingBitmaps.add(compressibleBitmap);
                     compressibleBitmap.inflateInBackground(inflatedBitmap -> {
                         final boolean inflated = inflatedBitmap.getBitmap() != null;
@@ -116,9 +125,7 @@ class PlayerFrameBitmapPainter {
                                 mInflatedBitmaps.add(inflatedBitmap);
                             }
                             mInflatingBitmaps.remove(inflatedBitmap);
-                            if (mInflatingBitmaps.isEmpty()) {
-                                mInvalidateCallback.run();
-                            }
+                            mInvalidateCallback.run();
                         });
                     });
                     continue;
@@ -143,7 +150,6 @@ class PlayerFrameBitmapPainter {
                 mDrawBitmapDst.set(canvasLeft, canvasTop, canvasRight, canvasBottom);
 
                 canvas.drawBitmap(tileBitmap, mDrawBitmapSrc, mDrawBitmapDst, null);
-                compressibleBitmap.unlock();
                 if (mFirstPaintListener != null) {
                     mFirstPaintListener.run();
                     mFirstPaintListener = null;
@@ -152,10 +158,16 @@ class PlayerFrameBitmapPainter {
         }
         for (CompressibleBitmap inflatedBitmap : mInflatedBitmaps) {
             if (mBitmapsToKeep.contains(inflatedBitmap)) continue;
+            mLockedBitmaps.remove(inflatedBitmap);
+            inflatedBitmap.unlock();
 
             inflatedBitmap.discardBitmap();
         }
         mInflatedBitmaps.clear();
         mInflatedBitmaps.addAll(mBitmapsToKeep);
+        if (needsInvalidate) {
+            mHandler.post(mInvalidateCallback);
+        }
+        TraceEvent.end("PlayerFrameBitmapPainter.onDraw");
     }
 }

@@ -53,7 +53,7 @@
 
 #include "third_party/blink/renderer/core/html/html_document.h"
 
-#include "base/stl_util.h"
+#include "base/cxx17_backports.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_controller.h"
 #include "third_party/blink/renderer/bindings/core/v8/window_proxy.h"
 #include "third_party/blink/renderer/core/dom/document_init.h"
@@ -66,7 +66,7 @@ HTMLDocument::HTMLDocument(const DocumentInit& initializer,
                            DocumentClassFlags extended_document_classes)
     : Document(initializer, kHTMLDocumentClass | extended_document_classes) {
   ClearXMLVersion();
-  if (IsSrcdocDocument() || initializer.ImportsController()) {
+  if (IsSrcdocDocument()) {
     DCHECK(InNoQuirksMode());
     LockCompatibilityMode();
   }

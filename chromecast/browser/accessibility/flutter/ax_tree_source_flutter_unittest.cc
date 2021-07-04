@@ -6,6 +6,8 @@
 
 #include <string>
 
+#include "base/unguessable_token.h"
+#include "base/util/values/values_util.h"
 #include "chromecast/browser/accessibility/flutter/flutter_semantics_node_wrapper.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/tts_controller.h"
@@ -69,6 +71,7 @@ class MockTtsPlatformImpl : public TtsPlatform {
   const std::string& GetLastSpokenUtterance() { return last_spoken_utterance_; }
   void ClearLastSpokenUtterance() { last_spoken_utterance_ = ""; }
   void Shutdown() override {}
+  bool PreferEngineDelegateVoices() override { return false; }
 
  private:
   std::vector<VoiceData> voices_;
@@ -96,11 +99,16 @@ class MockAutomationEventRouter
     : public extensions::AutomationEventRouterInterface {
  public:
   MockAutomationEventRouter() {}
-  ~MockAutomationEventRouter() override = default;
-  void DispatchAccessibilityEvents(
-      const ExtensionMsg_AccessibilityEventBundleParams& events) override {
-    for (const auto& event : events.events)
+  virtual ~MockAutomationEventRouter() = default;
+
+  void DispatchAccessibilityEvents(const ui::AXTreeID& tree_id,
+                                   std::vector<ui::AXTreeUpdate> updates,
+                                   const gfx::Point& mouse_location,
+                                   std::vector<ui::AXEvent> events) {
+    for (const auto& event : events)
       event_count_[event.event_type]++;
+
+    last_updates_ = updates;
   }
   MOCK_METHOD(void,
               DispatchAccessibilityLocationChange,
@@ -114,7 +122,12 @@ class MockAutomationEventRouter
               DispatchActionResult,
               (const ui::AXActionData&, bool, content::BrowserContext*),
               (override));
+  void DispatchGetTextLocationDataResult(
+      const ui::AXActionData& data,
+      const absl::optional<gfx::Rect>& rect) override {}
+
   std::map<ax::mojom::Event, int> event_count_;
+  std::vector<ui::AXTreeUpdate> last_updates_;
 };
 
 class AXTreeSourceFlutterTest : public testing::Test,
@@ -173,11 +186,72 @@ class AXTreeSourceFlutterTest : public testing::Test,
     return router_.event_count_[type];
   }
 
+  const std::vector<ui::AXTreeUpdate>& GetLastUpdates() {
+    return router_.last_updates_;
+  }
+
   void SetRect(Rect* rect, int left, int top, int right, int bottom) {
     rect->set_left(left);
     rect->set_top(top);
     rect->set_right(right);
     rect->set_bottom(bottom);
+  }
+
+  void ReparentHelperInitial() {
+    OnAccessibilityEventRequest event;
+    event.set_source_id(0);
+    event.set_window_id(1);
+    event.set_event_type(OnAccessibilityEventRequest_EventType_FOCUSED);
+
+    //     0
+    //    / \
+    //   1   2
+    //        \
+    //         3
+    SemanticsNode* root = event.add_node_data();
+    SemanticsNode* child1 = event.add_node_data();
+    SemanticsNode* child2 = event.add_node_data();
+    SemanticsNode* child3 = event.add_node_data();
+    root->set_node_id(0);
+    root->add_child_node_ids(1);
+    root->add_child_node_ids(2);
+    child1->set_node_id(1);
+    child2->set_node_id(2);
+    child2->add_child_node_ids(3);
+    child3->set_node_id(3);
+
+    // Populate the tree source with the data.
+    CallNotifyAccessibilityEvent(&event);
+    EXPECT_EQ(1, GetDispatchedEventCount(ax::mojom::Event::kFocus));
+  }
+
+  void ReparentHelperUpdate() {
+    OnAccessibilityEventRequest event;
+    event.set_source_id(0);
+    event.set_window_id(1);
+    event.set_event_type(OnAccessibilityEventRequest_EventType_FOCUSED);
+
+    // We are going to reparent child 3
+    //     0
+    //    / \
+    //   1   4
+    //        \
+    //         3
+    SemanticsNode* root = event.add_node_data();
+    SemanticsNode* child1 = event.add_node_data();
+    SemanticsNode* child4 = event.add_node_data();
+    SemanticsNode* child3 = event.add_node_data();
+    root->set_node_id(0);
+    root->add_child_node_ids(1);
+    root->add_child_node_ids(4);
+    child1->set_node_id(1);
+    child4->set_node_id(4);
+    child4->add_child_node_ids(3);
+    child3->set_node_id(3);
+
+    // Populate the tree source with the data.
+    CallNotifyAccessibilityEvent(&event);
+    EXPECT_EQ(3, GetDispatchedEventCount(ax::mojom::Event::kFocus));
   }
 
   SemanticsNode* AddChild(OnAccessibilityEventRequest* event,
@@ -207,8 +281,15 @@ class AXTreeSourceFlutterTest : public testing::Test,
     return new_node;
   }
 
+  gfx::Rect GetVirtualKeyboardBounds() const {
+    return virtual_keyboard_bounds_;
+  }
+
  private:
   void OnAction(const ui::AXActionData& data) override {}
+  void OnVirtualKeyboardBoundsChange(const gfx::Rect& bounds) override {
+    virtual_keyboard_bounds_ = bounds;
+  }
 
   // Required for the TestBrowserContext.
   content::BrowserTaskEnvironment task_environment_;
@@ -217,6 +298,7 @@ class AXTreeSourceFlutterTest : public testing::Test,
   std::unique_ptr<AXTreeSourceFlutter> tree_;
   content::MockContentBrowserClient mock_content_browser_client_;
   content::MockContentClient client_;
+  gfx::Rect virtual_keyboard_bounds_;
 };
 
 TEST_F(AXTreeSourceFlutterTest, AccessibleNameComputation) {
@@ -460,7 +542,12 @@ TEST_F(AXTreeSourceFlutterTest, ResetFocus) {
   child = AddChild(&event2, root2, 2, 0, 0, 400, 600, false);
   child = AddChild(&event2, root2, 3, 400, 0, 400, 600, false);
   child = AddChild(&event2, root2, 4, 0, 0, 200, 200, false);
-  child->set_plugin_id("1234");
+
+  // We need a plugin id that is the right length. Here we use
+  base::UnguessableToken token = base::UnguessableToken::Create();
+  std::string token_to_string =
+      util::UnguessableTokenToValue(token).GetString();
+  child->set_plugin_id(token_to_string);
 
   // focus should move to node with child tree
   CallNotifyAccessibilityEvent(&event2);
@@ -778,6 +865,75 @@ TEST_F(AXTreeSourceFlutterTest, Announce) {
 
   // Cleanup since the mock will expire at the end of this test.
   tts_controller->SetTtsPlatform(content::TtsPlatform::GetInstance());
+}
+
+TEST_F(AXTreeSourceFlutterTest, KeyboardBounds) {
+  OnAccessibilityEventRequest event;
+  event.set_source_id(1);
+  event.set_window_id(1);
+  event.set_event_type(OnAccessibilityEventRequest_EventType_FOCUSED);
+
+  SemanticsNode* root = event.add_node_data();
+  root->set_node_id(10);
+  root->add_child_node_ids(1);
+  root->add_child_node_ids(2);
+
+  // Add child nodes.
+  SemanticsNode* node1 = event.add_node_data();
+  node1->set_node_id(1);
+  node1->set_label("text 1");
+  Rect* bounds1 = node1->mutable_bounds_in_screen();
+  SetRect(bounds1, 0, 0, 320, 200);
+
+  SemanticsNode* node2 = event.add_node_data();
+  node2->set_node_id(2);
+  node2->set_label("text 2");
+  Rect* bounds2 = node2->mutable_bounds_in_screen();
+  SetRect(bounds2, 320, 200, 640, 400);
+
+  // No keyboard nodes.
+  CallNotifyAccessibilityEvent(&event);
+  EXPECT_EQ(gfx::Rect(), GetVirtualKeyboardBounds());
+
+  // node 1 and node 2 are keyboard nodes.
+  BooleanProperties* boolean_properties;
+  boolean_properties = node1->mutable_boolean_properties();
+  boolean_properties->set_is_lift_to_type(true);
+  boolean_properties = node2->mutable_boolean_properties();
+  boolean_properties->set_is_lift_to_type(true);
+  CallNotifyAccessibilityEvent(&event);
+  EXPECT_EQ(gfx::Rect(0, 0, 640, 400), GetVirtualKeyboardBounds());
+}
+
+// b/190749275 - Repro crash due to pointers to event
+// data that went out of scope still held on to by
+// the tree source. Triggered by reparenting children with
+// empty update in between updates.
+TEST_F(AXTreeSourceFlutterTest, ReparentedChildren) {
+  // Send in the initial tree.
+  ReparentHelperInitial();
+
+  // Send an empty update.
+  OnAccessibilityEventRequest event;
+  event.set_source_id(0);
+  event.set_window_id(1);
+  event.set_event_type(OnAccessibilityEventRequest_EventType_FOCUSED);
+  CallNotifyAccessibilityEvent(&event);
+  EXPECT_EQ(2, GetDispatchedEventCount(ax::mojom::Event::kFocus));
+
+  // Reparent node 3.
+  ReparentHelperUpdate();
+
+  // There should be an extra update from the one notification
+  // we just did in which child 3 should not appear.
+  const std::vector<ui::AXTreeUpdate>& last_updates = GetLastUpdates();
+  EXPECT_EQ(2ul, last_updates.size());
+
+  // Make sure child 3 has disappeared in the first update.
+  const ui::AXTreeUpdate& first_update = last_updates[0];
+  for (const auto& node : first_update.nodes) {
+    EXPECT_NE(3, node.id);
+  }
 }
 
 }  // namespace accessibility

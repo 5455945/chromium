@@ -54,10 +54,6 @@ bool ModulatorImplBase::IsScriptingDisabled() const {
   return !GetExecutionContext()->CanExecuteScripts(kAboutToExecuteScript);
 }
 
-bool ModulatorImplBase::ImportMapsEnabled() const {
-  return RuntimeEnabledFeatures::ImportMapsEnabled(GetExecutionContext());
-}
-
 mojom::blink::V8CacheOptions ModulatorImplBase::GetV8CacheOptions() const {
   return GetExecutionContext()->GetV8CacheOptions();
 }
@@ -75,10 +71,9 @@ void ModulatorImplBase::FetchTree(
     const ScriptFetchOptions& options,
     ModuleScriptCustomFetchType custom_fetch_type,
     ModuleTreeClient* client) {
-  ModuleTreeLinker::Fetch(url, module_type,
-                          fetch_client_settings_object_fetcher, context_type,
-                          destination, options, this, custom_fetch_type,
-                          tree_linker_registry_, client);
+  tree_linker_registry_->Fetch(
+      url, module_type, fetch_client_settings_object_fetcher, context_type,
+      destination, options, this, custom_fetch_type, client);
 }
 
 void ModulatorImplBase::FetchDescendantsForInlineScript(
@@ -87,10 +82,9 @@ void ModulatorImplBase::FetchDescendantsForInlineScript(
     mojom::blink::RequestContextType context_type,
     network::mojom::RequestDestination destination,
     ModuleTreeClient* client) {
-  ModuleTreeLinker::FetchDescendantsForInlineScript(
+  tree_linker_registry_->FetchDescendantsForInlineScript(
       module_script, fetch_client_settings_object_fetcher, context_type,
-      destination, this, ModuleScriptCustomFetchType::kNone,
-      tree_linker_registry_, client);
+      destination, this, ModuleScriptCustomFetchType::kNone, client);
 }
 
 void ModulatorImplBase::FetchSingle(
@@ -129,7 +123,7 @@ KURL ModulatorImplBase::ResolveModuleSpecifier(const String& specifier,
   // errors, but should be supressed (i.e. |logger| should be null) in normal
   // cases.
 
-  base::Optional<KURL> mapped_url;
+  absl::optional<KURL> mapped_url;
   if (import_map_) {
     String import_map_debug_message;
     mapped_url = import_map_->Resolve(parsed_specifier, base_url,
@@ -194,7 +188,6 @@ ScriptValue ModulatorImplBase::CreateSyntaxError(const String& message) const {
 void ModulatorImplBase::RegisterImportMap(const ImportMap* import_map,
                                           ScriptValue error_to_rethrow) {
   DCHECK(import_map);
-  DCHECK(ImportMapsEnabled());
 
   // <spec step="7">If import map parse result’s error to rethrow is not null,
   // then:</spec>
@@ -270,12 +263,6 @@ ScriptValue ModulatorImplBase::InstantiateModule(
   return ModuleRecord::Instantiate(script_state_, module_record, source_url);
 }
 
-Vector<ModuleRequest> ModulatorImplBase::ModuleRequestsFromModuleRecord(
-    v8::Local<v8::Module> module_record) {
-  ScriptState::Scope scope(script_state_);
-  return ModuleRecord::ModuleRequests(script_state_, module_record);
-}
-
 ModuleType ModulatorImplBase::ModuleTypeFromRequest(
     const ModuleRequest& module_request) const {
   String module_type_string = module_request.GetModuleTypeString();
@@ -328,13 +315,13 @@ void ModulatorImplBase::ProduceCacheModuleTree(
   module_script->ProduceCache();
 
   Vector<ModuleRequest> child_specifiers =
-      ModuleRequestsFromModuleRecord(record);
+      ModuleRecord::ModuleRequests(GetScriptState(), record);
 
   for (const auto& module_request : child_specifiers) {
     KURL child_url =
         module_script->ResolveModuleSpecifier(module_request.specifier);
 
-    ModuleType child_module_type = this->ModuleTypeFromRequest(module_request);
+    ModuleType child_module_type = ModuleTypeFromRequest(module_request);
     CHECK_NE(child_module_type, ModuleType::kInvalid);
 
     CHECK(child_url.IsValid())

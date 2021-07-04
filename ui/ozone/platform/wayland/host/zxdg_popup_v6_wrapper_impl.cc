@@ -16,6 +16,7 @@
 #include "ui/gfx/geometry/rect.h"
 #include "ui/ozone/platform/wayland/common/wayland_util.h"
 #include "ui/ozone/platform/wayland/host/wayland_connection.h"
+#include "ui/ozone/platform/wayland/host/wayland_event_source.h"
 #include "ui/ozone/platform/wayland/host/wayland_pointer.h"
 #include "ui/ozone/platform/wayland/host/wayland_popup.h"
 #include "ui/ozone/platform/wayland/host/wayland_toplevel_window.h"
@@ -112,7 +113,7 @@ ZXDGPopupV6WrapperImpl::ZXDGPopupV6WrapperImpl(
 ZXDGPopupV6WrapperImpl::~ZXDGPopupV6WrapperImpl() = default;
 
 bool ZXDGPopupV6WrapperImpl::Initialize(WaylandConnection* connection,
-                                        const gfx::Rect& bounds) {
+                                        const ShellPopupParams& params) {
   if (!connection->shell() && !connection->shell_v6()) {
     NOTREACHED() << "Wrong shell protocol";
     return false;
@@ -121,11 +122,9 @@ bool ZXDGPopupV6WrapperImpl::Initialize(WaylandConnection* connection,
   ZXDGSurfaceV6WrapperImpl* parent_xdg_surface = nullptr;
   // If the parent window is a popup, the surface of that popup must be used as
   // a parent.
-  if (wl::IsMenuType(wayland_window_->parent_window()->type())) {
-    auto* wayland_popup =
-        static_cast<WaylandPopup*>(wayland_window_->parent_window());
+  if (auto* parent_popup = wayland_window_->parent_window()->AsWaylandPopup()) {
     ZXDGPopupV6WrapperImpl* popup =
-        static_cast<ZXDGPopupV6WrapperImpl*>(wayland_popup->shell_popup());
+        static_cast<ZXDGPopupV6WrapperImpl*>(parent_popup->shell_popup());
     parent_xdg_surface = popup->zxdg_surface_v6_wrapper();
   } else {
     WaylandToplevelWindow* wayland_surface =
@@ -138,22 +137,22 @@ bool ZXDGPopupV6WrapperImpl::Initialize(WaylandConnection* connection,
   if (!zxdg_surface_v6_wrapper_ || !parent_xdg_surface)
     return false;
 
-  auto new_bounds = bounds;
+  auto new_params = params;
   // Wayland doesn't allow empty bounds. If a zero or negative size is set, the
   // invalid_input error is raised. Thus, use the least possible one.
   // WaylandPopup will update its bounds upon the following configure event.
-  if (new_bounds.IsEmpty())
-    new_bounds.set_size({1, 1});
+  if (new_params.bounds.IsEmpty())
+    new_params.bounds.set_size({1, 1});
 
   if (connection->shell_v6())
-    return InitializeV6(connection, new_bounds, parent_xdg_surface);
+    return InitializeV6(connection, new_params, parent_xdg_surface);
 
   return false;
 }
 
 bool ZXDGPopupV6WrapperImpl::InitializeV6(
     WaylandConnection* connection,
-    const gfx::Rect& bounds,
+    const ShellPopupParams& params,
     ZXDGSurfaceV6WrapperImpl* parent_xdg_surface) {
   static const struct zxdg_popup_v6_listener zxdg_popup_v6_listener = {
       &ZXDGPopupV6WrapperImpl::Configure,
@@ -161,7 +160,7 @@ bool ZXDGPopupV6WrapperImpl::InitializeV6(
   };
 
   zxdg_positioner_v6* positioner =
-      CreatePositioner(connection, wayland_window_->parent_window(), bounds);
+      CreatePositioner(connection, wayland_window_->parent_window(), params);
   if (!positioner)
     return false;
 
@@ -189,16 +188,19 @@ void ZXDGPopupV6WrapperImpl::AckConfigure(uint32_t serial) {
   zxdg_surface_v6_wrapper_->AckConfigure(serial);
 }
 
+bool ZXDGPopupV6WrapperImpl::IsConfigured() {
+  DCHECK(zxdg_surface_v6_wrapper_);
+  return zxdg_surface_v6_wrapper_->IsConfigured();
+}
+
 zxdg_positioner_v6* ZXDGPopupV6WrapperImpl::CreatePositioner(
     WaylandConnection* connection,
     WaylandWindow* parent_window,
-    const gfx::Rect& bounds) {
+    const ShellPopupParams& params) {
   struct zxdg_positioner_v6* positioner;
   positioner = zxdg_shell_v6_create_positioner(connection->shell_v6());
   if (!positioner)
     return nullptr;
-
-  auto menu_type = GetMenuTypeForPositioner(connection, parent_window);
 
   // The parent we got must be the topmost in the stack of the same family
   // windows.
@@ -206,21 +208,23 @@ zxdg_positioner_v6* ZXDGPopupV6WrapperImpl::CreatePositioner(
 
   // Place anchor to the end of the possible position.
   gfx::Rect anchor_rect = GetAnchorRect(
-      menu_type, bounds,
+      params.menu_type, params.bounds,
       gfx::ScaleToRoundedRect(parent_window->GetBounds(),
-                              1.0 / parent_window->buffer_scale()));
+                              1.0 / parent_window->window_scale()));
 
   zxdg_positioner_v6_set_anchor_rect(positioner, anchor_rect.x(),
                                      anchor_rect.y(), anchor_rect.width(),
                                      anchor_rect.height());
-  zxdg_positioner_v6_set_size(positioner, bounds.width(), bounds.height());
-  zxdg_positioner_v6_set_anchor(positioner,
-                                TranslateAnchor(GetAnchor(menu_type, bounds)));
+  zxdg_positioner_v6_set_size(positioner, params.bounds.width(),
+                              params.bounds.height());
+  zxdg_positioner_v6_set_anchor(
+      positioner, TranslateAnchor(GetAnchor(params.menu_type, params.bounds)));
   zxdg_positioner_v6_set_gravity(
-      positioner, TranslateGravity(GetGravity(menu_type, bounds)));
+      positioner,
+      TranslateGravity(GetGravity(params.menu_type, params.bounds)));
   zxdg_positioner_v6_set_constraint_adjustment(
       positioner,
-      TranslateConstraintAdjustment(GetConstraintAdjustment(menu_type)));
+      TranslateConstraintAdjustment(GetConstraintAdjustment(params.menu_type)));
   return positioner;
 }
 

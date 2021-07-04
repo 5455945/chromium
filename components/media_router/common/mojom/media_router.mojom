@@ -15,16 +15,13 @@ import "third_party/blink/public/mojom/presentation/presentation.mojom";
 import "url/mojom/origin.mojom";
 import "url/mojom/url.mojom";
 
-// This must stay in sync with ash.mojom.SinkIconType.
+// This must stay in sync with media_router::SinkIconType and ash::SinkIconType.
 enum SinkIconType {
-  CAST,
-  CAST_AUDIO_GROUP,
-  CAST_AUDIO,
-  MEETING,
-  HANGOUT,
-  EDUCATION,
-  WIRED_DISPLAY,
-  GENERIC
+  CAST = 0,
+  CAST_AUDIO_GROUP = 1,
+  CAST_AUDIO = 2,
+  WIRED_DISPLAY = 6,
+  GENERIC = 7
 };
 
 // Represents an output sink to which media can be routed.
@@ -126,6 +123,9 @@ struct MediaRoute {
   bool is_off_the_record;
   // Set to true if this route corresponds to a local presentation.
   bool is_local_presentation;
+  // Set to true if this route has been created by the MRP but is waiting for
+  // the receiver's response.
+  bool is_connecting;
 };
 
 // Notifications or an actionable events to be shown to the user.
@@ -217,25 +217,6 @@ enum RouteRequestResultCode {
 // New values must be added here.
 };
 
-// Used to pass feature configuration data from the Browser to Media Route
-// Provider. This object is used by the extension MRP only.
-struct MediaRouteProviderConfig {
-  // If the MRP should enable DIAL discovery.
-  bool enable_dial_discovery;
-
-  // If the MRP should enable Cast discovery.
-  bool enable_cast_discovery;
-
-  // If the MRP should enable DIAL sink query.
-  bool enable_dial_sink_query;
-
-  // If the MRP should enable Cast sink query.
-  bool enable_cast_sink_query;
-
-  // If Mirroring Service is being used.
-  bool use_mirroring_service;
-};
-
 // Used to pass a pair of PresentationConnection pipes as part of a route
 // result.  An MRP may return this as part of any route creation callback to
 // allow direct communication with the controlling page.
@@ -284,15 +265,12 @@ union ProviderState {
 // there are changes related to sinks or routes.
 // Each MRP is used to manage one type of media sinks (e.g. the Cast MRP is used
 // for CAST sinks)
-// EXTENSION MRPs live in the Media Router component extension and will be
-// removed soon. WIRED_DISPLAY, CAST and DIAL MRPs live in the browser.
-// ANDROID_CAF is the Cast Application Framework based MRPs used on Android
-// only.
+// WIRED_DISPLAY, CAST and DIAL MRPs live in the browser. ANDROID_CAF is the
+// Cast Application Framework based MRPs used on Android only.
 interface MediaRouteProvider {
   // Each MediaRouteProvider is associated with a unique ID. This enum must be
   // kept in sync with MediaRouteProviderId in C++.
   enum Id {
-    EXTENSION,
     WIRED_DISPLAY,
     CAST,
     DIAL,
@@ -522,11 +500,8 @@ interface MediaRouter {
   };
 
   // Registers a MediaRouteProvider with the MediaRouter.
-  // Returns a string that uniquely identifies the Media Router browser
-  // process.
   RegisterMediaRouteProvider(MediaRouteProvider.Id provider_id,
-      pending_remote<MediaRouteProvider> media_router_provider) =>
-          (string instance_id, MediaRouteProviderConfig config);
+      pending_remote<MediaRouteProvider> media_router_provider);
 
   // Called when a MediaRouteProvider receives a new list of |sinks|
   // compatible with |media_source|. The result is only valid for |origins|. If
@@ -583,12 +558,7 @@ interface MediaRouter {
   // feedback report.
   GetLogsAsString() => (string logs);
 
-  // Called to get a mirroring.mojom.MirroringServiceHost. These APIs are used
-  // by Media Router extension to start mirroring through the mirroring service.
-  // TODO(http://crbug.com/809249): Remove these APIs when native Cast MRP with
-  // mirroring support is rolled out.  NOTE(jrw): Removing these methods from
-  // the mojo interface is probably OK, but the implementation still needs
-  // to be called by the native Cast MRP.
+  // Called to get a mirroring.mojom.MirroringServiceHost.
   GetMirroringServiceHostForTab(int32 target_tab_id,
       pending_receiver<mirroring.mojom.MirroringServiceHost> receiver);
   GetMirroringServiceHostForDesktop(

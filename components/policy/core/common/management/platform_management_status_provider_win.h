@@ -5,7 +5,6 @@
 #ifndef COMPONENTS_POLICY_CORE_COMMON_MANAGEMENT_PLATFORM_MANAGEMENT_STATUS_PROVIDER_WIN_H_
 #define COMPONENTS_POLICY_CORE_COMMON_MANAGEMENT_PLATFORM_MANAGEMENT_STATUS_PROVIDER_WIN_H_
 
-#include "base/containers/flat_set.h"
 #include "build/build_config.h"
 #include "components/policy/core/common/management/management_service.h"
 #include "components/policy/policy_export.h"
@@ -16,8 +15,8 @@ namespace policy {
 class POLICY_EXPORT DomainEnrollmentStatusProvider
     : public ManagementStatusProvider {
  public:
-  DomainEnrollmentStatusProvider();
-  ~DomainEnrollmentStatusProvider() final;
+  DomainEnrollmentStatusProvider() = default;
+  ~DomainEnrollmentStatusProvider() final = default;
 
   // ManagementStatusProvider impl
   bool IsManaged() final;
@@ -25,13 +24,24 @@ class POLICY_EXPORT DomainEnrollmentStatusProvider
 
   static bool IsEnrolledToDomain();
 };
+
+class POLICY_EXPORT AzureActiveDirectoryStatusProvider final
+    : public ManagementStatusProvider {
+ public:
+  AzureActiveDirectoryStatusProvider() = default;
+  ~AzureActiveDirectoryStatusProvider() override = default;
+
+  // ManagementStatusProvider impl
+  bool IsManaged() override;
+  EnterpriseManagementAuthority GetAuthority() override;
+};
 #endif
 
 class POLICY_EXPORT EnterpriseMDMManagementStatusProvider
     : public ManagementStatusProvider {
  public:
-  EnterpriseMDMManagementStatusProvider();
-  ~EnterpriseMDMManagementStatusProvider() final;
+  EnterpriseMDMManagementStatusProvider() = default;
+  ~EnterpriseMDMManagementStatusProvider() final = default;
 
   // ManagementStatusProvider impl
   bool IsManaged() final;
@@ -42,5 +52,4 @@ class POLICY_EXPORT EnterpriseMDMManagementStatusProvider
 
 }  // namespace policy
 
-#endif  // #define
-        // COMPONENTS_POLICY_CORE_COMMON_MANAGEMENT_PLATFORM_MANAGEMENT_STATUS_PROVIDER_WIN_H_
+#endif  // COMPONENTS_POLICY_CORE_COMMON_MANAGEMENT_PLATFORM_MANAGEMENT_STATUS_PROVIDER_WIN_H_

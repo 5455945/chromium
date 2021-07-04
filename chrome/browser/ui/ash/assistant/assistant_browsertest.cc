@@ -5,6 +5,7 @@
 #include "ash/components/audio/cras_audio_handler.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/scoped_run_loop_timeout.h"
 #include "base/time/time.h"
 #include "chrome/browser/ui/ash/assistant/assistant_test_mixin.h"
@@ -43,7 +44,12 @@ using chromeos::assistant::test::ExpectResult;
 
 class AssistantBrowserTest : public MixinBasedInProcessBrowserTest {
  public:
-  AssistantBrowserTest() = default;
+  AssistantBrowserTest() {
+    // TODO(b/190633242): enable sandbox in browser tests.
+    feature_list_.InitAndDisableFeature(
+        chromeos::assistant::features::kEnableLibAssistantSandbox);
+  }
+
   ~AssistantBrowserTest() override = default;
 
   AssistantTestMixin* tester() { return &tester_; }
@@ -128,7 +134,9 @@ IN_PROC_BROWSER_TEST_F(AssistantBrowserTest,
   EXPECT_TRUE(tester()->IsVisible());
 }
 
-IN_PROC_BROWSER_TEST_F(AssistantBrowserTest, ShouldDisplayTextResponse) {
+// TODO(b/184802501): Fix this flaky test.
+IN_PROC_BROWSER_TEST_F(AssistantBrowserTest,
+                       DISABLED_ShouldDisplayTextResponse) {
   tester()->StartAssistantAndWaitForReady();
 
   ShowAssistantUi();
@@ -143,7 +151,9 @@ IN_PROC_BROWSER_TEST_F(AssistantBrowserTest, ShouldDisplayTextResponse) {
   });
 }
 
-IN_PROC_BROWSER_TEST_F(AssistantBrowserTest, ShouldDisplayCardResponse) {
+// Flaky. See https://crbug.com/1196560.
+IN_PROC_BROWSER_TEST_F(AssistantBrowserTest,
+                       DISABLED_ShouldDisplayCardResponse) {
   tester()->StartAssistantAndWaitForReady();
 
   ShowAssistantUi();

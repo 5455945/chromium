@@ -9,7 +9,6 @@
 #include "base/bind.h"
 #include "base/callback_helpers.h"
 #include "base/run_loop.h"
-#include "base/stl_util.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -131,7 +130,7 @@ class DeviceManagementServiceIntegrationTest
       DeviceManagementService::JobConfiguration::JobType type,
       bool critical,
       DMAuth auth_data,
-      base::Optional<std::string> oauth_token,
+      absl::optional<std::string> oauth_token,
       const em::DeviceManagementRequest request) {
     std::string payload;
     request.SerializeToString(&payload);
@@ -165,9 +164,9 @@ class DeviceManagementServiceIntegrationTest
 
   void SetUpOnMainThread() override {
     std::string service_url((this->*(GetParam()))());
-    service_.reset(new DeviceManagementService(
+    service_ = std::make_unique<DeviceManagementService>(
         std::unique_ptr<DeviceManagementService::Configuration>(
-            new MockDeviceManagementServiceConfiguration(service_url))));
+            new MockDeviceManagementServiceConfiguration(service_url)));
     service_->ScheduleInitialization(0);
   }
 
@@ -177,9 +176,9 @@ class DeviceManagementServiceIntegrationTest
   }
 
   void StartTestServer() {
-    test_server_.reset(new LocalPolicyTestServer(
+    test_server_ = std::make_unique<LocalPolicyTestServer>(
         "chrome/test/data/policy/"
-        "policy_device_management_service_browsertest.json"));
+        "policy_device_management_service_browsertest.json");
     ASSERT_TRUE(test_server_->Start());
   }
 

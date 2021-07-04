@@ -17,6 +17,7 @@
 #include "base/mac/bundle_locations.h"
 #include "base/mac/foundation_util.h"
 #include "base/mac/launch_services_util.h"
+#include "base/mac/mac_util.h"
 #include "base/mac/mach_logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -336,6 +337,18 @@ void AppShimController::SendBootstrapOnShimConnected(
           ? chrome::mojom::AppShimLaunchType::kRegisterOnly
           : chrome::mojom::AppShimLaunchType::kNormal;
   app_shim_info->files = launch_files_;
+  app_shim_info->urls = launch_urls_;
+
+  if (base::mac::WasLaunchedAsHiddenLoginItem()) {
+    app_shim_info->login_item_restore_state =
+        chrome::mojom::AppShimLoginItemRestoreState::kHidden;
+  } else if (base::mac::WasLaunchedAsLoginOrResumeItem()) {
+    app_shim_info->login_item_restore_state =
+        chrome::mojom::AppShimLoginItemRestoreState::kWindowed;
+  } else {
+    app_shim_info->login_item_restore_state =
+        chrome::mojom::AppShimLoginItemRestoreState::kNone;
+  }
 
   host_bootstrap_->OnShimConnected(
       std::move(host_receiver_), std::move(app_shim_info),
@@ -346,12 +359,7 @@ void AppShimController::SendBootstrapOnShimConnected(
 
 void AppShimController::SetUpMenu() {
   chrome::BuildMainMenu(NSApp, delegate_, params_.app_name, true);
-
-  // Initialize the profiles menu to be empty (the value of `use_new_picker` is
-  // chosen arbitrarily as it does not matter for an empty menu). It will be
-  // updated from the browser.
-  UpdateProfileMenu(std::vector<chrome::mojom::ProfileMenuItemPtr>(),
-                    /*use_new_picker=*/false);
+  UpdateProfileMenu(std::vector<chrome::mojom::ProfileMenuItemPtr>());
 }
 
 void AppShimController::BootstrapChannelError(uint32_t custom_reason,
@@ -438,8 +446,7 @@ void AppShimController::SetBadgeLabel(const std::string& badge_label) {
 }
 
 void AppShimController::UpdateProfileMenu(
-    std::vector<chrome::mojom::ProfileMenuItemPtr> profile_menu_items,
-    bool use_new_picker) {
+    std::vector<chrome::mojom::ProfileMenuItemPtr> profile_menu_items) {
   profile_menu_items_ = std::move(profile_menu_items);
 
   NSMenuItem* cocoa_profile_menu =
@@ -452,9 +459,7 @@ void AppShimController::UpdateProfileMenu(
   [cocoa_profile_menu setHidden:NO];
 
   base::scoped_nsobject<NSMenu> menu([[NSMenu alloc]
-      initWithTitle:l10n_util::GetNSStringWithFixup(
-                        use_new_picker ? IDS_PROFILES_MENU_NAME
-                                       : IDS_PROFILES_OPTIONS_GROUP_NAME)]);
+      initWithTitle:l10n_util::GetNSStringWithFixup(IDS_PROFILES_MENU_NAME)]);
   [cocoa_profile_menu setSubmenu:menu];
 
   // Note that this code to create menu items is nearly identical to the code
@@ -502,5 +507,13 @@ void AppShimController::ProfileMenuItemSelected(uint32_t index) {
       host_->ProfileSelectedFromMenu(mojo_item->profile_path);
       return;
     }
+  }
+}
+
+void AppShimController::OpenUrls(const std::vector<GURL>& urls) {
+  if (init_state_ == InitState::kWaitingForAppToFinishLaunch) {
+    launch_urls_ = urls;
+  } else {
+    host_->UrlsOpened(urls);
   }
 }

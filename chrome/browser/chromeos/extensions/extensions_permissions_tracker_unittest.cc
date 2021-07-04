@@ -4,9 +4,8 @@
 
 #include "chrome/browser/chromeos/extensions/extensions_permissions_tracker.h"
 
-#include "base/stl_util.h"
+#include "base/cxx17_backports.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chromeos/login/users/fake_chrome_user_manager.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/testing_browser_process.h"

@@ -54,6 +54,8 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
   void SetDeferBeginMainFrameOnImpl(bool defer_begin_main_frame) const;
   void SetNeedsRedrawOnImpl(const gfx::Rect& damage_rect);
   void SetNeedsCommitOnImpl();
+  void SetTargetLocalSurfaceIdOnImpl(
+      const viz::LocalSurfaceId& target_local_surface_id);
   void BeginMainFrameAbortedOnImpl(
       CommitEarlyOutReason reason,
       base::TimeTicks main_thread_start_time,
@@ -128,6 +130,9 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
   void DidObserveFirstScrollDelay(
       base::TimeDelta first_scroll_delay,
       base::TimeTicks first_scroll_timestamp) override;
+  bool IsInSynchronousComposite() const override;
+  void FrameSinksToThrottleUpdated(
+      const base::flat_set<viz::FrameSinkId>& id) override;
 
   // SchedulerClient implementation
   bool WillBeginImplFrame(const viz::BeginFrameArgs& args) override;
@@ -151,7 +156,6 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
       base::TimeTicks time) override;
   void FrameIntervalUpdated(base::TimeDelta interval) override {}
   bool HasCustomPropertyAnimations() const override;
-  bool IsInSynchronousComposite() const override;
 
   DrawResult DrawInternal(bool forced_draw);
 

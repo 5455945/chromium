@@ -10,7 +10,6 @@ import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.webkit.ValueCallback;
-import android.widget.Button;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -73,17 +72,6 @@ public class PageInfoControllerDelegateImpl extends PageInfoControllerDelegate {
         return mBrowser.getWindowAndroid().getModalDialogManager();
     }
 
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public void showSiteSettings(String url) {
-        Intent intent = SettingsIntentHelper.createIntentForSiteSettingsSingleWebsite(
-                mContext, mProfile.getName(), mProfile.isIncognito(), url);
-
-        launchIntent(intent);
-    }
-
     @Override
     public void showCookieSettings() {
         String category = SiteSettingsCategory.preferenceKey(SiteSettingsCategory.Type.COOKIES);
@@ -115,8 +103,8 @@ public class PageInfoControllerDelegateImpl extends PageInfoControllerDelegate {
      */
     @Override
     @Nullable
-    public PageInfoSubpageController createHistoryController(PageInfoMainController mainController,
-            PageInfoRowView rowView, Button forgetSiteButton, String url) {
+    public PageInfoSubpageController createHistoryController(
+            PageInfoMainController mainController, PageInfoRowView rowView, String url) {
         return null;
     }
 
@@ -139,9 +127,9 @@ public class PageInfoControllerDelegateImpl extends PageInfoControllerDelegate {
     }
 
     @Override
-    public void getFavicon(String url, Callback<Drawable> callback) {
+    public void getFavicon(GURL url, Callback<Drawable> callback) {
         mProfile.getCachedFaviconForPageUri(
-                url, ObjectWrapper.wrap((ValueCallback<Bitmap>) (bitmap) -> {
+                url.getSpec(), ObjectWrapper.wrap((ValueCallback<Bitmap>) (bitmap) -> {
                     if (bitmap != null) {
                         callback.onResult(new BitmapDrawable(mContext.getResources(), bitmap));
                     } else {
@@ -154,9 +142,8 @@ public class PageInfoControllerDelegateImpl extends PageInfoControllerDelegate {
      * {@inheritDoc}
      */
     @Override
-    @Nullable
-    public Drawable getPreviewUiIcon() {
-        return null;
+    public boolean isAccessibilityEnabled() {
+        return WebLayerAccessibilityUtil.get().isAccessibilityEnabled();
     }
 
     private static boolean isHttpOrHttps(GURL url) {

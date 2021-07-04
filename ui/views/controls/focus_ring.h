@@ -33,9 +33,30 @@ class VIEWS_EXPORT FocusRing : public View, public ViewObserver {
 
   using ViewPredicate = std::function<bool(View* view)>;
 
-  // Create a FocusRing and adds it to |parent|. The returned focus ring is
-  // owned by the |parent|.
-  static FocusRing* Install(View* parent);
+  // Creates a FocusRing and adds it to `host`.
+  static void Install(View* host);
+
+  // Gets the FocusRing, if present, from `host`.
+  static FocusRing* Get(View* host);
+  static const FocusRing* Get(const View* host);
+
+  // Removes the FocusRing, if present, from `host`.
+  static void Remove(View* host);
+
+  // Configures `view` so that FocusRings under it are aware of the background
+  // they are painted against. Unless the color of the FocusRing has been
+  // explicitly set, a color will be chosen that contrasts well against
+  // `background_color_id`.
+  // Warning: The FocusRing ThemeProvider is queried for these IDs, do not use
+  // NativeTheme color IDs here.
+  // WARNING: This is temporary shenanigans to solve an accessibility problem.
+  // DO NOT COPY this pattern or its implementation to other places in its
+  // current state.
+  // TODO(pbos): This seems not directly related to the FocusRing anymore,
+  // perhaps we could inform the view of what background color it's being
+  // painted onto orthogonally to how FocusRing uses it.
+  static void SetBackgroundColorIdForSubtree(View* view,
+                                             int background_color_id);
 
   ~FocusRing() override;
 
@@ -57,7 +78,7 @@ class VIEWS_EXPORT FocusRing : public View, public ViewObserver {
   // focus, but the FocusRing sits on the parent instead of the inner view.
   void SetHasFocusPredicate(const ViewPredicate& predicate);
 
-  void SetColor(base::Optional<SkColor> color);
+  void SetColor(absl::optional<SkColor> color);
 
   // View:
   void Layout() override;
@@ -72,6 +93,9 @@ class VIEWS_EXPORT FocusRing : public View, public ViewObserver {
 
  private:
   FocusRing();
+
+  SkPath GetPath() const;
+  SkRRect GetRingRoundRect() const;
 
   void RefreshLayer();
 
@@ -91,10 +115,10 @@ class VIEWS_EXPORT FocusRing : public View, public ViewObserver {
   bool invalid_ = false;
 
   // Overriding color for the focus ring.
-  base::Optional<SkColor> color_;
+  absl::optional<SkColor> color_;
 
   // The predicate used to determine whether the parent has focus.
-  base::Optional<ViewPredicate> has_focus_predicate_;
+  absl::optional<ViewPredicate> has_focus_predicate_;
 
   base::ScopedObservation<View, ViewObserver> view_observation_{this};
 

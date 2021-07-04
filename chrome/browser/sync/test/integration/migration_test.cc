@@ -13,11 +13,10 @@
 #include "chrome/browser/sync/test/integration/migration_waiter.h"
 #include "chrome/browser/sync/test/integration/migration_watcher.h"
 #include "chrome/browser/sync/test/integration/preferences_helper.h"
-#include "chrome/browser/sync/test/integration/profile_sync_service_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/scoped_user_pref_update.h"
-#include "components/sync/driver/profile_sync_service.h"
+#include "components/sync/driver/sync_service_impl.h"
 #include "components/translate/core/browser/translate_prefs.h"
 #include "content/public/test/browser_test.h"
 
@@ -92,7 +91,7 @@ class MigrationTest : public SyncTest  {
   }
 
   syncer::ModelTypeSet GetPreferredDataTypes() {
-    // ProfileSyncService must already have been created before we can call
+    // SyncServiceImpl must already have been created before we can call
     // GetPreferredDataTypes().
     DCHECK(GetSyncService(0));
     syncer::ModelTypeSet preferred_data_types =
@@ -110,7 +109,6 @@ class MigrationTest : public SyncTest  {
     // Supervised user data types will be "unready" during this test, so we
     // should not request that they be migrated.
     preferred_data_types.Remove(syncer::SUPERVISED_USER_SETTINGS);
-    preferred_data_types.Remove(syncer::DEPRECATED_SUPERVISED_USER_ALLOWLISTS);
 
     // Autofill wallet will be unready during this test, so we should not
     // request that it be migrated.
@@ -316,14 +314,13 @@ IN_PROC_BROWSER_TEST_F(MigrationSingleClientTest, AllTypesWithNigoriAtOnce) {
 class MigrationTwoClientTest : public MigrationTest {
  public:
   MigrationTwoClientTest() : MigrationTest(TWO_CLIENT) {}
-  ~MigrationTwoClientTest() override {}
+  ~MigrationTwoClientTest() override = default;
 
   // Helper function that verifies that preferences sync still works.
   void VerifyPrefSync() {
     ASSERT_TRUE(BooleanPrefMatches(prefs::kShowHomeButton));
     ChangeBooleanPref(0, prefs::kShowHomeButton);
-    ASSERT_TRUE(GetClient(0)->AwaitMutualSyncCycleCompletion(GetClient(1)));
-    ASSERT_TRUE(BooleanPrefMatches(prefs::kShowHomeButton));
+    ASSERT_TRUE(BooleanPrefMatchChecker(prefs::kShowHomeButton).Wait());
   }
 
   void RunTwoClientMigrationTest(const MigrationList& migration_list,

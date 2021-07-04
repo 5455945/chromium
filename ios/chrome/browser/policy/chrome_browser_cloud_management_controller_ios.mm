@@ -41,7 +41,7 @@ int ChromeBrowserCloudManagementControllerIOS::GetUserDataDirKey() {
 }
 
 base::FilePath
-ChromeBrowserCloudManagementControllerIOS::GetExternalPolicyPath() {
+ChromeBrowserCloudManagementControllerIOS::GetExternalPolicyDir() {
   // External policies are not supported on iOS.
   return base::FilePath();
 }
@@ -111,8 +111,12 @@ ChromeBrowserCloudManagementControllerIOS::CreateReportScheduler(
     CloudPolicyClient* client) {
   auto generator = std::make_unique<enterprise_reporting::ReportGenerator>(
       &reporting_delegate_factory_);
+  auto real_time_generator =
+      std::make_unique<enterprise_reporting::RealTimeReportGenerator>(
+          &reporting_delegate_factory_);
   return std::make_unique<enterprise_reporting::ReportScheduler>(
-      client, std::move(generator), &reporting_delegate_factory_);
+      client, std::move(generator), std::move(real_time_generator),
+      &reporting_delegate_factory_);
 }
 
 scoped_refptr<base::SingleThreadTaskRunner>
@@ -125,6 +129,14 @@ ChromeBrowserCloudManagementControllerIOS::GetBestEffortTaskRunner() {
 void ChromeBrowserCloudManagementControllerIOS::SetGaiaURLLoaderFactory(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
   // Policy invalidations aren't currently supported on iOS.
+}
+
+bool ChromeBrowserCloudManagementControllerIOS::ReadyToCreatePolicyManager() {
+  return true;
+}
+
+bool ChromeBrowserCloudManagementControllerIOS::ReadyToInit() {
+  return true;
 }
 
 }  // namespace policy

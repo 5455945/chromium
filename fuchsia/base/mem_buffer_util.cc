@@ -14,13 +14,12 @@
 #include "base/files/file_util.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/fuchsia/fuchsia_logging.h"
-#include "base/stl_util.h"
 #include "base/threading/thread_restrictions.h"
 
 namespace cr_fuchsia {
 
 bool ReadUTF8FromVMOAsUTF16(const fuchsia::mem::Buffer& buffer,
-                            base::string16* output) {
+                            std::u16string* output) {
   std::string output_utf8;
   if (!StringFromMemBuffer(buffer, &output_utf8))
     return false;
@@ -48,7 +47,7 @@ fuchsia::mem::Buffer MemBufferFromString16(const base::StringPiece16& data,
                                            base::StringPiece name) {
   return MemBufferFromString(
       base::StringPiece(reinterpret_cast<const char*>(data.data()),
-                        data.size() * sizeof(base::char16)),
+                        data.size() * sizeof(char16_t)),
       name);
 }
 

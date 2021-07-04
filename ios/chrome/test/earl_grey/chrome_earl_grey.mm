@@ -13,6 +13,7 @@
 #import "base/test/ios/wait_util.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey_app_interface.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
+#import "ios/chrome/test/scoped_eg_synchronization_disabler.h"
 #import "ios/testing/earl_grey/app_launch_configuration.h"
 #import "ios/testing/earl_grey/app_launch_manager.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
@@ -40,7 +41,36 @@ NSString* const kTypedURLError =
     @"Error occurred during typed URL verification.";
 NSString* const kWaitForRestoreSessionToFinishError =
     @"Session restoration did not finish";
+}  // namespace
+
+namespace chrome_test_util {
+UIWindow* GetAnyKeyWindow() {
+#if !defined(__IPHONE_13_0) || __IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_13_0
+  return [GREY_REMOTE_CLASS_IN_APP(UIApplication) sharedApplication].keyWindow;
+#else
+  // Only one or zero foreground scene should be available if this is called.
+  NSSet<UIScene*>* scenes =
+      [GREY_REMOTE_CLASS_IN_APP(UIApplication) sharedApplication]
+          .connectedScenes;
+  int foregroundScenes = 0;
+  for (UIScene* scene in scenes) {
+    if (scene.activationState == UISceneActivationStateForegroundInactive ||
+        scene.activationState == UISceneActivationStateForegroundActive) {
+      foregroundScenes++;
+    }
+  }
+  DCHECK(foregroundScenes <= 1);
+
+  NSArray<UIWindow*>* windows =
+      [GREY_REMOTE_CLASS_IN_APP(UIApplication) sharedApplication].windows;
+  for (UIWindow* window in windows) {
+    if (window.isKeyWindow)
+      return window;
+  }
+  return nil;
+#endif
 }
+}  // namespace chrome_test_util
 
 #if !defined(__has_feature) || !__has_feature(objc_arc)
 #error "This file requires ARC support."
@@ -89,17 +119,20 @@ GREY_STUB_CLASS_IN_APP_MAIN_QUEUE(ChromeEarlGreyAppInterface)
   return idiom == UIUserInterfaceIdiomPad;
 }
 
+- (BOOL)isRTL {
+  return [ChromeEarlGreyAppInterface isRTL];
+}
+
 - (BOOL)isCompactWidth {
   UIUserInterfaceSizeClass horizontalSpace =
-      [[[[GREY_REMOTE_CLASS_IN_APP(UIApplication) sharedApplication] keyWindow]
-          traitCollection] horizontalSizeClass];
+      [[chrome_test_util::GetAnyKeyWindow() traitCollection]
+          horizontalSizeClass];
   return horizontalSpace == UIUserInterfaceSizeClassCompact;
 }
 
 - (BOOL)isCompactHeight {
   UIUserInterfaceSizeClass verticalSpace =
-      [[[[GREY_REMOTE_CLASS_IN_APP(UIApplication) sharedApplication] keyWindow]
-          traitCollection] verticalSizeClass];
+      [[chrome_test_util::GetAnyKeyWindow() traitCollection] verticalSizeClass];
   return verticalSpace == UIUserInterfaceSizeClassCompact;
 }
 
@@ -109,8 +142,7 @@ GREY_STUB_CLASS_IN_APP_MAIN_QUEUE(ChromeEarlGreyAppInterface)
 
 - (BOOL)isRegularXRegularSizeClass {
   UITraitCollection* traitCollection =
-      [[[GREY_REMOTE_CLASS_IN_APP(UIApplication) sharedApplication] keyWindow]
-          traitCollection];
+      [chrome_test_util::GetAnyKeyWindow() traitCollection];
   return traitCollection.verticalSizeClass == UIUserInterfaceSizeClassRegular &&
          traitCollection.horizontalSizeClass == UIUserInterfaceSizeClassRegular;
 }
@@ -314,9 +346,9 @@ GREY_STUB_CLASS_IN_APP_MAIN_QUEUE(ChromeEarlGreyAppInterface)
   EG_TEST_HELPER_ASSERT_TRUE(pageLoaded, kWaitForPageToFinishLoadingError);
 }
 
-- (void)applicationOpenURL:(const GURL&)URL {
+- (void)sceneOpenURL:(const GURL&)URL {
   NSString* spec = base::SysUTF8ToNSString(URL.spec());
-  [ChromeEarlGreyAppInterface applicationOpenURL:spec];
+  [ChromeEarlGreyAppInterface sceneOpenURL:spec];
 }
 
 - (void)loadURL:(const GURL&)URL waitForCompletion:(BOOL)wait {
@@ -602,6 +634,11 @@ GREY_STUB_CLASS_IN_APP_MAIN_QUEUE(ChromeEarlGreyAppInterface)
       waitForWebStateContainingLoadedImage:imageID]);
 }
 
+- (void)waitForWebStateZoomScale:(CGFloat)scale {
+  EG_TEST_HELPER_ASSERT_NO_ERROR(
+      [ChromeEarlGreyAppInterface waitForWebStateZoomScale:scale]);
+}
+
 - (GURL)webStateVisibleURL {
   return GURL(
       base::SysNSStringToUTF8([ChromeEarlGreyAppInterface webStateVisibleURL]));
@@ -664,6 +701,14 @@ GREY_STUB_CLASS_IN_APP_MAIN_QUEUE(ChromeEarlGreyAppInterface)
 
 - (void)clearSyncServerData {
   [ChromeEarlGreyAppInterface clearSyncServerData];
+}
+
+- (void)revokeSyncConsent {
+  [ChromeEarlGreyAppInterface revokeSyncConsent];
+}
+
+- (void)clearSyncFirstSetupComplete {
+  [ChromeEarlGreyAppInterface clearSyncFirstSetupComplete];
 }
 
 - (void)startSync {
@@ -1024,6 +1069,23 @@ GREY_STUB_CLASS_IN_APP_MAIN_QUEUE(ChromeEarlGreyAppInterface)
   EG_TEST_HELPER_ASSERT_TRUE(tabCountEqual, errorString);
 }
 
+- (void)waitForJavaScriptCondition:(NSString*)javaScriptCondition {
+  auto verifyBlock = ^BOOL {
+    id value = [ChromeEarlGrey executeJavaScript:javaScriptCondition];
+    return [value isEqual:@YES];
+  };
+  NSTimeInterval timeout = base::test::ios::kWaitForActionTimeout;
+  NSString* conditionName = [NSString
+      stringWithFormat:@"Wait for JS condition: %@", javaScriptCondition];
+  GREYCondition* condition = [GREYCondition conditionWithName:conditionName
+                                                        block:verifyBlock];
+
+  NSString* errorString =
+      [NSString stringWithFormat:@"Failed waiting for condition '%@'",
+                                 javaScriptCondition];
+  EG_TEST_HELPER_ASSERT_TRUE([condition waitWithTimeout:timeout], errorString);
+}
+
 #pragma mark - SignIn Utilities (EG2)
 
 - (void)signOutAndClearIdentities {
@@ -1120,10 +1182,6 @@ GREY_STUB_CLASS_IN_APP_MAIN_QUEUE(ChromeEarlGreyAppInterface)
 
 - (BOOL)isMobileModeByDefault {
   return [ChromeEarlGreyAppInterface isMobileModeByDefault];
-}
-
-- (BOOL)isIllustratedEmptyStatesEnabled {
-  return [ChromeEarlGreyAppInterface isIllustratedEmptyStatesEnabled];
 }
 
 - (BOOL)isNativeContextMenusEnabled {
@@ -1298,12 +1356,23 @@ GREY_STUB_CLASS_IN_APP_MAIN_QUEUE(ChromeEarlGreyAppInterface)
       assertWithMatcher:grey_notNil()];
 }
 
-- (void)verifyShareActionWithPageTitle:(NSString*)pageTitle {
+- (void)verifyShareActionWithURL:(const GURL&)URL
+                       pageTitle:(NSString*)pageTitle {
   [[EarlGrey selectElementWithMatcher:ShareButton()] performAction:grey_tap()];
 
-  // Page title is added asynchronously, so wait for its appearance.
-  [self waitForMatcher:grey_allOf(ActivityViewHeader(pageTitle),
-                                  grey_sufficientlyVisible(), nil)];
+  {
+#if TARGET_IPHONE_SIMULATOR
+    // The activity view share sheet blocks EarlGrey's synchronization on
+    // the simulators. Ref:
+    // github.com/google/EarlGrey/blob/master/docs/features.md#visibility-checks
+    ScopedSynchronizationDisabler disabler;
+#endif
+
+    // Page title is added asynchronously, so wait for its appearance.
+    NSString* hostString = base::SysUTF8ToNSString(URL.host());
+    [self waitForMatcher:grey_allOf(ActivityViewHeader(hostString, pageTitle),
+                                    grey_sufficientlyVisible(), nil)];
+  }
 
   // Dismiss the Activity View by tapping outside its bounds.
   [[EarlGrey selectElementWithMatcher:grey_keyWindow()]

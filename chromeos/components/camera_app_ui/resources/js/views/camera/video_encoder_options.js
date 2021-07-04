@@ -4,10 +4,15 @@
 
 import {assert, assertInstanceof, assertNumber} from '../../chrome_util.js';
 import * as dom from '../../dom.js';
+import {reportError} from '../../error.js';
 import * as h264 from '../../h264.js';
 import * as state from '../../state.js';
 // eslint-disable-next-line no-unused-vars
-import {Resolution} from '../../type.js';
+import {
+  ErrorLevel,
+  ErrorType,
+  Resolution,
+} from '../../type.js';
 import * as util from '../../util.js';
 
 /**
@@ -120,15 +125,16 @@ export class VideoEncoderOptions {
     this.bitrateMultiplerText_.textContent = 'x' + multiplier;
     const bitrate = multiplier * resolution.area;
     this.bitrateText_.textContent = `${(bitrate / 1e6).toFixed(1)} Mbps`;
-    const level = h264.Levels.find(
-        (level) => h264.checkLevelLimits(level, fps, resolution) &&
-            h264.getMaxBitrate(profile, level) >= bitrate);
-    if (level === undefined) {
-      console.warn(
-          `No available level for profile=${h264.getProfileName(profile)}, ` +
-          `resolution=${resolution}, ` +
-          `fps=${fps}, ` +
-          `bitrate=${bitrate}`);
+    const level = h264.getMinimalLevel(profile, bitrate, fps, resolution);
+    if (level === null) {
+      reportError(
+          ErrorType.NO_AVAILABLE_LEVEL, ErrorLevel.WARNING,
+          new Error(
+              `No available level for profile=${
+                  h264.getProfileName(profile)}, ` +
+              `resolution=${resolution}, ` +
+              `fps=${fps}, ` +
+              `bitrate=${bitrate}`));
       this.onChange_(null);
       return;
     }
@@ -141,6 +147,7 @@ export class VideoEncoderOptions {
   updateBitrateRange_() {
     if (!this.enable_ || this.selectedProfile_ === null) {
       this.disableBitrateSlider_();
+      this.onChange_(null);
       return;
     }
     const fps = assertNumber(this.fps_);
@@ -150,11 +157,15 @@ export class VideoEncoderOptions {
 
     const maxLevel = h264.Levels[h264.Levels.length - 1];
     if (!h264.checkLevelLimits(maxLevel, fps, resolution)) {
-      console.warn(
-          `No available level for profile=${h264.getProfileName(profile)}, ` +
-          `resolution=${resolution}, ` +
-          `fps=${fps}`);
+      reportError(
+          ErrorType.NO_AVAILABLE_LEVEL, ErrorLevel.WARNING,
+          new Error(
+              `No available level for profile=${
+                  h264.getProfileName(profile)}, ` +
+              `resolution=${resolution}, ` +
+              `fps=${fps}`));
       this.disableBitrateSlider_();
+      this.onChange_(null);
       return;
     }
     const maxBitrate = h264.getMaxBitrate(profile, maxLevel);

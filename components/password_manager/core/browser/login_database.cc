@@ -21,7 +21,6 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/pickle.h"
-#include "base/stl_util.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -71,8 +70,8 @@ base::Pickle SerializeValueElementPairs(const ValueElementVector& vec) {
 
 ValueElementVector DeserializeValueElementPairs(const base::Pickle& p) {
   ValueElementVector ret;
-  base::string16 value;
-  base::string16 field_name;
+  std::u16string value;
+  std::u16string field_name;
 
   base::PickleIterator iterator(p);
   while (iterator.ReadString16(&value)) {
@@ -546,7 +545,6 @@ bool MigrateDatabase(unsigned current_version,
           current_version, db,
           base::BindRepeating(&LoginsTablePostMigrationStepCallback)))
     return false;
-
   if (!builders.insecure_credentials->MigrateFrom(
           current_version, db,
           base::BindRepeating(&InsecureCredentialsPostMigrationStepCallback,
@@ -654,7 +652,7 @@ PasswordForm GetFormForRemoval(const sql::Statement& statement) {
 struct LoginDatabase::PrimaryKeyAndPassword {
   int primary_key;
   std::string encrypted_password;
-  base::string16 decrypted_password;
+  std::u16string decrypted_password;
 };
 
 LoginDatabase::LoginDatabase(const base::FilePath& db_path,
@@ -1036,7 +1034,7 @@ void LoginDatabase::ReportInaccessiblePasswordsMetrics() {
 
   size_t failed_encryption = 0;
   while (get_passwords_statement.Step()) {
-    base::string16 decrypted_password;
+    std::u16string decrypted_password;
     if (DecryptedString(get_passwords_statement.ColumnString(0),
                         &decrypted_password) != ENCRYPTION_RESULT_SUCCESS) {
       ++failed_encryption;
@@ -1064,7 +1062,7 @@ void LoginDatabase::ReportDuplicateCredentialsMetrics() {
     // Note: CryptProtectData() (used on Windows for encrypting passwords) is
     // non-deterministic, so passwords must be decrypted before checking
     // equality.
-    base::string16 password16;
+    std::u16string password16;
     if (DecryptedString(encrypted_password, &password16) !=
         ENCRYPTION_RESULT_SUCCESS) {
       continue;
@@ -1282,12 +1280,20 @@ PasswordStoreChangeList LoginDatabase::UpdateLogin(const PasswordForm& form,
   if (db_.GetLastChangeCount()) {
     bool password_changed =
         form.password_value != old_primary_key_password.decrypted_password;
+
+    InsecureCredentialsChanged insecure_changed(
+        password_changed ? insecure_credentials_table().RemoveRows(
+                               form.signon_realm, form.username_value,
+                               RemoveInsecureCredentialsReason::kUpdate)
+                         : false);
+
     PasswordForm form_with_encrypted_password = form;
     form_with_encrypted_password.encrypted_password = encrypted_password;
     FillFormInStore(&form_with_encrypted_password);
-    list.emplace_back(
-        PasswordStoreChange::UPDATE, std::move(form_with_encrypted_password),
-        FormPrimaryKey(old_primary_key_password.primary_key), password_changed);
+    list.emplace_back(PasswordStoreChange::UPDATE,
+                      std::move(form_with_encrypted_password),
+                      FormPrimaryKey(old_primary_key_password.primary_key),
+                      password_changed, insecure_changed);
   } else if (error) {
     *error = UpdateLoginError::kNoUpdatedRecords;
   }
@@ -1438,7 +1444,7 @@ LoginDatabase::EncryptionResult LoginDatabase::InitPasswordFormFromStatement(
     PasswordForm* form) const {
   std::string encrypted_password;
   s.ColumnBlobAsString(COLUMN_PASSWORD_VALUE, &encrypted_password);
-  base::string16 decrypted_password;
+  std::u16string decrypted_password;
   if (decrypt_and_fill_password_value) {
     EncryptionResult encryption_result =
         DecryptedString(encrypted_password, &decrypted_password);
@@ -1507,11 +1513,20 @@ LoginDatabase::EncryptionResult LoginDatabase::InitPasswordFormFromStatement(
         s.ColumnByteLength(COLUMN_MOVING_BLOCKED_FOR));
     form->moving_blocked_for_list = DeserializeGaiaIdHashVector(pickle);
   }
+
+  std::vector<InsecureCredential> insecure_credentials =
+      insecure_credentials_table_.GetRows(FormPrimaryKey(*primary_key));
+  for (const auto& insecure_credential : insecure_credentials) {
+    form->password_issues[insecure_credential.insecure_type] =
+        InsecurityMetadata(insecure_credential.create_time,
+                           insecure_credential.is_muted);
+  }
+
   return ENCRYPTION_RESULT_SUCCESS;
 }
 
 bool LoginDatabase::GetLogins(
-    const PasswordStore::FormDigest& form,
+    const PasswordFormDigest& form,
     std::vector<std::unique_ptr<PasswordForm>>* forms) {
   TRACE_EVENT0("passwords", "LoginDatabase::GetLogins");
   DCHECK(forms);
@@ -1593,7 +1608,7 @@ bool LoginDatabase::GetLogins(
 }
 
 bool LoginDatabase::GetLoginsByPassword(
-    const base::string16& plain_text_password,
+    const std::u16string& plain_text_password,
     std::vector<std::unique_ptr<PasswordForm>>* forms) {
   TRACE_EVENT0("passwords", "LoginDatabase::GetLoginsByPassword");
   DCHECK(forms);
@@ -1653,7 +1668,7 @@ FormRetrievalResult LoginDatabase::GetAllLogins(
 
 FormRetrievalResult LoginDatabase::GetLoginsBySignonRealmAndUsername(
     const std::string& signon_realm,
-    const base::string16& username,
+    const std::u16string& username,
     PrimaryKeyToFormMap& key_to_form_map) {
   TRACE_EVENT0("passwords", "LoginDatabase::GetLoginsBySignonRealmAndUsername");
   key_to_form_map.clear();
@@ -1744,7 +1759,7 @@ DatabaseCleanupResult LoginDatabase::DeleteUndecryptableLogins() {
   while (s.Step()) {
     std::string encrypted_password;
     s.ColumnBlobAsString(COLUMN_PASSWORD_VALUE, &encrypted_password);
-    base::string16 decrypted_password;
+    std::u16string decrypted_password;
     if (DecryptedString(encrypted_password, &decrypted_password) ==
         ENCRYPTION_RESULT_SUCCESS)
       continue;
@@ -1958,7 +1973,7 @@ LoginDatabase::PrimaryKeyAndPassword LoginDatabase::GetPrimaryKeyAndPassword(
     }
     return result;
   }
-  return {-1, std::string(), base::string16()};
+  return {-1, std::string(), std::u16string()};
 }
 
 std::unique_ptr<syncer::MetadataBatch>
@@ -2017,7 +2032,7 @@ std::unique_ptr<sync_pb::ModelTypeState> LoginDatabase::GetModelTypeState() {
 
 FormRetrievalResult LoginDatabase::StatementToForms(
     sql::Statement* statement,
-    const PasswordStore::FormDigest* matched_form,
+    const PasswordFormDigest* matched_form,
     PrimaryKeyToFormMap* key_to_form_map) {
   std::vector<PasswordForm> forms_to_be_deleted;
 

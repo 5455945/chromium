@@ -8,18 +8,26 @@
 #include <memory>
 
 #include "ash/app_list/app_list_metrics.h"
-#include "ash/app_list/test/test_app_list_client.h"
+#include "ash/app_list/test_app_list_client.h"
 
 namespace ash {
 
+class AppListBubbleAppsPage;
+class AppListBubbleSearchPage;
 class AppListControllerImpl;
 class AppListView;
+class RecentAppsView;
+class ScrollableAppsGridView;
+class SearchBoxView;
 enum class AppListViewState;
 
 class AppListTestHelper {
  public:
   AppListTestHelper();
   ~AppListTestHelper();
+
+  // Shows the app list on the default display.
+  void ShowAppList();
 
   // Show the app list in |display_id|, and wait until animation finishes.
   // Note: we usually don't care about the show source in tests.
@@ -47,7 +55,10 @@ class AppListTestHelper {
   void ToggleAndRunLoop(uint64_t display_id, AppListShowSource show_source);
 
   // Check the visibility value of the app list and its target.
-  // Fails in tests if either one doesn't match |visible|,.
+  // Fails in tests if either one doesn't match |visible|.
+  // DEPRECATED: Prefer to EXPECT_TRUE or EXPECT_FALSE the visibility directly,
+  // so a failing test will print the line number of the expectation that
+  // failed.
   void CheckVisibility(bool visible);
 
   // Check the current app list view state.
@@ -56,7 +67,15 @@ class AppListTestHelper {
   // Run all pending in message loop to wait for animation to finish.
   void WaitUntilIdle();
 
+  // Fullscreen/peeking launcher helpers.
   AppListView* GetAppListView();
+
+  // Bubble launcher helpers. The bubble must be open before calling these.
+  SearchBoxView* GetBubbleSearchBoxView();
+  AppListBubbleAppsPage* GetBubbleAppsPage();
+  RecentAppsView* GetBubbleRecentAppsView();
+  ScrollableAppsGridView* GetScrollableAppsGridView();
+  AppListBubbleSearchPage* GetBubbleSearchPage();
 
   TestAppListClient* app_list_client() { return app_list_client_.get(); }
 

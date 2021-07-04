@@ -536,10 +536,6 @@
         "name": "blink_perf.layout/auto-grid-lots-of-spanning-data.html"
     },
     {
-        "duration": "19.0",
-        "name": "blink_perf.layout/change-text-css-contain.html"
-    },
-    {
         "duration": "14.0",
         "name": "blink_perf.layout/chapter-reflow-once-random.html"
     },
@@ -1390,14 +1386,6 @@
     {
         "duration": "162.0",
         "name": "desktop_ui/tab_search:scroll_up_and_down:2020"
-    },
-    {
-        "duration": "423.0",
-        "name": "desktop_ui/tab_search:top100:2020"
-    },
-    {
-        "duration": "168.0",
-        "name": "desktop_ui/tab_search:top100:loading:2020"
     },
     {
         "duration": "93.0",

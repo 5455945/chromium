@@ -18,8 +18,6 @@
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
-#include "base/optional.h"
-#include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "chromeos/dbus/shill/shill_manager_client.h"
 #include "chromeos/dbus/shill/shill_profile_client.h"
@@ -30,6 +28,7 @@
 #include "chromeos/network/network_state_handler.h"
 #include "chromeos/network/shill_property_util.h"
 #include "dbus/object_path.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
 namespace chromeos {
@@ -93,6 +92,12 @@ std::string GetErrorName(const std::string& dbus_error_name,
   return default_error_name;
 }
 
+std::string GetString(const base::Value& dict, const char* key) {
+  DCHECK(dict.is_dict());
+  const std::string* value = dict.FindStringKey(key);
+  return value ? *value : std::string();
+}
+
 }  // namespace
 
 // Helper class to request from Shill the profile entries associated with a
@@ -104,7 +109,7 @@ class NetworkConfigurationHandler::ProfileEntryDeleter {
   ProfileEntryDeleter(NetworkConfigurationHandler* handler,
                       const std::string& service_path,
                       const std::string& guid,
-                      base::Optional<RemoveConfirmer> remove_confirmer,
+                      absl::optional<RemoveConfirmer> remove_confirmer,
                       base::OnceClosure callback,
                       network_handler::ErrorCallback error_callback)
       : owner_(handler),
@@ -127,7 +132,7 @@ class NetworkConfigurationHandler::ProfileEntryDeleter {
 
  private:
   void GetProfileEntriesToDeleteCallback(
-      base::Optional<base::Value> profile_entries) {
+      absl::optional<base::Value> profile_entries) {
     if (!profile_entries) {
       InvokeErrorCallback(service_path_, std::move(error_callback_),
                           "GetLoadableProfileEntriesFailed");
@@ -228,7 +233,7 @@ class NetworkConfigurationHandler::ProfileEntryDeleter {
   // value is the profile path of the profile in question.
   std::string restrict_to_profile_path_;
   std::string guid_;
-  base::Optional<RemoveConfirmer> remove_confirmer_;
+  absl::optional<RemoveConfirmer> remove_confirmer_;
   base::OnceClosure callback_;
   network_handler::ErrorCallback error_callback_;
 
@@ -261,7 +266,7 @@ void NetworkConfigurationHandler::GetShillProperties(
       network_state_handler_->GetNetworkState(service_path);
   if (network_state &&
       (NetworkTypePattern::Tether().MatchesType(network_state->type()) ||
-       network_state->IsDefaultCellular())) {
+       network_state->IsNonShillCellularNetwork())) {
     // This is a Tether network or a Cellular network with no Service.
     // Provide properties from NetworkState.
     base::Value dictionary(base::Value::Type::DICTIONARY);
@@ -281,7 +286,7 @@ void NetworkConfigurationHandler::SetShillProperties(
     const base::DictionaryValue& shill_properties,
     base::OnceClosure callback,
     network_handler::ErrorCallback error_callback) {
-  if (shill_properties.empty()) {
+  if (shill_properties.DictEmpty()) {
     if (!callback.is_null())
       std::move(callback).Run();
     return;
@@ -292,8 +297,7 @@ void NetworkConfigurationHandler::SetShillProperties(
       shill_properties.DeepCopy());
 
   // Make sure that the GUID is saved to Shill when setting properties.
-  std::string guid;
-  properties_to_set->GetStringWithoutPathExpansion(shill::kGuidProperty, &guid);
+  std::string guid = GetString(*properties_to_set, shill::kGuidProperty);
   if (guid.empty()) {
     const NetworkState* network_state =
         network_state_handler_->GetNetworkState(service_path);
@@ -350,8 +354,7 @@ void NetworkConfigurationHandler::CreateShillConfiguration(
     network_handler::ServiceResultCallback callback,
     network_handler::ErrorCallback error_callback) {
   ShillManagerClient* manager = ShillManagerClient::Get();
-  std::string type;
-  shill_properties.GetStringWithoutPathExpansion(shill::kTypeProperty, &type);
+  std::string type = GetString(shill_properties, shill::kTypeProperty);
   DCHECK(!type.empty());
 
   std::unique_ptr<base::DictionaryValue> properties_to_set(
@@ -361,14 +364,12 @@ void NetworkConfigurationHandler::CreateShillConfiguration(
                 << shill_property_util::GetNetworkIdFromProperties(
                        shill_properties);
 
-  std::string profile_path;
-  properties_to_set->GetStringWithoutPathExpansion(shill::kProfileProperty,
-                                                   &profile_path);
+  std::string profile_path =
+      GetString(*properties_to_set, shill::kProfileProperty);
   DCHECK(!profile_path.empty());
 
   // Make sure that the GUID is saved to Shill when configuring networks.
-  std::string guid;
-  properties_to_set->GetStringWithoutPathExpansion(shill::kGuidProperty, &guid);
+  std::string guid = GetString(*properties_to_set, shill::kGuidProperty);
   if (guid.empty()) {
     guid = base::GenerateGUID();
     properties_to_set->SetKey(shill::kGuidProperty, base::Value(guid));
@@ -381,7 +382,7 @@ void NetworkConfigurationHandler::CreateShillConfiguration(
       dbus::ObjectPath(profile_path), *properties_to_set,
       base::BindOnce(&NetworkConfigurationHandler::ConfigurationCompleted,
                      weak_ptr_factory_.GetWeakPtr(), profile_path, guid,
-                     base::Passed(&properties_copy), std::move(callback)),
+                     std::move(properties_copy), std::move(callback)),
       base::BindOnce(&NetworkConfigurationHandler::ConfigurationFailed,
                      weak_ptr_factory_.GetWeakPtr(),
                      std::move(error_callback)));
@@ -389,7 +390,7 @@ void NetworkConfigurationHandler::CreateShillConfiguration(
 
 void NetworkConfigurationHandler::RemoveConfiguration(
     const std::string& service_path,
-    base::Optional<RemoveConfirmer> remove_confirmer,
+    absl::optional<RemoveConfirmer> remove_confirmer,
     base::OnceClosure callback,
     network_handler::ErrorCallback error_callback) {
   RemoveConfigurationFromProfile(service_path, "", std::move(remove_confirmer),
@@ -410,7 +411,7 @@ void NetworkConfigurationHandler::RemoveConfigurationFromCurrentProfile(
     return;
   }
   RemoveConfigurationFromProfile(service_path, network_state->profile_path(),
-                                 /*remove_confirmer=*/base::nullopt,
+                                 /*remove_confirmer=*/absl::nullopt,
                                  std::move(callback),
                                  std::move(error_callback));
 }
@@ -418,7 +419,7 @@ void NetworkConfigurationHandler::RemoveConfigurationFromCurrentProfile(
 void NetworkConfigurationHandler::RemoveConfigurationFromProfile(
     const std::string& service_path,
     const std::string& profile_path,
-    base::Optional<RemoveConfirmer> remove_confirmer,
+    absl::optional<RemoveConfirmer> remove_confirmer,
     base::OnceClosure callback,
     network_handler::ErrorCallback error_callback) {
   // Service.Remove is not reliable. Instead, request the profile entries
@@ -589,11 +590,11 @@ void NetworkConfigurationHandler::SetNetworkProfileCompleted(
 void NetworkConfigurationHandler::GetPropertiesCallback(
     network_handler::ResultCallback callback,
     const std::string& service_path,
-    base::Optional<base::Value> properties) {
+    absl::optional<base::Value> properties) {
   if (!properties) {
     // Because network services are added and removed frequently, we will see
     // failures regularly, so don't log these.
-    std::move(callback).Run(service_path, base::nullopt);
+    std::move(callback).Run(service_path, absl::nullopt);
     return;
   }
 

@@ -8,12 +8,15 @@ See http://dev.chromium.org/developers/how-tos/depottools/presubmit-scripts
 for more details about the presubmit API built into depot_tools.
 """
 
+USE_PYTHON3 = True
+
+
 def CommonChecks(input_api, output_api):
   results = []
 
   gpu_env = dict(input_api.environ)
   gpu_env.update({
-      'PYTHONPATH': input_api.PresubmitLocalPath(),
+      'PYTHONPATH': str(input_api.PresubmitLocalPath()),
       'PYTHONDONTWRITEBYTECODE': '1',
   })
 
@@ -33,14 +36,6 @@ def CommonChecks(input_api, output_api):
                         message=output_api.PresubmitError),
   ]
   results.extend(input_api.RunTests(gpu_tests))
-
-  results.extend(
-      input_api.canned_checks.RunUnitTestsInDirectory(
-          input_api,
-          output_api,
-          input_api.os_path.join(input_api.PresubmitLocalPath(),
-                                 'unexpected_passes'), [r'^.+_unittest\.py$'],
-          env=gpu_env))
 
   pylint_checks = input_api.canned_checks.GetPylint(input_api, output_api)
   results.extend(input_api.RunTests(pylint_checks))

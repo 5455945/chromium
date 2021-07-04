@@ -11,6 +11,7 @@
 #include "base/command_line.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/notreached.h"
 #include "base/path_service.h"
 #include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
@@ -19,8 +20,6 @@
 #include "components/enterprise/browser/controller/browser_dm_token_storage.h"
 #include "components/enterprise/browser/controller/chrome_browser_cloud_management_helper.h"
 #include "components/enterprise/browser/enterprise_switches.h"
-#include "components/enterprise/browser/reporting/report_generator.h"
-#include "components/enterprise/browser/reporting/report_scheduler.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/core/common/cloud/chrome_browser_cloud_management_metrics.h"
 #include "components/policy/core/common/cloud/cloud_external_data_manager.h"
@@ -33,6 +32,11 @@
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/policy_constants.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
+
+#if !defined(OS_ANDROID)
+#include "components/enterprise/browser/reporting/report_generator.h"
+#include "components/enterprise/browser/reporting/report_scheduler.h"
+#endif  // !defined(OS_ANDROID)
 
 namespace policy {
 
@@ -68,13 +72,9 @@ const base::FilePath::CharType
     ChromeBrowserCloudManagementController::kPolicyDir[] =
         FILE_PATH_LITERAL("Policy");
 
-bool ChromeBrowserCloudManagementController::IsEnabled() {
-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  return true;
-#else
-  return base::CommandLine::ForCurrentProcess()->HasSwitch(
-      switches::kEnableChromeBrowserCloudManagement);
-#endif
+void ChromeBrowserCloudManagementController::Delegate::DeferInitialization(
+    base::OnceClosure callback) {
+  NOTREACHED();
 }
 
 ChromeBrowserCloudManagementController::ChromeBrowserCloudManagementController(
@@ -89,6 +89,15 @@ ChromeBrowserCloudManagementController::
     policy_fetcher_->RemoveClientObserver(this);
   if (cloud_policy_client_)
     cloud_policy_client_->RemoveObserver(this);
+}
+
+bool ChromeBrowserCloudManagementController::IsEnabled() {
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  return true;
+#else
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kEnableChromeBrowserCloudManagement);
+#endif
 }
 
 std::unique_ptr<MachineLevelUserCloudPolicyManager>
@@ -135,7 +144,7 @@ ChromeBrowserCloudManagementController::CreatePolicyManager(
   base::FilePath policy_dir =
       user_data_dir.Append(ChromeBrowserCloudManagementController::kPolicyDir);
 
-  base::FilePath external_policy_path = delegate_->GetExternalPolicyPath();
+  base::FilePath external_policy_path = delegate_->GetExternalPolicyDir();
 
   std::unique_ptr<MachineLevelUserCloudPolicyStore> policy_store =
       MachineLevelUserCloudPolicyStore::Create(
@@ -152,6 +161,24 @@ ChromeBrowserCloudManagementController::CreatePolicyManager(
       delegate_->CreateNetworkConnectionTrackerGetter());
 }
 
+void ChromeBrowserCloudManagementController::DeferrableCreatePolicyManager(
+    ConfigurationPolicyProvider* platform_provider,
+    base::OnceCallback<
+        void(std::unique_ptr<MachineLevelUserCloudPolicyManager>)> callback) {
+  if (delegate_->ReadyToCreatePolicyManager()) {
+    DeferrableCreatePolicyManagerImpl(platform_provider, std::move(callback));
+  } else {
+    // Postpone policy manager creation to happen during controller
+    // initialization, so it's guaranteed that all dependencies have been
+    // resolved (e.g. on Android it depends on PolicyService being created
+    // and initialized).
+    create_cloud_policy_manager_callback_ = base::BindOnce(
+        &ChromeBrowserCloudManagementController::
+            DeferrableCreatePolicyManagerImpl,
+        weak_factory_.GetWeakPtr(), platform_provider, std::move(callback));
+  }
+}
+
 void ChromeBrowserCloudManagementController::Init(
     PrefService* local_state,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
@@ -163,6 +190,16 @@ void ChromeBrowserCloudManagementController::Init(
     delegate_->InitializeOAuthTokenFactory(url_loader_factory, local_state);
   }
 
+  if (create_cloud_policy_manager_callback_) {
+    // The conditions that allow controller initialization should also unblock
+    // policy manager creation (e.g. on Android both depend on PolicyService
+    // being initialized).
+    DCHECK(delegate_->ReadyToCreatePolicyManager());
+
+    std::move(create_cloud_policy_manager_callback_).Run();
+  }
+
+#if !defined(OS_ANDROID)
   // Post the task of CreateReportScheduler to run on best effort after launch
   // is completed.
   delegate_->GetBestEffortTaskRunner()->PostTask(
@@ -170,6 +207,7 @@ void ChromeBrowserCloudManagementController::Init(
       base::BindOnce(
           &ChromeBrowserCloudManagementController::CreateReportScheduler,
           weak_factory_.GetWeakPtr()));
+#endif  // !defined(OS_ANDROID)
 
   MachineLevelUserCloudPolicyManager* policy_manager =
       delegate_->GetMachineLevelUserCloudPolicyManager();
@@ -239,6 +277,18 @@ void ChromeBrowserCloudManagementController::Init(
   }
 }
 
+void ChromeBrowserCloudManagementController::MaybeInit(
+    PrefService* local_state,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
+  if (delegate_->ReadyToInit()) {
+    Init(local_state, url_loader_factory);
+  } else {
+    delegate_->DeferInitialization(base::BindOnce(
+        &ChromeBrowserCloudManagementController::Init,
+        weak_factory_.GetWeakPtr(), local_state, url_loader_factory));
+  }
+}
+
 bool ChromeBrowserCloudManagementController::
     WaitUntilPolicyEnrollmentFinished() {
   return delegate_->WaitUntilPolicyEnrollmentFinished();
@@ -272,10 +322,12 @@ void ChromeBrowserCloudManagementController::InvalidatePolicies() {
     policy_fetcher_->Disconnect();
   }
 
+#if !defined(OS_ANDROID)
   // This causes the scheduler to stop refreshing itself since the DM token is
   // no longer valid.
   if (report_scheduler_)
     report_scheduler_->OnDMTokenUpdated();
+#endif
 }
 
 void ChromeBrowserCloudManagementController::InvalidateDMTokenCallback(
@@ -318,8 +370,15 @@ void ChromeBrowserCloudManagementController::OnServiceAccountSet(
 
 void ChromeBrowserCloudManagementController::ShutDown() {
   delegate_->ShutDown();
+#if !defined(OS_ANDROID)
   if (report_scheduler_)
     report_scheduler_.reset();
+#endif
+}
+
+void ChromeBrowserCloudManagementController::SetGaiaURLLoaderFactory(
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
+  delegate_->SetGaiaURLLoaderFactory(url_loader_factory);
 }
 
 void ChromeBrowserCloudManagementController::NotifyPolicyRegisterFinished(
@@ -335,11 +394,13 @@ void ChromeBrowserCloudManagementController::NotifyBrowserUnenrolled(
     observer.OnBrowserUnenrolled(succeeded);
 }
 
+#if !defined(OS_ANDROID)
 void ChromeBrowserCloudManagementController::NotifyCloudReportingLaunched() {
   for (auto& observer : observers_) {
     observer.OnCloudReportingLaunched();
   }
 }
+#endif  // !defined(OS_ANDROID)
 
 bool ChromeBrowserCloudManagementController::GetEnrollmentTokenAndClientId(
     std::string* enrollment_token,
@@ -398,13 +459,16 @@ void ChromeBrowserCloudManagementController::
   VLOG(1) << "Fetch policy after enrollment.";
   policy_fetcher_->SetupRegistrationAndFetchPolicy(
       BrowserDMTokenStorage::Get()->RetrieveDMToken(), client_id);
+#if !defined(OS_ANDROID)
   if (report_scheduler_) {
     report_scheduler_->OnDMTokenUpdated();
   }
+#endif  // !defined(OS_ANDROID)
 
   NotifyPolicyRegisterFinished(true);
 }
 
+#if !defined(OS_ANDROID)
 void ChromeBrowserCloudManagementController::CreateReportScheduler() {
   cloud_policy_client_ = std::make_unique<policy::CloudPolicyClient>(
       delegate_->GetDeviceManagementService(),
@@ -416,10 +480,15 @@ void ChromeBrowserCloudManagementController::CreateReportScheduler() {
 
   NotifyCloudReportingLaunched();
 }
+#endif  // !defined(OS_ANDROID)
 
-void ChromeBrowserCloudManagementController::SetGaiaURLLoaderFactory(
-    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
-  delegate_->SetGaiaURLLoaderFactory(url_loader_factory);
+void ChromeBrowserCloudManagementController::DeferrableCreatePolicyManagerImpl(
+    ConfigurationPolicyProvider* platform_provider,
+    base::OnceCallback<
+        void(std::unique_ptr<MachineLevelUserCloudPolicyManager>)> callback) {
+  std::unique_ptr<MachineLevelUserCloudPolicyManager> policy_manager =
+      CreatePolicyManager(platform_provider);
+  std::move(callback).Run(std::move(policy_manager));
 }
 
 }  // namespace policy

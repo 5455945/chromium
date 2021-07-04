@@ -17,19 +17,26 @@
 #include "base/memory/platform_shared_memory_region.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
-#include "base/optional.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
+#include "chromecast/bindings/public/mojom/api_bindings.mojom.h"
 #include "chromecast/browser/cast_media_blocker.h"
 #include "chromecast/browser/cast_web_contents.h"
+#include "chromecast/browser/named_message_port_connector_cast.h"
 #include "components/on_load_script_injector/browser/on_load_script_injector_host.h"
 #include "content/public/browser/render_process_host_observer.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/media_playback_renderer_type.mojom.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "services/service_manager/public/cpp/binder_registry.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/favicon/favicon_url.mojom-forward.h"
+
+namespace content {
+class NavigationHandle;
+}  // namespace content
 
 namespace chromecast {
 
@@ -47,7 +54,7 @@ class CastWebContentsImpl : public CastWebContents,
 
   content::WebContents* web_contents() const override;
   PageState page_state() const override;
-  base::Optional<pid_t> GetMainFrameRenderProcessPid() const override;
+  absl::optional<pid_t> GetMainFrameRenderProcessPid() const override;
 
   // CastWebContents implementation:
   int tab_id() const override;
@@ -55,6 +62,8 @@ class CastWebContentsImpl : public CastWebContents,
   void AddRendererFeatures(std::vector<RendererFeature> features) override;
   void AllowWebAndMojoWebUiBindings() override;
   void ClearRenderWidgetHostView() override;
+  void SetAppProperties(const std::string& session_id,
+                        bool is_audio_app) override;
   void LoadUrl(const GURL& url) override;
   void ClosePage() override;
   void Stop(int error_code) override;
@@ -67,16 +76,16 @@ class CastWebContentsImpl : public CastWebContents,
   void BlockMediaLoading(bool blocked) override;
   void BlockMediaStarting(bool blocked) override;
   void EnableBackgroundVideoPlayback(bool enabled) override;
-  on_load_script_injector::OnLoadScriptInjectorHost<std::string>*
-  script_injector() override;
-  void InjectScriptsIntoMainFrame() override;
+  void AddBeforeLoadJavaScript(uint64_t id, base::StringPiece script) override;
   void PostMessageToMainFrame(
       const std::string& target_origin,
       const std::string& data,
       std::vector<blink::WebMessagePort> ports) override;
   void ExecuteJavaScript(
-      const base::string16& javascript,
+      const std::u16string& javascript,
       base::OnceCallback<void(base::Value)> callback) override;
+  void ConnectToBindingsService(
+      mojo::PendingRemote<mojom::ApiBindings> api_bindings_remote) override;
   void AddObserver(Observer* observer) override;
   void RemoveObserver(Observer* observer) override;
   void SetEnabledForRemoteDebugging(bool enabled) override;
@@ -99,6 +108,8 @@ class CastWebContentsImpl : public CastWebContents,
       mojo::ScopedMessagePipeHandle* interface_pipe) override;
   void RenderProcessGone(base::TerminationStatus status) override;
   void DidStartNavigation(
+      content::NavigationHandle* navigation_handle) override;
+  void DidRedirectNavigation(
       content::NavigationHandle* navigation_handle) override;
   void ReadyToCommitNavigation(
       content::NavigationHandle* navigation_handle) override;
@@ -140,6 +151,10 @@ class CastWebContentsImpl : public CastWebContents,
   void OnClosePageTimeout();
   void RemoveRenderProcessHostObserver();
   std::vector<chromecast::shell::mojom::FeaturePtr> GetRendererFeatures();
+  void OnBindingsReceived(
+      std::vector<chromecast::mojom::ApiBindingPtr> bindings);
+  bool OnPortConnected(base::StringPiece port_name,
+                       std::unique_ptr<cast_api_bindings::MessagePort> port);
 
   content::WebContents* web_contents_;
   base::WeakPtr<Delegate> delegate_;
@@ -151,7 +166,7 @@ class CastWebContentsImpl : public CastWebContents,
   BackgroundColor view_background_color_;
   shell::RemoteDebuggingServer* const remote_debugging_server_;
   std::unique_ptr<CastMediaBlocker> media_blocker_;
-  base::Optional<std::vector<std::string>> activity_url_filter_;
+  absl::optional<std::vector<std::string>> activity_url_filter_;
 
   // Retained so that this observer can be removed before being destroyed:
   content::RenderProcessHost* main_process_host_;
@@ -164,15 +179,29 @@ class CastWebContentsImpl : public CastWebContents,
   bool is_websql_enabled_;
   bool is_mixer_audio_enabled_;
   base::TimeTicks start_loading_ticks_;
+
+  // True once the main frame finishes loading and there are no outstanding
+  // navigations.
   bool main_frame_loaded_;
+  content::NavigationHandle* active_navigation_ = nullptr;
+
   bool closing_;
   bool stopped_;
   bool stop_notified_;
   bool notifying_;
   int last_error_;
 
-  on_load_script_injector::OnLoadScriptInjectorHost<std::string>
-      script_injector_;
+  on_load_script_injector::OnLoadScriptInjectorHost<uint64_t> script_injector_;
+  mojo::Remote<mojom::ApiBindings> api_bindings_;
+
+  // If |ConnectToBindingsService| is invoked, |bindings_received_| is set
+  // false. Following |LoadUrl| will be stored in |pending_load_url_|, and
+  // will be invoked once bindings are received.
+  bool bindings_received_{false};
+  GURL pending_load_url_;
+
+  // Used to open a MessageChannel for connecting API bindings.
+  std::unique_ptr<NamedMessagePortConnectorCast> named_message_port_connector_;
 
   base::ObserverList<Observer>::Unchecked observer_list_;
 

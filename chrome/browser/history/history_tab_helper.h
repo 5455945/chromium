@@ -6,8 +6,8 @@
 #define CHROME_BROWSER_HISTORY_HISTORY_TAB_HELPER_H_
 
 #include "base/macros.h"
-#include "base/memory/ref_counted.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
 
@@ -21,18 +21,6 @@ class HistoryTabHelper : public content::WebContentsObserver,
  public:
   ~HistoryTabHelper() override;
 
-  // If true, visits that do not increment the typed count (see
-  // HistoryBackend::IsTypedIncrement()) are marked as hidden. More
-  // specifically, this does two things:
-  //
-  // . |HistoryAddPageArgs::hidden| supplied to HistoryService::AddPage() is set
-  //   to true.
-  // . The transition type PAGE_TRANSITION_FROM_API_3 is added.
-  //
-  // This results in the visit not directly influencing the omnibox and not
-  // being shown in history ui.
-  void set_hide_all_navigations(bool value) { hide_all_navigations_ = value; }
-
   // Updates history with the specified navigation. This is called by
   // DidFinishNavigation to update history state.
   void UpdateHistoryForNavigation(
@@ -45,6 +33,11 @@ class HistoryTabHelper : public content::WebContentsObserver,
       base::Time timestamp,
       int nav_entry_id,
       content::NavigationHandle* navigation_handle);
+
+  // Fakes that the WebContents is a tab for testing purposes.
+  void SetForceEligibleTabForTesting(bool force) {
+    force_eligibile_tab_for_testing_ = force;
+  }
 
  private:
   explicit HistoryTabHelper(content::WebContents* web_contents);
@@ -63,6 +56,9 @@ class HistoryTabHelper : public content::WebContentsObserver,
   // Helper function to return the history service.  May return null.
   history::HistoryService* GetHistoryService();
 
+  // Returns true if our observed web contents is an eligible tab.
+  bool IsEligibleTab(const history::HistoryAddPageArgs& add_page_args) const;
+
   // True after navigation to a page is complete and the page is currently
   // loading. Only applies to the main frame of the page.
   bool is_loading_ = false;
@@ -75,8 +71,8 @@ class HistoryTabHelper : public content::WebContentsObserver,
   // history system. Only applies to the main frame of the page.
   base::TimeTicks last_load_completion_;
 
-  // See comment above setter for details.
-  bool hide_all_navigations_ = false;
+  // Set to true in unit tests to avoid need for a Browser instance.
+  bool force_eligibile_tab_for_testing_ = false;
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 

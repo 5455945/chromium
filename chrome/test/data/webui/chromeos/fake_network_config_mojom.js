@@ -6,11 +6,14 @@
  * @fileoverview Fake implementation of CrosNetworkConfig for testing.
  */
 
- // clang-format off
+// clang-format off
  // #import {assert} from 'chrome://resources/js/assert.m.js';
  // #import {OncMojo} from 'chrome://resources/cr_components/chromeos/network/onc_mojo.m.js';
  // #import {PromiseResolver} from 'chrome://resources/js/promise_resolver.m.js';
- // clang-format on
+// clang-format on
+
+// Default cellular pin, used when locking/unlocking cellular profiles.
+/* #export */ const DEFAULT_CELLULAR_PIN = '1111';
 
 // TODO(stevenjb): Include cros_network_config.mojom.js and extend
 // CrosNetworkConfigInterface
@@ -41,9 +44,31 @@
     this.userCerts_ = [];
 
     /**
-     * @type {!Array<!chromeos.networkConfig.mojom.CrosNetworkConfigObserver>
+     * @type {!Array<!chromeos.networkConfig.mojom.CrosNetworkConfigObserver>}
      */
     this.observers_ = [];
+
+    /**
+     * When updating or changing cellular pin, |testPin| is used to store
+     * the updated pin, if not set DEFAULT_CELLULAR_PIN is used to check pin
+     * value in |setCellularSimState()|
+     * @type {string}
+     */
+    this.testPin = '';
+
+    /**
+     * @type {chromeos.networkConfig.mojom.AlwaysOnVpnProperties}
+     */
+    this.alwaysOnVpnProperties_ = {
+      mode: chromeos.networkConfig.mojom.AlwaysOnVpnMode.kOff,
+      serviceGuid: '',
+    };
+
+    /** @type {Function} */
+    this.beforeGetDeviceStateList = null;
+
+    /** @type {!Array<chromeos.networkConfig.mojom.VpnProvider>} */
+    this.vpnProviders_ = [];
 
     this.resetForTest();
   }
@@ -55,10 +80,14 @@
    */
   addDeviceState_(type) {
     assert(type !== undefined);
-    const deviceState = {
-      type: type,
-      deviceState: chromeos.networkConfig.mojom.DeviceStateType.kUninitialized
-    };
+    const deviceState =
+        /** @type {!chromeos.networkConfig.mojom.DeviceStateProperties} */ ({
+          type: type,
+          deviceState:
+              chromeos.networkConfig.mojom.DeviceStateType.kUninitialized,
+          inhibitReason:
+              chromeos.networkConfig.mojom.InhibitReason.kNotInhibited
+        });
     this.deviceStates_.set(type, deviceState);
     return deviceState;
   }
@@ -74,12 +103,13 @@
     this.addDeviceState_(mojom.NetworkType.kTether);
     this.addDeviceState_(mojom.NetworkType.kVPN);
 
-    this.globalPolicy_ = {
-      allow_only_policy_networks_to_autoconnect: false,
-      allow_only_policy_networks_to_connect: false,
-      allow_only_policy_networks_to_connect_if_available: false,
-      blocked_hex_ssids: [],
-    };
+    this.globalPolicy_ =
+        /** @type {!chromeos.networkConfig.mojom.GlobalPolicy} */ ({
+          allow_only_policy_networks_to_autoconnect: false,
+          allow_only_policy_networks_to_connect: false,
+          allow_only_policy_networks_to_connect_if_available: false,
+          blocked_hex_ssids: [],
+        });
 
     const eth0 =
         OncMojo.getDefaultNetworkState(mojom.NetworkType.kEthernet, 'eth0');
@@ -89,13 +119,23 @@
 
     this.vpnProviders_ = [];
 
-    ['getNetworkState', 'getNetworkStateList', 'getDeviceStateList',
-     'getManagedProperties', 'setNetworkTypeEnabledState', 'requestNetworkScan',
-     'getGlobalPolicy', 'getVpnProviders', 'getNetworkCertificates',
-     'setProperties']
-        .forEach((methodName) => {
-          this.resolverMap_.set(methodName, new PromiseResolver());
-        });
+    ['getNetworkState',
+     'getNetworkStateList',
+     'getDeviceStateList',
+     'getManagedProperties',
+     'setNetworkTypeEnabledState',
+     'requestNetworkScan',
+     'getGlobalPolicy',
+     'getVpnProviders',
+     'getNetworkCertificates',
+     'setProperties',
+     'setCellularSimState',
+     'startConnect',
+     'configureNetwork',
+     'getAlwaysOnVpn',
+    ].forEach((methodName) => {
+      this.resolverMap_.set(methodName, new PromiseResolver());
+    });
   }
 
   /**
@@ -130,7 +170,7 @@
 
   /**
    * @param {!Array<!chromeos.networkConfig.mojom.NetworkStateProperties>}
-   *     network
+   *     networks
    */
   addNetworksForTest(networks) {
     this.networkStates_ = this.networkStates_.concat(networks);
@@ -138,7 +178,17 @@
   }
 
   /**
-   * @param {!chromeos.networkConfig.mojom.ManagedProperties>} network
+   * @param {!chromeos.networkConfig.mojom.NetworkStateProperties} network
+   */
+  removeNetworkForTest(network) {
+    this.networkStates_ = this.networkStates_.filter((state) => {
+      return state.guid !== network.guid;
+    });
+    this.onNetworkStateListChanged();
+  }
+
+  /**
+   * @param {!chromeos.networkConfig.mojom.ManagedProperties} network
    */
   setManagedPropertiesForTest(network) {
     assert(network.guid);
@@ -153,6 +203,7 @@
     } else {
       this.networkStates_.push(networkState);
     }
+    this.onNetworkStateListChanged();
   }
 
   /**
@@ -163,7 +214,7 @@
     const network = this.networkStates_.find(state => {
       return state.guid === guid;
     });
-    assertTrue(!!network, 'Network not found: ' + guid);
+    assert(!!network, 'Network not found: ' + guid);
     network.connectionState = state;
 
     const managed = this.managedProperties_.get(guid);
@@ -171,6 +222,43 @@
       managed.connectionState = state;
     }
     this.onActiveNetworksChanged();
+  }
+
+  /**
+   * @param {string} guid
+   * @return {!Promise<{result:
+   *     !chromeos.networkConfig.mojom.StartConnectResult}>}
+   */
+  startConnect(guid) {
+    return new Promise(resolve => {
+      this.methodCalled('startConnect');
+      resolve(
+          {result: chromeos.networkConfig.mojom.StartConnectResult.kCanceled});
+    });
+  }
+
+  /**
+   * @param {chromeos.networkConfig.mojom.ConfigProperties} properties
+   * @param {boolean} shared
+   * @return {!Promise<{guid: string, errorMessage: string}>}
+   */
+  configureNetwork(properties, shared) {
+    return new Promise(resolve => {
+      this.methodCalled('configureNetwork');
+      resolve({guid: 'test_guid', errorMessage: ''});
+    });
+  }
+
+  /**
+   * @param {string} guid
+   * @param {chromeos.networkConfig.mojom.ConfigProperties} properties
+   * @return {!Promise<{success: boolean, errorMessage: string}>}
+   */
+  setProperties(guid, properties) {
+    return new Promise(resolve => {
+      this.methodCalled('setProperties');
+      resolve({success: true, errorMessage: ''});
+    });
   }
 
   /**
@@ -184,7 +272,7 @@
   }
 
   /**
-   * @param {string} type
+   * @param {chromeos.networkConfig.mojom.NetworkType} type
    * @return {?chromeos.networkConfig.mojom.DeviceStateProperties}
    */
   getDeviceStateForTest(type) {
@@ -207,8 +295,12 @@
     this.onNetworkCertificatesChanged();
   }
 
-  // networkConfig observers
-
+  /**
+   * networkConfig observers
+   * TODO(joonbug): Remove the suppress when CrosNetworkConfigObserver is
+   * properly discoverable.
+   * @suppress {missingProperties}
+   */
   onActiveNetworksChanged() {
     const activeNetworks = this.networkStates_.filter(state => {
       // Calling onActiveNetworksChanged will trigger mojo checks on all
@@ -224,18 +316,38 @@
     this.observers_.forEach(o => o.onActiveNetworksChanged(activeNetworks));
   }
 
+  /**
+   * TODO(joonbug): Remove the suppress when CrosNetworkConfigObserver is
+   * properly discoverable.
+   * @suppress {missingProperties}
+   */
   onNetworkStateListChanged() {
     this.observers_.forEach(o => o.onNetworkStateListChanged());
   }
 
+  /**
+   * TODO(joonbug): Remove the suppress when CrosNetworkConfigObserver is
+   * properly discoverable.
+   * @suppress {missingProperties}
+   */
   onDeviceStateListChanged() {
     this.observers_.forEach(o => o.onDeviceStateListChanged());
   }
 
+  /**
+   * TODO(joonbug): Remove the suppress when CrosNetworkConfigObserver is
+   * properly discoverable.
+   * @suppress {missingProperties}
+   */
   onVpnProvidersChanged() {
     this.observers_.forEach(o => o.onVpnProvidersChanged());
   }
 
+  /**
+   * TODO(joonbug): Remove the suppress when CrosNetworkConfigObserver is
+   * properly discoverable.
+   * @suppress {missingProperties}
+   */
   onNetworkCertificatesChanged() {
     this.observers_.forEach(o => o.onNetworkCertificatesChanged());
   }
@@ -243,7 +355,7 @@
   // networkConfig methods
 
   /**
-   * @param {!chromeos.networkConfig.mojom.CrosNetworkConfigObserverProxy }
+   * @param {!chromeos.networkConfig.mojom.CrosNetworkConfigObserver}
    *     observer
    */
   addObserver(observer) {
@@ -253,7 +365,7 @@
   /**
    * @param {string} guid
    * @return {!Promise<{result:
-   *     !chromeos.networkConfig.mojom.NetworkStateProperties>>}
+   *     !chromeos.networkConfig.mojom.NetworkStateProperties}>}
    */
   getNetworkState(guid) {
     return new Promise(resolve => {
@@ -297,6 +409,10 @@
           devices.push(state);
         }
       });
+      if (this.beforeGetDeviceStateList) {
+        this.beforeGetDeviceStateList();
+        this.beforeGetDeviceStateList = null;
+      }
       this.methodCalled('getDeviceStateList');
       resolve({result: devices});
     });
@@ -323,6 +439,59 @@
       }
       this.methodCalled('getManagedProperties');
       resolve({result: result || null});
+    });
+  }
+
+  /**
+   * @param {!chromeos.networkConfig.mojom.CellularSimState} cellularSimState
+   * @return {!Promise<{success: boolean}>}
+   */
+  setCellularSimState(cellularSimState) {
+    return new Promise(resolve => {
+      const completeSetCellularSimState = (success) => {
+        this.methodCalled('setCellularSimState');
+        this.onDeviceStateListChanged();
+        resolve({success: success});
+      };
+
+      // This is only called by cellular networks.
+      const type = chromeos.networkConfig.mojom.NetworkType.kCellular;
+      let deviceState = this.deviceStates_.get(type);
+      let simLockStatus = deviceState.simLockStatus;
+      const pin = this.testPin ? this.testPin : DEFAULT_CELLULAR_PIN;
+
+      // If the correct pin is entered.
+      if (cellularSimState.currentPinOrPuk === pin) {
+        if (cellularSimState.newPin) {
+          // Set new pin.
+          this.testPin = cellularSimState.newPin;
+          completeSetCellularSimState(/*success*/ true);
+          return;
+        }
+
+        // toggling lock status.
+        simLockStatus.lockEnabled = !simLockStatus.lockEnabled;
+        deviceState.simLockStatus = simLockStatus;
+        this.deviceStates_.set(type, deviceState);
+        completeSetCellularSimState(/*success*/ true);
+        return;
+      }
+
+      // Wrong pin entered.
+      if (simLockStatus.retriesLeft > 1) {
+        // If there is more than one retries left.
+        simLockStatus.retriesLeft--;
+        deviceState.simLockStatus = simLockStatus;
+        this.deviceStates_.set(type, deviceState);
+        completeSetCellularSimState(/*success*/ false);
+        return;
+      }
+
+      // No retried left.
+      simLockStatus = {lockEnabled: true, lockType: 'sim-puk', retriesLeft: 0};
+      deviceState.simLockStatus = simLockStatus;
+      this.deviceStates_.set(type, deviceState);
+      completeSetCellularSimState(/*success*/ false);
     });
   }
 
@@ -380,5 +549,23 @@
       this.methodCalled('getNetworkCertificates');
       resolve({serverCas: this.serverCas_, userCerts: this.userCerts_});
     });
+  }
+
+  /**
+   * @return {!Promise<{
+   *      result: !chromeos.networkConfig.mojom.AlwaysOnVpnProperties}>}
+   */
+  getAlwaysOnVpn() {
+    return new Promise(resolve => {
+      this.methodCalled('getAlwaysOnVpn');
+      resolve({properties: this.alwaysOnVpnProperties_});
+    });
+  }
+
+  /**
+   * @param {!chromeos.networkConfig.mojom.AlwaysOnVpnProperties} properties
+   */
+  setAlwaysOnVpn(properties) {
+    this.alwaysOnVpnProperties_ = properties;
   }
 }

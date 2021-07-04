@@ -11,6 +11,7 @@
 #include "content/browser/file_system_access/mock_file_system_access_permission_grant.h"
 #include "content/public/test/browser_task_environment.h"
 #include "storage/browser/blob/blob_storage_context.h"
+#include "storage/browser/quota/quota_manager_proxy.h"
 #include "storage/browser/test/test_file_system_context.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -168,7 +169,7 @@ TEST_F(FileSystemAccessHandleBaseTest, RequestWritePermission_AlreadyGranted) {
 TEST_F(FileSystemAccessHandleBaseTest, RequestWritePermission) {
   const int kProcessId = 1;
   const int kFrameRoutingId = 2;
-  const GlobalFrameRoutingId kFrameId(kProcessId, kFrameRoutingId);
+  const GlobalRenderFrameHostId kFrameId(kProcessId, kFrameRoutingId);
 
   auto url =
       FileSystemURL::CreateForTest(kTestOrigin, storage::kFileSystemTypeTest,

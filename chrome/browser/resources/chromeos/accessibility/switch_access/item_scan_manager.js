@@ -7,6 +7,7 @@ import {AutoScanManager} from './auto_scan_manager.js';
 import {FocusRingManager} from './focus_ring_manager.js';
 import {FocusData, FocusHistory} from './history.js';
 import {MenuManager} from './menu_manager.js';
+import {Navigator} from './navigator.js';
 import {ItemNavigatorInterface} from './navigator_interface.js';
 import {BackButtonNode} from './nodes/back_button_node.js';
 import {BasicNode, BasicRootNode} from './nodes/basic_node.js';
@@ -49,6 +50,12 @@ export class ItemScanManager extends ItemNavigatorInterface {
     /** @private {!FocusHistory} */
     this.history_ = new FocusHistory();
 
+    /** @private {?FocusData} */
+    this.suspendedGroup_ = null;
+
+    /** @private {boolean} */
+    this.ignoreFocusInKeyboard_ = false;
+
     this.init_();
   }
 
@@ -74,6 +81,7 @@ export class ItemScanManager extends ItemNavigatorInterface {
 
   /** @override */
   enterKeyboard() {
+    this.ignoreFocusInKeyboard_ = true;
     this.node_.automationNode.focus();
     const keyboard = KeyboardRootNode.buildTree();
     this.jumpTo_(keyboard);
@@ -93,6 +101,7 @@ export class ItemScanManager extends ItemNavigatorInterface {
 
   /** @override */
   exitKeyboard() {
+    this.ignoreFocusInKeyboard_ = false;
     const isKeyboard = (data) => data.group instanceof KeyboardRootNode;
     // If we are not in the keyboard, do nothing.
     if (!(this.group_ instanceof KeyboardRootNode) &&
@@ -108,7 +117,15 @@ export class ItemScanManager extends ItemNavigatorInterface {
       this.exitGroup_();
     }
 
-    this.moveToValidNode();
+    chrome.automation.getFocus(focus => {
+      // First, try to move back to the focused node.
+      if (focus) {
+        this.moveTo_(focus);
+      } else {
+        // Otherwise, move to anything that's valid based on the above history.
+        this.moveToValidNode();
+      }
+    });
   }
 
   /** @override */
@@ -217,9 +234,6 @@ export class ItemScanManager extends ItemNavigatorInterface {
       return;
     }
 
-    // Make sure the menu isn't open.
-    ActionManager.exitAllMenus();
-
     const child = this.group_.firstValidChild();
     if (groupIsValid && child) {
       this.setNode_(child);
@@ -227,6 +241,38 @@ export class ItemScanManager extends ItemNavigatorInterface {
     }
 
     this.restoreFromHistory_();
+
+    // Make sure the menu isn't open unless we're still in the menu.
+    if (!this.group_.isEquivalentTo(MenuManager.menuAutomationNode)) {
+      ActionManager.exitAllMenus();
+    }
+  }
+
+  /** @override */
+  restart() {
+    const point = Navigator.byPoint.currentPoint;
+    SwitchAccess.mode = SAConstants.Mode.ITEM_SCAN;
+    this.desktop_.hitTestWithReply(point.x, point.y, (node) => {
+      this.moveTo_(node);
+    });
+  }
+
+  /** @override */
+  restoreSuspendedGroup() {
+    if (this.suspendedGroup_) {
+      // Clearing the focus rings avoids having them re-animate to the same
+      // position.
+      FocusRingManager.clearAll();
+      this.history_.save(new FocusData(this.group_, this.node_));
+      this.loadFromData_(this.suspendedGroup_);
+    }
+  }
+
+  /** @override */
+  suspendCurrentGroup() {
+    const data = new FocusData(this.group_, this.node_);
+    this.exitGroup_();
+    this.suspendedGroup_ = data;
   }
 
   /** @override */
@@ -258,6 +304,13 @@ export class ItemScanManager extends ItemNavigatorInterface {
       return;
     }
 
+    // To be safe, let's ignore focus when we're in the SA menu or over the
+    // keyboard.
+    if (this.ignoreFocusInKeyboard_ ||
+        this.group_ instanceof KeyboardRootNode || MenuManager.isMenuOpen()) {
+      return;
+    }
+
     if (this.node_.isEquivalentTo(event.target)) {
       return;
     }
@@ -279,7 +332,7 @@ export class ItemScanManager extends ItemNavigatorInterface {
       FocusRingManager.setFocusedNode(this.node_);
     }
     this.group_.refresh();
-    ActionManager.refreshMenu();
+    ActionManager.refreshMenuUnconditionally();
   }
 
   /**
@@ -330,8 +383,14 @@ export class ItemScanManager extends ItemNavigatorInterface {
 
   /** @private */
   init_() {
-    this.group_.onFocus();
-    this.node_.onFocus();
+    chrome.automation.getFocus(focus => {
+      if (focus && this.history_.buildFromAutomationNode(focus)) {
+        this.restoreFromHistory_();
+      } else {
+        this.group_.onFocus();
+        this.node_.onFocus();
+      }
+    });
 
     new RepeatedEventHandler(
         this.desktop_, chrome.automation.EventType.FOCUS,
@@ -409,7 +468,19 @@ export class ItemScanManager extends ItemNavigatorInterface {
    * @private
    */
   restoreFromHistory_() {
-    const data = this.history_.retrieve();
+    // retrieve() guarantees that the data's group is valid.
+    this.loadFromData_(this.history_.retrieve());
+  }
+
+  /**
+   * Extracts the focus and group from save data.
+   * @param {!FocusData} data
+   * @private
+   */
+  loadFromData_(data) {
+    if (!data.group.isValidGroup()) {
+      return;
+    }
 
     // |data.focus| may not be a child of |data.group| anymore since
     // |data.group| updates when retrieving the history record. So |data.focus|
@@ -424,7 +495,6 @@ export class ItemScanManager extends ItemNavigatorInterface {
       }
     }
 
-    // retrieve() guarantees that the group is valid, but not the focus.
     if (focusTarget && focusTarget.isValidAndVisible()) {
       this.setGroup_(data.group, focusTarget);
     } else {
@@ -440,6 +510,9 @@ export class ItemScanManager extends ItemNavigatorInterface {
    * @private
    */
   setGroup_(group, opt_focus) {
+    // Clear the suspended group, as it's only valid in its original context.
+    this.suspendedGroup_ = null;
+
     this.group_.onUnfocus();
     this.group_ = group;
     this.group_.onFocus();
@@ -449,6 +522,38 @@ export class ItemScanManager extends ItemNavigatorInterface {
       this.moveToValidNode();
       return;
     }
+
+    // Check to see if the new node requires we try and focus a new window.
+    chrome.automation.getFocus(currentAutomationFocus => {
+      const newAutomationNode = node.automationNode;
+      if (!newAutomationNode || !currentAutomationFocus) {
+        return;
+      }
+
+      // First, if the current focus is a descendant of the new node or vice
+      // versa, then we're done here.
+      if (AutomationUtil.isDescendantOf(
+              currentAutomationFocus, newAutomationNode) ||
+          AutomationUtil.isDescendantOf(
+              newAutomationNode, currentAutomationFocus)) {
+        return;
+      }
+
+      // The current focus and new node do not have one another in their
+      // ancestry; try to focus an ancestor window of the new node. In
+      // particular, the parenting aura::Window of the views::Widget.
+      let widget = newAutomationNode;
+      while (widget &&
+             (widget.role !== chrome.automation.RoleType.WINDOW ||
+              widget.className !== 'Widget')) {
+        widget = widget.parent;
+      }
+
+      if (widget && widget.parent) {
+        widget.parent.focus();
+      }
+    });
+
     this.setNode_(node);
   }
 

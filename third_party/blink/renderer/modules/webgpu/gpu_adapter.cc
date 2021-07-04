@@ -12,6 +12,8 @@
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/modules/webgpu/gpu_device.h"
+#include "third_party/blink/renderer/modules/webgpu/gpu_supported_features.h"
+#include "third_party/blink/renderer/modules/webgpu/gpu_supported_limits.h"
 #include "third_party/blink/renderer/platform/heap/heap.h"
 
 namespace blink {
@@ -20,10 +22,7 @@ namespace {
 WGPUDeviceProperties AsDawnType(const GPUDeviceDescriptor* descriptor) {
   DCHECK_NE(nullptr, descriptor);
 
-  const Vector<String>& feature_names = descriptor->hasExtensions()
-                                            ? descriptor->extensions()
-                                            :  // Deprecated path
-                                            descriptor->nonGuaranteedFeatures();
+  auto&& feature_names = descriptor->requiredFeatures();
 
   HashSet<String> feature_set;
   for (auto& feature : feature_names)
@@ -40,9 +39,12 @@ WGPUDeviceProperties AsDawnType(const GPUDeviceDescriptor* descriptor) {
       feature_set.Contains("pipeline-statistics-query");
   requested_device_properties.timestampQuery =
       feature_set.Contains("timestamp-query");
+  requested_device_properties.depthClamping =
+      feature_set.Contains("depth-clamping");
 
   return requested_device_properties;
 }
+
 }  // anonymous namespace
 
 GPUAdapter::GPUAdapter(
@@ -53,7 +55,8 @@ GPUAdapter::GPUAdapter(
     : DawnObjectBase(dawn_control_client),
       name_(name),
       adapter_service_id_(adapter_service_id),
-      adapter_properties_(properties) {
+      adapter_properties_(properties),
+      limits_(MakeGarbageCollected<GPUSupportedLimits>()) {
   InitializeFeatureNameList();
 }
 
@@ -81,16 +84,8 @@ const String& GPUAdapter::name() const {
   return name_;
 }
 
-Vector<String> GPUAdapter::features() const {
-  return feature_name_list_;
-}
-
-Vector<String> GPUAdapter::extensions(ExecutionContext* execution_context) {
-  AddConsoleWarning(
-      execution_context,
-      "The extensions attribute has been deprecated in favor of the features "
-      "attribute, and will soon be removed.");
-  return feature_name_list_;
+GPUSupportedFeatures* GPUAdapter::features() const {
+  return features_;
 }
 
 void GPUAdapter::OnRequestDeviceCallback(ScriptPromiseResolver* resolver,
@@ -113,18 +108,22 @@ void GPUAdapter::OnRequestDeviceCallback(ScriptPromiseResolver* resolver,
 }
 
 void GPUAdapter::InitializeFeatureNameList() {
-  DCHECK(feature_name_list_.IsEmpty());
+  features_ = MakeGarbageCollected<GPUSupportedFeatures>();
+  DCHECK(features_->FeatureNameSet().IsEmpty());
   if (adapter_properties_.textureCompressionBC) {
-    feature_name_list_.emplace_back("texture-compression-bc");
+    features_->AddFeatureName("texture-compression-bc");
   }
   if (adapter_properties_.shaderFloat16) {
-    feature_name_list_.emplace_back("shader-float16");
+    features_->AddFeatureName("shader-float16");
   }
   if (adapter_properties_.pipelineStatisticsQuery) {
-    feature_name_list_.emplace_back("pipeline-statistics-query");
+    features_->AddFeatureName("pipeline-statistics-query");
   }
   if (adapter_properties_.timestampQuery) {
-    feature_name_list_.emplace_back("timestamp-query");
+    features_->AddFeatureName("timestamp-query");
+  }
+  if (adapter_properties_.depthClamping) {
+    features_->AddFeatureName("depth-clamping");
   }
 }
 
@@ -133,12 +132,44 @@ ScriptPromise GPUAdapter::requestDevice(ScriptState* script_state,
   auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
   ScriptPromise promise = resolver->Promise();
 
-  if (descriptor->hasExtensions()) {
+  // Normalize the device descriptor to avoid using the deprecated fields.
+  if (descriptor->nonGuaranteedFeatures().size() > 0) {
     AddConsoleWarning(
-        ExecutionContext::From(script_state),
-        "Specifying extensions when requesting a GPUDevice is deprecated in "
-        "favor of specifying nonGuaranteedFeatures, and will soon be removed.");
-    descriptor->setNonGuaranteedFeatures(descriptor->extensions());
+        resolver->GetExecutionContext(),
+        "nonGuaranteedFeatures is deprecated. Use requiredFeatures instead.");
+    descriptor->setRequiredFeatures(descriptor->nonGuaranteedFeatures());
+  }
+  if (descriptor->hasNonGuaranteedLimits()) {
+    AddConsoleWarning(
+        resolver->GetExecutionContext(),
+        "nonGuaranteedLimits is deprecated. Use requiredLimits instead.");
+    descriptor->setRequiredLimits(descriptor->nonGuaranteedLimits());
+  }
+
+  // Validation of the limits could happen in Dawn, but until that's
+  // implemented we can do it here to preserve the spec behavior.
+  if (descriptor->hasRequiredLimits()) {
+    for (const auto& key_value_pair : descriptor->requiredLimits()) {
+      switch (
+          limits_->ValidateLimit(key_value_pair.first, key_value_pair.second)) {
+        case GPUSupportedLimits::ValidationResult::Valid:
+          break;
+        case GPUSupportedLimits::ValidationResult::BadName: {
+          resolver->Reject(MakeGarbageCollected<DOMException>(
+              DOMExceptionCode::kOperationError, "The limit name \"" +
+                                                     key_value_pair.first +
+                                                     "\" is not recognized."));
+          return promise;
+        }
+        case GPUSupportedLimits::ValidationResult::BadValue: {
+          resolver->Reject(MakeGarbageCollected<DOMException>(
+              DOMExceptionCode::kOperationError,
+              "The limit requested for \"" + key_value_pair.first +
+                  "\" exceeds the adapter's supported limit."));
+          return promise;
+        }
+      }
+    }
   }
 
   WGPUDeviceProperties requested_device_properties = AsDawnType(descriptor);
@@ -149,6 +180,12 @@ ScriptPromise GPUAdapter::requestDevice(ScriptState* script_state,
                 WrapPersistent(resolver), WrapPersistent(descriptor)));
 
   return promise;
+}
+
+void GPUAdapter::Trace(Visitor* visitor) const {
+  visitor->Trace(features_);
+  visitor->Trace(limits_);
+  ScriptWrappable::Trace(visitor);
 }
 
 }  // namespace blink

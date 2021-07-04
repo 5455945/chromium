@@ -8,17 +8,17 @@
 
 #include "base/bind.h"
 #include "base/compiler_specific.h"
+#include "base/cxx17_backports.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/lazy_instance.h"
 #include "base/location.h"
 #include "base/macros.h"
 #include "base/metrics/histogram.h"
-#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_tokenizer.h"
 #include "base/strings/stringprintf.h"
-#include "base/task/post_task.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/threading/thread_task_runner_handle.h"
@@ -33,6 +33,7 @@
 #include "components/omnibox/browser/omnibox_event_global_tracker.h"
 #include "components/version_info/version_info.h"
 #include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/notification_service.h"
@@ -161,7 +162,7 @@ void ThreadWatcherObserver::OnUserActivityDetected() {
 ThreadWatcher::ThreadWatcher(const WatchingParams& params)
     : thread_id_(params.thread_id),
       thread_name_(params.thread_name),
-      watched_runner_(base::CreateSingleThreadTaskRunner({params.thread_id})),
+      watched_runner_(BrowserThread::GetTaskRunnerForThread(params.thread_id)),
       sleep_time_(params.sleep_time),
       unresponsive_time_(params.unresponsive_time),
       ping_time_(base::TimeTicks::Now()),
@@ -175,6 +176,7 @@ ThreadWatcher::ThreadWatcher(const WatchingParams& params)
       hung_processing_complete_(false),
       unresponsive_threshold_(params.unresponsive_threshold),
       crash_on_hang_(params.crash_on_hang) {
+  DCHECK(watched_runner_);
   DCHECK(WatchDogThread::CurrentlyOnWatchDogThread());
   Initialize();
 }
@@ -626,7 +628,7 @@ void ThreadWatcherList::ParseCommandLineCrashOnHangThreads(
     // unresponsive before considering it as hung.
     CHECK_LE(values.size(), 2U);
 
-    std::string thread_name = values[0].as_string();
+    std::string thread_name(values[0]);
 
     uint32_t crash_seconds = default_crash_seconds;
     if (values.size() >= 2 &&

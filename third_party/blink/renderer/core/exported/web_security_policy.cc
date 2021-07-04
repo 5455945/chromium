@@ -73,6 +73,11 @@ void WebSecurityPolicy::
       scheme);
 }
 
+void WebSecurityPolicy::RegisterURLSchemeAsAllowingSharedArrayBuffers(
+    const WebString& scheme) {
+  SchemeRegistry::RegisterURLSchemeAsAllowingSharedArrayBuffers(scheme);
+}
+
 void WebSecurityPolicy::AddOriginAccessAllowListEntry(
     const WebURL& source_origin,
     const WebString& destination_protocol,
@@ -137,6 +142,14 @@ void WebSecurityPolicy::RegisterURLSchemeAsAllowedForReferrer(
 
 void WebSecurityPolicy::RegisterURLSchemeAsError(const WebString& scheme) {
   SchemeRegistry::RegisterURLSchemeAsError(scheme);
+}
+
+void WebSecurityPolicy::RegisterURLSchemeAsExtension(const WebString& scheme) {
+  SchemeRegistry::RegisterURLSchemeAsExtension(scheme);
+}
+
+void WebSecurityPolicy::RegisterURLSchemeAsWebUI(const WebString& scheme) {
+  SchemeRegistry::RegisterURLSchemeAsWebUI(scheme);
 }
 
 }  // namespace blink

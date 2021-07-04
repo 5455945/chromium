@@ -5,13 +5,13 @@
 #include "components/password_manager/core/browser/form_saver_impl.h"
 
 #include <memory>
+#include <string>
 #include <vector>
 
-#include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "components/password_manager/core/browser/password_manager_util.h"
-#include "components/password_manager/core/browser/password_store.h"
+#include "components/password_manager/core/browser/password_store_interface.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "url/gurl.h"
@@ -32,8 +32,7 @@ void SanitizeFormData(FormData* form) {
     field.label.clear();
     field.value.clear();
     field.autocomplete_attribute.clear();
-    field.option_values.clear();
-    field.option_contents.clear();
+    field.options.clear();
     field.placeholder.clear();
     field.css_classes.clear();
     field.id_attribute.clear();
@@ -44,8 +43,8 @@ void SanitizeFormData(FormData* form) {
 // Do the clean up of |matches| after |pending| was just pushed to the store.
 void PostProcessMatches(const PasswordForm& pending,
                         const std::vector<const PasswordForm*>& matches,
-                        const base::string16& old_password,
-                        PasswordStore* store) {
+                        const std::u16string& old_password,
+                        PasswordStoreInterface* store) {
   DCHECK(!pending.blocked_by_user);
 
   // Update existing matches in the password store.
@@ -77,13 +76,13 @@ void PostProcessMatches(const PasswordForm& pending,
 
 }  // namespace
 
-FormSaverImpl::FormSaverImpl(PasswordStore* store) : store_(store) {
+FormSaverImpl::FormSaverImpl(PasswordStoreInterface* store) : store_(store) {
   DCHECK(store);
 }
 
 FormSaverImpl::~FormSaverImpl() = default;
 
-PasswordForm FormSaverImpl::Blocklist(PasswordStore::FormDigest digest) {
+PasswordForm FormSaverImpl::Blocklist(PasswordFormDigest digest) {
   PasswordForm blocklisted =
       password_manager_util::MakeNormalizedBlocklistedForm(std::move(digest));
   blocklisted.date_created = base::Time::Now();
@@ -91,13 +90,13 @@ PasswordForm FormSaverImpl::Blocklist(PasswordStore::FormDigest digest) {
   return blocklisted;
 }
 
-void FormSaverImpl::Unblocklist(const PasswordStore::FormDigest& digest) {
+void FormSaverImpl::Unblocklist(const PasswordFormDigest& digest) {
   store_->Unblocklist(digest, /*completion=*/base::DoNothing());
 }
 
 void FormSaverImpl::Save(PasswordForm pending,
                          const std::vector<const PasswordForm*>& matches,
-                         const base::string16& old_password) {
+                         const std::u16string& old_password) {
   SanitizeFormData(&pending.form_data);
   store_->AddLogin(pending);
   // Update existing matches in the password store.
@@ -106,7 +105,7 @@ void FormSaverImpl::Save(PasswordForm pending,
 
 void FormSaverImpl::Update(PasswordForm pending,
                            const std::vector<const PasswordForm*>& matches,
-                           const base::string16& old_password) {
+                           const std::u16string& old_password) {
   SanitizeFormData(&pending.form_data);
   store_->UpdateLogin(pending);
   // Update existing matches in the password store.
@@ -116,7 +115,7 @@ void FormSaverImpl::Update(PasswordForm pending,
 void FormSaverImpl::UpdateReplace(
     PasswordForm pending,
     const std::vector<const PasswordForm*>& matches,
-    const base::string16& old_password,
+    const std::u16string& old_password,
     const PasswordForm& old_unique_key) {
   SanitizeFormData(&pending.form_data);
   store_->UpdateLoginWithPrimaryKey(pending, old_unique_key);

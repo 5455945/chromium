@@ -10,6 +10,7 @@
 #include "base/metrics/histogram_macros.h"
 #include "services/network/public/mojom/web_sandbox_flags.mojom-blink.h"
 #include "third_party/blink/public/common/action_after_pagehide.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/bindings/core/v8/serialization/post_message_helper.h"
 #include "third_party/blink/renderer/bindings/core/v8/source_location.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
@@ -25,6 +26,7 @@
 #include "third_party/blink/renderer/core/frame/frame.h"
 #include "third_party/blink/renderer/core/frame/frame_client.h"
 #include "third_party/blink/renderer/core/frame/frame_console.h"
+#include "third_party/blink/renderer/core/frame/frame_owner.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/location.h"
 #include "third_party/blink/renderer/core/frame/report.h"
@@ -33,7 +35,6 @@
 #include "third_party/blink/renderer/core/frame/user_activation.h"
 #include "third_party/blink/renderer/core/input/input_device_capabilities.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
-#include "third_party/blink/renderer/core/loader/mixed_content_checker.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/focus_controller.h"
 #include "third_party/blink/renderer/core/page/page.h"
@@ -55,24 +56,7 @@ DOMWindow::~DOMWindow() {
   DCHECK(!frame_);
 }
 
-v8::Local<v8::Value> DOMWindow::Wrap(v8::Isolate* isolate,
-                                     v8::Local<v8::Object> creation_context) {
-  // TODO(yukishiino): Get understanding of why it's possible to initialize
-  // the context after the frame is detached.  And then, remove the following
-  // lines.  See also https://crbug.com/712638 .
-  Frame* frame = GetFrame();
-  if (!frame)
-    return v8::Null(isolate);
-
-  // TODO(yukishiino): Make this function always return the non-empty handle
-  // even if the frame is detached because the global proxy must always exist
-  // per spec.
-  ScriptState* script_state = ScriptState::From(isolate->GetCurrentContext());
-  return frame->GetWindowProxy(script_state->World())
-      ->GlobalProxyIfNotDetached();
-}
-
-v8::MaybeLocal<v8::Value> DOMWindow::WrapV2(ScriptState* script_state) {
+v8::MaybeLocal<v8::Value> DOMWindow::Wrap(ScriptState* script_state) {
   // TODO(yukishiino): Get understanding of why it's possible to initialize
   // the context after the frame is detached.  And then, remove the following
   // lines.  See also https://crbug.com/712638 .
@@ -148,6 +132,29 @@ DOMWindow* DOMWindow::parent() const {
 DOMWindow* DOMWindow::top() const {
   if (!GetFrame())
     return nullptr;
+
+  // TODO(crbug.com/1123606): Remove this once we use MPArch as the underlying
+  // fenced frames implementation, instead of the
+  // `FencedFrameShadowDOMDelegate`. This is the version of `top()` specifically
+  // for fenced frames implemented with the ShadowDOM, because it provides
+  // top-most DOMWindow within the "fenced" frame tree. That is, the closest
+  // DOMWindow to this window that is marked as fenced, if one such frame
+  // exists (see the early-break below). See
+  // https://docs.google.com/document/d/1ijTZJT3DHQ1ljp4QQe4E4XCCRaYAxmInNzN1SzeJM8s/edit#heading=h.jztjmd6vstll.
+  if (RuntimeEnabledFeatures::FencedFramesEnabled(GetExecutionContext()) &&
+      features::kFencedFramesImplementationTypeParam.Get() ==
+          features::FencedFramesImplementationType::kShadowDOM) {
+    Frame* frame = GetFrame();
+    while (frame->Parent()) {
+      if (frame->Owner() && frame->Owner()->GetFramePolicy().is_fenced) {
+        break;
+      }
+      frame = frame->Parent();
+    }
+
+    DCHECK(frame);
+    return frame->DomWindow();
+  }
 
   return GetFrame()->Tree().Top().DomWindow();
 }
@@ -516,8 +523,20 @@ void DOMWindow::ReportCoopAccess(const char* property_name) {
 
   // Iframes are allowed to trigger reports, only when they are same-origin with
   // their top-level document.
-  if (accessing_frame->IsCrossOriginToParentFrame())
+  if (accessing_frame->IsCrossOriginToMainFrame())
     return;
+
+  // See https://crbug.com/1183571
+  // We assumed accessing_frame->IsCrossOriginToMainFrame() implies
+  // accessing_frame->Tree().Top() to be a LocalFrame. This might not be the
+  // case after all, some crashes are reported. This block speculatively returns
+  // early to avoid crashing.
+  // TODO(https://crbug.com/1183571): Check if crashes are still happening and
+  // remove this block.
+  if (!accessing_frame->Tree().Top().IsLocalFrame()) {
+    NOTREACHED();
+    return;
+  }
 
   LocalFrame& accessing_main_frame =
       To<LocalFrame>(accessing_frame->Tree().Top());
@@ -616,20 +635,28 @@ void DOMWindow::DoPostMessage(scoped_refptr<SerializedScriptValue> message,
   const SecurityOrigin* target_security_origin =
       GetFrame()->GetSecurityContext()->GetSecurityOrigin();
   const SecurityOrigin* source_security_origin = source->GetSecurityOrigin();
-  auto* local_dom_window = DynamicTo<LocalDOMWindow>(this);
-  KURL target_url = local_dom_window
-                        ? local_dom_window->Url()
-                        : KURL(NullURL(), target_security_origin->ToString());
-  if (MixedContentChecker::IsMixedContent(source_security_origin, target_url)) {
-    UseCounter::Count(source, WebFeature::kPostMessageFromSecureToInsecure);
-  } else if (MixedContentChecker::IsMixedContent(target_security_origin,
-                                                 source->Url())) {
-    UseCounter::Count(source, WebFeature::kPostMessageFromInsecureToSecure);
-    if (MixedContentChecker::IsMixedContent(
-            GetFrame()->Tree().Top().GetSecurityContext()->GetSecurityOrigin(),
-            source->Url())) {
-      UseCounter::Count(source,
-                        WebFeature::kPostMessageFromInsecureToSecureToplevel);
+  bool is_source_secure = source_security_origin->IsPotentiallyTrustworthy();
+  bool is_target_secure = target_security_origin->IsPotentiallyTrustworthy();
+  if (is_target_secure) {
+    if (is_source_secure) {
+      UseCounter::Count(source, WebFeature::kPostMessageFromSecureToSecure);
+    } else {
+      UseCounter::Count(source, WebFeature::kPostMessageFromInsecureToSecure);
+      if (!GetFrame()
+               ->Tree()
+               .Top()
+               .GetSecurityContext()
+               ->GetSecurityOrigin()
+               ->IsPotentiallyTrustworthy()) {
+        UseCounter::Count(source,
+                          WebFeature::kPostMessageFromInsecureToSecureToplevel);
+      }
+    }
+  } else {
+    if (is_source_secure) {
+      UseCounter::Count(source, WebFeature::kPostMessageFromSecureToInsecure);
+    } else {
+      UseCounter::Count(source, WebFeature::kPostMessageFromInsecureToInsecure);
     }
   }
 
@@ -645,13 +672,11 @@ void DOMWindow::DoPostMessage(scoped_refptr<SerializedScriptValue> message,
         UseCounter::Count(source, WebFeature::kSchemefulSameSitePostMessage);
       } else {
         UseCounter::Count(source, WebFeature::kSchemelesslySameSitePostMessage);
-        if (MixedContentChecker::IsMixedContent(source_security_origin,
-                                                target_url)) {
+        if (is_source_secure && !is_target_secure) {
           UseCounter::Count(
               source,
               WebFeature::kSchemelesslySameSitePostMessageSecureToInsecure);
-        } else if (MixedContentChecker::IsMixedContent(target_security_origin,
-                                                       source->Url())) {
+        } else if (!is_source_secure && is_target_secure) {
           UseCounter::Count(
               source,
               WebFeature::kSchemelesslySameSitePostMessageInsecureToSecure);
@@ -661,6 +686,10 @@ void DOMWindow::DoPostMessage(scoped_refptr<SerializedScriptValue> message,
       UseCounter::Count(source, WebFeature::kCrossSitePostMessage);
     }
   }
+  auto* local_dom_window = DynamicTo<LocalDOMWindow>(this);
+  KURL target_url = local_dom_window
+                        ? local_dom_window->Url()
+                        : KURL(NullURL(), target_security_origin->ToString());
   if (!source->GetContentSecurityPolicy()->AllowConnectToSource(
           target_url, target_url, RedirectStatus::kNoRedirect,
           ReportingDisposition::kSuppressReporting)) {
@@ -679,9 +708,9 @@ void DOMWindow::DoPostMessage(scoped_refptr<SerializedScriptValue> message,
   if (RuntimeEnabledFeatures::CapabilityDelegationPaymentRequestEnabled(
           GetExecutionContext()) &&
       LocalFrame::HasTransientUserActivation(source_frame) &&
-      options->hasCreateToken()) {
+      options->hasDelegate()) {
     Vector<String> capability_list;
-    options->createToken().Split(' ', capability_list);
+    options->delegate().Split(' ', capability_list);
     delegate_payment_request = capability_list.Contains("paymentrequest");
   }
 

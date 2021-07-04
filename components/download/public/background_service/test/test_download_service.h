@@ -9,10 +9,10 @@
 #include <memory>
 #include <string>
 
-#include "base/optional.h"
+#include "components/download/public/background_service/background_download_service.h"
 #include "components/download/public/background_service/client.h"
 #include "components/download/public/background_service/download_params.h"
-#include "components/download/public/background_service/download_service.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace download {
 
@@ -20,8 +20,8 @@ struct CompletionInfo;
 
 namespace test {
 
-// Implementation of DownloadService used for testing.
-class TestDownloadService : public DownloadService {
+// Implementation of BackgroundDownloadService used for testing.
+class TestDownloadService : public BackgroundDownloadService {
  public:
   TestDownloadService();
   ~TestDownloadService() override;
@@ -31,8 +31,8 @@ class TestDownloadService : public DownloadService {
   void OnStartScheduledTask(DownloadTaskType task_type,
                             TaskFinishedCallback callback) override;
   bool OnStopScheduledTask(DownloadTaskType task_type) override;
-  DownloadService::ServiceStatus GetStatus() override;
-  void StartDownload(const DownloadParams& download_params) override;
+  BackgroundDownloadService::ServiceStatus GetStatus() override;
+  void StartDownload(DownloadParams download_params) override;
   void PauseDownload(const std::string& guid) override;
   void ResumeDownload(const std::string& guid) override;
   void CancelDownload(const std::string& guid) override;
@@ -40,7 +40,8 @@ class TestDownloadService : public DownloadService {
                               const SchedulingParams& params) override;
   Logger* GetLogger() override;
 
-  base::Optional<DownloadParams> GetDownload(const std::string& guid) const;
+  const absl::optional<DownloadParams>& GetDownload(
+      const std::string& guid) const;
 
   // Set failed_download_id and fail_at_start.
   void SetFailedDownload(const std::string& failed_download_id,
@@ -76,7 +77,7 @@ class TestDownloadService : public DownloadService {
 
   Client* client_;
 
-  std::list<DownloadParams> downloads_;
+  std::list<absl::optional<DownloadParams>> downloads_;
 
   DISALLOW_COPY_AND_ASSIGN(TestDownloadService);
 };

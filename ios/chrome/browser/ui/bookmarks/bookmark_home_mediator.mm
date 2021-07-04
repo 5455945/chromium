@@ -109,21 +109,20 @@ const int kMaxBookmarksSearchResults = 50;
   _prefChangeRegistrar->Init(self.browserState->GetPrefs());
   _prefObserverBridge.reset(new PrefObserverBridge(self));
 
-  if (IsEditBookmarksIOSEnabled()) {
     _prefObserverBridge->ObserveChangesForPreference(
         bookmarks::prefs::kEditBookmarksEnabled, _prefChangeRegistrar.get());
-  }
 
-  if (IsManagedBookmarksEnabled()) {
     _prefObserverBridge->ObserveChangesForPreference(
         bookmarks::prefs::kManagedBookmarks, _prefChangeRegistrar.get());
-  }
 
   [self computePromoTableViewData];
   [self computeBookmarkTableViewData];
 }
 
 - (void)disconnect {
+  [_bookmarkPromoController shutdown];
+  _bookmarkPromoController = nil;
+
   _modelBridge = nullptr;
   _syncedBookmarksObserver = nullptr;
   self.browserState = nullptr;
@@ -180,8 +179,7 @@ const int kMaxBookmarksSearchResults = 50;
 // root.
 - (void)generateTableViewDataForRootNode {
   // If all the permanent nodes are empty, do not create items for any of them.
-  if (base::FeatureList::IsEnabled(kIllustratedEmptyStates) &&
-      ![self hasBookmarksOrFolders]) {
+  if (![self hasBookmarksOrFolders]) {
     return;
   }
 
@@ -218,7 +216,6 @@ const int kMaxBookmarksSearchResults = 50;
         toSectionWithIdentifier:BookmarkHomeSectionIdentifierBookmarks];
   }
 
-  if (IsManagedBookmarksEnabled()) {
     // Add "Managed Bookmarks" to the table if it exists.
     bookmarks::ManagedBookmarkService* managedBookmarkService =
         ManagedBookmarkServiceFactory::GetForBrowserState(self.browserState);
@@ -231,7 +228,6 @@ const int kMaxBookmarksSearchResults = 50;
                           addItem:managedItem
           toSectionWithIdentifier:BookmarkHomeSectionIdentifierBookmarks];
     }
-  }
 }
 
 - (void)computeBookmarkTableViewDataMatching:(NSString*)searchText
@@ -243,7 +239,7 @@ const int kMaxBookmarksSearchResults = 50;
 
   std::vector<const BookmarkNode*> nodes;
   bookmarks::QueryFields query;
-  query.word_phrase_query.reset(new base::string16);
+  query.word_phrase_query.reset(new std::u16string);
   *query.word_phrase_query = base::SysNSStringToUTF16(searchText);
   GetBookmarksMatchingProperties(self.sharedState.bookmarkModel, query,
                                  kMaxBookmarksSearchResults, &nodes);
@@ -284,8 +280,7 @@ const int kMaxBookmarksSearchResults = 50;
         _syncedBookmarksObserver->IsPerformingInitialSync()) {
       [self.consumer
           updateTableViewBackgroundStyle:BookmarkHomeBackgroundStyleLoading];
-    } else if (base::FeatureList::IsEnabled(kIllustratedEmptyStates) &&
-               ![self hasBookmarksOrFolders]) {
+    } else if (![self hasBookmarksOrFolders]) {
       [self.consumer
           updateTableViewBackgroundStyle:BookmarkHomeBackgroundStyleEmpty];
     } else {
@@ -357,9 +352,7 @@ const int kMaxBookmarksSearchResults = 50;
   [self.sharedState.tableView reloadData];
   // Update the TabelView background to make sure the new state of the promo
   // does not affect the background.
-  if (base::FeatureList::IsEnabled(kIllustratedEmptyStates)) {
-    [self updateTableViewBackground];
-  }
+  [self updateTableViewBackground];
 }
 
 #pragma mark - BookmarkModelBridgeObserver Callbacks
@@ -522,9 +515,8 @@ const int kMaxBookmarksSearchResults = 50;
 #pragma mark - Private Helpers
 
 - (BOOL)hasBookmarksOrFolders {
-  if (base::FeatureList::IsEnabled(kIllustratedEmptyStates) &&
-      self.sharedState.tableViewDisplayedRootNode ==
-          self.sharedState.bookmarkModel->root_node()) {
+  if (self.sharedState.tableViewDisplayedRootNode ==
+      self.sharedState.bookmarkModel->root_node()) {
     // The root node always has its permanent nodes. If all the permanent nodes
     // are empty, we treat it as if the root itself is empty.
     const auto& childrenOfRootNode =

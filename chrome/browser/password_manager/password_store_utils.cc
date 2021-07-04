@@ -10,6 +10,7 @@
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/password_manager/core/browser/password_store.h"
+#include "components/password_manager/core/browser/password_store_interface.h"
 
 namespace {
 using password_manager::metrics_util::IsPasswordChanged;
@@ -21,8 +22,8 @@ void EditSavedPasswords(
     Profile* profile,
     const base::span<const std::unique_ptr<password_manager::PasswordForm>>
         forms_to_change,
-    const base::string16& new_username,
-    const base::Optional<base::string16>& new_password) {
+    const std::u16string& new_username,
+    const absl::optional<std::u16string>& new_password) {
   DCHECK(!forms_to_change.empty());
 
   const std::string signon_realm = forms_to_change[0]->signon_realm;
@@ -36,7 +37,7 @@ void EditSavedPasswords(
   // make sure to call the right API. Update every entry in the equivalence
   // class.
   for (const auto& old_form : forms_to_change) {
-    scoped_refptr<password_manager::PasswordStore> store =
+    scoped_refptr<password_manager::PasswordStoreInterface> store =
         GetPasswordStore(profile, old_form->IsUsingAccountStore());
 
     if (!store) {
@@ -60,13 +61,15 @@ void EditSavedPasswords(
                                                         password_changed);
 }
 
-scoped_refptr<password_manager::PasswordStore> GetPasswordStore(
+password_manager::PasswordStoreInterface* GetPasswordStore(
     Profile* profile,
     bool use_account_store) {
   if (use_account_store) {
     return AccountPasswordStoreFactory::GetForProfile(
-        profile, ServiceAccessType::EXPLICIT_ACCESS);
+               profile, ServiceAccessType::EXPLICIT_ACCESS)
+        .get();
   }
-  return PasswordStoreFactory::GetForProfile(
-      profile, ServiceAccessType::EXPLICIT_ACCESS);
+  return PasswordStoreFactory::GetForProfile(profile,
+                                             ServiceAccessType::EXPLICIT_ACCESS)
+      .get();
 }

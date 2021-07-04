@@ -198,9 +198,12 @@ void CastRenderer::OnGetMultiroomInfo(
           ? MediaPipelineDeviceParams::kModeIgnorePts
           : MediaPipelineDeviceParams::kModeSyncPts;
 
-  MediaPipelineDeviceParams params(
-      sync_type, backend_task_runner_.get(), AudioContentType::kMedia,
-      ::media::AudioDeviceDescription::kDefaultDeviceId);
+  const std::string& device_id =
+      (multiroom_info->output_device_id.empty()
+           ? ::media::AudioDeviceDescription::kDefaultDeviceId
+           : multiroom_info->output_device_id);
+  MediaPipelineDeviceParams params(sync_type, backend_task_runner_.get(),
+                                   AudioContentType::kMedia, device_id);
   params.session_id = application_media_info->application_session_id;
   params.multiroom = multiroom_info->multiroom;
   params.audio_channel = multiroom_info->audio_channel;
@@ -342,7 +345,7 @@ void CastRenderer::SetCdm(::media::CdmContext* cdm_context,
 }
 
 void CastRenderer::SetLatencyHint(
-    base::Optional<base::TimeDelta> latency_hint) {}
+    absl::optional<base::TimeDelta> latency_hint) {}
 
 void CastRenderer::Flush(base::OnceClosure flush_cb) {
   DCHECK(task_runner_->BelongsToCurrentThread());

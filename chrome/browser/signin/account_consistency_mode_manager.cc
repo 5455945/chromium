@@ -26,6 +26,10 @@
 #include "chrome/browser/ash/account_manager/account_manager_util.h"
 #endif
 
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+#include "chrome/browser/lacros/account_manager_util.h"
+#endif
+
 using signin::AccountConsistencyMethod;
 
 namespace {
@@ -86,12 +90,16 @@ AccountConsistencyModeManager::AccountConsistencyModeManager(Profile* profile)
   DCHECK(profile_);
   DCHECK(ShouldBuildServiceForProfile(profile));
 
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+  // Lacros doesn't support account inconsistency.
+  // TODO(crbug.com/1220066): Remove this section when Lacros stops building
+  // with DICE.
+  profile->GetPrefs()->SetBoolean(prefs::kSigninAllowed, true);
+#elif BUILDFLAG(ENABLE_DICE_SUPPORT)
   PrefService* prefs = profile->GetPrefs();
   // Propagate settings changes from the previous launch to the signin-allowed
   // pref.
-  bool signin_allowed = CanEnableDiceForBuild() &&
-                        IsBrowserSigninAllowedByCommandLine() &&
+  bool signin_allowed = IsDiceSignInAllowed() &&
                         prefs->GetBoolean(prefs::kSigninAllowedOnNextStartup);
   prefs->SetBoolean(prefs::kSigninAllowed, signin_allowed);
 
@@ -147,6 +155,11 @@ void AccountConsistencyModeManager::SetDiceMigrationCompleted() {
 bool AccountConsistencyModeManager::IsDiceMigrationCompleted(Profile* profile) {
   return profile->GetPrefs()->GetBoolean(kDiceMigrationCompletePref);
 }
+
+// static
+bool AccountConsistencyModeManager::IsDiceSignInAllowed() {
+  return CanEnableDiceForBuild() && IsBrowserSigninAllowedByCommandLine();
+}
 #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
 // static
@@ -163,12 +176,7 @@ void AccountConsistencyModeManager::SetIgnoreMissingOAuthClientForTesting() {
 // static
 bool AccountConsistencyModeManager::ShouldBuildServiceForProfile(
     Profile* profile) {
-  // IsGuestSession() returns true for the ProfileImpl associated with Guest
-  // profiles. This profile manually sets the kSigninAllowed preference, which
-  // causes crashes if the AccountConsistencyModeManager is instantiated. See
-  // https://crbug.com/940026
-  return profile->IsRegularProfile() && !profile->IsGuestSession() &&
-         !profile->IsSystemProfile();
+  return profile->IsRegularProfile() || profile->IsEphemeralGuestProfile();
 }
 
 AccountConsistencyMethod
@@ -201,6 +209,15 @@ AccountConsistencyModeManager::ComputeAccountConsistencyMethod(
   return ash::IsAccountManagerAvailable(profile)
              ? AccountConsistencyMethod::kMirror
              : AccountConsistencyMethod::kDisabled;
+#endif
+
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+  // Mirror / Account Manager is available only for the first / Main Profile.
+  if (IsAccountManagerAvailable(profile))
+    return AccountConsistencyMethod::kMirror;
+    // else: Fall through to ENABLE_DICE_SUPPORT section below.
+    // TODO(crbug.com/1198490): Return `AccountConsistencyMethod::kDisabled` if
+    // AccountManager is not available, when DICE has been disabled on Lacros.
 #endif
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)

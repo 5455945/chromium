@@ -8,6 +8,7 @@
 
 #include "base/bind.h"
 #include "base/callback.h"
+#include "base/containers/contains.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
 #include "chrome/browser/history/history_service_factory.h"
@@ -46,7 +47,9 @@ SupervisedUserNavigationObserver::~SupervisedUserNavigationObserver() {
 SupervisedUserNavigationObserver::SupervisedUserNavigationObserver(
     content::WebContents* web_contents)
     : content::WebContentsObserver(web_contents),
-      receiver_(web_contents, this) {
+      receiver_(web_contents,
+                this,
+                content::WebContentsFrameReceiverSetPassKey()) {
   Profile* profile =
       Profile::FromBrowserContext(web_contents->GetBrowserContext());
   supervised_user_service_ =
@@ -103,8 +106,11 @@ void SupervisedUserNavigationObserver::DidFinishNavigation(
 
   // Only filter same page navigations (eg. pushState/popState); others will
   // have been filtered by the NavigationThrottle.
+  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
+  // frames. This caller was converted automatically to the primary main frame
+  // to preserve its semantics. Follow up to confirm correctness.
   if (navigation_handle->IsSameDocument() &&
-      navigation_handle->IsInMainFrame()) {
+      navigation_handle->IsInPrimaryMainFrame()) {
     auto* render_frame_host = web_contents()->GetMainFrame();
     int process_id = render_frame_host->GetProcess()->GetID();
     int routing_id = render_frame_host->GetRoutingID();
@@ -120,10 +126,8 @@ void SupervisedUserNavigationObserver::DidFinishNavigation(
   }
 }
 
-void SupervisedUserNavigationObserver::FrameDeleted(
-    content::RenderFrameHost* render_frame_host) {
-  int frame_id = render_frame_host->GetFrameTreeNodeId();
-  supervised_user_interstitials_.erase(frame_id);
+void SupervisedUserNavigationObserver::FrameDeleted(int frame_tree_node_id) {
+  supervised_user_interstitials_.erase(frame_tree_node_id);
 }
 
 void SupervisedUserNavigationObserver::DidFinishLoad(
@@ -163,12 +167,6 @@ void SupervisedUserNavigationObserver::OnURLFilterChanged() {
 
   MaybeUpdateRequestedHosts();
 
-  Profile* profile =
-      Profile::FromBrowserContext(web_contents()->GetBrowserContext());
-  SupervisedUserService* service =
-      SupervisedUserServiceFactory::GetForProfile(profile);
-  if (!service->IsSupervisedUserIframeFilterEnabled())
-    return;
 
   // Iframe filtering has been enabled.
   web_contents()->ForEachFrame(

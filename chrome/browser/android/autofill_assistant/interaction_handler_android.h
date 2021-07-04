@@ -14,7 +14,6 @@
 #include "base/callback.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "base/observer_list.h"
 #include "components/autofill_assistant/browser/event_handler.h"
 #include "components/autofill_assistant/browser/service.pb.h"
 
@@ -75,7 +74,7 @@ class InteractionHandlerAndroid : public EventHandler::Observer {
   void RunValueChangedCallbacks();
 
   // Creates a callback from |proto|.
-  base::Optional<InteractionCallback> CreateInteractionCallbackFromProto(
+  absl::optional<InteractionCallback> CreateInteractionCallbackFromProto(
       const CallbackProto& proto);
 
  private:

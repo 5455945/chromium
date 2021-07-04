@@ -29,9 +29,9 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
+#include "chrome/browser/sharing_hub/sharing_hub_features.h"
 #include "chrome/browser/shell_integration.h"
 #include "chrome/browser/signin/signin_promo.h"
-#include "chrome/browser/sync/profile_sync_service_factory.h"
 #include "chrome/browser/ui/apps/app_info_dialog.h"
 #include "chrome/browser/ui/bookmarks/bookmark_tab_helper.h"
 #include "chrome/browser/ui/browser.h"
@@ -48,6 +48,7 @@
 #include "chrome/browser/ui/web_applications/web_app_dialog_utils.h"
 #include "chrome/browser/ui/web_applications/web_app_launch_utils.h"
 #include "chrome/browser/ui/webui/inspect_ui.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/content_restriction.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
@@ -55,6 +56,7 @@
 #include "components/dom_distiller/core/dom_distiller_features.h"
 #include "components/prefs/pref_service.h"
 #include "components/sessions/core/tab_restore_service.h"
+#include "components/signin/public/base/signin_buildflags.h"
 #include "components/signin/public/base/signin_pref_names.h"
 #include "content/public/browser/native_web_keyboard_event.h"
 #include "content/public/browser/navigation_controller.h"
@@ -79,7 +81,6 @@
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "ash/public/cpp/desks_helper.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_context_menu.h"
 #include "chrome/browser/ui/browser_commands_chromeos.h"
@@ -293,10 +294,6 @@ void BrowserCommandController::FullscreenStateChanged() {
 void BrowserCommandController::LockedFullscreenStateChanged() {
   UpdateCommandsForLockedFullscreenMode();
 }
-
-void BrowserCommandController::DesksStateChanged(int num_desks) {
-  UpdateCommandsForDesks(num_desks);
-}
 #endif
 
 void BrowserCommandController::PrintingStateChanged() {
@@ -320,7 +317,7 @@ void BrowserCommandController::ExtensionStateChanged() {
 }
 
 void BrowserCommandController::TabKeyboardFocusChangedTo(
-    base::Optional<int> index) {
+    absl::optional<int> index) {
   UpdateCommandsForTabKeyboardFocus(index);
 }
 
@@ -565,6 +562,9 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
     case IDC_SAVE_AUTOFILL_ADDRESS:
       SaveAutofillAddress(browser_);
       break;
+    case IDC_VIRTUAL_CARD_MANUAL_FALLBACK:
+      ShowVirtualCardManualFallbackBubble(browser_);
+      break;
     case IDC_TRANSLATE_PAGE:
       Translate(browser_);
       break;
@@ -576,6 +576,9 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
       break;
     case IDC_QRCODE_GENERATOR:
       GenerateQRCodeFromPageAction(browser_);
+      break;
+    case IDC_SHARING_HUB:
+      SharingHubFromPageAction(browser_);
       break;
 
     // Clipboard commands
@@ -636,6 +639,9 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
     case IDC_FOCUS_INACTIVE_POPUP_FOR_ACCESSIBILITY:
       FocusInactivePopupForAccessibility(browser_);
       break;
+    case IDC_FOCUS_HELP_BUBBLE:
+      FocusHelpBubble(browser_);
+      break;
     case IDC_FOCUS_NEXT_PANE:
       FocusNextPane(browser_);
       break;
@@ -682,19 +688,6 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
 #if BUILDFLAG(IS_CHROMEOS_ASH)
     case IDC_TAKE_SCREENSHOT:
       TakeScreenshot();
-      break;
-    case IDC_MOVE_TO_DESK_1:
-    case IDC_MOVE_TO_DESK_2:
-    case IDC_MOVE_TO_DESK_3:
-    case IDC_MOVE_TO_DESK_4:
-    case IDC_MOVE_TO_DESK_5:
-    case IDC_MOVE_TO_DESK_6:
-    case IDC_MOVE_TO_DESK_7:
-    case IDC_MOVE_TO_DESK_8:
-      SendToDeskAtIndex(browser_, id - IDC_MOVE_TO_DESK_1);
-      break;
-    case IDC_TOGGLE_ASSIGN_TO_ALL_DESKS:
-      ToggleAssignedToAllDesks(browser_);
       break;
 #endif
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
@@ -743,9 +736,16 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
     case IDC_VIEW_PASSWORDS:
       ShowPasswordManager(browser_);
       break;
-    case IDC_CLEAR_BROWSING_DATA:
-      ShowClearBrowsingDataDialog(browser_);
+    case IDC_CLEAR_BROWSING_DATA: {
+      if (profile()->IsIncognitoProfile() &&
+          base::FeatureList::IsEnabled(
+              features::kIncognitoClearBrowsingDataDialogForDesktop)) {
+        ShowIncognitoClearBrowsingDataDialog(browser_);
+      } else {
+        ShowClearBrowsingDataDialog(browser_);
+      }
       break;
+    }
     case IDC_IMPORT_SETTINGS:
       ShowImportDialog(browser_);
       break;
@@ -771,13 +771,20 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
       NOTREACHED();
 #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
       break;
+    case IDC_CHROME_WHATS_NEW:
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+      ShowChromeWhatsNew(browser_);
+#else
+      NOTREACHED();
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+      break;
     case IDC_SHOW_BETA_FORUM:
       ShowBetaForum(browser_);
       break;
     case IDC_TOGGLE_COMMANDER:
       ToggleCommander(browser_);
       break;
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
     case IDC_SHOW_SIGNIN:
       ShowBrowserSigninOrSettings(
           browser_, signin_metrics::AccessPoint::ACCESS_POINT_MENU);
@@ -996,20 +1003,6 @@ void BrowserCommandController::InitCommandState() {
   command_updater_.UpdateCommandEnabled(IDC_VISIT_DESKTOP_OF_LRU_USER_3, true);
   command_updater_.UpdateCommandEnabled(IDC_VISIT_DESKTOP_OF_LRU_USER_4, true);
   command_updater_.UpdateCommandEnabled(IDC_VISIT_DESKTOP_OF_LRU_USER_5, true);
-
-  // Move to desks
-  command_updater_.UpdateCommandEnabled(IDC_MOVE_TO_DESKS_MENU, true);
-  static_assert(IDC_MOVE_TO_DESK_1 == IDC_MOVE_TO_DESK_2 - 1 &&
-                    IDC_MOVE_TO_DESK_2 == IDC_MOVE_TO_DESK_3 - 1 &&
-                    IDC_MOVE_TO_DESK_3 == IDC_MOVE_TO_DESK_4 - 1 &&
-                    IDC_MOVE_TO_DESK_4 == IDC_MOVE_TO_DESK_5 - 1 &&
-                    IDC_MOVE_TO_DESK_5 == IDC_MOVE_TO_DESK_6 - 1 &&
-                    IDC_MOVE_TO_DESK_6 == IDC_MOVE_TO_DESK_7 - 1 &&
-                    IDC_MOVE_TO_DESK_7 == IDC_MOVE_TO_DESK_8 - 1,
-                "IDC_MOVE_TO_DESK_* commands must be in order.");
-  auto* desks_helper = ash::DesksHelper::Get();
-  UpdateCommandsForDesks(desks_helper ? desks_helper->GetNumberOfDesks() : 1);
-  command_updater_.UpdateCommandEnabled(IDC_TOGGLE_ASSIGN_TO_ALL_DESKS, true);
 #endif
 // TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
 // of lacros-chrome is complete.
@@ -1062,10 +1055,18 @@ void BrowserCommandController::InitCommandState() {
       IDC_RECENT_TABS_MENU,
       (!profile()->IsGuestSession() && !profile()->IsSystemProfile() &&
        !profile()->IsIncognitoProfile()));
-  command_updater_.UpdateCommandEnabled(
-      IDC_CLEAR_BROWSING_DATA,
-      (!profile()->IsGuestSession() && !profile()->IsSystemProfile() &&
-       !profile()->IsIncognitoProfile()));
+
+  if (profile()->IsIncognitoProfile()) {
+    command_updater_.UpdateCommandEnabled(
+        IDC_CLEAR_BROWSING_DATA,
+        base::FeatureList::IsEnabled(
+            features::kIncognitoClearBrowsingDataDialogForDesktop));
+  } else {
+    command_updater_.UpdateCommandEnabled(
+        IDC_CLEAR_BROWSING_DATA,
+        (!profile()->IsGuestSession() && !profile()->IsSystemProfile()));
+  }
+
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   command_updater_.UpdateCommandEnabled(IDC_TAKE_SCREENSHOT, true);
   // Chrome OS uses the system tray menu to handle multi-profiles. Avatar menu
@@ -1094,7 +1095,11 @@ void BrowserCommandController::InitCommandState() {
 #endif
       web_app::AppBrowserController::IsWebApp(browser_);
   // Hosted app browser commands.
-  command_updater_.UpdateCommandEnabled(IDC_COPY_URL, is_web_app_or_custom_tab);
+  const bool enable_copy_url =
+      is_web_app_or_custom_tab ||
+      base::FeatureList::IsEnabled(sharing_hub::kSharingHubDesktopOmnibox) ||
+      base::FeatureList::IsEnabled(sharing_hub::kSharingHubDesktopAppMenu);
+  command_updater_.UpdateCommandEnabled(IDC_COPY_URL, enable_copy_url);
   command_updater_.UpdateCommandEnabled(IDC_OPEN_IN_CHROME,
                                         is_web_app_or_custom_tab);
   command_updater_.UpdateCommandEnabled(IDC_SITE_SETTINGS,
@@ -1135,9 +1140,7 @@ void BrowserCommandController::InitCommandState() {
   command_updater_.UpdateCommandEnabled(IDC_WINDOW_CLOSE_OTHER_TABS,
                                         normal_window);
 
-  const bool enable_tab_search_commands =
-      base::FeatureList::IsEnabled(features::kTabSearch) &&
-      browser_->is_type_normal();
+  const bool enable_tab_search_commands = browser_->is_type_normal();
   command_updater_.UpdateCommandEnabled(IDC_TAB_SEARCH,
                                         enable_tab_search_commands);
   command_updater_.UpdateCommandEnabled(IDC_TAB_SEARCH_CLOSE,
@@ -1403,8 +1406,10 @@ void BrowserCommandController::UpdateCommandsForFullscreenMode() {
   command_updater_.UpdateCommandEnabled(IDC_ABOUT, show_main_ui);
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   command_updater_.UpdateCommandEnabled(IDC_CHROME_TIPS, show_main_ui);
+  command_updater_.UpdateCommandEnabled(IDC_CHROME_WHATS_NEW, show_main_ui);
 #endif
   command_updater_.UpdateCommandEnabled(IDC_QRCODE_GENERATOR, show_main_ui);
+  command_updater_.UpdateCommandEnabled(IDC_SHARING_HUB, show_main_ui);
   command_updater_.UpdateCommandEnabled(IDC_SHOW_APP_MENU, show_main_ui);
   command_updater_.UpdateCommandEnabled(IDC_SEND_TAB_TO_SELF, show_main_ui);
   command_updater_.UpdateCommandEnabled(IDC_SEND_TAB_TO_SELF_SINGLE_TARGET,
@@ -1489,15 +1494,6 @@ void BrowserCommandController::UpdateCommandsForLockedFullscreenMode() {
     // DisableAllCommands.
     InitCommandState();
   }
-}
-
-void BrowserCommandController::UpdateCommandsForDesks(int num_desks) {
-  constexpr int kMaxNumberOfDesks = IDC_MOVE_TO_DESK_8 - IDC_MOVE_TO_DESK_1 + 1;
-  for (int i = 0; i < kMaxNumberOfDesks; ++i) {
-    command_updater_.UpdateCommandEnabled(IDC_MOVE_TO_DESK_1 + i,
-                                          i < num_desks);
-  }
-  command_updater_.UpdateCommandEnabled(IDC_MOVE_TO_DESKS_MENU, num_desks > 1);
 }
 #endif
 
@@ -1587,7 +1583,7 @@ void BrowserCommandController::UpdateCommandsForMediaRouter() {
 }
 
 void BrowserCommandController::UpdateCommandsForTabKeyboardFocus(
-    base::Optional<int> target_index) {
+    absl::optional<int> target_index) {
   command_updater_.UpdateCommandEnabled(
       IDC_DUPLICATE_TARGET_TAB, !browser_->deprecated_is_app() &&
                                     target_index.has_value() &&

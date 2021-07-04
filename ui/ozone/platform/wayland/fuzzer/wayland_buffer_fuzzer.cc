@@ -48,12 +48,14 @@ class MockPlatformWindowDelegate : public ui::PlatformWindowDelegate {
   MockPlatformWindowDelegate() = default;
   ~MockPlatformWindowDelegate() = default;
 
-  MOCK_METHOD1(OnBoundsChanged, void(const gfx::Rect& new_bounds));
+  MOCK_METHOD1(OnBoundsChanged, void(const BoundsChange& change));
   MOCK_METHOD1(OnDamageRect, void(const gfx::Rect& damaged_region));
   MOCK_METHOD1(DispatchEvent, void(ui::Event* event));
   MOCK_METHOD0(OnCloseRequest, void());
   MOCK_METHOD0(OnClosed, void());
-  MOCK_METHOD1(OnWindowStateChanged, void(ui::PlatformWindowState new_state));
+  MOCK_METHOD2(OnWindowStateChanged,
+               void(ui::PlatformWindowState old_state,
+                    ui::PlatformWindowState new_state));
   MOCK_METHOD0(OnLostCapture, void());
   MOCK_METHOD1(OnAcceleratedWidgetAvailable,
                void(gfx::AcceleratedWidget widget));
@@ -110,14 +112,13 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       DRM_FORMAT_NV12,        DRM_FORMAT_YVU420};
 
   wl::TestWaylandServerThread server;
-  CHECK(server.Start(6));
+  CHECK(server.Start({.shell_version = wl::ShellVersion::kV6}));
 
   std::unique_ptr<ui::WaylandConnection> connection =
       std::make_unique<ui::WaylandConnection>();
   CHECK(connection->Initialize());
 
-  auto screen = connection->wayland_output_manager()->CreateWaylandScreen(
-      connection.get());
+  auto screen = connection->wayland_output_manager()->CreateWaylandScreen();
 
   MockPlatformWindowDelegate delegate;
   gfx::AcceleratedWidget widget = gfx::kNullAcceleratedWidget;

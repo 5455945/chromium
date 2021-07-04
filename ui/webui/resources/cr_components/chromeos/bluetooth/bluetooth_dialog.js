@@ -163,8 +163,11 @@ Polymer({
       const transport = device.transport ? device.transport :
                                            chrome.bluetooth.Transport.INVALID;
       const connectResult = lastError ? undefined : result;
-      chrome.bluetoothPrivate.recordPairing(
-          transport, this.getPairingDurationMs_(), connectResult);
+      const pairingDurationMs = this.getPairingDurationMs_();
+      if (pairingDurationMs) {
+        chrome.bluetoothPrivate.recordPairing(
+            transport, pairingDurationMs, connectResult);
+      }
     }
 
     let error;
@@ -197,8 +200,8 @@ Polymer({
     let id = 'bluetooth_connect_' + error;
     if (!this.i18nExists(id)) {
       console.error(
-          'Unexpected error connecting to:', name, 'error:', error,
-          'result:', result);
+          'Unexpected error connecting to bluetooth device. Error:', error,
+          ' result:', result);
       id = 'bluetooth_connect_failed';
     }
     this.errorMessage_ = this.i18n(id, name);
@@ -587,7 +590,7 @@ Polymer({
   /**
    * Calculate how long it took to complete pairing, excluding how long the user
    * took to confirm the pairing auth process.
-   * @return {number}
+   * @return {?number}
    * @private
    */
   getPairingDurationMs_() {
@@ -606,9 +609,10 @@ Polymer({
             this.pairingUserAuthAttemptFinishTimestampMs_ -
             this.pairingUserAuthAttemptStartTimestampMs_;
       } else {
-        console.error(
+        console.warn(
             'No auth attempt finish timestamp present to' +
             ' complement start timestamp.');
+        return null;
       }
     }
 

@@ -10,11 +10,13 @@
 #include "base/memory/weak_ptr.h"
 #include "content/public/browser/bluetooth_scanning_prompt.h"
 
-class BluetoothScanningPromptController;
-
 namespace content {
 class RenderFrameHost;
 }  // namespace content
+
+namespace permissions {
+class BluetoothScanningPromptController;
+}  // namespace permissions
 
 // Represents a Bluetooth scanning prompt to ask the user permission to
 // allow a site to receive Bluetooth advertisement packets from Bluetooth
@@ -29,11 +31,11 @@ class BluetoothScanningPromptDesktop : public content::BluetoothScanningPrompt {
   // content::BluetoothScanningPrompt:
   void AddOrUpdateDevice(const std::string& device_id,
                          bool should_update_name,
-                         const base::string16& device_name) override;
+                         const std::u16string& device_name) override;
 
  private:
   // DeviceChooserContentView owns the controller.
-  base::WeakPtr<BluetoothScanningPromptController>
+  base::WeakPtr<permissions::BluetoothScanningPromptController>
       bluetooth_scanning_prompt_controller_;
 
   // Closes the displayed UI, if there is one. This is used to ensure the UI

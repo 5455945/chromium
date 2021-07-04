@@ -12,7 +12,6 @@
 <translation id="1315551408014407711">ਆਪਣੇ ਨਵੇਂ Chromium ਪ੍ਰੋਫਾਈਲ ਦਾ ਸੈੱਟਅੱਪ ਕਰੋ</translation>
 <translation id="1396446129537741364">Chromium ਪਾਸਵਰਡ ਦਿਖਾਉਣ ਦੀ ਕੋਸ਼ਿਸ਼ ਕਰ ਰਿਹਾ ਹੈ।</translation>
 <translation id="1414495520565016063">ਤੁਸੀਂ Chromium ਤੇ ਸਾਈਨ ਇਨ ਕੀਤਾ ਹੈ!</translation>
-<translation id="1414973082589232775">ਸੁਰੱਖਿਅਤ ਮੀਡੀਆ ਚਲਾਉਣ ਲਈ Rosetta ਵਰਤਣ ਵਾਸਤੇ, ਤੁਹਾਨੂੰ Chromium ਨੂੰ ਮੁੜ-ਸ਼ੁਰੂ ਕਰਨ ਦੀ ਲੋੜ ਹੈ।</translation>
 <translation id="151962892725702025">Chromium OS ਤੁਹਾਡਾ ਡਾਟਾ ਸਿੰਕ ਨਹੀਂ ਕਰ ਸਕਿਆ ਕਿਉਂਕਿ ਸਿੰਕ ਤੁਹਾਡੇ ਡੋਮੇਨ ਲਈ ਉਪਲਬਧ ਨਹੀਂ ਹੈ।</translation>
 <translation id="1524282610922162960">ਕੋਈ Chromium ਟੈਬ ਸਾਂਝੀ ਕਰੋ</translation>
 <translation id="1553461853655228091">Chromium ਨੂੰ ਤੁਹਾਡੇ ਆਲੇ-ਦੁਆਲੇ ਦਾ 3D ਨਕਸ਼ਾ ਬਣਾਉਣ ਵਾਸਤੇ ਤੁਹਾਡੇ ਕੈਮਰੇ ਤੱਕ ਪਹੁੰਚ ਕਰਨ ਲਈ ਇਜਾਜ਼ਤ ਦੀ ਲੋੜ ਹੈ</translation>
@@ -25,10 +24,11 @@
 <translation id="1911763535808217981">ਇਸਨੂੰ ਬੰਦ ਕਰਕੇ, ਤੁਸੀਂ Chromium ਵਿੱਚ ਸਾਈਨ-ਇਨ ਕੀਤੇ ਬਿਨਾਂ Gmail ਵਰਗੀਆਂ Google ਸਾਈਟਾਂ 'ਤੇ ਸਾਈਨ-ਇਨ ਕਰ ਸਕਦੇ ਹੋ</translation>
 <translation id="1929939181775079593">Chromium ਜਵਾਬ ਨਹੀਂ ਦੇ ਰਿਹਾ ਹੈ। ਕੀ ਹੁਣ ਰੀਲੌਂਚ ਕਰਨਾ ਹੈ?</translation>
 <translation id="1966382378801805537">Chromium ਪੂਰਵ-ਨਿਰਧਾਰਤ ਬ੍ਰਾਊਜ਼ਰ ਦਾ ਪਤਾ ਨਹੀਂ ਲਗਾ ਸਕਦਾ ਹੈ ਜਾਂ ਉਸਨੂੰ ਸੈੱਟ ਨਹੀਂ ਕਰ ਸਕਦਾ ਹੈ</translation>
+<translation id="1981611865800294956">&amp;Chromium OS ਨੂੰ ਅੱਪਡੇਟ ਕਰਨ ਲਈ ਮੁੜ-ਲਾਂਚ ਕਰੋ</translation>
 <translation id="2008474315282236005">ਇਸ ਨਾਲ ਇਸ ਡੀਵਾਈਸ ਤੋਂ 1 ਆਈਟਮ ਮਿਟਾ ਦਿੱਤੀ ਜਾਵੇਗੀ। ਬਾਅਦ ਵਿੱਚ ਆਪਣੇ ਡਾਟੇ ਨੂੰ ਮੁੜ-ਪ੍ਰਾਪਤ ਕਰਨ ਲਈ, Chromium 'ਤੇ <ph name="USER_EMAIL" /> ਵਜੋਂ ਸਾਈਨ-ਇਨ ਕਰੋ।</translation>
 <translation id="2020032459870799438">ਇਹ ਜਾਂਚ ਕਰਨ ਲਈ ਕਿ ਤੁਹਾਡੇ ਹੋਰ ਪਾਸਵਰਡ ਡਾਟਾ ਉਲੰਘਣਾਵਾਂ ਅਤੇ ਹੋਰ ਸੁਰੱਖਿਆ ਸੰਬੰਧੀ ਸਮੱਸਿਆਵਾਂ ਤੋਂ ਸੁਰੱਖਿਅਤ ਹਨ ਜਾਂ ਨਹੀਂ, <ph name="BEGIN_LINK" />Chromium ਵਿੱਚ ਸਾਈਨ-ਇਨ ਕਰੋ<ph name="END_LINK" />।</translation>
+<translation id="2174178932569897599">Chromium ਨੂੰ ਵਿਉਂਤਬੱਧ ਕਰੋ</translation>
 <translation id="2185166961232948079">Chromium - ਨੈੱਟਵਰਕ ਸਾਈਨ-ਇਨ - <ph name="PAGE_TITLE" /></translation>
-<translation id="2225696941839557119">Chromium OS ਤੁਹਾਡੇ ਪਾਸਵਰਡਾਂ ਦਾ ਸਮਕਾਲੀਕਰਨ ਨਹੀਂ ਕਰ ਸਕਿਆ।</translation>
 <translation id="2241627712206172106">ਜੇਕਰ ਤੁਸੀਂ ਕੋਈ ਕੰਪਿਊਟਰ ਸਾਂਝਾ ਕਰਦੇ ਹੋ, ਤਾਂ ਦੋਸਤ ਅਤੇ ਪਰਿਵਾਰ ਵੱਖਰੇ ਤੌਰ 'ਤੇ ਬ੍ਰਾਊਜ਼ ਕਰ ਸਕਦੇ ਹਨ ਅਤੇ ਆਪਣੇ ਤਰੀਕੇ ਨਾਲ Chromium ਦਾ ਸੈੱਟ ਅੱਪ ਕਰ ਸਕਦੇ ਹਨ।</translation>
 <translation id="2294245788148774212">ਵਿਕਲਪਿਕ: ਸਵੈਚਲਿਤ ਤੌਰ 'ਤੇ ਤਸ਼ਖੀਸੀ ਅਤੇ ਵਰਤੋਂ ਡਾਟਾ Google ਨੂੰ ਭੇਜ ਕੇ Chromium OS ਦੀਆਂ ਵਿਸ਼ੇਸ਼ਤਾਵਾਂ ਅਤੇ ਕਾਰਗੁਜ਼ਾਰੀ ਨੂੰ ਬਿਹਤਰ ਬਣਾਉਣ ਵਿੱਚ ਮਦਦ ਕਰੋ।</translation>
 <translation id="2343156876103232566">ਇੱਥੋਂ ਆਪਣੇ Android ਫ਼ੋਨ 'ਤੇ ਨੰਬਰ ਭੇਜਣ ਲਈ, ਦੋਵੇਂ ਡੀਵਾਈਸਾਂ 'ਤੇ Chromium ਵਿੱਚ ਸਾਈਨ-ਇਨ ਕਰੋ।</translation>
@@ -40,21 +40,20 @@
 <translation id="2560420686485554789">ਫ਼ਾਈਲਾਂ ਡਾਊਨਲੋਡ ਕਰਨ ਲਈ Chromium ਨੂੰ ਸਟੋਰੋਜ ਤੱਕ ਪਹੁੰਚ ਦੀ ਲੋੜ ਹੁੰਦੀ ਹੈ।</translation>
 <translation id="2572494885440352020">Chromium ਸਹਾਇਕ</translation>
 <translation id="2577788541081224677">ਆਪਣੇ ਸਾਰੇ ਡੀਵਾਈਸਾਂ ਵਿੱਚ ਆਪਣੀ Chromium ਸਮੱਗਰੀ ਤੱਕ ਪਹੁੰਚ ਕਰਨ ਲਈ, ਸਾਈਨ-ਇਨ ਕਰੋ, ਤਾਂ ਜੋ ਤੁਸੀਂ ਸਮਕਾਲੀਕਰਨ ਨੂੰ ਚਾਲੂ ਕਰ ਸਕੋ।</translation>
+<translation id="2580426763510374355">Chromium OS ਸਥਾਪਤ ਕਰੋ</translation>
 <translation id="2583187216237139145">ਇਸ ਪ੍ਰੋਫਾਈਲ ਦੀ ਵਰਤੋਂ ਦੇ ਦੌਰਾਨ ਤਿਆਰ ਕੀਤਾ ਕੋਈ ਵੀ Chromium ਡਾਟਾ (ਜਿਵੇਂ ਕਿ ਬੁੱਕਮਾਰਕ, ਇਤਿਹਾਸ, ਪਾਸਵਰਡ ਅਤੇ ਹੋਰ ਸੈਟਿੰਗਾਂ ਦੀ ਰਚਨਾ) ਕਾਰਜ ਪ੍ਰੋਫਾਈਲ ਪ੍ਰਸ਼ਾਸਕ ਵੱਲੋਂ ਹਟਾਇਆ ਜਾ ਸਕਦਾ ਹੈ। <ph name="LEARN_MORE" /></translation>
 <translation id="2587578672395088481">ਅੱਪਡੇਟ ਲਾਗੂ ਕਰਨ ਲਈ Chromium OS ਨੂੰ ਮੁੜ-ਚਾਲੂ ਕੀਤੇ ਜਾਣ ਦੀ ਲੋੜ ਹੈ।</translation>
-<translation id="2615699638672665509">ਇਹ ਕੰਪਿਊਟਰ ਜਲਦੀ ਹੀ Chromium ਅਪਡੇਟਾਂ ਪ੍ਰਾਪਤ ਕਰਨਾ ਬੰਦ ਕਰ ਦੇਵੇਗਾ ਕਿਉਂਕਿ ਇਸਦਾ ਹਾਰਡਵੇਅਰ ਹੁਣ ਸਮਰਥਿਤ ਨਹੀਂ ਹੈ।</translation>
 <translation id="2648074677641340862">ਸਥਾਪਤ ਕਰਨ ਦੌਰਾਨ ਇੱਕ ਓਪਰੇਟਿੰਗ ਸਿਸਟਮ ਵਿੱਚ ਗੜਬੜ ਹੋਈ। ਕਿਰਪਾ ਕਰਕੇ Chromium ਨੂੰ ਦੁਬਾਰਾ ਡਾਊਨਲੋਡ ਕਰੋ।</translation>
 <translation id="2661879430930417727">ਜੇ ਤੁਸੀਂ ਕੋਈ ਡੀਵਾਈਸ ਸਾਂਝਾ ਕਰਦੇ ਹੋ, ਤਾਂ ਦੋਸਤ ਅਤੇ ਪਰਿਵਾਰ ਵੱਖਰੇ ਤੌਰ 'ਤੇ ਬ੍ਰਾਊਜ਼ ਕਰ ਸਕਦੇ ਹਨ ਅਤੇ ਆਪਣੇ ਤਰੀਕੇ ਨਾਲ Chromium ਦਾ ਸੈੱਟਅੱਪ ਕਰ ਸਕਦੇ ਹਨ</translation>
-<translation id="270245676623587882">Chromium ਇਸ ਐਕਸਟੈਂਸ਼ਨ ਨੂੰ ਬੰਦ ਕਰਨ ਦੀ ਸਿਫ਼ਾਰਸ਼ ਕਰਦਾ ਹੈ ਕਿਉਂਕਿ ਫ਼ਿਲਹਾਲ ਇਹ ਵਿਸਤ੍ਰਿਤ ਸੁਰੱਖਿਅਤ ਬ੍ਰਾਊਜ਼ਿੰਗ ਮਿਆਰਾਂ 'ਤੇ ਖਰਾ ਨਹੀਂ ਉਤਰਦਾ।</translation>
 <translation id="2711502716910134313">Chromium ਟੈਬ</translation>
 <translation id="2718390899429598676">ਵਾਧੂ ਸੁਰੱਖਿਆ ਲਈ, Chromium ਤੁਹਾਡਾ ਡਾਟਾ ਐਨਕ੍ਰਿਪਟ ਕਰੇਗਾ।</translation>
 <translation id="2770231113462710648">ਪੂਰਵ-ਨਿਰਧਾਰਤ ਬ੍ਰਾਊਜ਼ਰ ਨੂੰ ਇਸ ਵਿੱਚ ਬਦਲੋ:</translation>
 <translation id="2799223571221894425">ਰੀਲੌਂਚ ਕਰੋ</translation>
 <translation id="2816712596130903444">ਕੀ Chromium ਪ੍ਰੋਫਾਈਲ ਨੂੰ ਵੱਖ ਕਰਨਾ ਹੈ?</translation>
+<translation id="2837693172913560447">ਇਸ ਨਾਲ <ph name="USER_EMAIL_ADDRESS" /> ਲਈ ਨਵਾਂ Chromium ਪ੍ਰੋਫਾਈਲ ਬਣਾਇਆ ਜਾਵੇਗਾ</translation>
 <translation id="2847479871509788944">Chromium ਤੋਂ ਹਟਾਓ...</translation>
 <translation id="2885378588091291677">ਕੰਮ ਪ੍ਰਬੰਧਕ</translation>
 <translation id="2910007522516064972">&amp;Chromium ਬਾਰੇ</translation>
-<translation id="2942419255987443909">Chromium OS ਨੂੰ ਵਧੀਕ <ph name="BEGIN_LINK_CROS_OSS" />ਖੁੱਲ੍ਹੇ ਸਰੋਤ ਸਾਫ਼ਟਵੇਅਰ<ph name="END_LINK_CROS_OSS" /> ਕਰਕੇ ਸੰਭਵ ਬਣਾਇਆ ਗਿਆ ਹੈ, ਜਿਵੇਂ ਕਿ <ph name="BEGIN_LINK_LINUX_OSS" />Linux ਵਿਕਾਸ ਵਾਤਾਵਰਨ (ਬੀਟਾ)<ph name="END_LINK_LINUX_OSS" />।</translation>
 <translation id="2977470724722393594">Chromium ਅੱਪ ਟੂ ਡੇਟ ਹੈ</translation>
 <translation id="2983934633046890458">Chromium ਪਾਸਵਰਡਾਂ ਦਾ ਸੰਪਾਦਨ ਕਰਨ ਦੀ ਕੋਸ਼ਿਸ਼ ਕਰ ਰਿਹਾ ਹੈ।</translation>
 <translation id="3032706164202344641">Chromium ਤੁਹਾਡੇ ਪਾਸਵਰਡਾਂ ਦੀ ਜਾਂਚ ਨਹੀਂ ਕਰ ਸਕਦਾ। ਬਾਅਦ ਵਿੱਚ ਦੁਬਾਰਾ ਕੋਸ਼ਿਸ਼ ਕਰੋ।</translation>
@@ -64,6 +63,7 @@
 <translation id="3130323860337406239">Chromium ਤੁਹਾਡਾ ਮਾਈਕ੍ਰੋਫੋਨ ਵਰਤ ਰਿਹਾ ਹੈ।</translation>
 <translation id="3155163173539279776">Chromium ਮੁੜ-ਲਾਂਚ ਕਰੋ</translation>
 <translation id="3179665906251668410">Chromium ਇਨ&amp;ਕੋਗਨਿਟੋ ਵਿੰਡੋ ਵਿੱਚ ਲਿੰਕ ਖੋਲ੍ਹੋ</translation>
+<translation id="3185330573522821672">ਆਪਣੇ ਨਵੇਂ Chromium ਪ੍ਰੋਫਾਈਲ ਨੂੰ ਵਿਉਂਤਬੱਧ ਕਰੋ</translation>
 <translation id="3190315855212034486">ਠਹਿਰੋ! Chromium ਕ੍ਰੈਸ਼ ਹੋ ਗਿਆ ਹੈ। ਕੀ ਹੁਣ ਰੀਲੌਂਚ ਕਰਨਾ ਹੈ?</translation>
 <translation id="3229526316128325841">Chromium ਤੁਹਾਡੇ ਪਾਸਵਰਡ ਨਿਰਯਾਤ ਕਰਨਾ ਚਾਹੁੰਦਾ ਹੈ।</translation>
 <translation id="3258596308407688501">Chromium ਆਪਣੀ ਡਾਟਾ ਡਾਇਰੈਕਟਰੀ ਨੂੰ ਪੜ੍ਹ ਅਤੇ ਲਿਖ ਨਹੀਂ ਸਕਦਾ: 
@@ -76,10 +76,13 @@
 <translation id="3350761136195634146">ਇਸ ਖਾਤੇ ਨਾਲ ਕੋਈ Chromium ਪ੍ਰੋਫਾਈਲ ਪਹਿਲਾਂ ਤੋਂ ਹੀ ਮੌਜੂਦ ਹੈ</translation>
 <translation id="3406848076815591792">ਕੀ ਮੌਜੂਦਾ Chromium ਪ੍ਰੋਫਾਈਲ 'ਤੇ ਜਾਣਾ ਹੈ?</translation>
 <translation id="3430503420100763906">Chromium ਪ੍ਰੋਫਾਈਲਾਂ ਨਾਲ ਤੁਸੀਂ ਆਪਣੀ ਸਾਰੀ Chromium ਸਮੱਗਰੀ ਨੂੰ ਵੱਖ ਕਰ ਸਕਦੇ ਹੋ। ਦੋਸਤਾਂ ਅਤੇ ਪਰਿਵਾਰ ਲਈ ਪ੍ਰੋਫਾਈਲਾਂ ਬਣਾਓ ਜਾਂ ਕਾਰਜ ਅਤੇ ਮੌਜ-ਮਸਤੀ ਵਿੱਚ ਵੰਡੋ।</translation>
+<translation id="3433271666494956603">Chromium OS ਦੀ ਸਥਾਪਨਾ ਜਾਰੀ ਹੈ</translation>
 <translation id="347328004046849135">ਤੁਹਾਡੇ ਵੱਲੋਂ ਕਿਸੇ ਛੇੜਛਾੜ ਵਾਲੇ ਪਾਸਵਰਡ ਨਾਲ ਸਾਈਨ-ਇਨ ਕਰਨ 'ਤੇ Chromium ਤੁਹਾਨੂੰ ਸੂਚਿਤ ਕਰੇਗਾ</translation>
 <translation id="3474745554856756813">ਇਸ ਨਾਲ ਇਸ ਡੀਵਾਈਸ ਤੋਂ <ph name="ITEMS_COUNT" /> ਆਈਟਮਾਂ ਮਿਟਾ ਦਿੱਤੀਆਂ ਜਾਣਗੀਆਂ। ਬਾਅਦ ਵਿੱਚ ਆਪਣੇ ਡਾਟੇ ਨੂੰ ਮੁੜ-ਪ੍ਰਾਪਤ ਕਰਨ ਲਈ, Chromium 'ਤੇ <ph name="USER_EMAIL" /> ਵਜੋਂ ਸਾਈਨ-ਇਨ ਕਰੋ।</translation>
+<translation id="3497319089134299931"><ph name="SHORTCUT" /> Chromium ਪ੍ਰੋਫਾਈਲਾਂ ਵਿਚਾਲੇ ਅਦਲਾ-ਬਦਲੀ ਕਰ ਸਕਦਾ ਹੈ।</translation>
 <translation id="3509308970982693815">ਕਿਰਪਾ ਕਰਕੇ ਸਾਰੀਆਂ Chromium windows ਬੰਦ ਕਰੋ ਅਤੇ ਦੁਬਾਰਾ ਕੋਸ਼ਿਸ਼ ਕਰੋ।</translation>
 <translation id="3575459661164320785">ਤੁਹਾਡੇ ਕੰਪਿਊਟਰ ਵਿੱਚ ਹਾਨੀਕਾਰਕ ਸਾਫ਼ਟਵੇਅਰ ਹੈ। Chromium ਇਸਨੂੰ ਹਟਾ ਸਕਦਾ ਹੈ, ਤੁਹਾਡੀਆਂ ਸੈਟਿੰਗਾਂ ਮੁੜ-ਬਹਾਲ ਕਰ ਸਕਦਾ ਹੈ ਅਤੇ ਤੁਹਾਡੇ ਬ੍ਰਾਊਜ਼ਰ ਦੇ ਦੁਬਾਰਾ ਆਮ ਵਾਂਗ ਕੰਮ ਕਰਨ ਲਈ ਐਕਸਟੈਂਸ਼ਨਾਂ ਬੰਦ ਕਰ ਸਕਦਾ ਹੈ।</translation>
+<translation id="3610776674893128619">ਹਾਰਡ ਡਰਾਈਵ ਮਿਟਾਓ ਅਤੇ Chromium OS ਨੂੰ ਸਥਾਪਤ ਕਰੋ</translation>
 <translation id="3639635944603682591">ਇਸ ਵਿਅਕਤੀ ਦਾ ਬ੍ਰਾਊਜ਼ਿੰਗ ਡਾਟਾ ਇਸ ਡੀਵਾਈਸ ਤੋਂ ਮਿਟਾ ਦਿੱਤਾ ਜਾਵੇਗਾ। ਡਾਟਾ ਮੁੜ-ਹਾਸਲ ਕਰਨ ਲਈ, Chromium ਵਿੱਚ <ph name="USER_EMAIL" /> ਵਜੋਂ ਸਾਈਨ-ਇਨ ਕਰੋ।</translation>
 <translation id="364817392622123556">{COUNT,plural, =0{Chromium ਲਈ ਇੱਕ ਨਵਾਂ ਅੱਪਡੇਟ ਉਪਲਬਧ ਹੈ ਅਤੇ ਤੁਹਾਡੇ ਵੱਲੋਂ ਮੁੜ-ਲਾਂਚ ਕਰਨ ਦੇ ਨਾਲ ਹੀ ਅੱਪਡੇਟ ਲਾਗੂ ਕਰ ਦਿੱਤਾ ਜਾਵੇਗਾ।}=1{Chromium ਲਈ ਇੱਕ ਨਵਾਂ ਅੱਪਡੇਟ ਉਪਲਬਧ ਹੈ ਅਤੇ ਤੁਹਾਡੇ ਵੱਲੋਂ ਮੁੜ-ਲਾਂਚ ਕਰਨ ਦੇ ਨਾਲ ਹੀ ਅੱਪਡੇਟ ਲਾਗੂ ਕਰ ਦਿੱਤਾ ਜਾਵੇਗਾ। ਤੁਹਾਡੀ ਇਨਕੋਗਨਿਟੋ ਵਿੰਡੋ ਦੁਬਾਰਾ ਨਹੀਂ ਖੁੱਲ੍ਹੇਗੀ।}other{Chromium ਲਈ ਇੱਕ ਨਵਾਂ ਅੱਪਡੇਟ ਉਪਲਬਧ ਹੈ ਅਤੇ ਤੁਹਾਡੇ ਵੱਲੋਂ ਮੁੜ-ਲਾਂਚ ਕਰਨ ਦੇ ਨਾਲ ਹੀ ਅੱਪਡੇਟ ਲਾਗੂ ਕਰ ਦਿੱਤਾ ਜਾਵੇਗਾ। ਤੁਹਾਡੀਆਂ # ਇਨਕੋਗਨਿਟੋ ਵਿੰਡੋ ਦੁਬਾਰਾ ਨਹੀਂ ਖੁੱਲ੍ਹਣਗੀਆਂ।}}</translation>
 <translation id="3651803019964686660"><ph name="ORIGIN" /> ਤੋਂ ਆਪਣੇ Android ਫ਼ੋਨ 'ਤੇ ਨੰਬਰ ਭੇਜਣ ਲਈ, ਦੋਵੇਂ ਡੀਵਾਈਸਾਂ 'ਤੇ Chromium ਵਿੱਚ ਸਾਈਨ-ਇਨ ਕਰੋ।</translation>
@@ -103,14 +106,17 @@
 <translation id="4264410486868823224"><ph name="MANAGER" /> ਦੀ ਸ਼ਰਤ ਹੈ ਕਿ ਤੁਸੀਂ ਇਸ ਡੀਵਾਈਸ ਨੂੰ ਵਰਤਣ ਤੋਂ ਪਹਿਲਾਂ ਹੇਠਾਂ ਦਿੱਤੇ ਸੇਵਾ ਦੇ ਨਿਯਮ ਪੜ੍ਹ ਕੇ ਸਵੀਕਾਰ ਕਰੋ। ਇਹ ਨਿਯਮ Chromium OS ਦੇ ਨਿਯਮਾਂ ਦਾ ਵਿਸਤਾਰ ਨਹੀਂ ਕਰਦੇ, ਇਹਨਾਂ ਵਿੱਚ ਕੋਈ ਸੋਧ ਨਹੀਂ ਕਰਦੇ ਜਾਂ ਇਹਨਾਂ ਨੂੰ ਸੀਮਤ ਨਹੀਂ ਕਰਦੇ ਹਨ।</translation>
 <translation id="4271805377592243930">Chromium ਬਾਰੇ ਮਦਦ ਪ੍ਰਾਪਤ ਕਰੋ</translation>
 <translation id="4285930937574705105">ਅਚਨਚੇਤ ਗੜਬੜ ਕਾਰਨ ਸਥਾਪਨਾ ਅਸਫਲ ਹੋ ਗਈ। ਜੇਕਰ ਇਸ ਵੇਲੇ Chromium ਚੱਲ ਰਿਹਾ ਹੈ, ਤਾਂ ਕਿਰਪਾ ਕਰਕੇ ਇਸਨੂੰ ਬੰਦ ਕਰਕੇ ਦੁਬਾਰਾ ਕੋਸ਼ਿਸ਼ ਕਰੋ।</translation>
+<translation id="429583012151745428">ਸਥਾਪਨਾ ਜਾਰੀ ਹੈ। ਡੀਵਾਈਸ ਨੂੰ ਬੰਦ ਨਾ ਕਰੋ। ਸਥਾਪਤ ਕਰਨ ਦੀ ਪ੍ਰਕਿਰਿਆ ਵਿੱਚ ਵੀਹ ਮਿੰਟ ਤੋਂ ਵੱਧ ਸਮਾਂ ਨਹੀਂ ਲੱਗਣਾ ਚਾਹੀਦਾ। ਸਥਾਪਨਾ ਪੂਰੀ ਹੋਣ ਤੋਂ ਬਾਅਦ, ਮਸ਼ੀਨ ਸਵੈਚਲਿਤ ਤੌਰ 'ਤੇ ਬੰਦ ਹੋ ਜਾਵੇਗੀ।</translation>
 <translation id="4407044323746248786">ਕੀ ਫਿਰ ਵੀ Chromium ਤੋਂ ਬਾਹਰ ਜਾਣਾ ਹੈ?</translation>
 <translation id="4415566066719264597">Chromium ਨੂੰ ਬੈਕਗ੍ਰਾਊਂਡ ਵਿੱਚ ਚੱਲਣ ਦਿਓ</translation>
 <translation id="4423735387467980091">Google Chrome ਨੂੰ ਵਿਉਂਤਬੱਧ ਕਰਕੇ ਕੰਟਰੋਲ ਕਰੋ।</translation>
+<translation id="4491398312037323794">ਇਹ ਪੰਨਾ ਤੁਹਾਨੂੰ ਆਪਣੇ ਸਾਈਨ-ਇਨ ਕੀਤੇ Google ਖਾਤਿਆਂ ਦਾ ਪ੍ਰਬੰਧਨ ਕਰਨ ਦੀ ਇਜਾਜ਼ਤ ਦਿੰਦਾ ਹੈ। ਇਹ ਖਾਤੇ Chromium ਬ੍ਰਾਊਜ਼ਰ ਅਤੇ 'Play ਸਟੋਰ' ਐਪਾਂ ਦੇ ਨਾਲ-ਨਾਲ Gmail, Drive ਅਤੇ YouTube ਵਰਗੀਆਂ ਸੇਵਾਵਾਂ ਵਿੱਚ ਵੀ ਉਪਲਬਧ ਹੋਣਗੇ। <ph name="LINK_BEGIN" />ਹੋਰ ਜਾਣੋ<ph name="LINK_END" /></translation>
 <translation id="452711251841752011">Chromium ਵਿੱਚ ਜੀ ਆਇਆਂ ਨੂੰ; ਨਵੀਂ ਬ੍ਰਾਊਜ਼ਰ ਵਿੰਡੋ ਖੋਲ੍ਹੀ ਗਈ</translation>
 <translation id="4544142686420020088">Chromium ਅੱਪਡੇਟ ਨਹੀਂ ਹੋਇਆ, ਕੋਈ ਗੜਬੜ ਹੋ ਗਈ। <ph name="BEGIN_LINK" />Chromium ਅੱਪਡੇਟ ਦੀਆਂ ਸਮੱਸਿਆਵਾਂ ਅਤੇ ਅਸਫਲ ਹੋਈਆਂ ਅੱਪਡੇਟਾਂ ਨੂੰ ਠੀਕ ਕਰੋ।<ph name="END_LINK" /></translation>
 <translation id="454579500955453258">ਕੀ ਨਵੇਂ Chromium ਪ੍ਰੋਫਾਈਲ ਵਿੱਚ ਜਾਰੀ ਰੱਖਣਾ ਹੈ?</translation>
 <translation id="4567424176335768812">ਤੁਸੀਂ <ph name="USER_EMAIL_ADDRESS" /> ਦੇ ਤੌਰ 'ਤੇ ਸਾਈਨ-ਇਨ ਕੀਤਾ ਹੈ। ਹੁਣ ਤੁਸੀਂ ਆਪਣੇ ਸਾਰੇ ਸਾਈਨ-ਇਨ ਕੀਤੇ ਡੀਵਾਈਸਾਂ 'ਤੇ ਆਪਣੇ ਬੁੱਕਮਾਰਕਾਂ, ਇਤਿਹਾਸ ਅਤੇ ਹੋਰ ਸੈਟਿੰਗਾਂ ਤੱਕ ਪਹੁੰਚ ਪ੍ਰਾਪਤ ਕਰ ਸਕਦੇ ਹੋ।</translation>
 <translation id="459535195905078186">Chromium ਐਪਸ</translation>
+<translation id="4665829708273112819">ਚਿਤਾਵਨੀ: Chromium ਐਕਸਟੈਂਸ਼ਨਾਂ ਨੂੰ ਤੁਹਾਡੇ ਬ੍ਰਾਊਜ਼ਿੰਗ ਇਤਿਹਾਸ ਨੂੰ ਰਿਕਾਰਡ ਕਰਨ ਤੋਂ ਨਹੀਂ ਰੋਕ ਸਕਦਾ। ਇਨਕੋਗਨਿਟੋ ਮੋਡ ਵਿੱਚ ਇਸ ਐਕਸਟੈਂਸ਼ਨ ਨੂੰ ਬੰਦ ਕਰਨ ਲਈ, ਇਸ ਵਿਕਲਪ ਨੂੰ ਅਣਚੁਣਿਆ ਕਰੋ।</translation>
 <translation id="4677944499843243528">ਇੰਜ ਜਾਪਦਾ ਹੈ ਕਿ ਪ੍ਰੋਫਾਈਲ ਨੂੰ ਕਿਸੇ ਹੋਰ ਕੰਪਿਊਟਰ <ph name="HOST_NAME" /> 'ਤੇ ਦੂਜੀ Chromium ਪ੍ਰਕਿਰਿਆ (<ph name="PROCESS_ID" />) ਵਿੱਚ ਵਰਤਿਆ ਜਾ ਰਿਹਾ ਹੈ। Chromium ਨੇ ਪ੍ਰੋਫਾਈਲ ਲਾਕ ਕਰ ਦਿੱਤੀ ਹੈ ਤਾਂ ਜੋ ਇਹ ਖਰਾਬ ਹੋਣ ਤੋਂ ਬੱਚ ਸਕੇ। ਜੇਕਰ ਤੁਹਾਨੂੰ ਪੱਕਾ ਪਤਾ ਹੈ ਕਿ ਕੋਈ ਹੋਰ ਪ੍ਰਕਿਰਿਆਵਾਂ ਇਹ ਪ੍ਰੋਫਾਈਲ ਨਹੀਂ ਵਰਤ ਰਹੀਆਂ, ਤਾਂ ਤੁਸੀਂ ਪ੍ਰੋਫਾਈਲ ਨੂੰ ਅਣਲਾਕ ਕਰ ਸਕਦੇ ਹੋ ਅਤੇ Chromium ਨੂੰ ਮੁੜ-ਲਾਂਚ ਕਰ ਸਕਦੇ ਹੋ।</translation>
 <translation id="469338717132742108">Chromium OS ਬਾਰੇ ਮਦਦ ਪ੍ਰਾਪਤ ਕਰੋ</translation>
 <translation id="4708774505295300557">ਕਿਸੇ ਵਿਅਕਤੀ ਨੇ ਪਹਿਲਾਂ ਹੀ <ph name="ACCOUNT_EMAIL_LAST" /> ਵਜੋਂ ਇਸ ਕੰਪਿਊਟਰ 'ਤੇ Chromium 'ਤੇ ਸਾਈਨ-ਇਨ ਕੀਤਾ ਹੋਇਆ ਹੈ। ਆਪਣੀ ਜਾਣਕਾਰੀ ਵੱਖਰੀ ਰੱਖਣ ਲਈ ਕਿਰਪਾ ਕਰਕੇ ਇੱਕ ਨਵਾਂ Chromium ਵਰਤੋਂਕਾਰ ਬਣਾਓ।</translation>
@@ -120,10 +126,12 @@
 <translation id="4788777615168560705">Chromium ਤੁਹਾਡੇ ਪਾਸਵਰਡਾਂ ਦੀ ਜਾਂਚ ਨਹੀਂ ਕਰ ਸਕਦਾ। 24 ਘੰਟਿਆਂ ਬਾਅਦ ਦੁਬਾਰਾ ਕੋਸ਼ਿਸ਼ ਕਰੋ ਜਾਂ <ph name="BEGIN_LINK" />ਆਪਣੇ Google ਖਾਤੇ ਵਿੱਚ ਪਾਸਵਰਡਾਂ ਦੀ ਜਾਂਚ ਕਰੋ<ph name="END_LINK" />।</translation>
 <translation id="479167709087336770">ਇਹ Google ਖੋਜ ਵੇਲੇ ਵਰਤੇ ਜਾਣ ਵਾਲੇ ਸਪੈੱਲ-ਚੈਕਰ ਨੂੰ ਹੀ ਵਰਤਦਾ ਹੈ। ਬ੍ਰਾਊਜ਼ਰ ਵਿੱਚ ਤੁਹਾਡੇ ਵੱਲੋਂ ਟਾਈਪ ਕੀਤੀ ਜਾਣ ਵਾਲੀ ਲਿਖਤ Google ਨੂੰ ਭੇਜੀ ਜਾਵੇਗੀ। ਤੁਸੀਂ ਹਮੇਸ਼ਾਂ ਸੈਟਿੰਗਾਂ ਵਿੱਚ ਇਸ ਵਤੀਰੇ ਨੂੰ ਬਦਲ ਸਕਦੇ ਹੋ।</translation>
 <translation id="4888717733111232871">mDNS ਟ੍ਰੈਫਿਕ ਦੀ ਆਗਿਆ ਦੇਣ ਲਈ Chromium ਲਈ ਇਨਬਾਊਂਡ ਨਿਯਮ।</translation>
+<translation id="4893347770495441059">&amp;Chromium ਨੂੰ ਅੱਪਡੇਟ ਕਰਨ ਲਈ ਮੁੜ-ਲਾਂਚ ਕਰੋ</translation>
 <translation id="4943838377383847465">Chromium ਪਿਛੋਕੜ ਮੋਡ ਵਿੱਚ ਹੈ।</translation>
 <translation id="4987820182225656817">ਮਹਿਮਾਨ ਕੁਝ ਵੀ ਪਿੱਛੇ ਛੱਡੇ ਬਿਨਾਂ Chromium ਵਰਤ ਸਕਦੇ ਹਨ।</translation>
 <translation id="4994636714258228724">ਖੁਦ ਨੂੰ Chromium ਵਿੱਚ ਜੋੜੋ</translation>
 <translation id="5224391634244552924">ਕੋਈ ਰੱਖਿਅਤ ਕੀਤਾ ਪਾਸਵਰਡ ਨਹੀਂ। ਤੁਹਾਡੇ ਵੱਲੋਂ ਆਪਣੇ ਪਾਸਵਰਡ ਰੱਖਿਅਤ ਕਰਨ 'ਤੇ Chromium ਉਹਨਾਂ ਦੀ ਜਾਂਚ ਕਰ ਸਕਦਾ ਹੈ।</translation>
+<translation id="5252179775517634216"><ph name="EXISTING_USER" /> ਪਹਿਲਾਂ ਤੋਂ ਹੀ ਇਸ Chromium ਪ੍ਰੋਫਾਈਲ ਵਿੱਚ ਸਾਈਨ-ਇਨ ਹੈ। ਇਸ ਨਾਲ <ph name="USER_EMAIL_ADDRESS" /> ਲਈ ਨਵਾਂ Chromium ਪ੍ਰੋਫਾਈਲ ਬਣਾਇਆ ਜਾਵੇਗਾ</translation>
 <translation id="5277894862589591112">ਆਪਣੀਆਂ ਤਬਦੀਲੀਆਂ ਲਾਗੂ ਕਰਨ ਲਈ, Chromium ਨੂੰ ਮੁੜ-ਲਾਂਚ ਕਰੋ</translation>
 <translation id="5358375970380395591">ਤੁਸੀਂ ਇੱਕ ਪ੍ਰਬੰਧਿਤ ਕੀਤੇ ਖਾਤੇ ਨਾਲ ਸਾਈਨ-ਇਨ ਕਰ ਰਹੇ ਹੋ ਅਤੇ ਇਸ ਦੇ ਪ੍ਰਸ਼ਾਸਕ ਨੂੰ ਆਪਣੇ Chromium ਪ੍ਰੋਫਾਈਲ ਦਾ ਕੰਟਰੋਲ ਦੇ ਰਹੇ ਹੋ। ਤੁਹਾਡਾ Chromium ਡਾਟਾ, ਜਿਵੇਂ ਕਿ ਤੁਹਾਡੀਆਂ ਐਪਾਂ, ਬੁੱਕਮਾਰਕ, ਇਤਿਹਾਸ, ਪਾਸਵਰਡ, ਅਤੇ ਹੋਰ ਸੈਟਿੰਗਾਂ <ph name="USER_NAME" /> ਨਾਲ ਸਥਾਈ ਤੌਰ 'ਤੇ ਜੋੜੇ ਜਾਣਗੇ। ਤੁਸੀਂ ਇਸ ਡਾਟੇ ਨੂੰ Google ਖਾਤੇ ਡੈਸ਼ਬੋਰਡ ਰਾਹੀਂ ਮਿਟਾ ਸਕੋਗੇ, ਪਰ ਤੁਸੀਂ ਇਸ ਡਾਟੇ ਨੂੰ ਦੂਜੇ ਖਾਤੇ ਨਾਲ ਨਹੀਂ ਜੋੜ ਸਕੋਗੇ। <ph name="LEARN_MORE" /></translation>
 <translation id="5386450000063123300">Chromium ਅੱਪਡੇਟ ਕੀਤਾ ਜਾ ਰਿਹਾ ਹੈ (<ph name="PROGRESS_PERCENT" />)</translation>
@@ -136,13 +144,13 @@
 <translation id="5480860683791598150">ਇਸ ਸਾਈਟ ਨਾਲ ਤੁਹਾਡਾ ਟਿਕਾਣਾ ਸਾਂਝਾ ਕਰਨ ਲਈ Chromium ਨੂੰ ਤੁਹਾਡੇ ਟਿਕਾਣੇ 'ਤੇ ਪਹੁੰਚ ਕਰਨ ਦੀ ਲੋੜ ਹੈ</translation>
 <translation id="549669000822060376">ਕਿਰਪਾ ਕਰਕੇ ਠਹਿਰੋ ਜਦੋਂ Chromium ਨਵੀਆਂ ਸਿਸਟਮ ਅਪਡੇਟਾਂ ਇੰਸਟੌਲ ਕਰ ਰਿਹਾ ਹੋਵੇ।</translation>
 <translation id="5496810170689441661">Chromium ਪਾਸਵਰਡਾਂ ਦਾ ਸੰਪਾਦਨ ਕਰਨ ਦੀ ਕੋਸ਼ਿਸ਼ ਕਰ ਰਿਹਾ ਹੈ। ਇਹ ਕਰਨ ਦੇਣ ਲਈ ਆਪਣਾ ਵਿੰਡੋ ਪਾਸਵਰਡ ਟਾਈਪ ਕਰੋ।</translation>
+<translation id="5527463683072221100">Chromium ਵਿੱਚ PDF ਖੋਲ੍ਹੋ</translation>
 <translation id="5623402015214259806">{0,plural, =0{Chromium ਅੱਪਡੇਟ ਉਪਲਬਧ ਹੈ}=1{Chromium ਅੱਪਡੇਟ ਉਪਲਬਧ ਹੈ}other{Chromium ਅੱਪਡੇਟ # ਦਿਨਾਂ ਤੋਂ ਉਪਲਬਧ ਹੈ}}</translation>
-<translation id="5631814766731275228">Chromium ਨਾਮ ਅਤੇ ਤਸਵੀਰ</translation>
 <translation id="5634636535844844681">Google Chrome ਨੂੰ Windows 7 ਜਾਂ ਇਸ ਤੋਂ ਬਾਅਦ ਵਾਲੇ ਵਰਜਨ ਦੀ ਲੋੜ ਹੈ।</translation>
 <translation id="5653831366781983928">ਕਿਰਪਾ ਕਰਕੇ ਹੁਣੇ Chromium ਨੂੰ ਮੁੜ-ਸ਼ੁਰੂ ਕਰੋ</translation>
 <translation id="5698481217667032250">Chromium ਨੂੰ ਇਸ ਭਾਸ਼ਾ ਵਿੱਚ  ਦਿਖਾਓ ।</translation>
-<translation id="5736967399513123100">ਸੁਰੱਖਿਅਤ ਮੀਡੀਆ ਚਲਾਉਣ ਲਈ Chromium ਨੂੰ ਚਾਲੂ ਕਰਨ ਵਾਸਤੇ, ਤੁਹਾਨੂੰ Rosetta ਸਥਾਪਤ ਕਰਨ ਦੀ ਲੋੜ ਹੈ। ਕੀ ਤੁਸੀਂ ਇਸਨੂੰ ਹੁਣੇ ਸਥਾਪਤ ਕਰਨਾ ਚਾਹੁੰਦੇ ਹੋ?</translation>
 <translation id="5820394555380036790">Chromium OS</translation>
+<translation id="5854740544000584380">Chromium OS ਨੂੰ ਵਧੀਕ <ph name="BEGIN_LINK_CROS_OSS" />ਖੁੱਲ੍ਹੇ ਸਰੋਤ ਸਾਫ਼ਟਵੇਅਰ<ph name="END_LINK_CROS_OSS" /> ਕਰਕੇ ਸੰਭਵ ਬਣਾਇਆ ਗਿਆ ਹੈ, ਜਿਵੇਂ ਕਿ <ph name="BEGIN_LINK_LINUX_OSS" />Linux ਵਿਕਾਸ ਵਾਤਾਵਰਨ<ph name="END_LINK_LINUX_OSS" />।</translation>
 <translation id="5862307444128926510">Chromium ਵਿੱਚ ਸੁਆਗਤ ਹੈ</translation>
 <translation id="5895138241574237353">ਰੀਸਟਾਰਟ ਕਰੋ</translation>
 <translation id="5903106910045431592"><ph name="PAGE_TITLE" /> - ਨੈੱਟਵਰਕ ਸਾਈਨ-ਇਨ</translation>
@@ -157,14 +165,24 @@
 <translation id="6120345080069858279">Chromium ਇਸ ਪਾਸਵਰਡ ਨੂੰ ਤੁਹਾਡੇ 'Google ਖਾਤੇ' ਵਿੱਚ ਰੱਖਿਅਤ ਕਰੇਗਾ। ਤੁਹਾਨੂੰ ਇਸਨੂੰ ਯਾਦ ਨਹੀਂ ਰੱਖਣਾ ਪਵੇਗਾ।</translation>
 <translation id="6129621093834146363"><ph name="FILE_NAME" /> ਖਤਰਨਾਕ ਹੈ, ਇਸ ਲਈ Chromium ਨੇ ਇਸਨੂੰ ਬਲੌਕ ਕਰ ਦਿੱਤਾ ਹੈ।</translation>
 <translation id="6134968993075716475">ਸੁਰੱਖਿਅਤ ਬ੍ਰਾਊਜ਼ਿੰਗ ਬੰਦ ਹੈ। Chromium ਇਸਨੂੰ ਚਾਲੂ ਕਰਨ ਦੀ ਸਿਫ਼ਾਰਸ਼ ਕਰਦਾ ਹੈ।</translation>
+<translation id="6145820983052037069">ਤੁਸੀਂ ਇੱਥੇ Chromium ਪ੍ਰੋਫਾਈਲਾਂ ਵਿਚਾਲੇ ਅਦਲਾ-ਬਦਲੀ ਕਰ ਸਕਦੇ ਹੋ</translation>
+<translation id="61577490437262925"><ph name="BEGIN_PARAGRAPH1" />ਅਸੀਂ Chromium OS ਨੂੰ ਸਥਾਪਤ ਕਰਨ ਲਈ ਤਿਆਰ ਹਾਂ! ਤੁਹਾਡੇ ਵੱਲੋਂ ਅੱਗੇ ਵੱਧ ਜਾਣ 'ਤੇ:
+          <ph name="BEGIN_LIST" />
+          <ph name="LIST_ITEM" />ਫ਼ਾਈਲਾਂ, ਡਾਟਾ ਅਤੇ ਤੁਹਾਡਾ ਮੋਜੂਦਾ ਓਪਰੇਟਿੰਗ ਸਿਸਟਮ ਮਿਟਾ ਦਿੱਤਾ ਜਾਵੇਗਾ।
+          <ph name="LIST_ITEM" />Chromium OS ਸਥਾਪਤ ਕੀਤਾ ਜਾਵੇਗਾ।
+          <ph name="LIST_ITEM" />ਸਥਾਪਨਾ ਪੂਰੀ ਹੋਣ 'ਤੇ ਤੁਹਾਡਾ ਡੀਵਾਈਸ ਬੰਦ ਹੋ ਜਾਵੇਗਾ।
+          <ph name="END_LIST" />
+          <ph name="END_PARAGRAPH1" />
+          <ph name="BEGIN_PARAGRAPH2" />ਇੱਕ ਆਖਰੀ ਰਿਮਾਈਂਡਰ: ਸਥਾਪਨਾ ਤੁਹਾਡੀ ਹਾਰਡ ਡਰਾਈਵ ਦੇ ਪੂਰੇ ਡਾਟੇ ਨੂੰ ਮਿਟਾ ਦੇਵੇਗੀ। ਕਿਰਪਾ ਕਰਕੇ ਪੱਕਾ ਕਰੋ ਕਿ ਤੁਸੀਂ ਆਪਣੇ ਮਹੱਤਵਪੂਰਨ ਡਾਟਾ ਦਾ ਬੈਕਅੱਪ ਲਿਆ ਹੈ।<ph name="END_PARAGRAPH2" />
+          <ph name="BEGIN_PARAGRAPH3" />ਇੱਕ ਵਾਰ ਸਥਾਪਨਾ ਸ਼ੁਰੂ ਹੋਣ 'ਤੇ, ਇਸ ਨੂੰ ਰੱਦ ਨਹੀਂ ਕੀਤਾ ਜਾ ਸਕਦਾ।<ph name="END_PARAGRAPH3" /></translation>
 <translation id="6183079672144801177">ਪੱਕਾ ਕਰੋ ਕਿ ਤੁਸੀਂ ਆਪਣੇ <ph name="TARGET_DEVICE_NAME" /> 'ਤੇ Chromium ਵਿੱਚ ਸਾਈਨ-ਇਨ ਕੀਤਾ ਹੋਇਆ ਹੈ ਅਤੇ ਫਿਰ ਦੁਬਾਰਾ ਭੇਜਣ ਦੀ ਕੋਸ਼ਿਸ਼ ਕਰੋ।</translation>
 <translation id="6212496753309875659">ਇਸ ਕੰਪਿਊਟਰ ਵਿੱਚ ਪਹਿਲਾਂ ਹੀ Chromium ਦਾ ਇੱਕ ਬਿਲਕੁਲ ਨਵਾਂ ਵਰਜਨ ਹੈ। ਜੇਕਰ ਸਾਫ਼ਟਵੇਅਰ ਕੰਮ ਨਹੀਂ ਕਰ ਰਿਹਾ ਹੈ, ਤਾਂ ਕਿਰਪਾ ਕਰਕੇ Chromium ਨੂੰ ਅਣਸਥਾਪਤ ਕਰਕੇ ਦੁਬਾਰਾ ਕੋਸ਼ਿਸ਼ ਕਰੋ।</translation>
 <translation id="6219195342503754812">{0,plural, =0{Chromium ਹੁਣੇ ਮੁੜ-ਲਾਂਚ ਹੋਵੇਗਾ}=1{Chromium 1 ਸਕਿੰਟ ਵਿੱਚ ਮੁੜ-ਲਾਂਚ ਹੋਵੇਗਾ}other{Chromium # ਸਕਿੰਟਾਂ ਵਿੱਚ ਮੁੜ-ਲਾਂਚ ਹੋਵੇਗਾ}}</translation>
-<translation id="623836266260425961">Chromium OS ਤੁਹਾਡੇ ਡਾਟੇ ਦਾ ਸਮਕਾਲੀਕਰਨ ਨਹੀਂ ਕਰ ਸਕਿਆ।</translation>
 <translation id="6248213926982192922">Chromium ਨੂੰ ਪੂਰਵ-ਨਿਰਧਾਰਤ ਬ੍ਰਾਊਜ਼ਰ ਬਣਾਓ</translation>
 <translation id="6266342355635466082">Chromium ਅੱਪਡੇਟਾਂ ਲਈ ਜਾਂਚ ਨਹੀਂ ਕਰ ਸਕਦਾ। ਆਪਣੇ ਇੰਟਰਨੈੱਟ ਕਨੈਕਸ਼ਨ ਦੀ ਜਾਂਚ ਕਰਕੇ ਦੇਖੋ।</translation>
 <translation id="6268381023930128611">ਕੀ Chromium ਤੋਂ ਸਾਈਨ-ਆਊਟ ਹੋਣਾ ਹੈ?</translation>
 <translation id="6281746429495226318">ਆਪਣੇ Chromium ਪ੍ਰੋਫਾਈਲ ਨੂੰ ਵਿਉਂਤਬੱਧ ਕਰੋ</translation>
+<translation id="6290827346642914212">ਆਪਣੇ Chromium ਪ੍ਰੋਫਾਈਲ ਨੂੰ ਨਾਮ ਦਿਓ</translation>
 <translation id="6295779123002464101"><ph name="FILE_NAME" /> ਖਤਰਨਾਕ ਹੋ ਸਕਦੀ ਹੈ, ਇਸ ਲਈ Chromium ਨੇ ਇਸਨੂੰ ਬਲੌਕ ਕਰ ਦਿੱਤਾ ਹੈ।</translation>
 <translation id="6309712487085796862">Chromium ਤੁਹਾਡਾ ਕੈਮਰਾ ਵਰਤ ਰਿਹਾ ਹੈ।</translation>
 <translation id="6333502561965082103">Chromium 'ਤੇ ਕੋਈ ਹੋਰ ਕਾਰਵਾਈ ਜਾਰੀ ਹੈ। ਕਿਰਪਾ ਕਰਕੇ ਬਾਅਦ ਵਿੱਚ ਦੁਬਾਰਾ ਕੋਸ਼ਿਸ਼ ਕਰੋ।</translation>
@@ -174,6 +192,7 @@
 <translation id="6434250628340475518">Chromium OS ਸਿਸਟਮ</translation>
 <translation id="6455857529632101747">Chromium ਪ੍ਰੋਫਾਈਲਾਂ ਵਿੱਚ ਜੀ ਆਇਆਂ ਨੂੰ</translation>
 <translation id="6457450909262716557">{SECONDS,plural, =1{Chromium 1 ਸਕਿੰਟ ਵਿੱਚ ਮੁੜ-ਚਾਲੂ ਹੋਵੇਗਾ}one{Chromium # ਸਕਿੰਟ ਵਿੱਚ ਮੁੜ-ਚਾਲੂ ਹੋਵੇਗਾ}other{Chromium # ਸਕਿੰਟਾਂ ਵਿੱਚ ਮੁੜ-ਚਾਲੂ ਹੋਵੇਗਾ}}</translation>
+<translation id="646620589868199210">Chromium OS ਨੂੰ ਸਥਾਪਤ ਕਰਨ ਲਈ ਤਿਆਰ</translation>
 <translation id="6475912303565314141">ਇਹ ਇਸਤੇ ਵੀ ਨਿਯੰਤਰਣ ਪਾਉਂਦਾ ਹੈ ਕਿ ਕਿਹੜਾ ਸਫ਼ਾ ਦਿਖਾਇਆ ਜਾਂਦਾ ਹੈ ਜਦੋਂ ਤੁਸੀਂ Chromium ਚਾਲੂ ਕਰਦੇ ਹੋ।</translation>
 <translation id="6510925080656968729">Chromium ਨੂੰ ਅਣਸਥਾਪਤ ਕਰੋ</translation>
 <translation id="6542839706527980775">ਹਰੇਕ ਪ੍ਰੋਫਾਈਲ ਵਿੱਚ ਆਪਣੀ Chromium ਜਾਣਕਾਰੀ ਹੁੰਦੀ ਹੈ ਜਿਵੇਂ ਕਿ ਬੁੱਕਮਾਰਕ, ਇਤਿਹਾਸ, ਪਾਸਵਰਡ ਅਤੇ ਹੋਰ ਬਹੁਤ ਕੁਝ</translation>
@@ -188,23 +207,20 @@
 <translation id="6734291798041940871">Chromium ਤੁਹਾਡੇ ਕੰਪਿਊਟਰ 'ਤੇ ਪਹਿਲਾਂ ਹੀ ਸਾਰੇ ਵਰਤੋਂਕਾਰਾਂ ਲਈ ਸਥਾਪਤ ਕੀਤਾ ਗਿਆ ਹੈ।</translation>
 <translation id="673636774878526923">ਆਪਣੇ ਸਾਰੇ ਡੀਵਾਈਸਾਂ ਵਿੱਚ ਆਪਣੀ Chromium ਸਮੱਗਰੀ ਤੱਕ ਪਹੁੰਚ ਕਰਨ ਲਈ, ਸਾਈਨ-ਇਨ ਕਰੋ, ਫਿਰ ਸਮਕਾਲੀਕਰਨ ਨੂੰ ਚਾਲੂ ਕਰੋ।</translation>
 <translation id="6774082503108938489">ਤੁਹਾਡੇ ਮਾਂ-ਪਿਓ ਨੇ Chromium ਲਈ "ਸਾਈਟਾਂ, ਐਪਾਂ ਅਤੇ ਐਕਸਟੈਂਸ਼ਨਾਂ ਲਈ ਇਜਾਜ਼ਤਾਂ" ਨੂੰ ਬੰਦ ਕਰ ਦਿੱਤਾ ਹੈ। ਇਸ <ph name="EXTENSION_TYPE_PARAMETER" /> ਨੂੰ ਚਾਲੂ ਕਰਨ ਦੀ ਇਜਾਜ਼ਤ ਨਹੀਂ ਹੈ।</translation>
+<translation id="6827182711503025204">Chromium OS ਨੂੰ ਸਥਾਪਤ ਕਰਨ ਨਾਲ ਤੁਹਾਡੇ ਡੀਵਾਈਸ ਦਾ ਸਾਰਾ ਡਾਟਾ ਓਵਰਰਾਈਟ ਹੋ ਜਾਵੇਗਾ।</translation>
 <translation id="6847869444787758381">Chromium ਤੁਹਾਨੂੰ ਇਹ ਗੱਲ ਦੱਸਦਾ ਹੈ ਕਿ ਤੁਹਾਡੇ ਪਾਸਵਰਡਾਂ ਨਾਲ ਪਹਿਲਾਂ ਕਦੇ ਛੇੜਛਾੜ ਹੋਈ ਹੈ ਜਾਂ ਨਹੀਂ</translation>
 <translation id="6857782730669500492">Chromium - <ph name="PAGE_TITLE" /></translation>
 <translation id="6863361426438995919">Google Pay (Chromium 'ਤੇ ਕਾਪੀ ਕੀਤਾ ਗਿਆ)</translation>
 <translation id="6893813176749746474">Chromium ਨੂੰ ਅੱਪਡੇਟ ਕੀਤਾ ਗਿਆ ਹੈ, ਪਰੰਤੂ ਤੁਸੀਂ ਇਸਨੂੰ ਪਿਛਲੇ ਘੱਟੋ-ਘੱਟ 30 ਦਿਨਾਂ ਤੋਂ ਨਹੀਂ ਵਰਤਿਆ ਹੈ।</translation>
-<translation id="6897548120660295439">Rosetta ਇਸ ਪੰਨੇ 'ਤੇ Chromium ਨੂੰ ਸੁਰੱਖਿਅਤ ਮੀਡੀਆ ਚਲਾਉਣ ਦੇ ਯੋਗ ਬਣਾਉਂਦਾ ਹੈ।</translation>
 <translation id="691026815377248078">ਜੋੜਾਬੱਧਕਰਨ ਜਾਰੀ ਰੱਖਣ ਲਈ Chromium ਨੂੰ ਬਲੂਟੁੱਥ ਪਹੁੰਚ 
  ਦੀ ਲੋੜ ਹੈ। <ph name="IDS_BLUETOOTH_DEVICE_CHOOSER_AUTHORIZE_BLUETOOTH_LINK" /></translation>
 <translation id="6964305034639999644">Chromium ਇਨ&amp;ਕੋਗਨਿਟੋ ਵਿੰਡੋ ਵਿੱਚ ਲਿੰਕ ਖੋਲ੍ਹੋ</translation>
 <translation id="6978145336957848883">ਕਮਜ਼ੋਰ ਪਾਸਵਰਡਾਂ ਦਾ ਅੰਦਾਜ਼ਾ ਲਗਾਉਣਾ ਆਸਾਨ ਹੁੰਦਾ ਹੈ। Chromium ਨੂੰ <ph name="BEGIN_LINK" />ਤੁਹਾਡੇ ਲਈ ਮਜ਼ਬੂਤ ਪਾਸਵਰਡ ਬਣਾਉਣ ਅਤੇ ਯਾਦ ਰੱਖਣ<ph name="END_LINK" /> ਦਿਓ।</translation>
 <translation id="6990124437352146030">Chromium ਨੂੰ ਇਸ ਸਾਈਟ ਵਾਸਤੇ ਤੁਹਾਡੇ ਮਾਈਕ੍ਰੋਫ਼ੋਨ ਤੱਕ ਪਹੁੰਚ ਕਰਨ ਲਈ ਇਜਾਜ਼ਤ ਦੀ ਲੋੜ ਹੈ</translation>
-<translation id="701244094609242530">Chromium ਤੁਹਾਡੀਆਂ ਐਕਸਟੈਂਸ਼ਨਾਂ ਦੀ ਜਾਂਚ ਨਹੀਂ ਕਰ ਸਕਦਾ। ਬਾਅਦ ਵਿੱਚ ਦੁਬਾਰਾ ਕੋਸ਼ਿਸ਼ ਕਰੋ।</translation>
 <translation id="705851970750939768">Chromium ਨੂੰ ਅੱਪਡੇਟ ਕਰੋ</translation>
-<translation id="7066436765290594559">Chromium OS ਤੁਹਾਡਾ ਡਾਟਾ ਸਿੰਕ ਨਹੀਂ ਕਰ ਸਕਿਆ। ਕਿਰਪਾ ਕਰਕੇ ਆਪਣਾ ਸਿੰਕ ਪਾਸਫਰੇਜ਼ ਅੱਪਡੇਟ ਕਰੋ।</translation>
 <translation id="7067091210845072982">ਜੇ ਕਿਸੇ ਚਿੱਤਰ ਦਾ ਲਾਭਕਾਰੀ ਵਰਣਨ ਨਹੀਂ ਹੈ, ਤਾਂ Chromium ਤੁਹਾਡੇ ਲਈ ਇੱਕ ਵਰਣਨ ਮੁਹੱਈਆ ਕਰਵਾਉਣ ਦੀ ਕੋਸ਼ਿਸ਼ ਕਰੇਗਾ। ਵਰਣਨ ਬਣਾਉਣ ਲਈ, ਚਿੱਤਰ Google ਨੂੰ ਭੇਜੇ ਜਾਂਦੇ ਹਨ।</translation>
 <translation id="7196312274710523067">Chromium ਨੂੰ ਲਾਂਚ ਨਹੀਂ ਕੀਤਾ ਜਾ ਸਕਿਆ। ਦੁਬਾਰਾ ਕੋਸ਼ਿਸ਼ ਕਰੋ।</translation>
 <translation id="7197677400338048821">Chromium ਤੁਹਾਡੇ ਪਾਸਵਰਡਾਂ ਦੀ ਜਾਂਚ ਨਹੀਂ ਕਰ ਸਕਦਾ। 24 ਘੰਟਿਆਂ ਬਾਅਦ ਦੁਬਾਰਾ ਕੋਸ਼ਿਸ਼ ਕਰੋ।</translation>
-<translation id="7205698830395646142">Chromium ਮੀਨੂ ਵਿੱਚ ਲੁਕਾਓ</translation>
 <translation id="7223968959479464213">ਕੰਮ ਪ੍ਰਬੰਧਕ - Chromium</translation>
 <translation id="731644333568559921">Chromium OS ਨੂੰ ਅੱਪਡੇਟ ਕਰੋ</translation>
 <translation id="731795002583552498">Chromium ਅੱਪਡੇਟ ਕੀਤਾ ਜਾ ਰਿਹਾ ਹੈ</translation>
@@ -226,21 +242,23 @@ Chromium ਤੁਹਾਡੀਆਂ ਸੈਟਿੰਗਾਂ ਮੁੜ-ਹਾਸ�
       Chromium OS ਸੈਟਿੰਗਾਂ<ph name="LINK_END" /> ਵਿੱਚ ਦੇਖੋ</translation>
 <translation id="761356813943268536">Chromium ਤੁਹਾਡਾ ਕੈਮਰਾ ਅਤੇ ਮਾਈਕ੍ਰੋਫੋਨ ਵਰਤ ਰਿਹਾ ਹੈ।</translation>
 <translation id="7617377681829253106">Chromium ਬਿਹਤਰ ਬਣ ਗਿਆ ਹੈ</translation>
+<translation id="7627575518938382525"><ph name="BEGIN_PARAGRAPH1" />ਸਾਡੇ ਵੱਲੋਂ ਸ਼ੁਰੂਆਤ ਕਰਨ ਤੋਂ ਪਹਿਲਾਂ, ਕਿਰਪਾ ਕਰਕੇ ਪੱਕਾ ਕਰੋ ਕਿ ਤੁਹਾਡੇ ਕੋਲ ਆਪਣੇ ਡਾਟੇ ਦਾ ਅੱਪ-ਟੂ-ਡੇਟ ਬੈਕਅੱਪ ਹੈ। Chromium OS ਨੂੰ ਸਥਾਪਤ ਕਰਨ ਨਾਲ, ਤੁਹਾਡੀ ਹਾਰਡ ਡਰਾਈਵ ਦਾ ਸਾਰਾ ਡਾਟਾ ਓਵਰਰਾਈਟ ਹੋ ਜਾਵੇਗਾ।<ph name="END_PARAGRAPH1" />
+          <ph name="BEGIN_PARAGRAPH2" />Google ਡਾਟਾ ਦੇ ਕਿਸੇ ਵੀ ਤਰੀਕੇ ਦੇ ਨੁਕਸਾਨ ਦਾ ਜ਼ਿੰਮੇਵਾਰ ਨਹੀਂ ਹੋਵੇਗਾ, ਅਤੇ ਇਸ ਗੱਲ ਦੀ ਕੋਈ ਗਰੰਟੀ ਨਹੀਂ ਦਿੰਦਾ ਕਿ Chromium OS ਅਪ੍ਰਮਾਣਿਤ ਮਾਡਲਾਂ 'ਤੇ ਕੰਮ ਕਰੇਗਾ। ਕਿਰਪਾ ਕਰਕੇ ਪ੍ਰਮਾਣਿਤ ਮਾਡਲਾਂ ਬਾਰੇ ਹੋਰ ਜਾਣਨ ਲਈ [TBD] 'ਤੇ ਜਾਓ।<ph name="END_PARAGRAPH2" />
+          <ph name="BEGIN_PARAGRAPH3" />Chromium OS ਨੂੰ ਸਥਾਪਤ ਕਰਨ ਅਤੇ ਡਾਟਾ ਮਿਟਾਉਣ ਬਾਰੇ ਹੋਰ ਜਾਣੋ: [TBD URL]<ph name="END_PARAGRAPH3" />
+          <ph name="BEGIN_PARAGRAPH4" />ਜੇ ਤੁਸੀਂ ਅੱਗੇ ਵਧਣ ਲਈ ਤਿਆਰ ਹੋ, ਤਾਂ “Chromium OS" ਨੂੰ ਸਥਾਪਤ ਕਰੋ” 'ਤੇ ਕਲਿੱਕ ਕਰੋ ਅਤੇ ਅਸੀਂ ਸਿਰਫ਼ ਕੁਝ ਆਸਾਨ ਪੜਾਵਾਂ ਵਿੱਚ ਸਥਾਪਨਾ ਕਰਨ ਸੰਬੰਧੀ ਤੁਹਾਡਾ ਮਾਰਗ-ਦਰਸ਼ਨ ਕਰਾਂਗੇ। ਸਾਡੇ ਵੱਲੋਂ ਤੁਹਾਡੇ ਕੰਪਿਊਟਰ 'ਤੇ ਕਿਸੇ ਵੀ ਤਰ੍ਹਾਂ ਦੀਆਂ ਤਬਦੀਲੀਆਂ ਕਰਨ ਤੋਂ ਪਹਿਲਾਂ ਤੁਹਾਡੇ ਕੋਲ ਤਸਦੀਕ ਕਰਨ ਦਾ ਇੱਕ ਹੋਰ ਮੌਕਾ ਹੋਵੇਗਾ।<ph name="END_PARAGRAPH4" /></translation>
 <translation id="7686590090926151193">Chromium ਤੁਹਾਡਾ ਪੂਰਵ-ਨਿਰਧਾਰਤ ਬ੍ਰਾਊਜ਼ਰ ਨਹੀਂ ਹੈ</translation>
 <translation id="7689606757190482937">ਸਮਕਾਲੀਕਰਨ ਕਰਕੇ ਆਪਣੇ ਡੀਵਾਈਸਾਂ ਵਿਚਾਲੇ Chromium ਨੂੰ ਵਿਅਕਤੀਗਤ ਬਣਾਓ</translation>
 <translation id="7729447699958282447">Chromium ਤੁਹਾਡਾ ਡਾਟਾ ਸਮਕਾਲੀਕਰਨ ਨਹੀਂ ਕਰ ਸਕਿਆ ਕਿਉਂਕਿ ਸਮਕਾਲੀਕਰਨ ਤੁਹਾਡੀ ਡੋਮੇਨ ਲਈ ਉਪਲਬਧ ਨਹੀਂ ਹੈ।</translation>
 <translation id="7745317241717453663">ਇਸ ਨਾਲ ਇਸ ਡੀਵਾਈਸ ਤੋਂ ਤੁਹਾਡੇ ਬ੍ਰਾਊਜ਼ਿੰਗ ਡਾਟੇ ਨੂੰ ਮਿਟਾ ਦਿੱਤਾ ਜਾਵੇਗਾ। ਬਾਅਦ ਵਿੱਚ ਆਪਣੇ ਡਾਟੇ ਨੂੰ ਮੁੜ-ਪ੍ਰਾਪਤ ਕਰਨ ਲਈ, Chromium 'ਤੇ <ph name="USER_EMAIL" /> ਵਜੋਂ ਸਾਈਨ-ਇਨ ਕਰੋ।</translation>
 <translation id="7747138024166251722">ਸਥਾਪਨਾਕਾਰ ਇੱਕ ਅਸਥਾਈ ਡਾਇਰੈਕਟਰੀ ਨਹੀਂ ਬਣਾ ਸਕਿਆ। ਕਿਰਪਾ ਕਰਕੇ ਸਾਫ਼ਟਵੇਅਰ ਨੂੰ ਸਥਾਪਤ ਕਰਨ ਲਈ ਖਾਲੀ ਡਿਸਕ ਸਪੇਸ ਅਤੇ ਇਜਾਜ਼ਤ ਦੀ ਜਾਂਚ ਕਰੋ।</translation>
-<translation id="7773960292263897147">ਚੇਤਾਵਨੀ: Chromium ਐਕਸਟੈਂਸ਼ਨਾਂ ਨੂੰ ਤੁਹਾਡੇ ਬ੍ਰਾਊਜ਼ਿੰਗ ਇਤਿਹਾਸ ਨੂੰ ਰਿਕਾਰਡ ਕਰਨ ਤੋਂ ਨਹੀਂ ਰੋਕ ਸਕਦਾ। ਇਨਕੋਗਨਿਟੋ ਮੋਡ ਵਿੱਚ ਇਸ ਐਕਸਟੈਂਸ਼ਨ ਨੂੰ ਬੰਦ ਕਰਨ ਲਈ, ਇਸ ਵਿਕਲਪ ਨੂੰ ਅਣਚੁਣਿਆ ਕਰੋ।</translation>
 <translation id="7790626492778995050"><ph name="PAGE_TITLE" /> - Chromium Canary</translation>
-<translation id="7827169012280634081">Chromium ਨੂੰ ਬੰਦ ਕਰਨ ਵੇਲੇ ਕੁਕੀਜ਼ ਅਤੇ ਸਾਈਟ ਡਾਟੇ ਨੂੰ ਵੀ ਕਲੀਅਰ ਕਰੋ</translation>
+<translation id="7828947555739565424">ਇਸ ਡੀਵਾਈਸ 'ਤੇ ਇਸ ਖਾਤੇ ਨਾਲ ਕੋਈ Chromium ਪ੍ਰੋਫਾਈਲ ਪਹਿਲਾਂ ਤੋਂ ਹੀ ਮੌਜੂਦ ਹੈ</translation>
 <translation id="7857220146454061152">Chromium ਸੰਬੰਧੀ ਭਵਿੱਖੀ ਅੱਪਡੇਟ ਪ੍ਰਾਪਤ ਕਰਨ ਲਈ, ਤੁਹਾਨੂੰ OS X 10.11 ਜਾਂ ਇਸ ਤੋਂ ਬਾਅਦ ਵਾਲੇ ਵਰਜਨ ਦੀ ਲੋੜ ਪਵੇਗੀ। ਇਸ ਕੰਪਿਊਟਰ 'ਤੇ OS X 10.10 ਵਰਜਨ ਵਰਤਿਆ ਜਾ ਰਿਹਾ ਹੈ।</translation>
 <translation id="7867198900892795913">Chromium ਨਵੀਨ ਵਰਜਨ 'ਤੇ ਅੱਪਡੇਟ ਨਹੀਂ ਕੀਤਾ ਜਾ ਸਕਿਆ, ਇਸ ਲਈ ਤੁਹਾਨੂੰ ਨਵੀਆਂ ਵਿਸ਼ੇਸ਼ਤਾਵਾਂ ਅਤੇ ਸੁਰੱਖਿਆ ਸਥਿਰ ਨਹੀਂ ਮਿਲ ਰਹੇ ਹਨ।</translation>
 <translation id="7898472181347242998">ਇਹ ਦੇਖਣ ਲਈ ਕਿ ਤੁਹਾਡਾ ਡੀਵਾਈਸ ਅੱਪ-ਟੂ-ਡੇਟ ਹੈ ਜਾਂ ਨਹੀਂ, <ph name="LINK_BEGIN" />Chromium OS ਸੈਟਿੰਗਾਂ<ph name="LINK_END" /> 'ਤੇ ਜਾਓ</translation>
 <translation id="7907774600618164274">Chromium OS ਸਹੀ ਢੰਗ ਨਾਲ ਬੰਦ ਨਹੀਂ ਹੋਇਆ।</translation>
 <translation id="7937630085815544518">ਤੁਸੀਂ <ph name="USER_EMAIL_ADDRESS" /> ਵਜੋਂ Chromium 'ਤੇ ਸਾਈਨ-ਇਨ ਕੀਤਾ ਸੀ। ਕਿਰਪਾ ਕਰਕੇ ਦੁਬਾਰਾ ਸਾਈਨ-ਇਨ ਕਰਨ ਲਈ ਓਹੀ ਖਾਤਾ ਵਰਤੋ।</translation>
 <translation id="7975919845073681630">ਇਹ Chromium ਦੀ ਇੱਕ ਸੈਕੰਡਰੀ ਸਥਾਪਨਾ ਹੈ, ਅਤੇ ਇਸਨੂੰ ਤੁਹਾਡਾ ਪੂਰਵ-ਨਿਰਧਾਰਤ ਬ੍ਰਾਊਜ਼ਰ ਨਹੀਂ ਬਣਾਇਆ ਜਾ ਸਕਦਾ ਹੈ।</translation>
-<translation id="7979877361127045932">Chromium ਮੀਨੂ ਵਿੱਚ ਲੁਕਾਓ</translation>
 <translation id="8013436988911883588">Chromium ਤੱਕ ਪਹੁੰਚ ਹੋਣ 'ਤੇ, ਵੈੱਬਸਾਈਟਾਂ ਤੁਹਾਨੂੰ ਪਹੁੰਚ ਲਈ ਪੁੱਛ ਸਕਣਗੀਆਂ।</translation>
 <translation id="81770708095080097">ਇਹ ਫ਼ਾਈਲ ਖਤਰਨਾਕ ਹੈ, ਇਸ ਲਈ Chromium ਨੇ ਇਸਨੂੰ ਬਲੌਕ ਕਰ ਦਿੱਤਾ ਹੈ।</translation>
 <translation id="8248265253516264921">ਜੇ ਕਿਸੇ ਚਿੱਤਰ ਦਾ ਲਾਭਕਾਰੀ ਵਰਣਨ ਨਹੀਂ ਹੈ, ਤਾਂ Chromium ਤੁਹਾਡੇ ਲਈ ਇੱਕ ਵਰਣਨ ਮੁਹੱਈਆ ਕਰਵਾਉਣ ਦੀ ਕੋਸ਼ਿਸ਼ ਕਰੇਗਾ। ਵਰਣਨ ਬਣਾਉਣ ਲਈ, ਚਿੱਤਰ Google ਨੂੰ ਭੇਜੇ ਜਾਂਦੇ ਹਨ। ਤੁਸੀਂ ਕਿਸੇ ਵੇਲੇ ਵੀ ਇਸਨੂੰ ਸੈਟਿੰਗਾਂ ਵਿੱਚ ਬੰਦ ਕਰ ਸਕਦੇ ਹੋ।</translation>
@@ -277,8 +295,10 @@ Chromium ਤੁਹਾਡੀਆਂ ਸੈਟਿੰਗਾਂ ਮੁੜ-ਹਾਸ�
 <translation id="91086099826398415">ਨਵੀਂ Chromium &amp;ਟੈਬ ਵਿੱਚ ਲਿੰਕ ਖੋਲ੍ਹੋ</translation>
 <translation id="911206726377975832">ਕੀ ਤੁਹਾਡਾ ਬ੍ਰਾਊਜ਼ਿੰਗ ਡਾਟਾ ਵੀ ਮਿਟਾਉਣਾ ਹੈ?</translation>
 <translation id="9158494823179993217">ਤੁਹਾਡੇ ਸਿਸਟਮ ਪ੍ਰਸ਼ਾਸਕ ਨੇ <ph name="TARGET_URL_HOSTNAME" /> ਤੱਕ ਪਹੁੰਚ ਕਰਨ ਵਾਸਤੇ ਕੋਈ ਵਿਕਲਪਿਕ ਬ੍ਰਾਊਜ਼ਰ ਖੋਲ੍ਹਣ ਲਈ Chromium ਦਾ ਸੰਰੂਪਣ ਕੀਤਾ ਹੈ।</translation>
+<translation id="9185526690718004400">&amp;Chromium ਨੂੰ ਅੱਪਡੇਟ ਕਰਨ ਲਈ ਮੁੜ-ਲਾਂਚ ਕਰੋ</translation>
 <translation id="9190841055450128916">Chromium (mDNS-In)</translation>
 <translation id="9214764063801632699">Chromium OS ਸਿਸਟਮ</translation>
 <translation id="93478295209880648">ਸ਼ਾਇਦ Chromium ਠੀਕ ਢੰਗ ਨਾਲ ਕੰਮ ਨਾ ਕਰੇ ਕਿਉਂਕਿ ਇਹ ਹੁਣ Windows XP ਜਾਂ Windows Vista 'ਤੇ ਕੰਮ ਨਹੀਂ ਕਰਦਾ ਹੈ</translation>
+<translation id="965162752251293939">Chromium ਕੌਣ ਵਰਤ ਰਿਹਾ ਹੈ?</translation>
 <translation id="985602178874221306">The Chromium Authors</translation>
 </translationbundle>

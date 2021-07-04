@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://resources/cr_elements/cr_search_field/cr_search_field.m.js';
+import 'chrome://resources/cr_elements/cr_search_field/cr_search_field.js';
 
 import {afterNextRender, html, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
@@ -52,6 +52,9 @@ export class EmojiSearch extends PolymerElement {
         'base.keywords',
       ]
     });
+    this.addEventListener('scroll', () => {
+      this.onSearchScroll();
+    });
   }
 
   ready() {
@@ -77,12 +80,20 @@ export class EmojiSearch extends PolymerElement {
   onKeyDown(ev) {
     const isUp = ev.key === 'ArrowUp';
     const isDown = ev.key === 'ArrowDown';
-    if (!isUp && !isDown)
-      return;
-
+    const isEnter = ev.key === 'Enter';
     // get emoji-button which has focus.
     /** @type {Element} */
     const focusedResult = this.shadowRoot.querySelector('.result:focus-within');
+
+    if (isEnter && focusedResult) {
+      focusedResult.click();
+    }
+    if (!isUp && !isDown)
+      return;
+
+    ev.preventDefault();
+    ev.stopPropagation();
+
     if (!focusedResult)
       return;
 
@@ -97,9 +108,8 @@ export class EmojiSearch extends PolymerElement {
     }
 
     const newResult = isDown ? next : prev;
-    const newButton = newResult && newResult.querySelector('emoji-button');
-    if (newButton) {
-      newButton.focusButton();
+    if (newResult) {
+      newResult.focus();
     }
   }
 
@@ -115,18 +125,18 @@ export class EmojiSearch extends PolymerElement {
 
     const isDown = ev.key === 'ArrowDown';
     const isEnter = ev.key === 'Enter';
-    if (isDown || isEnter) {
+    const isTab = ev.key === 'Tab';
+    if (isDown || isEnter || isTab) {
       ev.preventDefault();
       ev.stopPropagation();
 
       // focus first item in result list.
-      const firstButton =
-          this.shadowRoot.querySelector('emoji-button').getButton();
+      const firstButton = this.shadowRoot.querySelector('.result');
       firstButton.focus();
 
       // if there is only one result, select it on enter.
       if (isEnter && this.results.length === 1) {
-        firstButton.click();
+        firstButton.querySelector('emoji-button').click();
       }
     }
   }
@@ -139,10 +149,27 @@ export class EmojiSearch extends PolymerElement {
    * @return {!Array<!EmojiVariants>}
    */
   computeEmojiList(emojiData) {
-    return Array.from(new Map(emojiData.map(group => group.emoji)
-                                  .flat(1)
-                                  .map(emoji => [emoji.base.string, emoji]))
-                          .values());
+    return Array.from(
+        new Map(emojiData.map(group => group.emoji).flat(1).map(emoji => {
+          // The Fuse search library in ChromeOS doesn't support prefix
+          // matching. A workaround is appending a space before all name and
+          // keyword labels. This allows us to force a prefix matching by
+          // prepending a space on users' searches. E.g. for the Emoji "smile
+          // face", we store " smile face", if the user searches for "fa", the
+          // search will be " fa" and will match " smile face", but not "
+          // infant".
+          emoji.base.name = ' ' + emoji.base.name;
+          emoji.base.keywords =
+              emoji.base.keywords.map(keyword => ' ' + keyword);
+          return [emoji.base.string, emoji];
+        })).values());
+  }
+
+  onSearchScroll() {
+    this.$['search-shadow'].style.boxShadow =
+        this.shadowRoot.getElementById('results').scrollTop > 0 ?
+        'var(--cr-elevation-3)' :
+        'none';
   }
 
   /**
@@ -164,6 +191,12 @@ export class EmojiSearch extends PolymerElement {
       return [];
     // Add an initial space to force prefix matching only.
     return this.fuse.search(' ' + search);
+  }
+
+  onResultClick(ev) {
+    ev.currentTarget.querySelector('emoji-button')
+        .shadowRoot.querySelector('button')
+        .click();
   }
 }
 

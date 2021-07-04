@@ -9,6 +9,7 @@ interface AbortController
     method abort
     method constructor
 interface AbortSignal : EventTarget
+    static method abort
     attribute @@toStringTag
     getter aborted
     getter onabort
@@ -389,6 +390,31 @@ interface CSSConditionRule : CSSGroupingRule
     attribute @@toStringTag
     getter conditionText
     method constructor
+interface CSSCounterStyleRule : CSSRule
+    attribute @@toStringTag
+    getter additiveSymbols
+    getter fallback
+    getter name
+    getter negative
+    getter pad
+    getter prefix
+    getter range
+    getter speakAs
+    getter suffix
+    getter symbols
+    getter system
+    method constructor
+    setter additiveSymbols
+    setter fallback
+    setter name
+    setter negative
+    setter pad
+    setter prefix
+    setter range
+    setter speakAs
+    setter suffix
+    setter symbols
+    setter system
 interface CSSFontFaceRule : CSSRule
     attribute @@toStringTag
     getter style
@@ -536,6 +562,7 @@ interface CSSRotate : CSSTransformComponent
 interface CSSRule
     attribute @@toStringTag
     attribute CHARSET_RULE
+    attribute COUNTER_STYLE_RULE
     attribute FONT_FACE_RULE
     attribute IMPORT_RULE
     attribute KEYFRAMES_RULE
@@ -907,6 +934,7 @@ interface Crypto
     getter subtle
     method constructor
     method getRandomValues
+    method randomUUID
 interface CryptoKey
     attribute @@toStringTag
     getter algorithm
@@ -1745,6 +1773,7 @@ interface Element : Node
     method getElementsByClassName
     method getElementsByTagName
     method getElementsByTagNameNS
+    method getInnerHTML
     method hasAttribute
     method hasAttributeNS
     method hasAttributes
@@ -2094,6 +2123,7 @@ interface FontFace
     getter featureSettings
     getter lineGapOverride
     getter loaded
+    getter sizeAdjust
     getter status
     getter stretch
     getter style
@@ -2108,6 +2138,7 @@ interface FontFace
     setter family
     setter featureSettings
     setter lineGapOverride
+    setter sizeAdjust
     setter stretch
     setter style
     setter unicodeRange
@@ -2197,6 +2228,9 @@ interface GeolocationPositionError
     attribute TIMEOUT
     getter code
     getter message
+    method constructor
+interface GravitySensor : Accelerometer
+    attribute @@toStringTag
     method constructor
 interface Gyroscope : Sensor
     attribute @@toStringTag
@@ -3282,11 +3316,13 @@ interface HTMLMetaElement : HTMLElement
     attribute @@toStringTag
     getter content
     getter httpEquiv
+    getter media
     getter name
     getter scheme
     method constructor
     setter content
     setter httpEquiv
+    setter media
     setter name
     setter scheme
 interface HTMLMeterElement : HTMLElement
@@ -3687,6 +3723,7 @@ interface HTMLTableSectionElement : HTMLElement
 interface HTMLTemplateElement : HTMLElement
     attribute @@toStringTag
     getter content
+    getter shadowRoot
     method constructor
 interface HTMLTextAreaElement : HTMLElement
     attribute @@toStringTag
@@ -4052,6 +4089,7 @@ interface ImageCapture
     method takePhoto
 interface ImageData
     attribute @@toStringTag
+    getter colorSpace
     getter data
     getter height
     getter width
@@ -4397,6 +4435,8 @@ interface MediaSession
     getter playbackState
     method constructor
     method setActionHandler
+    method setCameraActive
+    method setMicrophoneActive
     method setPositionState
     setter metadata
     setter playbackState
@@ -4614,6 +4654,7 @@ interface Navigator
     getter language
     getter languages
     getter locks
+    getter managed
     getter maxTouchPoints
     getter mediaCapabilities
     getter mediaDevices
@@ -4656,12 +4697,20 @@ interface Navigator
     method unregisterProtocolHandler
     method vibrate
     method webkitGetUserMedia
+interface NavigatorManagedData : EventTarget
+    attribute @@toStringTag
+    getter onmanagedconfigurationchange
+    method constructor
+    method getManagedConfiguration
+    setter onmanagedconfigurationchange
 interface NavigatorUAData
     attribute @@toStringTag
     getter brands
     getter mobile
+    getter platform
     method constructor
     method getHighEntropyValues
+    method toJSON
 interface NetworkInformation : EventTarget
     attribute @@toStringTag
     getter downlink
@@ -4773,6 +4822,10 @@ interface Notification : EventTarget
     setter onclose
     setter onerror
     setter onshow
+interface OTPCredential : Credential
+    attribute @@toStringTag
+    getter code
+    method constructor
 interface OfflineAudioCompletionEvent : Event
     attribute @@toStringTag
     getter renderedBuffer
@@ -5054,7 +5107,6 @@ interface Performance : EventTarget
     method getEntriesByType
     method mark
     method measure
-    method measureUserAgentSpecificMemory
     method now
     method setResourceTimingBufferSize
     method toJSON
@@ -7119,6 +7171,7 @@ interface ShadowRoot : DocumentFragment
     method elementFromPoint
     method elementsFromPoint
     method getAnimations
+    method getInnerHTML
     method getSelection
     setter adoptedStyleSheets
     setter fullscreenElement
@@ -9268,9 +9321,21 @@ interface XRBoundedReferenceSpace : XRReferenceSpace
     attribute @@toStringTag
     getter boundsGeometry
     method constructor
+interface XRCPUDepthInformation : XRDepthInformation
+    attribute @@toStringTag
+    getter data
+    method constructor
+    method getDepthInMeters
 interface XRDOMOverlayState
     attribute @@toStringTag
     getter type
+    method constructor
+interface XRDepthInformation
+    attribute @@toStringTag
+    getter height
+    getter normDepthBufferFromNormView
+    getter rawValueToMeters
+    getter width
     method constructor
 interface XRFrame
     attribute @@toStringTag
@@ -9278,6 +9343,7 @@ interface XRFrame
     getter trackedAnchors
     method constructor
     method createAnchor
+    method getDepthInformation
     method getHitTestResults
     method getHitTestResultsForTransientInput
     method getLightEstimate
@@ -9374,6 +9440,8 @@ interface XRRigidTransform
     method constructor
 interface XRSession : EventTarget
     attribute @@toStringTag
+    getter depthDataFormat
+    getter depthUsage
     getter domOverlayState
     getter environmentBlendMode
     getter inputSources
@@ -9455,7 +9523,12 @@ interface XRViewport
 interface XRWebGLBinding
     attribute @@toStringTag
     method constructor
+    method getDepthInformation
     method getReflectionCubeMap
+interface XRWebGLDepthInformation : XRDepthInformation
+    attribute @@toStringTag
+    getter texture
+    method constructor
 interface XRWebGLLayer : XRLayer
     static method getNativeFramebufferScaleFactor
     attribute @@toStringTag
@@ -9613,8 +9686,6 @@ interface webkitSpeechRecognitionError : Event
     getter message
 interface webkitSpeechRecognitionEvent : Event
     attribute @@toStringTag
-    getter emma
-    getter interpretation
     getter resultIndex
     getter results
 interface webkitURL

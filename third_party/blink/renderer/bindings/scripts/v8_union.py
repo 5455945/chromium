@@ -7,18 +7,18 @@ import v8_types
 import v8_utilities
 
 UNION_CPP_INCLUDES = frozenset([
-    'base/stl_util.h',
+    'base/cxx17_backports.h',
     'bindings/core/v8/native_value_traits_impl.h',
     'bindings/core/v8/to_v8_for_core.h',
 ])
 
 UNION_H_INCLUDES = frozenset([
-    'base/optional.h',
     'bindings/core/v8/dictionary.h',
     'bindings/core/v8/native_value_traits.h',
     'bindings/core/v8/v8_binding_for_core.h',
     'platform/bindings/exception_state.h',
     'platform/heap/handle.h',
+    'third_party/abseil-cpp/absl/types/optional.h',
 ])
 
 cpp_includes = set()

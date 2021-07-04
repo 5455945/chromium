@@ -15,7 +15,6 @@
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/optional.h"
 #include "base/timer/elapsed_timer.h"
 #include "build/build_config.h"
 #include "cc/base/math_util.h"
@@ -23,10 +22,10 @@
 #include "media/base/video_frame.h"
 #include "media/renderers/paint_canvas_video_renderer.h"
 #include "media/video/half_float_maker.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/renderer/platform/image-decoders/fast_shared_buffer_reader.h"
 #include "third_party/blink/renderer/platform/image-decoders/image_animation.h"
 #include "third_party/blink/renderer/platform/image-decoders/image_decoder.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/libavif/src/include/avif/avif.h"
 #include "third_party/libyuv/include/libyuv.h"
 #include "ui/gfx/color_space.h"
@@ -44,6 +43,12 @@ namespace {
 // detect invalid sizes and offsets in an AVIF file before the file size is
 // known.
 constexpr uint64_t kMaxAvifFileSize = 0x10000000;  // 256 MB
+
+const char* AvifDecoderErrorMessage(const avifDecoder* decoder) {
+  // decoder->diag.error is a char array that stores a null-terminated C string.
+  return *decoder->diag.error != '\0' ? decoder->diag.error
+                                      : "(no error message)";
+}
 
 // Builds a gfx::ColorSpace from the ITU-T H.273 (CICP) color description in the
 // image. This color space is used to create the gfx::ColorTransform for the
@@ -103,24 +108,12 @@ gfx::ColorSpace GetColorSpace(const avifImage* image) {
 // color space of |image| to RGB.
 // media::PaintCanvasVideoRenderer::ConvertVideoFrameToRGBPixels() uses libyuv
 // for the YUV-to-RGB conversion.
-//
-// NOTE: Ideally, this function should be a static method of
-// media::PaintCanvasVideoRenderer. We did not do that because
-// media::PaintCanvasVideoRenderer uses the JPEG matrix coefficients for all
-// full-range YUV color spaces, but we want to use the JPEG matrix coefficients
-// only for full-range BT.601 YUV.
 bool IsColorSpaceSupportedByPCVR(const avifImage* image) {
   SkYUVColorSpace yuv_color_space;
-  if (!GetColorSpace(image).ToSkYUVColorSpace(image->depth, &yuv_color_space))
-    return false;
-  const bool color_space_is_supported =
-      yuv_color_space == kJPEG_Full_SkYUVColorSpace ||
-      yuv_color_space == kRec601_Limited_SkYUVColorSpace ||
-      yuv_color_space == kRec709_Limited_SkYUVColorSpace ||
-      yuv_color_space == kBT2020_8bit_Limited_SkYUVColorSpace;
   // libyuv supports the alpha channel only with the I420 pixel format, which is
   // 8-bit YUV 4:2:0.
-  return color_space_is_supported &&
+  return GetColorSpace(image).ToSkYUVColorSpace(image->depth,
+                                                &yuv_color_space) &&
          (!image->alphaPlane ||
           (image->depth == 8 && image->yuvFormat == AVIF_PIXEL_FORMAT_YUV420 &&
            image->alphaRange == AVIF_RANGE_FULL));
@@ -210,7 +203,7 @@ void YUVAToRGBA(const avifImage* image,
   avifGetPixelFormatInfo(image->yuvFormat, &format_info);
   gfx::Point3F pixel;
   const int max_channel_i = (1 << image->depth) - 1;
-  const float max_channel = float{max_channel_i};
+  const float max_channel = static_cast<float>(max_channel_i);
   for (uint32_t j = 0; j < image->height; ++j) {
     const int uv_j = j >> format_info.chromaShiftY;
 
@@ -320,7 +313,7 @@ size_t AVIFImageDecoder::DecodedYUVWidthBytes(cc::YUVIndex index) const {
   //
   // The comments for Dav1dPicAllocator in dav1d/picture.h require the pixel
   // width be padded to a multiple of 128 pixels.
-  int aligned_width = base::bits::Align(Size().Width(), 128);
+  int aligned_width = base::bits::AlignUp(Size().Width(), 128);
   if (index == cc::YUVIndex::kU || index == cc::YUVIndex::kV) {
     aligned_width >>= chroma_shift_x_;
   }
@@ -354,7 +347,6 @@ uint8_t AVIFImageDecoder::GetYUVBitDepth() const {
 void AVIFImageDecoder::DecodeToYUV() {
   DCHECK(image_planes_);
   DCHECK(CanDecodeToYUV());
-  DCHECK(IsAllDataReceived());
 
   if (Failed())
     return;
@@ -365,31 +357,14 @@ void AVIFImageDecoder::DecodeToYUV() {
   // libavif cannot decode to an external buffer. So we need to copy from
   // libavif's internal buffer to |image_planes_|.
   // TODO(crbug.com/1099825): Enhance libavif to decode to an external buffer.
-  if (DecodeImage(0) != AVIF_RESULT_OK) {
-    SetFailed();
+  auto ret = DecodeImage(0);
+  if (ret != AVIF_RESULT_OK) {
+    if (ret != AVIF_RESULT_WAITING_ON_IO)
+      SetFailed();
     return;
   }
 
   const auto* image = decoder_->image;
-  // Frame size must be equal to container size.
-  if (Size() != IntSize(image->width, image->height)) {
-    DVLOG(1) << "Frame size " << IntSize(image->width, image->height)
-             << " differs from container size " << Size();
-    SetFailed();
-    return;
-  }
-  // Frame bit depth must be equal to container bit depth.
-  if (image->depth != bit_depth_) {
-    DVLOG(1) << "Frame bit depth must be equal to container bit depth";
-    SetFailed();
-    return;
-  }
-  // Frame YUV format must be equal to container YUV format.
-  if (image->yuvFormat != avif_yuv_format_) {
-    DVLOG(1) << "Frame YUV format must be equal to container YUV format";
-    SetFailed();
-    return;
-  }
   DCHECK(!image->alphaPlane);
   static_assert(cc::YUVIndex::kY == static_cast<cc::YUVIndex>(AVIF_CHAN_Y), "");
   static_assert(cc::YUVIndex::kU == static_cast<cc::YUVIndex>(AVIF_CHAN_U), "");
@@ -407,10 +382,6 @@ void AVIFImageDecoder::DecodeToYUV() {
   uint32_t width = image->width;
   uint32_t height = image->height;
 
-  // |height| comes from the AV1 sequence header or frame header, which encodes
-  // max_frame_height_minus_1 and frame_height_minus_1, respectively, as n-bit
-  // unsigned integers for some n.
-  DCHECK_GT(height, 0u);
   for (size_t plane_index = 0; plane_index < cc::kNumYUVPlanes; ++plane_index) {
     const cc::YUVIndex plane = static_cast<cc::YUVIndex>(plane_index);
     const size_t src_row_bytes =
@@ -490,6 +461,11 @@ bool AVIFImageDecoder::ImageHasBothStillAndAnimatedSubImages() const {
   if (decoded_frame_count_ > 1)
     return true;
 
+  constexpr size_t kMajorBrandOffset = 8;
+  constexpr size_t kMajorBrandSize = 4;
+  if (data_->size() < kMajorBrandOffset + kMajorBrandSize)
+    return false;
+
   // TODO(wtc): We should rely on libavif to tell us if the file has both an
   // image and an animation track instead of just checking the major brand.
   //
@@ -499,10 +475,11 @@ bool AVIFImageDecoder::ImageHasBothStillAndAnimatedSubImages() const {
   //   unsigned int(32) major_brand;
   //   ...
   FastSharedBufferReader fast_reader(data_);
-  char buf[4];
-  const char* major_brand = fast_reader.GetConsecutiveData(8, 4, buf);
+  char buf[kMajorBrandSize];
+  const char* major_brand =
+      fast_reader.GetConsecutiveData(kMajorBrandOffset, kMajorBrandSize, buf);
   // The brand 'avis' is an AVIF image sequence (animation) brand.
-  return memcmp(major_brand, "avis", 4) == 0;
+  return memcmp(major_brand, "avis", kMajorBrandSize) == 0;
 }
 
 // static
@@ -569,25 +546,6 @@ void AVIFImageDecoder::Decode(size_t index) {
   }
 
   const auto* image = decoder_->image;
-  // Frame size must be equal to container size.
-  if (Size() != IntSize(image->width, image->height)) {
-    DVLOG(1) << "Frame size " << IntSize(image->width, image->height)
-             << " differs from container size " << Size();
-    SetFailed();
-    return;
-  }
-  // Frame bit depth must be equal to container bit depth.
-  if (image->depth != bit_depth_) {
-    DVLOG(1) << "Frame bit depth must be equal to container bit depth";
-    SetFailed();
-    return;
-  }
-  // Frame YUV format must be equal to container YUV format.
-  if (image->yuvFormat != avif_yuv_format_) {
-    DVLOG(1) << "Frame YUV format must be equal to container YUV format";
-    SetFailed();
-    return;
-  }
 
   ImageFrame& buffer = frame_buffer_cache_[index];
   DCHECK_EQ(buffer.GetStatus(), ImageFrame::kFrameEmpty);
@@ -687,6 +645,14 @@ bool AVIFImageDecoder::UpdateDemuxer() {
     if (!decoder_)
       return false;
 
+    // For simplicity, use a hardcoded maxThreads of 2, independent of the image
+    // size and processor count. Note: even if we want maxThreads to depend on
+    // the image size, it is impossible to do so because maxThreads is passed to
+    // dav1d_open() inside avifDecoderParse(), but the image size is not known
+    // until avifDecoderParse() returns successfully. See
+    // https://github.com/AOMediaCodec/libavif/issues/636.
+    decoder_->maxThreads = 2;
+
     // TODO(wtc): Currently libavif always prioritizes the animation, but that's
     // not correct. It should instead select animation or still image based on
     // the preferred and major brands listed in the file.
@@ -704,6 +670,10 @@ bool AVIFImageDecoder::UpdateDemuxer() {
     // at the end of a file.
     decoder_->ignoreXMP = AVIF_TRUE;
     decoder_->ignoreExif = AVIF_TRUE;
+
+    // Turn off libavif's 'clap' (clean aperture) property validation. (We
+    // ignore the 'clap' property.)
+    decoder_->strictFlags &= ~AVIF_STRICT_CLAP_VALID;
 
     avif_io_.destroy = nullptr;
     avif_io_.read = ReadFromSegmentReader;
@@ -802,53 +772,55 @@ bool AVIFImageDecoder::UpdateDemuxer() {
   // |angle| * 90 specifies the angle of anti-clockwise rotation in degrees.
   // Legal values: [0-3].
   int angle = 0;
-  if (container->transformFlags & AVIF_TRANSFORM_IROT)
+  if (container->transformFlags & AVIF_TRANSFORM_IROT) {
     angle = container->irot.angle;
-  // |axis| specifies the axis for the mirroring operation.
+    CHECK_LT(angle, 4);
+  }
+  // |mode| specifies how the mirroring is performed.
   //   -1: No mirroring.
-  //    0: Mirror about a vertical axis ("left-to-right").
-  //    1: Mirror about a horizontal axis ("top-to-bottom").
-  int axis = -1;
-  if (container->transformFlags & AVIF_TRANSFORM_IMIR)
-    axis = container->imir.axis;
+  //    0: The top and bottom parts of the image are exchanged.
+  //    1: The left and right parts of the image are exchanged.
+  int mode = -1;
+  if (container->transformFlags & AVIF_TRANSFORM_IMIR) {
+    mode = container->imir.mode;
+    CHECK_LT(mode, 2);
+  }
   // MIAF Section 7.3.6.7 (Clean aperture, rotation and mirror) says:
   //   These properties, if used, shall be indicated to be applied in the
   //   following order: clean aperture first, then rotation, then mirror.
   //
-  // In the kAxisAngleToOrientation array, the first dimension is axis (with an
+  // In the kModeAngleToOrientation array, the first dimension is mode (with an
   // offset of 1). The second dimension is angle.
-  constexpr ImageOrientationEnum kAxisAngleToOrientation[3][4] = {
+  constexpr ImageOrientationEnum kModeAngleToOrientation[3][4] = {
       // No mirroring.
       {ImageOrientationEnum::kOriginTopLeft,
        ImageOrientationEnum::kOriginLeftBottom,
        ImageOrientationEnum::kOriginBottomRight,
        ImageOrientationEnum::kOriginRightTop},
-      // Mirror about a vertical axis ("left-to-right"). Change Left<->Right in
-      // the first row.
-      {ImageOrientationEnum::kOriginTopRight,
-       ImageOrientationEnum::kOriginRightBottom,
-       ImageOrientationEnum::kOriginBottomLeft,
-       ImageOrientationEnum::kOriginLeftTop},
-      // Mirror about a horizontal axis ("top-to-bottom"). Change Top<->Bottom
-      // in the first row.
+      // Top-to-bottom mirroring. Change Top<->Bottom in the first row.
       {ImageOrientationEnum::kOriginBottomLeft,
        ImageOrientationEnum::kOriginLeftTop,
        ImageOrientationEnum::kOriginTopRight,
        ImageOrientationEnum::kOriginRightBottom},
+      // Left-to-right mirroring. Change Left<->Right in the first row.
+      {ImageOrientationEnum::kOriginTopRight,
+       ImageOrientationEnum::kOriginRightBottom,
+       ImageOrientationEnum::kOriginBottomLeft,
+       ImageOrientationEnum::kOriginLeftTop},
   };
-  orientation_ = kAxisAngleToOrientation[axis + 1][angle];
+  orientation_ = kModeAngleToOrientation[mode + 1][angle];
 
   // Determine whether the image can be decoded to YUV.
   // * Alpha channel is not supported.
   // * Multi-frame images (animations) are not supported. (The DecodeToYUV()
   //   method does not have an 'index' parameter.)
-  // * If ColorTransform() returns a non-null pointer, the decoder has to do a
-  //   color space conversion, so we don't decode to YUV.
-  allow_decode_to_yuv_ = avif_yuv_format_ != AVIF_PIXEL_FORMAT_YUV400 &&
-                         !decoder_->alphaPresent && decoded_frame_count_ == 1 &&
-                         GetColorSpace(container).ToSkYUVColorSpace(
-                             container->depth, &yuv_color_space_) &&
-                         !ColorTransform();
+  allow_decode_to_yuv_ =
+      avif_yuv_format_ != AVIF_PIXEL_FORMAT_YUV400 && !decoder_->alphaPresent &&
+      decoded_frame_count_ == 1 &&
+      GetColorSpace(container).ToSkYUVColorSpace(container->depth,
+                                                 &yuv_color_space_) &&
+      // TODO(crbug.com/911246): Support color space transforms for YUV decodes.
+      !ColorTransform();
   return SetSize(container->width, container->height);
 }
 
@@ -857,7 +829,33 @@ avifResult AVIFImageDecoder::DecodeImage(size_t index) {
   // |index| should be less than what DecodeFrameCount() returns, so we should
   // not get the AVIF_RESULT_NO_IMAGES_REMAINING error.
   DCHECK_NE(ret, AVIF_RESULT_NO_IMAGES_REMAINING);
-  return ret;
+  if (ret != AVIF_RESULT_OK) {
+    if (ret != AVIF_RESULT_WAITING_ON_IO) {
+      DVLOG(1) << "avifDecoderNthImage(" << index
+               << ") failed: " << avifResultToString(ret) << ": "
+               << AvifDecoderErrorMessage(decoder_.get());
+    }
+    return ret;
+  }
+
+  const auto* image = decoder_->image;
+  // Frame size must be equal to container size.
+  if (IntSize(image->width, image->height) != Size()) {
+    DVLOG(1) << "Frame size " << IntSize(image->width, image->height)
+             << " differs from container size " << Size();
+    return AVIF_RESULT_UNKNOWN_ERROR;
+  }
+  // Frame bit depth must be equal to container bit depth.
+  if (image->depth != bit_depth_) {
+    DVLOG(1) << "Frame bit depth must be equal to container bit depth";
+    return AVIF_RESULT_UNKNOWN_ERROR;
+  }
+  // Frame YUV format must be equal to container YUV format.
+  if (image->yuvFormat != avif_yuv_format_) {
+    DVLOG(1) << "Frame YUV format must be equal to container YUV format";
+    return AVIF_RESULT_UNKNOWN_ERROR;
+  }
+  return AVIF_RESULT_OK;
 }
 
 void AVIFImageDecoder::UpdateColorTransform(const gfx::ColorSpace& frame_cs,
@@ -867,9 +865,11 @@ void AVIFImageDecoder::UpdateColorTransform(const gfx::ColorSpace& frame_cs,
 
   // For YUV-to-RGB color conversion we can pass an invalid dst color space to
   // skip the code for full color conversion.
+  gfx::ColorTransform::Options options;
+  options.src_bit_depth = bit_depth;
+  options.dst_bit_depth = bit_depth;
   color_transform_ = gfx::ColorTransform::NewColorTransform(
-      frame_cs, bit_depth, gfx::ColorSpace(), bit_depth,
-      gfx::ColorTransform::Intent::INTENT_PERCEPTUAL);
+      frame_cs, gfx::ColorSpace(), options);
 }
 
 bool AVIFImageDecoder::RenderImage(const avifImage* image, ImageFrame* buffer) {

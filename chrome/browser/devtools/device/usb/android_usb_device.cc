@@ -11,10 +11,10 @@
 #include "base/base64.h"
 #include "base/bind.h"
 #include "base/containers/contains.h"
+#include "base/containers/cxx20_erase.h"
 #include "base/lazy_instance.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/single_thread_task_runner.h"
-#include "base/stl_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/threading/thread_task_runner_handle.h"
@@ -116,8 +116,8 @@ void CreateDeviceOnInterfaceClaimed(
     AndroidDeviceInfo android_device_info,
     mojo::Remote<device::mojom::UsbDevice> device,
     const base::RepeatingClosure& barrier,
-    bool success) {
-  if (success) {
+    device::mojom::UsbClaimInterfaceResult result) {
+  if (result == device::mojom::UsbClaimInterfaceResult::kSuccess) {
     devices->push_back(
         new AndroidUsbDevice(rsa_key, android_device_info, std::move(device)));
     barrier.Run();

@@ -7,10 +7,10 @@
 #include <utility>
 
 #include "ash/constants/ash_features.h"
+#include "base/containers/contains.h"
 #include "chromeos/components/quick_answers/quick_answers_model.h"
 #include "chromeos/components/quick_answers/utils/quick_answers_metrics.h"
 #include "chromeos/components/quick_answers/utils/quick_answers_utils.h"
-#include "third_party/icu/source/common/unicode/locid.h"
 
 namespace chromeos {
 namespace quick_answers {
@@ -37,61 +37,13 @@ void QuickAnswersClient::SetIntentGeneratorFactoryForTesting(
   g_testing_intent_generator_factory_callback = factory;
 }
 
-bool QuickAnswersClient::IsQuickAnswersAllowedForLocale(
-    const std::string& locale,
-    const std::string& runtime_locale) {
-  // String literals used in some cases in the array because their
-  // constant equivalents don't exist in:
-  // third_party/icu/source/common/unicode/uloc.h
-  const std::string kAllowedLocales[] = {ULOC_CANADA, ULOC_UK, ULOC_US,
-                                         "en_AU",     "en_IN", "en_NZ"};
-  return base::Contains(kAllowedLocales, locale) ||
-         base::Contains(kAllowedLocales, runtime_locale);
-}
-
 QuickAnswersClient::QuickAnswersClient(URLLoaderFactory* url_loader_factory,
-                                       ash::AssistantState* assistant_state,
                                        QuickAnswersDelegate* delegate)
     : url_loader_factory_(url_loader_factory),
-      assistant_state_(assistant_state),
       delegate_(delegate) {
-  if (assistant_state_) {
-    // We observe Assistant state to detect enabling/disabling of Assistant in
-    // settings as well as enabling/disabling of screen context.
-    assistant_state_->AddObserver(this);
-  }
 }
 
-QuickAnswersClient::~QuickAnswersClient() {
-  if (assistant_state_)
-    assistant_state_->RemoveObserver(this);
-}
-
-void QuickAnswersClient::OnAssistantFeatureAllowedChanged(
-    chromeos::assistant::AssistantAllowedState state) {
-  assistant_allowed_state_ = state;
-  NotifyEligibilityChanged();
-}
-
-void QuickAnswersClient::OnAssistantSettingsEnabled(bool enabled) {
-  assistant_enabled_ = enabled;
-  NotifyEligibilityChanged();
-}
-
-void QuickAnswersClient::OnAssistantContextEnabled(bool enabled) {
-  assistant_context_enabled_ = enabled;
-  NotifyEligibilityChanged();
-}
-
-void QuickAnswersClient::OnLocaleChanged(const std::string& locale) {
-  locale_supported_ = IsQuickAnswersAllowedForLocale(
-      locale, icu::Locale::getDefault().getName());
-  NotifyEligibilityChanged();
-}
-
-void QuickAnswersClient::OnAssistantStateDestroyed() {
-  assistant_state_ = nullptr;
-}
+QuickAnswersClient::~QuickAnswersClient() = default;
 
 void QuickAnswersClient::SendRequestForPreprocessing(
     const QuickAnswersRequest& quick_answers_request) {
@@ -121,21 +73,6 @@ void QuickAnswersClient::OnQuickAnswersDismissed(ResultType result_type,
                                                  bool is_active) {
   if (is_active)
     RecordActiveImpression(result_type, GetImpressionDuration());
-}
-
-void QuickAnswersClient::NotifyEligibilityChanged() {
-  DCHECK(delegate_);
-
-  bool is_eligible =
-      (chromeos::features::IsQuickAnswersEnabled() && assistant_state_ &&
-       assistant_enabled_ && locale_supported_ && assistant_context_enabled_ &&
-       assistant_allowed_state_ ==
-           chromeos::assistant::AssistantAllowedState::ALLOWED);
-
-  if (is_eligible_ != is_eligible) {
-    is_eligible_ = is_eligible;
-    delegate_->OnEligibilityChanged(is_eligible);
-  }
 }
 
 std::unique_ptr<ResultLoader> QuickAnswersClient::CreateResultLoader(
@@ -189,13 +126,16 @@ void QuickAnswersClient::IntentGeneratorCallback(
 
   delegate_->OnRequestPreprocessFinished(processed_request);
 
-  if (features::IsQuickAnswersTextAnnotatorEnabled()) {
+  if (features::ShouldUseQuickAnswersTextAnnotator()) {
     RecordIntentType(intent_info.intent_type);
     if (intent_info.intent_type == IntentType::kUnknown) {
       // Don't fetch answer if no intent is generated.
       return;
     }
   }
+
+  RecordRequestTextLength(intent_info.intent_type,
+                          quick_answers_request.selected_text.length());
 
   if (!skip_fetch)
     FetchQuickAnswers(processed_request);

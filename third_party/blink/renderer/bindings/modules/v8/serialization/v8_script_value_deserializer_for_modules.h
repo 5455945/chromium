@@ -10,6 +10,7 @@
 
 namespace blink {
 
+class AudioData;
 class CryptoKey;
 class FileSystemHandle;
 class RTCEncodedAudioFrame;
@@ -49,6 +50,7 @@ class MODULES_EXPORT V8ScriptValueDeserializerForModules final
   FileSystemHandle* ReadFileSystemHandle(SerializationTag tag);
   RTCEncodedAudioFrame* ReadRTCEncodedAudioFrame();
   RTCEncodedVideoFrame* ReadRTCEncodedVideoFrame();
+  AudioData* ReadAudioData();
   VideoFrame* ReadVideoFrame();
 };
 

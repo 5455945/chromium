@@ -9,7 +9,6 @@
 
 #include <utility>
 
-#include "base/optional.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -17,6 +16,7 @@
 #include "base/values.h"
 #include "content/browser/accessibility/browser_accessibility.h"
 #include "content/browser/accessibility/browser_accessibility_manager.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/accessibility/ax_tree_manager_map.h"
@@ -28,7 +28,7 @@
 namespace content {
 namespace {
 
-base::Optional<std::string> GetStringAttribute(
+absl::optional<std::string> GetStringAttribute(
     const ui::AXNode& node,
     ax::mojom::StringAttribute attr) {
   // Language is different from other string attributes as it inherits and has
@@ -36,7 +36,7 @@ base::Optional<std::string> GetStringAttribute(
   if (attr == ax::mojom::StringAttribute::kLanguage) {
     std::string value = node.GetLanguage();
     if (value.empty()) {
-      return base::nullopt;
+      return absl::nullopt;
     }
     return value;
   }
@@ -45,7 +45,7 @@ base::Optional<std::string> GetStringAttribute(
   if (attr == ax::mojom::StringAttribute::kFontFamily) {
     std::string value = node.GetInheritedStringAttribute(attr);
     if (value.empty()) {
-      return base::nullopt;
+      return absl::nullopt;
     }
     return value;
   }
@@ -56,7 +56,14 @@ base::Optional<std::string> GetStringAttribute(
   if (node.GetStringAttribute(attr, &value)) {
     return value;
   }
-  return base::nullopt;
+  return absl::nullopt;
+}
+
+std::string FormatColor(int argb) {
+  // Don't output the alpha component; only the red, green and blue
+  // actually matter.
+  int rgb = (static_cast<uint32_t>(argb) & 0xffffff);
+  return base::StringPrintf("%06x", rgb);
 }
 
 std::string IntAttrToString(const ui::AXNode& node,
@@ -129,6 +136,10 @@ std::string IntAttrToString(const ui::AXNode& node,
       return ui::ToString(static_cast<ax::mojom::TextPosition>(value));
     case ax::mojom::IntAttribute::kImageAnnotationStatus:
       return ui::ToString(static_cast<ax::mojom::ImageAnnotationStatus>(value));
+    case ax::mojom::IntAttribute::kBackgroundColor:
+      return FormatColor(node.ComputeBackgroundColor());
+    case ax::mojom::IntAttribute::kColor:
+      return FormatColor(node.ComputeColor());
     // No pretty printing necessary for these:
     case ax::mojom::IntAttribute::kActivedescendantId:
     case ax::mojom::IntAttribute::kAriaCellColumnIndex:
@@ -137,8 +148,6 @@ std::string IntAttrToString(const ui::AXNode& node,
     case ax::mojom::IntAttribute::kAriaCellColumnSpan:
     case ax::mojom::IntAttribute::kAriaCellRowSpan:
     case ax::mojom::IntAttribute::kAriaRowCount:
-    case ax::mojom::IntAttribute::kBackgroundColor:
-    case ax::mojom::IntAttribute::kColor:
     case ax::mojom::IntAttribute::kColorValue:
     case ax::mojom::IntAttribute::kDOMNodeId:
     case ax::mojom::IntAttribute::kErrormessageId:
@@ -256,6 +265,14 @@ base::Value AccessibilityTreeFormatterBlink::BuildTreeForNode(
   return dict;
 }
 
+base::Value AccessibilityTreeFormatterBlink::BuildNode(
+    ui::AXPlatformNodeDelegate* node) const {
+  CHECK(node);
+  base::DictionaryValue dict;
+  AddProperties(*BrowserAccessibility::FromAXPlatformNodeDelegate(node), &dict);
+  return std::move(dict);
+}
+
 std::string AccessibilityTreeFormatterBlink::DumpInternalAccessibilityTree(
     ui::AXTreeID tree_id,
     const std::vector<AXPropertyFilter>& property_filters) {
@@ -270,11 +287,15 @@ std::string AccessibilityTreeFormatterBlink::DumpInternalAccessibilityTree(
 void AccessibilityTreeFormatterBlink::RecursiveBuildTree(
     const BrowserAccessibility& node,
     base::Value* dict) const {
+  if (!ShouldDumpNode(node))
+    return;
+
   AddProperties(node, static_cast<base::DictionaryValue*>(dict));
+  if (!ShouldDumpChildren(node))
+    return;
 
   base::Value children(base::Value::Type::LIST);
-  for (size_t i = 0; i < ChildCount(node); ++i) {
-    BrowserAccessibility* child_node = GetChild(node, i);
+  for (const auto* child_node : node.AllChildren()) {
     base::Value child_dict(base::Value::Type::DICTIONARY);
     RecursiveBuildTree(*child_node, &child_dict);
     children.Append(std::move(child_dict));
@@ -294,29 +315,6 @@ void AccessibilityTreeFormatterBlink::RecursiveBuildTree(
     children.Append(std::move(child_dict));
   }
   dict->SetKey(kChildrenDictAttr, std::move(children));
-}
-
-uint32_t AccessibilityTreeFormatterBlink::ChildCount(
-    const BrowserAccessibility& node) const {
-  if (node.HasStringAttribute(ax::mojom::StringAttribute::kChildTreeId))
-    return node.PlatformChildCount();
-  // We don't want to use InternalGetChild as we want to include
-  // ignored nodes in the tree for tests.
-  return node.node()->children().size();
-}
-
-BrowserAccessibility* AccessibilityTreeFormatterBlink::GetChild(
-    const BrowserAccessibility& node,
-    uint32_t i) const {
-  if (node.HasStringAttribute(ax::mojom::StringAttribute::kChildTreeId))
-    return node.PlatformGetChild(i);
-  // We don't want to use InternalGetChild as we want to include
-  // ignored nodes in the tree for tests.
-  if (i < 0 && i >= node.node()->children().size())
-    return nullptr;
-  ui::AXNode* child_node = node.node()->children()[i];
-  DCHECK(child_node);
-  return node.manager()->GetFromAXNode(child_node);
 }
 
 void AccessibilityTreeFormatterBlink::AddProperties(
@@ -414,19 +412,19 @@ void AccessibilityTreeFormatterBlink::AddProperties(
     if (node.HasIntListAttribute(attr)) {
       std::vector<int32_t> values;
       node.GetIntListAttribute(attr, &values);
-      auto value_list = std::make_unique<base::ListValue>();
+      base::ListValue value_list;
       for (size_t i = 0; i < values.size(); ++i) {
         if (ui::IsNodeIdIntListAttribute(attr)) {
           BrowserAccessibility* target = node.manager()->GetFromID(values[i]);
           if (target)
-            value_list->AppendString(ui::ToString(target->GetData().role));
+            value_list.AppendString(ui::ToString(target->GetData().role));
           else
-            value_list->AppendString("null");
+            value_list.AppendString("null");
         } else {
-          value_list->AppendInteger(values[i]);
+          value_list.AppendInteger(values[i]);
         }
       }
-      dict->Set(ui::ToString(attr), std::move(value_list));
+      dict->SetKey(ui::ToString(attr), std::move(value_list));
     }
   }
 
@@ -560,7 +558,7 @@ void AccessibilityTreeFormatterBlink::AddProperties(
     if (node.HasIntListAttribute(attr)) {
       std::vector<int32_t> values;
       node.GetIntListAttribute(attr, &values);
-      auto value_list = std::make_unique<base::ListValue>();
+      base::ListValue value_list;
       for (auto value : values) {
         if (ui::IsNodeIdIntListAttribute(attr)) {
           ui::AXTreeID tree_id = node.tree()->GetAXTreeID();
@@ -569,14 +567,14 @@ void AccessibilityTreeFormatterBlink::AddProperties(
                                    ->GetNodeFromTree(tree_id, node.id());
 
           if (target)
-            value_list->AppendString(ui::ToString(target->data().role));
+            value_list.AppendString(ui::ToString(target->data().role));
           else
-            value_list->AppendString("null");
+            value_list.AppendString("null");
         } else {
-          value_list->AppendInteger(value);
+          value_list.AppendInteger(value);
         }
       }
-      dict->Set(ui::ToString(attr), std::move(value_list));
+      dict->SetKey(ui::ToString(attr), std::move(value_list));
     }
   }
 
@@ -795,10 +793,9 @@ std::string AccessibilityTreeFormatterBlink::ProcessTreeForOutput(
         break;
       }
       case base::Value::Type::INTEGER: {
-        int int_value = 0;
-        value->GetAsInteger(&int_value);
         WriteAttribute(false,
-                       base::StringPrintf("%s=%d", attribute_name, int_value),
+                       base::StringPrintf("%s=%d", attribute_name,
+                                          value->GetIfInt().value_or(0)),
                        &line);
         break;
       }

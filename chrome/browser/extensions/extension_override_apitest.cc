@@ -56,7 +56,7 @@ class ExtensionOverrideTest : public ExtensionApiTest {
       return false;
 
     std::set<std::string> seen_overrides;
-    for (const auto& val : *values) {
+    for (const auto& val : values->GetList()) {
       const base::DictionaryValue* dict = nullptr;
       std::string entry;
       if (!val.GetAsDictionary(&dict) || !dict->GetString("entry", &entry) ||
@@ -329,18 +329,18 @@ IN_PROC_BROWSER_TEST_F(ExtensionOverrideTest, ShouldCleanUpDuplicateEntries) {
   // a preferences file without corresponding UnloadExtension() calls. This is
   // the same as the above test, except for that it is testing the case where
   // the file already contains dupes when an extension is loaded.
-  auto list = std::make_unique<base::ListValue>();
+  base::Value list(base::Value::Type::LIST);
   for (size_t i = 0; i < 3; ++i) {
     std::unique_ptr<base::DictionaryValue> dict(new base::DictionaryValue());
     dict->SetString("entry", "http://www.google.com/");
     dict->SetBoolean("active", true);
-    list->Append(std::move(dict));
+    list.Append(std::move(*dict));
   }
 
   {
     DictionaryPrefUpdate update(browser()->profile()->GetPrefs(),
                                 ExtensionWebUI::kExtensionURLOverrides);
-    update.Get()->Set("history", std::move(list));
+    update.Get()->SetKey("history", std::move(list));
   }
 
   ASSERT_FALSE(CheckHistoryOverridesContainsNoDupes());

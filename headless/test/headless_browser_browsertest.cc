@@ -8,10 +8,14 @@
 #include "base/command_line.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
-#include "base/strings/stringprintf.h"
+#include "base/files/scoped_temp_dir.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_restrictions.h"
+#include "base/values.h"
 #include "build/build_config.h"
+#include "components/policy/core/browser/browser_policy_connector_base.h"
+#include "components/policy/core/common/mock_configuration_policy_provider.h"
+#include "components/policy/core/common/policy_map.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/permission_controller_delegate.h"
@@ -23,7 +27,9 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/no_renderer_crashes_assertion.h"
 #include "headless/lib/browser/headless_browser_context_impl.h"
+#include "headless/lib/browser/headless_browser_impl.h"
 #include "headless/lib/browser/headless_web_contents_impl.h"
+#include "headless/lib/browser/policy/headless_mode_policy.h"
 #include "headless/lib/headless_macros.h"
 #include "headless/public/devtools/domains/inspector.h"
 #include "headless/public/devtools/domains/network.h"
@@ -34,11 +40,13 @@
 #include "headless/public/headless_devtools_target.h"
 #include "headless/public/headless_web_contents.h"
 #include "headless/test/headless_browser_test.h"
+#include "net/base/net_errors.h"
 #include "net/cert/cert_status_flags.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/spawned_test_server/spawned_test_server.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/chrome_debug_urls.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/gfx/geometry/size.h"
@@ -265,7 +273,7 @@ IN_PROC_BROWSER_TEST_F(HeadlessBrowserTest, ClipboardCopyPasteText) {
   // Tests copy-pasting text with the clipboard in headless mode.
   ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
   ASSERT_TRUE(clipboard);
-  base::string16 paste_text = base::ASCIIToUTF16("Clippy!");
+  std::u16string paste_text = u"Clippy!";
   for (ui::ClipboardBuffer buffer :
        {ui::ClipboardBuffer::kCopyPaste, ui::ClipboardBuffer::kSelection,
         ui::ClipboardBuffer::kDrag}) {
@@ -275,7 +283,7 @@ IN_PROC_BROWSER_TEST_F(HeadlessBrowserTest, ClipboardCopyPasteText) {
       ui::ScopedClipboardWriter writer(buffer);
       writer.WriteText(paste_text);
     }
-    base::string16 copy_text;
+    std::u16string copy_text;
     clipboard->ReadText(buffer, /* data_dst = */ nullptr, &copy_text);
     EXPECT_EQ(paste_text, copy_text);
   }
@@ -486,7 +494,7 @@ IN_PROC_BROWSER_TEST_F(CrashReporterTest, MAYBE_GenerateMinidump) {
   browser_context_ = browser()->CreateBrowserContextBuilder().Build();
 
   web_contents_ = browser_context_->CreateWebContentsBuilder()
-                      .SetInitialURL(GURL(content::kChromeUICrashURL))
+                      .SetInitialURL(GURL(blink::kChromeUICrashURL))
                       .Build();
 
   web_contents_->AddObserver(this);

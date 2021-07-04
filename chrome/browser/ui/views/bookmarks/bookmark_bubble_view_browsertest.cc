@@ -34,12 +34,13 @@ class BookmarkBubbleViewBrowserTest : public DialogBrowserTest {
       signin::ClearPrimaryAccount(identity_manager);
     } else {
       constexpr char kTestUserEmail[] = "testuser@gtest.com";
-      signin::MakePrimaryAccountAvailable(identity_manager, kTestUserEmail);
+      signin::MakePrimaryAccountAvailable(identity_manager, kTestUserEmail,
+                                          signin::ConsentLevel::kSync);
     }
 #endif
 
     const GURL url = GURL("https://www.google.com");
-    const base::string16 title = base::ASCIIToUTF16("Title");
+    const std::u16string title = u"Title";
     bookmarks::BookmarkModel* bookmark_model =
         BookmarkModelFactory::GetForBrowserContext(browser()->profile());
     bookmarks::test::WaitForBookmarkModelToLoad(bookmark_model);

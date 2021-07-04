@@ -42,7 +42,8 @@ class SharesheetClientUnitTest : public ChromeRenderViewHostTestHarness {
 
   void SetGuest() {
     Profile* const otr_profile = profile()->GetOffTheRecordProfile(
-        Profile::OTRProfileID("Test::SharesheetClient"));
+        Profile::OTRProfileID::CreateUniqueForTesting(),
+        /*create_if_needed=*/true);
     EXPECT_TRUE(otr_profile->IsOffTheRecord());
     EXPECT_FALSE(otr_profile->IsIncognitoProfile());
     scoped_refptr<content::SiteInstance> instance =
@@ -52,7 +53,8 @@ class SharesheetClientUnitTest : public ChromeRenderViewHostTestHarness {
   }
 
   void SetIncognito() {
-    Profile* const otr_profile = profile()->GetPrimaryOTRProfile();
+    Profile* const otr_profile =
+        profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true);
     EXPECT_TRUE(otr_profile->IsOffTheRecord());
     EXPECT_TRUE(otr_profile->IsIncognitoProfile());
     scoped_refptr<content::SiteInstance> instance =
@@ -61,13 +63,14 @@ class SharesheetClientUnitTest : public ChromeRenderViewHostTestHarness {
         otr_profile, std::move(instance)));
   }
 
-  static void AcceptShareRequest(content::WebContents* web_contents,
-                                 const std::vector<base::FilePath>& file_paths,
-                                 const std::vector<std::string>& content_types,
-                                 const std::string& text,
-                                 const std::string& title,
-                                 sharesheet::CloseCallback close_callback) {
-    std::move(close_callback).Run(sharesheet::SharesheetResult::kSuccess);
+  static void AcceptShareRequest(
+      content::WebContents* web_contents,
+      const std::vector<base::FilePath>& file_paths,
+      const std::vector<std::string>& content_types,
+      const std::string& text,
+      const std::string& title,
+      sharesheet::DeliveredCallback delivered_callback) {
+    std::move(delivered_callback).Run(sharesheet::SharesheetResult::kSuccess);
   }
 };
 

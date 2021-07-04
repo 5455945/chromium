@@ -16,9 +16,9 @@
 #include "base/macros.h"
 #include "base/scoped_observation.h"
 #include "base/values.h"
+#include "chrome/browser/ash/child_accounts/parent_access_code/parent_access_service.h"
 #include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/ash/system/timezone_util.h"
-#include "chrome/browser/chromeos/child_accounts/parent_access_code/parent_access_service.h"
 #include "chrome/browser/chromeos/set_time_dialog.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/webui_util.h"
@@ -188,7 +188,8 @@ SetTimeUI::SetTimeUI(content::WebUI* web_ui) : WebDialogUI(web_ui) {
 
   base::DictionaryValue values;
   // List of list of strings: [[ID, name], [ID, name], ...]
-  values.Set("timezoneList", chromeos::system::GetTimezoneList());
+  values.SetPath("timezoneList", base::Value::FromUniquePtrValue(
+                                     chromeos::system::GetTimezoneList()));
 
   // If we are not logged in, we need to show the time zone dropdown.
   values.SetBoolean("showTimezone", SetTimeDialog::ShouldShowTimezone());

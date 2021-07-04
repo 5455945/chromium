@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "base/component_export.h"
-#include "base/strings/string16.h"
 #include "url/gurl.h"
 
 namespace chromeos {
@@ -42,7 +41,7 @@ class COMPONENT_EXPORT(UI_BASE_IME_CHROMEOS) InputMethodDescriptor {
   const std::string& keyboard_layout() const { return keyboard_layout_; }
   bool is_login_keyboard() const { return is_login_keyboard_; }
 
-  base::string16 GetIndicator() const;
+  std::u16string GetIndicator() const;
 
  private:
   // An ID that identifies an input method engine (e.g., "t:latn-post",
@@ -82,5 +81,13 @@ using InputMethodDescriptors = std::vector<InputMethodDescriptor>;
 
 }  // namespace input_method
 }  // namespace chromeos
+
+// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
+// source migration is finished.
+namespace ash {
+namespace input_method {
+using ::chromeos::input_method::InputMethodDescriptor;
+}
+}  // namespace ash
 
 #endif  // UI_BASE_IME_CHROMEOS_INPUT_METHOD_DESCRIPTOR_H_

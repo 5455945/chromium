@@ -28,6 +28,7 @@
 #include "base/threading/thread_restrictions.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
+#include "base/trace_event/trace_event.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/ui/browser.h"
@@ -54,6 +55,9 @@ namespace {
 
 const char kUptime[] = "uptime";
 const char kDisk[] = "disk";
+
+// The pointer to this object is used as a perfetto async event id.
+static const char kBootTimes[] = "BootTimes";
 
 RenderWidgetHost* GetRenderWidgetHost(NavigationController* tab) {
   WebContents* web_contents = tab->GetWebContents();
@@ -264,6 +268,23 @@ BootTimesRecorder* BootTimesRecorder::Get() {
   return g_boot_times_recorder.Pointer();
 }
 
+BootTimesRecorder::TimeMarker::TimeMarker(const char* name,
+                                          absl::optional<std::string> url,
+                                          bool send_to_uma)
+    : name_(name),
+      time_(base::Time::NowFromSystemTime()),
+      url_(url),
+      send_to_uma_(send_to_uma) {}
+
+BootTimesRecorder::TimeMarker::TimeMarker(const TimeMarker& other) = default;
+
+BootTimesRecorder::TimeMarker::~TimeMarker() = default;
+
+void BootTimesRecorder::AddLoginTimeMarkerWithURL(const char* marker_name,
+                                                  const std::string& url) {
+  AddMarker(&login_time_markers_, TimeMarker(marker_name, url, false));
+}
+
 // static
 void BootTimesRecorder::WriteTimes(const std::string base_name,
                                    const std::string uma_name,
@@ -292,8 +313,35 @@ void BootTimesRecorder::WriteTimes(const std::string base_name,
   std::string output =
       base::StringPrintf("%s: %.2f", uma_name.c_str(), total.InSecondsF());
   base::Time prev = first;
+  // Convert base::Time to base::TimeTicks for tracing.
+  auto time2timeticks = [](const base::Time& ts) {
+    return base::TimeTicks::Now() - (base::Time::Now() - ts);
+  };
+  // Send first event to name the track:
+  // "In Chrome, we usually don't bother setting explicit track names. If none
+  // is provided, the track is named after the first event on the track."
+  TRACE_EVENT_NESTABLE_ASYNC_BEGIN_WITH_TIMESTAMP0(
+      "startup", kBootTimes, TRACE_ID_LOCAL(kBootTimes), time2timeticks(prev));
+
   for (unsigned int i = 0; i < login_times.size(); ++i) {
     TimeMarker tm = login_times[i];
+
+    if (tm.url().has_value()) {
+      TRACE_EVENT_NESTABLE_ASYNC_BEGIN_WITH_TIMESTAMP1(
+          "startup", tm.name(), TRACE_ID_LOCAL(kBootTimes),
+          time2timeticks(prev), "url", *tm.url());
+      TRACE_EVENT_NESTABLE_ASYNC_END_WITH_TIMESTAMP1(
+          "startup", tm.name(), TRACE_ID_LOCAL(kBootTimes),
+          time2timeticks(tm.time()), "url", *tm.url());
+    } else {
+      TRACE_EVENT_NESTABLE_ASYNC_BEGIN_WITH_TIMESTAMP0(
+          "startup", tm.name(), TRACE_ID_LOCAL(kBootTimes),
+          time2timeticks(prev));
+      TRACE_EVENT_NESTABLE_ASYNC_END_WITH_TIMESTAMP0("startup", tm.name(),
+                                                     TRACE_ID_LOCAL(kBootTimes),
+                                                     time2timeticks(tm.time()));
+    }
+
     base::TimeDelta since_first = tm.time() - first;
     base::TimeDelta since_prev = tm.time() - prev;
     std::string name;
@@ -316,9 +364,15 @@ void BootTimesRecorder::WriteTimes(const std::string base_name,
             since_first.InSecondsF(),
             since_prev.InSecondsF(),
             name.data());
+    if (tm.url().has_value()) {
+      output += ": ";
+      output += *tm.url();
+    }
     prev = tm.time();
   }
   output += '\n';
+  TRACE_EVENT_NESTABLE_ASYNC_END_WITH_TIMESTAMP0(
+      "startup", kBootTimes, TRACE_ID_LOCAL(kBootTimes), time2timeticks(prev));
 
   base::WriteFile(log_path.Append(base_name), output.data(), output.size());
 }
@@ -437,14 +491,18 @@ void BootTimesRecorder::RecordLoginAttempted() {
   }
 }
 
-void BootTimesRecorder::AddLoginTimeMarker(const std::string& marker_name,
+void BootTimesRecorder::AddLoginTimeMarker(const char* marker_name,
                                            bool send_to_uma) {
-  AddMarker(&login_time_markers_, TimeMarker(marker_name, send_to_uma));
+  AddMarker(
+      &login_time_markers_,
+      TimeMarker(marker_name, absl::optional<std::string>(), send_to_uma));
 }
 
-void BootTimesRecorder::AddLogoutTimeMarker(const std::string& marker_name,
+void BootTimesRecorder::AddLogoutTimeMarker(const char* marker_name,
                                             bool send_to_uma) {
-  AddMarker(&logout_time_markers_, TimeMarker(marker_name, send_to_uma));
+  AddMarker(
+      &logout_time_markers_,
+      TimeMarker(marker_name, absl::optional<std::string>(), send_to_uma));
 }
 
 // static
@@ -484,7 +542,7 @@ void BootTimesRecorder::Observe(int type,
           content::Source<NavigationController>(source).ptr();
       RenderWidgetHost* rwh = GetRenderWidgetHost(tab);
       DCHECK(rwh);
-      AddLoginTimeMarker("TabLoad-Start: " + GetTabUrl(rwh), false);
+      AddLoginTimeMarkerWithURL("TabLoad-Start", GetTabUrl(rwh));
       if (!render_widget_host_observations_.IsObservingSource(rwh))
         render_widget_host_observations_.AddObservation(rwh);
       break;
@@ -494,7 +552,7 @@ void BootTimesRecorder::Observe(int type,
           content::Source<NavigationController>(source).ptr();
       RenderWidgetHost* rwh = GetRenderWidgetHost(tab);
       if (render_widget_host_observations_.IsObservingSource(rwh)) {
-        AddLoginTimeMarker("TabLoad-End: " + GetTabUrl(rwh), false);
+        AddLoginTimeMarkerWithURL("TabLoad-End", GetTabUrl(rwh));
       }
       break;
     }
@@ -506,7 +564,7 @@ void BootTimesRecorder::Observe(int type,
 void BootTimesRecorder::RenderWidgetHostDidUpdateVisualProperties(
     content::RenderWidgetHost* widget_host) {
   DCHECK(have_registered_);
-  AddLoginTimeMarker("TabPaint: " + GetTabUrl(widget_host), false);
+  AddLoginTimeMarkerWithURL("TabPaint", GetTabUrl(widget_host));
   LoginDone(user_manager::UserManager::Get()->IsCurrentUserNew());
 }
 

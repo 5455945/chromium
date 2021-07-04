@@ -29,18 +29,21 @@ using l10n_util::GetNSStringF;
 
 @property(nonatomic, strong) AlertCoordinator* errorAlertCoordinator;
 @property(nonatomic, strong) ChromeIdentity* identity;
+@property(nonatomic, assign) SigninTrustedVaultDialogIntent intent;
 
 @end
 
 @implementation TrustedVaultReauthenticationCoordinator
 
-- (instancetype)initWithBaseViewController:(UIViewController*)viewController
-                                   browser:(Browser*)browser
-                          retrievalTrigger:(syncer::KeyRetrievalTriggerForUMA)
-                                               retrievalTrigger {
+- (instancetype)
+    initWithBaseViewController:(UIViewController*)viewController
+                       browser:(Browser*)browser
+                        intent:(SigninTrustedVaultDialogIntent)intent
+                       trigger:(syncer::KeyRetrievalTriggerForUMA)trigger {
   self = [super initWithBaseViewController:viewController browser:browser];
   if (self) {
-    syncer::RecordKeyRetrievalTrigger(retrievalTrigger);
+    syncer::RecordKeyRetrievalTrigger(trigger);
+    _intent = intent;
   }
   return self;
 }
@@ -68,15 +71,16 @@ using l10n_util::GetNSStringF;
   void (^cancelCompletion)(void) = ^() {
     // The reauthentication callback is dropped when the dialog is canceled.
     // The completion block has to be called explicitly.
+    SigninCompletionInfo* completionInfo =
+        [SigninCompletionInfo signinCompletionInfoWithIdentity:nil];
     [weakSelf
         runCompletionCallbackWithSigninResult:SigninCoordinatorResultInterrupted
-                                     identity:self.identity
-                   showAdvancedSettingsSignin:NO];
+                               completionInfo:completionInfo];
     if (completion) {
       completion();
     }
   };
-  trustedVaultService->CancelReauthentication(animated, cancelCompletion);
+  trustedVaultService->CancelDialog(animated, cancelCompletion);
 }
 
 #pragma mark - ChromeCoordinator
@@ -87,10 +91,11 @@ using l10n_util::GetNSStringF;
       AuthenticationServiceFactory::GetForBrowserState(
           self.browser->GetBrowserState());
   DCHECK(authenticationService->IsAuthenticated());
-  // TODO(crbug.com/1019685): keys should be fetched to be sure the reauth is
-  // still needed. The reauth should be really started only when fetch is
-  // failed. If the fetch is success full, the coordinator can be closed
-  // successfuly.
+  // TODO(crbug.com/1019685): Should test if reauth is still needed. If still
+  // needed, the reauth should be really started.
+  // If not, the coordinator can be closed successfuly, by calling
+  // -[TrustedVaultReauthenticationCoordinator
+  // reauthentificationCompletedWithSuccess:]
   ios::ChromeBrowserProvider* browserProvider = ios::GetChromeBrowserProvider();
   ios::ChromeTrustedVaultService* trustedVaultService =
       browserProvider->GetChromeTrustedVaultService();
@@ -106,8 +111,16 @@ using l10n_util::GetNSStringF;
           [weakSelf reauthentificationCompletedWithSuccess:success];
         }
       };
-  trustedVaultService->Reauthentication(self.identity, self.baseViewController,
-                                        callback);
+  switch (self.intent) {
+    case SigninTrustedVaultDialogIntentFetchKeys:
+      trustedVaultService->ReauthenticationForFetchKeys(
+          self.identity, self.baseViewController, callback);
+      break;
+    case SigninTrustedVaultDialogIntentDegradedRecoverability:
+      trustedVaultService->FixDegradedRecoverability(
+          self.identity, self.baseViewController, callback);
+      break;
+  }
 }
 
 #pragma mark - Private
@@ -139,9 +152,10 @@ using l10n_util::GetNSStringF;
   SigninCoordinatorResult result = success
                                        ? SigninCoordinatorResultSuccess
                                        : SigninCoordinatorResultCanceledByUser;
+  SigninCompletionInfo* completionInfo = [SigninCompletionInfo
+      signinCompletionInfoWithIdentity:success ? self.identity : nil];
   [self runCompletionCallbackWithSigninResult:result
-                                     identity:self.identity
-                   showAdvancedSettingsSignin:NO];
+                               completionInfo:completionInfo];
 }
 
 @end

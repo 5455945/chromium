@@ -70,8 +70,8 @@ TestNavigationObserver::TestNavigationObserver(
     bool ignore_uncommitted_navigations)
     : TestNavigationObserver(web_contents,
                              number_of_navigations,
-                             base::nullopt /* target_url */,
-                             base::nullopt /* target_error */,
+                             absl::nullopt /* target_url */,
+                             absl::nullopt /* target_error */,
                              quit_mode,
                              ignore_uncommitted_navigations) {}
 
@@ -85,25 +85,25 @@ TestNavigationObserver::TestNavigationObserver(
                              ignore_uncommitted_navigations) {}
 
 TestNavigationObserver::TestNavigationObserver(
-    const GURL& target_url,
-    MessageLoopRunner::QuitMode quit_mode,
-    bool ignore_uncommitted_navigations)
-    : TestNavigationObserver(nullptr,
-                             1 /* num_of_navigations */,
-                             target_url,
-                             base::nullopt /* target_error */,
-                             quit_mode,
-                             ignore_uncommitted_navigations) {}
-
-TestNavigationObserver::TestNavigationObserver(
     WebContents* web_contents,
     net::Error target_error,
     MessageLoopRunner::QuitMode quit_mode,
     bool ignore_uncommitted_navigations)
     : TestNavigationObserver(web_contents,
                              1 /* num_of_navigations */,
-                             base::nullopt,
+                             absl::nullopt,
                              target_error,
+                             quit_mode,
+                             ignore_uncommitted_navigations) {}
+
+TestNavigationObserver::TestNavigationObserver(
+    const GURL& target_url,
+    MessageLoopRunner::QuitMode quit_mode,
+    bool ignore_uncommitted_navigations)
+    : TestNavigationObserver(nullptr,
+                             1 /* num_of_navigations */,
+                             target_url,
+                             absl::nullopt /* target_error */,
                              quit_mode,
                              ignore_uncommitted_navigations) {}
 
@@ -112,12 +112,23 @@ TestNavigationObserver::~TestNavigationObserver() {
 }
 
 void TestNavigationObserver::Wait() {
+  TRACE_EVENT1("test", "TestNavigationObserver::Wait", "params",
+               [&](perfetto::TracedValue ctx) {
+                 // TODO(crbug.com/1183371): Replace this with passing more
+                 // parameters to TRACE_EVENT directly when available.
+                 auto dict = std::move(ctx).WriteDictionary();
+                 dict.Add("wait_event", wait_event_);
+                 dict.Add("ignore_uncommitted_navigations",
+                          ignore_uncommitted_navigations_);
+                 dict.Add("target_url", target_url_);
+                 dict.Add("target_error", target_error_);
+               });
   message_loop_runner_->Run();
 }
 
 void TestNavigationObserver::WaitForNavigationFinished() {
   wait_event_ = WaitEvent::kNavigationFinished;
-  message_loop_runner_->Run();
+  Wait();
 }
 
 void TestNavigationObserver::StartWatchingNewWebContents() {
@@ -143,8 +154,8 @@ void TestNavigationObserver::RegisterAsObserver(WebContents* web_contents) {
 TestNavigationObserver::TestNavigationObserver(
     WebContents* web_contents,
     int number_of_navigations,
-    const base::Optional<GURL>& target_url,
-    base::Optional<net::Error> target_error,
+    const absl::optional<GURL>& target_url,
+    absl::optional<net::Error> target_error,
     MessageLoopRunner::QuitMode quit_mode,
     bool ignore_uncommitted_navigations)
     : wait_event_(WaitEvent::kLoadStopped),

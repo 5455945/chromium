@@ -5,6 +5,7 @@
 #include "ui/native_theme/native_theme_mac.h"
 
 #import <Cocoa/Cocoa.h>
+#include <MediaAccessibility/MediaAccessibility.h>
 #include <stddef.h>
 #include <vector>
 
@@ -16,6 +17,7 @@
 #include "ui/base/ui_base_features.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/color/mac/scoped_current_nsappearance.h"
+#include "ui/color/mac/system_color_utils.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/color_utils.h"
@@ -101,26 +103,13 @@ struct EnumArray {
   VALUE array[static_cast<size_t>(KEY::COUNT)];
 };
 
-// Converts an SkColor to grayscale by using luminance for all three components.
-// Experimentally, this seems to produce a better result than a flat average or
-// a min/max average for UI controls.
-SkColor ColorToGrayscale(SkColor color) {
-  SkScalar luminance = SkColorGetR(color) * 0.21 +
-                       SkColorGetG(color) * 0.72 +
-                       SkColorGetB(color) * 0.07;
-  uint8_t component = SkScalarRoundToInt(luminance);
-  return SkColorSetARGB(SkColorGetA(color), component, component, component);
-}
-
 }  // namespace
 
 namespace ui {
 
 // static
 NativeTheme* NativeTheme::GetInstanceForWeb() {
-  if (features::IsFormControlsRefreshEnabled())
-    return NativeThemeAura::web_instance();
-  return NativeThemeMac::instance();
+  return NativeThemeAura::web_instance();
 }
 
 // static
@@ -149,29 +138,13 @@ NativeThemeMac* NativeThemeMac::instance() {
 
 // static
 SkColor NativeThemeMac::ApplySystemControlTint(SkColor color) {
-  if ([NSColor currentControlTint] == NSGraphiteControlTint)
-    return ColorToGrayscale(color);
-  return color;
+  return ui::IsSystemGraphiteTinted() ? ui::ColorToGrayscale(color) : color;
 }
 
-SkColor NativeThemeMac::GetSystemColor(ColorId color_id,
-                                       ColorScheme color_scheme) const {
-  if (color_scheme == ColorScheme::kDefault)
-    color_scheme = GetDefaultSystemColorScheme();
-
-  // The first check makes sure that when we are using the color providers that
-  // we actually go to the providers instead of just returning the  colors
-  // below. The second check is to make sure that when not using color
-  // providers, we only skip the rest of the method when we are in an incognito
-  // window.
-  // TODO(http://crbug.com/1057754): Remove the && kPlatformHighContrast
-  // once NativeTheme.cc handles kColorProviderReirection and
-  // kPlatformHighContrast both being on.
-  if ((base::FeatureList::IsEnabled(features::kColorProviderRedirection) &&
-       color_scheme != ColorScheme::kPlatformHighContrast))
-    return NativeTheme::GetSystemColor(color_id, color_scheme);
-
-  if (UserHasContrastPreference()) {
+SkColor NativeThemeMac::GetSystemColorDeprecated(ColorId color_id,
+                                                 ColorScheme color_scheme,
+                                                 bool apply_processing) const {
+  if (GetPreferredContrast() == PreferredContrast::kMore) {
     switch (color_id) {
       case kColorId_SelectedMenuItemForegroundColor:
         return color_scheme == ColorScheme::kDark ? SK_ColorBLACK
@@ -184,24 +157,28 @@ SkColor NativeThemeMac::GetSystemColor(ColorId color_id,
     }
   }
 
-  base::Optional<SkColor> os_color = GetOSColor(color_id, color_scheme);
+  absl::optional<SkColor> os_color = GetOSColor(color_id, color_scheme);
   if (os_color.has_value())
     return os_color.value();
 
-  return ApplySystemControlTint(
-      NativeTheme::GetSystemColor(color_id, color_scheme));
+  SkColor color = NativeTheme::GetSystemColorDeprecated(color_id, color_scheme,
+                                                        apply_processing);
+  return apply_processing ? ApplySystemControlTint(color) : color;
 }
 
-base::Optional<SkColor> NativeThemeMac::GetOSColor(
+absl::optional<SkColor> NativeThemeMac::GetOSColor(
     ColorId color_id,
     ColorScheme color_scheme) const {
-  ScopedCurrentNSAppearance scoped_nsappearance(color_scheme ==
-                                                ColorScheme::kDark);
+  ScopedCurrentNSAppearance scoped_nsappearance(
+      color_scheme == ColorScheme::kDark,
+      GetPreferredContrast() == PreferredContrast::kMore);
 
   // Even with --secondary-ui-md, menus use the platform colors and styling, and
   // Mac has a couple of specific color overrides, documented below.
   switch (color_id) {
     case kColorId_EnabledMenuItemForegroundColor:
+    case kColorId_HighlightedMenuItemForegroundColor:
+    case kColorId_SelectedMenuItemForegroundColor:
       return skia::NSSystemColorToSkColor([NSColor controlTextColor]);
     case kColorId_DisabledMenuItemForegroundColor:
       return skia::NSSystemColorToSkColor([NSColor disabledControlTextColor]);
@@ -222,6 +199,7 @@ base::Optional<SkColor> NativeThemeMac::GetOSColor(
           [NSColor selectedTextBackgroundColor]);
 
     case kColorId_FocusedBorderColor:
+    case kColorId_TableGroupingIndicatorColor:
       return SkColorSetA(
           skia::NSSystemColorToSkColor([NSColor keyboardFocusIndicatorColor]),
           0x66);
@@ -235,7 +213,7 @@ base::Optional<SkColor> NativeThemeMac::GetOSColor(
           NSColor.controlAlternatingRowBackgroundColors[1]);
 
     default:
-      return base::nullopt;
+      return absl::nullopt;
   }
 }
 
@@ -250,7 +228,8 @@ void NativeThemeMac::Paint(cc::PaintCanvas* canvas,
                            State state,
                            const gfx::Rect& rect,
                            const ExtraParams& extra,
-                           ColorScheme color_scheme) const {
+                           ColorScheme color_scheme,
+                           const absl::optional<SkColor>& accent_color) const {
   ColorScheme color_scheme_updated = color_scheme;
   if (color_scheme_updated == ColorScheme::kDefault)
     color_scheme_updated = GetDefaultSystemColorScheme();
@@ -274,7 +253,8 @@ void NativeThemeMac::Paint(cc::PaintCanvas* canvas,
                                      rect, color_scheme_updated, true);
       break;
     default:
-      NativeThemeBase::Paint(canvas, part, state, rect, extra, color_scheme);
+      NativeThemeBase::Paint(canvas, part, state, rect, extra, color_scheme,
+                             accent_color);
       break;
   }
 }
@@ -403,13 +383,16 @@ void NativeThemeMac::PaintScrollbarTrackInnerBorder(
   // Compute the rect for the border.
   gfx::Rect inner_border(rect);
   if (extra_params.orientation == ScrollbarOrientation::kVerticalOnLeft)
-    inner_border.set_x(rect.right() - ScrollbarTrackBorderWidth());
+    inner_border.set_x(rect.right() -
+                       ScrollbarTrackBorderWidth(extra_params.scale_from_dip));
   if (is_corner ||
       extra_params.orientation == ScrollbarOrientation::kHorizontal)
-    inner_border.set_height(ScrollbarTrackBorderWidth());
+    inner_border.set_height(
+        ScrollbarTrackBorderWidth(extra_params.scale_from_dip));
   if (is_corner ||
       extra_params.orientation != ScrollbarOrientation::kHorizontal)
-    inner_border.set_width(ScrollbarTrackBorderWidth());
+    inner_border.set_width(
+        ScrollbarTrackBorderWidth(extra_params.scale_from_dip));
 
   // And draw.
   cc::PaintFlags flags;
@@ -439,8 +422,10 @@ void NativeThemeMac::PaintScrollbarTrackOuterBorder(
   if (is_corner ||
       extra_params.orientation == ScrollbarOrientation::kHorizontal) {
     gfx::Rect outer_border(rect);
-    outer_border.set_height(ScrollbarTrackBorderWidth());
-    outer_border.set_y(rect.bottom() - ScrollbarTrackBorderWidth());
+    outer_border.set_height(
+        ScrollbarTrackBorderWidth(extra_params.scale_from_dip));
+    outer_border.set_y(rect.bottom() -
+                       ScrollbarTrackBorderWidth(extra_params.scale_from_dip));
     paint_canvas.DrawRect(outer_border, flags);
   }
 
@@ -448,9 +433,11 @@ void NativeThemeMac::PaintScrollbarTrackOuterBorder(
   if (is_corner ||
       extra_params.orientation != ScrollbarOrientation::kHorizontal) {
     gfx::Rect outer_border(rect);
-    outer_border.set_width(ScrollbarTrackBorderWidth());
+    outer_border.set_width(
+        ScrollbarTrackBorderWidth(extra_params.scale_from_dip));
     if (extra_params.orientation == ScrollbarOrientation::kVerticalOnRight)
-      outer_border.set_x(rect.right() - ScrollbarTrackBorderWidth());
+      outer_border.set_x(rect.right() - ScrollbarTrackBorderWidth(
+                                            extra_params.scale_from_dip));
     paint_canvas.DrawRect(outer_border, flags);
   }
 }
@@ -476,14 +463,19 @@ void NativeThemeMac::PaintMacScrollbarThumb(
   gfx::Rect bounds(rect);
   {
     // Shrink the thumb evenly in length and girth to fit within the track.
-    gfx::Insets thumb_insets(GetScrollbarThumbInset(scroll_thumb.is_overlay));
+    gfx::Insets thumb_insets(GetScrollbarThumbInset(
+        scroll_thumb.is_overlay, scroll_thumb.scale_from_dip));
 
     // Also shrink the thumb in girth to not touch the border.
     if (scroll_thumb.orientation == ScrollbarOrientation::kHorizontal) {
-      thumb_insets.set_top(thumb_insets.top() + ScrollbarTrackBorderWidth());
+      thumb_insets.set_top(
+          thumb_insets.top() +
+          ScrollbarTrackBorderWidth(scroll_thumb.scale_from_dip));
       ConstrainedInset(&bounds, GetThumbMinSize(false), thumb_insets);
     } else {
-      thumb_insets.set_left(thumb_insets.left() + ScrollbarTrackBorderWidth());
+      thumb_insets.set_left(
+          thumb_insets.left() +
+          ScrollbarTrackBorderWidth(scroll_thumb.scale_from_dip));
       ConstrainedInset(&bounds, GetThumbMinSize(true), thumb_insets);
     }
   }
@@ -500,7 +492,7 @@ void NativeThemeMac::PaintMacScrollbarThumb(
   paint_canvas.DrawRoundRect(bounds, radius, flags);
 }
 
-base::Optional<SkColor> NativeThemeMac::GetScrollbarColor(
+absl::optional<SkColor> NativeThemeMac::GetScrollbarColor(
     ScrollbarPart part,
     ColorScheme color_scheme,
     const ScrollbarExtraParams& extra_params) const {
@@ -535,7 +527,7 @@ base::Optional<SkColor> NativeThemeMac::GetScrollbarColor(
                      : SkColorSetRGB(0xED, 0xED, 0xED);
   }
 
-  return base::nullopt;
+  return absl::nullopt;
 }
 
 SkColor NativeThemeMac::GetSystemButtonPressedColor(SkColor base_color) const {
@@ -580,6 +572,15 @@ void NativeThemeMac::PaintMenuItemBackground(
   }
 }
 
+// static
+static void CaptionSettingsChangedNotificationCallback(CFNotificationCenterRef,
+                                                       void*,
+                                                       CFStringRef,
+                                                       const void*,
+                                                       CFDictionaryRef) {
+  NativeTheme::GetInstanceForWeb()->NotifyOnCaptionStyleUpdated();
+}
+
 NativeThemeMac::NativeThemeMac(bool configure_web_instance,
                                bool should_only_use_dark_colors)
     : NativeThemeBase(should_only_use_dark_colors) {
@@ -598,7 +599,7 @@ NativeThemeMac::NativeThemeMac(bool configure_web_instance,
                     usingBlock:^(NSNotification* notification) {
                       theme->set_preferred_contrast(
                           CalculatePreferredContrast());
-                      theme->NotifyObservers();
+                      theme->NotifyOnNativeThemeUpdated();
                     }];
   }
 
@@ -629,16 +630,12 @@ void NativeThemeMac::InitializeDarkModeStateAndObserver() {
       [[NativeThemeEffectiveAppearanceObserver alloc] initWithHandler:^{
         theme->set_use_dark_colors(IsDarkMode());
         theme->set_preferred_color_scheme(CalculatePreferredColorScheme());
-        theme->NotifyObservers();
+        theme->NotifyOnNativeThemeUpdated();
       }]);
 }
 
 void NativeThemeMac::ConfigureWebInstance() {
-  if (!features::IsFormControlsRefreshEnabled())
-    return;
-
-  // For FormControlsRefresh, NativeThemeAura is used as web instance so we need
-  // to initialize its state.
+  // NativeThemeAura is used as web instance so we need to initialize its state.
   NativeTheme* web_instance = NativeTheme::GetInstanceForWeb();
   web_instance->set_use_dark_colors(IsDarkMode());
   web_instance->set_preferred_color_scheme(CalculatePreferredColorScheme());
@@ -650,6 +647,13 @@ void NativeThemeMac::ConfigureWebInstance() {
       std::make_unique<NativeTheme::ColorSchemeNativeThemeObserver>(
           NativeTheme::GetInstanceForWeb());
   AddObserver(color_scheme_observer_.get());
+
+  // Observe caption style changes.
+  CFNotificationCenterAddObserver(
+      CFNotificationCenterGetLocalCenter(), this,
+      CaptionSettingsChangedNotificationCallback,
+      kMACaptionAppearanceSettingsChangedNotification, 0,
+      CFNotificationSuspensionBehaviorDeliverImmediately);
 }
 
 }  // namespace ui

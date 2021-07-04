@@ -220,12 +220,19 @@ void SVGSVGElement::CollectStyleForPresentationAttribute(
                                             y_->CssValue());
   } else if (IsOutermostSVGSVGElement() &&
              (property == width_ || property == height_)) {
+    // SVG allows negative numbers for these attributes but CSS doesn't allow
+    // negative <length> values for the corresponding CSS properties. So remove
+    // negative values here.
     if (property == width_) {
-      AddPropertyToPresentationAttributeStyle(style, property->CssPropertyId(),
-                                              width_->CssValue());
+      if (const CSSValue* width = width_->NonNegativeCssValue()) {
+        AddPropertyToPresentationAttributeStyle(
+            style, property->CssPropertyId(), *width);
+      }
     } else if (property == height_) {
-      AddPropertyToPresentationAttributeStyle(style, property->CssPropertyId(),
-                                              height_->CssValue());
+      if (const CSSValue* height = height_->NonNegativeCssValue()) {
+        AddPropertyToPresentationAttributeStyle(
+            style, property->CssPropertyId(), *height);
+      }
     }
   } else {
     SVGGraphicsElement::CollectStyleForPresentationAttribute(name, value,
@@ -643,26 +650,26 @@ FloatSize SVGSVGElement::CurrentViewportSize() const {
   return viewport_rect.Size();
 }
 
-base::Optional<float> SVGSVGElement::IntrinsicWidth() const {
+absl::optional<float> SVGSVGElement::IntrinsicWidth() const {
   const SVGLength& width_attr = *width()->CurrentValue();
   // TODO(crbug.com/979895): This is the result of a refactoring, which might
   // have revealed an existing bug that we are not handling math functions
   // involving percentages correctly. Fix it if necessary.
   if (width_attr.IsPercentage())
-    return base::nullopt;
+    return absl::nullopt;
   SVGLengthContext length_context(this);
-  return width_attr.Value(length_context);
+  return std::max(0.0f, width_attr.Value(length_context));
 }
 
-base::Optional<float> SVGSVGElement::IntrinsicHeight() const {
+absl::optional<float> SVGSVGElement::IntrinsicHeight() const {
   const SVGLength& height_attr = *height()->CurrentValue();
   // TODO(crbug.com/979895): This is the result of a refactoring, which might
   // have revealed an existing bug that we are not handling math functions
   // involving percentages correctly. Fix it if necessary.
   if (height_attr.IsPercentage())
-    return base::nullopt;
+    return absl::nullopt;
   SVGLengthContext length_context(this);
-  return height_attr.Value(length_context);
+  return std::max(0.0f, height_attr.Value(length_context));
 }
 
 AffineTransform SVGSVGElement::ViewBoxToViewTransform(

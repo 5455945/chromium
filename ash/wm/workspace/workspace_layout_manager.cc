@@ -8,7 +8,7 @@
 #include <memory>
 
 #include "ash/accessibility/accessibility_controller_impl.h"
-#include "ash/autoclick/autoclick_controller.h"
+#include "ash/accessibility/autoclick/autoclick_controller.h"
 #include "ash/keyboard/ui/keyboard_ui_controller.h"
 #include "ash/public/cpp/keyboard/keyboard_controller_observer.h"
 #include "ash/public/cpp/shell_window_ids.h"
@@ -32,6 +32,7 @@
 #include "ash/wm/workspace/backdrop_controller.h"
 #include "base/command_line.h"
 #include "ui/aura/client/aura_constants.h"
+#include "ui/aura/window_tracker.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/compositor/layer.h"
 #include "ui/display/display.h"
@@ -107,7 +108,6 @@ WorkspaceLayoutManager::WorkspaceLayoutManager(aura::Window* window)
   Shell::Get()->AddShellObserver(this);
   Shell::Get()->activation_client()->AddObserver(this);
   root_window_->AddObserver(this);
-  display::Screen::GetScreen()->AddObserver(this);
   backdrop_controller_ = std::make_unique<BackdropController>(window_);
   keyboard::KeyboardUIController::Get()->AddObserver(this);
   settings_bubble_container_ = window->GetRootWindow()->GetChildById(
@@ -130,7 +130,6 @@ WorkspaceLayoutManager::~WorkspaceLayoutManager() {
     window_state->RemoveObserver(this);
     window->RemoveObserver(this);
   }
-  display::Screen::GetScreen()->RemoveObserver(this);
   Shell::Get()->activation_client()->RemoveObserver(this);
   Shell::Get()->RemoveShellObserver(this);
   keyboard::KeyboardUIController::Get()->RemoveObserver(this);
@@ -142,7 +141,7 @@ WorkspaceLayoutManager::~WorkspaceLayoutManager() {
 void WorkspaceLayoutManager::OnWindowResized() {}
 
 void WorkspaceLayoutManager::OnWindowAddedToLayout(aura::Window* child) {
-  DCHECK_NE(aura::client::WINDOW_TYPE_CONTROL, child->type());
+  DCHECK_NE(aura::client::WINDOW_TYPE_CONTROL, child->GetType());
   WindowState* window_state = WindowState::Get(child);
   WMEvent event(WM_EVENT_ADDED_TO_WORKSPACE);
   window_state->OnWMEvent(&event);
@@ -320,7 +319,7 @@ void WorkspaceLayoutManager::OnWindowPropertyChanged(aura::Window* window,
   } else if (key == aura::client::kVisibleOnAllWorkspacesKey) {
     auto* desks_controller = Shell::Get()->desks_controller();
 
-    if (window->type() != aura::client::WindowType::WINDOW_TYPE_NORMAL ||
+    if (window->GetType() != aura::client::WindowType::WINDOW_TYPE_NORMAL ||
         window->GetProperty(aura::client::kZOrderingKey) !=
             ui::ZOrderLevel::kNormal) {
       return;
@@ -539,10 +538,25 @@ void WorkspaceLayoutManager::UpdateAlwaysOnTop(
   // of |windows_| to avoid invalidating an iterator. Since both workspace and
   // always_on_top containers' layouts are managed by this class all the
   // appropriate windows will be included in the iteration.
-  WindowSet windows(windows_);
-  for (aura::Window* window : windows) {
+  // Use an `aura::WindowTracker` since `OnWillRemoveWindowFromLayout()` may
+  // remove windows from `windows_`.
+  std::vector<aura::Window*> windows(windows_.begin(), windows_.end());
+  aura::WindowTracker tracker(windows);
+  while (!tracker.windows().empty()) {
+    aura::Window* window = tracker.Pop();
     if (window == active_desk_fullscreen_window)
       continue;
+
+    // TODO(crbug.com/1200594): Remove after fix.
+    int window_id = window->GetId();
+    int window_width = window->bounds().width();
+    int window_height = window->bounds().height();
+    base::debug::Alias(&window_id);
+    base::debug::Alias(&window_width);
+    base::debug::Alias(&window_height);
+    DEBUG_ALIAS_FOR_CSTR(window_name, window->GetName().c_str(), 128);
+    DEBUG_ALIAS_FOR_CSTR(window_title,
+                         base::UTF16ToUTF8(window->GetTitle()).c_str(), 128);
 
     WindowState* window_state = WindowState::Get(window);
     if (active_desk_fullscreen_window)

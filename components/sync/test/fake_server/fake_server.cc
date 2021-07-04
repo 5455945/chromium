@@ -14,7 +14,6 @@
 #include "base/hash/hash.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
-#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -28,7 +27,6 @@
 #include "net/base/net_errors.h"
 #include "net/http/http_status_code.h"
 
-using syncer::GetModelType;
 using syncer::GetModelTypeFromSpecifics;
 using syncer::LoopbackServer;
 using syncer::LoopbackServerEntity;
@@ -254,8 +252,12 @@ net::HttpStatusCode FakeServer::HandleParsedCommand(
     case sync_pb::ClientToServerMessage::COMMIT:
       last_commit_message_ = message;
       break;
-    default:
+    case sync_pb::ClientToServerMessage::CLEAR_SERVER_DATA:
       // Don't care.
+      break;
+    case sync_pb::ClientToServerMessage::DEPRECATED_3:
+    case sync_pb::ClientToServerMessage::DEPRECATED_4:
+      NOTREACHED();
       break;
   }
 
@@ -519,7 +521,7 @@ void FakeServer::SetHttpError(net::HttpStatusCode http_status_code) {
 
 void FakeServer::ClearHttpError() {
   DCHECK(thread_checker_.CalledOnValidThread());
-  http_error_status_code_ = base::nullopt;
+  http_error_status_code_ = absl::nullopt;
 }
 
 void FakeServer::SetClientCommand(

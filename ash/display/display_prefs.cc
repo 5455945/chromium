@@ -6,13 +6,14 @@
 
 #include <stddef.h>
 
+#include <string>
+
 #include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/ash_pref_names.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "base/command_line.h"
 #include "base/containers/contains.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -460,8 +461,8 @@ void LoadDisplayMixedMirrorModeParams(PrefService* local_state) {
   }
 
   GetDisplayManager()->set_mixed_mirror_mode_params(
-      base::Optional<display::MixedMirrorModeParams>(
-          base::in_place, mirroring_source_id, mirroring_destination_ids));
+      absl::optional<display::MixedMirrorModeParams>(
+          absl::in_place, mirroring_source_id, mirroring_destination_ids));
 }
 
 void StoreDisplayLayoutPref(PrefService* pref_service,
@@ -472,14 +473,15 @@ void StoreDisplayLayoutPref(PrefService* pref_service,
 
   DictionaryPrefUpdate update(pref_service, prefs::kSecondaryDisplays);
   base::DictionaryValue* pref_data = update.Get();
-  std::unique_ptr<base::Value> layout_value(new base::DictionaryValue());
+  base::Value layout_value(base::Value::Type::DICTIONARY);
   if (pref_data->HasKey(name)) {
     base::Value* value = nullptr;
-    if (pref_data->Get(name, &value) && value != nullptr)
-      layout_value.reset(value->DeepCopy());
+    if (pref_data->Get(name, &value) && value != nullptr) {
+      layout_value = value->Clone();
+    }
   }
-  if (display::DisplayLayoutToJson(display_layout, layout_value.get()))
-    pref_data->Set(name, std::move(layout_value));
+  if (display::DisplayLayoutToJson(display_layout, &layout_value))
+    pref_data->SetPath(name, std::move(layout_value));
 }
 
 void StoreCurrentDisplayLayoutPrefs(PrefService* pref_service) {
@@ -528,44 +530,43 @@ void StoreCurrentDisplayProperties(PrefService* pref_service) {
     int64_t id = display.id();
     display::ManagedDisplayInfo info = display_manager->GetDisplayInfo(id);
 
-    std::unique_ptr<base::DictionaryValue> property_value(
-        new base::DictionaryValue());
+    base::DictionaryValue property_value;
     // Don't save the display preference in unified mode because its
     // size and modes can change depending on the combination of displays.
     if (display_manager->IsInUnifiedMode())
       continue;
-    property_value->SetInteger("rotation",
-                               static_cast<int>(info.GetRotation(
-                                   display::Display::RotationSource::USER)));
+    property_value.SetInteger("rotation",
+                              static_cast<int>(info.GetRotation(
+                                  display::Display::RotationSource::USER)));
 
     display::ManagedDisplayMode mode;
     if (!display.IsInternal() &&
         display_manager->GetSelectedModeForDisplayId(id, &mode) &&
         !mode.native()) {
-      property_value->SetInteger("width", mode.size().width());
-      property_value->SetInteger("height", mode.size().height());
-      property_value->SetInteger(
+      property_value.SetInteger("width", mode.size().width());
+      property_value.SetInteger("height", mode.size().height());
+      property_value.SetInteger(
           "device-scale-factor",
           static_cast<int>(mode.device_scale_factor() * 1000));
 
       if (display::features::IsListAllDisplayModesEnabled()) {
-        property_value->SetBoolean("interlaced", mode.is_interlaced());
-        property_value->SetDouble("refresh-rate", mode.refresh_rate());
+        property_value.SetBoolean("interlaced", mode.is_interlaced());
+        property_value.SetDouble("refresh-rate", mode.refresh_rate());
       }
     }
     if (!info.overscan_insets_in_dip().IsEmpty())
-      InsetsToValue(info.overscan_insets_in_dip(), property_value.get());
+      InsetsToValue(info.overscan_insets_in_dip(), &property_value);
 
     // Store the legacy format touch calibration data. This can be removed after
     // a couple of milestones when every device has migrated to the new format.
     if (legacy_data_map.size() && base::Contains(legacy_data_map, id)) {
       TouchDataToValue(legacy_data_map.at(id).calibration_data,
-                       property_value.get());
+                       &property_value);
     }
 
-    property_value->SetDouble(kDisplayZoom, info.zoom_factor());
+    property_value.SetDouble(kDisplayZoom, info.zoom_factor());
 
-    pref_data->Set(base::NumberToString(id), std::move(property_value));
+    pref_data->SetKey(base::NumberToString(id), std::move(property_value));
   }
 }
 
@@ -674,7 +675,7 @@ void StoreDisplayTouchAssociations(PrefService* pref_service) {
           base::NumberToString(association_info.first),
           association_info_value->Clone());
     }
-    if (association_info_map_value.empty())
+    if (association_info_map_value.DictEmpty())
       continue;
 
     // Move the already serialized entry of AssociationInfoMap from
@@ -726,7 +727,7 @@ void StoreExternalDisplayMirrorInfo(PrefService* pref_service) {
 // |mixed_mirror_mode_params| is null.
 void StoreDisplayMixedMirrorModeParams(
     PrefService* pref_service,
-    const base::Optional<display::MixedMirrorModeParams>& mixed_params) {
+    const absl::optional<display::MixedMirrorModeParams>& mixed_params) {
   DictionaryPrefUpdate update(pref_service,
                               prefs::kDisplayMixedMirrorModeParams);
   base::DictionaryValue* pref_data = update.Get();
@@ -883,10 +884,10 @@ void DisplayPrefs::StoreLegacyTouchDataForTest(
     const display::TouchCalibrationData& data) {
   DictionaryPrefUpdate update(local_state_, prefs::kDisplayProperties);
   base::DictionaryValue* pref_data = update.Get();
-  std::unique_ptr<base::DictionaryValue> property_value =
-      std::make_unique<base::DictionaryValue>();
-  TouchDataToValue(data, property_value.get());
-  pref_data->Set(base::NumberToString(display_id), std::move(property_value));
+  base::DictionaryValue property_value;
+  TouchDataToValue(data, &property_value);
+  pref_data->SetKey(base::NumberToString(display_id),
+                    std::move(property_value));
 }
 
 bool DisplayPrefs::ParseTouchCalibrationStringForTest(
@@ -896,7 +897,7 @@ bool DisplayPrefs::ParseTouchCalibrationStringForTest(
 }
 
 void DisplayPrefs::StoreDisplayMixedMirrorModeParamsForTest(
-    const base::Optional<display::MixedMirrorModeParams>& mixed_params) {
+    const absl::optional<display::MixedMirrorModeParams>& mixed_params) {
   StoreDisplayMixedMirrorModeParams(local_state_, mixed_params);
 }
 

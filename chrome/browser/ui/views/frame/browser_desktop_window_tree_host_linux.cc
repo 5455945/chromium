@@ -7,16 +7,27 @@
 #include <utility>
 
 #include "base/macros.h"
+#include "build/build_config.h"
+#include "build/chromeos_buildflags.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/views/frame/browser_frame.h"
+#include "chrome/browser/ui/views/frame/browser_frame_view_layout_linux.h"
+#include "chrome/browser/ui/views/frame/browser_frame_view_linux.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/frame/desktop_browser_frame_aura_linux.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gfx/skia_util.h"
 #include "ui/ozone/public/ozone_platform.h"
 #include "ui/platform_window/extensions/wayland_extension.h"
 #include "ui/platform_window/extensions/x11_extension.h"
+
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+#include "chrome/browser/ui/views/frame/desktop_browser_frame_lacros.h"
+#else  // defined(OS_LINUX)
+#include "chrome/browser/ui/views/frame/desktop_browser_frame_aura_linux.h"
+#endif
 
 #if defined(USE_DBUS_MENU)
 
@@ -47,13 +58,15 @@ BrowserDesktopWindowTreeHostLinux::BrowserDesktopWindowTreeHostLinux(
     views::DesktopNativeWidgetAura* desktop_native_widget_aura,
     BrowserView* browser_view,
     BrowserFrame* browser_frame)
-    : DesktopWindowTreeHostLinuxImpl(native_widget_delegate,
-                                     desktop_native_widget_aura),
+    : DesktopWindowTreeHostLinux(native_widget_delegate,
+                                 desktop_native_widget_aura),
       browser_view_(browser_view),
       browser_frame_(browser_frame) {
-  static_cast<DesktopBrowserFrameAuraLinux*>(
-      browser_frame->native_browser_frame())
-      ->set_host(this);
+#if defined(OS_LINUX)
+  native_frame_ = static_cast<DesktopBrowserFrameAuraLinux*>(
+      browser_frame->native_browser_frame());
+  native_frame_->set_host(this);
+#endif
   browser_frame->set_frame_type(browser_frame->UseCustomFrame()
                                     ? views::Widget::FrameType::kForceCustom
                                     : views::Widget::FrameType::kForceNative);
@@ -101,13 +114,96 @@ void BrowserDesktopWindowTreeHostLinux::TabDraggingKindChanged(
   }
 }
 
+bool BrowserDesktopWindowTreeHostLinux::SupportsClientFrameShadow() const {
+  return platform_window()->CanSetDecorationInsets() &&
+         platform_window()->IsTranslucentWindowOpacitySupported();
+}
+
+void BrowserDesktopWindowTreeHostLinux::UpdateFrameHints() {
+#if defined(OS_LINUX)
+  auto* view = static_cast<BrowserFrameViewLinux*>(
+      native_frame_->browser_frame()->GetFrameView());
+  auto* layout = view->layout();
+  auto* window = platform_window();
+  float scale = device_scale_factor();
+  bool showing_frame =
+      browser_frame_->native_browser_frame()->UseCustomFrame() &&
+      !view->IsFrameCondensed();
+
+  if (SupportsClientFrameShadow()) {
+    // Set the frame decoration insets.
+    auto insets = layout->MirroredFrameBorderInsets();
+    window->SetDecorationInsets(showing_frame
+                                    ? gfx::ScaleToCeiledInsets(insets, scale)
+                                    : gfx::Insets());
+
+    // Set the input region.
+    auto bounds = view->GetLocalBounds();
+    if (showing_frame)
+      bounds.Inset(insets + layout->GetInputInsets());
+    window->SetInputRegion(gfx::ScaleToEnclosingRect(bounds, scale));
+  }
+
+  if (window->IsTranslucentWindowOpacitySupported()) {
+    // Set the opaque region.
+    if (showing_frame) {
+      // The opaque region is a list of rectangles that contain only fully
+      // opaque pixels of the window.  We need to convert the clipping
+      // rounded-rect into this format.
+      SkRRect rrect = view->GetRestoredClipRegion();
+      gfx::RectF rectf = gfx::SkRectToRectF(rrect.rect());
+      rectf.Scale(scale);
+      // It is acceptable to omit some pixels that are opaque, but the region
+      // must not include any translucent pixels.  Therefore, we must
+      // conservatively scale to the enclosed rectangle.
+      gfx::Rect rect = gfx::ToEnclosedRect(rectf);
+
+      // Create the initial region from the clipping rectangle without rounded
+      // corners.
+      SkRegion region(gfx::RectToSkIRect(rect));
+
+      // Now subtract out the small rectangles that cover the corners.
+      struct {
+        SkRRect::Corner corner;
+        bool left;
+        bool upper;
+      } kCorners[] = {
+          {SkRRect::kUpperLeft_Corner, true, true},
+          {SkRRect::kUpperRight_Corner, false, true},
+          {SkRRect::kLowerLeft_Corner, true, false},
+          {SkRRect::kLowerRight_Corner, false, false},
+      };
+      for (const auto& corner : kCorners) {
+        auto radii = rrect.radii(corner.corner);
+        auto rx = std::ceil(scale * radii.x());
+        auto ry = std::ceil(scale * radii.y());
+        auto corner_rect = SkIRect::MakeXYWH(
+            corner.left ? rect.x() : rect.right() - rx,
+            corner.upper ? rect.y() : rect.bottom() - ry, rx, ry);
+        region.op(corner_rect, SkRegion::kDifference_Op);
+      }
+
+      // Convert the region to a list of rectangles.
+      std::vector<gfx::Rect> opaque_region;
+      for (SkRegion::Iterator i(region); !i.done(); i.next())
+        opaque_region.push_back(gfx::SkIRectToRect(i.rect()));
+      window->SetOpaqueRegion(opaque_region);
+    } else {
+      gfx::RectF bounds(view->GetLocalBounds());
+      bounds.Scale(scale);
+      window->SetOpaqueRegion({gfx::ToEnclosedRect(bounds)});
+    }
+  }
+#endif
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // BrowserDesktopWindowTreeHostLinux,
 //     DesktopWindowTreeHostLinuxImpl implementation:
 
 void BrowserDesktopWindowTreeHostLinux::Init(
     const views::Widget::InitParams& params) {
-  DesktopWindowTreeHostLinuxImpl::Init(std::move(params));
+  DesktopWindowTreeHostLinux::Init(std::move(params));
 
 #if defined(USE_DBUS_MENU)
   // We have now created our backing X11 window.  We now need to (possibly)
@@ -119,11 +215,17 @@ void BrowserDesktopWindowTreeHostLinux::Init(
 #endif
 }
 
+void BrowserDesktopWindowTreeHostLinux::OnWidgetInitDone() {
+  DesktopWindowTreeHostLinux::OnWidgetInitDone();
+
+  UpdateFrameHints();
+}
+
 void BrowserDesktopWindowTreeHostLinux::CloseNow() {
 #if defined(USE_DBUS_MENU)
   dbus_appmenu_.reset();
 #endif
-  DesktopWindowTreeHostLinuxImpl::CloseNow();
+  DesktopWindowTreeHostLinux::CloseNow();
 }
 
 bool BrowserDesktopWindowTreeHostLinux::IsOverrideRedirect(
@@ -132,11 +234,18 @@ bool BrowserDesktopWindowTreeHostLinux::IsOverrideRedirect(
          is_tiling_wm;
 }
 
-void BrowserDesktopWindowTreeHostLinux::OnWindowStateChanged(
-    ui::PlatformWindowState new_window_show_state) {
-  ui::PlatformWindowState old_window_show_state = window_show_state();
+void BrowserDesktopWindowTreeHostLinux::OnBoundsChanged(
+    const BoundsChange& change) {
+  DesktopWindowTreeHostLinux::OnBoundsChanged(change);
 
-  DesktopWindowTreeHostLinux::OnWindowStateChanged(new_window_show_state);
+  UpdateFrameHints();
+}
+
+void BrowserDesktopWindowTreeHostLinux::OnWindowStateChanged(
+    ui::PlatformWindowState old_window_show_state,
+    ui::PlatformWindowState new_window_show_state) {
+  DesktopWindowTreeHostLinux::OnWindowStateChanged(old_window_show_state,
+                                                   new_window_show_state);
 
   bool fullscreen_changed =
       new_window_show_state == ui::PlatformWindowState::kFullScreen ||
@@ -146,11 +255,16 @@ void BrowserDesktopWindowTreeHostLinux::OnWindowStateChanged(
     // BrowserView::ProcessFullscreen will no-op, so this call is harmless.
     browser_view_->FullscreenStateChanging();
   }
+
+  UpdateFrameHints();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // BrowserDesktopWindowTreeHost, public:
 
+// TODO(crbug.com/1221374): Separate Lacros specific codes into
+// browser_desktop_window_tree_host_lacros.cc.
+#if !BUILDFLAG(IS_CHROMEOS_LACROS)
 // static
 BrowserDesktopWindowTreeHost*
 BrowserDesktopWindowTreeHost::CreateBrowserDesktopWindowTreeHost(
@@ -162,3 +276,4 @@ BrowserDesktopWindowTreeHost::CreateBrowserDesktopWindowTreeHost(
                                                desktop_native_widget_aura,
                                                browser_view, browser_frame);
 }
+#endif

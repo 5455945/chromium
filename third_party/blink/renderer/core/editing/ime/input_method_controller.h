@@ -27,7 +27,6 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_EDITING_IME_INPUT_METHOD_CONTROLLER_H_
 
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
 #include "third_party/blink/public/platform/web_text_input_info.h"
 #include "third_party/blink/public/platform/web_text_input_type.h"
 #include "third_party/blink/renderer/core/core_export.h"
@@ -38,6 +37,8 @@
 #include "third_party/blink/renderer/core/editing/ime/ime_text_span.h"
 #include "third_party/blink/renderer/core/editing/plain_text_range.h"
 #include "third_party/blink/renderer/core/events/input_event.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
+#include "third_party/blink/renderer/platform/graphics/dom_node_id.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
@@ -60,6 +61,8 @@ class CORE_EXPORT InputMethodController final
   };
 
   explicit InputMethodController(LocalDOMWindow&, LocalFrame&);
+  InputMethodController(const InputMethodController&) = delete;
+  InputMethodController& operator=(const InputMethodController&) = delete;
   ~InputMethodController() override;
   void Trace(Visitor*) const override;
 
@@ -148,6 +151,8 @@ class CORE_EXPORT InputMethodController final
   CachedTextInputInfo& GetCachedTextInputInfoForTesting() {
     return cached_text_input_info_;
   }
+
+  DOMNodeId NodeIdOfFocusedElement() const;
 
  private:
   friend class InputMethodControllerTest;
@@ -254,8 +259,6 @@ class CORE_EXPORT InputMethodController final
                            InputModeOfFocusedElement);
   FRIEND_TEST_ALL_PREFIXES(InputMethodControllerTest,
                            VirtualKeyboardPolicyOfFocusedElement);
-
-  DISALLOW_COPY_AND_ASSIGN(InputMethodController);
 };
 
 }  // namespace blink

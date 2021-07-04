@@ -15,6 +15,7 @@
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "base/bind.h"
+#include "base/callback.h"
 #include "base/macros.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/android/features/keyboard_accessory/jni_headers/ManualFillingComponentBridge_jni.h"
@@ -27,6 +28,7 @@
 #include "components/password_manager/core/browser/credential_cache.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_form_manager.h"
+#include "content/public/browser/web_contents.h"
 #include "ui/android/view_android.h"
 #include "ui/android/window_android.h"
 
@@ -43,8 +45,9 @@ using base::android::ScopedJavaLocalRef;
 using password_manager::PasswordForm;
 
 ManualFillingViewAndroid::ManualFillingViewAndroid(
-    ManualFillingController* controller)
-    : controller_(controller) {}
+    ManualFillingController* controller,
+    content::WebContents* web_contents)
+    : controller_(controller), web_contents_(web_contents) {}
 
 ManualFillingViewAndroid::~ManualFillingViewAndroid() {
   if (!java_object_internal_)
@@ -91,6 +94,14 @@ void ManualFillingViewAndroid::Hide() {
   }
 }
 
+void ManualFillingViewAndroid::ShowAccessorySheetTab(
+    const autofill::AccessoryTabType& tab_type) {
+  if (auto obj = GetOrCreateJavaObject()) {
+    Java_ManualFillingComponentBridge_showAccessorySheetTab(
+        base::android::AttachCurrentThread(), obj, static_cast<int>(tab_type));
+  }
+}
+
 void ManualFillingViewAndroid::OnAutomaticGenerationStatusChanged(
     bool available) {
   if (!available && java_object_internal_.is_null())
@@ -126,6 +137,18 @@ void ManualFillingViewAndroid::OnToggleChanged(
     jboolean enabled) {
   controller_->OnToggleChanged(
       static_cast<autofill::AccessoryAction>(selected_action), enabled);
+}
+
+void ManualFillingViewAndroid::RequestAccessorySheet(
+    JNIEnv* env,
+    const base::android::JavaParamRef<jobject>& obj,
+    jint tab_type) {
+  // controller_ owns this class. Therefore, the callback can't outlive the view
+  // and base::Unretained is always a valid reference.
+  controller_->RequestAccessorySheet(
+      static_cast<autofill::AccessoryTabType>(tab_type),
+      base::BindOnce(&ManualFillingViewAndroid::OnItemsAvailable,
+                     base::Unretained(this)));
 }
 
 void ManualFillingViewAndroid::OnViewDestroyed(
@@ -164,6 +187,7 @@ ManualFillingViewAndroid::ConvertAccessorySheetDataToJavaObject(
           env, java_object_internal_, j_user_info,
           static_cast<int>(tab_data.get_sheet_type()),
           ConvertUTF16ToJavaString(env, field.display_text()),
+          ConvertUTF16ToJavaString(env, field.text_to_fill()),
           ConvertUTF16ToJavaString(env, field.a11y_description()),
           ConvertUTF8ToJavaString(env, field.id()), field.is_obfuscated(),
           field.selectable());
@@ -182,16 +206,18 @@ ManualFillingViewAndroid::ConvertAccessorySheetDataToJavaObject(
 UserInfo::Field ManualFillingViewAndroid::ConvertJavaUserInfoField(
     JNIEnv* env,
     const JavaRef<jobject>& j_field_to_convert) {
-  base::string16 display_text = ConvertJavaStringToUTF16(
+  std::u16string display_text = ConvertJavaStringToUTF16(
       env, Java_UserInfoField_getDisplayText(env, j_field_to_convert));
-  base::string16 a11y_description = ConvertJavaStringToUTF16(
+  std::u16string text_to_fill = ConvertJavaStringToUTF16(
+      env, Java_UserInfoField_getTextToFill(env, j_field_to_convert));
+  std::u16string a11y_description = ConvertJavaStringToUTF16(
       env, Java_UserInfoField_getA11yDescription(env, j_field_to_convert));
   std::string id = ConvertJavaStringToUTF8(
       env, Java_UserInfoField_getId(env, j_field_to_convert));
   bool is_obfuscated = Java_UserInfoField_isObfuscated(env, j_field_to_convert);
   bool selectable = Java_UserInfoField_isSelectable(env, j_field_to_convert);
-  return UserInfo::Field(display_text, a11y_description, id, is_obfuscated,
-                         selectable);
+  return UserInfo::Field(display_text, text_to_fill, a11y_description, id,
+                         is_obfuscated, selectable);
 }
 
 base::android::ScopedJavaGlobalRef<jobject>
@@ -204,7 +230,8 @@ ManualFillingViewAndroid::GetOrCreateJavaObject() {
   }
   java_object_internal_.Reset(Java_ManualFillingComponentBridge_create(
       base::android::AttachCurrentThread(), reinterpret_cast<intptr_t>(this),
-      controller_->container_view()->GetWindowAndroid()->GetJavaObject()));
+      controller_->container_view()->GetWindowAndroid()->GetJavaObject(),
+      web_contents_->GetJavaWebContents()));
   return java_object_internal_;
 }
 
@@ -245,10 +272,12 @@ void JNI_ManualFillingComponentBridge_CachePasswordSheetDataForTesting(
 void JNI_ManualFillingComponentBridge_NotifyFocusedFieldTypeForTesting(
     JNIEnv* env,
     const base::android::JavaParamRef<jobject>& j_web_contents,
+    jlong j_focused_field_id,
     jint j_available) {
   ManualFillingControllerImpl::GetOrCreate(
       content::WebContents::FromJavaWebContents(j_web_contents))
       ->NotifyFocusedInputChanged(
+          autofill::FieldRendererId(j_focused_field_id),
           static_cast<autofill::mojom::FocusedFieldType>(j_available));
 }
 
@@ -275,6 +304,7 @@ void JNI_ManualFillingComponentBridge_DisableServerPredictionsForTesting(
 
 // static
 std::unique_ptr<ManualFillingViewInterface> ManualFillingViewInterface::Create(
-    ManualFillingController* controller) {
-  return std::make_unique<ManualFillingViewAndroid>(controller);
+    ManualFillingController* controller,
+    content::WebContents* web_contents) {
+  return std::make_unique<ManualFillingViewAndroid>(controller, web_contents);
 }

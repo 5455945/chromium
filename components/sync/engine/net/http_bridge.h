@@ -19,7 +19,6 @@
 #include "base/timer/timer.h"
 #include "components/sync/engine/net/http_post_provider_factory.h"
 #include "components/sync/engine/net/http_post_provider_interface.h"
-#include "components/sync/engine/net/network_time_update_callback.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "url/gurl.h"
 
@@ -43,8 +42,7 @@ class HttpBridge : public HttpPostProviderInterface {
  public:
   HttpBridge(const std::string& user_agent,
              std::unique_ptr<network::PendingSharedURLLoaderFactory>
-                 pending_url_loader_factory,
-             const NetworkTimeUpdateCallback& network_time_update_callback);
+                 pending_url_loader_factory);
 
   // HttpPostProviderInterface implementation.
   void SetExtraRequestHeaders(const char* headers) override;
@@ -107,9 +105,7 @@ class HttpBridge : public HttpPostProviderInterface {
   // fetcher.
   void DestroyURLLoaderOnIOThread(
       std::unique_ptr<network::SimpleURLLoader> loader,
-      std::unique_ptr<base::OneShotTimer> loader_timer);
-
-  void UpdateNetworkTime();
+      std::unique_ptr<base::DelayTimer> loader_timer);
 
   // Helper method to abort the request if we timed out.
   void OnURLLoadTimedOut();
@@ -165,7 +161,7 @@ class HttpBridge : public HttpPostProviderInterface {
 
     // Timer to ensure http requests aren't stalled. Reset every time upload or
     // download progress is made.
-    std::unique_ptr<base::OneShotTimer> http_request_timeout_timer;
+    std::unique_ptr<base::DelayTimer> http_request_timeout_timer;
   };
 
   // This lock synchronizes use of state involved in the flow to load a URL
@@ -184,19 +180,14 @@ class HttpBridge : public HttpPostProviderInterface {
 
   const scoped_refptr<base::SequencedTaskRunner> network_task_runner_;
 
-  // Callback for updating network time.
-  NetworkTimeUpdateCallback network_time_update_callback_;
-
   DISALLOW_COPY_AND_ASSIGN(HttpBridge);
 };
 
 class HttpBridgeFactory : public HttpPostProviderFactory {
  public:
-  HttpBridgeFactory(
-      const std::string& user_agent,
-      std::unique_ptr<network::PendingSharedURLLoaderFactory>
-          pending_url_loader_factory,
-      const NetworkTimeUpdateCallback& network_time_update_callback);
+  HttpBridgeFactory(const std::string& user_agent,
+                    std::unique_ptr<network::PendingSharedURLLoaderFactory>
+                        pending_url_loader_factory);
   ~HttpBridgeFactory() override;
 
   // HttpPostProviderFactory:
@@ -208,8 +199,6 @@ class HttpBridgeFactory : public HttpPostProviderFactory {
 
   // The URL loader factory used for making all requests.
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
-
-  NetworkTimeUpdateCallback network_time_update_callback_;
 
   DISALLOW_COPY_AND_ASSIGN(HttpBridgeFactory);
 };

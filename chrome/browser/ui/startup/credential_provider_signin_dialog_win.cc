@@ -5,13 +5,13 @@
 #include "chrome/browser/ui/startup/credential_provider_signin_dialog_win.h"
 
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/json/json_writer.h"
-#include "base/strings/string16.h"
 #include "base/syslog_logging.h"
 #include "base/win/win_util.h"
 #include "chrome/browser/signin/signin_promo.h"
@@ -32,6 +32,9 @@
 #include "ui/web_dialogs/web_dialog_delegate.h"
 
 namespace {
+
+// The OAuth token consumer name.
+const char kOAuthConsumerName[] = "credential_provider_signin_dialog";
 
 #if BUILDFLAG(CAN_TEST_GCPW_SIGNIN_STARTUP)
 bool g_enable_gcpw_signin_during_tests = false;
@@ -125,7 +128,7 @@ void HandleSigninCompleteForGcpwLogin(
     // Create the fetcher and pass it to the callback so that it can be
     // deleted once it is finished.
     auto fetcher = std::make_unique<CredentialProviderSigninInfoFetcher>(
-        refresh_token, url_loader_factory);
+        refresh_token, kOAuthConsumerName, url_loader_factory);
     auto* const fetcher_ptr = fetcher.get();
     fetcher_ptr->SetCompletionCallbackAndStart(
         access_token, additional_mdm_oauth_scopes,
@@ -292,8 +295,7 @@ class CredentialProviderWebDialogDelegate : public ui::WebDialogDelegate {
   GURL GetDialogContentURL() const override {
     signin_metrics::AccessPoint access_point =
         signin_metrics::AccessPoint::ACCESS_POINT_MACHINE_LOGON;
-    signin_metrics::Reason reason =
-        signin_metrics::Reason::REASON_FETCH_LST_ONLY;
+    signin_metrics::Reason reason = signin_metrics::Reason::kFetchLstOnly;
 
     auto base_url =
         reauth_email_.empty()
@@ -329,10 +331,10 @@ class CredentialProviderWebDialogDelegate : public ui::WebDialogDelegate {
     return ui::MODAL_TYPE_WINDOW;
   }
 
-  base::string16 GetDialogTitle() const override { return base::string16(); }
+  std::u16string GetDialogTitle() const override { return std::u16string(); }
 
-  base::string16 GetAccessibleDialogTitle() const override {
-    return base::string16();
+  std::u16string GetAccessibleDialogTitle() const override {
+    return std::u16string();
   }
 
   std::string GetDialogName() const override {

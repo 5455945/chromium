@@ -251,7 +251,7 @@ bool ChunkDemuxerStream::UpdateAudioConfig(const AudioDecoderConfig& config,
   base::AutoLock auto_lock(lock_);
   if (!stream_) {
     DCHECK_EQ(state_, UNINITIALIZED);
-    stream_.reset(new SourceBufferStream(config, media_log));
+    stream_ = std::make_unique<SourceBufferStream>(config, media_log);
     return true;
   }
 
@@ -267,7 +267,7 @@ bool ChunkDemuxerStream::UpdateVideoConfig(const VideoDecoderConfig& config,
 
   if (!stream_) {
     DCHECK_EQ(state_, UNINITIALIZED);
-    stream_.reset(new SourceBufferStream(config, media_log));
+    stream_ = std::make_unique<SourceBufferStream>(config, media_log);
     return true;
   }
 
@@ -280,7 +280,7 @@ void ChunkDemuxerStream::UpdateTextConfig(const TextTrackConfig& config,
   base::AutoLock auto_lock(lock_);
   DCHECK(!stream_);
   DCHECK_EQ(state_, UNINITIALIZED);
-  stream_.reset(new SourceBufferStream(config, media_log));
+  stream_ = std::make_unique<SourceBufferStream>(config, media_log);
 }
 
 void ChunkDemuxerStream::MarkEndOfStream() {
@@ -570,9 +570,9 @@ int64_t ChunkDemuxer::GetMemoryUsage() const {
   return mem;
 }
 
-base::Optional<container_names::MediaContainerName>
+absl::optional<container_names::MediaContainerName>
 ChunkDemuxer::GetContainerForMetrics() const {
-  return base::nullopt;
+  return absl::nullopt;
 }
 
 void ChunkDemuxer::AbortPendingReads() {

@@ -267,6 +267,7 @@ test("compositor_unittests") {
     "//testing/gtest",
     "//ui/base",
     "//ui/gfx",
+    "//ui/gfx:test_support",
     "//ui/gfx/geometry",
     "//ui/gl",
     "//ui/resources",
@@ -274,5 +275,14 @@ test("compositor_unittests") {
 
   if (is_linux || is_chromeos) {
     deps += [ "//third_party/mesa_headers" ]
+  }
+
+  if (is_fuchsia) {
+    additional_manifest_fragments = [
+      # TODO(crbug.com/1185811): Figure out why jit_capabilities is needed.
+      "//build/config/fuchsia/test/jit_capabilities.test-cmx",
+
+      "//build/config/fuchsia/test/present_view_capabilities.test-cmx",
+    ]
   }
 }

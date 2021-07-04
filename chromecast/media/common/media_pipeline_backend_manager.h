@@ -10,7 +10,6 @@
 #include <vector>
 
 #include "base/containers/flat_map.h"
-#include "base/containers/flat_set.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
@@ -131,6 +130,11 @@ class MediaPipelineBackendManager : public media::CmaBackendFactory {
   // If |power_save_enabled| is |false|, power save will be turned off and
   // automatic power save will be disabled until this is called with |true|.
   void SetPowerSaveEnabled(bool power_save_enabled);
+
+  // Temporarily disables power save mode even if there are no currently-playing
+  // audio streams. Useful to disable power save ahead of time if audio will
+  // start playing soon (within 5 seconds).
+  void TemporaryDisablePowerSave();
 
  private:
   friend class ActiveMediaPipelineBackendWrapper;

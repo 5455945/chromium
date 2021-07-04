@@ -15,6 +15,8 @@
 #include "base/strings/string_number_conversions.h"
 #include "components/feed/core/proto/v2/store.pb.h"
 #include "components/feed/core/proto/v2/wire/content_id.pb.h"
+#include "components/feed/core/v2/feedstore_util.h"
+#include "components/feed/core/v2/proto_util.h"
 #include "components/feed/core/v2/protocol_translator.h"
 
 namespace feed {
@@ -29,6 +31,24 @@ bool HasClearAll(const std::vector<feedstore::StreamStructure>& structures) {
   }
   return false;
 }
+
+void MergeSharedStateIds(const feedstore::StreamData& model_data,
+                         feedstore::StreamData& update_request_data) {
+  for (const auto& content_id : model_data.shared_state_ids()) {
+    bool found = false;
+    for (const auto& update_request_content_id :
+         update_request_data.shared_state_ids()) {
+      if (Equal(update_request_content_id, content_id)) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      *update_request_data.add_shared_state_ids() = content_id;
+    }
+  }
+}
+
 }  // namespace
 
 UiUpdate::UiUpdate() = default;
@@ -65,6 +85,12 @@ const feedstore::Content* StreamModel::FindContent(
     ContentRevision revision) const {
   return GetFinalFeatureTree()->FindContent(revision);
 }
+
+feedwire::ContentId StreamModel::FindContentId(ContentRevision revision) const {
+  const feedstore::Content* content = FindContent(revision);
+  return content ? content->content_id() : feedwire::ContentId();
+}
+
 const std::string* StreamModel::FindSharedStateData(
     const std::string& id) const {
   auto iter = shared_states_.find(id);
@@ -110,6 +136,8 @@ void StreamModel::Update(
       //    Save the new stream data with the next sequence number.
       if (has_clear_all) {
         next_structure_sequence_number_ = 0;
+      } else {
+        MergeSharedStateIds(stream_data_, update_request->stream_data);
       }
       // Note: We might be overwriting some shared-states unnecessarily.
       StoreUpdate store_update;
@@ -235,6 +263,10 @@ void StreamModel::UpdateFlattenedTree() {
     observer.OnUiUpdate(update);
 }
 
+bool StreamModel::HasVisibleContent() {
+  return !content_list_.empty();
+}
+
 stream_model::FeatureTree* StreamModel::GetFinalFeatureTree() {
   return feature_tree_after_changes_ ? feature_tree_after_changes_.get()
                                      : &base_feature_tree_;
@@ -245,6 +277,13 @@ const stream_model::FeatureTree* StreamModel::GetFinalFeatureTree() const {
 
 const std::string& StreamModel::GetNextPageToken() const {
   return stream_data_.next_page_token();
+}
+
+base::Time StreamModel::GetLastAddedTime() const {
+  return feedstore::GetLastAddedTime(stream_data_);
+}
+ContentIdSet StreamModel::GetContentIds() const {
+  return feedstore::GetContentIds(stream_data_);
 }
 
 std::string StreamModel::DumpStateForTesting() {

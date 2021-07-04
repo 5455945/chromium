@@ -114,6 +114,8 @@ class TestGpuService : public mojom::GpuService {
                            bool is_gpu_host,
                            bool cache_shaders_on_disk,
                            EstablishGpuChannelCallback callback) override {}
+  void SetChannelClientPid(int32_t client_id,
+                           base::ProcessId client_pid) override {}
 
   void CloseChannel(int32_t client_id) override {}
 #if BUILDFLAG(IS_CHROMEOS_ASH)
@@ -216,13 +218,13 @@ class TestGpuService : public mojom::GpuService {
       WriteClangProfilingProfileCallback callback) override {}
 #endif
 
+  void GetDawnInfo(GetDawnInfoCallback callback) override {}
+
   void Crash() override {}
 
   void Hang() override {}
 
   void ThrowJavaException() override {}
-
-  void Stop(StopCallback callback) override {}
 
  private:
   base::OnceClosure connection_error_handler_;
@@ -261,7 +263,7 @@ class HostGpuMemoryBufferManagerTest : public ::testing::Test {
         std::move(gpu_memory_buffer_support),
         base::ThreadTaskRunnerHandle::Get());
     if (MustSignalGmbConfigReadyForTest())
-      gpu_memory_buffer_manager_->native_configurations_initialized_.Signal();
+      gpu_memory_buffer_manager_->native_configurations_initialized_.Set();
   }
 
   // Not all platforms support native configurations (currently only Windows,
@@ -295,18 +297,17 @@ class HostGpuMemoryBufferManagerTest : public ::testing::Test {
     std::unique_ptr<gfx::GpuMemoryBuffer> buffer;
     base::RunLoop run_loop;
     diff_thread.task_runner()->PostTask(
-        FROM_HERE, base::BindOnce(
-                       [](HostGpuMemoryBufferManager* manager,
-                          std::unique_ptr<gfx::GpuMemoryBuffer>* out_buffer,
-                          base::OnceClosure callback) {
-                         *out_buffer = manager->CreateGpuMemoryBuffer(
-                             gfx::Size(64, 64), gfx::BufferFormat::YVU_420,
-                             gfx::BufferUsage::GPU_READ,
-                             gpu::kNullSurfaceHandle);
-                         std::move(callback).Run();
-                       },
-                       gpu_memory_buffer_manager_.get(), &buffer,
-                       run_loop.QuitClosure()));
+        FROM_HERE,
+        base::BindOnce(
+            [](HostGpuMemoryBufferManager* manager,
+               std::unique_ptr<gfx::GpuMemoryBuffer>* out_buffer,
+               base::OnceClosure callback) {
+              *out_buffer = manager->CreateGpuMemoryBuffer(
+                  gfx::Size(64, 64), gfx::BufferFormat::YVU_420,
+                  gfx::BufferUsage::GPU_READ, gpu::kNullSurfaceHandle, nullptr);
+              std::move(callback).Run();
+            },
+            gpu_memory_buffer_manager_.get(), &buffer, run_loop.QuitClosure()));
     run_loop.Run();
     return buffer;
   }

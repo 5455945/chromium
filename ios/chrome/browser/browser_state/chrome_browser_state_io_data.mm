@@ -15,11 +15,11 @@
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
+#include "base/containers/contains.h"
 #include "base/debug/alias.h"
 #include "base/memory/ptr_util.h"
 #include "base/path_service.h"
 #include "base/single_thread_task_runner.h"
-#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/task/post_task.h"
@@ -86,7 +86,7 @@ void ChromeBrowserStateIOData::InitializeOnUIThread(
     ChromeBrowserState* browser_state) {
   DCHECK_CURRENTLY_ON(web::WebThread::UI);
   PrefService* pref_service = browser_state->GetPrefs();
-  std::unique_ptr<ProfileParams> params(new ProfileParams);
+  auto params = std::make_unique<ProfileParams>();
   params->path = browser_state->GetOriginalChromeBrowserState()->GetStatePath();
 
   params->io_thread = GetApplicationContext()->GetIOSChromeIOThread();
@@ -100,7 +100,7 @@ void ChromeBrowserStateIOData::InitializeOnUIThread(
       browser_state->GetProxyConfigTracker());
   params->system_cookie_store = web::CreateSystemCookieStore(browser_state);
   params->browser_state = browser_state;
-  profile_params_.reset(params.release());
+  profile_params_ = std::move(params);
 
   IOSChromeNetworkDelegate::InitializePrefsOnUIThread(&enable_do_not_track_,
                                                       pref_service);

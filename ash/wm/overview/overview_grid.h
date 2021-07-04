@@ -10,7 +10,7 @@
 #include <memory>
 #include <vector>
 
-#include "ash/public/cpp/wallpaper_controller_observer.h"
+#include "ash/public/cpp/wallpaper/wallpaper_controller_observer.h"
 #include "ash/rotator/screen_rotation_animator_observer.h"
 #include "ash/wm/overview/overview_session.h"
 #include "ash/wm/splitview/split_view_controller.h"
@@ -315,10 +315,6 @@ class ASH_EXPORT OverviewGrid : public SplitViewObserver,
   // splitview or entering splitview.
   int CalculateWidthAndMaybeSetUnclippedBounds(OverviewItem* item, int height);
 
-  // Called when a desk is added or removed to update the bounds of the desks
-  // widget as it may need to switch between default and compact layouts.
-  void OnDesksChanged();
-
   // Returns true if any desk name is being modified in its mini view on this
   // grid.
   bool IsDeskNameBeingModified() const;
@@ -376,8 +372,7 @@ class ASH_EXPORT OverviewGrid : public SplitViewObserver,
     gfx::RectF dst;
   };
 
-  // If the Virtual Desks feature is enabled, it initializes the widget that
-  // contains the DeskBarView contents.
+  // Initializes the widget that contains the DesksBarView contents.
   void MaybeInitDesksWidget();
 
   // Gets the layout of the overview items. Layout is done in 2 stages
@@ -501,10 +496,6 @@ class ASH_EXPORT OverviewGrid : public SplitViewObserver,
   // Value to clamp |scroll_offset| so scrolling stays limited to windows that
   // are visible in tablet overview mode.
   float scroll_offset_min_ = 0;
-
-  // Cached values of the item bounds so that they do not have to be calculated
-  // on each scroll update.
-  std::vector<gfx::RectF> items_scrolling_bounds_;
 
   // Handles events that are not handled by the OverviewItems.
   std::unique_ptr<OverviewGridEventHandler> grid_event_handler_;

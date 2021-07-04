@@ -4,14 +4,15 @@
 
 #include "components/sync/trusted_vault/trusted_vault_connection_impl.h"
 
+#include <string>
 #include <utility>
 
+#include "base/base64url.h"
 #include "base/containers/span.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/sync/protocol/vault.pb.h"
 #include "components/sync/trusted_vault/download_keys_response_handler.h"
 #include "components/sync/trusted_vault/proto_string_bytes_conversion.h"
-#include "components/sync/trusted_vault/register_authentication_factor_request.h"
 #include "components/sync/trusted_vault/securebox.h"
 #include "components/sync/trusted_vault/trusted_vault_access_token_fetcher.h"
 #include "components/sync/trusted_vault/trusted_vault_crypto.h"
@@ -23,6 +24,106 @@ namespace syncer {
 
 namespace {
 
+sync_pb::SharedMemberKey CreateSharedMemberKey(
+    const TrustedVaultKeyAndVersion& trusted_vault_key_and_version,
+    const SecureBoxPublicKey& public_key) {
+  sync_pb::SharedMemberKey shared_member_key;
+  shared_member_key.set_epoch(trusted_vault_key_and_version.version);
+
+  const std::vector<uint8_t>& trusted_vault_key =
+      trusted_vault_key_and_version.key;
+  AssignBytesToProtoString(
+      ComputeTrustedVaultWrappedKey(public_key, trusted_vault_key),
+      shared_member_key.mutable_wrapped_key());
+  AssignBytesToProtoString(ComputeMemberProof(public_key, trusted_vault_key),
+                           shared_member_key.mutable_member_proof());
+  return shared_member_key;
+}
+
+sync_pb::SecurityDomainMember CreateSecurityDomainMember(
+    const SecureBoxPublicKey& public_key,
+    AuthenticationFactorType authentication_factor_type) {
+  sync_pb::SecurityDomainMember member;
+  std::string public_key_string;
+  AssignBytesToProtoString(public_key.ExportToBytes(), &public_key_string);
+
+  std::string encoded_public_key;
+  base::Base64UrlEncode(public_key_string,
+                        base::Base64UrlEncodePolicy::OMIT_PADDING,
+                        &encoded_public_key);
+
+  member.set_name(kSecurityDomainMemberNamePrefix + encoded_public_key);
+  // Note: |public_key_string| using here is intentional, encoding is required
+  // only to compute member name.
+  member.set_public_key(public_key_string);
+  switch (authentication_factor_type) {
+    case AuthenticationFactorType::kPhysicalDevice:
+      member.set_member_type(
+          sync_pb::SecurityDomainMember::MEMBER_TYPE_PHYSICAL_DEVICE);
+      break;
+    case AuthenticationFactorType::kUnspecified:
+      member.set_member_type(
+          sync_pb::SecurityDomainMember::MEMBER_TYPE_UNSPECIFIED);
+      break;
+  }
+  return member;
+}
+
+sync_pb::JoinSecurityDomainsRequest CreateJoinSecurityDomainsRequest(
+    const TrustedVaultKeyAndVersion& last_trusted_vault_key_and_version,
+    const SecureBoxPublicKey& public_key,
+    AuthenticationFactorType authentication_factor_type,
+    absl::optional<int> authentication_factor_type_hint) {
+  sync_pb::JoinSecurityDomainsRequest request;
+  request.mutable_security_domain()->set_name(kSyncSecurityDomainName);
+  *request.mutable_security_domain_member() =
+      CreateSecurityDomainMember(public_key, authentication_factor_type);
+  *request.mutable_shared_member_key() =
+      CreateSharedMemberKey(last_trusted_vault_key_and_version, public_key);
+  if (authentication_factor_type_hint.has_value()) {
+    request.set_member_type_hint(authentication_factor_type_hint.value());
+  }
+  return request;
+}
+
+void ProcessRegisterAuthenticationFactorRequest(
+    TrustedVaultConnection::RegisterAuthenticationFactorCallback callback,
+    TrustedVaultRequest::HttpStatus http_status,
+    const std::string& response_body) {
+  switch (http_status) {
+    case TrustedVaultRequest::HttpStatus::kSuccess:
+      break;
+    case TrustedVaultRequest::HttpStatus::kOtherError:
+      std::move(callback).Run(TrustedVaultRegistrationStatus::kOtherError,
+                              /*last_key_version=*/0);
+      return;
+    case TrustedVaultRequest::HttpStatus::kNotFound:
+    case TrustedVaultRequest::HttpStatus::kFailedPrecondition:
+      // Local trusted vault keys are outdated.
+      std::move(callback).Run(
+          TrustedVaultRegistrationStatus::kLocalDataObsolete,
+          /*last_key_version=*/0);
+      return;
+  }
+
+  sync_pb::JoinSecurityDomainsResponse response;
+  if (!response.ParseFromString(response_body)) {
+    std::move(callback).Run(TrustedVaultRegistrationStatus::kOtherError,
+                            /*last_key_version=*/0);
+    return;
+  }
+  const int last_key_version = response.security_domain().current_epoch();
+  if (last_key_version == kUnknownConstantKeyVersion) {
+    // kUnknownConstantKeyVersion should be never returned by the server, likely
+    // response is corrupted or empty.
+    std::move(callback).Run(TrustedVaultRegistrationStatus::kOtherError,
+                            /*last_key_version=*/0);
+    return;
+  }
+  std::move(callback).Run(TrustedVaultRegistrationStatus::kSuccess,
+                          last_key_version);
+}
+
 void ProcessDownloadKeysResponse(
     std::unique_ptr<DownloadKeysResponseHandler> response_handler,
     TrustedVaultConnection::DownloadNewKeysCallback callback,
@@ -33,6 +134,37 @@ void ProcessDownloadKeysResponse(
   std::move(callback).Run(processed_response.status,
                           processed_response.new_keys,
                           processed_response.last_key_version);
+}
+
+void ProcessRetrieveIsRecoverabilityDegradedResponse(
+    TrustedVaultConnection::IsRecoverabilityDegradedCallback callback,
+    TrustedVaultRequest::HttpStatus http_status,
+    const std::string& response_body) {
+  // TODO(crbug.com/1201659): consider special handling when security domain
+  // doesn't exist.
+  switch (http_status) {
+    case TrustedVaultRequest::HttpStatus::kSuccess:
+      break;
+    case TrustedVaultRequest::HttpStatus::kOtherError:
+    case TrustedVaultRequest::HttpStatus::kNotFound:
+    case TrustedVaultRequest::HttpStatus::kFailedPrecondition:
+      std::move(callback).Run(TrustedVaultRecoverabilityStatus::kError);
+      return;
+  }
+  sync_pb::SecurityDomain security_domain;
+  if (!security_domain.ParseFromString(response_body) ||
+      !security_domain.security_domain_details().has_sync_details()) {
+    std::move(callback).Run(TrustedVaultRecoverabilityStatus::kError);
+    return;
+  }
+  TrustedVaultRecoverabilityStatus status =
+      TrustedVaultRecoverabilityStatus::kNotDegraded;
+  if (security_domain.security_domain_details()
+          .sync_details()
+          .degraded_recoverability()) {
+    status = TrustedVaultRecoverabilityStatus::kDegraded;
+  }
+  std::move(callback).Run(status);
 }
 
 }  // namespace
@@ -53,49 +185,69 @@ TrustedVaultConnectionImpl::~TrustedVaultConnectionImpl() = default;
 std::unique_ptr<TrustedVaultConnection::Request>
 TrustedVaultConnectionImpl::RegisterAuthenticationFactor(
     const CoreAccountInfo& account_info,
-    const base::Optional<TrustedVaultKeyAndVersion>&
-        last_trusted_vault_key_and_version,
+    const TrustedVaultKeyAndVersion& last_trusted_vault_key_and_version,
     const SecureBoxPublicKey& public_key,
+    AuthenticationFactorType authentication_factor_type,
+    absl::optional<int> authentication_factor_type_hint,
     RegisterAuthenticationFactorCallback callback) {
-  auto request = std::make_unique<RegisterAuthenticationFactorRequest>(
-      /*join_security_domains_url=*/GURL(trusted_vault_service_url_.spec() +
-                                         kJoinSecurityDomainsURLPath),
-      /*list_security_domains_url=*/
-      GURL(trusted_vault_service_url_.spec() +
-           kListSecurityDomainsURLPathAndQuery),
-      GetOrCreateURLLoaderFactory(), account_info.account_id, public_key,
-      access_token_fetcher_.get());
-  if (last_trusted_vault_key_and_version.has_value()) {
-    request->StartWithKnownTrustedVaultKeyAndVersion(
-        *last_trusted_vault_key_and_version, std::move(callback));
-  } else {
-    request->StartWithConstantKey(std::move(callback));
-  }
+  auto request = std::make_unique<TrustedVaultRequest>(
+      TrustedVaultRequest::HttpMethod::kPost,
+      GURL(trusted_vault_service_url_.spec() + kJoinSecurityDomainsURLPath),
+      /*serialized_request_proto=*/
+      CreateJoinSecurityDomainsRequest(last_trusted_vault_key_and_version,
+                                       public_key, authentication_factor_type,
+                                       authentication_factor_type_hint)
+          .SerializeAsString());
+
+  request->FetchAccessTokenAndSendRequest(
+      account_info.account_id, GetOrCreateURLLoaderFactory(),
+      access_token_fetcher_.get(),
+      base::BindOnce(&ProcessRegisterAuthenticationFactorRequest,
+                     std::move(callback)));
   return request;
 }
 
 std::unique_ptr<TrustedVaultConnection::Request>
 TrustedVaultConnectionImpl::DownloadNewKeys(
     const CoreAccountInfo& account_info,
-    const base::Optional<TrustedVaultKeyAndVersion>&
-        last_trusted_vault_key_and_version,
+    const TrustedVaultKeyAndVersion& last_trusted_vault_key_and_version,
     std::unique_ptr<SecureBoxKeyPair> device_key_pair,
     DownloadNewKeysCallback callback) {
   auto request = std::make_unique<TrustedVaultRequest>(
       TrustedVaultRequest::HttpMethod::kGet,
       GURL(trusted_vault_service_url_.spec() +
-           kListSecurityDomainsURLPathAndQuery),
-      /*serialized_request_proto=*/base::nullopt);
+           GetGetSecurityDomainMemberURLPathAndQuery(
+               device_key_pair->public_key().ExportToBytes())),
+      /*serialized_request_proto=*/absl::nullopt);
 
   request->FetchAccessTokenAndSendRequest(
       account_info.account_id, GetOrCreateURLLoaderFactory(),
       access_token_fetcher_.get(),
       base::BindOnce(
-          ProcessDownloadKeysResponse,
+          &ProcessDownloadKeysResponse,
           /*response_processor=*/
           std::make_unique<DownloadKeysResponseHandler>(
               last_trusted_vault_key_and_version, std::move(device_key_pair)),
           std::move(callback)));
+
+  return request;
+}
+
+std::unique_ptr<TrustedVaultConnection::Request>
+TrustedVaultConnectionImpl::RetrieveIsRecoverabilityDegraded(
+    const CoreAccountInfo& account_info,
+    IsRecoverabilityDegradedCallback callback) {
+  auto request = std::make_unique<TrustedVaultRequest>(
+      TrustedVaultRequest::HttpMethod::kGet,
+      GURL(trusted_vault_service_url_.spec() +
+           kGetSecurityDomainURLPathAndQuery),
+      /*serialized_request_proto=*/absl::nullopt);
+
+  request->FetchAccessTokenAndSendRequest(
+      account_info.account_id, GetOrCreateURLLoaderFactory(),
+      access_token_fetcher_.get(),
+      base::BindOnce(&ProcessRetrieveIsRecoverabilityDegradedResponse,
+                     std::move(callback)));
 
   return request;
 }

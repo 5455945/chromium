@@ -7,8 +7,10 @@
 
 #include <windows.h>
 
-#include <string>
+#include <vector>
 
+#include "base/callback_forward.h"
+#include "base/check.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/sequenced_task_runner.h"
 #include "base/win/scoped_com_initializer.h"
@@ -45,10 +47,18 @@ class ComServerApp : public AppServer {
   scoped_refptr<base::SequencedTaskRunner> main_task_runner() {
     return main_task_runner_;
   }
-  scoped_refptr<UpdateService> update_service() { return update_service_; }
+  scoped_refptr<UpdateService> update_service() {
+    CHECK(update_service_);
+    return update_service_;
+  }
   scoped_refptr<UpdateServiceInternal> update_service_internal() {
+    CHECK(update_service_internal_);
     return update_service_internal_;
   }
+
+  // Handles COM factory unregistration then triggers program shutdown. This
+  // function runs on a COM RPC thread when the WRL module is destroyed.
+  void Stop();
 
  private:
   ~ComServerApp() override;
@@ -57,14 +67,15 @@ class ComServerApp : public AppServer {
   void InitializeThreadPool() override;
 
   // Overrides for AppServer
-  void ActiveDuty(
-      scoped_refptr<UpdateService> update_service,
+  void ActiveDuty(scoped_refptr<UpdateService> update_service) override;
+  void ActiveDutyInternal(
       scoped_refptr<UpdateServiceInternal> update_service_internal) override;
   bool SwapRPCInterfaces() override;
   void UninstallSelf() override;
 
   // Registers and unregisters the out-of-process COM class factories.
   HRESULT RegisterClassObjects();
+  HRESULT RegisterInternalClassObjects();
   void UnregisterClassObjects();
 
   // Waits until the last COM object is released.
@@ -76,12 +87,11 @@ class ComServerApp : public AppServer {
   // Creates an out-of-process WRL Module.
   void CreateWRLModule();
 
-  // Handles object unregistration then triggers program shutdown. This
-  // function runs on a COM RPC thread when the WRL module is destroyed.
-  void Stop();
+  // Handles COM setup and registration.
+  void Start(base::OnceCallback<HRESULT()> register_callback);
 
   // Identifier of registered class objects used for unregistration.
-  DWORD cookies_[3] = {};
+  std::vector<DWORD> cookies_;
 
   // While this object lives, COM can be used by all threads in the program.
   base::win::ScopedCOMInitializer com_initializer_;

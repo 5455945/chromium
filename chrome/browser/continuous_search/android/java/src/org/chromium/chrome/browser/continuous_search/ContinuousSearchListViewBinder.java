@@ -4,34 +4,100 @@
 
 package org.chromium.chrome.browser.continuous_search;
 
+import android.text.TextUtils.TruncateAt;
 import android.view.View;
+import android.widget.ImageView;
 import android.widget.TextView;
 
-import org.chromium.components.embedder_support.util.UrlUtilities;
+import org.chromium.base.ApiCompatibilityUtils;
+import org.chromium.chrome.browser.continuous_search.ContinuousSearchListProperties.ListItemProperties;
+import org.chromium.chrome.browser.continuous_search.ContinuousSearchListProperties.ProviderProperties;
+import org.chromium.components.url_formatter.SchemeDisplay;
+import org.chromium.components.url_formatter.UrlFormatter;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
+import org.chromium.ui.widget.ChipView;
 import org.chromium.url.GURL;
 
 /**
  * Responsible for binding the {@link PropertyModel} for a search result item to a View.
  */
 class ContinuousSearchListViewBinder {
-    public static void bind(PropertyModel model, View view, PropertyKey propertyKey) {
-        if (ContinuousSearchListProperties.LABEL == propertyKey) {
-            TextView textView = view.findViewById(R.id.continuous_search_list_item_text);
-            textView.setText(model.get(ContinuousSearchListProperties.LABEL));
-        } else if (ContinuousSearchListProperties.URL == propertyKey) {
-            GURL url = model.get(ContinuousSearchListProperties.URL);
-            TextView textView = view.findViewById(R.id.continuous_search_list_item_description);
-            String domain = "";
+    static void bindProvider(PropertyModel model, View view, PropertyKey propertyKey) {
+        if (ProviderProperties.LABEL == propertyKey) {
+            TextView textView = view.findViewById(R.id.continuous_search_provider_label);
+            textView.setText(model.get(ProviderProperties.LABEL));
+        } else if (ProviderProperties.ICON_RESOURCE == propertyKey) {
+            TextView textView = view.findViewById(R.id.continuous_search_provider_label);
+            // Add the icon at the start of the provider label
+            textView.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                    model.get(ProviderProperties.ICON_RESOURCE), 0, 0, 0);
+        } else if (ProviderProperties.CLICK_LISTENER == propertyKey) {
+            view.setOnClickListener(model.get(ProviderProperties.CLICK_LISTENER));
+        } else if (ProviderProperties.TEXT_STYLE == propertyKey) {
+            TextView textView = view.findViewById(R.id.continuous_search_provider_label);
+            ApiCompatibilityUtils.setTextAppearance(
+                    textView, model.get(ProviderProperties.TEXT_STYLE));
+        }
+    }
+
+    /**
+     * Binds properties related to an individual item within the RecyclerView.
+     */
+    static void bindListItem(PropertyModel model, View view, PropertyKey propertyKey) {
+        ChipView chipView = view.findViewById(R.id.csn_chip);
+
+        if (ListItemProperties.URL == propertyKey) {
+            GURL url = model.get(ListItemProperties.URL);
+            TextView textView = chipView.getPrimaryTextView();
+
+            String safeUrl = "";
             if (url != null) {
-                domain = UrlUtilities.getDomainAndRegistry(url.getSpec(), true);
+                // Schemes are omitted as these are pre-navigation URLs and we have very limited UI
+                // surface.
+                //
+                // NOTE: the Google SRP does show schemes so consider revisiting this in future.
+                safeUrl = UrlFormatter.formatUrlForSecurityDisplay(
+                        url, SchemeDisplay.OMIT_HTTP_AND_HTTPS);
             }
-            textView.setText(domain);
-        } else if (ContinuousSearchListProperties.IS_SELECTED == propertyKey) {
-            view.setSelected(model.get(ContinuousSearchListProperties.IS_SELECTED));
-        } else if (ContinuousSearchListProperties.CLICK_LISTENER == propertyKey) {
-            view.setOnClickListener(model.get(ContinuousSearchListProperties.CLICK_LISTENER));
+            textView.setEllipsize(TruncateAt.START);
+            textView.setTextDirection(View.TEXT_DIRECTION_LTR);
+            textView.setText(safeUrl);
+        } else if (ListItemProperties.IS_SELECTED == propertyKey) {
+            setBorder(chipView, model);
+        } else if (ListItemProperties.BORDER_COLOR == propertyKey) {
+            setBorder(chipView, model);
+        } else if (ListItemProperties.CLICK_LISTENER == propertyKey) {
+            view.setOnClickListener(model.get(ListItemProperties.CLICK_LISTENER));
+        } else if (ListItemProperties.BACKGROUND_COLOR == propertyKey) {
+            chipView.setBackgroundColor(model.get(ListItemProperties.BACKGROUND_COLOR));
+        } else if (ListItemProperties.PRIMARY_TEXT_STYLE == propertyKey) {
+            ApiCompatibilityUtils.setTextAppearance(chipView.getPrimaryTextView(),
+                    model.get(ListItemProperties.PRIMARY_TEXT_STYLE));
+        }
+    }
+
+    private static void setBorder(ChipView chipView, PropertyModel model) {
+        chipView.setBorder(chipView.getResources().getDimensionPixelSize(R.dimen.chip_border_width),
+                model.get(ListItemProperties.IS_SELECTED)
+                        ? model.get(ListItemProperties.BORDER_COLOR)
+                        : model.get(ListItemProperties.BACKGROUND_COLOR));
+    }
+
+    /**
+     * Binds properties related to the root view, that includes the RecyclerView.
+     */
+    static void bindRootView(PropertyModel model, View view, PropertyKey propertyKey) {
+        if (ContinuousSearchListProperties.BACKGROUND_COLOR == propertyKey) {
+            view.setBackgroundColor(model.get(ContinuousSearchListProperties.BACKGROUND_COLOR));
+        } else if (ContinuousSearchListProperties.FOREGROUND_COLOR == propertyKey) {
+            ImageView buttonDismiss = view.findViewById(R.id.button_dismiss);
+            buttonDismiss.setColorFilter(
+                    model.get(ContinuousSearchListProperties.FOREGROUND_COLOR));
+        } else if (ContinuousSearchListProperties.DISMISS_CLICK_CALLBACK == propertyKey) {
+            ImageView buttonDismiss = view.findViewById(R.id.button_dismiss);
+            buttonDismiss.setOnClickListener(
+                    model.get(ContinuousSearchListProperties.DISMISS_CLICK_CALLBACK));
         }
     }
 }

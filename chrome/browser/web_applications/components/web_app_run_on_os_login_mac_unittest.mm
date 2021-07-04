@@ -25,13 +25,14 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #import "testing/gtest_mac.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace web_app {
 
 namespace {
 
-constexpr char kFakeChromeBundleId[] = {"fake.cfbundleidentifier"};
-constexpr char kAppTitle[] = {"app"};
+constexpr char kFakeChromeBundleId[] = "fake.cfbundleidentifier";
+constexpr char16_t kAppTitle[] = u"app";
 
 class WebAppAutoLoginUtilMock : public WebAppAutoLoginUtil {
  public:
@@ -96,7 +97,9 @@ class WebAppRunOnOsLoginMacTest : public WebAppTest {
     user_data_dir_ = base::MakeAbsoluteFilePath(user_data_dir_);
     app_data_dir_ = base::MakeAbsoluteFilePath(app_data_dir_);
 
-    SetChromeAppsFolderForTesting(destination_dir_);
+    ShortcutOverrideForTesting shortcut_override;
+    shortcut_override.chrome_apps_folder = destination_dir_;
+    web_app::SetShortcutOverrideForTesting(shortcut_override);
 
     info_ = GetShortcutInfo();
     base::FilePath shim_base_name =
@@ -109,14 +112,15 @@ class WebAppRunOnOsLoginMacTest : public WebAppTest {
 
   void TearDown() override {
     WebAppAutoLoginUtil::SetInstanceForTesting(nullptr);
-    SetChromeAppsFolderForTesting(base::FilePath());
+    web_app::SetShortcutOverrideForTesting(absl::nullopt);
+    WebAppShortcutCreator::ResetHaveLocalizedAppDirNameForTesting();
     WebAppTest::TearDown();
   }
 
   std::unique_ptr<ShortcutInfo> GetShortcutInfo() {
     std::unique_ptr<ShortcutInfo> info(new ShortcutInfo);
     info->extension_id = "app-id";
-    info->title = base::UTF8ToUTF16(kAppTitle);
+    info->title = kAppTitle;
     info->url = GURL("http://example.com/");
     info->profile_path = user_data_dir_.Append("Profile 1");
     info->profile_name = "profile name";

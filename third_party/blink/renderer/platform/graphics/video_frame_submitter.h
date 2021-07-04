@@ -9,9 +9,7 @@
 
 #include "base/memory/read_only_shared_memory_region.h"
 #include "base/memory/weak_ptr.h"
-#include "base/optional.h"
 #include "base/threading/thread_checker.h"
-#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "cc/metrics/frame_sequence_tracker_collection.h"
 #include "cc/metrics/video_playback_roughness_reporter.h"
@@ -25,6 +23,7 @@
 #include "mojo/public/cpp/system/buffer.h"
 #include "services/viz/public/mojom/compositing/compositor_frame_sink.mojom-blink.h"
 #include "services/viz/public/mojom/compositing/frame_timing_details.mojom-blink.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/frame_sinks/embedded_frame_sink.mojom-blink.h"
 #include "third_party/blink/public/platform/web_video_frame_submitter.h"
 #include "third_party/blink/renderer/platform/graphics/video_frame_resource_provider.h"
@@ -48,6 +47,8 @@ class PLATFORM_EXPORT VideoFrameSubmitter
   VideoFrameSubmitter(WebContextProviderCallback,
                       cc::VideoPlaybackRoughnessReporter::ReportingCallback,
                       std::unique_ptr<VideoFrameResourceProvider>);
+  VideoFrameSubmitter(const VideoFrameSubmitter&) = delete;
+  VideoFrameSubmitter& operator=(const VideoFrameSubmitter&) = delete;
   ~VideoFrameSubmitter() override;
 
   // cc::VideoFrameProvider::Client implementation.
@@ -71,13 +72,14 @@ class PLATFORM_EXPORT VideoFrameSubmitter
 
   // cc::mojom::CompositorFrameSinkClient implementation.
   void DidReceiveCompositorFrameAck(
-      const WTF::Vector<viz::ReturnedResource>& resources) override;
+      WTF::Vector<viz::ReturnedResource> resources) override;
   void OnBeginFrame(
       const viz::BeginFrameArgs&,
       const WTF::HashMap<uint32_t, viz::FrameTimingDetails>&) override;
   void OnBeginFramePausedChanged(bool paused) override {}
-  void ReclaimResources(
-      const WTF::Vector<viz::ReturnedResource>& resources) override;
+  void ReclaimResources(WTF::Vector<viz::ReturnedResource> resources) override;
+  void OnCompositorFrameTransitionDirectiveProcessed(
+      uint32_t sequence_id) override {}
 
   // viz::SharedBitmapReporter implementation.
   void DidAllocateSharedBitmap(base::ReadOnlySharedMemoryRegion,
@@ -183,7 +185,7 @@ class PLATFORM_EXPORT VideoFrameSubmitter
 
   base::OneShotTimer empty_frame_timer_;
 
-  base::Optional<int> last_frame_id_;
+  absl::optional<int> last_frame_id_;
 
   cc::FrameSequenceTrackerCollection frame_trackers_;
 
@@ -196,13 +198,11 @@ class PLATFORM_EXPORT VideoFrameSubmitter
   // presented.
   base::flat_set<uint32_t> ignorable_submitted_frames_;
 
-  std::unique_ptr<power_scheduler::PowerModeVoter> animation_power_mode_voter_;
+  std::unique_ptr<power_scheduler::PowerModeVoter> power_mode_voter_;
 
   THREAD_CHECKER(thread_checker_);
 
   base::WeakPtrFactory<VideoFrameSubmitter> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(VideoFrameSubmitter);
 };
 
 }  // namespace blink

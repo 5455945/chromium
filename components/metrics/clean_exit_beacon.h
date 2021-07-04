@@ -19,17 +19,22 @@ namespace metrics {
 // process exited cleanly.
 class CleanExitBeacon {
  public:
-  // Instantiates a CleanExitBeacon whose value is stored in |local_state|.
-  // |local_state| must be fully initialized.
-  // On Windows, |backup_registry_key| is used to store a backup of the beacon.
-  // It is ignored on other platforms.
+  // Instantiates a CleanExitBeacon whose value is stored in |local_state|'s
+  // kStabilityExitedCleanly pref. |local_state| must be fully initialized.
+  //
+  // On Windows, |backup_registry_key| stores a backup of the beacon to verify
+  // that the pref's value corresponds to the registry's. |backup_registry_key|
+  // is ignored on other platforms, but iOS has a similar verification
+  // mechanism using LastSessionExitedCleanly in
+  // ios/chrome/browser/pref_names.cc.
+  // TODO(crbug.com/1208077): Use the CleanExitBeacon for verification on iOS.
   CleanExitBeacon(const std::wstring& backup_registry_key,
                   PrefService* local_state);
 
   ~CleanExitBeacon();
 
   // Returns the original value of the beacon.
-  bool exited_cleanly() const { return initial_value_; }
+  bool exited_cleanly() const { return did_previous_session_exit_cleanly_; }
 
   // Returns the original value of the last live timestamp.
   base::Time browser_last_live_timestamp() const {
@@ -45,9 +50,18 @@ class CleanExitBeacon {
   // Registers local state prefs used by this class.
   static void RegisterPrefs(PrefRegistrySimple* registry);
 
+  // CHECKs that Chrome exited cleanly.
+  static void EnsureCleanShutdown(PrefService* local_state);
+
+  // Prevents a test browser from performing two clean shutdown steps. First, it
+  // prevents the beacon value from being updated after this function is called.
+  // This prevents the the test browser from signaling that Chrome is shutting
+  // down cleanly. Second, it makes EnsureCleanShutdown() a no-op.
+  static void SkipCleanShutdownStepsForTesting();
+
  private:
   PrefService* const local_state_;
-  const bool initial_value_;
+  const bool did_previous_session_exit_cleanly_;
 
   // This is the value of the last live timestamp from local state at the
   // time of construction. It notes a timestamp from the previous browser

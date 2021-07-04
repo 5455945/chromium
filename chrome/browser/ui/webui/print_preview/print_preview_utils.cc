@@ -27,6 +27,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "printing/backend/print_backend_consts.h"
 #include "printing/page_range.h"
+#include "printing/print_job_constants.h"
 
 namespace printing {
 
@@ -53,9 +54,9 @@ void PrintersToValues(const PrinterList& printer_list,
     printer_info->SetString(kSettingPrinterDescription,
                             printer.printer_description);
 
-    auto options = std::make_unique<base::DictionaryValue>();
+    base::DictionaryValue options;
     for (const auto& opt_it : printer.options)
-      options->SetString(opt_it.first, opt_it.second);
+      options.SetString(opt_it.first, opt_it.second);
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
     printer_info->SetBoolean(
@@ -64,7 +65,7 @@ void PrintersToValues(const PrinterList& printer_list,
             printer.options.at(kCUPSEnterprisePrinter) == kValueTrue);
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
-    printer_info->Set(kSettingPrinterOptions, std::move(options));
+    printer_info->SetKey(kSettingPrinterOptions, std::move(options));
 
     printers->Append(std::move(printer_info));
 
@@ -220,7 +221,7 @@ bool ParseSettings(const base::Value& settings,
     NOTREACHED();
     return false;
   }
-  base::Optional<base::Value> ticket_value =
+  absl::optional<base::Value> ticket_value =
       base::JSONReader::Read(*ticket_opt);
   if (!ticket_value)
     return false;

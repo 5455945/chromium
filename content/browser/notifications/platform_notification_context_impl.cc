@@ -8,11 +8,11 @@
 
 #include "base/bind.h"
 #include "base/callback_helpers.h"
+#include "base/containers/cxx20_erase.h"
 #include "base/feature_list.h"
 #include "base/files/file_util.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/stl_util.h"
 #include "base/task/thread_pool.h"
 #include "content/browser/notifications/blink_notification_service_impl.h"
 #include "content/browser/notifications/notification_database.h"
@@ -198,7 +198,7 @@ void PlatformNotificationContextImpl::DoSyncNotificationData(
     return;
 
   // Reset |next_trigger_| to keep track of the next trigger timestamp.
-  next_trigger_ = base::nullopt;
+  next_trigger_ = absl::nullopt;
 
   // Iterate over all notifications and delete all expired ones.
   std::set<std::string> close_notification_ids;
@@ -285,10 +285,11 @@ void PlatformNotificationContextImpl::Shutdown() {
 
 void PlatformNotificationContextImpl::CreateService(
     const url::Origin& origin,
+    const GURL& document_url,
     mojo::PendingReceiver<blink::mojom::NotificationService> receiver) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   services_.push_back(std::make_unique<BlinkNotificationServiceImpl>(
-      this, browser_context_, service_worker_context_, origin,
+      this, browser_context_, service_worker_context_, origin, document_url,
       std::move(receiver)));
 }
 
@@ -357,7 +358,7 @@ void PlatformNotificationContextImpl::CheckPermissionsAndDeleteBlocked(
   }
 
   content::PermissionController* controller =
-      BrowserContext::GetPermissionController(browser_context_);
+      browser_context_->GetPermissionController();
   if (!controller) {
     std::move(callback).Run(/* success= */ false, /* deleted_count= */ 0);
     return;
@@ -980,7 +981,7 @@ void PlatformNotificationContextImpl::DoWriteNotificationData(
 
   // Only store resources for notifications that will be scheduled.
   if (!CanTrigger(write_database_data))
-    write_database_data.notification_resources = base::nullopt;
+    write_database_data.notification_resources = absl::nullopt;
 
   NotificationDatabase::Status status =
       database_->WriteNotificationData(origin, write_database_data);

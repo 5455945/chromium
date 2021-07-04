@@ -13,6 +13,7 @@
 #include "third_party/blink/renderer/core/fileapi/file.h"
 #include "third_party/blink/renderer/core/fileapi/file_error.h"
 #include "third_party/blink/renderer/modules/file_system_access/file_system_access_error.h"
+#include "third_party/blink/renderer/modules/file_system_access/file_system_sync_access_handle.h"
 #include "third_party/blink/renderer/modules/file_system_access/file_system_writable_file_stream.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/file_metadata.h"
@@ -20,6 +21,7 @@
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
+
 using mojom::blink::FileSystemAccessErrorPtr;
 
 FileSystemFileHandle::FileSystemFileHandle(
@@ -93,6 +95,35 @@ ScriptPromise FileSystemFileHandle::getFile(ScriptState* script_state,
   return result;
 }
 
+ScriptPromise FileSystemFileHandle::createSyncAccessHandle(
+    ScriptState* script_state,
+    ExceptionState& exception_state) {
+  // TODO(fivedots): Check if storage access is allowed.
+  if (!mojo_ptr_.is_bound()) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError, "");
+    return ScriptPromise();
+  }
+
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+  ScriptPromise result = resolver->Promise();
+
+  mojo_ptr_->OpenAccessHandle(WTF::Bind(
+      [](ScriptPromiseResolver* resolver, FileSystemAccessErrorPtr result,
+         base::File file) {
+        if (result->status != mojom::blink::FileSystemAccessStatus::kOk) {
+          file_system_access_error::Reject(resolver, *result);
+          return;
+        }
+        DCHECK(file.IsValid()) << "File should be valid when result is OK";
+
+        resolver->Resolve(
+            MakeGarbageCollected<FileSystemSyncAccessHandle>(std::move(file)));
+      },
+      WrapPersistent(resolver)));
+
+  return result;
+}
+
 mojo::PendingRemote<mojom::blink::FileSystemAccessTransferToken>
 FileSystemFileHandle::Transfer() {
   mojo::PendingRemote<mojom::blink::FileSystemAccessTransferToken> result;
@@ -130,6 +161,19 @@ void FileSystemFileHandle::RequestPermissionImpl(
   }
 
   mojo_ptr_->RequestPermission(writable, std::move(callback));
+}
+
+void FileSystemFileHandle::RemoveImpl(
+    const FileSystemRemoveOptions* options,
+    base::OnceCallback<void(mojom::blink::FileSystemAccessErrorPtr)> callback) {
+  if (!mojo_ptr_.is_bound()) {
+    std::move(callback).Run(mojom::blink::FileSystemAccessError::New(
+        mojom::blink::FileSystemAccessStatus::kInvalidState,
+        base::File::Error::FILE_ERROR_FAILED, "Context Destroyed"));
+    return;
+  }
+
+  mojo_ptr_->Remove(std::move(callback));
 }
 
 void FileSystemFileHandle::IsSameEntryImpl(

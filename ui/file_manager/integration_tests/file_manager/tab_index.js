@@ -2,7 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-'use strict';
+import {addEntries, RootPath, TestEntryInfo} from '../test_util.js';
+import {testcase} from '../testcase.js';
+
+import {openAndWaitForClosingDialog, remoteCall, setupAndWaitUntilReady} from './background.js';
+import {BASIC_DRIVE_ENTRY_SET, BASIC_LOCAL_ENTRY_SET} from './test_data.js';
 
 /**
  * Tests the focus behavior of the search box.
@@ -91,6 +95,8 @@ testcase.tabindexFocusDownloads = async () => {
       await remoteCall.checkNextTabFocus(appId, 'sort-button'));
   chrome.test.assertTrue(
       await remoteCall.checkNextTabFocus(appId, 'gear-button'));
+  chrome.test.assertTrue(await remoteCall.checkNextTabFocus(
+      appId, 'holding-space-welcome-dismiss'));
   chrome.test.assertTrue(
       await remoteCall.checkNextTabFocus(appId, 'file-list'));
 };
@@ -123,51 +129,28 @@ testcase.tabindexFocusDirectorySelected = async () => {
   ]);
 
   // Send Tab key events to cycle through the tabable elements.
-  if (await isFilesNg(appId)) {
-    chrome.test.assertTrue(
-        await remoteCall.checkNextTabFocus(appId, 'directory-tree'));
-    chrome.test.assertTrue(
-        await remoteCall.checkNextTabFocus(appId, 'pinned-toggle'));
-    chrome.test.assertTrue(
-        await remoteCall.checkNextTabFocus(appId, 'share-menu-button'));
-    chrome.test.assertTrue(
-        await remoteCall.checkNextTabFocus(appId, 'delete-button'));
-    chrome.test.assertTrue(
-        await remoteCall.checkNextTabFocus(appId, 'search-button'));
-    chrome.test.assertTrue(
-        await remoteCall.checkNextTabFocus(appId, 'view-button'));
-    chrome.test.assertTrue(
-        await remoteCall.checkNextTabFocus(appId, 'sort-button'));
-    chrome.test.assertTrue(
-        await remoteCall.checkNextTabFocus(appId, 'gear-button'));
-    chrome.test.assertTrue(
-        await remoteCall.checkNextTabFocus(appId, 'drive-welcome-link'));
-    chrome.test.assertTrue(
-        await remoteCall.checkNextTabFocus(appId, 'welcome-dismiss'));
-    chrome.test.assertTrue(
-        await remoteCall.checkNextTabFocus(appId, 'file-list'));
-  } else {
-    chrome.test.assertTrue(
-        await remoteCall.checkNextTabFocus(appId, 'share-menu-button'));
-    chrome.test.assertTrue(
-        await remoteCall.checkNextTabFocus(appId, 'delete-button'));
-    chrome.test.assertTrue(
-        await remoteCall.checkNextTabFocus(appId, 'search-button'));
-    chrome.test.assertTrue(
-        await remoteCall.checkNextTabFocus(appId, 'view-button'));
-    chrome.test.assertTrue(
-        await remoteCall.checkNextTabFocus(appId, 'sort-button'));
-    chrome.test.assertTrue(
-        await remoteCall.checkNextTabFocus(appId, 'gear-button'));
-    chrome.test.assertTrue(
-        await remoteCall.checkNextTabFocus(appId, 'directory-tree'));
-    chrome.test.assertTrue(
-        await remoteCall.checkNextTabFocus(appId, 'welcome-dismiss'));
-    chrome.test.assertTrue(
-        await remoteCall.checkNextTabFocus(appId, 'drive-welcome-link'));
-    chrome.test.assertTrue(
-        await remoteCall.checkNextTabFocus(appId, 'file-list'));
-  }
+  chrome.test.assertTrue(
+      await remoteCall.checkNextTabFocus(appId, 'directory-tree'));
+  chrome.test.assertTrue(
+      await remoteCall.checkNextTabFocus(appId, 'pinned-toggle'));
+  chrome.test.assertTrue(
+      await remoteCall.checkNextTabFocus(appId, 'share-menu-button'));
+  chrome.test.assertTrue(
+      await remoteCall.checkNextTabFocus(appId, 'delete-button'));
+  chrome.test.assertTrue(
+      await remoteCall.checkNextTabFocus(appId, 'search-button'));
+  chrome.test.assertTrue(
+      await remoteCall.checkNextTabFocus(appId, 'view-button'));
+  chrome.test.assertTrue(
+      await remoteCall.checkNextTabFocus(appId, 'sort-button'));
+  chrome.test.assertTrue(
+      await remoteCall.checkNextTabFocus(appId, 'gear-button'));
+  chrome.test.assertTrue(
+      await remoteCall.checkNextTabFocus(appId, 'drive-welcome-link'));
+  chrome.test.assertTrue(
+      await remoteCall.checkNextTabFocus(appId, 'welcome-dismiss'));
+  chrome.test.assertTrue(
+      await remoteCall.checkNextTabFocus(appId, 'file-list'));
 };
 
 /**

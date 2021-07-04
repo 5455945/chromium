@@ -4,6 +4,8 @@
 
 #include "chrome/browser/extensions/extension_management.h"
 
+#include <memory>
+#include <string>
 #include <utility>
 
 #include "base/bind.h"
@@ -11,7 +13,6 @@
 #include "base/containers/contains.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/syslog_logging.h"
@@ -27,6 +28,8 @@
 #include "chrome/browser/extensions/standard_management_policy_provider.h"
 #include "chrome/browser/profiles/incognito_helpers.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/themes/theme_service.h"
+#include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/pref_names.h"
 #include "components/crx_file/id_util.h"
@@ -251,6 +254,12 @@ bool ExtensionManagement::IsOffstoreInstallAllowed(
 bool ExtensionManagement::IsAllowedManifestType(
     Manifest::Type manifest_type,
     const std::string& extension_id) const {
+  // If a managed theme has been set for the current profile, theme extension
+  // installations are not allowed.
+  if (manifest_type == Manifest::Type::TYPE_THEME &&
+      ThemeServiceFactory::GetForProfile(profile_)->UsingPolicyTheme())
+    return false;
+
   if (!global_settings_->has_restricted_allowed_types)
     return true;
   const std::vector<Manifest::Type>& allowed_types =
@@ -423,14 +432,18 @@ void ExtensionManagement::Refresh() {
       prefs::kCloudExtensionRequestEnabled, false, base::Value::Type::BOOLEAN);
 
   // Reset all settings.
-  global_settings_.reset(new internal::GlobalSettings());
+  global_settings_ = std::make_unique<internal::GlobalSettings>();
   settings_by_id_.clear();
-  default_settings_.reset(new internal::IndividualSettings());
+  default_settings_ = std::make_unique<internal::IndividualSettings>();
 
   // Parse default settings.
   const base::Value wildcard("*");
   if ((denied_list_pref &&
-       denied_list_pref->Find(wildcard) != denied_list_pref->end()) ||
+       // TODO(crbug.com/1187106): Use base::Contains once |denied_list_pref| is
+       // not a ListValue.
+       std::find(denied_list_pref->GetList().begin(),
+                 denied_list_pref->GetList().end(),
+                 wildcard) != denied_list_pref->GetList().end()) ||
       (extension_request_pref && extension_request_pref->GetBool())) {
     default_settings_->installation_mode = INSTALLATION_BLOCKED;
   }
@@ -456,17 +469,15 @@ void ExtensionManagement::Refresh() {
   ExtensionId id;
 
   if (allowed_list_pref) {
-    for (auto it = allowed_list_pref->begin(); it != allowed_list_pref->end();
-         ++it) {
-      if (it->GetAsString(&id) && crx_file::id_util::IdIsValid(id))
+    for (const auto& entry : allowed_list_pref->GetList()) {
+      if (entry.GetAsString(&id) && crx_file::id_util::IdIsValid(id))
         AccessById(id)->installation_mode = INSTALLATION_ALLOWED;
     }
   }
 
   if (denied_list_pref) {
-    for (auto it = denied_list_pref->begin(); it != denied_list_pref->end();
-         ++it) {
-      if (it->GetAsString(&id) && crx_file::id_util::IdIsValid(id))
+    for (const auto& entry : denied_list_pref->GetList()) {
+      if (entry.GetAsString(&id) && crx_file::id_util::IdIsValid(id))
         AccessById(id)->installation_mode = INSTALLATION_BLOCKED;
     }
   }
@@ -475,10 +486,9 @@ void ExtensionManagement::Refresh() {
 
   if (install_sources_pref) {
     global_settings_->has_restricted_install_sources = true;
-    for (auto it = install_sources_pref->begin();
-         it != install_sources_pref->end(); ++it) {
+    for (const auto& entry : install_sources_pref->GetList()) {
       std::string url_pattern;
-      if (it->GetAsString(&url_pattern)) {
+      if (entry.GetAsString(&url_pattern)) {
         URLPattern entry(URLPattern::SCHEME_ALL);
         if (entry.Parse(url_pattern) == URLPattern::ParseResult::kSuccess) {
           global_settings_->install_sources.AddPattern(entry);
@@ -493,17 +503,14 @@ void ExtensionManagement::Refresh() {
 
   if (allowed_types_pref) {
     global_settings_->has_restricted_allowed_types = true;
-    for (auto it = allowed_types_pref->begin(); it != allowed_types_pref->end();
-         ++it) {
-      int int_value;
-      std::string string_value;
-      if (it->GetAsInteger(&int_value) && int_value >= 0 &&
-          int_value < Manifest::Type::NUM_LOAD_TYPES) {
+    for (const auto& entry : allowed_types_pref->GetList()) {
+      if (entry.is_int() && entry.GetInt() >= 0 &&
+          entry.GetInt() < Manifest::Type::NUM_LOAD_TYPES) {
         global_settings_->allowed_types.push_back(
-            static_cast<Manifest::Type>(int_value));
-      } else if (it->GetAsString(&string_value)) {
+            static_cast<Manifest::Type>(entry.GetInt()));
+      } else if (entry.is_string()) {
         Manifest::Type manifest_type =
-            schema_constants::GetManifestType(string_value);
+            schema_constants::GetManifestType(entry.GetString());
         if (manifest_type != Manifest::TYPE_UNKNOWN)
           global_settings_->allowed_types.push_back(manifest_type);
       }
@@ -642,7 +649,6 @@ void ExtensionManagement::UpdateForcedExtensions(
   if (!extension_dict)
     return;
 
-  std::string update_url;
   InstallStageTracker* install_stage_tracker =
       InstallStageTracker::Get(profile_);
   for (base::DictionaryValue::Iterator it(*extension_dict); !it.IsAtEnd();
@@ -653,21 +659,26 @@ void ExtensionManagement::UpdateForcedExtensions(
       continue;
     }
     const base::DictionaryValue* dict_value = nullptr;
-    if (it.value().GetAsDictionary(&dict_value) &&
-        dict_value->GetStringWithoutPathExpansion(
-            ExternalProviderImpl::kExternalUpdateUrl, &update_url)) {
-      internal::IndividualSettings* by_id = AccessById(it.key());
-      by_id->installation_mode = INSTALLATION_FORCED;
-      by_id->update_url = update_url;
-      install_stage_tracker->ReportInstallationStage(
-          it.key(), InstallStageTracker::Stage::CREATED);
-      install_stage_tracker->ReportInstallCreationStage(
-          it.key(),
-          InstallStageTracker::InstallCreationStage::CREATION_INITIATED);
-    } else {
+    if (!it.value().GetAsDictionary(&dict_value)) {
       install_stage_tracker->ReportFailure(
           it.key(), InstallStageTracker::FailureReason::NO_UPDATE_URL);
+      continue;
     }
+    const std::string* update_url =
+        dict_value->FindStringKey(ExternalProviderImpl::kExternalUpdateUrl);
+    if (!update_url) {
+      install_stage_tracker->ReportFailure(
+          it.key(), InstallStageTracker::FailureReason::NO_UPDATE_URL);
+      continue;
+    }
+    internal::IndividualSettings* by_id = AccessById(it.key());
+    by_id->installation_mode = INSTALLATION_FORCED;
+    by_id->update_url = *update_url;
+    install_stage_tracker->ReportInstallationStage(
+        it.key(), InstallStageTracker::Stage::CREATED);
+    install_stage_tracker->ReportInstallCreationStage(
+        it.key(),
+        InstallStageTracker::InstallCreationStage::CREATION_INITIATED);
   }
 }
 

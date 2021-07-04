@@ -7,9 +7,9 @@
 #include "chrome/browser/chrome_content_browser_client.h"
 
 #include "base/bind.h"
+#include "base/metrics/histogram_functions.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
-#include "chrome/browser/badging/badge_manager.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/cache_stats_recorder.h"
 #include "chrome/browser/chrome_browser_interface_binders.h"
@@ -22,7 +22,7 @@
 #include "chrome/browser/predictors/loading_predictor.h"
 #include "chrome/browser/predictors/loading_predictor_factory.h"
 #include "components/autofill/content/browser/content_autofill_driver_factory.h"
-#include "components/content_capture/browser/content_capture_receiver_manager.h"
+#include "components/content_capture/browser/onscreen_content_provider.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_service.h"
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_params.h"
 #include "components/metrics/call_stack_profile_collector.h"
@@ -34,7 +34,9 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/resource_context.h"
+#include "content/public/browser/service_worker_version_base_info.h"
 #include "media/mojo/buildflags.h"
+#include "mojo/public/cpp/bindings/binder_map.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
 #include "third_party/widevine/cdm/buildflags.h"
 
@@ -55,10 +57,13 @@
 #include "extensions/browser/extensions_browser_client.h"
 #endif
 
+#if BUILDFLAG(ENABLE_LIBRARY_CDMS) || defined(OS_WIN)
+#include "chrome/browser/media/cdm_document_service_impl.h"
+#endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS) || defined(OS_WIN)
+
 #if BUILDFLAG(ENABLE_LIBRARY_CDMS)
 #include "chrome/browser/media/output_protection_impl.h"
-#include "chrome/browser/media/platform_verification_impl.h"
-#endif
+#endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
 
 #if BUILDFLAG(ENABLE_MOJO_CDM) && defined(OS_ANDROID)
 #include "chrome/browser/media/android/cdm/media_drm_storage_factory.h"
@@ -72,6 +77,10 @@
 #endif
 #endif
 
+#if !defined(OS_ANDROID)
+#include "chrome/browser/badging/badge_manager.h"
+#endif
+
 namespace {
 
 // Helper method for ExposeInterfacesToRenderer() that checks the latest
@@ -82,7 +91,9 @@ void MaybeCreateSafeBrowsingForRenderer(
     content::ResourceContext* resource_context,
     base::RepeatingCallback<scoped_refptr<safe_browsing::UrlCheckerDelegate>(
         bool safe_browsing_enabled,
-        bool should_check_on_sb_disabled)> get_checker_delegate,
+        bool should_check_on_sb_disabled,
+        const std::vector<std::string>& allowlist_domains)>
+        get_checker_delegate,
     mojo::PendingReceiver<safe_browsing::mojom::SafeBrowsing> receiver) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
@@ -91,9 +102,26 @@ void MaybeCreateSafeBrowsingForRenderer(
   if (!render_process_host)
     return;
 
-  bool safe_browsing_enabled = safe_browsing::IsSafeBrowsingEnabled(
-      *Profile::FromBrowserContext(render_process_host->GetBrowserContext())
-           ->GetPrefs());
+  PrefService* pref_service =
+      Profile::FromBrowserContext(render_process_host->GetBrowserContext())
+          ->GetPrefs();
+
+  std::vector<std::string> allowlist_domains =
+      safe_browsing::GetURLAllowlistByPolicy(pref_service);
+
+  // Log the size of the domains to make sure copying them is
+  // not too expensive.
+  if (allowlist_domains.size() > 0) {
+    int total_size = 0;
+    for (const auto& domains : allowlist_domains) {
+      total_size += domains.size();
+    }
+    base::UmaHistogramCounts10000(
+        "SafeBrowsing.Policy.AllowlistDomainsTotalSize", total_size);
+  }
+
+  bool safe_browsing_enabled =
+      safe_browsing::IsSafeBrowsingEnabled(*pref_service);
   content::GetIOThreadTaskRunner({})->PostTask(
       FROM_HERE,
       base::BindOnce(
@@ -103,9 +131,27 @@ void MaybeCreateSafeBrowsingForRenderer(
                               // Navigation initiated from renderer should never
                               // check when safe browsing is disabled, because
                               // enterprise check only supports mainframe URL.
-                              /*should_check_on_sb_disabled=*/false),
+                              /*should_check_on_sb_disabled=*/false,
+                              allowlist_domains),
           std::move(receiver)));
 }
+
+// BadgeManager is not used for Android.
+#if !defined(OS_ANDROID)
+void BindBadgeServiceForServiceWorker(
+    const content::ServiceWorkerVersionBaseInfo& info,
+    mojo::PendingReceiver<blink::mojom::BadgeService> receiver) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  content::RenderProcessHost* render_process_host =
+      content::RenderProcessHost::FromID(info.process_id);
+  if (!render_process_host)
+    return;
+
+  badging::BadgeManager::BindServiceWorkerReceiver(
+      render_process_host, info.scope, std::move(receiver));
+}
+#endif
 
 }  // namespace
 
@@ -209,12 +255,14 @@ void ChromeContentBrowserClient::BindMediaServiceReceiver(
     OutputProtectionImpl::Create(render_frame_host, std::move(r));
     return;
   }
+#endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
 
-  if (auto r = receiver.As<media::mojom::PlatformVerification>()) {
-    PlatformVerificationImpl::Create(render_frame_host, std::move(r));
+#if BUILDFLAG(ENABLE_LIBRARY_CDMS) || defined(OS_WIN)
+  if (auto r = receiver.As<media::mojom::CdmDocumentService>()) {
+    CdmDocumentServiceImpl::Create(render_frame_host, std::move(r));
     return;
   }
-#endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
+#endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS) || defined(OS_WIN)
 
 #if BUILDFLAG(ENABLE_MOJO_CDM) && defined(OS_ANDROID)
   if (auto r = receiver.As<media::mojom::MediaDrmStorage>()) {
@@ -227,7 +275,7 @@ void ChromeContentBrowserClient::BindMediaServiceReceiver(
 void ChromeContentBrowserClient::RegisterBrowserInterfaceBindersForFrame(
     content::RenderFrameHost* render_frame_host,
     mojo::BinderMapWithContext<content::RenderFrameHost*>* map) {
-  chrome::internal::PopulateChromeFrameBinders(map);
+  chrome::internal::PopulateChromeFrameBinders(map, render_frame_host);
   chrome::internal::PopulateChromeWebUIFrameBinders(map);
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
@@ -245,6 +293,16 @@ void ChromeContentBrowserClient::RegisterBrowserInterfaceBindersForFrame(
   extensions::ExtensionsBrowserClient::Get()
       ->RegisterBrowserInterfaceBindersForFrame(map, render_frame_host,
                                                 extension);
+#endif
+}
+
+void ChromeContentBrowserClient::
+    RegisterBrowserInterfaceBindersForServiceWorker(
+        mojo::BinderMapWithContext<
+            const content::ServiceWorkerVersionBaseInfo&>* map) {
+#if !defined(OS_ANDROID)
+  map->Add<blink::mojom::BadgeService>(
+      base::BindRepeating(&BindBadgeServiceForServiceWorker));
 #endif
 }
 
@@ -268,7 +326,7 @@ bool ChromeContentBrowserClient::BindAssociatedReceiverFromFrame(
     return true;
   }
   if (interface_name == content_capture::mojom::ContentCaptureReceiver::Name_) {
-    content_capture::ContentCaptureReceiverManager::BindContentCaptureReceiver(
+    content_capture::OnscreenContentProvider::BindContentCaptureReceiver(
         mojo::PendingAssociatedReceiver<
             content_capture::mojom::ContentCaptureReceiver>(std::move(*handle)),
         render_frame_host);
@@ -276,16 +334,6 @@ bool ChromeContentBrowserClient::BindAssociatedReceiverFromFrame(
   }
 
   return false;
-}
-
-void ChromeContentBrowserClient::BindBadgeServiceReceiverFromServiceWorker(
-    content::RenderProcessHost* service_worker_process_host,
-    const GURL& service_worker_scope,
-    mojo::PendingReceiver<blink::mojom::BadgeService> receiver) {
-#if !defined(OS_ANDROID)
-  badging::BadgeManager::BindServiceWorkerReceiver(
-      service_worker_process_host, service_worker_scope, std::move(receiver));
-#endif
 }
 
 void ChromeContentBrowserClient::BindGpuHostReceiver(

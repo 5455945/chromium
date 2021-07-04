@@ -49,7 +49,6 @@
 #include "third_party/blink/renderer/platform/instrumentation/tracing/web_memory_allocator_dump.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/web_process_memory_dump.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/partitions.h"
-#include "third_party/blink/renderer/platform/wtf/assertions.h"
 #include "third_party/blink/renderer/platform/wtf/container_annotations.h"
 #include "third_party/blink/renderer/platform/wtf/leak_annotations.h"
 
@@ -770,21 +769,19 @@ void NormalPageArena::PromptlyFreeObjectInFreeList(HeapObjectHeader* header,
   DCHECK(!header->IsMarked());
   Address address = reinterpret_cast<Address>(header);
   NormalPage* page = static_cast<NormalPage*>(PageFromObject(header));
-  if (page->HasBeenSwept()) {
-    Address payload = header->Payload();
-    size_t payload_size = header->PayloadSize();
-    // If the page has been swept a promptly freed object may be adjacent
-    // to other free list entries. We make the object available for future
-    // allocation right away by adding it to the free list and increase the
-    // promptly_freed_size_ counter which may result in coalescing later.
-    SET_MEMORY_INACCESSIBLE(payload, payload_size);
-    CHECK_MEMORY_INACCESSIBLE(payload, payload_size);
-    AddToFreeList(address, size);
-    promptly_freed_size_ += size;
-    GetThreadState()->Heap().stats_collector()->DecreaseAllocatedObjectSize(
-        size);
-    page->DecreaseAllocatedBytes(size);
-  }
+  DCHECK(page->HasBeenSwept());
+  Address payload = header->Payload();
+  size_t payload_size = header->PayloadSize();
+  // If the page has been swept a promptly freed object may be adjacent
+  // to other free list entries. We make the object available for future
+  // allocation right away by adding it to the free list and increase the
+  // promptly_freed_size_ counter which may result in coalescing later.
+  SET_MEMORY_INACCESSIBLE(payload, payload_size);
+  CHECK_MEMORY_INACCESSIBLE(payload, payload_size);
+  AddToFreeList(address, size);
+  promptly_freed_size_ += size;
+  GetThreadState()->Heap().stats_collector()->DecreaseAllocatedObjectSize(size);
+  page->DecreaseAllocatedBytes(size);
 }
 
 bool NormalPageArena::ExpandObject(HeapObjectHeader* header, size_t new_size) {
@@ -827,7 +824,7 @@ bool NormalPageArena::ShrinkObject(HeapObjectHeader* header, size_t new_size) {
   DCHECK_GE(shrink_size, sizeof(HeapObjectHeader));
   DCHECK_GT(header->GcInfoIndex(), 0u);
   Address shrink_address = header->PayloadEnd() - shrink_size;
-  HeapObjectHeader* freed_header = new (NotNull, shrink_address)
+  HeapObjectHeader* freed_header = new (NotNullTag::kNotNull, shrink_address)
       HeapObjectHeader(shrink_size, header->GcInfoIndex());
   // Since only size has been changed, we don't need to update object starts.
   PromptlyFreeObjectInFreeList(freed_header, shrink_size);
@@ -1014,7 +1011,7 @@ Address LargeObjectArena::DoAllocateLargeObjectPage(size_t allocation_size,
   DCHECK_GT(gc_info_index, 0u);
   LargeObjectPage* large_page = new (large_page_address)
       LargeObjectPage(page_memory, this, allocation_size);
-  HeapObjectHeader* header = new (NotNull, header_address)
+  HeapObjectHeader* header = new (NotNullTag::kNotNull, header_address)
       HeapObjectHeader(kLargeObjectSizeInHeader, gc_info_index);
   Address result = header_address + sizeof(*header);
   DCHECK(!(reinterpret_cast<uintptr_t>(result) & kAllocationMask));
@@ -1108,13 +1105,13 @@ void FreeList::Add(Address address, size_t size) {
     // Create a dummy header with only a size and freelist bit set.
     DCHECK_GE(size, sizeof(HeapObjectHeader));
     // Free list encode the size to mark the lost memory as freelist memory.
-    new (NotNull, address)
+    new (NotNullTag::kNotNull, address)
         HeapObjectHeader(size, kGcInfoIndexForFreeListHeader);
     ASAN_POISON_MEMORY_REGION(address, size);
     // This memory gets lost. Sweeping can reclaim it.
     return;
   }
-  entry = new (NotNull, address) FreeListEntry(size);
+  entry = new (NotNullTag::kNotNull, address) FreeListEntry(size);
 
 #if DCHECK_IS_ON() || defined(LEAK_SANITIZER) || defined(ADDRESS_SANITIZER)
   // The following logic delays reusing free lists for (at least) one GC

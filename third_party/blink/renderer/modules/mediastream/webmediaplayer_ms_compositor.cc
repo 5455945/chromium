@@ -22,6 +22,7 @@
 #include "media/renderers/paint_canvas_video_renderer.h"
 #include "services/viz/public/cpp/gpu/context_provider_command_buffer.h"
 #include "skia/ext/platform_canvas.h"
+#include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/web_video_frame_submitter.h"
 #include "third_party/blink/public/web/modules/mediastream/webmediaplayer_ms.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_component.h"
@@ -36,8 +37,8 @@
 namespace WTF {
 
 template <typename T>
-struct CrossThreadCopier<base::Optional<T>>
-    : public CrossThreadCopierPassThrough<base::Optional<T>> {
+struct CrossThreadCopier<absl::optional<T>>
+    : public CrossThreadCopierPassThrough<absl::optional<T>> {
   STATIC_ONLY(CrossThreadCopier);
 };
 
@@ -55,6 +56,8 @@ scoped_refptr<media::VideoFrame> CopyFrame(
   if (frame->HasTextures()) {
     DCHECK(frame->format() == media::PIXEL_FORMAT_ARGB ||
            frame->format() == media::PIXEL_FORMAT_XRGB ||
+           frame->format() == media::PIXEL_FORMAT_ABGR ||
+           frame->format() == media::PIXEL_FORMAT_XBGR ||
            frame->format() == media::PIXEL_FORMAT_I420 ||
            frame->format() == media::PIXEL_FORMAT_NV12);
     auto provider = Platform::Current()->SharedMainThreadContextProvider();
@@ -460,10 +463,13 @@ void WebMediaPlayerMSCompositor::PutCurrentFrame() {
 base::TimeDelta WebMediaPlayerMSCompositor::GetPreferredRenderInterval() {
   DCHECK(video_frame_compositor_task_runner_->BelongsToCurrentThread());
   if (!rendering_frame_buffer_) {
+    DCHECK_GE(last_render_length_, base::TimeDelta());
     return last_render_length_;
-  } else {
-    return rendering_frame_buffer_->average_frame_duration();
   }
+
+  DCHECK_GE(rendering_frame_buffer_->average_frame_duration(),
+            base::TimeDelta());
+  return rendering_frame_buffer_->average_frame_duration();
 }
 
 void WebMediaPlayerMSCompositor::StartRendering() {
@@ -582,9 +588,12 @@ void WebMediaPlayerMSCompositor::RenderWithoutAlgorithmOnCompositor(
   DCHECK(video_frame_compositor_task_runner_->BelongsToCurrentThread());
   {
     base::AutoLock auto_lock(current_frame_lock_);
-    if (current_frame_)
+    // Last timestamp in the stream might not have timestamp.
+    if (current_frame_ && !frame->timestamp().is_zero() &&
+        frame->timestamp() > current_frame_->timestamp()) {
       last_render_length_ = frame->timestamp() - current_frame_->timestamp();
-    SetCurrentFrame(std::move(frame), is_copy, base::nullopt);
+    }
+    SetCurrentFrame(std::move(frame), is_copy, absl::nullopt);
   }
   if (video_frame_provider_client_)
     video_frame_provider_client_->DidReceiveFrame();
@@ -593,7 +602,7 @@ void WebMediaPlayerMSCompositor::RenderWithoutAlgorithmOnCompositor(
 void WebMediaPlayerMSCompositor::SetCurrentFrame(
     scoped_refptr<media::VideoFrame> frame,
     bool is_copy,
-    base::Optional<base::TimeTicks> expected_display_time) {
+    absl::optional<base::TimeTicks> expected_display_time) {
   DCHECK(video_frame_compositor_task_runner_->BelongsToCurrentThread());
   current_frame_lock_.AssertAcquired();
   TRACE_EVENT_INSTANT1("media", "WebMediaPlayerMSCompositor::SetCurrentFrame",
@@ -609,11 +618,11 @@ void WebMediaPlayerMSCompositor::SetCurrentFrame(
   bool is_first_frame = true;
   bool has_frame_size_changed = false;
 
-  base::Optional<media::VideoRotation> new_rotation = media::VIDEO_ROTATION_0;
+  absl::optional<media::VideoRotation> new_rotation = media::VIDEO_ROTATION_0;
   if (frame->metadata().transformation)
     new_rotation = frame->metadata().transformation->rotation;
 
-  base::Optional<bool> new_opacity;
+  absl::optional<bool> new_opacity;
   new_opacity = media::IsOpaque(frame->format());
 
   if (current_frame_) {
@@ -672,8 +681,8 @@ void WebMediaPlayerMSCompositor::SetCurrentFrame(
 void WebMediaPlayerMSCompositor::CheckForFrameChanges(
     bool is_first_frame,
     bool has_frame_size_changed,
-    base::Optional<media::VideoRotation> new_frame_rotation,
-    base::Optional<bool> new_frame_opacity) {
+    absl::optional<media::VideoRotation> new_frame_rotation,
+    absl::optional<bool> new_frame_opacity) {
   DCHECK(video_frame_compositor_task_runner_->BelongsToCurrentThread());
 
   if (is_first_frame) {

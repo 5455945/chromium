@@ -7,13 +7,14 @@
 #include <ctype.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#include <memory>
 #include <string>
 #include <utility>
 
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/macros.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -29,7 +30,6 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace metrics {
-
 namespace {
 
 // Verifies that the client id follows the expected pattern.
@@ -78,7 +78,7 @@ class MetricsStateManagerTest : public testing::Test {
   }
 
   void SetFakeClientInfoBackup(const ClientInfo& client_info) {
-    fake_client_info_backup_.reset(new ClientInfo);
+    fake_client_info_backup_ = std::make_unique<ClientInfo>();
     fake_client_info_backup_->client_id = client_info.client_id;
     fake_client_info_backup_->installation_date = client_info.installation_date;
     fake_client_info_backup_->reporting_enabled_date =
@@ -105,7 +105,7 @@ class MetricsStateManagerTest : public testing::Test {
   // Stores the |client_info| in |stored_client_info_backup_| for verification
   // by the tests later.
   void MockStoreClientInfoBackup(const ClientInfo& client_info) {
-    stored_client_info_backup_.reset(new ClientInfo);
+    stored_client_info_backup_ = std::make_unique<ClientInfo>();
     stored_client_info_backup_->client_id = client_info.client_id;
     stored_client_info_backup_->installation_date =
         client_info.installation_date;
@@ -219,6 +219,22 @@ TEST_F(MetricsStateManagerTest, ResetMetricsIDs) {
   }
 
   EXPECT_NE(kInitialClientId, prefs_.GetString(prefs::kMetricsClientID));
+}
+
+TEST_F(MetricsStateManagerTest, LogHasSessionShutdownCleanly) {
+  std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
+  prefs_.SetBoolean(prefs::kStabilityExitedCleanly, false);
+  state_manager->LogHasSessionShutdownCleanly(
+      /*has_session_shutdown_cleanly=*/true);
+  EXPECT_TRUE(prefs_.GetBoolean(prefs::kStabilityExitedCleanly));
+}
+
+TEST_F(MetricsStateManagerTest, LogSessionHasNotYetShutdownCleanly) {
+  std::unique_ptr<MetricsStateManager> state_manager(CreateStateManager());
+  ASSERT_TRUE(prefs_.GetBoolean(prefs::kStabilityExitedCleanly));
+  state_manager->LogHasSessionShutdownCleanly(
+      /*has_session_shutdown_cleanly=*/false);
+  EXPECT_FALSE(prefs_.GetBoolean(prefs::kStabilityExitedCleanly));
 }
 
 TEST_F(MetricsStateManagerTest, ForceClientIdCreation) {

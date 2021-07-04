@@ -6,6 +6,7 @@
 
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
+#include "base/strings/string_split.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/language/android/jni_headers/TranslateBridge_jni.h"
 #include "chrome/browser/language/language_model_manager_factory.h"
@@ -77,7 +78,7 @@ static void JNI_TranslateBridge_TranslateToLanguage(
   const std::string target_language_code(
       ConvertJavaStringToUTF8(env, j_target_language_code));
   const std::string& source_language_code =
-      client->GetLanguageState().original_language();
+      client->GetLanguageState().source_language();
   if (source_language_code.empty()) {
     // TODO(crbug.com/1181400): Add support for specifying a target language for
     // ManualTranslateWhenReady().
@@ -121,8 +122,7 @@ static jboolean JNI_TranslateBridge_ShouldShowManualTranslateIPH(
   translate::TranslateManager* manager = client->GetTranslateManager();
   DCHECK(manager);
 
-  const std::string page_lang =
-      manager->GetLanguageState()->original_language();
+  const std::string page_lang = manager->GetLanguageState()->source_language();
   std::unique_ptr<translate::TranslatePrefs> translate_prefs(
       client->GetTranslatePrefs());
 
@@ -149,7 +149,7 @@ static void JNI_TranslateBridge_SetPredefinedTargetLanguage(
 }
 
 static base::android::ScopedJavaLocalRef<jstring>
-JNI_TranslateBridge_GetOriginalLanguage(
+JNI_TranslateBridge_GetSourceLanguage(
     JNIEnv* env,
     const base::android::JavaParamRef<jobject>& j_web_contents) {
   content::WebContents* web_contents =
@@ -157,12 +157,12 @@ JNI_TranslateBridge_GetOriginalLanguage(
   ChromeTranslateClient* client =
       ChromeTranslateClient::FromWebContents(web_contents);
   DCHECK(client);
-  const std::string& original_language_code =
-      client->GetLanguageState().original_language();
-  DCHECK(!original_language_code.empty());
-  base::android::ScopedJavaLocalRef<jstring> j_original_language =
-      base::android::ConvertUTF8ToJavaString(env, original_language_code);
-  return j_original_language;
+  const std::string& source_language_code =
+      client->GetLanguageState().source_language();
+  DCHECK(!source_language_code.empty());
+  base::android::ScopedJavaLocalRef<jstring> j_source_language =
+      base::android::ConvertUTF8ToJavaString(env, source_language_code);
+  return j_source_language;
 }
 
 static base::android::ScopedJavaLocalRef<jstring>
@@ -254,6 +254,34 @@ static void JNI_TranslateBridge_GetAlwaysTranslateLanguages(
                            translate_prefs->GetAlwaysTranslateLanguages()));
 }
 
+// Gets all languages for which translation should not be prompted.
+static void JNI_TranslateBridge_GetNeverTranslateLanguages(
+    JNIEnv* env,
+    const base::android::JavaParamRef<jobject>& list) {
+  std::unique_ptr<translate::TranslatePrefs> translate_prefs =
+      ChromeTranslateClient::CreateTranslatePrefs(GetPrefService());
+
+  Java_TranslateBridge_copyStringArrayToList(
+      env, list,
+      ToJavaArrayOfStrings(env, translate_prefs->GetNeverTranslateLanguages()));
+}
+
+// Sets the always translate state for a language.
+// The always translate language list is actually a dict mapping
+// source_language -> target_language.  We use the current target language when
+// adding |language| to the dict.
+static void JNI_TranslateBridge_SetLanguageAlwaysTranslateState(
+    JNIEnv* env,
+    const JavaParamRef<jstring>& language,
+    jboolean alwaysTranslate) {
+  std::string language_code(ConvertJavaStringToUTF8(env, language));
+  std::unique_ptr<translate::TranslatePrefs> translate_prefs =
+      ChromeTranslateClient::CreateTranslatePrefs(GetPrefService());
+
+  translate_prefs->SetLanguageAlwaysTranslateState(language_code,
+                                                   alwaysTranslate);
+}
+
 // static
 // Input |locales| is a comma separated locale representation that consists of
 // language tags (BCP47 compliant format). Each language tag contains a language
@@ -337,7 +365,7 @@ static void JNI_TranslateBridge_ResetAcceptLanguages(
 
   TranslateBridge::PrependToAcceptLanguagesIfNecessary(locale_string,
                                                        &accept_languages);
-  GetPrefService()->SetString(language::prefs::kAcceptLanguages,
+  GetPrefService()->SetString(language::prefs::kSelectedLanguages,
                               accept_languages);
 }
 
@@ -352,20 +380,12 @@ static void JNI_TranslateBridge_GetChromeAcceptLanguages(
   translate_prefs->GetLanguageInfoList(
       app_locale, translate_prefs->IsTranslateAllowedByPolicy(), &languages);
 
-  language::ToTranslateLanguageSynonym(&app_locale);
   for (const auto& info : languages) {
-    // If the language comes from the same language family as the app locale,
-    // translate for this language won't be supported on this device.
-    std::string lang_code = info.code;
-    language::ToTranslateLanguageSynonym(&lang_code);
-    bool supports_translate =
-        info.supports_translate && lang_code != app_locale;
-
     Java_TranslateBridge_addNewLanguageItemToList(
         env, list, ConvertUTF8ToJavaString(env, info.code),
         ConvertUTF8ToJavaString(env, info.display_name),
         ConvertUTF8ToJavaString(env, info.native_display_name),
-        supports_translate);
+        info.supports_translate);
   }
 }
 
@@ -463,6 +483,18 @@ static void JNI_TranslateBridge_SetExplicitLanguageAskPromptShown(
   std::unique_ptr<translate::TranslatePrefs> translate_prefs =
       ChromeTranslateClient::CreateTranslatePrefs(GetPrefService());
   translate_prefs->SetExplicitLanguageAskPromptShown(shown);
+}
+
+static jboolean JNI_TranslateBridge_GetAppLanguagePromptShown(JNIEnv* env) {
+  std::unique_ptr<translate::TranslatePrefs> translate_prefs =
+      ChromeTranslateClient::CreateTranslatePrefs(GetPrefService());
+  return translate_prefs->GetAppLanguagePromptShown();
+}
+
+static void JNI_TranslateBridge_SetAppLanguagePromptShown(JNIEnv* env) {
+  std::unique_ptr<translate::TranslatePrefs> translate_prefs =
+      ChromeTranslateClient::CreateTranslatePrefs(GetPrefService());
+  translate_prefs->SetAppLanguagePromptShown();
 }
 
 static void JNI_TranslateBridge_SetIgnoreMissingKeyForTesting(  // IN-TEST

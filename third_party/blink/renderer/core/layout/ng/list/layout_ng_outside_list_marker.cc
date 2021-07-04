@@ -4,6 +4,8 @@
 
 #include "third_party/blink/renderer/core/layout/ng/list/layout_ng_outside_list_marker.h"
 
+#include "third_party/blink/renderer/core/editing/position_with_affinity.h"
+#include "third_party/blink/renderer/core/html/html_ulist_element.h"
 #include "third_party/blink/renderer/core/layout/layout_text.h"
 
 namespace blink {
@@ -20,6 +22,13 @@ bool LayoutNGOutsideListMarker::IsOfType(LayoutObjectType type) const {
 
 void LayoutNGOutsideListMarker::WillCollectInlines() {
   list_marker_.UpdateMarkerTextIfNeeded(*this);
+}
+
+LayoutBox::PaginationBreakability
+LayoutNGOutsideListMarker::GetPaginationBreakability(
+    FragmentationEngine engine) const {
+  // Outside list markers are always monolithic.
+  return kForbidBreaks;
 }
 
 bool LayoutNGOutsideListMarker::NeedsOccupyWholeLine() const {

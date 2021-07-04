@@ -4,6 +4,8 @@
 
 #include "chrome/browser/renderer_context_menu/accessibility_labels_menu_observer.h"
 
+#include <memory>
+
 #include "base/macros.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
@@ -45,8 +47,8 @@ class AccessibilityLabelsMenuObserverTest : public InProcessBrowserTest {
 
   void Reset(bool incognito) {
     observer_.reset();
-    menu_.reset(new MockRenderViewContextMenu(incognito));
-    observer_.reset(new AccessibilityLabelsMenuObserver(menu_.get()));
+    menu_ = std::make_unique<MockRenderViewContextMenu>(incognito);
+    observer_ = std::make_unique<AccessibilityLabelsMenuObserver>(menu_.get());
     menu_->SetObserver(observer_.get());
   }
 
@@ -93,7 +95,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityLabelsMenuObserverTest,
   ash::AccessibilityManager::Get()->EnableSpokenFeedback(true);
 #else
   // Spoof a screen reader.
-  content::BrowserAccessibilityState::GetInstance()->AddAccessibilityModeFlags(
+  content::testing::ScopedContentAXModeSetter scoped_accessibility_mode(
       ui::AXMode::kScreenReader);
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
   menu()->GetPrefs()->SetBoolean(prefs::kAccessibilityImageLabelsEnabled,

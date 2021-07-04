@@ -5,6 +5,8 @@
 #include "third_party/blink/renderer/modules/webcodecs/encoded_video_chunk.h"
 
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_typedefs.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_union_arraybuffer_arraybufferview.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_encoded_video_chunk_init.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
@@ -14,10 +16,9 @@ namespace {
 
 class EncodedVideoChunkTest : public testing::Test {
  public:
-  ArrayBufferOrArrayBufferView StringToBuffer(std::string data) {
-    ArrayBufferOrArrayBufferView result;
-    result.SetArrayBuffer(DOMArrayBuffer::Create(data.data(), data.size()));
-    return result;
+  V8BufferSource* StringToBuffer(std::string data) {
+    return MakeGarbageCollected<V8BufferSource>(
+        DOMArrayBuffer::Create(data.data(), data.size()));
   }
 
   std::string BufferToString(DOMArrayBuffer* buffer) {
@@ -28,7 +29,7 @@ class EncodedVideoChunkTest : public testing::Test {
 
 TEST_F(EncodedVideoChunkTest, ConstructorAndAttributes) {
   String type = "key";
-  uint64_t timestamp = 1000000;
+  int64_t timestamp = 1000000;
   std::string data = "test";
   auto* init = EncodedVideoChunkInit::Create();
   init->setTimestamp(timestamp);
@@ -44,7 +45,7 @@ TEST_F(EncodedVideoChunkTest, ConstructorAndAttributes) {
 
 TEST_F(EncodedVideoChunkTest, ConstructorWithDuration) {
   String type = "key";
-  uint64_t timestamp = 1000000;
+  int64_t timestamp = 1000000;
   uint64_t duration = 16667;
   std::string data = "test";
   auto* init = EncodedVideoChunkInit::Create();

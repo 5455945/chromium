@@ -8,10 +8,10 @@
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
 #include "ui/base/ime/candidate_window.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/chromeos/ui_chromeos_export.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/label.h"
-#include "ui/views/metadata/metadata_header_macros.h"
 #include "ui/views/metadata/view_factory.h"
 #include "ui/views/view.h"
 
@@ -53,6 +53,7 @@ class UI_CHROMEOS_EXPORT CandidateView : public views::Button {
   void Layout() override;
   gfx::Size CalculatePreferredSize() const override;
   void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
+  void OnThemeChanged() override;
 
   // The orientation of the candidate view.
   ui::CandidateWindow::Orientation orientation_;

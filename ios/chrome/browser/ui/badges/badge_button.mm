@@ -104,9 +104,16 @@ const CGFloat kButtonCircularCornerRadiusDivisor = 2.0;
     case BadgeType::kBadgeTypeSaveCard:
       return accepted ? kBadgeButtonSaveCardAcceptedAccessibilityIdentifier
                       : kBadgeButtonSaveCardAccessibilityIdentifier;
+    case BadgeType::kBadgeTypeSaveAddressProfile:
+      return accepted
+                 ? kBadgeButtonSaveAddressProfileAcceptedAccessibilityIdentifier
+                 : kBadgeButtonSaveAddressProfileAccessibilityIdentifier;
     case BadgeType::kBadgeTypeTranslate:
       return accepted ? kBadgeButtonTranslateAcceptedAccessibilityIdentifier
                       : kBadgeButtonTranslateAccessibilityIdentifier;
+    case BadgeType::kBadgeTypeAddToReadingList:
+      return accepted ? kBadgeButtonReadingListAcceptedAccessibilityIdentifier
+                      : kBadgeButtonReadingListAccessibilityIdentifier;
   }
 }
 

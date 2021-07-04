@@ -15,7 +15,6 @@
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/history/history_service_factory.h"
-#include "chrome/browser/history/history_tab_helper.h"
 #include "chrome/browser/history/history_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
@@ -80,10 +79,10 @@ class HistoryBrowserTest : public InProcessBrowserTest {
   }
 
   void LoadAndWaitForURL(const GURL& url) {
-    base::string16 expected_title(base::ASCIIToUTF16("OK"));
+    std::u16string expected_title(u"OK");
     content::TitleWatcher title_watcher(
         browser()->tab_strip_model()->GetActiveWebContents(), expected_title);
-    title_watcher.AlsoWaitForTitle(base::ASCIIToUTF16("FAIL"));
+    title_watcher.AlsoWaitForTitle(u"FAIL");
     ui_test_utils::NavigateToURL(browser(), url);
     EXPECT_EQ(expected_title, title_watcher.WaitAndGetTitle());
   }
@@ -116,12 +115,6 @@ class HistoryBrowserTest : public InProcessBrowserTest {
     run_loop.Run();
 
     return query_url_result;
-  }
-
-  void NavigateToUrlAsTypeLink(const GURL& url) {
-    NavigateParams params(browser(), url,
-                          ui::PageTransition::PAGE_TRANSITION_LINK);
-    ui_test_utils::NavigateToURL(&params);
   }
 
  private:
@@ -210,87 +203,6 @@ IN_PROC_BROWSER_TEST_F(HistoryBrowserTest, SavingHistoryEnabledThenDisabled) {
     std::vector<GURL> urls(GetHistoryContents());
     ASSERT_EQ(1U, urls.size());
     EXPECT_EQ(GetTestUrl().spec(), urls[0].spec());
-  }
-}
-
-IN_PROC_BROWSER_TEST_F(HistoryBrowserTest, SetHideAllNavigations) {
-  ui_test_utils::WaitForHistoryToLoad(HistoryServiceFactory::GetForProfile(
-      browser()->profile(), ServiceAccessType::EXPLICIT_ACCESS));
-  ExpectEmptyHistory();
-
-  HistoryTabHelper::FromWebContents(
-      browser()->tab_strip_model()->GetActiveWebContents())
-      ->set_hide_all_navigations(true);
-  NavigateToUrlAsTypeLink(GetTestUrl());
-  WaitForHistoryBackendToRun(GetProfile());
-
-  {
-    auto result = QueryURL(GetTestUrl());
-    ASSERT_TRUE(result.success);
-    EXPECT_TRUE(result.row.hidden());
-    EXPECT_EQ(0, result.row.typed_count());
-    EXPECT_EQ(1, result.row.visit_count());
-    ASSERT_EQ(1u, result.visits.size());
-    EXPECT_FALSE(result.visits[0].incremented_omnibox_typed_score);
-  }
-
-  GURL url2 = ui_test_utils::GetTestUrl(
-      base::FilePath(), base::FilePath(FILE_PATH_LITERAL("simple.html")));
-  NavigateToUrlAsTypeLink(url2);
-  WaitForHistoryBackendToRun(GetProfile());
-
-  {
-    auto result = QueryURL(url2);
-    ASSERT_TRUE(result.success);
-    EXPECT_TRUE(result.row.hidden());
-    EXPECT_EQ(0, result.row.typed_count());
-    EXPECT_EQ(1, result.row.visit_count());
-    ASSERT_EQ(1u, result.visits.size());
-    EXPECT_FALSE(result.visits[0].incremented_omnibox_typed_score);
-  }
-
-  HistoryTabHelper::FromWebContents(
-      browser()->tab_strip_model()->GetActiveWebContents())
-      ->set_hide_all_navigations(false);
-  NavigateToUrlAsTypeLink(GetTestUrl());
-  WaitForHistoryBackendToRun(GetProfile());
-
-  {
-    auto result = QueryURL(GetTestUrl());
-    ASSERT_TRUE(result.success);
-    EXPECT_FALSE(result.row.hidden());
-    EXPECT_EQ(2, result.row.visit_count());
-    ASSERT_EQ(2u, result.visits.size());
-    EXPECT_FALSE(result.visits[0].incremented_omnibox_typed_score);
-    EXPECT_FALSE(result.visits[1].incremented_omnibox_typed_score);
-  }
-}
-
-IN_PROC_BROWSER_TEST_F(HistoryBrowserTest,
-                       SetHideAllNavigationsDoesntAddApi3ForTypedNavigation) {
-  ui_test_utils::WaitForHistoryToLoad(HistoryServiceFactory::GetForProfile(
-      browser()->profile(), ServiceAccessType::EXPLICIT_ACCESS));
-  ExpectEmptyHistory();
-
-  HistoryTabHelper::FromWebContents(
-      browser()->tab_strip_model()->GetActiveWebContents())
-      ->set_hide_all_navigations(true);
-  // This navigates with a TYPED navigation.
-  ui_test_utils::NavigateToURL(browser(), GetTestUrl());
-  WaitForHistoryBackendToRun(GetProfile());
-
-  {
-    auto result = QueryURL(GetTestUrl());
-    ASSERT_TRUE(result.success);
-    EXPECT_FALSE(result.row.hidden());
-    EXPECT_EQ(1, result.row.typed_count());
-    EXPECT_EQ(1, result.row.visit_count());
-    ASSERT_EQ(1u, result.visits.size());
-    EXPECT_TRUE(result.visits[0].incremented_omnibox_typed_score);
-    // As the transition was TYPED, set_hide_all_navigations() was ignored and
-    // PAGE_TRANSITION_FROM_API_3 should not be added.
-    EXPECT_TRUE((ui::PageTransitionGetQualifier(result.visits[0].transition) &
-                 ui::PAGE_TRANSITION_FROM_API_3) == 0);
   }
 }
 
@@ -395,11 +307,10 @@ IN_PROC_BROWSER_TEST_F(HistoryBrowserTest, DISABLED_HistorySearchXSS) {
   // so that we're not susceptible (less susceptible?) to a race condition.
   // Should a race condition ever trigger, it won't result in flakiness.
   int num = ui_test_utils::FindInPage(
-      browser()->tab_strip_model()->GetActiveWebContents(),
-      base::ASCIIToUTF16("<img"), true,
-      true, NULL, NULL);
+      browser()->tab_strip_model()->GetActiveWebContents(), u"<img", true, true,
+      NULL, NULL);
   EXPECT_GT(num, 0);
-  EXPECT_EQ(base::ASCIIToUTF16("History"),
+  EXPECT_EQ(u"History",
             browser()->tab_strip_model()->GetActiveWebContents()->GetTitle());
 }
 
@@ -499,14 +410,15 @@ IN_PROC_BROWSER_TEST_F(HistoryBrowserTest, DownloadNoHistory) {
 
 IN_PROC_BROWSER_TEST_F(HistoryBrowserTest, HistoryRemovalRemovesTemplateURL) {
   constexpr char origin[] = "foo.com";
+  constexpr char16_t origin16[] = u"foo.com";
 
   ASSERT_TRUE(embedded_test_server()->Start());
   GURL url(embedded_test_server()->GetURL(origin, "/title3.html"));
 
   // Creating keyword shortcut manually.
   TemplateURLData data;
-  data.SetShortName(base::ASCIIToUTF16(origin));
-  data.SetKeyword(base::ASCIIToUTF16("keyword"));
+  data.SetShortName(origin16);
+  data.SetKeyword(u"keyword");
   data.SetURL(url.spec());
   data.safe_for_autoreplace = true;
 
@@ -741,7 +653,7 @@ IN_PROC_BROWSER_TEST_F(HistoryBrowserTest, PushStateSetsTitle) {
   ui_test_utils::NavigateToURL(browser(), url);
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
-  base::string16 title = web_contents->GetTitle();
+  std::u16string title = web_contents->GetTitle();
 
   // Do a pushState to create a new navigation entry and a new history entry.
   ASSERT_TRUE(content::ExecuteScript(web_contents,
@@ -770,7 +682,7 @@ IN_PROC_BROWSER_TEST_F(HistoryBrowserTest, BeforeUnloadCommitDuringPending) {
   ui_test_utils::NavigateToURL(browser(), url1);
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
-  base::string16 title1 = web_contents->GetTitle();
+  std::u16string title1 = web_contents->GetTitle();
 
   // Create a beforeunload handler that does a replaceState during navigation,
   // unrelated to the destination URL (similar to Twitter).
@@ -802,7 +714,7 @@ IN_PROC_BROWSER_TEST_F(HistoryBrowserTest, BeforeUnloadCommitDuringPending) {
   // should be another row with the new URL and title.
   manager.WaitForNavigationFinished();
   EXPECT_TRUE(content::WaitForLoadStop(web_contents));
-  base::string16 title3 = web_contents->GetTitle();
+  std::u16string title3 = web_contents->GetTitle();
   EXPECT_NE(title1, title3);
   {
     std::vector<GURL> urls(GetHistoryContents());
@@ -833,7 +745,7 @@ IN_PROC_BROWSER_TEST_F(HistoryBrowserTest, SubmitFormAddsTargetPage) {
 
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
-  base::string16 expected_title(base::ASCIIToUTF16("Target Page"));
+  std::u16string expected_title(u"Target Page");
   content::TitleWatcher title_watcher(
       browser()->tab_strip_model()->GetActiveWebContents(), expected_title);
   ASSERT_TRUE(content::ExecuteScript(
@@ -855,7 +767,7 @@ IN_PROC_BROWSER_TEST_F(HistoryBrowserTest, OneHistoryTabPerWindow) {
   // 'Loading...' for a brief time while the history page loads.
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
-  base::string16 expected_title(base::ASCIIToUTF16("History"));
+  std::u16string expected_title(u"History");
   content::TitleWatcher title_watcher(web_contents, expected_title);
   chrome::ExecuteCommand(browser(), IDC_SHOW_HISTORY);
   EXPECT_EQ(expected_title, title_watcher.WaitAndGetTitle());

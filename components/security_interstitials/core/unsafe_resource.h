@@ -10,8 +10,8 @@
 #include "base/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/single_thread_task_runner.h"
+#include "components/safe_browsing/core/browser/db/hit_report.h"
 #include "components/safe_browsing/core/common/safebrowsing_constants.h"
-#include "components/safe_browsing/core/db/hit_report.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
 #include "url/gurl.h"
 
@@ -48,6 +48,11 @@ struct UnsafeResource {
   // be blocking, eg. client side detection happens after the load is
   // committed.
   bool IsMainPageLoadBlocked() const;
+
+  // Checks if |callback| is not null and posts it to |callback_thread|.
+  void DispatchCallback(const base::Location& from_here,
+                        bool proceed,
+                        bool showed_interstitial) const;
 
   GURL url;
   GURL original_url;

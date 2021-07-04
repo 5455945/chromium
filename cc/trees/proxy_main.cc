@@ -145,6 +145,9 @@ void ProxyMain::BeginMainFrame(
   layer_tree_host_->ImageDecodesFinished(
       std::move(begin_main_frame_state->completed_image_decode_requests));
 
+  layer_tree_host_->NotifyTransitionRequestsFinished(std::move(
+      begin_main_frame_state->finished_transition_request_sequence_ids));
+
   // Visibility check needs to happen before setting
   // max_requested_pipeline_stage_. Otherwise a requested commit could get lost
   // after tab becomes visible again.
@@ -472,6 +475,15 @@ void ProxyMain::SetNeedsRedraw(const gfx::Rect& damage_rect) {
 void ProxyMain::SetNextCommitWaitsForActivation() {
   DCHECK(IsMainThread());
   commit_waits_for_activation_ = true;
+}
+
+void ProxyMain::SetTargetLocalSurfaceId(
+    const viz::LocalSurfaceId& target_local_surface_id) {
+  DCHECK(IsMainThread());
+  ImplThreadTaskRunner()->PostTask(
+      FROM_HERE, base::BindOnce(&ProxyImpl::SetTargetLocalSurfaceIdOnImpl,
+                                base::Unretained(proxy_impl_.get()),
+                                target_local_surface_id));
 }
 
 bool ProxyMain::RequestedAnimatePending() {

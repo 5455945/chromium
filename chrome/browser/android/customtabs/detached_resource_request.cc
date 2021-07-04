@@ -133,7 +133,6 @@ DetachedResourceRequest::DetachedResourceRequest(
   resource_request->resource_type =
       static_cast<int>(blink::mojom::ResourceType::kSubResource);
   resource_request->do_not_prompt_for_login = true;
-  resource_request->render_frame_id = -1;
   resource_request->enable_load_timing = false;
   resource_request->report_raw_headers = false;
 
@@ -146,8 +145,7 @@ void DetachedResourceRequest::Start(
     std::unique_ptr<DetachedResourceRequest> request,
     content::BrowserContext* browser_context) {
   request->start_time_ = base::TimeTicks::Now();
-  auto* storage_partition =
-      content::BrowserContext::GetStoragePartition(browser_context, nullptr);
+  auto* storage_partition = browser_context->GetStoragePartition(nullptr);
 
   request->url_loader_->SetOnRedirectCallback(
       base::BindRepeating(&DetachedResourceRequest::OnRedirectCallback,

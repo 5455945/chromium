@@ -13,6 +13,7 @@
 #include "ash/system/unified/unified_system_tray.h"
 #include "ash/system/unified/unified_system_tray_bubble.h"
 #include "ash/system/unified/unified_system_tray_view.h"
+#include "base/bind.h"
 
 namespace ash {
 
@@ -104,9 +105,9 @@ void PrivacyScreenToastController::OnMouseExitedView() {
   mouse_hovered_ = false;
 }
 
-base::string16 PrivacyScreenToastController::GetAccessibleNameForBubble() {
+std::u16string PrivacyScreenToastController::GetAccessibleNameForBubble() {
   if (!toast_view_)
-    return base::string16();
+    return std::u16string();
   return toast_view_->GetAccessibleName();
 }
 

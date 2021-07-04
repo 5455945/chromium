@@ -5,8 +5,9 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_PAINT_PAINT_PROPERTY_TREE_BUILDER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_PAINT_PAINT_PROPERTY_TREE_BUILDER_H_
 
+#include "base/dcheck_is_on.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/optional.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/renderer/core/layout/geometry/physical_rect.h"
 #include "third_party/blink/renderer/platform/graphics/paint/clip_paint_property_node.h"
 #include "third_party/blink/renderer/platform/graphics/paint/effect_paint_property_node.h"
@@ -28,7 +29,7 @@ class VisualViewport;
 // It's responsible for bookkeeping tree state in other order, for example, the
 // most recent position container seen.
 struct PaintPropertyTreeBuilderFragmentContext {
-  USING_FAST_MALLOC(PaintPropertyTreeBuilderFragmentContext);
+  DISALLOW_NEW();
 
  public:
   // Initializes all property tree nodes to the roots.
@@ -37,6 +38,9 @@ struct PaintPropertyTreeBuilderFragmentContext {
   // State that propagates on the containing block chain (and so is adjusted
   // when an absolute or fixed position object is encountered).
   struct ContainingBlockContext {
+    DISALLOW_NEW();
+
+   public:
     // The combination of a transform and paint offset describes a linear space.
     // When a layout object recur to its children, the main context is expected
     // to refer the object's border box, then the callee will derive its own
@@ -64,6 +68,10 @@ struct PaintPropertyTreeBuilderFragmentContext {
     // This field is the diff between the new and the old additional offsets to
     // layout shift root.
     PhysicalOffset additional_offset_to_layout_shift_root_delta;
+
+    // Similar to additional_offset_to_layout_shift_root_delta but for scroll
+    // offsets.
+    FloatSize scroll_offset_to_layout_shift_root_delta;
 
     // For paint invalidation optimization for subpixel movement under
     // composited layer. It's reset to zero if subpixel can't be propagated
@@ -102,6 +110,8 @@ struct PaintPropertyTreeBuilderFragmentContext {
     // reference a scroll offset transform, scroll nodes should be updated if
     // the transform tree changes.
     const ScrollPaintPropertyNode* scroll = nullptr;
+
+    FloatSize pending_scroll_anchor_adjustment;
   };
 
   ContainingBlockContext current;
@@ -133,7 +143,7 @@ struct PaintPropertyTreeBuilderFragmentContext {
 
   // If the object is a flow thread, this records the clip rect for this
   // fragment.
-  base::Optional<PhysicalRect> fragment_clip;
+  absl::optional<PhysicalRect> fragment_clip;
 
   // If the object is fragmented, this records the logical top of this fragment
   // in the flow thread.
@@ -154,14 +164,16 @@ struct PaintPropertyTreeBuilderFragmentContext {
 
   // The delta between the old and new accumulated offsets of 2d translation
   // transforms to the layout shift root.
-  PhysicalOffset translation_2d_to_layout_shift_root_delta;
+  FloatSize translation_2d_to_layout_shift_root_delta;
 };
 
-struct PaintPropertyTreeBuilderContext {
-  DISALLOW_NEW();
+struct PaintPropertyTreeBuilderContext final {
+  STACK_ALLOCATED();
 
  public:
   PaintPropertyTreeBuilderContext();
+  PaintPropertyTreeBuilderContext(const PaintPropertyTreeBuilderContext&) =
+      default;
 
   Vector<PaintPropertyTreeBuilderFragmentContext, 1> fragments;
 
@@ -285,6 +297,9 @@ class PaintPropertyTreeBuilder {
   // Returns whether any paint property of the object has changed.
   PaintPropertyChangeType UpdateForChildren();
 
+  static bool NeedsTransform(const LayoutObject& object,
+                             CompositingReasons direct_compositing_reasons);
+
  private:
   ALWAYS_INLINE void InitFragmentPaintProperties(
       FragmentData&,
@@ -302,7 +317,7 @@ class PaintPropertyTreeBuilder {
   ALWAYS_INLINE bool ObjectTypeMightNeedPaintProperties() const;
   ALWAYS_INLINE void UpdateCompositedLayerPaginationOffset();
   ALWAYS_INLINE PaintPropertyTreeBuilderFragmentContext
-  ContextForFragment(const base::Optional<PhysicalRect>& fragment_clip,
+  ContextForFragment(const absl::optional<PhysicalRect>& fragment_clip,
                      LayoutUnit logical_top_in_flow_thread) const;
   ALWAYS_INLINE void CreateFragmentContextsInFlowThread(
       bool needs_paint_properties);

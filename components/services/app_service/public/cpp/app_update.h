@@ -133,6 +133,12 @@ class COMPONENT_EXPORT(APP_UPDATE) AppUpdate {
   std::vector<apps::mojom::IntentFilterPtr> IntentFilters() const;
   bool IntentFiltersChanged() const;
 
+  apps::mojom::OptionalBool ResizeLocked() const;
+  bool ResizeLockedChanged() const;
+
+  apps::mojom::WindowMode WindowMode() const;
+  bool WindowModeChanged() const;
+
   const ::AccountId& AccountId() const;
 
  private:

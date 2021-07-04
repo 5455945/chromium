@@ -12,6 +12,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/sequenced_task_runner.h"
 #include "remoting/client/notification/notification_client.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace remoting {
 
@@ -27,7 +28,7 @@ class JniNotificationPresenter final {
   void Destroy(JNIEnv* env);
 
  private:
-  void OnNotificationFetched(base::Optional<NotificationMessage> notification);
+  void OnNotificationFetched(absl::optional<NotificationMessage> notification);
 
   JavaObjectWeakGlobalRef java_presenter_;
   NotificationClient notification_client_;

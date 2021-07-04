@@ -11,7 +11,13 @@
 
 #include "base/macros.h"
 #include "components/services/app_service/public/mojom/types.mojom.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
+
+namespace base {
+class DictionaryValue;
+class Value;
+}  // namespace base
 
 namespace apps_util {
 
@@ -49,6 +55,11 @@ apps::mojom::IntentPtr CreateShareIntentFromDriveFile(
 apps::mojom::IntentPtr CreateShareIntentFromText(
     const std::string& share_text,
     const std::string& share_title);
+
+// Create an intent struct from activity and start type.
+apps::mojom::IntentPtr CreateIntentForActivity(const std::string& activity,
+                                               const std::string& start_type,
+                                               const std::string& category);
 
 // Return true if |value| matches with the |condition_value|, based on the
 // pattern match type in the |condition_value|.
@@ -97,18 +108,25 @@ base::Value ConvertIntentToValue(const apps::mojom::IntentPtr& intent);
 
 // Gets the string value from base::DictionaryValue, e.g. { "key": "value" }
 // returns "value".
-base::Optional<std::string> GetStringValueFromDict(
+absl::optional<std::string> GetStringValueFromDict(
+    const base::DictionaryValue& dict,
+    const std::string& key_name);
+
+// Gets the apps::mojom::OptionalBool value from base::DictionaryValue, e.g. {
+// "key": "value" } returns "value".
+apps::mojom::OptionalBool GetBoolValueFromDict(
     const base::DictionaryValue& dict,
     const std::string& key_name);
 
 // Gets GURL from base::DictionaryValue, e.g. { "url": "abc.com" } returns
 // "abc.com".
-base::Optional<GURL> GetGurlValueFromDict(const base::DictionaryValue& dict,
+absl::optional<GURL> GetGurlValueFromDict(const base::DictionaryValue& dict,
                                           const std::string& key_name);
 
-// Gets std::vector<::GURL> from base::DictionaryValue, e.g. { "file_urls":
-// "/abc, /a" } returns std::vector<::GURL>{"/abc, /a"}.
-base::Optional<std::vector<::GURL>> GetFileUrlsFromDict(
+// Gets std::vector<IntentFilePtr> from base::DictionaryValue, e.g. {
+// "file_urls": "/abc, /a" } returns
+// std::vector<apps::mojom::IntentFilePtr>{"/abc", "/a"}.
+absl::optional<std::vector<apps::mojom::IntentFilePtr>> GetFilesFromDict(
     const base::DictionaryValue& dict,
     const std::string& key_name);
 

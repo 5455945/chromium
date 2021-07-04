@@ -4,11 +4,11 @@
 
 #include "chrome/browser/ui/views/policy/enterprise_startup_dialog_view.h"
 
+#include <string>
 #include <utility>
 
 #include "base/bind.h"
 #include "base/i18n/message_formatter.h"
-#include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/branding_buildflags.h"
@@ -19,6 +19,7 @@
 #include "chrome/grit/theme_resources.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/paint_vector_icon.h"
@@ -30,7 +31,6 @@
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/throbber.h"
 #include "ui/views/layout/grid_layout.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 
 #if defined(OS_MAC)
 #include "base/task/current_thread.h"
@@ -52,16 +52,15 @@ constexpr int kLogoHeight = 20;  // The height of Chrome enterprise logo.
 
 gfx::Insets GetDialogInsets() {
   return ChromeLayoutProvider::Get()->GetDialogInsetsForContentType(
-      views::CONTROL, views::TEXT);
+      views::DialogContentType::kControl, views::DialogContentType::kText);
 }
 
-std::unique_ptr<views::Label> CreateText(const base::string16& message) {
-  auto text = std::make_unique<views::Label>(message);
+std::unique_ptr<views::Label> CreateText(const std::u16string& message) {
+  auto text = std::make_unique<views::Label>(
+      message, views::style::CONTEXT_DIALOG_BODY_TEXT,
+      views::style::STYLE_PRIMARY);
   text->SetFontList(gfx::FontList().Derive(kFontSizeDelta, gfx::Font::NORMAL,
                                            gfx::Font::Weight::MEDIUM));
-  text->SetEnabledColor(
-      views::style::GetColor(*text, views::style::CONTEXT_DIALOG_BODY_TEXT,
-                             views::style::STYLE_PRIMARY));
   text->SetLineHeight(kLineHeight);
   return text;
 }
@@ -118,7 +117,7 @@ EnterpriseStartupDialogView::EnterpriseStartupDialogView(
 EnterpriseStartupDialogView::~EnterpriseStartupDialogView() {}
 
 void EnterpriseStartupDialogView::DisplayLaunchingInformationWithThrobber(
-    const base::string16& information) {
+    const std::u16string& information) {
   ResetDialog(false);
 
   std::unique_ptr<views::Label> text = CreateText(information);
@@ -131,8 +130,8 @@ void EnterpriseStartupDialogView::DisplayLaunchingInformationWithThrobber(
 }
 
 void EnterpriseStartupDialogView::DisplayErrorMessage(
-    const base::string16& error_message,
-    const base::Optional<base::string16>& accept_button) {
+    const std::u16string& error_message,
+    const absl::optional<std::u16string>& accept_button) {
   ResetDialog(accept_button.has_value());
   std::unique_ptr<views::Label> text = CreateText(error_message);
   auto error_icon = std::make_unique<views::ImageView>();
@@ -257,14 +256,14 @@ EnterpriseStartupDialogImpl::~EnterpriseStartupDialogImpl() {
 }
 
 void EnterpriseStartupDialogImpl::DisplayLaunchingInformationWithThrobber(
-    const base::string16& information) {
+    const std::u16string& information) {
   if (dialog_view_)
     dialog_view_->DisplayLaunchingInformationWithThrobber(information);
 }
 
 void EnterpriseStartupDialogImpl::DisplayErrorMessage(
-    const base::string16& error_message,
-    const base::Optional<base::string16>& accept_button) {
+    const std::u16string& error_message,
+    const absl::optional<std::u16string>& accept_button) {
   if (dialog_view_)
     dialog_view_->DisplayErrorMessage(error_message, accept_button);
 }

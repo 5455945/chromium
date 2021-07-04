@@ -28,28 +28,35 @@ class BrowserTabStripModelDelegate : public TabStripModelDelegate {
   void AddTabAt(const GURL& url,
                 int index,
                 bool foreground,
-                base::Optional<tab_groups::TabGroupId> group) override;
+                absl::optional<tab_groups::TabGroupId> group) override;
   Browser* CreateNewStripWithContents(std::vector<NewStripContents> contentses,
                                       const gfx::Rect& window_bounds,
                                       bool maximize) override;
   void WillAddWebContents(content::WebContents* contents) override;
   int GetDragActions() const override;
   bool CanDuplicateContentsAt(int index) override;
+  bool IsTabStripEditable() override;
   void DuplicateContentsAt(int index) override;
   void MoveToExistingWindow(const std::vector<int>& indices,
                             int browser_index) override;
-  std::vector<base::string16> GetExistingWindowsForMoveMenu() override;
+  std::vector<std::u16string> GetExistingWindowsForMoveMenu() override;
   bool CanMoveTabsToWindow(const std::vector<int>& indices) override;
   void MoveTabsToNewWindow(const std::vector<int>& indices) override;
   void MoveGroupToNewWindow(const tab_groups::TabGroupId& group) override;
-  base::Optional<SessionID> CreateHistoricalTab(
+  absl::optional<SessionID> CreateHistoricalTab(
       content::WebContents* contents) override;
+  void CreateHistoricalGroup(const tab_groups::TabGroupId& group) override;
+  void GroupCloseStopped(const tab_groups::TabGroupId& group) override;
   bool RunUnloadListenerBeforeClosing(content::WebContents* contents) override;
   bool ShouldRunUnloadListenerBeforeClosing(
       content::WebContents* contents) override;
   bool ShouldDisplayFavicon(content::WebContents* contents) const override;
 
   void CloseFrame();
+
+  // Returns whether the browser has the right conditions for creating
+  // historical tabs or groups.
+  bool BrowserSupportsHistoricalEntries();
 
   Browser* const browser_;
 

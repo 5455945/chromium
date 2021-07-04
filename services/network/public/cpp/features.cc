@@ -76,6 +76,13 @@ const base::Feature kProactivelyThrottleLowPriorityRequests{
     "ProactivelyThrottleLowPriorityRequests",
     base::FEATURE_DISABLED_BY_DEFAULT};
 
+// Enables Cross-Origin-Embedder-Policy: credentialless.
+// https://github.com/mikewest/credentiallessness
+COMPONENT_EXPORT(NETWORK_CPP)
+extern const base::Feature kCrossOriginEmbedderPolicyCredentialless{
+    "CrossOriginEmbedderPolicyCredentialless",
+    base::FEATURE_DISABLED_BY_DEFAULT};
+
 // Enables Cross-Origin Opener Policy (COOP).
 // https://gist.github.com/annevk/6f2dd8c79c77123f39797f6bdac43f3e
 // https://html.spec.whatwg.org/#cross-origin-opener-policy
@@ -103,11 +110,6 @@ const base::Feature kCrossOriginOpenerPolicyAccessReporting{
 // https://github.com/mikewest/coop-by-default/
 const base::Feature kCrossOriginOpenerPolicyByDefault{
     "CrossOriginOpenerPolicyByDefault", base::FEATURE_DISABLED_BY_DEFAULT};
-
-// Enables the most recent developments on the crossOriginIsolated property.
-// https://developer.mozilla.org/en-US/docs/Web/API/WindowOrWorkerGlobalScope/crossOriginIsolated
-const base::Feature kCrossOriginIsolated{"CrossOriginIsolated",
-                                         base::FEATURE_ENABLED_BY_DEFAULT};
 
 // Enables or defaults splittup up server (not proxy) entries in the
 // HttpAuthCache.
@@ -144,17 +146,6 @@ const base::FeatureParam<std::string>
 // for investigation on the memory usage, and should not be enabled widely.
 const base::Feature kDisableKeepaliveFetch{"DisableKeepaliveFetch",
                                            base::FEATURE_DISABLED_BY_DEFAULT};
-
-// Controls whether a |request_initiator| that mismatches
-// |request_initiator_origin_lock| leads to 1) failing the HTTP request and 2)
-// calling mojo::ReportBadMessage (on desktop platforms, where NetworkService
-// is hosted outside of the Browser process, this leads to DumpWithoutCrashing
-// and does *not* lead to a renderer kill).
-//
-// See also https://crbug.com/920634
-const base::Feature kRequestInitiatorSiteLockEnfocement = {
-    "RequestInitiatorSiteLockEnfocement",
-    base::FEATURE_ENABLED_BY_DEFAULT};
 
 // Enables preprocessing requests with the Trust Tokens API Fetch flags set,
 // and handling their responses, according to the protocol.
@@ -203,6 +194,20 @@ const base::FeatureParam<bool> kPlatformProvidedTrustTokenIssuance{
 
 const base::Feature kWebSocketReassembleShortMessages{
     "WebSocketReassembleShortMessages", base::FEATURE_ENABLED_BY_DEFAULT};
+
+// Enable support for ACCEPT_CH H2/3 frame as part of Client Hint Reliability.
+// See:
+// https://tools.ietf.org/html/draft-davidben-http-client-hint-reliability-02#section-4.3
+const base::Feature kAcceptCHFrame{"AcceptCHFrame",
+                                   base::FEATURE_DISABLED_BY_DEFAULT};
+
+// Enables support for FTP URLs. When disabled FTP URLs will behave the same as
+// any other URL scheme that's unknown to the UA. See https://crbug.com/333943
+const base::Feature kFtpProtocol{"FtpProtocol",
+                                 base::FEATURE_DISABLED_BY_DEFAULT};
+
+const base::Feature kSCTAuditingRetryAndPersistReports{
+    "SCTAuditingRetryAndPersistReports", base::FEATURE_DISABLED_BY_DEFAULT};
 
 }  // namespace features
 }  // namespace network

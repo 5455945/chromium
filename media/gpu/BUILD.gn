@@ -45,6 +45,9 @@ component("gpu") {
     "//media/gpu/vaapi/*",
     "//media/mojo/*",
     "//remoting/codec:encoder",
+
+    # TODO(crbug.com/1184041): Remove //remoting/host:common when the usage is removed.
+    "//remoting/host:common",
   ]
 
   if (is_mac) {
@@ -219,6 +222,7 @@ component("gpu") {
     ]
     public_deps += [ "//media/base/win:media_foundation_util" ]
     deps += [
+      "//gpu/ipc/common:common",
       "//media/base/win:hresult_status_helper",
       "//media/parsers",
       "//third_party/angle:includes",
@@ -561,6 +565,7 @@ if (use_v4l2_codec || use_vaapi) {
       "test:video_player",
       "test:video_player_test_environment",
       "//media:test_support",
+      "//sandbox/linux:sandbox_services",
       "//testing/gtest",
     ]
   }

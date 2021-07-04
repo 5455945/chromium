@@ -11,7 +11,7 @@
 #include "base/bind.h"
 #include "base/callback_helpers.h"
 #include "base/command_line.h"
-#include "base/stl_util.h"
+#include "base/cxx17_backports.h"
 #include "base/trace_event/trace_event.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkDeferredDisplayListRecorder.h"
@@ -66,7 +66,6 @@ OverlaySurfaceCandidate MakeOverlayCandidate(int z_order,
 
   // The demo overlay instance is always ontop and not clipped. Clipped quads
   // cannot be placed in overlays.
-  overlay_candidate.is_clipped = false;
 
   return overlay_candidate;
 }
@@ -283,6 +282,7 @@ void SurfacelessSkiaGlRenderer::PostRenderFrameTask(
     case gfx::SwapResult::SWAP_ACK:
       SkiaGlRenderer::PostRenderFrameTask(std::move(result));
       break;
+    case gfx::SwapResult::SWAP_SKIPPED:
     case gfx::SwapResult::SWAP_FAILED:
       LOG(FATAL) << "Failed to swap buffers";
       break;

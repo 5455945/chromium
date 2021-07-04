@@ -5,6 +5,7 @@
 #ifndef CHROMEOS_SERVICES_CELLULAR_SETUP_EUICC_H_
 #define CHROMEOS_SERVICES_CELLULAR_SETUP_EUICC_H_
 
+#include "base/gtest_prod_util.h"
 #include "chromeos/dbus/hermes/hermes_euicc_client.h"
 #include "chromeos/dbus/hermes/hermes_profile_client.h"
 #include "chromeos/network/cellular_inhibitor.h"
@@ -61,6 +62,31 @@ class Euicc : public mojom::Euicc {
   const mojom::EuiccPropertiesPtr& properties() { return properties_; }
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(EuiccTest, InstallProfileFromActivationCode);
+  FRIEND_TEST_ALL_PREFIXES(EuiccTest, RequestPendingProfiles);
+
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  enum class InstallProfileViaQrCodeResult {
+    kSuccess = 0,
+    kInhibitFailed = 1,
+    kHermesInstallFailed = 2,
+    kMaxValue = kHermesInstallFailed
+  };
+  static void RecordInstallProfileViaQrCodeResult(
+      InstallProfileViaQrCodeResult result);
+
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  enum class RequestPendingProfilesResult {
+    kSuccess = 0,
+    kInhibitFailed = 1,
+    kHermesRequestFailed = 2,
+    kMaxValue = kHermesRequestFailed
+  };
+  static void RecordRequestPendingProfilesResult(
+      RequestPendingProfilesResult result);
+
   // Type of callback for profile installation methods.
   using ProfileInstallResultCallback =
       base::OnceCallback<void(mojom::ProfileInstallResult)>;
@@ -75,6 +101,15 @@ class Euicc : public mojom::Euicc {
       std::unique_ptr<CellularInhibitor::InhibitLock> inhibit_lock,
       HermesResponseStatus status,
       const dbus::ObjectPath* object_path);
+  void OnNewProfileEnableSuccess(const dbus::ObjectPath& profile_path,
+                                 const std::string& service_path);
+  void OnNewProfileConnectSuccess(const dbus::ObjectPath& profile_path);
+  void OnPrepareCellularNetworkForConnectionFailure(
+      const dbus::ObjectPath& profile_path,
+      const std::string& service_path,
+      const std::string& error_name);
+  void HandleNewProfileEnableFailure(const dbus::ObjectPath& profile_path,
+                                     const std::string& error_name);
   void PerformRequestPendingProfiles(
       RequestPendingProfilesCallback callback,
       std::unique_ptr<CellularInhibitor::InhibitLock> inhibit_lock);
@@ -101,10 +136,15 @@ class Euicc : public mojom::Euicc {
   mojom::EuiccPropertiesPtr properties_;
   dbus::ObjectPath path_;
   std::vector<std::unique_ptr<ESimProfile>> esim_profiles_;
+
   // Maps profile dbus paths to InstallProfileFromActivation method callbacks
   // that are pending creation of a new ESimProfile object.
   std::map<dbus::ObjectPath, InstallProfileFromActivationCodeCallback>
       install_calls_pending_create_;
+  // Maps profile dbus paths to InstallProfileFromActivation method callbacks
+  // that are pending connection to the newly created network.
+  std::map<dbus::ObjectPath, InstallProfileFromActivationCodeCallback>
+      install_calls_pending_connect_;
 
   base::WeakPtrFactory<Euicc> weak_ptr_factory_{this};
 };

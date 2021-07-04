@@ -39,6 +39,7 @@ enum MessageTypes : int {
   kStreamVolume,
   kPauseResume,
   kEndOfStream,
+  kTimestampAdjustment,
 };
 
 }  // namespace
@@ -93,8 +94,14 @@ void OutputStreamConnection::SendAudioBuffer(
     socket_->SendProto(kEndOfStream, message);
     return;
   }
-  socket_->SendAudioBuffer(std::move(audio_buffer), filled_frames * frame_size_,
-                           pts);
+  if (socket_->SendAudioBuffer(std::move(audio_buffer),
+                               filled_frames * frame_size_, pts)) {
+    LOG_IF(INFO, dropping_audio_) << "Stopped dropping audio";
+    dropping_audio_ = false;
+  } else {
+    LOG_IF(WARNING, !dropping_audio_) << "Dropping audio";
+    dropping_audio_ = true;
+  }
 }
 
 void OutputStreamConnection::SetVolumeMultiplier(float multiplier) {
@@ -150,8 +157,19 @@ void OutputStreamConnection::Resume() {
   paused_ = false;
   if (socket_) {
     Generic message;
-    message.mutable_set_paused()->set_paused(false);
+    auto* pause_message = message.mutable_set_paused();
+    pause_message->set_paused(false);
     socket_->SendProto(kPauseResume, message);
+  }
+}
+
+void OutputStreamConnection::SendTimestampAdjustment(
+    int64_t timestamp_adjustment) {
+  if (socket_) {
+    Generic message;
+    auto* adjustment_message = message.mutable_timestamp_adjustment();
+    adjustment_message->set_adjustment(timestamp_adjustment);
+    socket_->SendProto(kTimestampAdjustment, message);
   }
 }
 

@@ -10,6 +10,7 @@
 #include "base/trace_event/trace_event.h"
 #include "build/chromeos_buildflags.h"
 #include "components/viz/common/features.h"
+#include "components/viz/common/surfaces/frame_sink_id.h"
 #include "ui/aura/client/capture_client.h"
 #include "ui/aura/client/cursor_client.h"
 #include "ui/aura/env.h"
@@ -310,7 +311,7 @@ void WindowTreeHost::Hide() {
 }
 
 std::unique_ptr<ScopedKeyboardHook> WindowTreeHost::CaptureSystemKeyEvents(
-    base::Optional<base::flat_set<ui::DomCode>> dom_codes) {
+    absl::optional<base::flat_set<ui::DomCode>> dom_codes) {
   // TODO(joedow): Remove the simple hook class/logic once this flag is removed.
   if (!base::FeatureList::IsEnabled(features::kSystemKeyboardLock))
     return std::make_unique<ScopedSimpleKeyboardHook>(std::move(dom_codes));
@@ -341,6 +342,31 @@ std::unique_ptr<ScopedEnableUnadjustedMouseEvents>
 WindowTreeHost::RequestUnadjustedMovement() {
   NOTIMPLEMENTED();
   return nullptr;
+}
+
+void WindowTreeHost::LockMouse(Window* window) {
+  Window* root_window = window->GetRootWindow();
+  DCHECK(root_window);
+
+  auto* cursor_client = client::GetCursorClient(root_window);
+  if (cursor_client) {
+    cursor_client->HideCursor();
+    cursor_client->LockCursor();
+  }
+}
+
+void WindowTreeHost::UnlockMouse(Window* window) {
+  Window* root_window = window->GetRootWindow();
+  DCHECK(root_window);
+
+  if (window->HasCapture())
+    window->ReleaseCapture();
+
+  auto* cursor_client = client::GetCursorClient(root_window);
+  if (cursor_client) {
+    cursor_client->UnlockCursor();
+    cursor_client->ShowCursor();
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -395,7 +421,6 @@ void WindowTreeHost::DestroyDispatcher() {
 }
 
 void WindowTreeHost::CreateCompositor(
-    const viz::FrameSinkId& frame_sink_id,
     bool force_software_compositor,
     bool use_external_begin_frame_control,
     bool enable_compositing_based_throttling) {
@@ -403,11 +428,10 @@ void WindowTreeHost::CreateCompositor(
   ui::ContextFactory* context_factory = env->context_factory();
   DCHECK(context_factory);
   compositor_ = std::make_unique<ui::Compositor>(
-      (frame_sink_id.is_valid()) ? frame_sink_id
-                                 : context_factory->AllocateFrameSinkId(),
-      context_factory, base::ThreadTaskRunnerHandle::Get(),
-      ui::IsPixelCanvasRecordingEnabled(), use_external_begin_frame_control,
-      force_software_compositor, enable_compositing_based_throttling);
+      context_factory->AllocateFrameSinkId(), context_factory,
+      base::ThreadTaskRunnerHandle::Get(), ui::IsPixelCanvasRecordingEnabled(),
+      use_external_begin_frame_control, force_software_compositor,
+      enable_compositing_based_throttling);
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   compositor_->AddObserver(this);
 #endif
@@ -557,6 +581,12 @@ void WindowTreeHost::OnCompositingChildResizing(ui::Compositor* compositor) {
     return;
   dispatcher_->HoldPointerMoves();
   holding_pointer_moves_ = true;
+}
+
+void WindowTreeHost::OnFrameSinksToThrottleUpdated(
+    const base::flat_set<viz::FrameSinkId>& ids) {
+  for (auto& observer : observers_)
+    observer.OnCompositingFrameSinksToThrottleUpdated(this, ids);
 }
 
 }  // namespace aura

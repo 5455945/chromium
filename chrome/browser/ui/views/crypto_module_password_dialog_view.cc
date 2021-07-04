@@ -10,11 +10,11 @@
 #include "chrome/grit/generated_resources.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/events/event.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/layout/grid_layout.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/widget/widget.h"
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -42,7 +42,7 @@ CryptoModulePasswordDialogView::CryptoModulePasswordDialogView(
       base::Unretained(this)));
   SetModalType(ui::MODAL_TYPE_WINDOW);
   set_margins(ChromeLayoutProvider::Get()->GetDialogInsetsForContentType(
-      views::TEXT, views::CONTROL));
+      views::DialogContentType::kText, views::DialogContentType::kControl));
   Init(hostname, slot_name, reason);
   chrome::RecordDialogCreation(chrome::DialogIdentifier::CRYPTO_PASSWORD);
 }
@@ -57,14 +57,13 @@ views::View* CryptoModulePasswordDialogView::GetInitiallyFocusedView() {
   return password_entry_;
 }
 
-base::string16 CryptoModulePasswordDialogView::GetWindowTitle() const {
+std::u16string CryptoModulePasswordDialogView::GetWindowTitle() const {
   return l10n_util::GetStringUTF16(IDS_CRYPTO_MODULE_AUTH_DIALOG_TITLE);
 }
 
 void CryptoModulePasswordDialogView::ContentsChanged(
     views::Textfield* sender,
-    const base::string16& new_contents) {
-}
+    const std::u16string& new_contents) {}
 
 bool CryptoModulePasswordDialogView::HandleKeyEvent(
     views::Textfield* sender,
@@ -77,8 +76,8 @@ void CryptoModulePasswordDialogView::Init(const std::string& hostname,
                                           CryptoModulePasswordReason reason) {
   // Select an appropriate text for the reason.
   std::string text;
-  const base::string16& hostname16 = base::UTF8ToUTF16(hostname);
-  const base::string16& slot16 = base::UTF8ToUTF16(slot_name);
+  const std::u16string& hostname16 = base::UTF8ToUTF16(hostname);
+  const std::u16string& slot16 = base::UTF8ToUTF16(slot_name);
   switch (reason) {
     case kCryptoModulePasswordCertEnrollment:
       text = l10n_util::GetStringFUTF8(

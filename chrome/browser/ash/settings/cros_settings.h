@@ -13,11 +13,11 @@
 #include "base/callback_forward.h"
 #include "base/callback_list.h"
 #include "base/macros.h"
-#include "base/optional.h"
 #include "base/sequence_checker.h"
 #include "chromeos/settings/cros_settings_names.h"
 #include "chromeos/settings/cros_settings_provider.h"
 #include "components/user_manager/user_type.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class PrefService;
 
@@ -27,7 +27,7 @@ class ListValue;
 class Value;
 }  // namespace base
 
-namespace chromeos {
+namespace ash {
 
 class DeviceSettingsService;
 class SupervisedUserCrosSettingsProvider;
@@ -99,7 +99,7 @@ class CrosSettings {
   bool IsUserAllowlisted(
       const std::string& username,
       bool* wildcard_match,
-      const base::Optional<user_manager::UserType>& user_type) const;
+      const absl::optional<user_manager::UserType>& user_type) const;
 
   // Helper function for the allowlist op. Implemented here because we will need
   // this in a few places. The functions searches for |email| in the pref |path|
@@ -146,7 +146,7 @@ class CrosSettings {
 
   // A map from settings names to a list of observers. Observers get fired in
   // the order they are added.
-  std::map<std::string, std::unique_ptr<base::CallbackList<void(void)>>>
+  std::map<std::string, std::unique_ptr<base::RepeatingClosureList>>
       settings_observers_;
 
   SEQUENCE_CHECKER(sequence_checker_);
@@ -165,12 +165,12 @@ class ScopedTestCrosSettings {
   DISALLOW_COPY_AND_ASSIGN(ScopedTestCrosSettings);
 };
 
-}  // namespace chromeos
+}  // namespace ash
 
-// TODO(https://crbug.com/1164001): remove after //chrome/browser/chromeos
-// source migration is finished.
-namespace ash {
-using ::chromeos::CrosSettings;
-}
+// TODO(https://crbug.com/1164001): remove when Chrome OS code migration is
+// done.
+namespace chromeos {
+using ::ash::CrosSettings;
+}  // namespace chromeos
 
 #endif  // CHROME_BROWSER_ASH_SETTINGS_CROS_SETTINGS_H_

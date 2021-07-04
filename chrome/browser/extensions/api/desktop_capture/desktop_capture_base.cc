@@ -10,6 +10,8 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
+#include "base/containers/contains.h"
+#include "base/containers/cxx20_erase.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
@@ -76,7 +78,7 @@ DesktopCaptureChooseDesktopMediaFunctionBase::Execute(
     const std::vector<api::desktop_capture::DesktopCaptureSourceType>& sources,
     content::WebContents* web_contents,
     const GURL& origin,
-    const base::string16 target_name) {
+    const std::u16string target_name) {
   DCHECK(!picker_controller_);
 
   gfx::NativeWindow parent_window = web_contents->GetTopLevelNativeWindow();
@@ -147,8 +149,8 @@ DesktopCaptureChooseDesktopMediaFunctionBase::Execute(
 
 std::string DesktopCaptureChooseDesktopMediaFunctionBase::GetCallerDisplayName()
     const {
-  if (extension()->location() == Manifest::COMPONENT ||
-      extension()->location() == Manifest::EXTERNAL_COMPONENT) {
+  if (extension()->location() == mojom::ManifestLocation::kComponent ||
+      extension()->location() == mojom::ManifestLocation::kExternalComponent) {
     return l10n_util::GetStringUTF8(IDS_SHORT_PRODUCT_NAME);
   } else {
     return extension()->name();

@@ -33,14 +33,6 @@ import java.lang.annotation.RetentionPolicy;
 public class TopUiThemeColorProvider extends ThemeColorProvider {
     private static final float LOCATION_BAR_TRANSPARENT_BACKGROUND_ALPHA = 0.2f;
 
-    /**
-     * Tells if the given Tab is in preview mode.
-     */
-    @FunctionalInterface
-    public interface PreviewChecker {
-        boolean inPreview(Tab tab);
-    }
-
     @IntDef({ThemeColorUma.NO_COLOR_SET, ThemeColorUma.COLOR_SET_AND_APPLIED,
             ThemeColorUma.COLOR_SET_BUT_NOT_APPLIED, ThemeColorUma.NUM_ENTRIES})
     @Retention(RetentionPolicy.SOURCE)
@@ -55,7 +47,12 @@ public class TopUiThemeColorProvider extends ThemeColorProvider {
 
     private final Supplier<Integer> mActivityThemeColorSupplier;
     private final BooleanSupplier mIsTabletSupplier;
-    private final PreviewChecker mPreviewChecker;
+
+    /** Whether the theme should apply while in dark mode. */
+    private final boolean mAllowThemingInNightMode;
+
+    /** Whether bright theme colors are allowed. */
+    private final boolean mAllowBrightThemeColors;
 
     /** Whether or not the default color is used. */
     private boolean mIsDefaultColorUsed;
@@ -65,11 +62,13 @@ public class TopUiThemeColorProvider extends ThemeColorProvider {
      * @param tabSupplier Supplier of the current tab.
      * @param activityThemeColorSupplier Supplier of activity theme color.
      * @param isTabletSupplier Supplier of a boolean indicating we're on a tablet device.
-     * @param previewChecker {@link PreviewChecker} instance.
+     * @param allowThemingInNightMode Whether the tab theme should be used when the device is in
+     *                                night mode.
+     * @param allowBrightThemeColors Whether the tab allows bright theme colors.
      */
     public TopUiThemeColorProvider(Context context, ObservableSupplier<Tab> tabSupplier,
             Supplier<Integer> activityThemeColorSupplier, BooleanSupplier isTabletSupplier,
-            PreviewChecker previewChecker) {
+            boolean allowThemingInNightMode, boolean allowBrightThemeColors) {
         super(context);
         mTabObserver = new CurrentTabObserver(tabSupplier,
                 new EmptyTabObserver() {
@@ -88,7 +87,8 @@ public class TopUiThemeColorProvider extends ThemeColorProvider {
                 });
         mActivityThemeColorSupplier = activityThemeColorSupplier;
         mIsTabletSupplier = isTabletSupplier;
-        mPreviewChecker = previewChecker;
+        mAllowThemingInNightMode = allowThemingInNightMode;
+        mAllowBrightThemeColors = allowBrightThemeColors;
     }
 
     /**
@@ -113,14 +113,10 @@ public class TopUiThemeColorProvider extends ThemeColorProvider {
     public int calculateColor(Tab tab, int themeColor) {
         // This method is used not only for the current tab but also for
         // any given tab. Therefore it should not alter any class state.
-        boolean isThemingAllowed = isThemingAllowed(tab);
-        boolean isUsingTabThemeColor = isThemingAllowed
-                && themeColor != TabState.UNSPECIFIED_THEME_COLOR
-                && ColorUtils.isValidThemeColor(themeColor);
-        if (!isUsingTabThemeColor) {
+        if (!isUsingTabThemeColor(tab, themeColor)) {
             themeColor = ChromeColors.getDefaultThemeColor(
                     tab.getContext().getResources(), tab.isIncognito());
-            if (isThemingAllowed) {
+            if (isThemingAllowed(tab)) {
                 int customThemeColor = mActivityThemeColorSupplier.get();
                 if (customThemeColor != TabState.UNSPECIFIED_THEME_COLOR) {
                     themeColor = customThemeColor;
@@ -136,12 +132,8 @@ public class TopUiThemeColorProvider extends ThemeColorProvider {
     private boolean isUsingDefaultColor(Tab tab, int themeColor) {
         // This method is used not only for the current tab but also for
         // any given tab. Therefore it should not alter any class state.
-        boolean isThemingAllowed = isThemingAllowed(tab);
-        boolean isUsingTabThemeColor = isThemingAllowed
-                && themeColor != TabState.UNSPECIFIED_THEME_COLOR
-                && ColorUtils.isValidThemeColor(themeColor);
-        return !(isUsingTabThemeColor
-                || (isThemingAllowed
+        return !(isUsingTabThemeColor(tab, themeColor)
+                || (isThemingAllowed(tab)
                         && mActivityThemeColorSupplier.get() != TabState.UNSPECIFIED_THEME_COLOR));
     }
 
@@ -157,13 +149,25 @@ public class TopUiThemeColorProvider extends ThemeColorProvider {
     }
 
     /**
+     * @param tab Tab to get the theme color for.
+     * @param themeColor Initial color to calculate the theme color with.
+     * @return Whether the given tab is using the tab theme color.
+     */
+    private boolean isUsingTabThemeColor(Tab tab, int themeColor) {
+        return isThemingAllowed(tab) && themeColor != TabState.UNSPECIFIED_THEME_COLOR
+                && (mAllowBrightThemeColors || !ColorUtils.isThemeColorTooBright(themeColor));
+    }
+
+    /**
      * Returns whether theming the activity is allowed (either by the web contents or by the
      * activity).
      */
     private boolean isThemingAllowed(Tab tab) {
+        boolean disallowDueToNightMode =
+                !mAllowThemingInNightMode && ColorUtils.inNightMode(tab.getContext());
+
         return tab.isThemingAllowed() && !mIsTabletSupplier.getAsBoolean()
-                && !ColorUtils.inNightMode(tab.getContext()) && !tab.isNativePage()
-                && !tab.isIncognito() && !mPreviewChecker.inPreview(tab);
+                && !disallowDueToNightMode && !tab.isNativePage() && !tab.isIncognito();
     }
 
     /**

@@ -24,7 +24,7 @@
 #include "services/device/usb/usb_service.h"
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chromeos/dbus/permission_broker/permission_broker_client.h"
+#include "chromeos/dbus/permission_broker/permission_broker_client.h"  // nogncheck
 
 namespace {
 constexpr uint32_t kAllInterfacesMask = ~0U;
@@ -40,6 +40,7 @@ UsbDeviceLinux::UsbDeviceLinux(const std::string& device_path,
 
 UsbDeviceLinux::~UsbDeviceLinux() = default;
 
+// TODO(huangs): Enable for IS_CHROMEOS_LACROS for crbug.com/1195247.
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 
 void UsbDeviceLinux::CheckUsbAccess(ResultCallback callback) {
@@ -63,13 +64,13 @@ void UsbDeviceLinux::Open(OpenCallback callback) {
     return;
   }
 
-  auto copyable_callback = base::AdaptCallbackForRepeating(std::move(callback));
+  auto split_callback = base::SplitOnceCallback(std::move(callback));
   chromeos::PermissionBrokerClient::Get()->ClaimDevicePath(
       device_path_, kAllInterfacesMask, read_end.get(),
       base::BindOnce(&UsbDeviceLinux::OnOpenRequestComplete, this,
-                     copyable_callback, std::move(write_end)),
+                     std::move(split_callback.first), std::move(write_end)),
       base::BindOnce(&UsbDeviceLinux::OnOpenRequestError, this,
-                     copyable_callback));
+                     std::move(split_callback.second)));
 #else
   scoped_refptr<base::SequencedTaskRunner> blocking_task_runner =
       UsbService::CreateBlockingTaskRunner();

@@ -5,6 +5,7 @@
 #import "base/ios/block_types.h"
 #include "base/ios/ios_util.h"
 #include "components/signin/public/base/account_consistency_method.h"
+#include "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/ui/authentication/signin_earl_grey.h"
 #import "ios/chrome/browser/ui/authentication/signin_earl_grey_ui.h"
 #import "ios/chrome/browser/ui/content_suggestions/content_suggestions_feature.h"
@@ -24,18 +25,19 @@
 #error "This file requires ARC support."
 #endif
 
+using chrome_test_util::ButtonWithAccessibilityLabelId;
 using chrome_test_util::ButtonWithAccessibilityLabel;
 using chrome_test_util::PrimarySignInButton;
+using chrome_test_util::SettingsAccountButton;
 using chrome_test_util::SettingsDoneButton;
-using chrome_test_util::WebStateScrollViewMatcher;
+using chrome_test_util::ClearBrowsingDataButton;
+using chrome_test_util::ConfirmClearBrowsingDataButton;
+using chrome_test_util::SettingsMenuPrivacyButton;
+using chrome_test_util::SettingsCollectionView;
 
 // Sign-in interaction tests that work with |kMobileIdentityConsistency|
 // enabled.
 @interface SigninCoordinatorMICETestCase : ChromeTestCase
-
-// Signs in to the primary user account and disables Sync.
-- (void)primaryAccountSignInWithSyncDisabled;
-
 @end
 
 @implementation SigninCoordinatorMICETestCase
@@ -54,18 +56,21 @@ using chrome_test_util::WebStateScrollViewMatcher;
   [ChromeEarlGrey clearBrowsingHistory];
 }
 
-// Simulates an interrupted sign-in flow in order to emulate signing in a
-// default account with the Sync feature turned off.
-- (void)primaryAccountSignInWithSyncDisabled {
-  [ChromeEarlGreyUI openSettingsMenu];
-  [ChromeEarlGreyUI tapSettingsMenuButton:PrimarySignInButton()];
+// Tests that a signed-in user can open "Settings" screen from the NTP.
+- (void)testOpenManageSyncSettingsFromNTP {
+  // Sign in to Chrome.
+  FakeChromeIdentity* fakeIdentity = [SigninEarlGrey fakeIdentity1];
+  [SigninEarlGreyUI signinWithFakeIdentity:fakeIdentity];
 
-  // Select advanced Sync Settings link.
-  [SigninEarlGreyUI tapSettingsLink];
-  [ChromeEarlGreyUI waitForAppToIdle];
+  // Select the identity disc particle.
+  [[EarlGrey
+      selectElementWithMatcher:grey_accessibilityLabel(l10n_util::GetNSString(
+                                   IDS_ACCNAME_PARTICLE_DISC))]
+      performAction:grey_tap()];
 
-  // Open new tab to cancel sign-in.
-  [ChromeEarlGrey simulateExternalAppURLOpening];
+  // Ensure the Settings menu is displayed.
+  [[EarlGrey selectElementWithMatcher:SettingsCollectionView()]
+      assertWithMatcher:grey_sufficientlyVisible()];
 }
 
 // Tests that opening the sign-in screen from the Settings and signing in works
@@ -89,6 +94,11 @@ using chrome_test_util::WebStateScrollViewMatcher;
                                        kSettingsGoogleSyncAndServicesCellId),
                                    nil)]
       assertWithMatcher:grey_sufficientlyVisible()];
+  [[EarlGrey selectElementWithMatcher:grey_accessibilityID(
+                                          kSettingsGoogleServicesCellId)]
+      assertWithMatcher:grey_sufficientlyVisible()];
+  [[EarlGrey selectElementWithMatcher:SettingsAccountButton()]
+      assertWithMatcher:grey_sufficientlyVisible()];
 }
 
 // Tests that opening the sign-in screen from the Sync Off tab and signin in
@@ -97,7 +107,7 @@ using chrome_test_util::WebStateScrollViewMatcher;
   FakeChromeIdentity* fakeIdentity = [SigninEarlGrey fakeIdentity1];
   [SigninEarlGrey addFakeIdentity:fakeIdentity];
 
-  [self primaryAccountSignInWithSyncDisabled];
+  [SigninEarlGreyUI signinWithFakeIdentity:fakeIdentity enableSync:NO];
 
   [ChromeEarlGreyUI openSettingsMenu];
   // Check Sync Off label is visible and user is signed in.
@@ -109,7 +119,13 @@ using chrome_test_util::WebStateScrollViewMatcher;
                                    grey_accessibilityID(
                                        kSettingsGoogleSyncAndServicesCellId),
                                    nil)] performAction:grey_tap()];
-  [SigninEarlGreyUI tapSigninConfirmationDialog];
+
+  // If the consent screen was previously scrolled it will not need to be
+  // scrolled again.
+  [[EarlGrey
+      selectElementWithMatcher:ButtonWithAccessibilityLabelId(
+                                   IDS_IOS_ACCOUNT_UNIFIED_CONSENT_OK_BUTTON)]
+      performAction:grey_tap()];
 
   // Check Sync On label is visible and user is signed in.
   [SigninEarlGrey verifySignedInWithFakeIdentity:fakeIdentity];
@@ -179,12 +195,12 @@ using chrome_test_util::WebStateScrollViewMatcher;
   FakeChromeIdentity* fakeIdentity = [SigninEarlGrey fakeIdentity1];
   [SigninEarlGrey addFakeIdentity:fakeIdentity];
 
-  [self primaryAccountSignInWithSyncDisabled];
+  [SigninEarlGreyUI signinWithFakeIdentity:fakeIdentity enableSync:NO];
 
   [ChromeEarlGreyUI openSettingsMenu];
   [SigninEarlGrey verifySignedInWithFakeIdentity:fakeIdentity];
-  [SigninEarlGreyUI verifySigninPromoVisibleWithMode:
-                        SigninPromoViewModeSyncWithPrimaryAccount];
+  [SigninEarlGreyUI
+      verifySigninPromoVisibleWithMode:SigninPromoViewModeSigninWithAccount];
 }
 
 // Tests that no sign-in promo for Sync is displayed when the user is signed in
@@ -194,11 +210,11 @@ using chrome_test_util::WebStateScrollViewMatcher;
   FakeChromeIdentity* fakeIdentity = [SigninEarlGrey fakeIdentity1];
   [SigninEarlGrey addFakeIdentity:fakeIdentity];
 
-  [self primaryAccountSignInWithSyncDisabled];
+  [SigninEarlGreyUI signinWithFakeIdentity:fakeIdentity enableSync:NO];
 
   [ChromeEarlGreyUI openSettingsMenu];
-  [SigninEarlGreyUI verifySigninPromoVisibleWithMode:
-                        SigninPromoViewModeSyncWithPrimaryAccount];
+  [SigninEarlGreyUI
+      verifySigninPromoVisibleWithMode:SigninPromoViewModeSigninWithAccount];
   // Tap on dismiss button.
   [[EarlGrey
       selectElementWithMatcher:grey_allOf(grey_accessibilityID(
@@ -208,6 +224,25 @@ using chrome_test_util::WebStateScrollViewMatcher;
 
   [SigninEarlGrey verifySignedInWithFakeIdentity:fakeIdentity];
   [SigninEarlGreyUI verifySigninPromoNotVisible];
+}
+
+// Tests that a user in the |ConsentLevel::kSignin| state will be signed out
+// after clearing their browsing history.
+- (void)testUserSignedOutWhenClearingBrowsingData {
+  FakeChromeIdentity* fakeIdentity = [SigninEarlGrey fakeIdentity1];
+  [SigninEarlGrey addFakeIdentity:fakeIdentity];
+  [SigninEarlGreyUI signinWithFakeIdentity:fakeIdentity enableSync:NO];
+
+  [ChromeEarlGreyUI openSettingsMenu];
+  [ChromeEarlGreyUI tapSettingsMenuButton:SettingsMenuPrivacyButton()];
+  [ChromeEarlGreyUI
+      tapPrivacyMenuButton:ButtonWithAccessibilityLabelId(
+                               IDS_IOS_CLEAR_BROWSING_DATA_TITLE)];
+  [ChromeEarlGreyUI tapClearBrowsingDataMenuButton:ClearBrowsingDataButton()];
+  [[EarlGrey selectElementWithMatcher:ConfirmClearBrowsingDataButton()]
+      performAction:grey_tap()];
+
+  [SigninEarlGrey verifySignedOut];
 }
 
 @end

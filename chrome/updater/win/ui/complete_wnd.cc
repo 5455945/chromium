@@ -8,7 +8,7 @@
 #include "base/strings/string_util.h"
 #include "chrome/updater/win/ui/constants.h"
 #include "chrome/updater/win/ui/util.h"
-#include "chrome/updater/win/util.h"
+#include "chrome/updater/win/win_util.h"
 
 namespace updater {
 namespace ui {
@@ -86,7 +86,7 @@ bool CompleteWnd::MaybeCloseWindow() {
 
 void CompleteWnd::DisplayCompletionDialog(bool is_success,
                                           const std::wstring& text,
-                                          const base::string16& help_url) {
+                                          const std::u16string& help_url) {
   if (!OmahaWnd::OnComplete())
     return;
 

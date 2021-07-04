@@ -58,7 +58,7 @@ FileHandlersParser::~FileHandlersParser() {
 bool LoadFileHandler(const std::string& handler_id,
                      const base::Value& handler_info,
                      FileHandlersInfo* file_handlers,
-                     base::string16* error,
+                     std::u16string* error,
                      std::vector<InstallWarning>* install_warnings) {
   DCHECK(error);
   apps::FileHandlerInfo handler;
@@ -144,7 +144,7 @@ bool LoadFileHandler(const std::string& handler_id,
   file_handlers->push_back(handler);
 
   // Check for unknown keys.
-  for (const auto& entry : handler_info.DictItems()) {
+  for (auto entry : handler_info.DictItems()) {
     if (entry.first != keys::kFileHandlerExtensions &&
         entry.first != keys::kFileHandlerTypes &&
         entry.first != keys::kFileHandlerIncludeDirectories &&
@@ -158,7 +158,7 @@ bool LoadFileHandler(const std::string& handler_id,
   return true;
 }
 
-bool FileHandlersParser::Parse(Extension* extension, base::string16* error) {
+bool FileHandlersParser::Parse(Extension* extension, std::u16string* error) {
   // Don't load file handlers for hosted_apps unless they're also bookmark apps.
   // This check can be removed when bookmark apps are migrated off hosted apps,
   // and hosted_apps should be removed from the list of valid extension types
@@ -179,7 +179,7 @@ bool FileHandlersParser::Parse(Extension* extension, base::string16* error) {
   }
 
   std::vector<InstallWarning> install_warnings;
-  for (const auto& entry : all_handlers->DictItems()) {
+  for (auto entry : all_handlers->DictItems()) {
     if (!entry.second.is_dict()) {
       *error = base::ASCIIToUTF16(errors::kInvalidFileHandlers);
       return false;

@@ -7,19 +7,20 @@
 #include <limits>
 #include <memory>
 
+#include "ash/login/ui/login_constants.h"
 #include "ash/login/ui/login_display_style.h"
 #include "ash/login/ui/login_user_view.h"
 #include "ash/login/ui/non_accessible_view.h"
 #include "ash/login/ui/views_utils.h"
-#include "ash/public/cpp/login_constants.h"
 #include "ash/shell.h"
 #include "ash/style/ash_color_provider.h"
 #include "ash/style/default_color_constants.h"
 #include "ash/wallpaper/wallpaper_controller_impl.h"
 #include "base/bind.h"
 #include "base/numerics/ranges.h"
-#include "base/optional.h"
 #include "base/timer/timer.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/canvas.h"
@@ -102,6 +103,7 @@ class ScrollBarThumb : public views::BaseScrollBarThumb {
   gfx::Size CalculatePreferredSize() const override {
     return gfx::Size(kScrollThumbThicknessDp, kScrollThumbThicknessDp);
   }
+
   void OnPaint(gfx::Canvas* canvas) override {
     cc::PaintFlags fill_flags;
     fill_flags.setStyle(cc::PaintFlags::kFill_Style);
@@ -331,7 +333,7 @@ ScrollableUsersListView::ScrollableUsersListView(
       ->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kCenter);
   ensure_min_height->AddChildView(user_view_host_);
   SetContents(std::move(ensure_min_height));
-  SetBackgroundColor(base::nullopt);
+  SetBackgroundColor(absl::nullopt);
   SetDrawOverflowIndicator(false);
 
   SetVerticalScrollBar(std::make_unique<UsersListScrollBar>(false));
@@ -351,6 +353,16 @@ LoginUserView* ScrollableUsersListView::GetUserView(
   return nullptr;
 }
 
+void ScrollableUsersListView::UpdateUserViewHostLayoutInsets() {
+  DCHECK(GetWidget());
+  bool should_show_landscape =
+      login_views_utils::ShouldShowLandscape(GetWidget());
+  LayoutParams layout_params = BuildLayoutForStyle(display_style_);
+  user_view_host_layout_->set_inside_border_insets(
+      should_show_landscape ? layout_params.insets_landscape
+                            : layout_params.insets_portrait);
+}
+
 void ScrollableUsersListView::Layout() {
   DCHECK(user_view_host_layout_);
 
@@ -362,13 +374,7 @@ void ScrollableUsersListView::Layout() {
       PreferredSizeChanged();
   }
 
-  // Update the user view layout.
-  bool should_show_landscape =
-      login_views_utils::ShouldShowLandscape(GetWidget());
-  LayoutParams layout_params = BuildLayoutForStyle(display_style_);
-  user_view_host_layout_->set_inside_border_insets(
-      should_show_landscape ? layout_params.insets_landscape
-                            : layout_params.insets_portrait);
+  UpdateUserViewHostLayoutInsets();
 
   // Layout everything.
   ScrollView::Layout();
@@ -424,10 +430,14 @@ void ScrollableUsersListView::OnPaintBackground(gfx::Canvas* canvas) {
     flags.setStyle(cc::PaintFlags::kFill_Style);
     flags.setColor(AshColorProvider::Get()->GetShieldLayerColor(
         AshColorProvider::ShieldLayerType::kShield80));
-    canvas->DrawRoundRect(
-        render_bounds, login_constants::kNonBlurredWallpaperBackgroundRadiusDp,
-        flags);
+    canvas->DrawRoundRect(render_bounds,
+                          login::kNonBlurredWallpaperBackgroundRadiusDp, flags);
   }
+}
+
+void ScrollableUsersListView::OnThemeChanged() {
+  views::ScrollView::OnThemeChanged();
+  gradient_params_ = GradientParams::BuildForStyle(display_style_);
 }
 
 // When the active user is updated, the wallpaper changes. The gradient color

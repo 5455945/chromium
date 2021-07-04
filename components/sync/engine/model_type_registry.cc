@@ -12,8 +12,6 @@
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/threading/sequenced_task_runner_handle.h"
-#include "components/sync/engine/commit_queue.h"
 #include "components/sync/engine/data_type_activation_response.h"
 #include "components/sync/engine/model_type_processor.h"
 #include "components/sync/engine/model_type_worker.h"
@@ -22,43 +20,19 @@
 
 namespace syncer {
 
-namespace {
-
-class CommitQueueProxy : public CommitQueue {
- public:
-  CommitQueueProxy(const base::WeakPtr<CommitQueue>& worker,
-                   const scoped_refptr<base::SequencedTaskRunner>& sync_thread);
-  ~CommitQueueProxy() override;
-
-  void NudgeForCommit() override;
-
- private:
-  base::WeakPtr<CommitQueue> worker_;
-  scoped_refptr<base::SequencedTaskRunner> sync_thread_;
-};
-
-CommitQueueProxy::CommitQueueProxy(
-    const base::WeakPtr<CommitQueue>& worker,
-    const scoped_refptr<base::SequencedTaskRunner>& sync_thread)
-    : worker_(worker), sync_thread_(sync_thread) {}
-
-CommitQueueProxy::~CommitQueueProxy() {}
-
-void CommitQueueProxy::NudgeForCommit() {
-  sync_thread_->PostTask(FROM_HERE,
-                         base::BindOnce(&CommitQueue::NudgeForCommit, worker_));
-}
-
-}  // namespace
-
-ModelTypeRegistry::ModelTypeRegistry(NudgeHandler* nudge_handler,
-                                     CancelationSignal* cancelation_signal,
-                                     KeystoreKeysHandler* keystore_keys_handler)
+ModelTypeRegistry::ModelTypeRegistry(
+    NudgeHandler* nudge_handler,
+    CancelationSignal* cancelation_signal,
+    SyncEncryptionHandler* sync_encryption_handler)
     : nudge_handler_(nudge_handler),
       cancelation_signal_(cancelation_signal),
-      keystore_keys_handler_(keystore_keys_handler) {}
+      sync_encryption_handler_(sync_encryption_handler) {
+  sync_encryption_handler_->AddObserver(this);
+}
 
-ModelTypeRegistry::~ModelTypeRegistry() = default;
+ModelTypeRegistry::~ModelTypeRegistry() {
+  sync_encryption_handler_->RemoveObserver(this);
+}
 
 void ModelTypeRegistry::ConnectDataType(
     ModelType type,
@@ -68,29 +42,12 @@ void ModelTypeRegistry::ConnectDataType(
   DCHECK(commit_contributor_map_.find(type) == commit_contributor_map_.end());
   DVLOG(1) << "Enabling an off-thread sync type: " << ModelTypeToString(type);
 
-  // Save a raw pointer to the processor for connecting later.
-  ModelTypeProcessor* type_processor =
-      activation_response->type_processor.get();
-
-  bool initial_sync_done =
-      activation_response->model_type_state.initial_sync_done();
-
-  DCHECK(!encrypted_types_.Has(type) || cryptographer_)
-      << "Connecting encrypted type " << ModelTypeToString(type)
-      << " but the cryptographer isn't set";
-
   auto worker = std::make_unique<ModelTypeWorker>(
       type, activation_response->model_type_state,
-      /*trigger_initial_sync=*/!initial_sync_done,
-      encrypted_types_.Has(type) ? cryptographer_->Clone() : nullptr,
-      passphrase_type_, nudge_handler_,
-      std::move(activation_response->type_processor), cancelation_signal_);
-
-  // If the cryptographer wasn't set yet, it will be informed to this |worker|
-  // as soon as it's set in OnCryptographerStateChanged().
-  if (cryptographer_) {
-    worker->UpdateFallbackCryptographerForUma(cryptographer_->Clone());
-  }
+      sync_encryption_handler_->GetCryptographer(),
+      sync_encryption_handler_->GetEncryptedTypes().Has(type),
+      sync_encryption_handler_->GetPassphraseType(), nudge_handler_,
+      cancelation_signal_);
 
   // Save a raw pointer and add the worker to our structures.
   ModelTypeWorker* worker_ptr = worker.get();
@@ -98,9 +55,7 @@ void ModelTypeRegistry::ConnectDataType(
   update_handler_map_.insert(std::make_pair(type, worker_ptr));
   commit_contributor_map_.insert(std::make_pair(type, worker_ptr));
 
-  // Initialize Processor -> Worker communication channel.
-  type_processor->ConnectSync(std::make_unique<CommitQueueProxy>(
-      worker_ptr->AsWeakPtr(), base::SequencedTaskRunnerHandle::Get()));
+  worker_ptr->ConnectSync(std::move(activation_response->type_processor));
 }
 
 void ModelTypeRegistry::DisconnectDataType(ModelType type) {
@@ -171,7 +126,7 @@ CommitContributorMap* ModelTypeRegistry::commit_contributor_map() {
 }
 
 KeystoreKeysHandler* ModelTypeRegistry::keystore_keys_handler() {
-  return keystore_keys_handler_;
+  return sync_encryption_handler_->GetKeystoreKeysHandler();
 }
 
 bool ModelTypeRegistry::HasUnsyncedItems() const {
@@ -193,23 +148,11 @@ void ModelTypeRegistry::OnPassphraseRequired(
     const KeyDerivationParams& key_derivation_params,
     const sync_pb::EncryptedData& pending_keys) {}
 
-void ModelTypeRegistry::OnPassphraseAccepted() {
-  for (const auto& worker : connected_model_type_workers_) {
-    if (encrypted_types_.Has(worker->GetModelType())) {
-      worker->EncryptionAcceptedMaybeApplyUpdates();
-    }
-  }
-}
+void ModelTypeRegistry::OnPassphraseAccepted() {}
 
 void ModelTypeRegistry::OnTrustedVaultKeyRequired() {}
 
-void ModelTypeRegistry::OnTrustedVaultKeyAccepted() {
-  for (const auto& worker : connected_model_type_workers_) {
-    if (encrypted_types_.Has(worker->GetModelType())) {
-      worker->EncryptionAcceptedMaybeApplyUpdates();
-    }
-  }
-}
+void ModelTypeRegistry::OnTrustedVaultKeyAccepted() {}
 
 void ModelTypeRegistry::OnBootstrapTokenUpdated(
     const std::string& bootstrap_token,
@@ -217,43 +160,28 @@ void ModelTypeRegistry::OnBootstrapTokenUpdated(
 
 void ModelTypeRegistry::OnEncryptedTypesChanged(ModelTypeSet encrypted_types,
                                                 bool encrypt_everything) {
-  // TODO(skym): This does not handle reducing the number of encrypted types
-  // correctly. They're removed from |encrypted_types_| but corresponding
-  // workers never have their Cryptographers removed. This probably is not a use
-  // case that currently needs to be supported, but it should be guarded against
-  // here.
-  encrypted_types_ = encrypted_types;
-  UpdateCryptographerForConnectedEncryptedTypes();
+  // This does NOT support disabling encryption without reconnecting the
+  // type, i.e. recreating its ModelTypeWorker.
+  for (const auto& worker : connected_model_type_workers_) {
+    if (encrypted_types.Has(worker->GetModelType())) {
+      // No-op if the type was already encrypted.
+      worker->EnableEncryption();
+    }
+  }
 }
 
 void ModelTypeRegistry::OnCryptographerStateChanged(
     Cryptographer* cryptographer,
     bool has_pending_keys) {
-  cryptographer_ = cryptographer->Clone();
-  UpdateCryptographerForConnectedEncryptedTypes();
   for (const auto& worker : connected_model_type_workers_) {
-    worker->UpdateFallbackCryptographerForUma(cryptographer_->Clone());
+    worker->OnCryptographerChange();
   }
 }
 
 void ModelTypeRegistry::OnPassphraseTypeChanged(PassphraseType type,
                                                 base::Time passphrase_time) {
-  passphrase_type_ = type;
   for (const auto& worker : connected_model_type_workers_) {
-    if (encrypted_types_.Has(worker->GetModelType())) {
-      worker->UpdatePassphraseType(type);
-    }
-  }
-}
-
-void ModelTypeRegistry::UpdateCryptographerForConnectedEncryptedTypes() {
-  for (const auto& worker : connected_model_type_workers_) {
-    if (encrypted_types_.Has(worker->GetModelType())) {
-      DCHECK(cryptographer_)
-          << ModelTypeToString(worker->GetModelType())
-          << " is a connected encrypted type but there's no cryptographer";
-      worker->UpdateCryptographer(cryptographer_->Clone());
-    }
+    worker->UpdatePassphraseType(type);
   }
 }
 

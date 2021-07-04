@@ -106,8 +106,9 @@ x11::RandR::GetScreenResourcesCurrentReply* ScreenResources::get() {
 }
 
 DesktopResizerX11::DesktopResizerX11()
-    : randr_(&connection_.randr()),
-      screen_(&connection_.default_screen()),
+    : connection_(x11::Connection::Get()),
+      randr_(&connection_->randr()),
+      screen_(&connection_->default_screen()),
       root_(screen_->root),
       exact_resize_(base::CommandLine::ForCurrentProcess()->HasSwitch(
           "server-supports-exact-resize")) {
@@ -127,11 +128,11 @@ ScreenResolution DesktopResizerX11::GetCurrentResolution() {
   // Process pending events so that the connection setup data is updated
   // with the correct display metrics.
   if (has_randr_)
-    connection_.DispatchAll();
+    connection_->DispatchAll();
 
   ScreenResolution result(
-      webrtc::DesktopSize(connection_.default_screen().width_in_pixels,
-                          connection_.default_screen().height_in_pixels),
+      webrtc::DesktopSize(connection_->default_screen().width_in_pixels,
+                          connection_->default_screen().height_in_pixels),
       webrtc::DesktopVector(kDefaultDPI, kDefaultDPI));
   return result;
 }
@@ -177,11 +178,11 @@ void DesktopResizerX11::SetResolution(const ScreenResolution& resolution) {
   // error, for example if xrandr has been used to add a mode with the same
   // name as our temporary mode, or to remove the "client resolution" mode. We
   // don't want to terminate the process if this happens.
-  x11::ScopedIgnoreErrors ignore_errors(&connection_);
+  x11::ScopedIgnoreErrors ignore_errors(connection_);
 
   // Grab the X server while we're changing the display resolution. This ensures
   // that the display configuration doesn't change under our feet.
-  ScopedXGrabServer grabber(&connection_);
+  ScopedXGrabServer grabber(connection_);
 
   if (exact_resize_)
     SetResolutionNewMode(resolution);
@@ -210,16 +211,17 @@ void DesktopResizerX11::SetResolutionNewMode(
            << "x" << resolution.dimensions().height();
 
   // TODO(lambroslambrou): Use the DPI from client size information.
-  int width_mm =
+  uint32_t width_mm =
       PixelsToMillimeters(resolution.dimensions().width(), kDefaultDPI);
-  int height_mm =
+  uint32_t height_mm =
       PixelsToMillimeters(resolution.dimensions().height(), kDefaultDPI);
   CreateMode(kTempModeName, resolution.dimensions().width(),
              resolution.dimensions().height());
   SwitchToMode(nullptr);
-  randr_->SetScreenSize({root_, resolution.dimensions().width(),
-                         resolution.dimensions().height(), width_mm,
-                         height_mm});
+  randr_->SetScreenSize(
+      {root_, static_cast<uint16_t>(resolution.dimensions().width()),
+       static_cast<uint16_t>(resolution.dimensions().height()), width_mm,
+       height_mm});
   SwitchToMode(kTempModeName);
   DeleteMode(kModeName);
   CreateMode(kModeName, resolution.dimensions().width(),
@@ -240,7 +242,7 @@ void DesktopResizerX11::SetResolutionExistingMode(
             .window = root_,
             .timestamp = x11::Time::CurrentTime,
             .config_timestamp = config->config_timestamp,
-            .sizeID = i,
+            .sizeID = static_cast<uint16_t>(i),
             .rotation = current_rotation,
             .rate = 0,
         });

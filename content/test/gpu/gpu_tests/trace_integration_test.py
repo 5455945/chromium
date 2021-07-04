@@ -2,6 +2,8 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import print_function
+
 import os
 import sys
 
@@ -304,7 +306,10 @@ class TraceIntegrationTest(gpu_integration_test.GpuIntegrationTest):
           expected.pixel_format = 'YUY2'
         else:
           assert supports_sw_nv12_overlays
-          expected.pixel_format = 'NV12'
+          expected.pixel_format = 'BGRA'
+      else:
+        if (not supports_hw_nv12_overlays and not supports_hw_yuy2_overlays):
+          expected.pixel_format = 'BGRA'
 
       gpu = self.browser.GetSystemInfo().gpu.devices[0]
       supports_rotated_video_overlays = (

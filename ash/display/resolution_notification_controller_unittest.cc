@@ -6,7 +6,6 @@
 
 #include "ash/display/display_change_dialog.h"
 #include "ash/display/display_util.h"
-#include "ash/public/cpp/ash_features.h"
 #include "ash/screen_util.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
@@ -35,12 +34,12 @@ class ResolutionNotificationControllerTest
 
   ~ResolutionNotificationControllerTest() override = default;
 
-  base::string16 ExpectedNotificationMessage(int64_t display_id,
+  std::u16string ExpectedNotificationMessage(int64_t display_id,
                                              const gfx::Size& new_resolution,
                                              float new_refresh_rate) {
-    const base::string16 display_name =
+    const std::u16string display_name =
         base::UTF8ToUTF16(display_manager()->GetDisplayNameForId(display_id));
-    const base::string16 countdown = ui::TimeFormat::Simple(
+    const std::u16string countdown = ui::TimeFormat::Simple(
         ui::TimeFormat::FORMAT_DURATION, ui::TimeFormat::LENGTH_LONG,
         base::TimeDelta::FromSeconds(15));
     if (::display::features::IsListAllDisplayModesEnabled()) {
@@ -54,15 +53,15 @@ class ResolutionNotificationControllerTest
         base::UTF8ToUTF16(new_resolution.ToString()), countdown);
   }
 
-  base::string16 ExpectedFallbackNotificationMessage(
+  std::u16string ExpectedFallbackNotificationMessage(
       int64_t display_id,
       const gfx::Size& specified_resolution,
       float specified_refresh_rate,
       const gfx::Size& fallback_resolution,
       float fallback_refresh_rate) {
-    const base::string16 display_name =
+    const std::u16string display_name =
         base::UTF8ToUTF16(display_manager()->GetDisplayNameForId(display_id));
-    const base::string16 countdown = ui::TimeFormat::Simple(
+    const std::u16string countdown = ui::TimeFormat::Simple(
         ui::TimeFormat::FORMAT_DURATION, ui::TimeFormat::LENGTH_LONG,
         base::TimeDelta::FromSeconds(15));
     if (::display::features::IsListAllDisplayModesEnabled()) {
@@ -145,7 +144,7 @@ class ResolutionNotificationControllerTest
         new_is_native, source);
   }
 
-  static base::string16 GetNotificationMessage() {
+  static std::u16string GetNotificationMessage() {
     return controller()->dialog_for_testing()->label_->GetText();
   }
 
@@ -462,6 +461,35 @@ TEST_P(ResolutionNotificationControllerTest, NoTimeoutInKioskMode) {
   SetDisplayResolutionAndNotify(display, gfx::Size(200, 200), 60,
                                 /*old_is_native=*/true,
                                 /*new_is_native=*/false);
+}
+
+TEST_P(ResolutionNotificationControllerTest, NoDialogInKioskMode) {
+  // Login in as kiosk app.
+  UserSession session;
+  session.session_id = 1u;
+  session.user_info.type = user_manager::USER_TYPE_KIOSK_APP;
+  session.user_info.account_id = AccountId::FromUserEmail("user1@test.com");
+  session.user_info.display_name = "User 1";
+  session.user_info.display_email = "user1@test.com";
+  Shell::Get()->session_controller()->UpdateUserSession(std::move(session));
+  EXPECT_EQ(LoginStatus::KIOSK_APP,
+            Shell::Get()->session_controller()->login_status());
+
+  UpdateDisplay("100x100,150x150#150x150%59|200x200%60");
+  display::test::DisplayManagerTestApi display_manager_test(display_manager());
+  int64_t id2 = display_manager_test.GetSecondaryDisplay().id();
+  ASSERT_EQ(0, accept_count());
+  EXPECT_FALSE(IsNotificationVisible());
+
+  // Changes the resolution and apply the result.
+  SetDisplayResolutionAndNotify(
+      display_manager_test.GetSecondaryDisplay(), gfx::Size(200, 200), 60,
+      /*old_is_native=*/false, /*new_is_native=*/true);
+  EXPECT_FALSE(IsNotificationVisible());
+  display::ManagedDisplayMode mode;
+  EXPECT_TRUE(display_manager()->GetSelectedModeForDisplayId(id2, &mode));
+  EXPECT_EQ("200x200", mode.size().ToString());
+  EXPECT_EQ(60.0f, mode.refresh_rate());
 }
 
 // Parametrizes all tests to run with display::features::kListAllDisplayModes

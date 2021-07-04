@@ -16,6 +16,7 @@
 #include "chrome/browser/web_applications/components/web_app_id.h"
 #include "chrome/browser/web_applications/components/web_app_prefs_utils.h"
 #include "chrome/browser/web_applications/components/web_application_info.h"
+#include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -34,7 +35,7 @@ class PWAConfirmationBubbleViewBrowserTest : public InProcessBrowserTest {
 
   std::unique_ptr<WebApplicationInfo> GetAppInfo() {
     auto app_info = std::make_unique<WebApplicationInfo>();
-    app_info->title = base::UTF8ToUTF16("Test app 2");
+    app_info->title = u"Test app 2";
     app_info->start_url = GURL("https://example2.com");
     app_info->open_as_window = true;
     return app_info;
@@ -47,10 +48,11 @@ class PWAConfirmationBubbleViewBrowserTest : public InProcessBrowserTest {
 IN_PROC_BROWSER_TEST_F(PWAConfirmationBubbleViewBrowserTest,
                        ShowBubbleInPWAWindow) {
   auto app_info = std::make_unique<WebApplicationInfo>();
-  app_info->title = base::UTF8ToUTF16("Test app");
+  app_info->title = u"Test app";
   app_info->start_url = GURL("https://example.com");
   Profile* profile = browser()->profile();
-  web_app::AppId app_id = web_app::InstallWebApp(profile, std::move(app_info));
+  web_app::AppId app_id =
+      web_app::test::InstallWebApp(profile, std::move(app_info));
   Browser* browser = web_app::LaunchWebAppBrowser(profile, app_id);
 
   app_info = GetAppInfo();
@@ -62,7 +64,7 @@ IN_PROC_BROWSER_TEST_F(PWAConfirmationBubbleViewBrowserTest,
   // Tests that we don't crash when attempting to show bubble when it's already
   // shown.
   app_info = std::make_unique<WebApplicationInfo>();
-  app_info->title = base::UTF8ToUTF16("Test app 3");
+  app_info->title = u"Test app 3";
   app_info->start_url = GURL("https://example3.com");
   app_info->open_as_window = true;
   chrome::ShowPWAInstallBubble(

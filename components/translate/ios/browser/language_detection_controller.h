@@ -11,17 +11,12 @@
 #include "base/callback_list.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "base/strings/string16.h"
 #include "components/prefs/pref_member.h"
 #import "ios/web/public/web_state.h"
 #include "ios/web/public/web_state_observer.h"
 
 class GURL;
 class PrefService;
-
-namespace base {
-class DictionaryValue;
-}
 
 namespace net {
 class HttpResponseHeaders;
@@ -49,13 +44,14 @@ class LanguageDetectionController : public web::WebStateObserver {
 
   // Handles the "languageDetection.textCaptured" javascript command.
   // |interacting| is true if the user is currently interacting with the page.
-  void OnTextCaptured(const base::DictionaryValue& value,
+  void OnTextCaptured(const base::Value& value,
                       const GURL& url,
                       bool user_is_interacting,
                       web::WebFrame* sender_frame);
 
   // Completion handler used to retrieve the buffered text.
-  void OnTextRetrieved(const std::string& http_content_language,
+  void OnTextRetrieved(const bool has_notranslate,
+                       const std::string& http_content_language,
                        const std::string& html_lang,
                        const GURL& url,
                        const base::Value* text_content);

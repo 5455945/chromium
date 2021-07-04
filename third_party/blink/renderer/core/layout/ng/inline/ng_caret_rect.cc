@@ -8,6 +8,7 @@
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/layout/geometry/physical_rect.h"
 #include "third_party/blink/renderer/core/layout/layout_block_flow.h"
+#include "third_party/blink/renderer/core/layout/ng/inline/layout_ng_text_combine.h"
 #include "third_party/blink/renderer/core/layout/ng/inline/ng_caret_position.h"
 #include "third_party/blink/renderer/core/layout/ng/ng_physical_box_fragment.h"
 
@@ -89,7 +90,7 @@ PhysicalRect ComputeLocalCaretRectAtTextOffset(const NGInlineCursor& cursor,
                                           : cursor.Current().Size().width;
   LayoutUnit caret_top;
 
-  LayoutUnit caret_left = cursor.InlinePositionForOffset(offset);
+  LayoutUnit caret_left = cursor.CaretInlinePositionForOffset(offset);
   if (!cursor.Current().IsLineBreak())
     caret_left -= caret_width / 2;
 
@@ -101,6 +102,12 @@ PhysicalRect ComputeLocalCaretRectAtTextOffset(const NGInlineCursor& cursor,
   // Adjust the location to be relative to the inline formatting context.
   PhysicalOffset caret_location = PhysicalOffset(caret_left, caret_top) +
                                   cursor.Current().OffsetInContainerFragment();
+  const auto* const text_combine = DynamicTo<LayoutNGTextCombine>(
+      cursor.Current().GetLayoutObject()->Parent());
+  if (UNLIKELY(text_combine)) {
+    caret_location =
+        text_combine->AdjustOffsetForLocalCaretRect(caret_location);
+  }
   const PhysicalSize caret_size(caret_width, caret_height);
 
   const NGPhysicalBoxFragment& fragment = cursor.ContainerFragment();
@@ -155,22 +162,24 @@ LocalCaretRect ComputeLocalCaretRect(const NGCaretPosition& caret_position) {
   if (caret_position.IsNull())
     return LocalCaretRect();
 
-  const LayoutObject* layout_object =
+  const LayoutObject* const layout_object =
       caret_position.cursor.Current().GetLayoutObject();
+  const NGPhysicalBoxFragment& container_fragment =
+      caret_position.cursor.ContainerFragment();
   switch (caret_position.position_type) {
     case NGCaretPositionType::kBeforeBox:
     case NGCaretPositionType::kAfterBox: {
       DCHECK(!caret_position.cursor.Current().IsText());
       const PhysicalRect fragment_local_rect = ComputeLocalCaretRectByBoxSide(
           caret_position.cursor, caret_position.position_type);
-      return {layout_object, fragment_local_rect};
+      return {layout_object, fragment_local_rect, &container_fragment};
     }
     case NGCaretPositionType::kAtTextOffset: {
       DCHECK(caret_position.cursor.Current().IsText());
       DCHECK(caret_position.text_offset.has_value());
       const PhysicalRect caret_rect = ComputeLocalCaretRectAtTextOffset(
           caret_position.cursor, *caret_position.text_offset);
-      return {layout_object, caret_rect};
+      return {layout_object, caret_rect, &container_fragment};
     }
   }
 
@@ -198,7 +207,8 @@ LocalCaretRect ComputeLocalSelectionRect(
     rect.SetX(line_box.Current().OffsetInContainerFragment().left);
     rect.SetHeight(line_box.Current().Size().width);
   }
-  return {caret_rect.layout_object, rect};
+  return {caret_rect.layout_object, rect,
+          &caret_position.cursor.ContainerFragment()};
 }
 
 }  // namespace blink

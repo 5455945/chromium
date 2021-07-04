@@ -24,6 +24,14 @@
 // Constraint used for leading text constraint with |imageView| showing.
 @property(nonatomic, strong) NSLayoutConstraint* textWithImageConstraint;
 
+// Constraint used for aligning the image with the content view centerYAnchor.
+@property(nonatomic, strong)
+    NSLayoutConstraint* alignImageWithContentViewCenterYConstraint;
+
+// Constraint used for aligning the image with the content view
+// firstBaselineAnchor.
+@property(nonatomic, strong)
+    NSLayoutConstraint* alignImageWithContentViewFirstBaselineAnchorConstraint;
 @end
 
 @implementation SettingsImageDetailTextCell
@@ -50,6 +58,11 @@
   _imageView = [[UIImageView alloc] init];
   _imageView.translatesAutoresizingMaskIntoConstraints = NO;
   _imageView.tintColor = UIColor.cr_labelColor;
+  [_imageView setContentHuggingPriority:UILayoutPriorityRequired
+                                forAxis:UILayoutConstraintAxisHorizontal];
+  [_imageView
+      setContentCompressionResistancePriority:UILayoutPriorityRequired
+                                      forAxis:UILayoutConstraintAxisHorizontal];
   [contentView addSubview:_imageView];
 
   _textLabel = [[UILabel alloc] init];
@@ -83,17 +96,22 @@
       constraintEqualToAnchor:_imageView.trailingAnchor
                      constant:kTableViewImagePadding];
 
+  _alignImageWithContentViewCenterYConstraint = [_imageView.centerYAnchor
+      constraintEqualToAnchor:contentView.centerYAnchor];
+
+  _alignImageWithContentViewFirstBaselineAnchorConstraint =
+      [_imageView.firstBaselineAnchor
+          constraintEqualToAnchor:contentView.firstBaselineAnchor];
+
   [NSLayoutConstraint activateConstraints:@[
-    [_imageView.widthAnchor constraintEqualToConstant:kTableViewIconImageSize],
-    [_imageView.heightAnchor constraintEqualToAnchor:_imageView.widthAnchor],
     [_imageView.leadingAnchor
         constraintEqualToAnchor:contentView.leadingAnchor
                        constant:kTableViewHorizontalSpacing],
-    [_imageView.centerYAnchor
-        constraintEqualToAnchor:contentView.centerYAnchor],
+    _alignImageWithContentViewCenterYConstraint,
     [_imageView.topAnchor
         constraintGreaterThanOrEqualToAnchor:contentView.topAnchor
-                                    constant:kTableViewVerticalSpacing],
+                                    constant:
+                                        kTableViewTwoLabelsCellVerticalSpacing],
     [contentView.trailingAnchor
         constraintEqualToAnchor:textStackView.trailingAnchor
                        constant:kTableViewHorizontalSpacing],
@@ -133,6 +151,24 @@
 
 - (UIImage*)image {
   return self.imageView.image;
+}
+
+- (void)setImageViewTintColor:(UIColor*)color {
+  _imageView.tintColor = color;
+}
+
+- (void)alignImageWithFirstLineOfText:(BOOL)alignImageWithFirstBaseline {
+  self.alignImageWithContentViewCenterYConstraint.active =
+      !alignImageWithFirstBaseline;
+  self.alignImageWithContentViewFirstBaselineAnchorConstraint.active =
+      alignImageWithFirstBaseline;
+}
+
+#pragma mark - UITableViewCell
+
+- (void)prepareForReuse {
+  [super prepareForReuse];
+  [self alignImageWithFirstLineOfText:NO];
 }
 
 #pragma mark - UIAccessibility

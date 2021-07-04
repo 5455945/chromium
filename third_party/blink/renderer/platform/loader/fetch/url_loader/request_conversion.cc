@@ -10,6 +10,7 @@
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "net/base/load_flags.h"
 #include "net/base/request_priority.h"
+#include "net/filter/source_stream.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_util.h"
 #include "services/network/public/cpp/constants.h"
@@ -20,6 +21,9 @@
 #include "services/network/public/mojom/data_pipe_getter.mojom.h"
 #include "services/network/public/mojom/trust_tokens.mojom-blink.h"
 #include "services/network/public/mojom/trust_tokens.mojom.h"
+#include "third_party/blink/public/common/buildflags.h"
+#include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/mojom/blob/blob.mojom-blink.h"
 #include "third_party/blink/public/mojom/blob/blob.mojom.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/mojom/loader/resource_load_info.mojom-shared.h"
@@ -36,14 +40,26 @@
 
 namespace blink {
 
-#if BUILDFLAG(ENABLE_AV1_DECODER)
-constexpr char kImageAcceptHeader[] =
-    "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
+const char* ImageAcceptHeader() {
+#if BUILDFLAG(ENABLE_JXL_DECODER) && BUILDFLAG(ENABLE_AV1_DECODER)
+  if (base::FeatureList::IsEnabled(blink::features::kJXL)) {
+    return "image/jxl,image/avif,image/webp,image/apng,image/svg+xml,image/*,*/"
+           "*;q=0.8";
+  } else {
+    return "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
+  }
+#elif BUILDFLAG(ENABLE_JXL_DECODER)
+  if (base::FeatureList::IsEnabled(blink::features::kJXL)) {
+    return "image/jxl,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
+  } else {
+    return "image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
+  }
+#elif BUILDFLAG(ENABLE_AV1_DECODER)
+  return "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
 #else
-constexpr char kImageAcceptHeader[] =
-    "image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
+  return "image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
 #endif
-
+}
 namespace {
 
 constexpr char kStylesheetAcceptHeader[] = "text/css,*/*;q=0.1";
@@ -135,7 +151,6 @@ mojom::ResourceType RequestContextToResourceType(
       return mojom::ResourceType::kPrefetch;
 
     // Script
-    case mojom::blink::RequestContextType::IMPORT:
     case mojom::blink::RequestContextType::SCRIPT:
       return mojom::ResourceType::kScript;
 
@@ -266,6 +281,12 @@ void PopulateResourceRequest(const ResourceRequestHead& src,
   dest->site_for_cookies = src.SiteForCookies();
   dest->upgrade_if_insecure = src.UpgradeIfInsecure();
   dest->is_revalidating = src.IsRevalidating();
+  if (src.GetDevToolsAcceptedStreamTypes()) {
+    dest->devtools_accepted_stream_types =
+        std::vector<net::SourceStream::SourceType>(
+            src.GetDevToolsAcceptedStreamTypes()->data.begin(),
+            src.GetDevToolsAcceptedStreamTypes()->data.end());
+  }
   if (src.RequestorOrigin()->ToString() == "null") {
     // "file:" origin is treated like an opaque unique origin when
     // allow-file-access-from-files is not specified. Such origin is not opaque
@@ -321,7 +342,7 @@ void PopulateResourceRequest(const ResourceRequestHead& src,
   dest->fetch_integrity = src.GetFetchIntegrity().Utf8();
   if (src.GetWebBundleTokenParams().has_value()) {
     dest->web_bundle_token_params =
-        base::make_optional(network::ResourceRequest::WebBundleTokenParams(
+        absl::make_optional(network::ResourceRequest::WebBundleTokenParams(
             src.GetWebBundleTokenParams()->bundle_url,
             src.GetWebBundleTokenParams()->token,
             src.GetWebBundleTokenParams()->CloneHandle()));
@@ -352,7 +373,7 @@ void PopulateResourceRequest(const ResourceRequestHead& src,
   dest->trust_token_params = ConvertTrustTokenParams(src.TrustTokenParams());
 
   if (base::UnguessableToken window_id = src.GetFetchWindowId())
-    dest->fetch_window_id = base::make_optional(window_id);
+    dest->fetch_window_id = absl::make_optional(window_id);
 
   if (src.GetDevToolsId().has_value()) {
     dest->devtools_request_id = src.GetDevToolsId().value().Ascii();
@@ -388,7 +409,7 @@ void PopulateResourceRequest(const ResourceRequestHead& src,
   } else if (request_destination ==
              network::mojom::RequestDestination::kImage) {
     dest->headers.SetHeaderIfMissing(net::HttpRequestHeaders::kAccept,
-                                     kImageAcceptHeader);
+                                     ImageAcceptHeader());
   } else {
     // Calling SetHeaderIfMissing() instead of SetHeader() because JS can
     // manually set an accept header on an XHR.

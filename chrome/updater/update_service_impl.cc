@@ -12,18 +12,22 @@
 #include "base/callback.h"
 #include "base/callback_helpers.h"
 #include "base/containers/contains.h"
+#include "base/containers/queue.h"
 #include "base/run_loop.h"
 #include "base/sequenced_task_runner.h"
 #include "base/task/post_task.h"
 #include "base/threading/sequenced_task_runner_handle.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/version.h"
+#include "chrome/updater/check_for_updates_task.h"
 #include "chrome/updater/configurator.h"
 #include "chrome/updater/constants.h"
 #include "chrome/updater/installer.h"
 #include "chrome/updater/persisted_data.h"
+#include "chrome/updater/policy/service.h"
 #include "chrome/updater/prefs.h"
 #include "chrome/updater/registration_data.h"
+#include "chrome/updater/update_service.h"
 #include "chrome/updater/updater_version.h"
 #include "components/prefs/pref_service.h"
 #include "components/update_client/crx_update_item.h"
@@ -133,21 +137,31 @@ MakeUpdateClientCrxStateChangeCallback(
       config, callback);
 }
 
-std::vector<base::Optional<update_client::CrxComponent>> GetComponents(
+std::vector<absl::optional<update_client::CrxComponent>> GetComponents(
+    scoped_refptr<Configurator> config,
     scoped_refptr<PersistedData> persisted_data,
     const std::vector<std::string>& ids) {
-  std::vector<base::Optional<update_client::CrxComponent>> components;
+  std::vector<absl::optional<update_client::CrxComponent>> components;
   for (const auto& id : ids) {
-    components.push_back(base::MakeRefCounted<Installer>(id, persisted_data)
-                             ->MakeCrxComponent());
+    components.push_back(
+        base::MakeRefCounted<Installer>(
+            id,
+            [&config, &id]() {
+              std::string component_channel;
+              return config->GetPolicyService()->GetTargetChannel(
+                         id, nullptr, &component_channel)
+                         ? component_channel
+                         : std::string();
+            }(),
+            persisted_data)
+            ->MakeCrxComponent());
   }
   return components;
 }
 
 }  // namespace
 
-UpdateServiceImpl::UpdateServiceImpl(
-    scoped_refptr<update_client::Configurator> config)
+UpdateServiceImpl::UpdateServiceImpl(scoped_refptr<Configurator> config)
     : config_(config),
       persisted_data_(
           base::MakeRefCounted<PersistedData>(config_->GetPrefService())),
@@ -158,33 +172,65 @@ void UpdateServiceImpl::GetVersion(
     base::OnceCallback<void(const base::Version&)> callback) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   main_task_runner_->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback),
-                                base::Version(UPDATER_VERSION_STRING)));
+      FROM_HERE,
+      base::BindOnce(std::move(callback), base::Version(kUpdaterVersion)));
 }
 
 void UpdateServiceImpl::RegisterApp(
     const RegistrationRequest& request,
     base::OnceCallback<void(const RegistrationResponse&)> callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  main_task_runner_->PostTask(
+      FROM_HERE, base::BindOnce(std::move(callback),
+                                RegistrationResponse(DoRegistration(request))));
+}
 
+int UpdateServiceImpl::DoRegistration(const RegistrationRequest& request) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  base::Version current_version =
+      persisted_data_->GetProductVersion(request.app_id);
+  if (current_version.IsValid() &&
+      current_version.CompareTo(request.version) == 1) {
+    return kRegistrationAlreadyRegistered;
+  }
   persisted_data_->RegisterApp(request);
+  update_client_->SendRegistrationPing(request.app_id, request.version,
+                                       base::DoNothing());
+  return kRegistrationSuccess;
+}
+
+void UpdateServiceImpl::RunPeriodicTasks(base::OnceClosure callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  // The installer should make an updater registration, but in case it halts
+  // before it does, synthesize a registration if necessary here.
   if (!base::Contains(persisted_data_->GetAppIds(), kUpdaterAppId)) {
     RegistrationRequest updater_request;
     updater_request.app_id = kUpdaterAppId;
-    updater_request.version = base::Version(UPDATER_VERSION_STRING);
-    persisted_data_->RegisterApp(updater_request);
-    update_client_->SendRegistrationPing(
-        updater_request.app_id, updater_request.version, base::DoNothing());
+    updater_request.version = base::Version(kUpdaterVersion);
+    RegisterApp(updater_request, base::DoNothing());
   }
 
-  update_client_->SendRegistrationPing(request.app_id, request.version,
-                                       base::DoNothing());
+  tasks_.push(base::MakeRefCounted<CheckForUpdatesTask>(
+      config_,
+      base::BindOnce(&UpdateServiceImpl::UpdateAll, this, base::DoNothing()),
+      base::BindOnce(&UpdateServiceImpl::TaskDone, this, std::move(callback))));
+  if (tasks_.size() == 1)
+    TaskStart();
+}
 
-  // Result of registration. Currently there's no error handling in
-  // PersistedData, so we assume success every time, which is why we respond
-  // with 0.
-  main_task_runner_->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), RegistrationResponse(0)));
+void UpdateServiceImpl::TaskStart() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!tasks_.empty()) {
+    tasks_.front()->Run();
+  }
+}
+
+void UpdateServiceImpl::TaskDone(base::OnceClosure callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  std::move(callback).Run();
+  tasks_.pop();
+  TaskStart();
 }
 
 void UpdateServiceImpl::UpdateAll(StateChangeCallback state_update,
@@ -195,7 +241,7 @@ void UpdateServiceImpl::UpdateAll(StateChangeCallback state_update,
   DCHECK(base::Contains(app_ids, kUpdaterAppId));
 
   update_client_->Update(
-      app_ids, base::BindOnce(&GetComponents, persisted_data_),
+      app_ids, base::BindOnce(&GetComponents, config_, persisted_data_),
       MakeUpdateClientCrxStateChangeCallback(config_, state_update), false,
       MakeUpdateClientCallback(std::move(callback)));
 }
@@ -207,7 +253,7 @@ void UpdateServiceImpl::Update(const std::string& app_id,
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   update_client_->Update(
-      {app_id}, base::BindOnce(&GetComponents, persisted_data_),
+      {app_id}, base::BindOnce(&GetComponents, config_, persisted_data_),
       MakeUpdateClientCrxStateChangeCallback(config_, state_update),
       priority == Priority::kForeground,
       MakeUpdateClientCallback(std::move(callback)));

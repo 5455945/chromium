@@ -281,7 +281,7 @@ TEST_P(LoginAuthUserViewUnittest,
 
   // Set a password.
   SetAuthMethods(LoginAuthUserView::AUTH_PASSWORD);
-  password_test.textfield()->SetText(base::ASCIIToUTF16("Hello"));
+  password_test.textfield()->SetText(u"Hello");
 
   // Enable some other auth method (PIN), password is not cleared.
   EXPECT_TRUE(has_password());
@@ -299,7 +299,7 @@ TEST_P(LoginAuthUserViewUnittest, PasswordFieldChangeOnUpdateUser) {
   LoginAuthUserView::TestApi auth_test(view_);
   LoginPasswordView::TestApi password_test(auth_test.password_view());
 
-  const auto password = base::ASCIIToUTF16("abc1");
+  const std::u16string password = u"abc1";
   password_test.textfield()->SetText(password);
   view_->UpdateForUser(user_);
   EXPECT_EQ(password_test.textfield()->GetText(), password);
@@ -364,7 +364,7 @@ TEST_P(LoginAuthUserViewUnittest, PasswordOnlyFieldMode) {
   SetAuthMethods(LoginAuthUserView::AUTH_PASSWORD);
   ExpectModeVisibility(LoginAuthUserView::InputFieldMode::PASSWORD_ONLY);
 
-  password_test.textfield()->SetText(base::ASCIIToUTF16("test_password"));
+  password_test.textfield()->SetText(u"test_password");
 
   EXPECT_CALL(*client, AuthenticateUserWithPasswordOrPin_(
                            user_view->current_user().basic_user_info.account_id,
@@ -494,7 +494,7 @@ TEST_P(LoginAuthUserViewUnittest, PwdWithToggleFieldModeCorrectness) {
 
   // Insert a password consisting of numbers only and expect it to be treated
   // as a password, not a PIN. This means 'authenticated_by_pin' must be false.
-  password_test.textfield()->SetText(base::ASCIIToUTF16("12345678"));
+  password_test.textfield()->SetText(u"12345678");
 
   EXPECT_CALL(*client, AuthenticateUserWithPasswordOrPin_(
                            user_view->current_user().basic_user_info.account_id,

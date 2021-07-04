@@ -11,7 +11,6 @@
 #include "base/mac/foundation_util.h"
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
-#include "base/scoped_observer.h"
 #include "components/ntp_snippets/content_suggestions_service.h"
 #include "components/ntp_snippets/features.h"
 #import "components/signin/public/identity_manager/objc/identity_manager_observer_bridge.h"
@@ -33,7 +32,10 @@
 #import "ios/chrome/browser/ui/content_suggestions/cells/content_suggestions_item.h"
 #import "ios/chrome/browser/ui/content_suggestions/cells/content_suggestions_most_visited_action_item.h"
 #import "ios/chrome/browser/ui/content_suggestions/cells/content_suggestions_most_visited_item.h"
+#import "ios/chrome/browser/ui/content_suggestions/cells/content_suggestions_return_to_recent_tab_item.h"
 #import "ios/chrome/browser/ui/content_suggestions/content_suggestions_alert_factory.h"
+#import "ios/chrome/browser/ui/content_suggestions/content_suggestions_collection_updater.h"
+#import "ios/chrome/browser/ui/content_suggestions/content_suggestions_collection_utils.h"
 #import "ios/chrome/browser/ui/content_suggestions/content_suggestions_header_synchronizer.h"
 #import "ios/chrome/browser/ui/content_suggestions/content_suggestions_mediator.h"
 #import "ios/chrome/browser/ui/content_suggestions/content_suggestions_metrics_recorder.h"
@@ -44,8 +46,10 @@
 #import "ios/chrome/browser/ui/content_suggestions/ntp_home_consumer.h"
 #import "ios/chrome/browser/ui/content_suggestions/ntp_home_metrics.h"
 #import "ios/chrome/browser/ui/content_suggestions/user_account_image_update_delegate.h"
+#import "ios/chrome/browser/ui/default_promo/default_browser_utils.h"
 #import "ios/chrome/browser/ui/ntp/discover_feed_wrapper_view_controller.h"
 #include "ios/chrome/browser/ui/ntp/metrics.h"
+#import "ios/chrome/browser/ui/ntp/new_tab_page_feed_delegate.h"
 #import "ios/chrome/browser/ui/ntp/new_tab_page_header_constants.h"
 #import "ios/chrome/browser/ui/ntp/new_tab_page_view_controller.h"
 #import "ios/chrome/browser/ui/ntp/notification_promo_whats_new.h"
@@ -53,6 +57,7 @@
 #import "ios/chrome/browser/url_loading/url_loading_browser_agent.h"
 #import "ios/chrome/browser/url_loading/url_loading_params.h"
 #import "ios/chrome/browser/voice/voice_search_availability.h"
+#import "ios/chrome/browser/web_state_list/web_state_list.h"
 #import "ios/chrome/common/ui/favicon/favicon_attributes.h"
 #include "ios/chrome/grit/ios_strings.h"
 #import "ios/public/provider/chrome/browser/chrome_browser_provider.h"
@@ -272,6 +277,7 @@ const char kNTPHelpURL[] =
     switch (mostVisitedItem.collectionShortcutType) {
       case NTPCollectionShortcutTypeBookmark:
         base::RecordAction(base::UserMetricsAction("MobileNTPShowBookmarks"));
+        LogLikelyInterestedDefaultBrowserUserActivity(DefaultPromoTypeAllTabs);
         [self.dispatcher showBookmarksManager];
         break;
       case NTPCollectionShortcutTypeReadingList:
@@ -431,6 +437,23 @@ const char kNTPHelpURL[] =
   [self.NTPMetrics recordAction:new_tab_page_uma::ACTION_OPENED_LEARN_MORE];
 }
 
+- (void)openMostRecentTab:(CollectionViewItem*)item {
+  DCHECK([item isKindOfClass:[ContentSuggestionsReturnToRecentTabItem class]]);
+  base::RecordAction(
+      base::UserMetricsAction("IOS.StartSurface.OpenMostRecentTab"));
+  [self.suggestionsMediator hideRecentTabTile];
+  WebStateList* web_state_list = self.browser->GetWebStateList();
+  web::WebState* web_state =
+      StartSurfaceRecentTabBrowserAgent::FromBrowser(self.browser)
+          ->most_recent_tab();
+  int index = web_state_list->GetIndexOfWebState(web_state);
+  web_state_list->ActivateWebStateAt(index);
+}
+
+- (void)hideMostRecentTab {
+  [self.suggestionsMediator hideRecentTabTile];
+}
+
 #pragma mark - ContentSuggestionsGestureCommands
 
 - (void)openNewTabWithSuggestionsItem:(ContentSuggestionsItem*)item
@@ -562,7 +585,7 @@ const char kNTPHelpURL[] =
 
 - (void)onPrimaryAccountChanged:
     (const signin::PrimaryAccountChangeEvent&)event {
-  switch (event.GetEventTypeFor(signin::ConsentLevel::kNotRequired)) {
+  switch (event.GetEventTypeFor(signin::ConsentLevel::kSignin)) {
     case signin::PrimaryAccountChangeEvent::Type::kSet:
     case signin::PrimaryAccountChangeEvent::Type::kCleared:
       [self updateAccountImage];
@@ -659,12 +682,24 @@ const char kNTPHelpURL[] =
   // TODO(crbug.com/1114792): Create a protocol to stop having references to
   // both of these ViewControllers directly.
   UICollectionView* collectionView =
-      self.refactoredFeedVisible
+      [self.ntpFeedDelegate isNTPRefactoredAndFeedVisible]
           ? self.ntpViewController.discoverFeedWrapperViewController
                 .feedCollectionView
           : self.suggestionsViewController.collectionView;
   UIEdgeInsets contentInset = collectionView.contentInset;
   CGPoint contentOffset = collectionView.contentOffset;
+  if ([self.suggestionsMediator mostRecentTabStartSurfaceTileIsShowing]) {
+    // Return to Recent tab tile is only shown one time, so subtract it's
+    // vertical space to preserve relative scroll position from top.
+    CGFloat tileSectionHeight =
+        [ContentSuggestionsReturnToRecentTabCell defaultSize].height +
+        content_suggestions::kReturnToRecentTabSectionBottomMargin;
+    if (contentOffset.y >
+        tileSectionHeight +
+            [self.headerCollectionInteractionHandler pinnedOffsetY]) {
+      contentOffset.y -= tileSectionHeight;
+    }
+  }
 
   contentOffset.y -=
       self.headerCollectionInteractionHandler.collectionShiftingOffset;
@@ -683,14 +718,14 @@ const char kNTPHelpURL[] =
   CGFloat offset =
       item ? item->GetPageDisplayState().scroll_state().content_offset().y : 0;
   CGFloat minimumOffset =
-      [self isRefactoredFeedVisible]
+      [self.ntpFeedDelegate isNTPRefactoredAndFeedVisible]
           ? -self.ntpViewController.contentSuggestionsContentHeight
           : 0;
   // TODO(crbug.com/1114792): Create a protocol to stop having references to
   // both of these ViewControllers directly.
   if (offset > minimumOffset) {
-    if ([self isRefactoredFeedVisible]) {
-      [self.ntpViewController setContentOffset:offset];
+    if ([self.ntpFeedDelegate isNTPRefactoredAndFeedVisible]) {
+      [self.ntpViewController setSavedContentOffset:offset];
     } else {
       [self.suggestionsViewController setContentOffset:offset];
     }

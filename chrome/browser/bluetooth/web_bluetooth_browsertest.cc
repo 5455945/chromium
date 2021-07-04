@@ -8,19 +8,19 @@
 #include "base/callback.h"
 #include "base/command_line.h"
 #include "base/metrics/field_trial.h"
-#include "base/optional.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
-#include "chrome/browser/bluetooth/bluetooth_chooser_context.h"
 #include "chrome/browser/bluetooth/bluetooth_chooser_context_factory.h"
 #include "chrome/browser/bluetooth/chrome_bluetooth_delegate.h"
 #include "chrome/browser/chrome_content_browser_client.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_dialogs.h"
+#include "chrome/browser/ui/chooser_bubble_testapi.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/permissions/contexts/bluetooth_chooser_context.h"
 #include "components/permissions/permission_context_base.h"
 #include "components/variations/variations_associated_data.h"
 #include "content/public/browser/render_frame_host.h"
@@ -42,6 +42,7 @@
 #include "device/bluetooth/test/mock_bluetooth_device.h"
 #include "device/bluetooth/test/mock_bluetooth_gatt_connection.h"
 #include "device/bluetooth/test/mock_bluetooth_gatt_service.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/bluetooth/web_bluetooth_device_id.h"
 
 namespace {
@@ -64,13 +65,13 @@ class FakeBluetoothAdapter
 
   void SimulateDeviceAdvertisementReceived(
       const std::string& device_address,
-      const base::Optional<std::string>& advertisement_name =
-          base::nullopt) const {
+      const absl::optional<std::string>& advertisement_name =
+          absl::nullopt) const {
     for (auto& observer : observers_) {
       observer.DeviceAdvertisementReceived(
-          device_address, /*device_name=*/base::nullopt, advertisement_name,
-          /*rssi=*/base::nullopt, /*tx_power=*/base::nullopt,
-          /*appearance=*/base::nullopt,
+          device_address, /*device_name=*/absl::nullopt, advertisement_name,
+          /*rssi=*/absl::nullopt, /*tx_power=*/absl::nullopt,
+          /*appearance=*/absl::nullopt,
           /*advertised_uuids=*/{}, /*service_data_map=*/{},
           /*manufacturer_data_map=*/{});
     }
@@ -161,15 +162,14 @@ class FakeBluetoothDevice
                                                        /*connected=*/true) {}
 
   void CreateGattConnection(
-      base::OnceCallback<void(std::unique_ptr<device::BluetoothGattConnection>)>
-          callback,
-      base::OnceCallback<void(enum ConnectErrorCode)> error_callback,
-      base::Optional<device::BluetoothUUID> service_uuid =
-          base::nullopt) override {
+      device::BluetoothDevice::GattConnectionCallback callback,
+      absl::optional<device::BluetoothUUID> service_uuid =
+          absl::nullopt) override {
     SetConnected(true);
     gatt_services_discovery_complete_ = true;
     std::move(callback).Run(
-        std::make_unique<FakeBluetoothGattConnection>(adapter_, GetAddress()));
+        std::make_unique<FakeBluetoothGattConnection>(adapter_, GetAddress()),
+        /*error_code=*/absl::nullopt);
   }
 
   bool IsGattServicesDiscoveryComplete() const override {
@@ -192,14 +192,14 @@ class FakeBluetoothDevice
 class FakeBluetoothChooser : public content::BluetoothChooser {
  public:
   FakeBluetoothChooser(content::BluetoothChooser::EventHandler event_handler,
-                       const base::Optional<std::string>& device_to_select)
+                       const absl::optional<std::string>& device_to_select)
       : event_handler_(event_handler), device_to_select_(device_to_select) {}
   ~FakeBluetoothChooser() override = default;
 
   // content::BluetoothChooser implementation:
   void AddOrUpdateDevice(const std::string& device_id,
                          bool should_update_name,
-                         const base::string16& device_name,
+                         const std::u16string& device_name,
                          bool is_gatt_connected,
                          bool is_paired,
                          int signal_strength_level) override {
@@ -223,7 +223,7 @@ class FakeBluetoothChooser : public content::BluetoothChooser {
 
  private:
   content::BluetoothChooser::EventHandler event_handler_;
-  base::Optional<std::string> device_to_select_;
+  absl::optional<std::string> device_to_select_;
 };
 
 class TestBluetoothDelegate : public ChromeBluetoothDelegate {
@@ -233,7 +233,13 @@ class TestBluetoothDelegate : public ChromeBluetoothDelegate {
   TestBluetoothDelegate(const TestBluetoothDelegate&) = delete;
   TestBluetoothDelegate& operator=(const TestBluetoothDelegate&) = delete;
 
+  void UseRealChooser() {
+    EXPECT_FALSE(device_to_select_.has_value());
+    use_real_chooser_ = true;
+  }
+
   void SetDeviceToSelect(const std::string& device_address) {
+    EXPECT_FALSE(use_real_chooser_);
     device_to_select_ = device_address;
   }
 
@@ -242,6 +248,9 @@ class TestBluetoothDelegate : public ChromeBluetoothDelegate {
   std::unique_ptr<content::BluetoothChooser> RunBluetoothChooser(
       content::RenderFrameHost* frame,
       const content::BluetoothChooser::EventHandler& event_handler) override {
+    if (use_real_chooser_) {
+      return ChromeBluetoothDelegate::RunBluetoothChooser(frame, event_handler);
+    }
     return std::make_unique<FakeBluetoothChooser>(event_handler,
                                                   device_to_select_);
   }
@@ -255,7 +264,9 @@ class TestBluetoothDelegate : public ChromeBluetoothDelegate {
     return nullptr;
   }
 
-  base::Optional<std::string> device_to_select_;
+ private:
+  absl::optional<std::string> device_to_select_;
+  bool use_real_chooser_ = false;
 };
 
 class TestContentBrowserClient : public ChromeContentBrowserClient {
@@ -355,6 +366,10 @@ class WebBluetoothTest : public InProcessBrowserTest {
     browser_client_.bluetooth_delegate()->SetDeviceToSelect(device_address);
   }
 
+  void UseRealChooser() {
+    browser_client_.bluetooth_delegate()->UseRealChooser();
+  }
+
   std::unique_ptr<device::BluetoothAdapterFactory::GlobalValuesForTesting>
       global_values_;
   scoped_refptr<FakeBluetoothAdapter> adapter_;
@@ -365,7 +380,7 @@ class WebBluetoothTest : public InProcessBrowserTest {
   std::unique_ptr<content::URLLoaderInterceptor> url_loader_interceptor_;
 };
 
-IN_PROC_BROWSER_TEST_F(WebBluetoothTest, DISABLED_WebBluetoothAfterCrash) {
+IN_PROC_BROWSER_TEST_F(WebBluetoothTest, WebBluetoothAfterCrash) {
   // Make sure we can use Web Bluetooth after the tab crashes.
   // Set up adapter with one device.
   adapter_->SetIsPresent(false);
@@ -464,18 +479,55 @@ IN_PROC_BROWSER_TEST_F(WebBluetoothTest, BlocklistShouldBlock) {
 }
 
 IN_PROC_BROWSER_TEST_F(WebBluetoothTest, NavigateWithChooserCrossOrigin) {
+  UseRealChooser();
   content::TestNavigationObserver observer(
       web_contents_, 1 /* number_of_navigations */,
       content::MessageLoopRunner::QuitMode::DEFERRED);
 
-  EXPECT_TRUE(content::ExecuteScript(
+  auto waiter = test::ChooserBubbleUiWaiter::Create();
+
+  EXPECT_TRUE(content::ExecJs(
       web_contents_,
-      "navigator.bluetooth.requestDevice({filters: [{name: 'Hello'}]});"
-      "document.location.href = \"https://google.com\";"));
+      "navigator.bluetooth.requestDevice({filters: [{name: 'Hello'}]})",
+      content::EXECUTE_SCRIPT_NO_RESOLVE_PROMISES));
+
+  // Wait for the chooser to be displayed before navigating to avoid a race
+  // between the two IPCs.
+  waiter->WaitForChange();
+  EXPECT_TRUE(waiter->has_shown());
+
+  EXPECT_TRUE(content::ExecJs(web_contents_,
+                              "document.location.href = 'https://google.com'"));
 
   observer.Wait();
-  EXPECT_FALSE(chrome::IsDeviceChooserShowingForTesting(browser()));
+  waiter->WaitForChange();
+  EXPECT_TRUE(waiter->has_closed());
   EXPECT_EQ(GURL("https://google.com"), web_contents_->GetLastCommittedURL());
+}
+
+IN_PROC_BROWSER_TEST_F(WebBluetoothTest, ShowChooserInBackgroundTab) {
+  UseRealChooser();
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  // Create a new foreground tab that covers |web_contents|.
+  ui_test_utils::NavigateToURLWithDisposition(
+      browser(), GURL("https://example.com"),
+      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+
+  // Try to show the chooser in the background tab.
+  EXPECT_EQ("NotFoundError: User cancelled the requestDevice() chooser.",
+            content::EvalJs(web_contents,
+                            R"((async () => {
+      try {
+        await navigator.bluetooth.requestDevice({ filters: [{name: 'Hello'}] });
+        return "Expected error, got success.";
+      } catch (e) {
+        return `${e.name}: ${e.message}`;
+      }
+    })())"));
 }
 
 // The new Web Bluetooth permissions backend is currently implemented behind a
@@ -746,15 +798,15 @@ IN_PROC_BROWSER_TEST_F(WebBluetoothTestWithNewPermissionsBackendEnabled,
     })()
   )"));
 
-  BluetoothChooserContext* context =
+  permissions::BluetoothChooserContext* context =
       BluetoothChooserContextFactory::GetForProfile(browser()->profile());
   url::Origin origin =
       url::Origin::Create(web_contents_->GetLastCommittedURL());
 
   // Revoke the permission.
-  const auto objects = context->GetGrantedObjects(origin, origin);
+  const auto objects = context->GetGrantedObjects(origin);
   EXPECT_EQ(1ul, objects.size());
-  context->RevokeObjectPermission(origin, origin, objects.at(0)->value);
+  context->RevokeObjectPermission(origin, objects.at(0)->value);
 
   // Wait for gattserverdisconnect event.
   EXPECT_EQ("event fired",
@@ -802,6 +854,14 @@ IN_PROC_BROWSER_TEST_F(WebBluetoothTestWithNewPermissionsBackendEnabled,
     })()
   )"));
 
+  url::Origin origin =
+      url::Origin::Create(web_contents_->GetLastCommittedURL());
+  permissions::BluetoothChooserContext* context =
+      BluetoothChooserContextFactory::GetForProfile(browser()->profile());
+  auto objects = context->GetGrantedObjects(origin);
+  ASSERT_EQ(1u, objects.size());
+  const auto first_object_key = context->GetKeyForObject(objects.at(0)->value);
+
   // Add a second listener on a different device which is used purely as an
   // indicator of how much to wait until we can be reasonably sure that the
   // second advertisement will not arrive.
@@ -829,11 +889,7 @@ IN_PROC_BROWSER_TEST_F(WebBluetoothTestWithNewPermissionsBackendEnabled,
   )"));
 
   // Number of granted objects should be 2.
-  url::Origin origin =
-      url::Origin::Create(web_contents_->GetLastCommittedURL());
-  BluetoothChooserContext* context =
-      BluetoothChooserContextFactory::GetForProfile(browser()->profile());
-  const auto objects = context->GetGrantedObjects(origin, origin);
+  objects = context->GetGrantedObjects(origin);
   EXPECT_EQ(2u, objects.size());
 
   // Send first advertisement and wait for the event to be resolved.
@@ -843,8 +899,8 @@ IN_PROC_BROWSER_TEST_F(WebBluetoothTestWithNewPermissionsBackendEnabled,
             content::EvalJs(web_contents_, "first_device_promise"));
 
   // Revoke the permission.
-  context->RevokeObjectPermission(origin, origin, objects.at(0)->value);
-  EXPECT_EQ(1ul, context->GetGrantedObjects(origin, origin).size());
+  context->RevokeObjectPermission(origin, first_object_key);
+  EXPECT_EQ(1ul, context->GetGrantedObjects(origin).size());
 
   // Send another advertisement after the permission was revoked, this
   // advertisement event should not be received. Also send an advertisement

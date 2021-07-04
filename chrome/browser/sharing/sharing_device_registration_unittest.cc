@@ -211,6 +211,9 @@ class SharingDeviceRegistrationTest : public testing::Test {
     if (sharing_device_registration_.IsRemoteCopySupported())
       features.insert(sync_pb::SharingSpecificFields::REMOTE_COPY);
 
+    if (sharing_device_registration_.IsSmsFetcherSupported())
+      features.insert(sync_pb::SharingSpecificFields::SMS_FETCHER);
+
     return features;
   }
 
@@ -232,8 +235,8 @@ class SharingDeviceRegistrationTest : public testing::Test {
   SharingDeviceRegistration sharing_device_registration_;
 
   // callback results
-  base::Optional<syncer::DeviceInfo::SharingInfo> local_sharing_info_;
-  base::Optional<SharingSyncPreference::FCMRegistration> fcm_registration_;
+  absl::optional<syncer::DeviceInfo::SharingInfo> local_sharing_info_;
+  absl::optional<SharingSyncPreference::FCMRegistration> fcm_registration_;
   SharingDeviceRegistrationResult result_;
 };
 

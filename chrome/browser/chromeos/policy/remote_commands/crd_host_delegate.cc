@@ -7,89 +7,65 @@
 #include "base/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
-#include "chrome/browser/ash/app_mode/arc/arc_kiosk_app_manager.h"
-#include "chrome/browser/ash/app_mode/kiosk_app_manager.h"
-#include "chrome/browser/ash/app_mode/web_app/web_kiosk_app_manager.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/device_identity/device_oauth2_token_service.h"
-#include "chrome/browser/device_identity/device_oauth2_token_service_factory.h"
-#include "components/user_manager/user_manager.h"
+#include "chrome/browser/chromeos/policy/remote_commands/crd_logging.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/storage_partition.h"
 #include "extensions/browser/api/messaging/native_message_host.h"
 #include "google_apis/gaia/gaia_constants.h"
-#include "net/base/load_flags.h"
-#include "net/http/http_request_headers.h"
+#include "remoting/host/it2me/it2me_constants.h"
 #include "remoting/host/it2me/it2me_native_messaging_host_chromeos.h"
-#include "ui/base/user_activity/user_activity_detector.h"
 
 namespace policy {
 
 namespace {
 
-// TODO(https://crbug.com/864455): move these constants to some place
-// that they can be reused by both this code and It2MeNativeMessagingHost.
+class DefaultNativeMessageHostFactory
+    : public CRDHostDelegate::NativeMessageHostFactory {
+ public:
+  DefaultNativeMessageHostFactory() = default;
+  DefaultNativeMessageHostFactory(const DefaultNativeMessageHostFactory&) =
+      delete;
+  DefaultNativeMessageHostFactory& operator=(
+      const DefaultNativeMessageHostFactory&) = delete;
+  ~DefaultNativeMessageHostFactory() override = default;
 
-// Communication with CRD Host, messages sent to host:
-constexpr char kCRDMessageTypeKey[] = "type";
+  // CRDHostDelegate::NativeMessageHostFactory implementation:
+  std::unique_ptr<extensions::NativeMessageHost> CreateNativeMessageHostHost()
+      override {
+    return remoting::CreateIt2MeNativeMessagingHostForChromeOS(
+        content::GetIOThreadTaskRunner({}), content::GetUIThreadTaskRunner({}),
+        g_browser_process->policy_service());
+  }
+};
 
-constexpr char kCRDMessageHello[] = "hello";
-constexpr char kCRDMessageConnect[] = "connect";
-constexpr char kCRDMessageDisconnect[] = "disconnect";
-
-// Communication with CRD Host, messages received from host:
-constexpr char kCRDResponseHello[] = "helloResponse";
-constexpr char kCRDResponseConnect[] = "connectResponse";
-constexpr char kCRDStateChanged[] = "hostStateChanged";
-constexpr char kCRDResponseDisconnect[] = "disconnectResponse";
-constexpr char kCRDResponseError[] = "error";
-
-// Connect message parameters:
-constexpr char kCRDConnectUserName[] = "userName";
-constexpr char kCRDConnectAuth[] = "authServiceWithToken";
-constexpr char kCRDConnectXMPPServer[] = "xmppServerAddress";
-constexpr char kCRDConnectXMPPTLS[] = "xmppServerUseTls";
-constexpr char kCRDConnectDirectoryBot[] = "directoryBotJid";
-constexpr char kCRDConnectSuppressUserDialogs[] = "suppressUserDialogs";
-constexpr char kCRDConnectSuppressNotifications[] = "suppressNotifications";
-constexpr char kCRDTerminateUponInput[] = "terminateUponInput";
-
-// Connect message parameter values:
-constexpr char kCRDConnectXMPPServerValue[] = "talk.google.com:443";
-constexpr char kCRDConnectDirectoryBotValue[] = "remoting@bot.talk.google.com";
-
-// CRD host states we care about:
-constexpr char kCRDStateKey[] = "state";
-constexpr char kCRDStateError[] = "ERROR";
-constexpr char kCRDStateStarting[] = "STARTING";
-constexpr char kCRDStateAccessCodeRequested[] = "REQUESTED_ACCESS_CODE";
-constexpr char kCRDStateDomainError[] = "INVALID_DOMAIN_ERROR";
-constexpr char kCRDStateAccessCode[] = "RECEIVED_ACCESS_CODE";
-constexpr char kCRDStateRemoteDisconnected[] = "DISCONNECTED";
-constexpr char kCRDStateRemoteConnected[] = "CONNECTED";
-
-constexpr char kCRDErrorCodeKey[] = "error_code";
-constexpr char kCRDAccessCodeKey[] = "accessCode";
-constexpr char kCRDAccessCodeLifetimeKey[] = "accessCodeLifetime";
-
-constexpr char kCRDConnectClientKey[] = "client";
-
-// OAuth2 Token scopes
-constexpr char kCloudDevicesOAuth2Scope[] =
-    "https://www.googleapis.com/auth/clouddevices";
-constexpr char kChromotingRemoteSupportOAuth2Scope[] =
-    "https://www.googleapis.com/auth/chromoting.remote.support";
-constexpr char kTachyonOAuth2Scope[] =
-    "https://www.googleapis.com/auth/tachyon";
+std::string FormatErrorMessage(const std::string& error_state,
+                               const base::Value& message) {
+  if (error_state == remoting::kHostStateDomainError) {
+    return "Invalid domain";
+  } else {
+    const std::string* error_code =
+        message.FindStringKey(remoting::kErrorMessageCode);
+    if (error_code)
+      return *error_code;
+    else
+      return "Unknown Error";
+  }
+}
 
 }  // namespace
 
 CRDHostDelegate::CRDHostDelegate()
-    : OAuth2AccessTokenManager::Consumer("crd_host_delegate") {}
+    : CRDHostDelegate(std::make_unique<DefaultNativeMessageHostFactory>()) {}
 
-CRDHostDelegate::~CRDHostDelegate() {}
+CRDHostDelegate::CRDHostDelegate(
+    std::unique_ptr<NativeMessageHostFactory> factory)
+    : factory_(std::move(factory)) {
+  DCHECK(factory_);
+}
+
+CRDHostDelegate::~CRDHostDelegate() = default;
 
 bool CRDHostDelegate::HasActiveSession() const {
   return host_ != nullptr;
@@ -100,82 +76,9 @@ void CRDHostDelegate::TerminateSession(base::OnceClosure callback) {
   std::move(callback).Run();
 }
 
-bool CRDHostDelegate::AreServicesReady() const {
-  return user_manager::UserManager::IsInitialized() &&
-         ui::UserActivityDetector::Get() != nullptr &&
-         chromeos::ProfileHelper::Get() != nullptr &&
-         DeviceOAuth2TokenServiceFactory::Get() != nullptr;
-}
-
-bool CRDHostDelegate::IsRunningKiosk() const {
-  auto* user_manager = user_manager::UserManager::Get();
-  if (!user_manager->IsLoggedInAsAnyKioskApp()) {
-    return false;
-  }
-  if (!GetKioskProfile())
-    return false;
-
-  if (user_manager->IsLoggedInAsKioskApp()) {
-    ash::KioskAppManager* manager = ash::KioskAppManager::Get();
-    if (manager->GetAutoLaunchApp().empty())
-      return false;
-    ash::KioskAppManager::App app;
-    CHECK(manager->GetApp(manager->GetAutoLaunchApp(), &app));
-    return app.was_auto_launched_with_zero_delay;
-  } else if (user_manager->IsLoggedInAsArcKioskApp()) {
-    return chromeos::ArcKioskAppManager::Get()
-        ->current_app_was_auto_launched_with_zero_delay();
-  } else if (user_manager->IsLoggedInAsWebKioskApp()) {
-    return ash::WebKioskAppManager::Get()
-        ->current_app_was_auto_launched_with_zero_delay();
-  }
-  NOTREACHED();
-  return false;
-}
-
-base::TimeDelta CRDHostDelegate::GetIdlenessPeriod() const {
-  return base::TimeTicks::Now() -
-         ui::UserActivityDetector::Get()->last_activity_time();
-}
-
-void CRDHostDelegate::FetchOAuthToken(
-    DeviceCommandStartCRDSessionJob::OAuthTokenCallback success_callback,
-    DeviceCommandStartCRDSessionJob::ErrorCallback error_callback) {
-  DCHECK(!oauth_success_callback_);
-  DCHECK(!error_callback_);
-  DeviceOAuth2TokenService* oauth_service =
-      DeviceOAuth2TokenServiceFactory::Get();
-
-  OAuth2AccessTokenManager::ScopeSet scopes{
-      GaiaConstants::kGoogleUserInfoEmail, kCloudDevicesOAuth2Scope,
-      kChromotingRemoteSupportOAuth2Scope, kTachyonOAuth2Scope};
-
-  oauth_success_callback_ = std::move(success_callback);
-  error_callback_ = std::move(error_callback);
-
-  oauth_request_ = oauth_service->StartAccessTokenRequest(scopes, this);
-}
-
-void CRDHostDelegate::OnGetTokenSuccess(
-    const OAuth2AccessTokenManager::Request* request,
-    const OAuth2AccessTokenConsumer::TokenResponse& token_response) {
-  oauth_request_.reset();
-  error_callback_.Reset();
-  std::move(oauth_success_callback_).Run(token_response.access_token);
-}
-
-void CRDHostDelegate::OnGetTokenFailure(
-    const OAuth2AccessTokenManager::Request* request,
-    const GoogleServiceAuthError& error) {
-  oauth_request_.reset();
-  oauth_success_callback_.Reset();
-  std::move(error_callback_)
-      .Run(DeviceCommandStartCRDSessionJob::FAILURE_NO_OAUTH_TOKEN,
-           error.ToString());
-}
-
 void CRDHostDelegate::StartCRDHostAndGetCode(
     const std::string& oauth_token,
+    const std::string& user_name,
     bool terminate_upon_input,
     DeviceCommandStartCRDSessionJob::AccessCodeCallback success_callback,
     DeviceCommandStartCRDSessionJob::ErrorCallback error_callback) {
@@ -185,23 +88,13 @@ void CRDHostDelegate::StartCRDHostAndGetCode(
 
   // Store all parameters for future connect call.
   base::Value connect_params(base::Value::Type::DICTIONARY);
-  CoreAccountId account_id =
-      DeviceOAuth2TokenServiceFactory::Get()->GetRobotAccountId();
 
-  // TODO(msarda): This conversion will not be correct once account id is
-  // migrated to be the Gaia ID on ChromeOS. Fix it.
-  std::string username = account_id.ToString();
-
-  connect_params.SetKey(kCRDConnectUserName, base::Value(username));
-  connect_params.SetKey(kCRDConnectAuth, base::Value("oauth2:" + oauth_token));
-  connect_params.SetKey(kCRDConnectXMPPServer,
-                        base::Value(kCRDConnectXMPPServerValue));
-  connect_params.SetKey(kCRDConnectXMPPTLS, base::Value(true));
-  connect_params.SetKey(kCRDConnectDirectoryBot,
-                        base::Value(kCRDConnectDirectoryBotValue));
-  connect_params.SetKey(kCRDConnectSuppressUserDialogs, base::Value(true));
-  connect_params.SetKey(kCRDConnectSuppressNotifications, base::Value(true));
-  connect_params.SetKey(kCRDTerminateUponInput,
+  connect_params.SetKey(remoting::kUserName, base::Value(user_name));
+  connect_params.SetKey(remoting::kAuthServiceWithToken,
+                        base::Value("oauth2:" + oauth_token));
+  connect_params.SetKey(remoting::kSuppressUserDialogs, base::Value(true));
+  connect_params.SetKey(remoting::kSuppressNotifications, base::Value(true));
+  connect_params.SetKey(remoting::kTerminateUponInput,
                         base::Value(terminate_upon_input));
   connect_params_ = std::move(connect_params);
 
@@ -212,72 +105,78 @@ void CRDHostDelegate::StartCRDHostAndGetCode(
   error_callback_ = std::move(error_callback);
 
   // TODO(antrim): set up watchdog timer (reasonable cutoff).
-  host_ = remoting::CreateIt2MeNativeMessagingHostForChromeOS(
-      content::GetIOThreadTaskRunner({}), content::GetUIThreadTaskRunner({}),
-      g_browser_process->policy_service());
+  host_ = factory_->CreateNativeMessageHostHost();
   host_->Start(this);
 
   base::Value params(base::Value::Type::DICTIONARY);
-  SendMessageToHost(kCRDMessageHello, params);
+  SendMessageToHost(remoting::kHelloMessage, params);
 }
 
-void CRDHostDelegate::PostMessageFromNativeHost(const std::string& message) {
-  std::unique_ptr<base::Value> message_value =
-      base::JSONReader::ReadDeprecated(message);
-  if (!message_value->is_dict()) {
+void CRDHostDelegate::PostMessageFromNativeHost(
+    const std::string& message_string) {
+  CRD_DVLOG(1) << "Received message from CRD host: " << message_string;
+
+  absl::optional<base::Value> message = base::JSONReader::Read(message_string);
+  if (!message) {
+    OnProtocolBroken("Message is invalid JSON");
+    return;
+  }
+
+  if (!message->is_dict()) {
     OnProtocolBroken("Message is not a dictionary");
     return;
   }
 
-  auto* type_value = message_value->FindKeyOfType(kCRDMessageTypeKey,
-                                                  base::Value::Type::STRING);
-  if (!type_value) {
+  const std::string* type_pointer =
+      message->FindStringKey(remoting::kMessageType);
+  if (!type_pointer) {
     OnProtocolBroken("Message without type");
     return;
   }
-  std::string type = type_value->GetString();
+  const std::string& type = *type_pointer;
 
-  if (type == kCRDResponseHello) {
+  if (type == remoting::kHelloResponse) {
     OnHelloResponse();
     return;
-  } else if (type == kCRDResponseConnect) {
-    // Ok, just ignore.
+  } else if (type == remoting::kConnectResponse) {
+    //  Ok, just ignore.
     return;
-  } else if (type == kCRDResponseDisconnect) {
+  } else if (type == remoting::kDisconnectResponse) {
     OnDisconnectResponse();
     return;
-  } else if (type == kCRDStateChanged || type == kCRDResponseError) {
-    // Handle CRD host state changes
-    auto* state_value =
-        message_value->FindKeyOfType(kCRDStateKey, base::Value::Type::STRING);
-    if (!state_value) {
+  } else if (type == remoting::kHostStateChangedMessage ||
+             type == remoting::kErrorMessage) {
+    //  Handle CRD host state changes
+    const std::string* state_pointer = message->FindStringKey(remoting::kState);
+    if (!state_pointer) {
       OnProtocolBroken("No state in message");
       return;
     }
-    std::string state = state_value->GetString();
+    const std::string& state = *state_pointer;
 
-    if (state == kCRDStateAccessCode) {
-      OnStateReceivedAccessCode(*message_value);
-    } else if (state == kCRDStateRemoteConnected) {
-      OnStateRemoteConnected(*message_value);
-    } else if (state == kCRDStateRemoteDisconnected) {
+    if (state == remoting::kHostStateReceivedAccessCode) {
+      OnStateReceivedAccessCode(*message);
+    } else if (state == remoting::kHostStateConnected) {
+      OnStateRemoteConnected(*message);
+    } else if (state == remoting::kHostStateDisconnected) {
       OnStateRemoteDisconnected();
-    } else if (state == kCRDStateError || state == kCRDStateDomainError) {
-      OnStateError(state, *message_value);
-    } else if (state == kCRDStateStarting ||
-               state == kCRDStateAccessCodeRequested) {
-      // Just ignore these states.
+    } else if (state == remoting::kHostStateError ||
+               state == remoting::kHostStateDomainError) {
+      OnStateError(state, *message);
+    } else if (state == remoting::kHostStateStarting ||
+               state == remoting::kHostStateRequestedAccessCode) {
+      //  Just ignore these states.
     } else {
-      LOG(WARNING) << "Unhandled state :" << type;
+      CRD_LOG(WARNING) << "Unhandled state :" << type;
     }
     return;
   }
-  LOG(WARNING) << "Unknown message type: " << type;
+  CRD_LOG(WARNING) << "Unknown message type: " << type;
 }
 
 void CRDHostDelegate::OnHelloResponse() {
   // Host is initialized, start connection.
-  SendMessageToHost(kCRDMessageConnect, connect_params_);
+  SendMessageToHost(remoting::kConnectMessage, connect_params_);
 }
 
 void CRDHostDelegate::OnDisconnectResponse() {
@@ -289,54 +188,43 @@ void CRDHostDelegate::OnDisconnectResponse() {
   ShutdownHost();
 }
 
-void CRDHostDelegate::OnStateError(std::string error_state,
-                                   base::Value& message) {
-  std::string error_message;
-  if (error_state == kCRDStateDomainError) {
-    error_message = "CRD Error : Invalid domain";
-  } else {
-    auto* error_code_value =
-        message.FindKeyOfType(kCRDErrorCodeKey, base::Value::Type::STRING);
-    if (error_code_value)
-      error_message = error_code_value->GetString();
-    else
-      error_message = "Unknown CRD Error";
-  }
+void CRDHostDelegate::OnStateError(const std::string& error_state,
+                                   const base::Value& message) {
   // Notify callback if command is still running.
   if (command_awaiting_crd_access_code_) {
     command_awaiting_crd_access_code_ = false;
     std::move(error_callback_)
         .Run(DeviceCommandStartCRDSessionJob::FAILURE_CRD_HOST_ERROR,
-             "CRD Error state " + error_state);
+             "CRD State Error: " + FormatErrorMessage(error_state, message));
     code_success_callback_.Reset();
   }
-  // Shut down host, if any
+  // Shut down host, if any.
   ShutdownHost();
 }
 
-void CRDHostDelegate::OnStateRemoteConnected(base::Value& message) {
+void CRDHostDelegate::OnStateRemoteConnected(const base::Value& message) {
   remote_connected_ = true;
   // TODO(antrim): set up watchdog timer (session duration).
-  auto* client_value =
-      message.FindKeyOfType(kCRDConnectClientKey, base::Value::Type::STRING);
-  if (client_value) {
-    VLOG(1) << "Remote connection by " << client_value->GetString();
-  }
+  const std::string* client = message.FindStringKey(remoting::kClient);
+  if (client)
+    CRD_DVLOG(1) << "Remote connection by " << *client;
 }
 
 void CRDHostDelegate::OnStateRemoteDisconnected() {
   // There could be a connection attempt that was not successful, we will
   // receive "disconnected" message without actually receiving "connected".
-  if (!remote_connected_)
+  if (!remote_connected_) {
+    CRD_DVLOG(1) << "Received disconnect out-of-order before connect";
     return;
+  }
   remote_connected_ = false;
   // Remote has disconnected, time to send "disconnect" that would result
   // in shutting down the host.
   base::Value params(base::Value::Type::DICTIONARY);
-  SendMessageToHost(kCRDMessageDisconnect, params);
+  SendMessageToHost(remoting::kDisconnectMessage, params);
 }
 
-void CRDHostDelegate::OnStateReceivedAccessCode(base::Value& message) {
+void CRDHostDelegate::OnStateReceivedAccessCode(const base::Value& message) {
   if (!command_awaiting_crd_access_code_) {
     if (!remote_connected_) {
       // We have already sent the access code back to the server which initiated
@@ -344,27 +232,28 @@ void CRDHostDelegate::OnStateReceivedAccessCode(base::Value& message) {
       // access code. Assuming that the old access code is no longer valid, we
       // can only terminate the current CRD session.
       base::Value params(base::Value::Type::DICTIONARY);
-      SendMessageToHost(kCRDMessageDisconnect, params);
+      SendMessageToHost(remoting::kDisconnectMessage, params);
     }
     return;
   }
 
-  auto* code_value =
-      message.FindKeyOfType(kCRDAccessCodeKey, base::Value::Type::STRING);
-  auto* code_lifetime_value = message.FindKeyOfType(kCRDAccessCodeLifetimeKey,
-                                                    base::Value::Type::INTEGER);
-  if (!code_value || !code_lifetime_value) {
+  const std::string* access_code = message.FindStringKey(remoting::kAccessCode);
+  absl::optional<int> code_lifetime =
+      message.FindIntKey(remoting::kAccessCodeLifetime);
+  if (!access_code || !code_lifetime) {
     OnProtocolBroken("Can not obtain access code");
     return;
   }
+
+  CRD_DVLOG(1) << "Got access code";
   // TODO(antrim): set up watchdog timer (access code lifetime).
   command_awaiting_crd_access_code_ = false;
-  std::move(code_success_callback_).Run(std::string(code_value->GetString()));
+  std::move(code_success_callback_).Run(*access_code);
   error_callback_.Reset();
 }
 
 void CRDHostDelegate::CloseChannel(const std::string& error_message) {
-  LOG(ERROR) << "CRD Host closed channel" << error_message;
+  CRD_LOG(ERROR) << "CRD Host closed channel" << error_message;
   command_awaiting_crd_access_code_ = false;
 
   if (error_callback_) {
@@ -378,8 +267,9 @@ void CRDHostDelegate::CloseChannel(const std::string& error_message) {
 
 void CRDHostDelegate::SendMessageToHost(const std::string& type,
                                         base::Value& params) {
+  CRD_DVLOG(1) << "Sending message of type '" << type << "' to CRD host.";
   std::string message_json;
-  params.SetKey(kCRDMessageTypeKey, base::Value(type));
+  params.SetKey(remoting::kMessageType, base::Value(type));
   base::JSONWriter::Write(params, &message_json);
   base::ThreadTaskRunnerHandle::Get()->PostTask(
       FROM_HERE, base::BindOnce(&CRDHostDelegate::DoSendMessage,
@@ -393,7 +283,7 @@ void CRDHostDelegate::DoSendMessage(const std::string& json) {
 }
 
 void CRDHostDelegate::OnProtocolBroken(const std::string& message) {
-  LOG(ERROR) << "Error communicating with CRD Host : " << message;
+  CRD_LOG(ERROR) << "Error communicating with CRD Host : " << message;
   command_awaiting_crd_access_code_ = false;
 
   std::move(error_callback_)
@@ -412,12 +302,6 @@ void CRDHostDelegate::ShutdownHost() {
 
 void CRDHostDelegate::DoShutdownHost() {
   host_.reset();
-}
-
-Profile* CRDHostDelegate::GetKioskProfile() const {
-  auto* user_manager = user_manager::UserManager::Get();
-  return chromeos::ProfileHelper::Get()->GetProfileByUser(
-      user_manager->GetActiveUser());
 }
 
 }  // namespace policy

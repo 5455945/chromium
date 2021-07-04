@@ -4,9 +4,9 @@
 
 #include "ash/shelf/contextual_tooltip.h"
 
-#include "ash/public/cpp/ash_features.h"
+#include "ash/constants/ash_features.h"
+#include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/ash_pref_names.h"
-#include "ash/public/cpp/ash_switches.h"
 #include "ash/public/cpp/shelf_config.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shelf/contextual_nudge_status_tracker.h"
@@ -76,15 +76,15 @@ base::Time GetLastShownTime(PrefService* prefs, TooltipType type) {
 }
 
 int GetSuccessCount(PrefService* prefs, TooltipType type) {
-  base::Optional<int> success_count =
+  absl::optional<int> success_count =
       prefs->GetDictionary(prefs::kContextualTooltips)
           ->FindIntPath(GetPath(type, kSuccessCount));
   return success_count.value_or(0);
 }
 
-const base::Optional<base::TimeDelta>& GetMinIntervalOverride() {
+const absl::optional<base::TimeDelta>& GetMinIntervalOverride() {
   // Overridden minimum time between showing contextual nudges to the user.
-  static base::Optional<base::TimeDelta> min_interval_override;
+  static absl::optional<base::TimeDelta> min_interval_override;
   if (!min_interval_override) {
     min_interval_override = switches::ContextualNudgesInterval();
   }
@@ -220,7 +220,7 @@ base::TimeDelta GetNudgeTimeout(PrefService* prefs, TooltipType type) {
 }
 
 int GetShownCount(PrefService* prefs, TooltipType type) {
-  base::Optional<int> shown_count =
+  absl::optional<int> shown_count =
       prefs->GetDictionary(prefs::kContextualTooltips)
           ->FindIntPath(GetPath(type, kShownCount));
   return shown_count.value_or(0);
@@ -260,7 +260,7 @@ void ClearPrefs() {
       Shell::Get()->session_controller()->GetLastActiveUserPrefService(),
       prefs::kContextualTooltips);
   base::DictionaryValue* nudges_dict = update.Get();
-  if (nudges_dict && !nudges_dict->empty())
+  if (nudges_dict && !nudges_dict->DictEmpty())
     nudges_dict->Clear();
 }
 

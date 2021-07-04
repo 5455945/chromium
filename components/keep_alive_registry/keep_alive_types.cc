@@ -14,6 +14,8 @@ std::ostream& operator<<(std::ostream& out, const KeepAliveOrigin& origin) {
       return out << "BROWSER";
     case KeepAliveOrigin::BROWSER_PROCESS_CHROMEOS:
       return out << "BROWSER_PROCESS_CHROMEOS";
+    case KeepAliveOrigin::BROWSER_PROCESS_LACROS:
+      return out << "BROWSER_PROCESS_LACROS";
     case KeepAliveOrigin::SESSION_RESTORE:
       return out << "SESSION_RESTORE";
     case KeepAliveOrigin::BACKGROUND_MODE_MANAGER:
@@ -64,6 +66,12 @@ std::ostream& operator<<(std::ostream& out, const KeepAliveOrigin& origin) {
       return out << "CREDENTIAL_PROVIDER_SIGNIN_DIALOG";
     case KeepAliveOrigin::NATIVE_MESSAGING_HOST_ERROR_REPORT:
       return out << "NATIVE_MESSAGING_HOST_ERROR_REPORT";
+    case KeepAliveOrigin::WEB_APP_INTENT_PICKER:
+      return out << "WEB_APP_INTENT_PICKER";
+    case KeepAliveOrigin::WEB_APP_PROTOCOL_HANDLER_LAUNCH:
+      return out << "WEB_APP_PROTOCOL_HANDLER_LAUNCH";
+    case KeepAliveOrigin::SESSION_DATA_DELETER:
+      return out << "SESSION_DATA_DELETER";
   }
 
   NOTREACHED();

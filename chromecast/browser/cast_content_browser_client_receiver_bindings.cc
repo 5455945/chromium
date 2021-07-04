@@ -10,7 +10,6 @@
 
 #include "base/bind.h"
 #include "base/logging.h"
-#include "base/no_destructor.h"
 #include "base/threading/sequence_local_storage_slot.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
@@ -43,6 +42,13 @@
 #if !defined(OS_ANDROID)
 #include "chromecast/browser/memory_pressure_controller_impl.h"
 #endif  // !defined(OS_ANDROID)
+
+#if BUILDFLAG(ENABLE_CHROMECAST_EXTENSIONS)
+#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
+#include "extensions/browser/event_router.h"
+#include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
+#endif
 
 namespace chromecast {
 namespace shell {
@@ -98,6 +104,11 @@ void CastContentBrowserClient::ExposeInterfacesToRenderer(
                           base::Unretained(memory_pressure_controller_.get())),
       base::ThreadTaskRunnerHandle::Get());
 #endif  // !defined(OS_ANDROID) && !defined(OS_FUCHSIA)
+
+#if BUILDFLAG(ENABLE_CHROMECAST_EXTENSIONS)
+  associated_registry->AddInterface(base::BindRepeating(
+      &extensions::EventRouter::BindForRenderer, render_process_host->GetID()));
+#endif
 }
 
 void CastContentBrowserClient::BindMediaServiceReceiver(
@@ -159,10 +170,8 @@ void CastContentBrowserClient::CreateMediaService(
   mojo_media_client->SetVideoGeometrySetterService(
       video_geometry_setter_service_.get());
 
-  static base::NoDestructor<
-      base::SequenceLocalStorageSlot<::media::MediaService>>
-      service;
-  service->emplace(std::move(mojo_media_client), std::move(receiver));
+  static base::SequenceLocalStorageSlot<::media::MediaService> service;
+  service.emplace(std::move(mojo_media_client), std::move(receiver));
 }
 
 void CastContentBrowserClient::CreateVideoGeometrySetterServiceOnMediaThread() {

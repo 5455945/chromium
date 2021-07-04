@@ -106,11 +106,14 @@ void TableSectionPainter::PaintCollapsedBorders(const PaintInfo& paint_info) {
     return;
   }
 
+  unsigned fragment_index = 0;
   for (const auto* fragment = &layout_table_section_.FirstFragment(); fragment;
        fragment = fragment->NextFragment()) {
     PaintInfo fragment_paint_info = paint_info;
     fragment_paint_info.SetFragmentLogicalTopInFlowThread(
         fragment->LogicalTopInFlowThread());
+    ScopedDisplayItemFragment scoped_display_item_fragment(
+        fragment_paint_info.context, fragment_index++);
     PaintCollapsedSectionBorders(fragment_paint_info);
   }
 }
@@ -134,7 +137,7 @@ void TableSectionPainter::PaintCollapsedSectionBorders(
     return;
 
   ScopedPaintState paint_state(layout_table_section_, paint_info);
-  base::Optional<ScopedBoxContentsPaintState> contents_paint_state;
+  absl::optional<ScopedBoxContentsPaintState> contents_paint_state;
   if (paint_info.phase != PaintPhase::kMask)
     contents_paint_state.emplace(paint_state, layout_table_section_);
   const auto& local_paint_info = contents_paint_state
@@ -298,7 +301,7 @@ void TableSectionPainter::PaintBoxDecorationBackground(
   if (may_have_background) {
     PaintInfo paint_info_for_cells = paint_info.ForDescendants();
     for (auto r = dirtied_rows.Start(); r < dirtied_rows.End(); r++) {
-      base::Optional<ScopedPaintState> row_paint_state;
+      absl::optional<ScopedPaintState> row_paint_state;
       for (auto c = dirtied_columns.Start(); c < dirtied_columns.End(); c++) {
         if (const auto* cell = layout_table_section_.OriginatingCellAt(r, c)) {
           if (!row_paint_state)

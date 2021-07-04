@@ -12,6 +12,7 @@
 #include "base/memory/singleton.h"
 #include "build/build_config.h"
 #include "components/viz/common/surfaces/surface_id.h"
+#include "content/public/browser/color_chooser.h"
 #include "content/public/browser/file_select_listener.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
 #include "content/public/browser/render_view_host.h"
@@ -32,17 +33,13 @@ WebContents* WebContentsDelegate::OpenURLFromTab(WebContents* source,
   return nullptr;
 }
 
-bool WebContentsDelegate::ShouldTransferNavigation(
+bool WebContentsDelegate::ShouldAllowRendererInitiatedCrossProcessNavigation(
     bool is_main_frame_navigation) {
   return true;
 }
 
 bool WebContentsDelegate::CanOverscrollContent() {
-#if defined(USE_AURA)
-  return true;
-#else
   return false;
-#endif
 }
 
 bool WebContentsDelegate::ShouldSuppressDialogs(WebContents* source) {
@@ -56,9 +53,9 @@ bool WebContentsDelegate::ShouldPreserveAbortedURLs(WebContents* source) {
 bool WebContentsDelegate::DidAddMessageToConsole(
     WebContents* source,
     blink::mojom::ConsoleMessageLevel log_level,
-    const base::string16& message,
+    const std::u16string& message,
     int32_t line_no,
-    const base::string16& source_id) {
+    const std::u16string& source_id) {
   return false;
 }
 
@@ -140,7 +137,7 @@ WebContents* WebContentsDelegate::CreateCustomWebContents(
     const GURL& opener_url,
     const std::string& frame_name,
     const GURL& target_url,
-    const std::string& partition_id,
+    const StoragePartitionId& partition_id,
     SessionStorageNamespace* session_storage_namespace) {
   return nullptr;
 }
@@ -184,7 +181,7 @@ void WebContentsDelegate::RequestKeyboardLock(WebContents* web_contents,
   web_contents->GotResponseToKeyboardLockRequest(false);
 }
 
-ColorChooser* WebContentsDelegate::OpenColorChooser(
+std::unique_ptr<ColorChooser> WebContentsDelegate::OpenColorChooser(
     WebContents* web_contents,
     SkColor color,
     const std::vector<blink::mojom::ColorSuggestionPtr>& suggestions) {
@@ -274,7 +271,9 @@ bool WebContentsDelegate::GuestSaveFrame(WebContents* guest_web_contents) {
   return false;
 }
 
-bool WebContentsDelegate::SaveFrame(const GURL& url, const Referrer& referrer) {
+bool WebContentsDelegate::SaveFrame(const GURL& url,
+                                    const Referrer& referrer,
+                                    content::RenderFrameHost* rfh) {
   return false;
 }
 
@@ -330,6 +329,14 @@ PictureInPictureResult WebContentsDelegate::EnterPictureInPicture(
 
 bool WebContentsDelegate::ShouldAllowLazyLoad() {
   return true;
+}
+
+bool WebContentsDelegate::IsBackForwardCacheSupported() {
+  return false;
+}
+
+bool WebContentsDelegate::IsPrerender2Supported() {
+  return false;
 }
 
 std::unique_ptr<WebContents> WebContentsDelegate::ActivatePortalWebContents(

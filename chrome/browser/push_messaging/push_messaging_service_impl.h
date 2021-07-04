@@ -8,16 +8,17 @@
 #include <stdint.h>
 #include <memory>
 #include <queue>
-#include <set>
+#include <utility>
 #include <vector>
 
 #include "base/callback.h"
+#include "base/callback_helpers.h"
 #include "base/compiler_specific.h"
+#include "base/containers/flat_map.h"
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "base/optional.h"
-#include "base/scoped_observer.h"
+#include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "chrome/browser/permissions/abusive_origin_permission_revocation_request.h"
 #include "chrome/browser/push_messaging/push_messaging_notification_manager.h"
@@ -35,6 +36,7 @@
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/push_messaging_service.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/push_messaging/push_messaging.mojom-forward.h"
 
 class GURL;
@@ -66,6 +68,7 @@ class InstanceIDDriver;
 namespace {
 struct PendingMessage {
   PendingMessage(std::string app_id, gcm::IncomingMessage message);
+  PendingMessage(const PendingMessage& other);
   PendingMessage(PendingMessage&& other);
   ~PendingMessage();
 
@@ -73,6 +76,7 @@ struct PendingMessage {
 
   std::string app_id;
   gcm::IncomingMessage message;
+  base::Time received_time;
 };
 }  // namespace
 
@@ -189,8 +193,11 @@ class PushMessagingServiceImpl : public content::PushMessagingService,
 
  private:
   friend class PushMessagingBrowserTest;
+  friend class PushMessagingServiceTest;
   FRIEND_TEST_ALL_PREFIXES(PushMessagingServiceTest, NormalizeSenderInfo);
   FRIEND_TEST_ALL_PREFIXES(PushMessagingServiceTest, PayloadEncryptionTest);
+  FRIEND_TEST_ALL_PREFIXES(PushMessagingServiceTest,
+                           TestMultipleIncomingPushMessages);
 
   // A subscription is pending until it has succeeded or failed.
   void IncreasePushSubscriptionCount(int add, bool is_pending);
@@ -202,26 +209,28 @@ class PushMessagingServiceImpl : public content::PushMessagingService,
                               const GURL& requesting_origin,
                               int64_t service_worker_registration_id,
                               const gcm::IncomingMessage& message,
-                              base::OnceClosure message_handled_closure,
+                              bool did_enqueue_message,
                               blink::mojom::PushEventStatus status);
+
+  void DidHandleEnqueuedMessage(
+      const GURL& origin,
+      int64_t service_worker_registration_id,
+      base::OnceCallback<void(bool)> message_handled_callback,
+      bool did_show_generic_notification);
 
   void DidHandleMessage(const std::string& app_id,
                         const std::string& push_message_id,
-                        base::OnceClosure completion_closure,
                         bool did_show_generic_notification);
 
   void OnCheckedOriginForAbuse(
-      const std::string& app_id,
-      const gcm::IncomingMessage& message,
+      PendingMessage message,
       AbusiveOriginPermissionRevocationRequest::Outcome outcome);
 
-  void CheckOriginForAbuseAndDispatchNextMessage();
+  void DeliverNextQueuedMessageForServiceWorkerRegistration(
+      const GURL& origin,
+      int64_t service_worker_registration_id);
 
-  base::OnceClosure message_handled_callback() {
-    return message_callback_for_testing_.is_null()
-               ? base::DoNothing()
-               : message_callback_for_testing_;
-  }
+  void CheckOriginForAbuseAndDispatchNextMessage();
 
   // Subscribe methods ---------------------------------------------------------
 
@@ -235,7 +244,7 @@ class PushMessagingServiceImpl : public content::PushMessagingService,
   void SubscribeEnd(RegisterCallback callback,
                     const std::string& subscription_id,
                     const GURL& endpoint,
-                    const base::Optional<base::Time>& expiration_time,
+                    const absl::optional<base::Time>& expiration_time,
                     const std::vector<uint8_t>& p256dh,
                     const std::vector<uint8_t>& auth,
                     blink::mojom::PushRegistrationStatus status);
@@ -263,12 +272,12 @@ class PushMessagingServiceImpl : public content::PushMessagingService,
       const std::string& app_id,
       const std::string& sender_id,
       const GURL& endpoint,
-      const base::Optional<base::Time>& expiration_time,
+      const absl::optional<base::Time>& expiration_time,
       SubscriptionInfoCallback callback,
       bool is_valid);
 
   void DidGetEncryptionInfo(const GURL& endpoint,
-                            const base::Optional<base::Time>& expiration_time,
+                            const absl::optional<base::Time>& expiration_time,
                             SubscriptionInfoCallback callback,
                             std::string p256dh,
                             std::string auth_secret) const;
@@ -315,7 +324,7 @@ class PushMessagingServiceImpl : public content::PushMessagingService,
       const std::string& sender_id,
       bool is_valid,
       const GURL& endpoint,
-      const base::Optional<base::Time>& expiration_time,
+      const absl::optional<base::Time>& expiration_time,
       const std::vector<uint8_t>& p256dh,
       const std::vector<uint8_t>& auth);
 
@@ -344,7 +353,7 @@ class PushMessagingServiceImpl : public content::PushMessagingService,
                              const std::string& sender_id,
                              const std::string& registration_id,
                              const GURL& endpoint,
-                             const base::Optional<base::Time>& expiration_time,
+                             const absl::optional<base::Time>& expiration_time,
                              const std::vector<uint8_t>& p256dh,
                              const std::vector<uint8_t>& auth,
                              blink::mojom::PushRegistrationStatus status);
@@ -389,14 +398,17 @@ class PushMessagingServiceImpl : public content::PushMessagingService,
 
   // Testing methods -----------------------------------------------------------
 
-  // Callback to be invoked when a message has been dispatched. Enables tests to
-  // observe message delivery before it's dispatched to the Service Worker.
+  using PushEventCallback =
+      base::OnceCallback<void(blink::mojom::PushEventStatus)>;
   using MessageDispatchedCallback =
       base::RepeatingCallback<void(const std::string& app_id,
                                    const GURL& origin,
                                    int64_t service_worker_registration_id,
-                                   base::Optional<std::string> payload)>;
+                                   absl::optional<std::string> payload,
+                                   PushEventCallback callback)>;
 
+  // Callback to be invoked when a message has been dispatched. Enables tests to
+  // observe message delivery instead of delivering it to the Service Worker.
   void SetMessageDispatchedCallbackForTesting(
       const MessageDispatchedCallback& callback) {
     message_dispatched_callback_for_testing_ = callback;
@@ -406,6 +418,15 @@ class PushMessagingServiceImpl : public content::PushMessagingService,
   std::unique_ptr<AbusiveOriginPermissionRevocationRequest>
       abusive_origin_revocation_request_;
   std::queue<PendingMessage> messages_pending_permission_check_;
+
+  // {Origin, ServiceWokerRegistratonId} key for message delivery queue. This
+  // ensures that we only deliver one message at a time per ServiceWorker.
+  using MessageDeliveryQueueKey = std::pair<GURL, int64_t>;
+
+  // Queue of pending messages per ServiceWorkerRegstration to be delivered one
+  // at a time. This allows us to enforce visibility requirements.
+  base::flat_map<MessageDeliveryQueueKey, std::queue<PendingMessage>>
+      message_delivery_queue_;
 
   int push_subscription_count_;
   int pending_push_subscription_count_;
@@ -422,11 +443,9 @@ class PushMessagingServiceImpl : public content::PushMessagingService,
 
   PushMessagingRefresher refresher_;
 
-  ScopedObserver<PushMessagingRefresher, PushMessagingRefresher::Observer>
-      refresh_observer_{this};
-  // A multiset containing one entry for each in-flight push message delivery,
-  // keyed by the receiver's app id.
-  std::multiset<std::string> in_flight_message_deliveries_;
+  base::ScopedObservation<PushMessagingRefresher,
+                          PushMessagingRefresher::Observer>
+      refresh_observation_{this};
 
   MessageDispatchedCallback message_dispatched_callback_for_testing_;
 

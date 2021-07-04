@@ -10,7 +10,6 @@
 #include "ash/display/screen_orientation_controller.h"
 #include "ash/display/screen_orientation_controller_test_api.h"
 #include "ash/display/window_tree_host_manager.h"
-#include "ash/public/cpp/ash_switches.h"
 #include "ash/rotator/screen_rotation_animator_observer.h"
 #include "ash/rotator/screen_rotation_animator_test_api.h"
 #include "ash/shell.h"
@@ -22,7 +21,6 @@
 #include "ash/wallpaper/wallpaper_controller_impl.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "base/bind.h"
-#include "base/callback_forward.h"
 #include "base/command_line.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
@@ -277,7 +275,7 @@ void ScreenRotationAnimatorSmoothAnimationTest::SetScreenRotationAnimator(
 }
 
 void ScreenRotationAnimatorSmoothAnimationTest::WaitForCopyCallback() {
-  run_loop_.reset(new base::RunLoop());
+  run_loop_ = std::make_unique<base::RunLoop>();
   run_loop_->Run();
 }
 

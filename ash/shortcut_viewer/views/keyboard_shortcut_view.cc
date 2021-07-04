@@ -9,9 +9,9 @@
 #include <string>
 #include <utility>
 
+#include "ash/constants/app_types.h"
 #include "ash/display/privacy_screen_controller.h"
 #include "ash/public/cpp/app_list/internal_app_id_constants.h"
-#include "ash/public/cpp/app_types.h"
 #include "ash/public/cpp/ash_typography.h"
 #include "ash/public/cpp/resources/grit/ash_public_unscaled_resources.h"
 #include "ash/public/cpp/shelf_item.h"
@@ -40,6 +40,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/chromeos/events/keyboard_layout_util.h"
+#include "ui/compositor/compositor.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/types/event_type.h"
 #include "ui/gfx/paint_vector_icon.h"
@@ -63,7 +64,7 @@ namespace {
 
 KeyboardShortcutView* g_ksv_view = nullptr;
 
-constexpr base::nullopt_t kAllCategories = base::nullopt;
+constexpr absl::nullopt_t kAllCategories = absl::nullopt;
 
 // Creates the no search result view.
 std::unique_ptr<views::View> CreateNoSearchResultView() {
@@ -239,7 +240,7 @@ ax::mojom::Role KeyboardShortcutView::GetAccessibleWindowRole() {
   return ax::mojom::Role::kWindow;
 }
 
-base::string16 KeyboardShortcutView::GetAccessibleWindowTitle() const {
+std::u16string KeyboardShortcutView::GetAccessibleWindowTitle() const {
   return l10n_util::GetStringUTF16(IDS_KSV_TITLE);
 }
 
@@ -339,6 +340,12 @@ void KeyboardShortcutView::BackButtonPressed() {
   search_box_view_->SetSearchBoxActive(false, ui::ET_UNKNOWN);
 }
 
+void KeyboardShortcutView::CloseButtonPressed() {
+  // After clicking search box close button focus the search box text field.
+  search_box_view_->search_box()->RequestFocus();
+  search_box_view_->ClearSearch();
+}
+
 void KeyboardShortcutView::ActiveChanged(ash::SearchBoxViewBase* sender) {
   const bool is_search_box_active = sender->is_search_box_active();
   is_search_box_empty_ = sender->IsSearchBoxTrimmedQueryEmpty();
@@ -347,6 +354,10 @@ void KeyboardShortcutView::ActiveChanged(ash::SearchBoxViewBase* sender) {
         base::UserMetricsAction("KeyboardShortcutViewer.Search"));
   }
   UpdateViewsLayout(is_search_box_active);
+}
+
+bool KeyboardShortcutView::CanSelectSearchResults() {
+  return true;
 }
 
 KeyboardShortcutView::KeyboardShortcutView() {
@@ -364,9 +375,9 @@ KeyboardShortcutView::KeyboardShortcutView() {
 void KeyboardShortcutView::InitViews() {
   TRACE_EVENT0("shortcut_viewer", "InitViews");
   // Init search box view.
-  search_box_view_ = std::make_unique<KSVSearchBoxView>(this);
-  search_box_view_->Init();
-  AddChildView(search_box_view_.get());
+  auto search_box_view = std::make_unique<KSVSearchBoxView>(this);
+  search_box_view->Init();
+  search_box_view_ = AddChildView(std::move(search_box_view));
 
   // Init no search result illustration view.
   search_no_result_view_ = CreateNoSearchResultView();
@@ -413,7 +424,7 @@ void KeyboardShortcutView::InitViews() {
 }
 
 void KeyboardShortcutView::InitCategoriesTabbedPane(
-    base::Optional<ShortcutCategory> initial_category) {
+    absl::optional<ShortcutCategory> initial_category) {
   active_tab_index_ = categories_tabbed_pane_->GetSelectedTabIndex();
   // If the tab count is 0, GetSelectedTabIndex() will return kNoSelectedTab,
   // which we do not want to cache.
@@ -513,7 +524,7 @@ void KeyboardShortcutView::UpdateViewsLayout(bool is_search_box_active) {
 }
 
 void KeyboardShortcutView::ShowSearchResults(
-    const base::string16& search_query) {
+    const std::u16string& search_query) {
   search_results_container_->RemoveAllChildViews(true);
   auto* search_container_content_view = search_no_result_view_.get();
   auto found_items_list_view = std::make_unique<KeyboardShortcutItemListView>();
@@ -524,9 +535,9 @@ void KeyboardShortcutView::ShowSearchResults(
   found_shortcut_items_.clear();
 
   for (const auto& item_view : shortcut_views_) {
-    base::string16 description_text =
+    std::u16string description_text =
         item_view->description_label_view()->GetText();
-    base::string16 shortcut_text = item_view->shortcut_label_view()->GetText();
+    std::u16string shortcut_text = item_view->shortcut_label_view()->GetText();
     size_t match_index = -1;
     size_t match_length = 0;
     // Only highlight |description_label_view_| in KeyboardShortcutItemView.
@@ -565,7 +576,7 @@ void KeyboardShortcutView::ShowSearchResults(
     }
   }
 
-  std::vector<base::string16> replacement_strings;
+  std::vector<std::u16string> replacement_strings;
   const int number_search_results = found_shortcut_items_.size();
   if (!found_items_list_view->children().empty()) {
     UpdateAXNodeDataPosition(found_shortcut_items_);
@@ -610,7 +621,7 @@ KeyboardShortcutView::GetShortcutViewsForTesting() const {
 }
 
 KSVSearchBoxView* KeyboardShortcutView::GetSearchBoxViewForTesting() {
-  return search_box_view_.get();
+  return search_box_view_;
 }
 
 const std::vector<KeyboardShortcutItemView*>&

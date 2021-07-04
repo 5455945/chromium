@@ -51,15 +51,6 @@ RawResource* RawResource::FetchSynchronously(FetchParameters& params,
       params, RawResourceFactory(ResourceType::kRaw), client));
 }
 
-RawResource* RawResource::FetchImport(FetchParameters& params,
-                                      ResourceFetcher* fetcher,
-                                      RawResourceClient* client) {
-  params.SetRequestContext(mojom::blink::RequestContextType::IMPORT);
-  params.SetRequestDestination(network::mojom::RequestDestination::kEmpty);
-  return ToRawResource(fetcher->RequestResource(
-      params, RawResourceFactory(ResourceType::kImportResource), client));
-}
-
 RawResource* RawResource::Fetch(FetchParameters& params,
                                 ResourceFetcher* fetcher,
                                 RawResourceClient* client) {
@@ -241,20 +232,11 @@ void RawResource::Trace(Visitor* visitor) const {
 }
 
 void RawResource::ResponseReceived(const ResourceResponse& response) {
-  if (response.WasFallbackRequiredByServiceWorker()) {
-    // The ServiceWorker asked us to re-fetch the request. This resource must
-    // not be reused.
-    // Note: This logic is needed here because ThreadableLoader handles
-    // CORS independently from ResourceLoader. Fix it.
-    if (IsMainThread())
-      GetMemoryCache()->Remove(this);
-  }
-
   Resource::ResponseReceived(response);
 
   ResourceClientWalker<RawResourceClient> w(Clients());
   while (RawResourceClient* c = w.Next()) {
-    c->ResponseReceived(this, this->GetResponse());
+    c->ResponseReceived(this, GetResponse());
   }
 }
 
@@ -436,8 +418,28 @@ NOINLINE void RawResourceClientStateChecker::DidDownloadToBlob() {
 
 NOINLINE void RawResourceClientStateChecker::NotifyFinished(
     Resource* resource) {
+  // TODO(https://crbug.com/1158346): Remove these once the investigation is
+  // done.
+  const int32_t destination =
+      static_cast<int32_t>(
+          resource->GetResourceRequest().GetRequestDestination()) +
+      0x400;
+  const int32_t context =
+      static_cast<int32_t>(resource->GetResourceRequest().GetRequestContext()) +
+      0x800;
+  base::debug::Alias(&destination);
+  base::debug::Alias(&context);
+
   SECURITY_CHECK(state_ != kNotAddedAsClient);
   SECURITY_CHECK(state_ != kNotifyFinished);
+
+  // TODO(https://crbug.com/1158346): Remove these CHECKs once the investigation
+  // is done.
+  if (!resource->ErrorOccurred()) {
+    SECURITY_CHECK(state_ != kStarted);
+    SECURITY_CHECK(state_ != kRedirectBlocked);
+  }
+
   SECURITY_CHECK(resource->ErrorOccurred() ||
                  (state_ == kResponseReceived || state_ == kDataReceived ||
                   state_ == kDataDownloaded ||

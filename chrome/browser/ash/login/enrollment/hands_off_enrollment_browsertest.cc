@@ -6,13 +6,13 @@
 #include "base/command_line.h"
 #include "base/run_loop.h"
 #include "chrome/browser/ash/login/enrollment/enterprise_enrollment_helper_mock.h"
-#include "chrome/browser/chromeos/login/existing_user_controller.h"
-#include "chrome/browser/chromeos/login/login_wizard.h"
-#include "chrome/browser/chromeos/login/oobe_screen.h"
-#include "chrome/browser/chromeos/login/startup_utils.h"
-#include "chrome/browser/chromeos/login/test/enrollment_helper_mixin.h"
-#include "chrome/browser/chromeos/login/test/oobe_screen_waiter.h"
-#include "chrome/browser/chromeos/login/wizard_controller.h"
+#include "chrome/browser/ash/login/existing_user_controller.h"
+#include "chrome/browser/ash/login/login_wizard.h"
+#include "chrome/browser/ash/login/oobe_screen.h"
+#include "chrome/browser/ash/login/startup_utils.h"
+#include "chrome/browser/ash/login/test/enrollment_helper_mixin.h"
+#include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
+#include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/policy/enrollment_status.h"
 #include "chrome/browser/ui/webui/chromeos/login/network_screen_handler.h"
 #include "chrome/browser/ui/webui/chromeos/login/welcome_screen_handler.h"
@@ -27,8 +27,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/cros_system_api/dbus/shill/dbus-constants.h"
 
-namespace chromeos {
-
+namespace ash {
 namespace {
 
 constexpr char kDefaultNetworkServicePath[] = "/service/eth1";
@@ -164,4 +163,4 @@ IN_PROC_BROWSER_TEST_F(HandsOffEnrollmentTest, EnrollmentError) {
   EXPECT_FALSE(StartupUtils::IsDeviceRegistered());
 }
 
-}  // namespace chromeos
+}  // namespace ash

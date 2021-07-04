@@ -3,14 +3,18 @@
 // found in the LICENSE file.
 
 #include "components/lens/lens_features.h"
+
 #include "base/feature_list.h"
+#include "base/metrics/field_trial_params.h"
 
 namespace lens {
 namespace features {
 
-// Enables context menu search by image sending to lens.google.com.
 const base::Feature kLensStandalone{"LensStandalone",
                                     base::FEATURE_DISABLED_BY_DEFAULT};
+
+const base::Feature kLensRegionSearch{"LensRegionSearch",
+                                      base::FEATURE_DISABLED_BY_DEFAULT};
 
 constexpr base::FeatureParam<int> kMaxPixels{&kLensStandalone,
                                              "dimensions-max-pixels", 1000};

@@ -19,13 +19,13 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/tracing/background_tracing_field_trial.h"
 #include "chrome/browser/tracing/crash_service_uploader.h"
 #include "chrome/browser/ui/browser_otr_state.h"
 #include "chrome/common/pref_names.h"
 #include "components/metrics/metrics_pref_names.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
-#include "components/tracing/common/tracing_switches.h"
 #include "components/variations/active_field_trials.h"
 #include "components/version_info/version_info.h"
 #include "content/public/browser/background_tracing_config.h"
@@ -43,6 +43,7 @@
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #include "ash/constants/ash_pref_names.h"
+#include "chromeos/dbus/constants/dbus_switches.h"  // nogncheck
 #endif
 
 namespace {
@@ -98,9 +99,8 @@ ChromeTracingDelegate::~ChromeTracingDelegate() {
 
 #if defined(OS_ANDROID)
 void ChromeTracingDelegate::OnTabModelAdded() {
-  for (TabModelList::const_iterator i = TabModelList::begin();
-       i != TabModelList::end(); i++) {
-    if ((*i)->GetProfile()->IsOffTheRecord())
+  for (const TabModel* model : TabModelList::models()) {
+    if (model->GetProfile()->IsOffTheRecord())
       incognito_launched_ = true;
   }
 }
@@ -130,8 +130,7 @@ Profile* GetProfile() {
   if (!profile_manager)
     return nullptr;
 
-  return profile_manager->GetProfileByPath(
-      profile_manager->GetLastUsedProfileDir(profile_manager->user_data_dir()));
+  return profile_manager->GetLastUsedProfileIfLoaded();
 }
 
 bool ProfileAllowsScenario(const content::BackgroundTracingConfig& config,
@@ -139,9 +138,8 @@ bool ProfileAllowsScenario(const content::BackgroundTracingConfig& config,
                            bool is_crash_scenario) {
   // If the background tracing is specified on the command-line, we allow
   // any scenario to be traced.
-  auto* command_line = base::CommandLine::ForCurrentProcess();
-  if (command_line->HasSwitch(switches::kEnableBackgroundTracing) &&
-      command_line->HasSwitch(switches::kTraceUploadURL)) {
+  if (tracing::GetBackgroundTracingSetupMode() ==
+      tracing::BackgroundTracingSetupMode::kFromConfigFile) {
     return true;
   }
 
@@ -274,6 +272,12 @@ bool ChromeTracingDelegate::IsProfileLoaded() {
 
 bool ChromeTracingDelegate::IsSystemWideTracingEnabled() {
 #if BUILDFLAG(IS_CHROMEOS_ASH)
+  // Always allow system tracing in dev mode images.
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          chromeos::switches::kSystemDevMode)) {
+    return true;
+  }
+  // In non-dev images, honor the pref for system-wide tracing.
   PrefService* local_state = g_browser_process->local_state();
   DCHECK(local_state);
   return local_state->GetBoolean(

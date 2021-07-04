@@ -9,6 +9,7 @@ interface AbortPaymentEvent : ExtendableEvent
     method constructor
     method respondWith
 interface AbortSignal : EventTarget
+    static method abort
     attribute @@toStringTag
     getter aborted
     getter onabort
@@ -120,6 +121,9 @@ interface CanMakePaymentEvent : ExtendableEvent
     method constructor
     method respondWith
     method respondWithMinimalUI
+interface CanvasFilter
+    attribute @@toStringTag
+    method constructor
 interface CanvasGradient
     attribute @@toStringTag
     method addColorStop
@@ -188,6 +192,7 @@ interface Crypto
     getter subtle
     method constructor
     method getRandomValues
+    method randomUUID
 interface CryptoKey
     attribute @@toStringTag
     getter algorithm
@@ -399,6 +404,19 @@ interface DOMStringList
     method constructor
     method contains
     method item
+interface DatagramDuplexStream
+    attribute @@toStringTag
+    getter incomingHighWaterMark
+    getter incomingMaxAge
+    getter outgoingHighWaterMark
+    getter outgoingMaxAge
+    getter readable
+    getter writable
+    method constructor
+    setter incomingHighWaterMark
+    setter incomingMaxAge
+    setter outgoingHighWaterMark
+    setter outgoingMaxAge
 interface DecompressionStream
     attribute @@toStringTag
     getter readable
@@ -555,6 +573,7 @@ interface FileSystemHandle
     method constructor
     method isSameEntry
     method queryPermission
+    method remove
     method requestPermission
 interface FileSystemWritableFileStream : WritableStream
     attribute @@toStringTag
@@ -571,6 +590,7 @@ interface FontFace
     getter featureSettings
     getter lineGapOverride
     getter loaded
+    getter sizeAdjust
     getter status
     getter stretch
     getter style
@@ -585,6 +605,7 @@ interface FontFace
     setter family
     setter featureSettings
     setter lineGapOverride
+    setter sizeAdjust
     setter stretch
     setter style
     setter unicodeRange
@@ -767,8 +788,10 @@ interface ImageBitmapRenderingContext
     method transferFromImageBitmap
 interface ImageData
     attribute @@toStringTag
+    getter colorSpace
     getter data
     getter height
+    getter storageFormat
     getter width
     method constructor
     method getSettings
@@ -898,8 +921,10 @@ interface NavigatorUAData
     attribute @@toStringTag
     getter brands
     getter mobile
+    getter platform
     method constructor
     method getHighEntropyValues
+    method toJSON
 interface NetworkInformation : EventTarget
     attribute @@toStringTag
     getter downlink
@@ -1009,6 +1034,7 @@ interface OffscreenCanvasRenderingContext2D
     method getImageData
     method getLineDash
     method getTransform
+    method isContextLost
     method isPointInPath
     method isPointInStroke
     method lineTo
@@ -1114,7 +1140,6 @@ interface Performance : EventTarget
     method mark
     method measure
     method now
-    method profile
     method setResourceTimingBufferSize
     method toJSON
     setter onresourcetimingbufferfull
@@ -1200,7 +1225,7 @@ interface Permissions
     method request
     method requestAll
     method revoke
-interface Profiler
+interface Profiler : EventTarget
     attribute @@toStringTag
     getter sampleInterval
     getter stopped
@@ -1248,18 +1273,6 @@ interface PushSubscriptionOptions
     getter applicationServerKey
     getter userVisibleOnly
     method constructor
-interface QuicTransport
-    attribute @@toStringTag
-    getter closed
-    getter ready
-    method close
-    method constructor
-    method createBidirectionalStream
-    method createSendStream
-    method receiveBidirectionalStreams
-    method receiveDatagrams
-    method receiveStreams
-    method sendDatagrams
 interface ReadableByteStreamController
     attribute @@toStringTag
     getter byobRequest
@@ -1304,7 +1317,7 @@ interface ReadableStreamDefaultReader
     method constructor
     method read
     method releaseLock
-interface ReceiveStream
+interface ReceiveStream : ReadableStream
     attribute @@toStringTag
     getter readable
     getter readingAborted
@@ -1361,6 +1374,11 @@ interface Response
     method formData
     method json
     method text
+interface Scheduler
+    attribute @@toStringTag
+    getter currentTaskSignal
+    method constructor
+    method postTask
 interface SecurityPolicyViolationEvent : Event
     attribute @@toStringTag
     getter blockedURI
@@ -1376,7 +1394,7 @@ interface SecurityPolicyViolationEvent : Event
     getter statusCode
     getter violatedDirective
     method constructor
-interface SendStream
+interface SendStream : WritableStream
     attribute @@toStringTag
     getter writable
     getter writingAborted
@@ -1464,6 +1482,20 @@ interface SyncManager
     method constructor
     method getTags
     method register
+interface TaskController : AbortController
+    attribute @@toStringTag
+    method constructor
+    method setPriority
+interface TaskPriorityChangeEvent : Event
+    attribute @@toStringTag
+    getter previousPriority
+    method constructor
+interface TaskSignal : AbortSignal
+    attribute @@toStringTag
+    getter onprioritychange
+    getter priority
+    method constructor
+    setter onprioritychange
 interface TextDecoder
     attribute @@toStringTag
     getter encoding
@@ -1562,6 +1594,14 @@ interface URL
     setter username
 interface URLPattern
     attribute @@toStringTag
+    getter hash
+    getter hostname
+    getter password
+    getter pathname
+    getter port
+    getter protocol
+    getter search
+    getter username
     method constructor
     method exec
     method test
@@ -2901,6 +2941,7 @@ interface WebTransport
     getter closed
     getter datagramReadable
     getter datagramWritable
+    getter datagrams
     getter incomingBidirectionalStreams
     getter incomingUnidirectionalStreams
     getter ready
@@ -2934,6 +2975,7 @@ interface WorkerGlobalScope : EventTarget
     getter onunhandledrejection
     getter origin
     getter performance
+    getter scheduler
     getter self
     getter storageFoundation
     getter trustedTypes
@@ -2955,6 +2997,7 @@ interface WorkerGlobalScope : EventTarget
     setter onunhandledrejection
     setter origin
     setter performance
+    setter scheduler
 interface WorkerLocation
     attribute @@toStringTag
     getter hash

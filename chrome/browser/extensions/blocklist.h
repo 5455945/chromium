@@ -18,7 +18,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "components/safe_browsing/core/db/database_manager.h"
+#include "components/safe_browsing/core/browser/db/database_manager.h"
 #include "extensions/browser/blocklist_state.h"
 
 namespace content {
@@ -109,6 +109,10 @@ class Blocklist : public KeyedService, public base::SupportsWeakPtr<Blocklist> {
 
   // Reset the listening for an updated database.
   void ResetDatabaseUpdatedListenerForTest();
+
+  // Reset blocklist state cache to make sure the blocklist state is
+  // fetched from the blocklist state fetcher.
+  void ResetBlocklistStateCacheForTest();
 
   // Adds/removes an observer to the blocklist.
   void AddObserver(Observer* observer);

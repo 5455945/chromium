@@ -60,11 +60,13 @@ class ChromeMetricsServiceClient : public metrics::MetricsServiceClient,
   // metrics::MetricsServiceClient:
   metrics::MetricsService* GetMetricsService() override;
   ukm::UkmService* GetUkmService() override;
+  bool ShouldUploadMetricsForUserId(const uint64_t user_id) override;
   void SetMetricsClientId(const std::string& client_id) override;
   int32_t GetProduct() override;
   std::string GetApplicationLocale() override;
   bool GetBrand(std::string* brand_code) override;
   metrics::SystemProfileProto::Channel GetChannel() override;
+  bool IsExtendedStableChannel() override;
   std::string GetVersionString() override;
   void OnEnvironmentUpdate(std::string* serialized_environment) override;
   void CollectFinalMetricsForLog(base::OnceClosure done_callback) override;
@@ -83,7 +85,7 @@ class ChromeMetricsServiceClient : public metrics::MetricsServiceClient,
   bool IsUkmAllowedForAllProfiles() override;
   bool IsUkmAllowedWithExtensionsForAllProfiles() override;
   bool AreNotificationListenersEnabledOnAllProfiles() override;
-  std::string GetAppPackageName() override;
+  std::string GetAppPackageNameIfLoggable() override;
   std::string GetUploadSigningKey() override;
   static void SetNotificationListenerSetupFailedForTesting(
       bool simulate_failure);

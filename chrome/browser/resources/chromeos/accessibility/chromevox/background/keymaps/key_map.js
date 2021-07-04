@@ -565,6 +565,11 @@ KeyMap.BINDINGS_ = [
         {cvoxModifier: true, keys: {keyCode: [KeyCode.L], ctrlKey: [true]}}
   },
   {
+    command: 'showActionsMenu',
+    sequence:
+        {cvoxModifier: true, keys: {keyCode: [KeyCode.A], ctrlKey: [true]}}
+  },
+  {
     command: 'showTablesList',
     sequence:
         {cvoxModifier: true, keys: {keyCode: [KeyCode.T], ctrlKey: [true]}}
@@ -703,7 +708,7 @@ KeyMap.BINDINGS_ = [
     sequence: {cvoxModifier: true, keys: {keyCode: [KeyCode.A, KeyCode.J]}}
   },
   {
-    command: 'toggleDarkScreen',
+    command: 'toggleScreen',
     sequence: {cvoxModifier: true, keys: {keyCode: [KeyCode.BRIGHTNESS_UP]}}
   },
   {

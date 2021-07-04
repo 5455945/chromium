@@ -7,6 +7,7 @@
 #include <stddef.h>
 
 #include "base/check.h"
+#include "base/feature_list.h"
 #include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
@@ -22,6 +23,7 @@
 #include "components/dom_distiller/core/url_constants.h"
 #include "components/dom_distiller/core/url_utils.h"
 #include "components/prefs/pref_service.h"
+#include "components/reading_list/features/reading_list_switches.h"
 #include "components/search/search.h"
 #include "components/url_formatter/url_formatter.h"
 #include "components/user_prefs/user_prefs.h"
@@ -96,10 +98,13 @@ GURL GetURLToBookmark(content::WebContents* web_contents) {
   return web_contents->GetURL();
 }
 
-void GetURLAndTitleToBookmark(content::WebContents* web_contents,
+bool GetURLAndTitleToBookmark(content::WebContents* web_contents,
                               GURL* url,
-                              base::string16* title) {
-  *url = GetURLToBookmark(web_contents);
+                              std::u16string* title) {
+  GURL u = GetURLToBookmark(web_contents);
+  if (!u.is_valid())
+    return false;
+  *url = u;
   if (dom_distiller::url_utils::IsDistilledPage(web_contents->GetURL())) {
     // Users cannot bookmark Reader Mode pages directly. Instead, a bookmark
     // is added for the original page and original title.
@@ -109,6 +114,7 @@ void GetURLAndTitleToBookmark(content::WebContents* web_contents,
   } else {
     *title = web_contents->GetTitle();
   }
+  return true;
 }
 
 void ToggleBookmarkBarWhenVisible(content::BrowserContext* browser_context) {
@@ -120,7 +126,7 @@ void ToggleBookmarkBarWhenVisible(content::BrowserContext* browser_context) {
   prefs->SetBoolean(bookmarks::prefs::kShowBookmarkBar, always_show);
 }
 
-base::string16 FormatBookmarkURLForDisplay(const GURL& url) {
+std::u16string FormatBookmarkURLForDisplay(const GURL& url) {
   // Because this gets re-parsed by FixupURL(), it's safe to omit the scheme
   // and trailing slash, and unescape most characters. However, it's
   // important not to drop any username/password, or unescape anything that
@@ -151,6 +157,12 @@ bool ShouldShowAppsShortcutInBookmarkBar(Profile* profile) {
   return IsAppsShortcutEnabled(profile) &&
          profile->GetPrefs()->GetBoolean(
              bookmarks::prefs::kShowAppsShortcutInBookmarkBar);
+}
+
+bool ShouldShowReadingListInBookmarkBar(Profile* profile) {
+  return base::FeatureList::IsEnabled(reading_list::switches::kReadLater) &&
+         profile->GetPrefs()->GetBoolean(
+             bookmarks::prefs::kShowReadingListInBookmarkBar);
 }
 
 int GetBookmarkDragOperation(content::BrowserContext* browser_context,
@@ -243,8 +255,8 @@ bool IsValidBookmarkDropLocation(Profile* profile,
       const BookmarkNode* node = nodes[i];
       int node_index = (drop_parent == node->parent()) ?
           drop_parent->GetIndexOf(nodes[i]) : -1;
-      if (node_index != -1 &&
-          (index == size_t{node_index} || index == size_t{node_index} + 1))
+      if (node_index != -1 && (index == static_cast<size_t>(node_index) ||
+                               index == static_cast<size_t>(node_index) + 1))
         return false;
 
       // drop_parent can't accept a child that is an ancestor.

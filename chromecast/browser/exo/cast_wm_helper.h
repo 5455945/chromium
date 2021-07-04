@@ -10,7 +10,6 @@
 #include <vector>
 
 #include "base/macros.h"
-#include "base/observer_list.h"
 #include "components/exo/vsync_timing_manager.h"
 #include "components/exo/wm_helper.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -111,6 +110,8 @@ class CastWMHelper : public WMHelper, public VSyncTimingManager::Delegate {
   ui::mojom::DragOperation OnPerformDrop(
       const ui::DropTargetEvent& event,
       std::unique_ptr<ui::OSExchangeData> data) override;
+  WMHelper::DropCallback GetDropCallback(
+      const ui::DropTargetEvent& event) override;
 
   // Overridden from VSyncTimingManager::Delegate:
   void AddVSyncParameterObserver(

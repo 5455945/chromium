@@ -7,13 +7,10 @@
 #include "base/metrics/histogram_functions.h"
 #include "components/keyed_service/core/service_access_type.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
-#include "components/password_manager/core/browser/password_store.h"
 #include "components/password_manager/core/common/password_manager_features.h"
 #import "ios/chrome/browser/main/browser.h"
 #include "ios/chrome/browser/passwords/ios_chrome_password_check_manager.h"
 #include "ios/chrome/browser/passwords/ios_chrome_password_check_manager_factory.h"
-#include "ios/chrome/browser/passwords/ios_chrome_password_store_factory.h"
-#include "ios/chrome/browser/signin/authentication_service_factory.h"
 #include "ios/chrome/browser/sync/sync_setup_service_factory.h"
 #import "ios/chrome/browser/ui/commands/application_commands.h"
 #import "ios/chrome/browser/ui/commands/command_dispatcher.h"
@@ -97,14 +94,9 @@
 
 - (void)start {
   self.mediator = [[PasswordsMediator alloc]
-      initWithPasswordStore:IOSChromePasswordStoreFactory::GetForBrowserState(
-                                self.browser->GetBrowserState(),
-                                ServiceAccessType::EXPLICIT_ACCESS)
-       passwordCheckManager:[self passwordCheckManager]
-                authService:AuthenticationServiceFactory::GetForBrowserState(
-                                self.browser->GetBrowserState())
-                syncService:SyncSetupServiceFactory::GetForBrowserState(
-                                self.browser->GetBrowserState())];
+      initWithPasswordCheckManager:[self passwordCheckManager]
+                       syncService:SyncSetupServiceFactory::GetForBrowserState(
+                                       self.browser->GetBrowserState())];
   self.reauthModule = [[ReauthenticationModule alloc]
       initWithSuccessfulReauthTimeAccessor:self.mediator];
 
@@ -178,7 +170,7 @@
 
 - (BOOL)willHandlePasswordDeletion:
     (const password_manager::PasswordForm&)password {
-  [self.passwordsViewController deletePasswordForm:password];
+  [self.mediator deletePasswordForm:password];
   return YES;
 }
 
@@ -196,7 +188,8 @@
                     deletePassword:
                         (const password_manager::PasswordForm&)password {
   DCHECK_EQ(self.passwordDetailsCoordinator, coordinator);
-  [self.passwordsViewController deletePasswordForm:password];
+  [self.mediator deletePasswordForm:password];
+  [self.baseNavigationController popViewControllerAnimated:YES];
 }
 
 #pragma mark Private

@@ -10,8 +10,8 @@
 
 #include "ash/accessibility/accessibility_controller_impl.h"
 #include "ash/app_list/app_list_controller_impl.h"
+#include "ash/constants/ash_features.h"
 #include "ash/frame_throttler/frame_throttling_controller.h"
-#include "ash/public/cpp/ash_features.h"
 #include "ash/public/cpp/metrics_util.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/public/cpp/window_properties.h"
@@ -20,26 +20,31 @@
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/ash_color_provider.h"
 #include "ash/style/default_colors.h"
+#include "ash/wm/gestures/wm_fling_handler.h"
 #include "ash/wm/window_cycle/window_cycle_tab_slider.h"
 #include "ash/wm/window_cycle/window_cycle_tab_slider_button.h"
 #include "ash/wm/window_mini_view.h"
 #include "ash/wm/window_preview_view.h"
 #include "ash/wm/window_state.h"
 #include "ash/wm/window_util.h"
+#include "base/bind.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/numerics/ranges.h"
-#include "ui/accessibility/ax_enums.mojom.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/aura/scoped_window_targeter.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_targeter.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/compositor/animation_throughput_reporter.h"
+#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_sequence.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/display/display.h"
 #include "ui/gfx/geometry/insets.h"
-#include "ui/views/animation/bounds_animator.h"
 #include "ui/views/background.h"
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/layout/box_layout.h"
@@ -147,12 +152,27 @@ gfx::Point ConvertEventToScreen(const ui::LocatedEvent* event) {
   return event_screen_point;
 }
 
+aura::Window* GetRootWindowForCycleView() {
+  // Returns the root window for initializing cycle view if tablet mode is
+  // enabled, or if the feature for alt-tab to follow the cursor is disabled.
+  if (Shell::Get()->tablet_mode_controller()->InTabletMode() ||
+      !features::DoWindowsFollowCursor()) {
+    return Shell::GetRootWindowForNewWindows();
+  }
+
+  // Return the root window the cursor is currently on.
+  return Shell::GetRootWindowForDisplayId(
+      Shell::Get()->cursor_manager()->GetDisplay().id());
+}
+
 }  // namespace
 
 // This view represents a single aura::Window by displaying a title and a
 // thumbnail of the window's contents.
 class WindowCycleItemView : public WindowMiniView {
  public:
+  METADATA_HEADER(WindowCycleItemView);
+
   explicit WindowCycleItemView(aura::Window* window) : WindowMiniView(window) {
     SetFocusBehavior(FocusBehavior::ALWAYS);
     SetNotifyEnterExitOnChild(true);
@@ -204,9 +224,10 @@ class WindowCycleItemView : public WindowMiniView {
     gfx::Size preview_pref_size = preview_view()->GetPreferredSize();
     if (preview_pref_size.width() > kMaxPreviewWidthDp ||
         preview_pref_size.height() > kFixedPreviewHeightDp) {
-      const float scale =
-          std::min(kMaxPreviewWidthDp / float{preview_pref_size.width()},
-                   kFixedPreviewHeightDp / float{preview_pref_size.height()});
+      const float scale = std::min(
+          kMaxPreviewWidthDp / static_cast<float>(preview_pref_size.width()),
+          kFixedPreviewHeightDp /
+              static_cast<float>(preview_pref_size.height()));
       preview_pref_size =
           gfx::ScaleToFlooredSize(preview_pref_size, scale, scale);
     }
@@ -251,13 +272,24 @@ class WindowCycleItemView : public WindowMiniView {
   }
 };
 
+BEGIN_METADATA(WindowCycleItemView, WindowMiniView)
+END_METADATA
+
 // A view that shows a collection of windows the user can tab through.
 class WindowCycleView : public views::WidgetDelegateView,
                         public ui::ImplicitAnimationObserver {
  public:
-  explicit WindowCycleView(const WindowCycleList::WindowList& windows) {
-    DCHECK(!windows.empty());
+  METADATA_HEADER(WindowCycleView);
 
+  WindowCycleView(aura::Window* root_window,
+                  const WindowCycleList::WindowList& windows)
+      : root_window_(root_window) {
+    const bool is_interactive_alt_tab_mode_allowed =
+        Shell::Get()
+            ->window_cycle_controller()
+            ->IsInteractiveAltTabModeAllowed();
+
+    DCHECK(!windows.empty() || is_interactive_alt_tab_mode_allowed);
     // Start the occlusion tracker pauser. It's used to increase smoothness for
     // the fade in but we also create windows here which may occlude other
     // windows.
@@ -276,15 +308,31 @@ class WindowCycleView : public views::WidgetDelegateView,
     layer->SetName("WindowCycleView");
     layer->SetMasksToBounds(true);
 
-    if (Shell::Get()
-            ->window_cycle_controller()
-            ->IsInteractiveAltTabModeAllowed()) {
+    // |mirror_container_| may be larger than |this|. In this case, it will be
+    // shifted along the x-axis when the user tabs through. It is a container
+    // for the previews and has no rendered content.
+    mirror_container_ = AddChildView(std::make_unique<views::View>());
+    mirror_container_->SetPaintToLayer(ui::LAYER_NOT_DRAWN);
+    mirror_container_->layer()->SetName("WindowCycleView/MirrorContainer");
+    views::BoxLayout* layout =
+        mirror_container_->SetLayoutManager(std::make_unique<views::BoxLayout>(
+            views::BoxLayout::Orientation::kHorizontal,
+            gfx::Insets(is_interactive_alt_tab_mode_allowed
+                            ? kMirrorContainerVerticalPaddingDp
+                            : kInsideBorderVerticalPaddingDp,
+                        WindowCycleList::kInsideBorderHorizontalPaddingDp,
+                        kInsideBorderVerticalPaddingDp,
+                        WindowCycleList::kInsideBorderHorizontalPaddingDp),
+            kBetweenChildPaddingDp));
+    layout->set_cross_axis_alignment(
+        views::BoxLayout::CrossAxisAlignment::kStart);
+
+    if (is_interactive_alt_tab_mode_allowed) {
       tab_slider_container_ =
           AddChildView(std::make_unique<WindowCycleTabSlider>());
 
       no_recent_items_label_ = AddChildView(std::make_unique<views::Label>(
           l10n_util::GetStringUTF16(IDS_ASH_OVERVIEW_NO_RECENT_ITEMS)));
-
       no_recent_items_label_->SetPaintToLayer();
       no_recent_items_label_->layer()->SetFillsBoundsOpaquely(false);
       no_recent_items_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
@@ -299,29 +347,14 @@ class WindowCycleView : public views::WidgetDelegateView,
                   kNoRecentItemsLabelFontSizeDp -
                   no_recent_items_label_->font_list().GetFontSize())
               .DeriveWithWeight(gfx::Font::Weight::NORMAL));
-      no_recent_items_label_->SetVisible(false);
+      no_recent_items_label_->SetVisible(windows.empty());
+      no_recent_items_label_->SetPreferredSize(
+          gfx::Size(tab_slider_container_->GetPreferredSize().width() +
+                        2 * WindowCycleList::kInsideBorderHorizontalPaddingDp,
+                    kFixedPreviewHeightDp + WindowMiniView::kHeaderHeightDp +
+                        kMirrorContainerVerticalPaddingDp +
+                        kInsideBorderVerticalPaddingDp + 8));
     }
-
-    // |mirror_container_| may be larger than |this|. In this case, it will be
-    // shifted along the x-axis when the user tabs through. It is a container
-    // for the previews and has no rendered content.
-    mirror_container_ = AddChildView(std::make_unique<views::View>());
-    mirror_container_->SetPaintToLayer(ui::LAYER_NOT_DRAWN);
-    mirror_container_->layer()->SetName("WindowCycleView/MirrorContainer");
-    views::BoxLayout* layout =
-        mirror_container_->SetLayoutManager(std::make_unique<views::BoxLayout>(
-            views::BoxLayout::Orientation::kHorizontal,
-            gfx::Insets(Shell::Get()
-                                ->window_cycle_controller()
-                                ->IsInteractiveAltTabModeAllowed()
-                            ? kMirrorContainerVerticalPaddingDp
-                            : kInsideBorderVerticalPaddingDp,
-                        WindowCycleList::kInsideBorderHorizontalPaddingDp,
-                        kInsideBorderVerticalPaddingDp,
-                        WindowCycleList::kInsideBorderHorizontalPaddingDp),
-            kBetweenChildPaddingDp));
-    layout->set_cross_axis_alignment(
-        views::BoxLayout::CrossAxisAlignment::kStart);
 
     for (auto* window : windows) {
       // |mirror_container_| owns |view|. The |preview_view_| in |view| will
@@ -407,8 +440,7 @@ class WindowCycleView : public views::WidgetDelegateView,
     // widget as some previews will be offscreen. In Layout() of |cycle_view_|
     // the mirror container will be slid back and forth depending on the target
     // window.
-    aura::Window* root_window = Shell::GetRootWindowForNewWindows();
-    gfx::Rect widget_rect = root_window->GetBoundsInScreen();
+    gfx::Rect widget_rect = root_window_->GetBoundsInScreen();
     widget_rect.ClampToCenteredSize(GetPreferredSize());
     return widget_rect;
   }
@@ -419,10 +451,15 @@ class WindowCycleView : public views::WidgetDelegateView,
         Shell::Get()
             ->window_cycle_controller()
             ->IsInteractiveAltTabModeAllowed();
-    if (is_interactive_alt_tab_mode_allowed)
+
+    if (is_interactive_alt_tab_mode_allowed) {
+      DCHECK(no_recent_items_label_);
       no_recent_items_label_->SetVisible(no_windows);
+    }
+
     if (no_windows)
       return;
+
     for (auto* window : windows) {
       auto* view = mirror_container_->AddChildView(
           std::make_unique<WindowCycleItemView>(window));
@@ -469,9 +506,8 @@ class WindowCycleView : public views::WidgetDelegateView,
     // |horizontal_distance_dragged_|.
     horizontal_distance_dragged_ = 0.f;
 
-    if (GetWidget()) {
+    if (GetWidget())
       Layout();
-    }
   }
 
   void SetTargetWindow(aura::Window* target) {
@@ -487,21 +523,31 @@ class WindowCycleView : public views::WidgetDelegateView,
     if (target_it != window_view_map_.end())
       target_it->second->UpdateBorderState(/*show=*/true);
 
-    // Focus the target window if the user is not currently switching the mode.
-    // During the mode switch, we want more informative a11y string than that
-    // automatically announced from the focus event, so we prevent the focus
-    // to avoid such auto announcement and send our own string in
-    // `WindowCycleController::OnModeChanged`.
-    auto* shell = Shell::Get();
-    const bool chromevox_enabled =
-        shell->accessibility_controller()->spoken_feedback().enabled();
-    const bool is_switching_mode =
-        shell->window_cycle_controller()->IsSwitchingMode();
-    if (target_window_ && (!chromevox_enabled || !is_switching_mode)) {
-      if (GetWidget())
+    // Focus the target window if the user is not currently switching the mode
+    // while ChromeVox is on.
+    // During the mode switch, we prevent ChromeVox auto-announce the window
+    // title from the focus and send our custom string to announce both window
+    // title and the selected mode together
+    // (see `WindowCycleController::OnModeChanged`).
+    auto* a11y_controller = Shell::Get()->accessibility_controller();
+    auto* window_cycle_controller = Shell::Get()->window_cycle_controller();
+    const bool chromevox_enabled = a11y_controller->spoken_feedback().enabled();
+    const bool is_switching_mode = window_cycle_controller->IsSwitchingMode();
+    if (target_window_ && !(chromevox_enabled && is_switching_mode)) {
+      if (GetWidget()) {
         window_view_map_[target_window_]->RequestFocus();
-      else
+      } else {
         SetInitiallyFocusedView(window_view_map_[target_window_]);
+        // When alt-tab mode selection is available, announce via ChromeVox the
+        // current mode and the directional cue for mode switching.
+        if (window_cycle_controller->IsInteractiveAltTabModeAllowed()) {
+          a11y_controller->TriggerAccessibilityAlertWithMessage(
+              l10n_util::GetStringUTF8(
+                  window_cycle_controller->IsAltTabPerActiveDesk()
+                      ? IDS_ASH_ALT_TAB_FOCUS_CURRENT_DESK_MODE
+                      : IDS_ASH_ALT_TAB_FOCUS_ALL_DESKS_MODE));
+        }
+      }
     }
   }
 
@@ -525,12 +571,15 @@ class WindowCycleView : public views::WidgetDelegateView,
   }
 
   void DestroyContents() {
+    is_destroying_ = true;
+
     window_view_map_.clear();
     no_previews_set_.clear();
     target_window_ = nullptr;
     current_window_ = nullptr;
     defer_widget_bounds_update_ = false;
     RemoveAllChildViews(true);
+    OnFlingEnd();
   }
 
   void Drag(float delta_x) {
@@ -538,22 +587,45 @@ class WindowCycleView : public views::WidgetDelegateView,
     Layout();
   }
 
+  void StartFling(float velocity_x) {
+    fling_handler_ = std::make_unique<WmFlingHandler>(
+        gfx::Vector2dF(velocity_x, 0),
+        GetWidget()->GetNativeWindow()->GetRootWindow(),
+        base::BindRepeating(&WindowCycleView::OnFlingStep,
+                            base::Unretained(this)),
+        base::BindRepeating(&WindowCycleView::OnFlingEnd,
+                            base::Unretained(this)));
+  }
+
+  bool OnFlingStep(float offset) {
+    DCHECK(fling_handler_);
+    horizontal_distance_dragged_ += offset;
+    Layout();
+    return true;
+  }
+
+  void OnFlingEnd() { fling_handler_.reset(); }
+
   // views::WidgetDelegateView:
   gfx::Size CalculatePreferredSize() const override {
-    gfx::Size size = mirror_container_->GetPreferredSize();
+    gfx::Size size = GetContentContainerBounds().size();
     // |mirror_container_| can have window list that overflow out of the
     // screen, but the window cycle view with a bandshield, cropping the
     // overflow window list, should remain within the specified horizontal
     // insets of the screen width.
-    size.set_width(
-        std::min(size.width(), Shell::GetRootWindowForNewWindows()
-                                       ->GetBoundsInScreen()
-                                       .size()
-                                       .width() -
-                                   2 * kBackgroundHorizontalInsetDp));
+    const int max_width = root_window_->GetBoundsInScreen().size().width() -
+                          2 * kBackgroundHorizontalInsetDp;
+    size.set_width(std::min(size.width(), max_width));
     if (Shell::Get()
             ->window_cycle_controller()
             ->IsInteractiveAltTabModeAllowed()) {
+      DCHECK(tab_slider_container_);
+      // |mirror_container_| can have window list with width smaller the tab
+      // slider's width. The padding should be 64px from the tab slider.
+      const int min_width =
+          tab_slider_container_->GetPreferredSize().width() +
+          2 * WindowCycleList::kInsideBorderHorizontalPaddingDp;
+      size.set_width(std::max(size.width(), min_width));
       size.Enlarge(0, tab_slider_container_->GetPreferredSize().height() +
                           kTabSliderContainerVerticalPaddingDp);
     }
@@ -561,8 +633,17 @@ class WindowCycleView : public views::WidgetDelegateView,
   }
 
   void Layout() override {
-    if (!target_window_ || !current_window_ || bounds().IsEmpty())
+    if (is_destroying_)
       return;
+
+    const bool is_interactive_alt_tab_mode_allowed =
+        Shell::Get()
+            ->window_cycle_controller()
+            ->IsInteractiveAltTabModeAllowed();
+    if (bounds().IsEmpty() || (!is_interactive_alt_tab_mode_allowed &&
+                               (!target_window_ || !current_window_))) {
+      return;
+    }
 
     const bool first_layout = mirror_container_->bounds().IsEmpty();
     // If |mirror_container_| has not yet been laid out, we must lay it and
@@ -573,14 +654,24 @@ class WindowCycleView : public views::WidgetDelegateView,
       layer()->SetRoundedCornerRadius(kBackgroundCornerRadius);
     }
 
-    views::View* target_view = window_view_map_[current_window_];
-    gfx::RectF target_bounds(target_view->GetLocalBounds());
-    views::View::ConvertRectToTarget(target_view, mirror_container_,
-                                     &target_bounds);
-    gfx::Rect mirror_container_bounds(mirror_container_->GetPreferredSize());
+    gfx::RectF target_bounds;
+    if (current_window_ || !is_interactive_alt_tab_mode_allowed) {
+      views::View* target_view = window_view_map_[current_window_];
+      target_bounds = gfx::RectF(target_view->GetLocalBounds());
+      views::View::ConvertRectToTarget(target_view, mirror_container_,
+                                       &target_bounds);
+    } else {
+      DCHECK(no_recent_items_label_);
+      target_bounds = gfx::RectF(no_recent_items_label_->bounds());
+    }
+
+    // Content container represents the mirror container with >=1 windows or
+    // no-recent-items label when there is no window to be shown.
+    gfx::Rect content_container_bounds = GetContentContainerBounds();
+
     // Case one: the container is narrower than the screen. Center the
     // container.
-    int x_offset = (width() - mirror_container_bounds.width()) / 2;
+    int x_offset = (width() - content_container_bounds.width()) / 2;
     if (x_offset < 0) {
       // Case two: the container is wider than the screen. Center the target
       // view by moving the list just enough to ensure the target view is in
@@ -590,27 +681,30 @@ class WindowCycleView : public views::WidgetDelegateView,
 
       // However, the container must span the screen, i.e. the maximum x is 0
       // and the minimum for its right boundary is the width of the screen.
-      int minimum_x = width() - mirror_container_bounds.width();
+      int minimum_x = width() - content_container_bounds.width();
       x_offset = base::ClampToRange(x_offset, minimum_x, 0);
 
       // If the user has dragged, offset the container based on how much they
-      // have dragged.
-      if (features::IsInteractiveWindowCycleListEnabled()) {
-        // Cap |horizontal_distance_dragged_| based on the available distance
-        // from the container to the left and right boundaries.
-        horizontal_distance_dragged_ =
-            base::ClampToRange(horizontal_distance_dragged_,
-                               static_cast<float>(minimum_x - x_offset),
-                               static_cast<float>(-x_offset));
-        x_offset += horizontal_distance_dragged_;
-      }
+      // have dragged. Cap |horizontal_distance_dragged_| based on the available
+      // distance from the container to the left and right boundaries.
+      float clamped_horizontal_distance_dragged =
+          base::ClampToRange(horizontal_distance_dragged_,
+                             static_cast<float>(minimum_x - x_offset),
+                             static_cast<float>(-x_offset));
+      if (horizontal_distance_dragged_ != clamped_horizontal_distance_dragged)
+        OnFlingEnd();
+
+      horizontal_distance_dragged_ = clamped_horizontal_distance_dragged;
+      x_offset += horizontal_distance_dragged_;
     }
-    mirror_container_bounds.set_x(x_offset);
+    content_container_bounds.set_x(x_offset);
 
     // Layout a tab slider if Bento is enabled.
-    if (Shell::Get()
-            ->window_cycle_controller()
-            ->IsInteractiveAltTabModeAllowed()) {
+    if (is_interactive_alt_tab_mode_allowed) {
+      // TODO(crbug.com/1216238): Change these back to DCHECKs once the bug is
+      // resolved.
+      CHECK(tab_slider_container_);
+      CHECK(no_recent_items_label_);
       // Layout the tab slider.
       const gfx::Size tab_slider_size =
           tab_slider_container_->GetPreferredSize();
@@ -621,15 +715,16 @@ class WindowCycleView : public views::WidgetDelegateView,
       tab_slider_container_->SetBoundsRect(tab_slider_mirror_container_bounds);
 
       // Move window cycle container down.
-      mirror_container_bounds.set_y(tab_slider_container_->y() +
-                                    tab_slider_container_->height());
+      content_container_bounds.set_y(tab_slider_container_->y() +
+                                     tab_slider_container_->height());
 
       // Unlike the bounds of scrollable mirror container, the bounds of label
       // should not overflow out of the screen.
       const gfx::Rect no_recent_item_bounds_(
-          std::max(0, mirror_container_bounds.x()), mirror_container_bounds.y(),
-          std::min(width(), mirror_container_bounds.width()),
-          mirror_container_bounds.height());
+          std::max(0, content_container_bounds.x()),
+          content_container_bounds.y(),
+          std::min(width(), content_container_bounds.width()),
+          content_container_bounds.height());
       no_recent_items_label_->SetBoundsRect(no_recent_item_bounds_);
     }
 
@@ -638,7 +733,7 @@ class WindowCycleView : public views::WidgetDelegateView,
     // the cycle view is already being animated or just finished animating for
     // mode switch.
     std::unique_ptr<ui::ScopedLayerAnimationSettings> settings;
-    base::Optional<ui::AnimationThroughputReporter> reporter;
+    absl::optional<ui::AnimationThroughputReporter> reporter;
     if (!first_layout && !this->layer()->GetAnimator()->is_animating() &&
         !defer_widget_bounds_update_) {
       settings = std::make_unique<ui::ScopedLayerAnimationSettings>(
@@ -654,7 +749,7 @@ class WindowCycleView : public views::WidgetDelegateView,
             UMA_HISTOGRAM_PERCENTAGE(kContainerAnimationSmoothness, smoothness);
           })));
     }
-    mirror_container_->SetBoundsRect(mirror_container_bounds);
+    mirror_container_->SetBoundsRect(content_container_bounds);
 
     // If an element in |no_previews_set_| is no onscreen (its bounds in |this|
     // coordinates intersects |this|), create the rest of its elements and
@@ -695,14 +790,23 @@ class WindowCycleView : public views::WidgetDelegateView,
   }
 
   const views::View::Views& GetTabSliderButtonsForTesting() const {
+    if (!tab_slider_container_) {
+      static const views::View::Views empty;
+      return empty;
+    }
     return tab_slider_container_->GetTabSliderButtonsForTesting();
   }
 
   const views::Label* GetNoRecentItemsLabelForTesting() const {
     return no_recent_items_label_;
   }
+
   const aura::Window* GetTargetWindowForTesting() const {
     return target_window_;
+  }
+
+  bool IsCycleViewAnimatingForTesting() {
+    return layer()->GetAnimator()->is_animating();
   }
 
   void OnModePrefsChanged() {
@@ -723,6 +827,17 @@ class WindowCycleView : public views::WidgetDelegateView,
   }
 
  private:
+  // Returns a bound of alt-tab content container, which represents the mirror
+  // container when there is at least one window and represents no-recent-items
+  // label when there is no window to be shown.
+  gfx::Rect GetContentContainerBounds() const {
+    const bool empty_mirror_container = mirror_container_->children().empty();
+    if (empty_mirror_container && no_recent_items_label_)
+      return gfx::Rect(no_recent_items_label_->GetPreferredSize());
+    return gfx::Rect(mirror_container_->GetPreferredSize());
+  }
+
+  aura::Window* const root_window_;
   std::map<aura::Window*, WindowCycleItemView*> window_view_map_;
   views::View* mirror_container_ = nullptr;
 
@@ -758,7 +873,19 @@ class WindowCycleView : public views::WidgetDelegateView,
   // |mirror_container_|. This should be reset only when a user cycles the
   // window cycle list or when the user switches alt-tab modes.
   float horizontal_distance_dragged_ = 0.f;
+
+  // Fling handler of the current active fling. Nullptr while a fling is not
+  // active.
+  std::unique_ptr<WmFlingHandler> fling_handler_;
+
+  // True once `DestroyContents` is called. Used to prevent `Layout` from being
+  // called once all the child views have been removed. See
+  // https://crbug.com/1223302 for more details.
+  bool is_destroying_ = false;
 };
+
+BEGIN_METADATA(WindowCycleView, views::WidgetDelegateView)
+END_METADATA
 
 WindowCycleList::WindowCycleList(const WindowList& windows)
     : windows_(windows) {
@@ -837,7 +964,8 @@ void WindowCycleList::ReplaceWindows(const WindowList& windows) {
 }
 
 void WindowCycleList::Step(
-    WindowCycleController::WindowCyclingDirection direction) {
+    WindowCycleController::WindowCyclingDirection direction,
+    bool starting_alt_tab_or_switching_mode) {
   if (windows_.empty())
     return;
 
@@ -845,44 +973,40 @@ void WindowCycleList::Step(
   // selected item, scroll to the selected item and then step.
   if (cycle_view_) {
     aura::Window* selected_window = cycle_view_->GetTargetWindow();
-    Scroll(GetIndexOfWindow(selected_window) - current_index_);
+    if (selected_window)
+      Scroll(GetIndexOfWindow(selected_window) - current_index_);
   }
 
-  const int offset =
+  int offset =
       direction == WindowCycleController::WindowCyclingDirection::kForward ? 1
                                                                            : -1;
-  if (offset == 1 && active_window_before_window_cycle_ != windows_[0] &&
-      Shell::Get()->window_cycle_controller()->IsSwitchingMode()) {
-    // Similar to `WindowCycleList::Scroll()`, when switching to alt-tab mode,
-    // if the first window in the MRU cycle list is not the latest active one
-    // before entering alt-tab, highlight it instead of the second window.
-    // This occurs when the user is in overview mode, all windows are
-    // minimized, or all windows are in other desks.
-    //
-    // Note: Simply checking the active status of the first window won't work
-    // because when the ChromeVox is enabled, the widget is activatable, so the
-    // first window in MRU becomes inactive.
-    SetFocusedWindow(windows_[0]);
-  } else {
-    SetFocusedWindow(windows_[GetOffsettedWindowIndex(offset)]);
+  // When the window highlight should be reset and the first window in the MRU
+  // cycle list is not the latest active one before entering alt-tab, highlight
+  // it instead of the second window. This occurs when the user is in overview
+  // mode, all windows are minimized, or all windows are in other desks.
+  //
+  // Note: Simply checking the active status of the first window won't work
+  // because when the ChromeVox is enabled, the widget is activatable, so the
+  // first window in MRU becomes inactive.
+  if (starting_alt_tab_or_switching_mode &&
+      direction == WindowCycleController::WindowCyclingDirection::kForward &&
+      active_window_before_window_cycle_ != windows_[0]) {
+    offset = 0;
+    current_index_ = 0;
   }
-  Scroll(offset);
-}
 
-void WindowCycleList::ScrollInDirection(
-    WindowCycleController::WindowCyclingDirection direction) {
-  if (windows_.empty())
-    return;
-
-  const int offset =
-      direction == WindowCycleController::WindowCyclingDirection::kForward ? 1
-                                                                           : -1;
+  SetFocusedWindow(windows_[GetOffsettedWindowIndex(offset)]);
   Scroll(offset);
 }
 
 void WindowCycleList::Drag(float delta_x) {
   DCHECK(cycle_view_);
   cycle_view_->Drag(delta_x);
+}
+
+void WindowCycleList::StartFling(float velocity_x) {
+  DCHECK(cycle_view_);
+  cycle_view_->StartFling(velocity_x);
 }
 
 void WindowCycleList::SetFocusedWindow(aura::Window* window) {
@@ -915,7 +1039,19 @@ aura::Window* WindowCycleList::GetWindowAtPoint(const ui::LocatedEvent* event) {
 }
 
 bool WindowCycleList::ShouldShowUi() {
-  return windows_.size() > 1u;
+  // Show alt-tab when there are at least two windows to pick from alt-tab, or
+  // when there is at least a window to switch to by switching to the different
+  // mode.
+  if (!Shell::Get()
+           ->window_cycle_controller()
+           ->IsInteractiveAltTabModeAllowed()) {
+    return windows_.size() > 1u;
+  }
+
+  int total_window_in_all_desks = GetNumberOfWindowsAllDesks();
+  return windows_.size() > 1u ||
+         (windows_.size() <= 1u &&
+          static_cast<size_t>(total_window_in_all_desks) > windows_.size());
 }
 
 void WindowCycleList::OnModePrefsChanged() {
@@ -988,10 +1124,18 @@ void WindowCycleList::RemoveAllWindows() {
 void WindowCycleList::InitWindowCycleView() {
   if (cycle_view_)
     return;
+  aura::Window* root_window = GetRootWindowForCycleView();
+  cycle_view_ = new WindowCycleView(root_window, windows_);
+  const bool is_interactive_alt_tab_mode_allowed =
+      Shell::Get()->window_cycle_controller()->IsInteractiveAltTabModeAllowed();
+  DCHECK(!windows_.empty() || is_interactive_alt_tab_mode_allowed);
 
-  cycle_view_ = new WindowCycleView(windows_);
-  cycle_view_->SetTargetWindow(windows_[current_index_]);
-  cycle_view_->ScrollToWindow(windows_[current_index_]);
+  // Only set target window and scroll to the window when alt-tab is not empty.
+  if (!windows_.empty()) {
+    DCHECK(static_cast<int>(windows_.size()) > current_index_);
+    cycle_view_->SetTargetWindow(windows_[current_index_]);
+    cycle_view_->ScrollToWindow(windows_[current_index_]);
+  }
 
   // We need to activate the widget if ChromeVox is enabled as ChromeVox
   // relies on activation.
@@ -1009,16 +1153,14 @@ void WindowCycleList::InitWindowCycleView() {
   // activated window continue to be in the foreground. This may affect
   // things such as video automatically pausing/playing.
   if (!spoken_feedback_enabled)
-    params.activatable = views::Widget::InitParams::ACTIVATABLE_NO;
+    params.activatable = views::Widget::InitParams::Activatable::kNo;
   params.accept_events = true;
   params.name = "WindowCycleList (Alt+Tab)";
   // TODO(estade): make sure nothing untoward happens when the lock screen
   // or a system modal dialog is shown.
-  aura::Window* root_window = Shell::GetRootWindowForNewWindows();
   params.parent = root_window->GetChildById(kShellWindowId_OverlayContainer);
   params.bounds = cycle_view_->GetTargetBounds();
 
-  screen_observer_.Observe(display::Screen::GetScreen());
   widget->Init(std::move(params));
   widget->Show();
   cycle_view_->FadeInLayer();
@@ -1055,45 +1197,25 @@ void WindowCycleList::SelectWindow(aura::Window* window) {
 }
 
 void WindowCycleList::Scroll(int offset) {
-  if (windows_.empty())
-    return;
-
-  // When there is only one window, we should give feedback to the user. If
-  // the window is minimized, we should also show it.
-  if (windows_.size() == 1 &&
-      !Shell::Get()->window_cycle_controller()->IsSwitchingMode()) {
-    ::wm::AnimateWindow(windows_[0], ::wm::WINDOW_ANIMATION_TYPE_BOUNCE);
+  if (windows_.size() == 1)
     SelectWindow(windows_[0]);
+
+  if (!ShouldShowUi()) {
+    // When there is only one window, we should give feedback to the user. If
+    // the window is minimized, we should also show it.
+    if (windows_.size() == 1)
+      ::wm::AnimateWindow(windows_[0], ::wm::WINDOW_ANIMATION_TYPE_BOUNCE);
     return;
   }
 
   DCHECK(static_cast<size_t>(current_index_) < windows_.size());
-
-  // If alt-tab is entered or switched to the other mode, check the following
-  // special case: user is cycling forward but the MRU window in cycle list is
-  // not the latest active one before starting the alt-tab. The starting window
-  // should then be the first one rather than the second.
-  if ((!cycle_view_ ||
-       Shell::Get()->window_cycle_controller()->IsSwitchingMode()) &&
-      current_index_ == 0 && offset == 1 &&
-      active_window_before_window_cycle_ != windows_[0]) {
-    current_index_ = -1;
-  }
-
   current_index_ = GetOffsettedWindowIndex(offset);
-  if (ShouldShowUi()) {
-    if (current_index_ > 1)
-      InitWindowCycleView();
 
-    if (cycle_view_)
-      cycle_view_->ScrollToWindow(windows_[current_index_]);
-  }
-}
+  if (current_index_ > 1)
+    InitWindowCycleView();
 
-int WindowCycleList::GetIndexOfWindow(aura::Window* window) const {
-  auto target_window = std::find(windows_.begin(), windows_.end(), window);
-  DCHECK(target_window != windows_.end());
-  return std::distance(windows_.begin(), target_window);
+  if (cycle_view_)
+    cycle_view_->ScrollToWindow(windows_[current_index_]);
 }
 
 int WindowCycleList::GetOffsettedWindowIndex(int offset) const {
@@ -1104,6 +1226,24 @@ int WindowCycleList::GetOffsettedWindowIndex(int offset) const {
   DCHECK(windows_[offsetted_index]);
 
   return offsetted_index;
+}
+
+int WindowCycleList::GetIndexOfWindow(aura::Window* window) const {
+  auto target_window = std::find(windows_.begin(), windows_.end(), window);
+  DCHECK(target_window != windows_.end());
+  return std::distance(windows_.begin(), target_window);
+}
+
+int WindowCycleList::GetNumberOfWindowsAllDesks() const {
+  // If alt-tab mode is not available, the alt-tab defaults to all-desks mode
+  // and can obtain the number of all windows easily from `windows_.size()`.
+  DCHECK(Shell::Get()
+             ->window_cycle_controller()
+             ->IsInteractiveAltTabModeAllowed());
+  return Shell::Get()
+      ->mru_window_tracker()
+      ->BuildWindowForCycleWithPipList(kAllDesks)
+      .size();
 }
 
 const views::View::Views& WindowCycleList::GetWindowCycleItemViewsForTesting()
@@ -1123,6 +1263,10 @@ WindowCycleList::GetWindowCycleNoRecentItemsLabelForTesting() const {
 
 const aura::Window* WindowCycleList::GetTargetWindowForTesting() const {
   return cycle_view_->GetTargetWindowForTesting();  // IN-TEST
+}
+
+bool WindowCycleList::IsCycleViewAnimatingForTesting() const {
+  return cycle_view_->IsCycleViewAnimatingForTesting();  // IN-TEST
 }
 
 }  // namespace ash

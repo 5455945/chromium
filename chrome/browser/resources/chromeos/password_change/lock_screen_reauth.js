@@ -7,7 +7,6 @@
  * the lock screen.
  */
 
-
 import {assert} from 'chrome://resources/js/assert.m.js';
 import {I18nBehavior} from 'chrome://resources/js/i18n_behavior.m.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.m.js';
@@ -128,7 +127,7 @@ Polymer({
     this.isPasswordChanged_ = false;
   },
 
-    /**
+  /**
    * Invoked when the authDomain property is changed on the authenticator.
    * @private
    */
@@ -153,7 +152,6 @@ Polymer({
         params[name] = data[name];
       }
     }
-    params.doSamlRedirect = true;
     this.authenticatorParams_ = params;
     this.email_ = data.email;
     chrome.send('authenticatorLoaded');

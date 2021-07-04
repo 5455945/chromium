@@ -8,17 +8,21 @@
 #include <stdint.h>
 #include <string>
 
-#include "base/strings/string16.h"
 #include "base/time/time.h"
+#include "media/mojo/mojom/speech_recognition_service.mojom.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 // Requires cleanup. See crbug.com/800374.
 enum SpeechRecognizerStatus {
   SPEECH_RECOGNIZER_OFF = 0,
+  // Ready for SpeechRecognizer::Start() to be called.
   SPEECH_RECOGNIZER_READY,
+  // Beginning to listen for speech, but have not received any yet.
   SPEECH_RECOGNIZER_RECOGNIZING,
+  // Sounds are being recognized.
   SPEECH_RECOGNIZER_IN_SPEECH,
-  SPEECH_RECOGNIZER_STOPPING,
-  SPEECH_RECOGNIZER_NETWORK_ERROR,
+  // There was an error.
+  SPEECH_RECOGNIZER_ERROR,
 };
 
 // Delegate for speech recognizer. All methods are called from the thread on
@@ -28,11 +32,12 @@ class SpeechRecognizerDelegate {
   // Receive a speech recognition result. |is_final| indicated whether the
   // result is an intermediate or final result. If |is_final| is true, then the
   // recognizer stops and no more results will be returned.
-  // May include word timing information in |word_offsets|.
+  // May include word timing information in |full_result| if the speech
+  // recognizer is an on device speech recognizer.
   virtual void OnSpeechResult(
-      const base::string16& text,
+      const std::u16string& text,
       bool is_final,
-      base::Optional<std::vector<base::TimeDelta>> word_offsets) = 0;
+      const absl::optional<media::SpeechRecognitionResult>& full_result) = 0;
 
   // Invoked regularly to indicate the average sound volume.
   virtual void OnSpeechSoundLevelChanged(int16_t level) = 0;

@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <memory>
 #include <string>
 
 #include "base/bind.h"
@@ -21,6 +22,7 @@
 #include "net/test/embedded_test_server/http_response.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "services/network/public/mojom/network_service_test.mojom.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 
 namespace {
 
@@ -66,8 +68,8 @@ class AvailabilityProberBrowserTest : public InProcessBrowserTest {
   ~AvailabilityProberBrowserTest() override = default;
 
   void SetUpOnMainThread() override {
-    https_server_.reset(
-        new net::EmbeddedTestServer(net::EmbeddedTestServer::TYPE_HTTPS));
+    https_server_ = std::make_unique<net::EmbeddedTestServer>(
+        net::EmbeddedTestServer::TYPE_HTTPS);
     https_server_->RegisterRequestHandler(base::BindRepeating(
         &AvailabilityProberBrowserTest::HandleRequest, base::Unretained(this)));
     ASSERT_TRUE(https_server_->Start());

@@ -26,6 +26,7 @@ import org.chromium.chrome.browser.app.tabmodel.AsyncTabParamsManagerSingleton;
 import org.chromium.chrome.browser.app.tabmodel.ChromeTabModelFilterFactory;
 import org.chromium.chrome.browser.app.tabmodel.TabWindowManagerSingleton;
 import org.chromium.chrome.browser.firstrun.FirstRunStatus;
+import org.chromium.chrome.browser.flags.ActivityType;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabLaunchType;
@@ -33,7 +34,7 @@ import org.chromium.chrome.browser.tabmodel.NextTabPolicy.NextTabPolicySupplier;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
 import org.chromium.chrome.test.batch.BlankCTATabInitialStateRule;
-import org.chromium.chrome.test.util.browser.contextmenu.RevampedContextMenuUtils;
+import org.chromium.chrome.test.util.browser.contextmenu.ContextMenuUtils;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.test.util.TestThreadUtils;
 
@@ -54,6 +55,10 @@ public class ContextMenuLoadUrlParamsTest {
     @Rule
     public BlankCTATabInitialStateRule mBlankCTATabInitialStateRule =
             new BlankCTATabInitialStateRule(sActivityTestRule, false);
+
+    // Test activity type that does not restore tab on cold restart.
+    // Any type other than ActivityType.TABBED works.
+    private static final @ActivityType int NO_RESTORE_TYPE = ActivityType.CUSTOM_TAB;
 
     private static final String HTML_PATH =
             "/chrome/test/data/android/contextmenu/context_menu_test.html";
@@ -77,7 +82,7 @@ public class ContextMenuLoadUrlParamsTest {
             super(null, tabCreatorManager, tabModelFilterFactory,
                     ()
                             -> NextTabPolicy.HIERARCHICAL,
-                    AsyncTabParamsManagerSingleton.getInstance(), false, false, false);
+                    AsyncTabParamsManagerSingleton.getInstance(), false, NO_RESTORE_TYPE, false);
         }
     }
 
@@ -93,7 +98,7 @@ public class ContextMenuLoadUrlParamsTest {
                             TabCreatorManager tabCreatorManager,
                             NextTabPolicySupplier nextTabPolicySupplier, int selectorIndex) {
                         return new RecordingTabModelSelector(activity, tabCreatorManager,
-                                new ChromeTabModelFilterFactory(), selectorIndex);
+                                new ChromeTabModelFilterFactory(activity), selectorIndex);
                     }
                 });
     }
@@ -160,7 +165,7 @@ public class ContextMenuLoadUrlParamsTest {
         sActivityTestRule.loadUrl(url);
         sActivityTestRule.assertWaitForPageScaleFactorMatch(0.5f);
         Tab tab = sActivityTestRule.getActivity().getActivityTab();
-        RevampedContextMenuUtils.selectContextMenuItem(InstrumentationRegistry.getInstrumentation(),
+        ContextMenuUtils.selectContextMenuItem(InstrumentationRegistry.getInstrumentation(),
                 sActivityTestRule.getActivity(), tab, openerDomId, menuItemId);
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
     }

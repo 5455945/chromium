@@ -18,6 +18,7 @@
 #import "ios/chrome/browser/ui/commands/browser_commands.h"
 #import "ios/chrome/browser/ui/commands/infobar_commands.h"
 #import "ios/chrome/browser/ui/commands/load_query_commands.h"
+#import "ios/chrome/browser/ui/default_promo/default_browser_utils.h"
 #import "ios/chrome/browser/ui/fullscreen/fullscreen_animator.h"
 #import "ios/chrome/browser/ui/infobars/infobar_feature.h"
 #import "ios/chrome/browser/ui/location_bar/location_bar_constants.h"
@@ -26,7 +27,6 @@
 #include "ios/chrome/browser/ui/ui_feature_flags.h"
 #import "ios/chrome/browser/ui/util/named_guide.h"
 #import "ios/chrome/browser/ui/util/uikit_ui_util.h"
-#import "ios/chrome/browser/ui/whats_new/default_browser_utils.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/grit/ios_strings.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -224,6 +224,7 @@ const NSString* kScribbleOmniboxElementId = @"omnibox";
   self.locationBarSteadyView.translatesAutoresizingMaskIntoConstraints = NO;
   AddSameConstraints(self.locationBarSteadyView, self.view);
 
+  [self updateTrailingButtonState];
   [self switchToEditing:NO];
 }
 
@@ -535,6 +536,7 @@ const NSString* kScribbleOmniboxElementId = @"omnibox";
 // here.
 - (void)shareButtonPressed {
   RecordAction(UserMetricsAction("MobileToolbarShareMenu"));
+  [self.delegate recordShareButtonPressed];
 }
 
 // Updates the cached clipboard content type and calls |completion| when the
@@ -648,7 +650,7 @@ const NSString* kScribbleOmniboxElementId = @"omnibox";
   RecordAction(
       UserMetricsAction("Mobile.OmniboxContextMenu.SearchCopiedImage"));
   ClipboardRecentContent::GetInstance()->GetRecentImageFromClipboard(
-      base::BindOnce(^(base::Optional<gfx::Image> optionalImage) {
+      base::BindOnce(^(absl::optional<gfx::Image> optionalImage) {
         if (!optionalImage) {
           return;
         }
@@ -663,10 +665,10 @@ const NSString* kScribbleOmniboxElementId = @"omnibox";
 - (void)visitCopiedLink:(id)sender {
   // A search using clipboard link is activity that should indicate a user
   // that would be interested in setting Chrome as the default browser.
-  LogLikelyInterestedDefaultBrowserUserActivity();
-  RecordAction(UserMetricsAction("Mobile.OmniboxContextMenu.VisitCopiedLink"));
+  LogLikelyInterestedDefaultBrowserUserActivity(DefaultPromoTypeGeneral);
+  [self.delegate locationBarVisitCopyLinkTapped];
   ClipboardRecentContent::GetInstance()->GetRecentURLFromClipboard(
-      base::BindOnce(^(base::Optional<GURL> optionalURL) {
+      base::BindOnce(^(absl::optional<GURL> optionalURL) {
         if (!optionalURL) {
           return;
         }
@@ -681,10 +683,10 @@ const NSString* kScribbleOmniboxElementId = @"omnibox";
 - (void)searchCopiedText:(id)sender {
   // A search using clipboard text is activity that should indicate a user
   // that would be interested in setting Chrome as the default browser.
-  LogLikelyInterestedDefaultBrowserUserActivity();
+  LogLikelyInterestedDefaultBrowserUserActivity(DefaultPromoTypeGeneral);
   RecordAction(UserMetricsAction("Mobile.OmniboxContextMenu.SearchCopiedText"));
   ClipboardRecentContent::GetInstance()->GetRecentTextFromClipboard(
-      base::BindOnce(^(base::Optional<base::string16> optionalText) {
+      base::BindOnce(^(absl::optional<std::u16string> optionalText) {
         if (!optionalText) {
           return;
         }

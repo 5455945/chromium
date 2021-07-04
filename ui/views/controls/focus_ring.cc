@@ -7,21 +7,32 @@
 #include <memory>
 #include <utility>
 
+#include "base/i18n/rtl.h"
 #include "base/memory/ptr_util.h"
 #include "base/notreached.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/theme_provider.h"
+#include "ui/compositor/layer.h"
 #include "ui/gfx/canvas.h"
+#include "ui/gfx/color_utils.h"
+#include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gfx/skia_util.h"
 #include "ui/views/controls/focusable_border.h"
 #include "ui/views/controls/highlight_path_generator.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/style/platform_style.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/view_utils.h"
 
+DEFINE_UI_CLASS_PROPERTY_TYPE(views::FocusRing*)
+
 namespace views {
 
 namespace {
+
+DEFINE_UI_CLASS_PROPERTY_KEY(int, kFocusRingBackgroundColorIdKey, -1)
+DEFINE_UI_CLASS_PROPERTY_KEY(FocusRing*, kFocusRingIdKey, nullptr)
 
 bool IsPathUsable(const SkPath& path) {
   return !path.isEmpty() && (path.isRect(nullptr) || path.isOval(nullptr) ||
@@ -33,8 +44,36 @@ ui::NativeTheme::ColorId ColorIdForValidity(bool valid) {
                : ui::NativeTheme::kColorId_AlertSeverityHigh;
 }
 
+int GetBackgroundColorId(View* view) {
+  int color_id_property = view->GetProperty(kFocusRingBackgroundColorIdKey);
+  if (color_id_property != -1)
+    return color_id_property;
+  if (!view->parent())
+    return -1;
+  return GetBackgroundColorId(view->parent());
+}
+
+SkColor GetBackgroundColor(View* view) {
+  int color_id = GetBackgroundColorId(view);
+  return color_id == -1 ? view->GetNativeTheme()->GetSystemColor(
+                              ui::NativeTheme::kColorId_WindowBackground)
+                        : view->GetThemeProvider()->GetColor(color_id);
+}
+
+SkColor GetColor(View* focus_ring, bool valid) {
+  const SkColor default_color =
+      focus_ring->GetNativeTheme()->GetSystemColor(ColorIdForValidity(valid));
+
+  if (!valid)
+    return default_color;
+
+  return color_utils::PickGoogleColor(
+      default_color, GetBackgroundColor(focus_ring),
+      color_utils::kMinimumVisibleContrastRatio);
+}
+
 double GetCornerRadius() {
-  double thickness = PlatformStyle::kFocusHaloThickness / 2.f;
+  const double thickness = PlatformStyle::kFocusHaloThickness / 2.f;
   return FocusableBorder::kCornerRadiusDp + thickness;
 }
 
@@ -58,17 +97,35 @@ SkPath GetHighlightPathInternal(const View* view) {
 }  // namespace
 
 // static
-FocusRing* FocusRing::Install(View* parent) {
-  if (IsViewClass<Button>(parent)) {
-    // Ensure we don't install dual focus rings on a button.
-    Button* button = static_cast<Button*>(parent);
-    if (button->GetInstallFocusRingOnFocus())
-      button->SetInstallFocusRingOnFocus(false);
-  }
+void FocusRing::Install(View* host) {
+  FocusRing::Remove(host);
   auto ring = base::WrapUnique<FocusRing>(new FocusRing());
   ring->InvalidateLayout();
   ring->SchedulePaint();
-  return parent->AddChildView(std::move(ring));
+  host->SetProperty(kFocusRingIdKey, host->AddChildView(std::move(ring)));
+}
+
+FocusRing* FocusRing::Get(View* host) {
+  return host->GetProperty(kFocusRingIdKey);
+}
+
+const FocusRing* FocusRing::Get(const View* host) {
+  return host->GetProperty(kFocusRingIdKey);
+}
+
+void FocusRing::Remove(View* host) {
+  // Note that the FocusRing is owned by the View hierarchy, so we can't just
+  // clear the key.
+  FocusRing* const focus_ring = FocusRing::Get(host);
+  if (!focus_ring)
+    return;
+  host->RemoveChildViewT(focus_ring);
+  host->ClearProperty(kFocusRingIdKey);
+}
+
+void FocusRing::SetBackgroundColorIdForSubtree(View* view,
+                                               int background_color_id) {
+  view->SetProperty(kFocusRingBackgroundColorIdKey, background_color_id);
 }
 
 FocusRing::~FocusRing() = default;
@@ -76,6 +133,7 @@ FocusRing::~FocusRing() = default;
 void FocusRing::SetPathGenerator(
     std::unique_ptr<HighlightPathGenerator> generator) {
   path_generator_ = std::move(generator);
+  InvalidateLayout();
   SchedulePaint();
 }
 
@@ -89,7 +147,7 @@ void FocusRing::SetHasFocusPredicate(const ViewPredicate& predicate) {
   RefreshLayer();
 }
 
-void FocusRing::SetColor(base::Optional<SkColor> color) {
+void FocusRing::SetColor(absl::optional<SkColor> color) {
   color_ = color;
   SchedulePaint();
 }
@@ -98,6 +156,16 @@ void FocusRing::Layout() {
   // The focus ring handles its own sizing, which is simply to fill the parent
   // and extend a little beyond its borders.
   gfx::Rect focus_bounds = parent()->GetLocalBounds();
+
+  // Make sure the focus-ring path fits.
+  // TODO(pbos): Chase down use cases where this path is not in a usable state
+  // by the time layout happens. This may be due to synchronous Layout() calls.
+  const SkPath path = GetPath();
+  if (IsPathUsable(path)) {
+    focus_bounds.Union(
+        gfx::ToEnclosingRect(gfx::SkRectToRectF(path.getBounds())));
+  }
+
   focus_bounds.Inset(gfx::Insets(PlatformStyle::kFocusHaloInset));
   SetBoundsRect(focus_bounds);
 
@@ -135,35 +203,36 @@ void FocusRing::OnPaint(gfx::Canvas* canvas) {
 
   cc::PaintFlags paint;
   paint.setAntiAlias(true);
-  paint.setColor(color_.value_or(
-      GetNativeTheme()->GetSystemColor(ColorIdForValidity(!invalid_))));
+  paint.setColor(color_.value_or(GetColor(this, !invalid_)));
   paint.setStyle(cc::PaintFlags::kStroke_Style);
   paint.setStrokeWidth(PlatformStyle::kFocusHaloThickness);
 
-  SkPath path;
-  if (path_generator_)
-    path = path_generator_->GetHighlightPath(parent());
+  canvas->sk_canvas()->drawRRect(GetRingRoundRect(), paint);
+}
 
-  // If there's no path generator or the generated path is unusable, fall back
-  // to the default.
-  if (!IsPathUsable(path))
-    path = GetHighlightPathInternal(parent());
+SkRRect FocusRing::GetRingRoundRect() const {
+  const SkPath path = GetPath();
 
   DCHECK(IsPathUsable(path));
   DCHECK_EQ(GetFlipCanvasOnPaintForRTLUI(),
             parent()->GetFlipCanvasOnPaintForRTLUI());
+
   SkRect bounds;
   SkRRect rbounds;
-  if (path.isRect(&bounds)) {
-    canvas->sk_canvas()->drawRRect(RingRectFromPathRect(bounds), paint);
-  } else if (path.isOval(&bounds)) {
+  if (path.isRect(&bounds))
+    return RingRectFromPathRect(bounds);
+
+  if (path.isOval(&bounds)) {
     gfx::RectF rect = gfx::SkRectToRectF(bounds);
     View::ConvertRectToTarget(parent(), this, &rect);
-    canvas->sk_canvas()->drawRRect(SkRRect::MakeOval(gfx::RectFToSkRect(rect)),
-                                   paint);
-  } else if (path.isRRect(&rbounds)) {
-    canvas->sk_canvas()->drawRRect(RingRectFromPathRect(rbounds), paint);
+    return SkRRect::MakeOval(gfx::RectFToSkRect(rect));
   }
+
+  if (path.isRRect(&rbounds))
+    return RingRectFromPathRect(rbounds);
+
+  NOTREACHED();
+  return SkRRect();
 }
 
 void FocusRing::GetAccessibleNodeData(ui::AXNodeData* node_data) {
@@ -183,6 +252,19 @@ void FocusRing::OnViewBlurred(View* view) {
 FocusRing::FocusRing() {
   // Don't allow the view to process events.
   SetCanProcessEventsWithinSubtree(false);
+}
+
+SkPath FocusRing::GetPath() const {
+  SkPath path;
+  if (path_generator_) {
+    path = path_generator_->GetHighlightPath(parent());
+    if (IsPathUsable(path))
+      return path;
+  }
+
+  // If there's no path generator or the generated path is unusable, fall back
+  // to the default.
+  return GetHighlightPathInternal(parent());
 }
 
 void FocusRing::RefreshLayer() {

@@ -8,7 +8,7 @@
 #include "base/memory/ptr_util.h"
 #include "chrome/browser/ash/login/enrollment/enterprise_enrollment_helper_impl.h"
 
-namespace chromeos {
+namespace ash {
 
 EnterpriseEnrollmentHelper*
     EnterpriseEnrollmentHelper::mock_enrollment_helper_ = nullptr;
@@ -27,7 +27,7 @@ void EnterpriseEnrollmentHelper::SetEnrollmentHelperMock(
 // static
 std::unique_ptr<EnterpriseEnrollmentHelper> EnterpriseEnrollmentHelper::Create(
     EnrollmentStatusConsumer* status_consumer,
-    ActiveDirectoryJoinDelegate* ad_join_delegate,
+    policy::ActiveDirectoryJoinDelegate* ad_join_delegate,
     const policy::EnrollmentConfig& enrollment_config,
     const std::string& enrolling_user_domain) {
   std::unique_ptr<EnterpriseEnrollmentHelper> result;
@@ -52,4 +52,4 @@ void EnterpriseEnrollmentHelper::set_status_consumer(
   status_consumer_ = status_consumer;
 }
 
-}  // namespace chromeos
+}  // namespace ash

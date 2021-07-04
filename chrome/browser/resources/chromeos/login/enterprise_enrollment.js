@@ -147,6 +147,15 @@ Polymer({
     authFlow_: {
       type: Number,
     },
+
+    isMeet_: {
+      type: Boolean,
+      value() {
+        return loadTimeData.valueExists('flowType') &&
+            (loadTimeData.getString('flowType') == 'meet');
+      },
+      readOnly: true,
+    },
   },
 
   defaultUIStep() {
@@ -202,18 +211,6 @@ Polymer({
         keyboard.onAdvanceFocus(true);
     });
 
-    this.authenticator_.addEventListener(
-        'authCompleted',
-        (function(e) {
-          var detail = e.detail;
-          if (!detail.email) {
-            this.showError(
-                loadTimeData.getString('fatalEnrollmentError'), false);
-            return;
-          }
-          chrome.send('oauthEnrollCompleteLogin', [detail.email]);
-        }).bind(this));
-
     this.$["step-ad-join"].addEventListener('authCompleted', function(e) {
       this.$["step-ad-join"].disabled = true;
       this.$["step-ad-join"].loading = true;
@@ -263,7 +260,10 @@ Polymer({
       }]);
     }
 
-    this.authenticator_.setWebviewPartition(data.webviewPartitionName);
+    // TODO(crbug.com/1187024) - Improve the type checking in `data`
+    //
+    this.authenticator_.setWebviewPartition(
+      'webviewPartitionName' in data ? data.webviewPartitionName : '');
 
     var gaiaParams = {};
     gaiaParams.gaiaUrl = data.gaiaUrl;
@@ -279,13 +279,16 @@ Polymer({
     this.authenticator_.load(
         cr.login.Authenticator.AuthMode.DEFAULT, gaiaParams);
 
-    this.isManualEnrollment_ = data.enrollment_mode === 'manual';
-    this.isForced_ = data.is_enrollment_enforced;
-    this.isAutoEnroll_ = data.attestationBased;
+    this.isManualEnrollment_ = 'enrollment_mode' in data ?
+                               data.enrollment_mode === 'manual' : undefined;
+    this.isForced_ = 'is_enrollment_enforced' in data ?
+                     data.is_enrollment_enforced : undefined;
+    this.isAutoEnroll_ = 'attestationBased' in data ?
+                         data.attestationBased : undefined;
 
     cr.ui.login.invokePolymerMethod(this.$["step-ad-join"], 'onBeforeShow');
     if (!this.uiStep) {
-      this.showStep(data.attestationBased ?
+      this.showStep(this.isAutoEnroll_ ?
           ENROLLMENT_STEP.WORKING : ENROLLMENT_STEP.SIGNIN);
     }
   },
@@ -383,6 +386,10 @@ Polymer({
     this.$["step-ad-join"].focus();
   },
 
+  clickPrimaryButtonForTesting() {
+    this.$['step-signin'].clickPrimaryButtonForTesting();
+  },
+
   /**
    * Skips the device attribute update,
    * shows the successful enrollment step.
@@ -427,6 +434,15 @@ Polymer({
 
   isEmpty_(str) {
     return !str;
+  },
+
+  onAuthCompleted_(e) {
+    var detail = e.detail;
+    if (!detail.email) {
+      this.showError(loadTimeData.getString('fatalEnrollmentError'), false);
+      return;
+    }
+    chrome.send('oauthEnrollCompleteLogin', [detail.email]);
   },
 
   onReady() {

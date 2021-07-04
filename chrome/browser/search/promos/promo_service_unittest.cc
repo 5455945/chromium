@@ -27,6 +27,7 @@
 #include "extensions/common/extension_features.h"
 #include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -100,12 +101,12 @@ class PromoServiceTest : public testing::Test {
 TEST_F(PromoServiceTest, PromoDataNetworkError) {
   SetUpResponseWithNetworkError(service()->GetLoadURLForTesting());
 
-  ASSERT_EQ(service()->promo_data(), base::nullopt);
+  ASSERT_EQ(service()->promo_data(), absl::nullopt);
 
   service()->Refresh();
   base::RunLoop().RunUntilIdle();
 
-  EXPECT_EQ(service()->promo_data(), base::nullopt);
+  EXPECT_EQ(service()->promo_data(), absl::nullopt);
   EXPECT_EQ(service()->promo_status(), PromoService::Status::TRANSIENT_ERROR);
 }
 
@@ -113,12 +114,12 @@ TEST_F(PromoServiceTest, BadPromoResponse) {
   SetUpResponseWithData(service()->GetLoadURLForTesting(),
                         "{\"update\":{\"promotions\":{}}}");
 
-  ASSERT_EQ(service()->promo_data(), base::nullopt);
+  ASSERT_EQ(service()->promo_data(), absl::nullopt);
 
   service()->Refresh();
   base::RunLoop().RunUntilIdle();
 
-  EXPECT_EQ(service()->promo_data(), base::nullopt);
+  EXPECT_EQ(service()->promo_data(), absl::nullopt);
   EXPECT_EQ(service()->promo_status(), PromoService::Status::FATAL_ERROR);
 }
 
@@ -126,7 +127,7 @@ TEST_F(PromoServiceTest, PromoResponseMissingData) {
   SetUpResponseWithData(service()->GetLoadURLForTesting(),
                         "{\"update\":{\"promos\":{}}}");
 
-  ASSERT_EQ(service()->promo_data(), base::nullopt);
+  ASSERT_EQ(service()->promo_data(), absl::nullopt);
 
   service()->Refresh();
   base::RunLoop().RunUntilIdle();
@@ -141,7 +142,7 @@ TEST_F(PromoServiceTest, GoodPromoResponse) {
       "script></div>\", \"log_url\":\"/log_url?id=42\", \"id\": \"42\"}}}";
   SetUpResponseWithData(service()->GetLoadURLForTesting(), response_string);
 
-  ASSERT_EQ(service()->promo_data(), base::nullopt);
+  ASSERT_EQ(service()->promo_data(), absl::nullopt);
 
   service()->Refresh();
   base::RunLoop().RunUntilIdle();
@@ -163,7 +164,7 @@ TEST_F(PromoServiceTest, GoodPromoResponseCanDismiss) {
       "script></div>\", \"log_url\":\"/log_url?id=42\", \"id\": \"42\"}}}";
   SetUpResponseWithData(service()->GetLoadURLForTesting(), response_string);
 
-  ASSERT_EQ(service()->promo_data(), base::nullopt);
+  ASSERT_EQ(service()->promo_data(), absl::nullopt);
 
   service()->Refresh();
   base::RunLoop().RunUntilIdle();
@@ -186,7 +187,7 @@ TEST_F(PromoServiceTest, GoodPromoResponseNoIdField) {
       "script></div>\", \"log_url\":\"/log_url?id=42\"}}}";
   SetUpResponseWithData(service()->GetLoadURLForTesting(), response_string);
 
-  ASSERT_EQ(service()->promo_data(), base::nullopt);
+  ASSERT_EQ(service()->promo_data(), absl::nullopt);
 
   service()->Refresh();
   base::RunLoop().RunUntilIdle();
@@ -209,7 +210,7 @@ TEST_F(PromoServiceTest, GoodPromoResponseNoIdFieldNorLogUrl) {
       "script></div>\"}}}";
   SetUpResponseWithData(service()->GetLoadURLForTesting(), response_string);
 
-  ASSERT_EQ(service()->promo_data(), base::nullopt);
+  ASSERT_EQ(service()->promo_data(), absl::nullopt);
 
   service()->Refresh();
   base::RunLoop().RunUntilIdle();
@@ -236,7 +237,7 @@ TEST_F(PromoServiceTest, GoodPromoWithBlockedID) {
       "script></div>\", \"log_url\":\"/log_url?id=42\", \"id\": \"42\"}}}";
   SetUpResponseWithData(service()->GetLoadURLForTesting(), response_string);
 
-  ASSERT_EQ(service()->promo_data(), base::nullopt);
+  ASSERT_EQ(service()->promo_data(), absl::nullopt);
 
   service()->Refresh();
   base::RunLoop().RunUntilIdle();
@@ -254,7 +255,7 @@ TEST_F(PromoServiceTest, BlocklistPromo) {
       "script></div>\", \"log_url\":\"/log_url?id=42\", \"id\": \"42\"}}}";
   SetUpResponseWithData(service()->GetLoadURLForTesting(), response_string);
 
-  ASSERT_EQ(service()->promo_data(), base::nullopt);
+  ASSERT_EQ(service()->promo_data(), absl::nullopt);
 
   service()->Refresh();
   base::RunLoop().RunUntilIdle();
@@ -267,7 +268,7 @@ TEST_F(PromoServiceTest, BlocklistPromo) {
   EXPECT_EQ(service()->promo_data(), promo);
   EXPECT_EQ(service()->promo_status(), PromoService::Status::OK_WITH_PROMO);
 
-  ASSERT_EQ(0u, prefs()->GetDictionary(prefs::kNtpPromoBlocklist)->size());
+  ASSERT_EQ(0u, prefs()->GetDictionary(prefs::kNtpPromoBlocklist)->DictSize());
 
   service()->BlocklistPromo("42");
 
@@ -275,7 +276,7 @@ TEST_F(PromoServiceTest, BlocklistPromo) {
   EXPECT_EQ(service()->promo_status(), PromoService::Status::OK_BUT_BLOCKED);
 
   const auto* blocklist = prefs()->GetDictionary(prefs::kNtpPromoBlocklist);
-  ASSERT_EQ(1u, blocklist->size());
+  ASSERT_EQ(1u, blocklist->DictSize());
   ASSERT_TRUE(blocklist->HasKey("42"));
 }
 
@@ -285,12 +286,12 @@ TEST_F(PromoServiceTest, BlocklistExpiration) {
 
   {
     DictionaryPrefUpdate update(prefs(), prefs::kNtpPromoBlocklist);
-    ASSERT_EQ(0u, update->size());
+    ASSERT_EQ(0u, update->DictSize());
     base::Time past = base::Time::Now() - base::TimeDelta::FromDays(365);
     update->SetDoubleKey("42", past.ToDeltaSinceWindowsEpoch().InSecondsF());
   }
 
-  ASSERT_EQ(1u, prefs()->GetDictionary(prefs::kNtpPromoBlocklist)->size());
+  ASSERT_EQ(1u, prefs()->GetDictionary(prefs::kNtpPromoBlocklist)->DictSize());
 
   std::string response_string =
       "{\"update\":{\"promos\":{\"middle\":\"<style></style><div><script></"
@@ -301,7 +302,7 @@ TEST_F(PromoServiceTest, BlocklistExpiration) {
   base::RunLoop().RunUntilIdle();
 
   // The year-old entry of {promo_id: "42", time: <1y ago>} should be gone.
-  ASSERT_EQ(0u, prefs()->GetDictionary(prefs::kNtpPromoBlocklist)->size());
+  ASSERT_EQ(0u, prefs()->GetDictionary(prefs::kNtpPromoBlocklist)->DictSize());
 
   // The promo should've still been shown, as expiration should take precedence.
   PromoData promo;
@@ -319,12 +320,12 @@ TEST_F(PromoServiceTest, BlocklistWrongExpiryType) {
 
   {
     DictionaryPrefUpdate update(prefs(), prefs::kNtpPromoBlocklist);
-    ASSERT_EQ(0u, update->size());
+    ASSERT_EQ(0u, update->DictSize());
     update->SetDoubleKey("42", 5);
     update->SetStringKey("84", "wrong type");
   }
 
-  ASSERT_GT(prefs()->GetDictionary(prefs::kNtpPromoBlocklist)->size(), 0u);
+  ASSERT_GT(prefs()->GetDictionary(prefs::kNtpPromoBlocklist)->DictSize(), 0u);
 
   std::string response_string =
       "{\"update\":{\"promos\":{\"middle\":\"<style></style><div><script></"
@@ -335,7 +336,7 @@ TEST_F(PromoServiceTest, BlocklistWrongExpiryType) {
   base::RunLoop().RunUntilIdle();
 
   // All the invalid formats should've been removed from the pref.
-  ASSERT_EQ(0u, prefs()->GetDictionary(prefs::kNtpPromoBlocklist)->size());
+  ASSERT_EQ(0u, prefs()->GetDictionary(prefs::kNtpPromoBlocklist)->DictSize());
 }
 
 TEST_F(PromoServiceTest, ServeExtensionsPromo) {

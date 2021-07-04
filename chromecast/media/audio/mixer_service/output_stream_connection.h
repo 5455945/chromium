@@ -111,6 +111,9 @@ class OutputStreamConnection : public MixerConnection,
   // Resumes playback.
   void Resume();
 
+  // Adjusts timestamps.
+  void SendTimestampAdjustment(int64_t timestamp_adjustment);
+
  private:
   // MixerConnection implementation:
   void OnConnected(std::unique_ptr<MixerSocket> socket) override;
@@ -139,6 +142,8 @@ class OutputStreamConnection : public MixerConnection,
 
   bool paused_ = false;
   bool sent_eos_ = false;
+
+  bool dropping_audio_ = false;
 
   DISALLOW_COPY_AND_ASSIGN(OutputStreamConnection);
 };

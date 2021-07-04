@@ -3,6 +3,29 @@
 // found in the LICENSE file.
 
 /**
+ * 'settings-dropdown-menu' is a control for displaying options
+ * in the settings.
+ *
+ * Example:
+ *
+ *   <settings-dropdown-menu pref="{{prefs.foo}}">
+ *   </settings-dropdown-menu>
+ */
+import '//resources/cr_elements/md_select_css.m.js';
+import '//resources/cr_elements/policy/cr_policy_pref_indicator.m.js';
+import '../settings_shared_css.js';
+import '../settings_vars_css.js';
+
+import {CrPolicyPrefBehavior, CrPolicyPrefBehaviorInterface} from '//resources/cr_elements/policy/cr_policy_pref_behavior.m.js';
+import {assert} from '//resources/js/assert.m.js';
+import {html, microTask, mixinBehaviors, PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+
+import {loadTimeData} from '../i18n_setup.js';
+import {prefToString, stringToPrefValue} from '../prefs/pref_util.js';
+
+import {PrefControlBehavior, PrefControlBehaviorInterface} from './pref_control_behavior.js';
+
+/**
  * The |name| is shown in the gui.  The |value| us use to set or compare with
  * the preference value.
  * @typedef {{
@@ -15,67 +38,76 @@ let DropdownMenuOption;
 /**
  * @typedef {!Array<!DropdownMenuOption>}
  */
-/* #export */ let DropdownMenuOptionList;
+export let DropdownMenuOptionList;
 
 /**
- * 'settings-dropdown-menu' is a control for displaying options
- * in the settings.
- *
- * Example:
- *
- *   <settings-dropdown-menu pref="{{prefs.foo}}">
- *   </settings-dropdown-menu>
+ * @constructor
+ * @extends {PolymerElement}
+ * @implements {PrefControlBehaviorInterface}
+ * @implements {CrPolicyPrefBehaviorInterface}
  */
-Polymer({
-  is: 'settings-dropdown-menu',
+const SettingsDropdownMenuElementBase =
+    mixinBehaviors([CrPolicyPrefBehavior, PrefControlBehavior], PolymerElement);
 
-  behaviors: [CrPolicyPrefBehavior, PrefControlBehavior],
+/** @polymer */
+class SettingsDropdownMenuElement extends SettingsDropdownMenuElementBase {
+  static get is() {
+    return 'settings-dropdown-menu';
+  }
 
-  properties: {
-    /**
-     * List of options for the drop-down menu.
-     * @type {!DropdownMenuOptionList}
-     */
-    menuOptions: Array,
+  static get template() {
+    return html`{__html_template__}`;
+  }
 
-    /** Whether the dropdown menu should be disabled. */
-    disabled: {
-      type: Boolean,
-      reflectToAttribute: true,
-      value: false,
-    },
+  static get properties() {
+    return {
+      /**
+       * List of options for the drop-down menu.
+       * @type {!DropdownMenuOptionList}
+       */
+      menuOptions: Array,
 
-    /**
-       If this is a dictionary pref, this is the key for the item
-        we are interested in.
-     */
-    prefKey: {
-      type: String,
-      value: null,
-    },
+      /** Whether the dropdown menu should be disabled. */
+      disabled: {
+        type: Boolean,
+        reflectToAttribute: true,
+        value: false,
+      },
 
-    /**
-     * The value of the "custom" item.
-     * @private
-     */
-    notFoundValue_: {
-      type: String,
-      value: 'SETTINGS_DROPDOWN_NOT_FOUND_ITEM',
-      readOnly: true,
-    },
+      /**
+         If this is a dictionary pref, this is the key for the item
+          we are interested in.
+       */
+      prefKey: {
+        type: String,
+        value: null,
+      },
 
-    /** Label for a11y purposes */
-    label: String,
-  },
+      /**
+       * The value of the "custom" item.
+       * @private
+       */
+      notFoundValue_: {
+        type: String,
+        value: 'SETTINGS_DROPDOWN_NOT_FOUND_ITEM',
+        readOnly: true,
+      },
 
-  observers: [
-    'updateSelected_(menuOptions, pref.value.*, prefKey)',
-  ],
+      /** Label for a11y purposes */
+      label: String,
+    };
+  }
+
+  static get observers() {
+    return [
+      'updateSelected_(menuOptions, pref.value.*, prefKey)',
+    ];
+  }
 
   /** @override */
   focus() {
     this.$.dropdownMenu.focus();
-  },
+  }
 
   /**
    * Pass the selection change to the pref value.
@@ -92,8 +124,7 @@ Polymer({
       assert(this.pref);
       this.set(`pref.value.${this.prefKey}`, selected);
     } else {
-      const prefValue =
-          Settings.PrefUtil.stringToPrefValue(selected, assert(this.pref));
+      const prefValue = stringToPrefValue(selected, assert(this.pref));
       if (prefValue !== undefined) {
         this.set('pref.value', prefValue);
       }
@@ -101,8 +132,9 @@ Polymer({
 
     // settings-control-change only fires when the selection is changed to
     // a valid property.
-    this.fire('settings-control-change');
-  },
+    this.dispatchEvent(new CustomEvent(
+        'settings-control-change', {bubbles: true, composed: true}));
+  }
 
   /**
    * Updates the selected item when the pref or menuOptions change.
@@ -125,11 +157,11 @@ Polymer({
 
     // Wait for the dom-repeat to populate the <select> before setting
     // <select>#value so the correct option gets selected.
-    this.async(() => {
+    microTask.run(() => {
       this.$.dropdownMenu.value =
           option === undefined ? this.notFoundValue_ : prefValue;
     });
-  },
+  }
 
   /**
    * Gets the current value of the preference as a string.
@@ -141,9 +173,9 @@ Polymer({
       // Dictionary pref, values are always strings.
       return this.pref.value[this.prefKey];
     } else {
-      return Settings.PrefUtil.prefToString(assert(this.pref));
+      return prefToString(assert(this.pref));
     }
-  },
+  }
 
   /**
    * @param {?DropdownMenuOptionList} menuOptions
@@ -165,7 +197,7 @@ Polymer({
       return menuItem.value.toString() === this.prefStringValue_();
     });
     return !option;
-  },
+  }
 
   /**
    * @return {boolean}
@@ -174,5 +206,8 @@ Polymer({
   shouldDisableMenu_() {
     return this.disabled || this.isPrefEnforced() ||
         this.menuOptions === undefined || this.menuOptions.length === 0;
-  },
-});
+  }
+}
+
+customElements.define(
+    SettingsDropdownMenuElement.is, SettingsDropdownMenuElement);

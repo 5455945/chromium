@@ -32,6 +32,7 @@ import org.mockito.MockitoAnnotations;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
+import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabSelectionType;
@@ -44,6 +45,8 @@ import org.chromium.chrome.browser.tabmodel.TabModelSelectorObserver;
 import org.chromium.chrome.browser.tasks.tab_management.TabListFaviconProvider;
 import org.chromium.chrome.browser.tasks.tab_management.TabSwitcher;
 import org.chromium.ui.modelutil.PropertyModel;
+import org.chromium.url.GURL;
+import org.chromium.url.JUnitTestGURLs;
 
 /** Tests for {@link SingleTabSwitcherMediator}. */
 @RunWith(BaseRobolectricTestRunner.class)
@@ -51,10 +54,10 @@ import org.chromium.ui.modelutil.PropertyModel;
 public class SingleTabSwitcherMediatorUnitTest {
     private final int mTabId = 1;
     private final String mTitle = "test";
-    private final String mUrlString = "chrome://test.com";
+    private final GURL mUrl = JUnitTestGURLs.getGURL(JUnitTestGURLs.URL_1);
     private final int mTabId2 = 2;
     private final String mTitle2 = "test2";
-    private final String mUrlString2 = "chrome://test2.com";
+    private final GURL mUrl2 = JUnitTestGURLs.getGURL(JUnitTestGURLs.URL_2);
     private SingleTabSwitcherMediator mMediator;
     private PropertyModel mPropertyModel;
 
@@ -98,16 +101,16 @@ public class SingleTabSwitcherMediatorUnitTest {
         doReturn(0).when(mNormalTabModel).index();
         doReturn(1).when(mNormalTabModel).getCount();
         doReturn(false).when(mNormalTabModel).isIncognito();
-        doReturn(mUrlString).when(mTab).getUrlString();
+        doReturn(mUrl).when(mTab).getUrl();
         doReturn(mTabId).when(mTab).getId();
         doReturn(mTitle).when(mTab).getTitle();
-        doReturn(mUrlString2).when(mTab2).getUrlString();
+        doReturn(mUrl2).when(mTab2).getUrl();
         doReturn(mTabId2).when(mTab2).getId();
         doReturn(mTitle2).when(mTab2).getTitle();
         doReturn(true).when(mIncognitoTabModel).isIncognito();
 
         mPropertyModel = new PropertyModel(SingleTabViewProperties.ALL_KEYS);
-        mMediator = new SingleTabSwitcherMediator(
+        mMediator = new SingleTabSwitcherMediator(ContextUtils.getApplicationContext(),
                 mPropertyModel, mTabModelSelector, mTabListFaviconProvider);
     }
 
@@ -129,7 +132,7 @@ public class SingleTabSwitcherMediatorUnitTest {
                 .addTabModelFilterObserver(mTabModelObserverCaptor.capture());
         verify(mTabModelSelector).addObserver(mTabModelSelectorObserverCaptor.capture());
         verify(mTabListFaviconProvider)
-                .getFaviconForUrlAsync(eq(mUrlString), eq(false), mFaviconCallbackCaptor.capture());
+                .getFaviconForUrlAsync(eq(mUrl), eq(false), mFaviconCallbackCaptor.capture());
         assertTrue(mMediator.overviewVisible());
         verify(mOverviewModeObserver).startedShowing();
         verify(mOverviewModeObserver).finishedShowing();
@@ -159,7 +162,7 @@ public class SingleTabSwitcherMediatorUnitTest {
                 .addTabModelFilterObserver(mTabModelObserverCaptor.capture());
         verify(mTabModelSelector).addObserver(mTabModelSelectorObserverCaptor.capture());
         verify(mTabListFaviconProvider)
-                .getFaviconForUrlAsync(eq(mUrlString), eq(false), mFaviconCallbackCaptor.capture());
+                .getFaviconForUrlAsync(eq(mUrl), eq(false), mFaviconCallbackCaptor.capture());
         assertTrue(mMediator.overviewVisible());
         verify(mOverviewModeObserver).startedShowing();
         verify(mOverviewModeObserver).finishedShowing();
@@ -198,7 +201,7 @@ public class SingleTabSwitcherMediatorUnitTest {
                 .addTabModelFilterObserver(mTabModelObserverCaptor.capture());
         verify(mTabModelSelector).addObserver(mTabModelSelectorObserverCaptor.capture());
         verify(mTabListFaviconProvider)
-                .getFaviconForUrlAsync(eq(mUrlString), eq(false), mFaviconCallbackCaptor.capture());
+                .getFaviconForUrlAsync(eq(mUrl), eq(false), mFaviconCallbackCaptor.capture());
         assertTrue(mMediator.overviewVisible());
         verify(mOverviewModeObserver).startedShowing();
         verify(mOverviewModeObserver).finishedShowing();
@@ -227,7 +230,7 @@ public class SingleTabSwitcherMediatorUnitTest {
                 .addTabModelFilterObserver(mTabModelObserverCaptor.capture());
         verify(mTabModelSelector).addObserver(mTabModelSelectorObserverCaptor.capture());
         verify(mTabListFaviconProvider)
-                .getFaviconForUrlAsync(eq(mUrlString), eq(false), mFaviconCallbackCaptor.capture());
+                .getFaviconForUrlAsync(eq(mUrl), eq(false), mFaviconCallbackCaptor.capture());
         assertEquals(mPropertyModel.get(TITLE), mTitle);
 
         mTabModelSelectorObserverCaptor.getValue().onTabModelSelected(

@@ -7,6 +7,7 @@
 #include <string>
 
 #include "base/containers/flat_set.h"
+#include "base/hash/hash.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/strings/stringprintf.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
@@ -55,6 +56,12 @@ std::string GetStringNameForOptimizationType(
       return "LinkPerformance";
     case proto::OptimizationType::SHOPPING_PAGE_PREDICTOR:
       return "ShoppingPagePredictor";
+    case proto::OptimizationType::LOGIN_DETECTION:
+      return "LoginDetection";
+    case proto::OptimizationType::MERCHANT_TRUST_SIGNALS:
+      return "MerchantTrustSignals";
+    case proto::OptimizationType::PRICE_TRACKING:
+      return "PriceTracking";
   }
   NOTREACHED();
   return std::string();

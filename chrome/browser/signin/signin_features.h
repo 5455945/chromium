@@ -12,4 +12,8 @@
 extern const base::Feature kDiceWebSigninInterceptionFeature;
 #endif  // ENABLE_DICE_SUPPORT
 
+extern const base::Feature kProcessGaiaRemoveLocalAccountHeader;
+
+extern const base::Feature kAccountPoliciesLoadedWithoutSync;
+
 #endif  // CHROME_BROWSER_SIGNIN_SIGNIN_FEATURES_H_

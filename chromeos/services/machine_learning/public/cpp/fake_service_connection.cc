@@ -6,8 +6,7 @@
 
 #include <utility>
 #include "base/bind.h"
-#include "base/callback_forward.h"
-#include "base/optional.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace chromeos {
 namespace machine_learning {
@@ -15,6 +14,8 @@ namespace machine_learning {
 FakeServiceConnectionImpl::FakeServiceConnectionImpl()
     : output_tensor_(mojom::Tensor::New()),
       load_handwriting_model_result_(mojom::LoadHandwritingModelResult::OK),
+      load_web_platform_handwriting_model_result_(
+          mojom::LoadHandwritingModelResult::OK),
       load_model_result_(mojom::LoadModelResult::OK),
       load_text_classifier_result_(mojom::LoadModelResult::OK),
       load_soda_result_(mojom::LoadModelResult::OK),
@@ -109,6 +110,24 @@ void FakeServiceConnectionImpl::LoadHandwritingModelWithSpec(
       base::Unretained(this), std::move(receiver), std::move(callback)));
 }
 
+void FakeServiceConnectionImpl::HandleLoadWebPlatformHandwritingModelCall(
+    mojo::PendingReceiver<web_platform::mojom::HandwritingRecognizer> receiver,
+    mojom::MachineLearningService::LoadHandwritingModelCallback callback) {
+  if (load_handwriting_model_result_ == mojom::LoadHandwritingModelResult::OK)
+    web_platform_handwriting_receivers_.Add(this, std::move(receiver));
+  std::move(callback).Run(load_web_platform_handwriting_model_result_);
+}
+
+void FakeServiceConnectionImpl::LoadWebPlatformHandwritingModel(
+    web_platform::mojom::HandwritingModelConstraintPtr constraint,
+    mojo::PendingReceiver<web_platform::mojom::HandwritingRecognizer> receiver,
+    mojom::MachineLearningService::LoadWebPlatformHandwritingModelCallback
+        callback) {
+  ScheduleCall(base::BindOnce(
+      &FakeServiceConnectionImpl::HandleLoadWebPlatformHandwritingModelCall,
+      base::Unretained(this), std::move(receiver), std::move(callback)));
+}
+
 void FakeServiceConnectionImpl::LoadGrammarChecker(
     mojo::PendingReceiver<mojom::GrammarChecker> receiver,
     mojom::MachineLearningService::LoadGrammarCheckerCallback callback) {
@@ -116,6 +135,7 @@ void FakeServiceConnectionImpl::LoadGrammarChecker(
       &FakeServiceConnectionImpl::HandleLoadGrammarCheckerCall,
       base::Unretained(this), std::move(receiver), std::move(callback)));
 }
+
 void FakeServiceConnectionImpl::LoadSpeechRecognizer(
     mojom::SodaConfigPtr soda_config,
     mojo::PendingRemote<mojom::SodaClient> soda_client,
@@ -125,6 +145,16 @@ void FakeServiceConnectionImpl::LoadSpeechRecognizer(
       base::BindOnce(&FakeServiceConnectionImpl::HandleLoadSpeechRecognizerCall,
                      base::Unretained(this), std::move(soda_client),
                      std::move(soda_recognizer), std::move(callback)));
+}
+
+void FakeServiceConnectionImpl::LoadTextSuggester(
+    mojo::PendingReceiver<mojom::TextSuggester> receiver,
+    mojom::TextSuggesterSpecPtr spec,
+    mojom::MachineLearningService::LoadTextSuggesterCallback callback) {
+  ScheduleCall(
+      base::BindOnce(&FakeServiceConnectionImpl::HandleLoadTextSuggesterCall,
+                     base::Unretained(this), std::move(receiver),
+                     std::move(spec), std::move(callback)));
 }
 
 void FakeServiceConnectionImpl::Execute(
@@ -233,7 +263,7 @@ void FakeServiceConnectionImpl::HandleCreateGraphExecutorCall(
 void FakeServiceConnectionImpl::HandleExecuteCall(
     mojom::GraphExecutor::ExecuteCallback callback) {
   if (execute_result_ != mojom::ExecuteResult::OK) {
-    std::move(callback).Run(execute_result_, base::nullopt);
+    std::move(callback).Run(execute_result_, absl::nullopt);
     return;
   }
 
@@ -295,9 +325,23 @@ void FakeServiceConnectionImpl::SetOutputHandwritingRecognizerResult(
   handwriting_result_ = result.Clone();
 }
 
+void FakeServiceConnectionImpl::SetOutputWebPlatformHandwritingRecognizerResult(
+    const std::vector<web_platform::mojom::HandwritingPredictionPtr>&
+        predictions) {
+  web_platform_handwriting_result_.clear();
+  for (auto const& prediction : predictions) {
+    web_platform_handwriting_result_.emplace_back(prediction.Clone());
+  }
+}
+
 void FakeServiceConnectionImpl::SetOutputGrammarCheckerResult(
     const mojom::GrammarCheckerResultPtr& result) {
   grammar_checker_result_ = result.Clone();
+}
+
+void FakeServiceConnectionImpl::SetOutputTextSuggesterResult(
+    const mojom::TextSuggesterResultPtr& result) {
+  text_suggester_result_ = result.Clone();
 }
 
 void FakeServiceConnectionImpl::Annotate(
@@ -330,6 +374,17 @@ void FakeServiceConnectionImpl::Recognize(
   ScheduleCall(base::BindOnce(&FakeServiceConnectionImpl::HandleRecognizeCall,
                               base::Unretained(this), std::move(query),
                               std::move(callback)));
+}
+
+void FakeServiceConnectionImpl::GetPrediction(
+    std::vector<web_platform::mojom::HandwritingStrokePtr> strokes,
+    web_platform::mojom::HandwritingHintsPtr hints,
+    web_platform::mojom::HandwritingRecognizer::GetPredictionCallback
+        callback) {
+  ScheduleCall(
+      base::BindOnce(&FakeServiceConnectionImpl::HandleGetPredictionCall,
+                     base::Unretained(this), std::move(strokes),
+                     std::move(hints), std::move(callback)));
 }
 
 void FakeServiceConnectionImpl::Check(
@@ -365,6 +420,14 @@ void FakeServiceConnectionImpl::MarkDone() {
                               base::Unretained(this)));
 }
 
+void FakeServiceConnectionImpl::Suggest(
+    mojom::TextSuggesterQueryPtr query,
+    mojom::TextSuggester::SuggestCallback callback) {
+  ScheduleCall(base::BindOnce(
+      &FakeServiceConnectionImpl::HandleTextSuggesterSuggestCall,
+      base::Unretained(this), std::move(query), std::move(callback)));
+}
+
 void FakeServiceConnectionImpl::HandleLoadHandwritingModelCall(
     mojo::PendingReceiver<mojom::HandwritingRecognizer> receiver,
     mojom::MachineLearningService::LoadHandwritingModelCallback callback) {
@@ -389,6 +452,18 @@ void FakeServiceConnectionImpl::HandleRecognizeCall(
   std::move(callback).Run(handwriting_result_.Clone());
 }
 
+void FakeServiceConnectionImpl::HandleGetPredictionCall(
+    std::vector<web_platform::mojom::HandwritingStrokePtr> strokes,
+    web_platform::mojom::HandwritingHintsPtr hints,
+    web_platform::mojom::HandwritingRecognizer::GetPredictionCallback
+        callback) {
+  std::vector<web_platform::mojom::HandwritingPredictionPtr> predictions;
+  for (auto const& prediction : web_platform_handwriting_result_) {
+    predictions.emplace_back(prediction.Clone());
+  }
+  std::move(callback).Run(std::move(predictions));
+}
+
 void FakeServiceConnectionImpl::HandleLoadGrammarCheckerCall(
     mojo::PendingReceiver<mojom::GrammarChecker> receiver,
     mojom::MachineLearningService::LoadGrammarCheckerCallback callback) {
@@ -397,6 +472,7 @@ void FakeServiceConnectionImpl::HandleLoadGrammarCheckerCall(
 
   std::move(callback).Run(load_model_result_);
 }
+
 void FakeServiceConnectionImpl::HandleLoadSpeechRecognizerCall(
     mojo::PendingRemote<mojom::SodaClient> soda_client,
     mojo::PendingReceiver<mojom::SodaRecognizer> soda_recognizer,
@@ -412,6 +488,22 @@ void FakeServiceConnectionImpl::HandleGrammarCheckerQueryCall(
     mojom::GrammarCheckerQueryPtr query,
     mojom::GrammarChecker::CheckCallback callback) {
   std::move(callback).Run(grammar_checker_result_.Clone());
+}
+
+void FakeServiceConnectionImpl::HandleLoadTextSuggesterCall(
+    mojo::PendingReceiver<mojom::TextSuggester> receiver,
+    mojom::TextSuggesterSpecPtr spec,
+    mojom::MachineLearningService::LoadTextSuggesterCallback callback) {
+  if (load_model_result_ == mojom::LoadModelResult::OK)
+    text_suggester_receivers_.Add(this, std::move(receiver));
+
+  std::move(callback).Run(load_model_result_);
+}
+
+void FakeServiceConnectionImpl::HandleTextSuggesterSuggestCall(
+    mojom::TextSuggesterQueryPtr query,
+    mojom::TextSuggester::SuggestCallback callback) {
+  std::move(callback).Run(text_suggester_result_.Clone());
 }
 
 }  // namespace machine_learning

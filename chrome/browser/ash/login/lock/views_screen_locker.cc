@@ -8,7 +8,6 @@
 #include <string>
 #include <utility>
 
-#include "ash/public/cpp/ash_features.h"
 #include "ash/public/cpp/login_screen.h"
 #include "ash/public/cpp/login_screen_model.h"
 #include "base/bind.h"
@@ -19,20 +18,20 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
+#include "chrome/browser/ash/authpolicy/authpolicy_helper.h"
+#include "chrome/browser/ash/lock_screen_apps/state_controller.h"
+#include "chrome/browser/ash/login/challenge_response_auth_keys_loader.h"
+#include "chrome/browser/ash/login/lock_screen_utils.h"
+#include "chrome/browser/ash/login/mojo_system_info_dispatcher.h"
 #include "chrome/browser/ash/login/quick_unlock/pin_backend.h"
 #include "chrome/browser/ash/login/quick_unlock/quick_unlock_factory.h"
+#include "chrome/browser/ash/login/screens/chrome_user_selection_screen.h"
+#include "chrome/browser/ash/login/user_board_view_mojo.h"
 #include "chrome/browser/ash/system/system_clock.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/chromeos/authpolicy/authpolicy_helper.h"
-#include "chrome/browser/chromeos/lock_screen_apps/state_controller.h"
-#include "chrome/browser/chromeos/login/challenge_response_auth_keys_loader.h"
-#include "chrome/browser/chromeos/login/lock_screen_utils.h"
-#include "chrome/browser/chromeos/login/mojo_system_info_dispatcher.h"
-#include "chrome/browser/chromeos/login/screens/chrome_user_selection_screen.h"
-#include "chrome/browser/chromeos/login/user_board_view_mojo.h"
 #include "chrome/browser/ui/ash/session_controller_client_impl.h"
-#include "chrome/browser/ui/ash/wallpaper_controller_client.h"
+#include "chrome/browser/ui/ash/wallpaper_controller_client_impl.h"
 #include "chrome/common/pref_names.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/user.h"
@@ -45,7 +44,7 @@ namespace chromeos {
 ViewsScreenLocker::ViewsScreenLocker(ScreenLocker* screen_locker)
     : screen_locker_(screen_locker),
       system_info_updater_(std::make_unique<MojoSystemInfoDispatcher>()) {
-  LoginScreenClient::Get()->SetDelegate(this);
+  LoginScreenClientImpl::Get()->SetDelegate(this);
   user_board_view_mojo_ = std::make_unique<UserBoardViewMojo>();
   user_selection_screen_ =
       std::make_unique<ChromeUserSelectionScreen>(DisplayedScreen::LOCK_SCREEN);
@@ -54,7 +53,7 @@ ViewsScreenLocker::ViewsScreenLocker(ScreenLocker* screen_locker)
 
 ViewsScreenLocker::~ViewsScreenLocker() {
   lock_screen_apps::StateController::Get()->SetFocusCyclerDelegate(nullptr);
-  LoginScreenClient::Get()->SetDelegate(nullptr);
+  LoginScreenClientImpl::Get()->SetDelegate(nullptr);
 }
 
 void ViewsScreenLocker::Init() {
@@ -150,7 +149,7 @@ void ViewsScreenLocker::HandleHardlockPod(const AccountId& account_id) {
 void ViewsScreenLocker::HandleOnFocusPod(const AccountId& account_id) {
   user_selection_screen_->HandleFocusPod(account_id);
 
-  WallpaperControllerClient::Get()->ShowUserWallpaper(account_id);
+  WallpaperControllerClientImpl::Get()->ShowUserWallpaper(account_id);
 }
 
 void ViewsScreenLocker::HandleOnNoPodFocused() {

@@ -69,7 +69,7 @@ class ASH_EXPORT ShelfAppButton : public ShelfButton,
   void SetImage(const gfx::ImageSkia& image);
 
   // Retrieve the image to show proxy operations.
-  const gfx::ImageSkia& GetImage() const;
+  gfx::ImageSkia GetImage() const;
 
   // |state| is or'd into the current state.
   void AddState(State state);
@@ -127,9 +127,6 @@ class ASH_EXPORT ShelfAppButton : public ShelfButton,
   // ui::EventHandler:
   void OnGestureEvent(ui::GestureEvent* event) override;
 
-  // views::Button:
-  std::unique_ptr<views::InkDropRipple> CreateInkDropRipple() const override;
-
   // ui::ImplicitAnimationObserver:
   void OnImplicitAnimationsCompleted() override;
 
@@ -173,6 +170,9 @@ class ASH_EXPORT ShelfAppButton : public ShelfButton,
 
   // Marks whether the ink drop animation has started or not.
   void SetInkDropAnimationStarted(bool started);
+
+  // Maybe hides the ink drop at the end of gesture handling.
+  void MaybeHideInkDropWhenGestureEnds();
 
   // The icon part of a button can be animated independently of the rest.
   views::ImageView* icon_view_;

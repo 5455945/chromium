@@ -22,7 +22,7 @@
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/chromeos/policy/dlp/dlp_content_manager.h"
+#include "chrome/browser/chromeos/policy/dlp/dlp_content_manager_test_helper.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_content_restriction_set.h"
 #endif
 
@@ -159,6 +159,7 @@ IN_PROC_BROWSER_TEST_P(WebRtcScreenCaptureBrowserTestWithPicker,
                        ScreenCaptureVideoWithDlp) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
+  policy::DlpContentManagerTestHelper helper;
   content::WebContents* tab = OpenTestPageInNewTab(kMainHtmlPage);
   std::string constraints("{video:true}");
   RunTestedFunction(test_config_.tested_function, tab, constraints,
@@ -176,19 +177,18 @@ IN_PROC_BROWSER_TEST_P(WebRtcScreenCaptureBrowserTestWithPicker,
   EXPECT_EQ(result, "unmuted");
 
   const policy::DlpContentRestrictionSet kScreenShareRestricted(
-      policy::DlpContentRestriction::kScreenShare);
-  const policy::DlpContentRestrictionSet kEmptyRestrictionSet;
+      policy::DlpContentRestriction::kScreenShare,
+      policy::DlpRulesManager::Level::kBlock);
 
-  policy::DlpContentManager* dlp_content_manager =
-      policy::DlpContentManager::Get();
-  dlp_content_manager->OnConfidentialityChanged(tab, kScreenShareRestricted);
+  helper.ChangeConfidentiality(tab, kScreenShareRestricted);
   content::WaitForLoadStop(tab);
 
   EXPECT_TRUE(content::ExecuteScriptAndExtractString(
       tab->GetMainFrame(), "waitVideoMuted();", &result));
   EXPECT_EQ(result, "muted");
 
-  dlp_content_manager->OnConfidentialityChanged(tab, kEmptyRestrictionSet);
+  const policy::DlpContentRestrictionSet kEmptyRestrictionSet;
+  helper.ChangeConfidentiality(tab, kEmptyRestrictionSet);
 
   EXPECT_TRUE(content::ExecuteScriptAndExtractString(
       tab->GetMainFrame(), "waitVideoUnmuted();", &result));

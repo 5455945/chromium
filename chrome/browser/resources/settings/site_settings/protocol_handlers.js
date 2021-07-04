@@ -10,20 +10,24 @@
 
 import 'chrome://resources/cr_elements/cr_action_menu/cr_action_menu.m.js';
 import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.m.js';
-import 'chrome://resources/cr_elements/cr_link_row/cr_link_row.m.js';
+import 'chrome://resources/cr_elements/cr_radio_group/cr_radio_group.m.js';
+import 'chrome://resources/cr_elements/cr_link_row/cr_link_row.js';
 import 'chrome://resources/cr_elements/cr_toggle/cr_toggle.m.js';
 import 'chrome://resources/cr_elements/shared_style_css.m.js';
 import 'chrome://resources/cr_elements/icons.m.js';
 import 'chrome://resources/polymer/v3_0/iron-flex-layout/iron-flex-layout-classes.js';
-import '../settings_shared_css.m.js';
+import '../controls/settings_toggle_button.js';
+import '../prefs/prefs.js';
+import '../privacy_page/collapse_radio_button.js';
+import '../settings_shared_css.js';
 import '../site_favicon.js';
 
-import {WebUIListenerBehavior} from 'chrome://resources/js/web_ui_listener_behavior.m.js';
-import {html, Polymer} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {WebUIListenerBehavior, WebUIListenerBehaviorInterface} from 'chrome://resources/js/web_ui_listener_behavior.m.js';
+import {html, mixinBehaviors, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {loadTimeData} from '../i18n_setup.js';
 
-import {SiteSettingsBehavior} from './site_settings_behavior.js';
+import {SiteSettingsBehavior, SiteSettingsBehaviorInterface} from './site_settings_behavior.js';
 
 /**
  * All possible actions in the menu.
@@ -50,44 +54,76 @@ export let HandlerEntry;
  */
 export let ProtocolEntry;
 
-Polymer({
-  is: 'protocol-handlers',
 
-  _template: html`{__html_template__}`,
+/**
+ * @constructor
+ * @extends {PolymerElement}
+ * @implements {SiteSettingsBehaviorInterface}
+ * @implements {WebUIListenerBehaviorInterface}
+ */
+const ProtocolHandlersElementBase = mixinBehaviors(
+    [SiteSettingsBehavior, WebUIListenerBehavior], PolymerElement);
 
-  behaviors: [SiteSettingsBehavior, WebUIListenerBehavior],
+/** @polymer */
+class ProtocolHandlersElement extends ProtocolHandlersElementBase {
+  static get is() {
+    return 'protocol-handlers';
+  }
 
-  properties: {
-    /**
-     * Represents the state of the main toggle shown for the category.
-     */
-    categoryEnabled: Boolean,
+  static get template() {
+    return html`{__html_template__}`;
+  }
 
-    /**
-     * Array of protocols and their handlers.
-     * @type {!Array<!ProtocolEntry>}
-     */
-    protocols: Array,
+  static get properties() {
+    return {
+      /**
+       * Array of protocols and their handlers.
+       * @type {!Array<!ProtocolEntry>}
+       */
+      protocols: Array,
 
-    /**
-     * The targetted object for menu operations.
-     * @private {?HandlerEntry}
-     */
-    actionMenuModel_: Object,
+      /**
+       * The targeted object for menu operations.
+       * @private {?HandlerEntry}
+       */
+      actionMenuModel_: Object,
 
-    /* Labels for the toggle on/off positions. */
-    toggleOffLabel: String,
-    toggleOnLabel: String,
+      /* Labels for the toggle on/off positions. */
+      toggleOffLabel: String,
+      toggleOnLabel: String,
 
-    /**
-     * Array of ignored (blocked) protocols.
-     * @type {!Array<!HandlerEntry>}
-     */
-    ignoredProtocols: Array,
-  },
+      /**
+       * Array of ignored (blocked) protocols.
+       * @type {!Array<!HandlerEntry>}
+       */
+      ignoredProtocols: Array,
+
+      /** @private */
+      enableContentSettingsRedesign_: {
+        type: Boolean,
+        value() {
+          return loadTimeData.getBoolean('enableContentSettingsRedesign');
+        }
+      },
+
+      /** @private {chrome.settingsPrivate.PrefObject} */
+      handlersEnabledPref_: {
+        type: Object,
+        value() {
+          return /** @type {chrome.settingsPrivate.PrefObject} */ ({
+            type: chrome.settingsPrivate.PrefType.BOOLEAN,
+            value: false,
+          });
+        },
+      },
+
+    };
+  }
 
   /** @override */
   ready() {
+    super.ready();
+
     this.addWebUIListener(
         'setHandlersEnabled', this.setHandlersEnabled_.bind(this));
     this.addWebUIListener(
@@ -96,12 +132,7 @@ Polymer({
         'setIgnoredProtocolHandlers',
         this.setIgnoredProtocolHandlers_.bind(this));
     this.browserProxy.observeProtocolHandlers();
-  },
-
-  /** @private */
-  categoryLabelClicked_() {
-    this.$.toggle.click();
-  },
+  }
 
   /**
    * Obtains the description for the main toggle.
@@ -109,8 +140,9 @@ Polymer({
    * @private
    */
   computeHandlersDescription_() {
-    return this.categoryEnabled ? this.toggleOnLabel : this.toggleOffLabel;
-  },
+    return this.handlersEnabledPref_.value ? this.toggleOnLabel :
+                                             this.toggleOffLabel;
+  }
 
   /**
    * Updates the main toggle to set it enabled/disabled.
@@ -118,8 +150,8 @@ Polymer({
    * @private
    */
   setHandlersEnabled_(enabled) {
-    this.categoryEnabled = enabled;
-  },
+    this.set('handlersEnabledPref_.value', enabled);
+  }
 
   /**
    * Updates the list of protocol handlers.
@@ -128,7 +160,7 @@ Polymer({
    */
   setProtocolHandlers_(protocols) {
     this.protocols = protocols;
-  },
+  }
 
   /**
    * Updates the list of ignored protocol handlers.
@@ -138,24 +170,25 @@ Polymer({
    */
   setIgnoredProtocolHandlers_(ignoredProtocols) {
     this.ignoredProtocols = ignoredProtocols;
-  },
+  }
 
   /**
    * Closes action menu and resets action menu model
    * @private
    */
   closeActionMenu_() {
-    this.$$('cr-action-menu').close();
+    this.shadowRoot.querySelector('cr-action-menu').close();
     this.actionMenuModel_ = null;
-  },
+  }
 
   /**
    * A handler when the toggle is flipped.
    * @private
    */
-  onToggleChange_(event) {
-    this.browserProxy.setProtocolHandlerDefault(this.categoryEnabled);
-  },
+  onToggleChange_() {
+    this.browserProxy.setProtocolHandlerDefault(
+        !!this.handlersEnabledPref_.value);
+  }
 
   /**
    * The handler for when "Set Default" is selected in the action menu.
@@ -165,7 +198,7 @@ Polymer({
     const item = this.actionMenuModel_;
     this.browserProxy.setProtocolDefault(item.protocol, item.spec);
     this.closeActionMenu_();
-  },
+  }
 
   /**
    * The handler for when "Remove" is selected in the action menu.
@@ -175,7 +208,7 @@ Polymer({
     const item = this.actionMenuModel_;
     this.browserProxy.removeProtocolHandler(item.protocol, item.spec);
     this.closeActionMenu_();
-  },
+  }
 
   /**
    * Handler for removing handlers that were blocked
@@ -184,7 +217,7 @@ Polymer({
   onRemoveIgnored_(event) {
     const item = event.model.item;
     this.browserProxy.removeProtocolHandler(item.protocol, item.spec);
-  },
+  }
 
   /**
    * A handler to show the action menu next to the clicked menu button.
@@ -193,8 +226,11 @@ Polymer({
    */
   showMenu_(event) {
     this.actionMenuModel_ = event.model.item;
-    /** @type {!CrActionMenuElement} */ (this.$$('cr-action-menu'))
+    /** @type {!CrActionMenuElement} */ (
+        this.shadowRoot.querySelector('cr-action-menu'))
         .showAt(
             /** @type {!Element} */ (/** @type {!Event} */ (event).target));
   }
-});
+}
+
+customElements.define(ProtocolHandlersElement.is, ProtocolHandlersElement);

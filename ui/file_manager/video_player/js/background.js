@@ -2,13 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// clang-format off
-// #import {assert} from 'chrome://resources/js/assert.m.js';
-// #import {AppWindowWrapper} from '../../file_manager/background/js/app_window_wrapper.m.js';
-// #import {util} from '../../file_manager/common/js/util.m.js';
-// #import {BackgroundBaseImpl} from '../../file_manager/background/js/background_base.m.js';
-// #import {BackgroundBase} from '../../externs/background/background_base.m.js';
-// clang-format on
+import {AppWindowWrapper} from 'chrome-extension://hhaomjibdihmijegdhdafkllkbggdgoj/background/js/app_window_wrapper.js';
+import {BackgroundBaseImpl} from 'chrome-extension://hhaomjibdihmijegdhdafkllkbggdgoj/background/js/background_base.js';
+import {util} from 'chrome-extension://hhaomjibdihmijegdhdafkllkbggdgoj/common/js/util.js';
+import {BackgroundBase} from 'chrome-extension://hhaomjibdihmijegdhdafkllkbggdgoj/externs/background/background_base.js';
+import {assert} from 'chrome://resources/js/assert.m.js';
 
 /**
  * Use maximum size and let ash downsample the icon.
@@ -17,13 +15,6 @@
  * @const
  */
 const ICON_IMAGE = 'images/icon/video-player-192.png';
-
-/**
- * HTML source of the video player.
- * @type {!string}
- * @const
- */
-const VIDEO_PLAYER_APP_URL = 'video_player.html';
 
 /**
  * HTML source of the video player as JS module.
@@ -69,7 +60,7 @@ const generateWindowId = (function() {
  *     playing.
  * @return {!Promise} Promise to be fulfilled on success, or rejected on error.
  */
-/* #export */ function openVideoPlayerWindow(urls) {
+export function openVideoPlayerWindow(urls) {
   let position = 0;
   const startUrl = (position < urls.length) ? urls[position] : '';
   let windowId = null;
@@ -96,9 +87,7 @@ const generateWindowId = (function() {
 
         // Opens the video player window.
         const urls = util.entriesToURLs(entries);
-        const videoPlayerUrl = util.isVideoPlayerJsModulesEnabled() ?
-            VIDEO_PLAYER_MODULE_APP_URL :
-            VIDEO_PLAYER_APP_URL;
+        const videoPlayerUrl = VIDEO_PLAYER_MODULE_APP_URL;
         const videoPlayer = new AppWindowWrapper(
             videoPlayerUrl, assert(windowId), windowCreateOptions);
 

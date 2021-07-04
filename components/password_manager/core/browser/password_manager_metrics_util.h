@@ -224,6 +224,7 @@ enum AccessPasswordInSettingsEvent {
 // numeric values should never be reused. Needs to stay in sync with
 // "PasswordManager.ReauthResult" in enums.xml.
 // Metrics: PasswordManager.ReauthToAccessPasswordInSettings
+// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.password_manager
 enum class ReauthResult {
   kSuccess = 0,
   kFailure = 1,
@@ -519,7 +520,7 @@ void LogGeneralUIDismissalReason(UIDismissalReason reason);
 // user-state-specific histogram.
 void LogSaveUIDismissalReason(
     UIDismissalReason reason,
-    base::Optional<PasswordAccountStorageUserState> user_state);
+    absl::optional<PasswordAccountStorageUserState> user_state);
 
 // Log the |reason| a user dismissed the save password prompt after previously
 // having unblocklisted the origin while on the page.

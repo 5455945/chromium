@@ -9,7 +9,6 @@
 
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
-#include "base/optional.h"
 #include "base/time/time.h"
 #include "chrome/browser/page_load_metrics/observers/page_load_metrics_observer_test_harness.h"
 #include "components/page_load_metrics/browser/page_load_tracker.h"
@@ -21,6 +20,7 @@
 #include "services/metrics/public/cpp/metrics_utils.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_source.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 using content::NavigationSimulator;
@@ -59,7 +59,7 @@ class AMPPageLoadMetricsObserverTest
 
   void ValidateHistogramsFor(const std::string& histogram,
                              const char* view_type,
-                             const base::Optional<base::TimeDelta>& event,
+                             const absl::optional<base::TimeDelta>& event,
                              bool expect_histograms) {
     const size_t kTypeOffset = strlen("PageLoad.Clients.AMP.");
     std::string view_type_histogram = histogram;
@@ -321,6 +321,10 @@ TEST_F(AMPPageLoadMetricsObserverTest, SubFrameMetrics) {
       blink::LoadingBehaviorFlag::kLoadingBehaviorAmpDocumentLoaded;
   tester()->SimulateMetadataUpdate(metadata, subframe);
 
+  blink::MobileFriendliness mf;
+  mf.text_content_outside_viewport_percentage = 55;
+  tester()->SimulateMobileFriendlinessUpdate(mf, subframe);
+
   page_load_metrics::mojom::PageLoadTiming subframe_timing;
   page_load_metrics::InitPageLoadTimingForTest(&subframe_timing);
   subframe_timing.navigation_start = base::Time::FromDoubleT(2);
@@ -373,6 +377,9 @@ TEST_F(AMPPageLoadMetricsObserverTest, SubFrameMetrics) {
   tester()->test_ukm_recorder().ExpectEntryMetric(
       entry.get(), "SubFrame.PaintTiming.NavigationToLargestContentfulPaint",
       8);
+  tester()->test_ukm_recorder().ExpectEntryMetric(
+      entry.get(),
+      "SubFrame.MobileFriendliness.TextContentOutsideViewportPercentage", 55);
 }
 
 TEST_F(AMPPageLoadMetricsObserverTest, SubFrameMetrics_LayoutInstability) {
@@ -398,7 +405,7 @@ TEST_F(AMPPageLoadMetricsObserverTest, SubFrameMetrics_LayoutInstability) {
   tester()->SimulateMetadataUpdate(metadata, subframe);
 
   page_load_metrics::mojom::FrameRenderDataUpdate render_data(1.0, 0.5, 0, 0, 0,
-                                                              0, {});
+                                                              0, 0, 0, {});
   tester()->SimulateRenderDataUpdate(render_data, subframe);
 
   // Navigate the main frame to trigger metrics recording.
@@ -419,6 +426,77 @@ TEST_F(AMPPageLoadMetricsObserverTest, SubFrameMetrics_LayoutInstability) {
       entry.get(),
       "SubFrame.LayoutInstability.CumulativeShiftScore.BeforeInputOrScroll",
       50);
+}
+
+TEST_F(AMPPageLoadMetricsObserverTest,
+       SubFrameMetrics_Layout_Shift_Normalization) {
+  GURL amp_url("https://ampviewer.com/page");
+
+  NavigationSimulator::CreateRendererInitiated(GURL("https://ampviewer.com/"),
+                                               main_rfh())
+      ->Commit();
+
+  NavigationSimulator::CreateRendererInitiated(amp_url, main_rfh())
+      ->CommitSameDocument();
+
+  content::RenderFrameHost* subframe =
+      NavigationSimulator::NavigateAndCommitFromDocument(
+          GURL("https://ampsubframe.com/page"
+               "?amp_js_v=0.1#viewerUrl=https%3A%2F%2Fampviewer.com%2Fpage"),
+          content::RenderFrameHostTester::For(web_contents()->GetMainFrame())
+              ->AppendChild("subframe"));
+
+  page_load_metrics::mojom::FrameMetadata metadata;
+  metadata.behavior_flags =
+      blink::LoadingBehaviorFlag::kLoadingBehaviorAmpDocumentLoaded;
+  tester()->SimulateMetadataUpdate(metadata, subframe);
+
+  base::TimeTicks current_time = base::TimeTicks::Now();
+  page_load_metrics::mojom::FrameRenderDataUpdate render_data(0.65, 0.65, 0, 0,
+                                                              0, 0, 0, 0, {});
+
+  render_data.new_layout_shifts.emplace_back(
+      page_load_metrics::mojom::LayoutShift::New(
+          current_time - base::TimeDelta::FromMilliseconds(4000), 0.1));
+  render_data.new_layout_shifts.emplace_back(
+      page_load_metrics::mojom::LayoutShift::New(
+          current_time - base::TimeDelta::FromMilliseconds(3000), 0.1));
+  render_data.new_layout_shifts.emplace_back(
+      page_load_metrics::mojom::LayoutShift::New(
+          current_time - base::TimeDelta::FromMilliseconds(2000), 0.2));
+  render_data.new_layout_shifts.emplace_back(
+      page_load_metrics::mojom::LayoutShift::New(
+          current_time - base::TimeDelta::FromMilliseconds(200), 0.1));
+  render_data.new_layout_shifts.emplace_back(
+      page_load_metrics::mojom::LayoutShift::New(
+          current_time - base::TimeDelta::FromMilliseconds(100), 0.15));
+
+  tester()->SimulateRenderDataUpdate(render_data, subframe);
+
+  // Navigate the main frame to trigger metrics recording.
+  NavigationSimulator::CreateRendererInitiated(
+      GURL("https://ampviewer.com/other"), main_rfh())
+      ->CommitSameDocument();
+
+  ukm::mojom::UkmEntryPtr entry = GetAmpPageLoadUkmEntry(amp_url);
+  ASSERT_NE(nullptr, entry.get());
+  tester()->test_ukm_recorder().ExpectEntrySourceHasUrl(entry.get(), amp_url);
+  tester()->test_ukm_recorder().ExpectEntryMetric(
+      entry.get(), "SubFrame.LayoutInstability.CumulativeShiftScore", 65);
+  tester()->test_ukm_recorder().ExpectEntryMetric(
+      entry.get(),
+      "SubFrame.LayoutInstability.CumulativeShiftScore.BeforeInputOrScroll",
+      65);
+  // Layout Shift Normalization UKM.
+  tester()->test_ukm_recorder().ExpectEntryMetric(
+      entry.get(),
+      "SubFrame.LayoutInstability.MaxCumulativeShiftScore.SessionWindow."
+      "Gap1000ms.Max5000ms",
+      40);
+  tester()->histogram_tester().ExpectUniqueSample(
+      "PageLoad.Clients.AMP.LayoutInstability.MaxCumulativeShiftScore."
+      "Subframe.SessionWindow.Gap1000ms.Max5000ms",
+      4, 1);
 }
 
 TEST_F(AMPPageLoadMetricsObserverTest, SubFrameMetricsFullNavigation) {
@@ -513,6 +591,10 @@ TEST_F(AMPPageLoadMetricsObserverTest, SubFrameRecordOnFullNavigation) {
       blink::LoadingBehaviorFlag::kLoadingBehaviorAmpDocumentLoaded;
   tester()->SimulateMetadataUpdate(metadata, subframe);
 
+  blink::MobileFriendliness mf;
+  mf.small_text_ratio = 75;
+  tester()->SimulateMobileFriendlinessUpdate(mf, subframe);
+
   // Navigate the main frame to trigger metrics recording.
   NavigationSimulator::CreateRendererInitiated(GURL("https://www.example.com/"),
                                                main_rfh())
@@ -531,6 +613,12 @@ TEST_F(AMPPageLoadMetricsObserverTest, SubFrameRecordOnFullNavigation) {
           entry.get(), "SubFrame.MainFrameToSubFrameNavigationDelta");
   EXPECT_NE(nullptr, nav_delta_metric);
   EXPECT_GE(*nav_delta_metric, 0ll);
+
+  const int64_t* small_text_ratio_metric =
+      tester()->test_ukm_recorder().GetEntryMetric(
+          entry.get(), "SubFrame.MobileFriendliness.SmallTextRatio");
+  EXPECT_NE(nullptr, small_text_ratio_metric);
+  EXPECT_EQ(*small_text_ratio_metric, 75ll);
 }
 
 TEST_F(AMPPageLoadMetricsObserverTest, SubFrameRecordOnFrameDeleted) {
@@ -555,6 +643,10 @@ TEST_F(AMPPageLoadMetricsObserverTest, SubFrameRecordOnFrameDeleted) {
       blink::LoadingBehaviorFlag::kLoadingBehaviorAmpDocumentLoaded;
   tester()->SimulateMetadataUpdate(metadata, subframe);
 
+  blink::MobileFriendliness mf;
+  mf.bad_tap_targets_ratio = 42;
+  tester()->SimulateMobileFriendlinessUpdate(mf, subframe);
+
   tester()->histogram_tester().ExpectTotalCount(
       "PageLoad.Clients.AMP.Experimental.PageTiming.InputToNavigation.Subframe",
       0);
@@ -575,6 +667,12 @@ TEST_F(AMPPageLoadMetricsObserverTest, SubFrameRecordOnFrameDeleted) {
           entry.get(), "SubFrame.MainFrameToSubFrameNavigationDelta");
   EXPECT_NE(nullptr, nav_delta_metric);
   EXPECT_GE(*nav_delta_metric, 0ll);
+
+  const int64_t* bad_tap_targets_ratio_metric =
+      tester()->test_ukm_recorder().GetEntryMetric(
+          entry.get(), "SubFrame.MobileFriendliness.BadTapTargetsRatio");
+  EXPECT_NE(nullptr, bad_tap_targets_ratio_metric);
+  EXPECT_GE(*bad_tap_targets_ratio_metric, 0ll);
 }
 
 TEST_F(AMPPageLoadMetricsObserverTest, SubFrameMultipleFrames) {

@@ -15,6 +15,7 @@
 #include "fuchsia/engine/web_engine_export.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "services/media_session/public/mojom/media_session.mojom.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace content {
 class MediaSession;
@@ -60,7 +61,7 @@ class WEB_ENGINE_EXPORT MediaPlayerImpl
   void MediaSessionInfoChanged(
       media_session::mojom::MediaSessionInfoPtr info) final;
   void MediaSessionMetadataChanged(
-      const base::Optional<media_session::MediaMetadata>& metadata) final;
+      const absl::optional<media_session::MediaMetadata>& metadata) final;
   void MediaSessionActionsChanged(
       const std::vector<media_session::mojom::MediaSessionAction>& action)
       final;
@@ -69,7 +70,7 @@ class WEB_ENGINE_EXPORT MediaPlayerImpl
                            std::vector<media_session::MediaImage>>& images)
       final;
   void MediaSessionPositionChanged(
-      const base::Optional<media_session::MediaPosition>& position) final;
+      const absl::optional<media_session::MediaPosition>& position) final;
 
   // Sends changes accumulated in |pending_info_delta_|, if any, to the
   // |pending_info_change_callback_|, if it is set.

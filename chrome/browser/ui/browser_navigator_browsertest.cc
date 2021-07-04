@@ -25,7 +25,7 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
-#include "chrome/browser/ui/search/local_ntp_test_utils.h"
+#include "chrome/browser/ui/search/ntp_test_utils.h"
 #include "chrome/browser/ui/singleton_tabs.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/web_applications/components/web_app_helpers.h"
@@ -61,6 +61,7 @@ using content::WebContents;
 namespace {
 
 const char kExpectedTitle[] = "PASSED!";
+const char16_t kExpectedTitle16[] = u"PASSED!";
 const char kEchoTitleCommand[] = "/echotitle";
 
 GURL GetGoogleURL() {
@@ -107,7 +108,7 @@ bool BrowserNavigatorTest::OpenPOSTURLInNewForegroundTabAndGetTitle(
     const GURL& url,
     const std::string& post_data,
     bool is_browser_initiated,
-    base::string16* title) {
+    std::u16string* title) {
   NavigateParams param(MakeNavigateParams());
   param.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
   param.url = url;
@@ -245,7 +246,7 @@ class TestNavigationUIDataObserver : public content::TestNavigationObserver {
     content::TestNavigationObserver::OnDidFinishNavigation(navigation_handle);
   }
 
-  std::unique_ptr<content::NavigationUIData> last_navigation_ui_data_ = nullptr;
+  std::unique_ptr<content::NavigationUIData> last_navigation_ui_data_;
 };
 
 Browser* BrowserNavigatorTest::NavigateHelper(const GURL& url,
@@ -404,7 +405,8 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   // need a different profile, and creating a popup window with an incognito
   // profile is a quick and dirty way of achieving this.
   Browser* popup = CreateEmptyBrowserForType(
-      Browser::TYPE_POPUP, browser()->profile()->GetPrimaryOTRProfile());
+      Browser::TYPE_POPUP,
+      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true));
   NavigateParams params(MakeNavigateParams(popup));
   params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
   Navigate(&params);
@@ -940,8 +942,9 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, MAYBE_Disposition_Incognito) {
 
   // Navigate() should have opened a new toplevel incognito window.
   EXPECT_NE(browser(), params.browser);
-  EXPECT_EQ(browser()->profile()->GetPrimaryOTRProfile(),
-            params.browser->profile());
+  EXPECT_EQ(
+      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true),
+      params.browser->profile());
 
   // |source_contents| should be set to NULL because the profile for the new
   // page is different from the originating page.
@@ -958,7 +961,8 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, MAYBE_Disposition_Incognito) {
 // reuses an existing incognito window when possible.
 IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, Disposition_IncognitoRefocus) {
   Browser* incognito_browser = CreateEmptyBrowserForType(
-      Browser::TYPE_NORMAL, browser()->profile()->GetPrimaryOTRProfile());
+      Browser::TYPE_NORMAL,
+      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true));
   NavigateParams params(MakeNavigateParams());
   params.disposition = WindowOpenDisposition::OFF_THE_RECORD;
   Navigate(&params);
@@ -1436,7 +1440,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   params.url = GURL(chrome::kChromeUINewTabURL);
   ui_test_utils::NavigateToURL(&params);
   EXPECT_EQ(1, browser()->tab_strip_model()->count());
-  EXPECT_EQ(local_ntp_test_utils::GetFinalNtpUrl(browser()->profile()),
+  EXPECT_EQ(ntp_test_utils::GetFinalNtpUrl(browser()->profile()),
             browser()
                 ->tab_strip_model()
                 ->GetActiveWebContents()
@@ -1686,8 +1690,9 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, NavigateWithoutBrowser) {
 
   // Now navigate using the incognito profile and check that a new window
   // is created.
-  NavigateParams params_incognito(browser()->profile()->GetPrimaryOTRProfile(),
-                                  GetGoogleURL(), ui::PAGE_TRANSITION_LINK);
+  NavigateParams params_incognito(
+      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true),
+      GetGoogleURL(), ui::PAGE_TRANSITION_LINK);
   ui_test_utils::NavigateToURL(&params_incognito);
   EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
 }
@@ -1715,9 +1720,9 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   ASSERT_TRUE(embedded_test_server()->Start());
 
   // Open a browser initiated POST request in new foreground tab.
-  base::string16 expected_title(base::ASCIIToUTF16(kExpectedTitle));
+  std::u16string expected_title(kExpectedTitle16);
   std::string post_data = kExpectedTitle;
-  base::string16 title;
+  std::u16string title;
   ASSERT_TRUE(OpenPOSTURLInNewForegroundTabAndGetTitle(
       embedded_test_server()->GetURL(kEchoTitleCommand), post_data, true,
       &title));
@@ -1732,9 +1737,9 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   ASSERT_TRUE(embedded_test_server()->Start());
 
   // Open a renderer initiated POST request in new foreground tab.
-  base::string16 expected_title(base::ASCIIToUTF16(kExpectedTitle));
+  std::u16string expected_title(kExpectedTitle16);
   std::string post_data = kExpectedTitle;
-  base::string16 title;
+  std::u16string title;
   ASSERT_TRUE(OpenPOSTURLInNewForegroundTabAndGetTitle(
       embedded_test_server()->GetURL(kEchoTitleCommand), post_data, false,
       &title));
@@ -1765,7 +1770,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   params.window_action = NavigateParams::SHOW_WINDOW;
   ui_test_utils::NavigateToURL(&params);
 
-  base::string16 expected_title(base::UTF8ToUTF16(unescaped_title));
+  std::u16string expected_title(base::UTF8ToUTF16(unescaped_title));
   EXPECT_TRUE(params.navigated_or_inserted_contents);
   EXPECT_EQ(expected_title, params.navigated_or_inserted_contents->GetTitle());
   // GURL always keeps non-ASCII characters escaped, but check them anyways.

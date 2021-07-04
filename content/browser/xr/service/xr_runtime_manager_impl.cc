@@ -8,13 +8,17 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "base/callback.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/lazy_instance.h"
 #include "base/memory/singleton.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/trace_event/common/trace_event_common.h"
+#include "base/trace_event/trace_event.h"
+#include "content/browser/xr/service/xr_frame_sink_client_impl.h"
 #include "content/browser/xr/xr_utils.h"
+#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/device_service.h"
 #include "content/public/browser/gpu_data_manager.h"
 #include "content/public/browser/gpu_utils.h"
@@ -54,6 +58,19 @@ bool IsEnabled(const base::CommandLine* command_line,
               name) == 0);
 }
 #endif
+
+std::unique_ptr<device::XrFrameSinkClient> FrameSinkClientFactory(
+    int32_t render_process_id,
+    int32_t render_frame_id) {
+  // The XrFrameSinkClientImpl needs to be constructed (and destructed) on the
+  // main thread. Currently, the only runtime that uses this is ArCore, which
+  // runs on the browser main thread (which per comments in
+  // content/public/browser/browser_thread.h is also the UI thread).
+  DCHECK(GetUIThreadTaskRunner({})->BelongsToCurrentThread())
+      << "Must construct XrFrameSinkClient from UI thread";
+  return std::make_unique<XrFrameSinkClientImpl>(render_process_id,
+                                                 render_frame_id);
+}
 
 }  // namespace
 
@@ -223,7 +240,8 @@ BrowserXRRuntimeImpl* XRRuntimeManagerImpl::GetImmersiveArRuntime() {
 #endif
 
 #if BUILDFLAG(ENABLE_OPENXR)
-  if (base::FeatureList::IsEnabled(features::kOpenXrExtendedFeatureSupport)) {
+  if (base::FeatureList::IsEnabled(
+          device::features::kOpenXrExtendedFeatureSupport)) {
     auto* openxr = GetRuntime(device::mojom::XRDeviceId::OPENXR_DEVICE_ID);
     if (openxr && openxr->SupportsArBlendMode())
       return openxr;
@@ -337,7 +355,7 @@ void XRRuntimeManagerImpl::MakeXrCompatible() {
 
   if (!IsInitializedOnCompatibleAdapter(runtime)) {
 #if defined(OS_WIN)
-    base::Optional<LUID> luid = runtime->GetLuid();
+    absl::optional<LUID> luid = runtime->GetLuid();
     // IsInitializedOnCompatibleAdapter should have returned true if the
     // runtime doesn't specify a LUID.
     DCHECK(luid && (luid->HighPart != 0 || luid->LowPart != 0));
@@ -383,7 +401,7 @@ void XRRuntimeManagerImpl::MakeXrCompatible() {
 bool XRRuntimeManagerImpl::IsInitializedOnCompatibleAdapter(
     BrowserXRRuntimeImpl* runtime) {
 #if defined(OS_WIN)
-  base::Optional<LUID> luid = runtime->GetLuid();
+  absl::optional<LUID> luid = runtime->GetLuid();
   if (luid && (luid->HighPart != 0 || luid->LowPart != 0)) {
     LUID active_luid =
         content::GpuDataManager::GetInstance()->GetGPUInfo().active_gpu().luid;
@@ -491,7 +509,8 @@ void XRRuntimeManagerImpl::InitializeProviders() {
         base::BindRepeating(&XRRuntimeManagerImpl::RemoveRuntime,
                             base::Unretained(this)),
         base::BindOnce(&XRRuntimeManagerImpl::OnProviderInitialized,
-                       base::Unretained(this)));
+                       base::Unretained(this)),
+        base::BindRepeating(&FrameSinkClientFactory));
   }
 
   providers_initialized_ = true;

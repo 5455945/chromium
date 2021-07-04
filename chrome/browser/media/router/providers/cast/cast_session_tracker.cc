@@ -5,7 +5,6 @@
 #include "chrome/browser/media/router/providers/cast/cast_session_tracker.h"
 
 #include "base/bind.h"
-#include "base/stl_util.h"
 #include "chrome/browser/media/router/providers/cast/chrome_cast_message_handler.h"
 #include "chrome/browser/media/router/providers/cast/dual_media_sink_service.h"
 #include "components/cast_channel/cast_socket_service.h"
@@ -152,7 +151,7 @@ void CastSessionTracker::HandleMediaStatusMessage(const MediaSinkInternal& sink,
   DVLOG(2) << "Final updated MEDIA_STATUS: " << *updated_status;
   session->UpdateMedia(*updated_status);
 
-  base::Optional<int> request_id =
+  absl::optional<int> request_id =
       cast_channel::GetRequestIdFromResponse(updated_message);
 
   // Notify observers of media update.

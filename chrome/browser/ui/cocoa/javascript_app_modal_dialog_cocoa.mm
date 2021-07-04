@@ -8,8 +8,6 @@
 #include <stddef.h>
 
 #include "base/bind.h"
-#include "base/logging.h"
-#include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #import "chrome/browser/chrome_browser_application_mac.h"
 #include "chrome/browser/ui/blocked_content/popunder_preventer.h"
@@ -25,7 +23,6 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "ui/accelerated_widget_mac/window_resize_helper_mac.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/strings/grit/ui_strings.h"
@@ -34,6 +31,19 @@ using remote_cocoa::mojom::AlertDisposition;
 
 ////////////////////////////////////////////////////////////////////////////////
 // JavaScriptAppModalDialogCocoa:
+
+// static
+javascript_dialogs::AppModalDialogView*
+JavaScriptAppModalDialogCocoa::CreateNativeJavaScriptDialog(
+    javascript_dialogs::AppModalDialogController* controller) {
+  javascript_dialogs::AppModalDialogView* view =
+      new JavaScriptAppModalDialogCocoa(controller);
+  // Match Views by activating the tab during creation (rather than
+  // when showing).
+  controller->web_contents()->GetDelegate()->ActivateContents(
+      controller->web_contents());
+  return view;
+}
 
 JavaScriptAppModalDialogCocoa::JavaScriptAppModalDialogCocoa(
     javascript_dialogs::AppModalDialogController* controller)
@@ -92,7 +102,7 @@ JavaScriptAppModalDialogCocoa::GetAlertParams() {
 
 void JavaScriptAppModalDialogCocoa::OnAlertFinished(
     AlertDisposition disposition,
-    const base::string16& text_field_value,
+    const std::u16string& text_field_value,
     bool check_box_value) {
   switch (disposition) {
     case AlertDisposition::PRIMARY_BUTTON:
@@ -109,8 +119,12 @@ void JavaScriptAppModalDialogCocoa::OnAlertFinished(
       controller_->OnClose();
       break;
   }
-  if (Browser* browser = BrowserList::GetInstance()->GetLastActive())
-    browser->window()->Show();
+  if (![NSApp keyWindow]) {
+    // If key wasn't restored after showing an alert, focus the most recent
+    // browser.
+    if (Browser* browser = BrowserList::GetInstance()->GetLastActive())
+      browser->window()->Show();
+  }
   delete this;
 }
 
@@ -152,7 +166,7 @@ void JavaScriptAppModalDialogCocoa::ActivateAppModalDialog() {
 void JavaScriptAppModalDialogCocoa::CloseAppModalDialog() {
   // This function expects that controller_->OnClose will be called before this
   // function completes.
-  OnAlertFinished(AlertDisposition::CLOSE, base::string16(),
+  OnAlertFinished(AlertDisposition::CLOSE, std::u16string(),
                   false /* check_box_value */);
 }
 
@@ -167,7 +181,7 @@ void JavaScriptAppModalDialogCocoa::AcceptAppModalDialog() {
 }
 
 void JavaScriptAppModalDialogCocoa::CancelAppModalDialog() {
-  OnAlertFinished(AlertDisposition::SECONDARY_BUTTON, base::string16(), false
+  OnAlertFinished(AlertDisposition::SECONDARY_BUTTON, std::u16string(), false
                   /* check_box_value */);
 }
 
@@ -175,16 +189,8 @@ bool JavaScriptAppModalDialogCocoa::IsShowing() const {
   return is_showing_;
 }
 
-void InstallChromeJavaScriptAppModalDialogViewFactory() {
+void InstallChromeJavaScriptAppModalDialogViewCocoaFactory() {
   javascript_dialogs::AppModalDialogManager::GetInstance()
       ->SetNativeDialogFactory(base::BindRepeating(
-          [](javascript_dialogs::AppModalDialogController* controller) {
-            javascript_dialogs::AppModalDialogView* view =
-                new JavaScriptAppModalDialogCocoa(controller);
-            // Match Views by activating the tab during creation (rather than
-            // when showing).
-            controller->web_contents()->GetDelegate()->ActivateContents(
-                controller->web_contents());
-            return view;
-          }));
+          &JavaScriptAppModalDialogCocoa::CreateNativeJavaScriptDialog));
 }

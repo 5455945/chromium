@@ -7,7 +7,6 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/macros.h"
-#include "base/optional.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
@@ -18,8 +17,10 @@
 #include "chrome/browser/permissions/quiet_notification_permission_ui_state.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
@@ -31,9 +32,9 @@
 #include "components/content_settings/core/common/pref_names.h"
 #include "components/no_state_prefetch/browser/no_state_prefetch_manager.h"
 #include "components/permissions/features.h"
-#include "components/permissions/notification_permission_ui_selector.h"
 #include "components/permissions/permission_request.h"
 #include "components/permissions/permission_request_manager.h"
+#include "components/permissions/permission_ui_selector.h"
 #include "components/permissions/request_type.h"
 #include "components/permissions/test/mock_permission_prompt_factory.h"
 #include "components/permissions/test/mock_permission_request.h"
@@ -45,20 +46,23 @@
 #include "content/public/test/web_contents_tester.h"
 #include "net/cookies/cookie_options.h"
 #include "services/device/public/cpp/device_features.h"
-#include "services/device/public/cpp/geolocation/geolocation_system_permission_mac.h"
-#include "services/device/public/cpp/geolocation/location_system_permission_status.h"
-#include "services/device/public/cpp/test/fake_geolocation_system_permission.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/color_palette.h"
 
+#if defined(OS_MAC)
+#include "services/device/public/cpp/geolocation/geolocation_manager.h"
+#include "services/device/public/cpp/geolocation/location_system_permission_status.h"
+#include "services/device/public/cpp/test/fake_geolocation_manager.h"
+#endif
+
 using content_settings::PageSpecificContentSettings;
-using device::LocationSystemPermissionStatus;
 
 namespace {
 
 class TestQuietNotificationPermissionUiSelector
-    : public permissions::NotificationPermissionUiSelector {
+    : public permissions::PermissionUiSelector {
  public:
   explicit TestQuietNotificationPermissionUiSelector(
       QuietUiReason simulated_reason_for_quiet_ui)
@@ -66,11 +70,16 @@ class TestQuietNotificationPermissionUiSelector
   ~TestQuietNotificationPermissionUiSelector() override = default;
 
  protected:
-  // permissions::NotificationPermissionUiSelector:
+  // permissions::PermissionUiSelector:
   void SelectUiToUse(permissions::PermissionRequest* request,
                      DecisionMadeCallback callback) override {
     std::move(callback).Run(
-        Decision(simulated_reason_for_quiet_ui_, base::nullopt));
+        Decision(simulated_reason_for_quiet_ui_, absl::nullopt));
+  }
+
+  bool IsPermissionRequestSupported(
+      permissions::RequestType request_type) override {
+    return request_type == permissions::RequestType::kNotifications;
   }
 
  private:
@@ -82,7 +91,7 @@ class TestQuietNotificationPermissionUiSelector
 class ContentSettingImageModelTest : public BrowserWithTestWindowTest {
  public:
   ContentSettingImageModelTest()
-      : request_("test1",
+      : request_(u"test1",
                  permissions::RequestType::kNotifications,
                  permissions::PermissionRequestGestureType::GESTURE) {}
   ~ContentSettingImageModelTest() override {}
@@ -102,8 +111,28 @@ class ContentSettingImageModelTest : public BrowserWithTestWindowTest {
   }
 
   void WaitForBubbleToBeShown() {
-    manager_->DocumentOnLoadCompletedInMainFrame();
+    manager_->DocumentOnLoadCompletedInMainFrame(
+        web_contents()->GetMainFrame());
     base::RunLoop().RunUntilIdle();
+  }
+
+  void UpdateModelAndVerifyStates(ContentSettingImageModel* model,
+                                  bool is_visible,
+                                  bool tooltip_empty) {
+    model->Update(web_contents());
+    EXPECT_EQ(model->is_visible(), is_visible);
+    EXPECT_EQ(model->get_tooltip().empty(), tooltip_empty);
+    EXPECT_EQ(!model->GetIcon(gfx::kPlaceholderColor).IsEmpty(), is_visible);
+  }
+
+  void UpdateModelAndVerifyStates(ContentSettingImageModel* model,
+                                  bool is_visible,
+                                  bool tooltip_empty,
+                                  int tooltip_id,
+                                  int explanatory_string_id) {
+    UpdateModelAndVerifyStates(model, is_visible, tooltip_empty);
+    EXPECT_EQ(model->get_tooltip(), l10n_util::GetStringUTF16(tooltip_id));
+    EXPECT_EQ(model->explanatory_string_id(), explanatory_string_id);
   }
 
  protected:
@@ -114,10 +143,6 @@ class ContentSettingImageModelTest : public BrowserWithTestWindowTest {
  private:
   DISALLOW_COPY_AND_ASSIGN(ContentSettingImageModelTest);
 };
-
-bool HasIcon(const ContentSettingImageModel& model) {
-  return !model.GetIcon(gfx::kPlaceholderColor).IsEmpty();
-}
 
 TEST_F(ContentSettingImageModelTest, Update) {
   PageSpecificContentSettings::CreateForWebContents(
@@ -133,11 +158,9 @@ TEST_F(ContentSettingImageModelTest, Update) {
   EXPECT_TRUE(content_setting_image_model->get_tooltip().empty());
 
   content_settings->OnContentBlocked(ContentSettingsType::IMAGES);
-  content_setting_image_model->Update(web_contents());
-
-  EXPECT_TRUE(content_setting_image_model->is_visible());
-  EXPECT_TRUE(HasIcon(*content_setting_image_model));
-  EXPECT_FALSE(content_setting_image_model->get_tooltip().empty());
+  UpdateModelAndVerifyStates(content_setting_image_model.get(),
+                             /* is_visible = */ true,
+                             /* tooltip_empty = */ false);
 }
 
 TEST_F(ContentSettingImageModelTest, RPHUpdate) {
@@ -153,7 +176,7 @@ TEST_F(ContentSettingImageModelTest, RPHUpdate) {
 
   chrome::PageSpecificContentSettingsDelegate::FromWebContents(web_contents())
       ->set_pending_protocol_handler(ProtocolHandler::CreateProtocolHandler(
-          "mailto", GURL("http://www.google.com/")));
+          "mailto", GURL("https://www.google.com/")));
   content_setting_image_model->Update(web_contents());
   EXPECT_TRUE(content_setting_image_model->is_visible());
 }
@@ -174,7 +197,7 @@ TEST_F(ContentSettingImageModelTest, CookieAccessed) {
 
   GURL origin("http://google.com");
   std::unique_ptr<net::CanonicalCookie> cookie(net::CanonicalCookie::Create(
-      origin, "A=B", base::Time::Now(), base::nullopt /* server_time */));
+      origin, "A=B", base::Time::Now(), absl::nullopt /* server_time */));
   ASSERT_TRUE(cookie);
   PageSpecificContentSettings::GetForFrame(web_contents()->GetMainFrame())
       ->OnCookiesAccessed({content::CookieAccessDetails::Type::kChange,
@@ -182,10 +205,9 @@ TEST_F(ContentSettingImageModelTest, CookieAccessed) {
                            origin,
                            {*cookie},
                            false});
-  content_setting_image_model->Update(web_contents());
-  EXPECT_TRUE(content_setting_image_model->is_visible());
-  EXPECT_TRUE(HasIcon(*content_setting_image_model));
-  EXPECT_FALSE(content_setting_image_model->get_tooltip().empty());
+  UpdateModelAndVerifyStates(content_setting_image_model.get(),
+                             /* is_visible = */ true,
+                             /* tooltip_empty = */ false);
 }
 
 TEST_F(ContentSettingImageModelTest, SensorAccessed) {
@@ -213,26 +235,23 @@ TEST_F(ContentSettingImageModelTest, SensorAccessed) {
       ->SetDefaultContentSetting(ContentSettingsType::SENSORS,
                                  CONTENT_SETTING_ALLOW);
   content_settings->OnContentAllowed(ContentSettingsType::SENSORS);
-  content_setting_image_model->Update(web_contents());
-  EXPECT_FALSE(content_setting_image_model->is_visible());
-  EXPECT_TRUE(content_setting_image_model->get_tooltip().empty());
+  UpdateModelAndVerifyStates(content_setting_image_model.get(),
+                             /* is_visible = */ false,
+                             /* tooltip_empty = */ true);
 
   NavigateAndCommit(controller_, GURL("http://www.google.com"));
   content_settings =
       PageSpecificContentSettings::GetForFrame(web_contents()->GetMainFrame());
 
-  // Allowing by default but blocking (e.g. due to a feature policy) causes the
-  // indicator to be shown.
+  // Allowing by default but blocking (e.g. due to a permissions policy) causes
+  // the indicator to be shown.
   HostContentSettingsMapFactory::GetForProfile(profile())
       ->SetDefaultContentSetting(ContentSettingsType::SENSORS,
                                  CONTENT_SETTING_ALLOW);
   content_settings->OnContentBlocked(ContentSettingsType::SENSORS);
-  content_setting_image_model->Update(web_contents());
-  EXPECT_TRUE(content_setting_image_model->is_visible());
-  EXPECT_TRUE(HasIcon(*content_setting_image_model));
-  EXPECT_FALSE(content_setting_image_model->get_tooltip().empty());
-  EXPECT_EQ(content_setting_image_model->get_tooltip(),
-            l10n_util::GetStringUTF16(IDS_SENSORS_BLOCKED_TOOLTIP));
+  UpdateModelAndVerifyStates(
+      content_setting_image_model.get(), /* is_visible = */ true,
+      /* tooltip_empty = */ false, IDS_SENSORS_BLOCKED_TOOLTIP, 0);
 
   NavigateAndCommit(controller_, GURL("http://www.google.com"));
   content_settings =
@@ -244,12 +263,9 @@ TEST_F(ContentSettingImageModelTest, SensorAccessed) {
       ->SetDefaultContentSetting(ContentSettingsType::SENSORS,
                                  CONTENT_SETTING_BLOCK);
   content_settings->OnContentAllowed(ContentSettingsType::SENSORS);
-  content_setting_image_model->Update(web_contents());
-  EXPECT_TRUE(content_setting_image_model->is_visible());
-  EXPECT_TRUE(HasIcon(*content_setting_image_model));
-  EXPECT_FALSE(content_setting_image_model->get_tooltip().empty());
-  EXPECT_EQ(content_setting_image_model->get_tooltip(),
-            l10n_util::GetStringUTF16(IDS_SENSORS_ALLOWED_TOOLTIP));
+  UpdateModelAndVerifyStates(
+      content_setting_image_model.get(), /* is_visible = */ true,
+      /* tooltip_empty = */ false, IDS_SENSORS_ALLOWED_TOOLTIP, 0);
 
   NavigateAndCommit(controller_, GURL("http://www.google.com"));
   content_settings =
@@ -261,12 +277,9 @@ TEST_F(ContentSettingImageModelTest, SensorAccessed) {
       ->SetDefaultContentSetting(ContentSettingsType::SENSORS,
                                  CONTENT_SETTING_BLOCK);
   content_settings->OnContentBlocked(ContentSettingsType::SENSORS);
-  content_setting_image_model->Update(web_contents());
-  EXPECT_TRUE(content_setting_image_model->is_visible());
-  EXPECT_TRUE(HasIcon(*content_setting_image_model));
-  EXPECT_FALSE(content_setting_image_model->get_tooltip().empty());
-  EXPECT_EQ(content_setting_image_model->get_tooltip(),
-            l10n_util::GetStringUTF16(IDS_SENSORS_BLOCKED_TOOLTIP));
+  UpdateModelAndVerifyStates(
+      content_setting_image_model.get(), /* is_visible = */ true,
+      /* tooltip_empty = */ false, IDS_SENSORS_BLOCKED_TOOLTIP, 0);
 }
 
 #if defined(OS_MAC)
@@ -275,14 +288,13 @@ TEST_F(ContentSettingImageModelTest, SensorAccessed) {
 TEST_F(ContentSettingImageModelTest, GeolocationAccessPermissionsChanged) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(features::kMacCoreLocationImplementation);
-  auto test_location_permission_manager =
-      std::make_unique<FakeSystemGeolocationPermissionsManager>();
-  FakeSystemGeolocationPermissionsManager* location_permission_manager =
-      test_location_permission_manager.get();
+  auto test_geolocation_manager =
+      std::make_unique<device::FakeGeolocationManager>();
+  device::FakeGeolocationManager* geolocation_manager =
+      test_geolocation_manager.get();
   TestingBrowserProcess::GetGlobal()
       ->GetTestPlatformPart()
-      ->SetLocationPermissionManager(
-          std::move(test_location_permission_manager));
+      ->SetGeolocationManager(std::move(test_geolocation_manager));
 
   PageSpecificContentSettings::CreateForWebContents(
       web_contents(),
@@ -301,60 +313,46 @@ TEST_F(ContentSettingImageModelTest, GeolocationAccessPermissionsChanged) {
   EXPECT_FALSE(content_setting_image_model->is_visible());
   EXPECT_TRUE(content_setting_image_model->get_tooltip().empty());
 
-  location_permission_manager->set_status(
-      LocationSystemPermissionStatus::kAllowed);
+  geolocation_manager->SetSystemPermission(
+      device::LocationSystemPermissionStatus::kAllowed);
 
   settings_map->SetDefaultContentSetting(ContentSettingsType::GEOLOCATION,
                                          CONTENT_SETTING_ALLOW);
   content_settings->OnContentAllowed(ContentSettingsType::GEOLOCATION);
-  content_setting_image_model->Update(web_contents());
-  EXPECT_TRUE(content_setting_image_model->is_visible());
-  EXPECT_FALSE(content_setting_image_model->get_tooltip().empty());
-  EXPECT_EQ(content_setting_image_model->get_tooltip(),
-            l10n_util::GetStringUTF16(IDS_ALLOWED_GEOLOCATION_MESSAGE));
-  EXPECT_EQ(content_setting_image_model->explanatory_string_id(), 0);
+  UpdateModelAndVerifyStates(
+      content_setting_image_model.get(), /* is_visible = */ true,
+      /* tooltip_empty = */ false, IDS_ALLOWED_GEOLOCATION_MESSAGE, 0);
 
   settings_map->SetDefaultContentSetting(ContentSettingsType::GEOLOCATION,
                                          CONTENT_SETTING_BLOCK);
   content_settings->OnContentBlocked(ContentSettingsType::GEOLOCATION);
-  content_setting_image_model->Update(web_contents());
-  EXPECT_TRUE(content_setting_image_model->is_visible());
-  EXPECT_TRUE(HasIcon(*content_setting_image_model));
-  EXPECT_FALSE(content_setting_image_model->get_tooltip().empty());
-  EXPECT_EQ(content_setting_image_model->get_tooltip(),
-            l10n_util::GetStringUTF16(IDS_BLOCKED_GEOLOCATION_MESSAGE));
-  EXPECT_EQ(content_setting_image_model->explanatory_string_id(), 0);
+  UpdateModelAndVerifyStates(
+      content_setting_image_model.get(), /* is_visible = */ true,
+      /* tooltip_empty = */ false, IDS_BLOCKED_GEOLOCATION_MESSAGE, 0);
 
-  location_permission_manager->set_status(
-      LocationSystemPermissionStatus::kDenied);
-  content_setting_image_model->Update(web_contents());
-  EXPECT_TRUE(content_setting_image_model->is_visible());
-  EXPECT_FALSE(content_setting_image_model->get_tooltip().empty());
-  EXPECT_EQ(content_setting_image_model->get_tooltip(),
-            l10n_util::GetStringUTF16(IDS_BLOCKED_GEOLOCATION_MESSAGE));
-  EXPECT_EQ(content_setting_image_model->explanatory_string_id(), 0);
+  geolocation_manager->SetSystemPermission(
+      device::LocationSystemPermissionStatus::kDenied);
+  UpdateModelAndVerifyStates(
+      content_setting_image_model.get(), /* is_visible = */ true,
+      /* tooltip_empty = */ false, IDS_BLOCKED_GEOLOCATION_MESSAGE, 0);
 
   content_settings->OnContentAllowed(ContentSettingsType::GEOLOCATION);
-  content_setting_image_model->Update(web_contents());
-  EXPECT_TRUE(content_setting_image_model->is_visible());
-  EXPECT_FALSE(content_setting_image_model->get_tooltip().empty());
-  EXPECT_EQ(content_setting_image_model->get_tooltip(),
-            l10n_util::GetStringUTF16(IDS_BLOCKED_GEOLOCATION_MESSAGE));
-  EXPECT_EQ(content_setting_image_model->explanatory_string_id(),
-            IDS_GEOLOCATION_TURNED_OFF);
+  UpdateModelAndVerifyStates(
+      content_setting_image_model.get(), /* is_visible = */ true,
+      /* tooltip_empty = */ false, IDS_BLOCKED_GEOLOCATION_MESSAGE,
+      IDS_GEOLOCATION_TURNED_OFF);
 }
 
 TEST_F(ContentSettingImageModelTest, GeolocationAccessPermissionsUndetermined) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(features::kMacCoreLocationImplementation);
-  auto test_location_permission_manager =
-      std::make_unique<FakeSystemGeolocationPermissionsManager>();
-  test_location_permission_manager->set_status(
-      LocationSystemPermissionStatus::kNotDetermined);
+  auto test_geolocation_manager =
+      std::make_unique<device::FakeGeolocationManager>();
+  test_geolocation_manager->SetSystemPermission(
+      device::LocationSystemPermissionStatus::kNotDetermined);
   TestingBrowserProcess::GetGlobal()
       ->GetTestPlatformPart()
-      ->SetLocationPermissionManager(
-          std::move(test_location_permission_manager));
+      ->SetGeolocationManager(std::move(test_geolocation_manager));
 
   PageSpecificContentSettings::CreateForWebContents(
       web_contents(),
@@ -379,25 +377,87 @@ TEST_F(ContentSettingImageModelTest, GeolocationAccessPermissionsUndetermined) {
   settings_map->SetDefaultContentSetting(ContentSettingsType::GEOLOCATION,
                                          CONTENT_SETTING_ALLOW);
   content_settings->OnContentAllowed(ContentSettingsType::GEOLOCATION);
-  content_setting_image_model->Update(web_contents());
-  EXPECT_TRUE(content_setting_image_model->is_visible());
-  EXPECT_FALSE(content_setting_image_model->get_tooltip().empty());
-  EXPECT_EQ(content_setting_image_model->get_tooltip(),
-            l10n_util::GetStringUTF16(IDS_BLOCKED_GEOLOCATION_MESSAGE));
-  EXPECT_EQ(content_setting_image_model->explanatory_string_id(), 0);
+  UpdateModelAndVerifyStates(
+      content_setting_image_model.get(), /* is_visible = */ true,
+      /* tooltip_empty = */ false, IDS_BLOCKED_GEOLOCATION_MESSAGE, 0);
 
   // When site permission is blocked it should not make any difference what the
   // OS level permission is.
   settings_map->SetDefaultContentSetting(ContentSettingsType::GEOLOCATION,
                                          CONTENT_SETTING_BLOCK);
   content_settings->OnContentBlocked(ContentSettingsType::GEOLOCATION);
-  content_setting_image_model->Update(web_contents());
-  EXPECT_TRUE(content_setting_image_model->is_visible());
-  EXPECT_TRUE(HasIcon(*content_setting_image_model));
-  EXPECT_FALSE(content_setting_image_model->get_tooltip().empty());
-  EXPECT_EQ(content_setting_image_model->get_tooltip(),
-            l10n_util::GetStringUTF16(IDS_BLOCKED_GEOLOCATION_MESSAGE));
-  EXPECT_EQ(content_setting_image_model->explanatory_string_id(), 0);
+  UpdateModelAndVerifyStates(
+      content_setting_image_model.get(), /* is_visible = */ true,
+      /* tooltip_empty = */ false, IDS_BLOCKED_GEOLOCATION_MESSAGE, 0);
+}
+
+TEST_F(ContentSettingImageModelTest, GeolocationAccessDeniedExperiment) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({features::kMacCoreLocationImplementation,
+                                 features::kLocationPermissionsExperiment},
+                                {});
+  auto test_geolocation_manager =
+      std::make_unique<device::FakeGeolocationManager>();
+  device::FakeGeolocationManager* geolocation_manager =
+      test_geolocation_manager.get();
+  TestingBrowserProcess::GetGlobal()
+      ->GetTestPlatformPart()
+      ->SetGeolocationManager(std::move(test_geolocation_manager));
+
+  PageSpecificContentSettings::CreateForWebContents(
+      web_contents(),
+      std::make_unique<chrome::PageSpecificContentSettingsDelegate>(
+          web_contents()));
+  GURL requesting_origin = GURL("https://www.example.com");
+  NavigateAndCommit(controller_, requesting_origin);
+  PageSpecificContentSettings* content_settings =
+      PageSpecificContentSettings::GetForFrame(web_contents()->GetMainFrame());
+
+  auto content_setting_image_model =
+      ContentSettingImageModel::CreateForContentType(
+          ContentSettingImageModel::ImageType::GEOLOCATION);
+  EXPECT_FALSE(content_setting_image_model->is_visible());
+  EXPECT_TRUE(content_setting_image_model->get_tooltip().empty());
+
+  geolocation_manager->SetSystemPermission(
+      device::LocationSystemPermissionStatus::kDenied);
+  content_settings->OnContentAllowed(ContentSettingsType::GEOLOCATION);
+
+  auto* local_state = g_browser_process->local_state();
+
+  // Verify the button is shown without a label the first three time permission
+  // is denied by system preferences while allowed for chrome preferences/
+  for (int i = 0; i < 3; i++) {
+    EXPECT_EQ(local_state->GetInteger(
+                  prefs::kMacRestoreLocationPermissionsExperimentCount),
+              i);
+    UpdateModelAndVerifyStates(
+        content_setting_image_model.get(), /* is_visible = */ true,
+        /* tooltip_empty = */ false, IDS_BLOCKED_GEOLOCATION_MESSAGE, 0);
+  }
+  // Verify the button is shown with a label the fourth to eighth time
+  // permission is denied by system preferences while allowed for chrome
+  // preferences/
+  for (int i = 3; i < 8; i++) {
+    EXPECT_EQ(local_state->GetInteger(
+                  prefs::kMacRestoreLocationPermissionsExperimentCount),
+              i);
+    UpdateModelAndVerifyStates(
+        content_setting_image_model.get(), /* is_visible = */ true,
+        /* tooltip_empty = */ false, IDS_BLOCKED_GEOLOCATION_MESSAGE,
+        IDS_GEOLOCATION_TURNED_OFF);
+  }
+  // Verify we return to normal behavior after the eighth time permission is
+  // denied by system preferences while allowed for chrome preferences/
+  for (int i = 8; i < 10; i++) {
+    EXPECT_EQ(local_state->GetInteger(
+                  prefs::kMacRestoreLocationPermissionsExperimentCount),
+              8);
+    UpdateModelAndVerifyStates(
+        content_setting_image_model.get(), /* is_visible = */ true,
+        /* tooltip_empty = */ false, IDS_BLOCKED_GEOLOCATION_MESSAGE,
+        IDS_GEOLOCATION_TURNED_OFF);
+  }
 }
 #endif
 
@@ -430,19 +490,17 @@ TEST_F(ContentSettingImageModelTest, SensorAccessPermissionsChanged) {
     settings_map->SetDefaultContentSetting(ContentSettingsType::SENSORS,
                                            CONTENT_SETTING_ALLOW);
     content_settings->OnContentAllowed(ContentSettingsType::SENSORS);
-    content_setting_image_model->Update(web_contents());
-    EXPECT_FALSE(content_setting_image_model->is_visible());
-    EXPECT_TRUE(content_setting_image_model->get_tooltip().empty());
+
+    UpdateModelAndVerifyStates(content_setting_image_model.get(),
+                               /* is_visible = */ false,
+                               /* tooltip_empty = */ true);
 
     settings_map->SetDefaultContentSetting(ContentSettingsType::SENSORS,
                                            CONTENT_SETTING_BLOCK);
     content_settings->OnContentBlocked(ContentSettingsType::SENSORS);
-    content_setting_image_model->Update(web_contents());
-    EXPECT_TRUE(content_setting_image_model->is_visible());
-    EXPECT_TRUE(HasIcon(*content_setting_image_model));
-    EXPECT_FALSE(content_setting_image_model->get_tooltip().empty());
-    EXPECT_EQ(content_setting_image_model->get_tooltip(),
-              l10n_util::GetStringUTF16(IDS_SENSORS_BLOCKED_TOOLTIP));
+    UpdateModelAndVerifyStates(
+        content_setting_image_model.get(), /* is_visible = */ true,
+        /* tooltip_empty = */ false, IDS_SENSORS_BLOCKED_TOOLTIP, 0);
 
     settings_map->SetDefaultContentSetting(ContentSettingsType::SENSORS,
                                            CONTENT_SETTING_ALLOW);
@@ -462,12 +520,9 @@ TEST_F(ContentSettingImageModelTest, SensorAccessPermissionsChanged) {
     settings_map->SetDefaultContentSetting(ContentSettingsType::SENSORS,
                                            CONTENT_SETTING_BLOCK);
     content_settings->OnContentBlocked(ContentSettingsType::SENSORS);
-    content_setting_image_model->Update(web_contents());
-    EXPECT_TRUE(content_setting_image_model->is_visible());
-    EXPECT_TRUE(HasIcon(*content_setting_image_model));
-    EXPECT_FALSE(content_setting_image_model->get_tooltip().empty());
-    EXPECT_EQ(content_setting_image_model->get_tooltip(),
-              l10n_util::GetStringUTF16(IDS_SENSORS_BLOCKED_TOOLTIP));
+    UpdateModelAndVerifyStates(
+        content_setting_image_model.get(), /* is_visible = */ true,
+        /* tooltip_empty = */ false, IDS_SENSORS_BLOCKED_TOOLTIP, 0);
     settings_map->SetDefaultContentSetting(ContentSettingsType::SENSORS,
                                            CONTENT_SETTING_ALLOW);
 
@@ -480,12 +535,9 @@ TEST_F(ContentSettingImageModelTest, SensorAccessPermissionsChanged) {
     settings_map->SetDefaultContentSetting(ContentSettingsType::SENSORS,
                                            CONTENT_SETTING_BLOCK);
     content_settings->OnContentBlocked(ContentSettingsType::SENSORS);
-    content_setting_image_model->Update(web_contents());
-    EXPECT_TRUE(content_setting_image_model->is_visible());
-    EXPECT_TRUE(HasIcon(*content_setting_image_model));
-    EXPECT_FALSE(content_setting_image_model->get_tooltip().empty());
-    EXPECT_EQ(content_setting_image_model->get_tooltip(),
-              l10n_util::GetStringUTF16(IDS_SENSORS_BLOCKED_TOOLTIP));
+    UpdateModelAndVerifyStates(
+        content_setting_image_model.get(), /* is_visible = */ true,
+        /* tooltip_empty = */ false, IDS_SENSORS_BLOCKED_TOOLTIP, 0);
   }
 
   NavigateAndCommit(controller_, GURL("https://www.example.com"));
@@ -500,13 +552,10 @@ TEST_F(ContentSettingImageModelTest, SensorAccessPermissionsChanged) {
         web_contents()->GetURL(), web_contents()->GetURL(),
         ContentSettingsType::SENSORS, CONTENT_SETTING_ALLOW);
     content_settings->OnContentAllowed(ContentSettingsType::SENSORS);
-    content_setting_image_model->Update(web_contents());
 
-    EXPECT_TRUE(content_setting_image_model->is_visible());
-    EXPECT_TRUE(HasIcon(*content_setting_image_model));
-    EXPECT_FALSE(content_setting_image_model->get_tooltip().empty());
-    EXPECT_EQ(content_setting_image_model->get_tooltip(),
-              l10n_util::GetStringUTF16(IDS_SENSORS_ALLOWED_TOOLTIP));
+    UpdateModelAndVerifyStates(
+        content_setting_image_model.get(), /* is_visible = */ true,
+        /* tooltip_empty = */ false, IDS_SENSORS_ALLOWED_TOOLTIP, 0);
   }
 
   NavigateAndCommit(controller_, GURL("https://www.example.com"));
@@ -523,13 +572,10 @@ TEST_F(ContentSettingImageModelTest, SensorAccessPermissionsChanged) {
         web_contents()->GetURL(), web_contents()->GetURL(),
         ContentSettingsType::SENSORS, CONTENT_SETTING_BLOCK);
     content_settings->OnContentBlocked(ContentSettingsType::SENSORS);
-    content_setting_image_model->Update(web_contents());
 
-    EXPECT_TRUE(content_setting_image_model->is_visible());
-    EXPECT_TRUE(HasIcon(*content_setting_image_model));
-    EXPECT_FALSE(content_setting_image_model->get_tooltip().empty());
-    EXPECT_EQ(content_setting_image_model->get_tooltip(),
-              l10n_util::GetStringUTF16(IDS_SENSORS_BLOCKED_TOOLTIP));
+    UpdateModelAndVerifyStates(
+        content_setting_image_model.get(), /* is_visible = */ true,
+        /* tooltip_empty = */ false, IDS_SENSORS_BLOCKED_TOOLTIP, 0);
   }
 }
 
@@ -558,11 +604,9 @@ TEST_F(ContentSettingImageModelTest, SubresourceFilter) {
   EXPECT_TRUE(content_setting_image_model->get_tooltip().empty());
 
   content_settings->OnContentBlocked(ContentSettingsType::ADS);
-  content_setting_image_model->Update(web_contents());
-
-  EXPECT_TRUE(content_setting_image_model->is_visible());
-  EXPECT_TRUE(HasIcon(*content_setting_image_model));
-  EXPECT_FALSE(content_setting_image_model->get_tooltip().empty());
+  UpdateModelAndVerifyStates(content_setting_image_model.get(),
+                             /* is_visible = */ true,
+                             /* tooltip_empty = */ false);
 }
 
 TEST_F(ContentSettingImageModelTest, NotificationsIconVisibility) {
@@ -626,9 +670,9 @@ TEST_F(ContentSettingImageModelTest, NotificationsPromptCrowdDeny) {
       ContentSettingImageModel::CreateForContentType(
           ContentSettingImageModel::ImageType::NOTIFICATIONS_QUIET_PROMPT);
   EXPECT_FALSE(content_setting_image_model->is_visible());
-  manager_->set_notification_permission_ui_selector_for_testing(
+  manager_->set_permission_ui_selector_for_testing(
       std::make_unique<TestQuietNotificationPermissionUiSelector>(
-          permissions::NotificationPermissionUiSelector::QuietUiReason::
+          permissions::PermissionUiSelector::QuietUiReason::
               kTriggeredByCrowdDeny));
   manager_->AddRequest(web_contents()->GetMainFrame(), &request_);
   WaitForBubbleToBeShown();
@@ -647,9 +691,9 @@ TEST_F(ContentSettingImageModelTest, NotificationsPromptAbusive) {
       ContentSettingImageModel::CreateForContentType(
           ContentSettingImageModel::ImageType::NOTIFICATIONS_QUIET_PROMPT);
   EXPECT_FALSE(content_setting_image_model->is_visible());
-  manager_->set_notification_permission_ui_selector_for_testing(
+  manager_->set_permission_ui_selector_for_testing(
       std::make_unique<TestQuietNotificationPermissionUiSelector>(
-          permissions::NotificationPermissionUiSelector::QuietUiReason::
+          permissions::PermissionUiSelector::QuietUiReason::
               kTriggeredDueToAbusiveRequests));
   manager_->AddRequest(web_contents()->GetMainFrame(), &request_);
   WaitForBubbleToBeShown();
@@ -668,9 +712,9 @@ TEST_F(ContentSettingImageModelTest, NotificationsContentAbusive) {
       ContentSettingImageModel::CreateForContentType(
           ContentSettingImageModel::ImageType::NOTIFICATIONS_QUIET_PROMPT);
   EXPECT_FALSE(content_setting_image_model->is_visible());
-  manager_->set_notification_permission_ui_selector_for_testing(
+  manager_->set_permission_ui_selector_for_testing(
       std::make_unique<TestQuietNotificationPermissionUiSelector>(
-          permissions::NotificationPermissionUiSelector::QuietUiReason::
+          permissions::PermissionUiSelector::QuietUiReason::
               kTriggeredDueToAbusiveContent));
   manager_->AddRequest(web_contents()->GetMainFrame(), &request_);
   WaitForBubbleToBeShown();

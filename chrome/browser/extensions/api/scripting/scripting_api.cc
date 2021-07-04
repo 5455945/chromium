@@ -5,21 +5,35 @@
 #include "chrome/browser/extensions/api/scripting/scripting_api.h"
 
 #include <algorithm>
-#include <utility>
 
 #include "base/check.h"
+#include "base/json/json_writer.h"
+#include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/common/extensions/api/scripting.h"
+#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
+#include "extensions/browser/api/extension_types_utils.h"
 #include "extensions/browser/extension_api_frame_id_map.h"
+#include "extensions/browser/extension_file_task_runner.h"
+#include "extensions/browser/extension_system.h"
+#include "extensions/browser/extension_user_script_loader.h"
 #include "extensions/browser/load_and_localize_file.h"
 #include "extensions/browser/script_executor.h"
+#include "extensions/browser/user_script_manager.h"
+#include "extensions/common/api/extension_types.h"
 #include "extensions/common/error_utils.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/manifest_constants.h"
+#include "extensions/common/mojom/css_origin.mojom-shared.h"
+#include "extensions/common/mojom/host_id.mojom.h"
+#include "extensions/common/mojom/run_location.mojom-shared.h"
 #include "extensions/common/permissions/api_permission.h"
 #include "extensions/common/permissions/permissions_data.h"
+#include "extensions/common/utils/content_script_utils.h"
 
 namespace extensions {
 
@@ -32,19 +46,30 @@ constexpr char kExactlyOneOfCssAndFilesError[] =
 // Note: CSS always injects as soon as possible, so we default to
 // document_start. Because of tab loading, there's no guarantee this will
 // *actually* inject before page load, but it will at least inject "soon".
-constexpr UserScript::RunLocation kCSSRunLocation = UserScript::DOCUMENT_START;
+constexpr mojom::RunLocation kCSSRunLocation =
+    mojom::RunLocation::kDocumentStart;
+
+// TODO(crbug.com/1168627): The can_execute_script_everywhere flag is currently
+// only used by the legacy version Chromevox extension. We can assume it will
+// always be false here, but it may be added back if needed.
+constexpr bool kScriptsCanExecuteEverywhere = false;
+
+// The all_urls_includes_chrome_urls flag is only true for the legacy ChromeVox
+// extension, which does not call this API. Therefore we can assume it to be
+// always false.
+constexpr bool kAllUrlsIncludesChromeUrls = false;
 
 // Converts the given `style_origin` to a CSSOrigin.
-CSSOrigin ConvertStyleOriginToCSSOrigin(
+mojom::CSSOrigin ConvertStyleOriginToCSSOrigin(
     api::scripting::StyleOrigin style_origin) {
-  CSSOrigin css_origin = CSSOrigin::kAuthor;
+  mojom::CSSOrigin css_origin = mojom::CSSOrigin::kAuthor;
   switch (style_origin) {
     case api::scripting::STYLE_ORIGIN_NONE:
     case api::scripting::STYLE_ORIGIN_AUTHOR:
-      css_origin = CSSOrigin::kAuthor;
+      css_origin = mojom::CSSOrigin::kAuthor;
       break;
     case api::scripting::STYLE_ORIGIN_USER:
-      css_origin = CSSOrigin::kUser;
+      css_origin = mojom::CSSOrigin::kUser;
       break;
   }
 
@@ -89,7 +114,7 @@ bool HasPermissionToInjectIntoFrame(const PermissionsData& permissions,
     const url::SchemeHostPort& tuple_or_precursor_tuple =
         origin.GetTupleOrPrecursorTupleIfOpaque();
     if (!tuple_or_precursor_tuple.IsValid()) {
-      if (permissions.HasAPIPermission(APIPermission::kTab)) {
+      if (permissions.HasAPIPermission(mojom::APIPermissionID::kTab)) {
         *error = ErrorUtils::FormatErrorMessage(
             manifest_errors::kCannotAccessPageWithUrl, url.spec());
       } else {
@@ -114,7 +139,7 @@ bool CanAccessTarget(const PermissionsData& permissions,
                      bool include_incognito_information,
                      ScriptExecutor** script_executor_out,
                      ScriptExecutor::FrameScope* frame_scope_out,
-                     std::vector<int>* frame_ids_out,
+                     std::set<int>* frame_ids_out,
                      std::string* error_out) {
   content::WebContents* tab = nullptr;
   TabHelper* tab_helper = nullptr;
@@ -139,15 +164,11 @@ bool CanAccessTarget(const PermissionsData& permissions,
           ? ScriptExecutor::INCLUDE_SUB_FRAMES
           : ScriptExecutor::SPECIFIED_FRAMES;
 
-  std::vector<int> frame_ids;
+  std::set<int> frame_ids;
   if (target.frame_ids) {
-    // Ensure IDs are unique.
-    frame_ids = *target.frame_ids;
-    std::sort(frame_ids.begin(), frame_ids.end());
-    auto new_end = std::unique(frame_ids.begin(), frame_ids.end());
-    frame_ids.erase(new_end, frame_ids.end());
+    frame_ids.insert(target.frame_ids->begin(), target.frame_ids->end());
   } else {
-    frame_ids.push_back(ExtensionApiFrameIdMap::kTopFrameId);
+    frame_ids.insert(ExtensionApiFrameIdMap::kTopFrameId);
   }
 
   // TODO(devlin): If `allFrames` is true, we error out if the extension
@@ -216,6 +237,57 @@ bool CheckAndLoadFiles(const std::vector<std::string>& files,
   return true;
 }
 
+std::unique_ptr<UserScript> ParseUserScript(
+    const Extension& extension,
+    const api::scripting::RegisteredContentScript& content_script,
+    int definition_index,
+    int valid_schemes,
+    std::u16string* error) {
+  auto result = std::make_unique<UserScript>();
+  result->set_id(content_script.id);
+  result->set_host_id(
+      mojom::HostID(mojom::HostID::HostType::kExtensions, extension.id()));
+
+  if (content_script.run_at != api::extension_types::RUN_AT_NONE)
+    result->set_run_location(ConvertRunLocation(content_script.run_at));
+
+  if (content_script.all_frames)
+    result->set_match_all_frames(*content_script.all_frames);
+
+  if (!script_parsing::ParseMatchPatterns(
+          content_script.matches, content_script.exclude_matches.get(),
+          definition_index, extension.creation_flags(),
+          kScriptsCanExecuteEverywhere, valid_schemes,
+          kAllUrlsIncludesChromeUrls, result.get(), error,
+          /*wants_file_access=*/nullptr)) {
+    return nullptr;
+  }
+
+  if (!script_parsing::ParseFileSources(
+          &extension, content_script.js.get(), content_script.css.get(),
+          definition_index, result.get(), error)) {
+    return nullptr;
+  }
+
+  return result;
+}
+
+ValidateContentScriptsResult ValidateParsedScriptsOnFileThread(
+    ExtensionResource::SymlinkPolicy symlink_policy,
+    std::unique_ptr<UserScriptList> scripts) {
+  DCHECK(GetExtensionFileTaskRunner()->RunsTasksInCurrentSequence());
+
+  // Validate that claimed script resources actually exist, and are UTF-8
+  // encoded.
+  std::string error;
+  bool are_script_files_valid =
+      script_parsing::ValidateFileSources(*scripts, symlink_policy, &error);
+
+  return std::make_pair(std::move(scripts), are_script_files_valid
+                                                ? absl::nullopt
+                                                : absl::make_optional(error));
+}
+
 }  // namespace
 
 ScriptingExecuteScriptFunction::ScriptingExecuteScriptFunction() = default;
@@ -227,13 +299,27 @@ ExtensionFunction::ResponseAction ScriptingExecuteScriptFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(params);
   injection_ = std::move(params->injection);
 
-  if ((injection_.files && injection_.function) ||
-      (!injection_.files && !injection_.function)) {
+  // Silently alias `function` to `func` for backwards compatibility.
+  // TODO(devlin): Remove this in M95.
+  if (injection_.function) {
+    if (injection_.func) {
+      return RespondNow(
+          Error("Both 'func' and 'function' were specified. "
+                "Only 'func' should be used."));
+    }
+    injection_.func = std::move(injection_.function);
+  }
+
+  if ((injection_.files && injection_.func) ||
+      (!injection_.files && !injection_.func)) {
     return RespondNow(
-        Error("Exactly one of 'function' and 'files' must be specified"));
+        Error("Exactly one of 'func' and 'files' must be specified"));
   }
 
   if (injection_.files) {
+    if (injection_.args)
+      return RespondNow(Error("'args' may not be used with file injections."));
+
     // JS files don't require localization.
     constexpr bool kRequiresLocalization = false;
     std::string error;
@@ -247,13 +333,27 @@ ExtensionFunction::ResponseAction ScriptingExecuteScriptFunction::Run() {
     return RespondLater();
   }
 
-  DCHECK(injection_.function);
+  DCHECK(injection_.func);
 
   // TODO(devlin): This (wrapping a function to create an IIFE) is pretty hacky,
-  // and won't work well when we support currying arguments. Add support to the
-  // ScriptExecutor to better support this case.
-  std::string code_to_execute =
-      base::StringPrintf("(%s)()", injection_.function->c_str());
+  // and along with the JSON-serialization of the arguments to curry in.
+  // Add support to the ScriptExecutor to better support this case.
+  std::string args_expression;
+  if (injection_.args) {
+    std::vector<std::string> string_args;
+    string_args.reserve(injection_.args->size());
+    for (const auto& arg : *injection_.args) {
+      DCHECK(arg);
+      std::string json;
+      if (!base::JSONWriter::Write(*arg, &json))
+        return RespondNow(Error("Unserializable argument passed."));
+      string_args.push_back(std::move(json));
+    }
+    args_expression = base::JoinString(string_args, ",");
+  }
+
+  std::string code_to_execute = base::StringPrintf(
+      "(%s)(%s)", injection_.func->c_str(), args_expression.c_str());
 
   std::string error;
   if (!Execute(std::move(code_to_execute), /*script_src=*/GURL(), &error))
@@ -285,20 +385,24 @@ bool ScriptingExecuteScriptFunction::Execute(std::string code_to_execute,
                                              std::string* error) {
   ScriptExecutor* script_executor = nullptr;
   ScriptExecutor::FrameScope frame_scope = ScriptExecutor::SPECIFIED_FRAMES;
-  std::vector<int> frame_ids;
+  std::set<int> frame_ids;
   if (!CanAccessTarget(*extension()->permissions_data(), injection_.target,
                        browser_context(), include_incognito_information(),
                        &script_executor, &frame_scope, &frame_ids, error)) {
     return false;
   }
 
+  std::vector<mojom::JSSourcePtr> sources;
+  sources.push_back(
+      mojom::JSSource::New(std::move(code_to_execute), std::move(script_url)));
   script_executor->ExecuteScript(
-      HostID(HostID::EXTENSIONS, extension()->id()), UserScript::ADD_JAVASCRIPT,
-      std::move(code_to_execute), frame_scope, frame_ids,
-      ScriptExecutor::MATCH_ABOUT_BLANK, UserScript::DOCUMENT_IDLE,
-      ScriptExecutor::DEFAULT_PROCESS,
-      /* webview_src */ GURL(), std::move(script_url), user_gesture(),
-      CSSOrigin::kAuthor, ScriptExecutor::JSON_SERIALIZED_RESULT,
+      mojom::HostID(mojom::HostID::HostType::kExtensions, extension()->id()),
+      mojom::CodeInjection::NewJs(mojom::JSInjection::New(std::move(sources),
+                                                          /*wants_result=*/true,
+                                                          user_gesture())),
+      frame_scope, frame_ids, ScriptExecutor::MATCH_ABOUT_BLANK,
+      mojom::RunLocation::kDocumentIdle, ScriptExecutor::DEFAULT_PROCESS,
+      /* webview_src */ GURL(),
       base::BindOnce(&ScriptingExecuteScriptFunction::OnScriptExecuted, this));
 
   return true;
@@ -399,7 +503,7 @@ bool ScriptingInsertCSSFunction::Execute(std::string code_to_execute,
                                          std::string* error) {
   ScriptExecutor* script_executor = nullptr;
   ScriptExecutor::FrameScope frame_scope = ScriptExecutor::SPECIFIED_FRAMES;
-  std::vector<int> frame_ids;
+  std::set<int> frame_ids;
   if (!CanAccessTarget(*extension()->permissions_data(), injection_.target,
                        browser_context(), include_incognito_information(),
                        &script_executor, &frame_scope, &frame_ids, error)) {
@@ -407,14 +511,22 @@ bool ScriptingInsertCSSFunction::Execute(std::string code_to_execute,
   }
   DCHECK(script_executor);
 
+  mojom::HostID host_id(mojom::HostID::HostType::kExtensions,
+                        extension()->id());
+  std::string injection_key = ScriptExecutor::GenerateInjectionKey(
+      host_id, script_url, code_to_execute);
+
+  std::vector<mojom::CSSSourcePtr> sources;
+  sources.push_back(mojom::CSSSource::New(std::move(code_to_execute),
+                                          std::move(injection_key)));
   script_executor->ExecuteScript(
-      HostID(HostID::EXTENSIONS, extension()->id()), UserScript::ADD_CSS,
-      std::move(code_to_execute), frame_scope, frame_ids,
-      ScriptExecutor::MATCH_ABOUT_BLANK, kCSSRunLocation,
-      ScriptExecutor::DEFAULT_PROCESS,
-      /* webview_src */ GURL(), std::move(script_url), user_gesture(),
-      ConvertStyleOriginToCSSOrigin(injection_.origin),
-      ScriptExecutor::NO_RESULT,
+      std::move(host_id),
+      mojom::CodeInjection::NewCss(mojom::CSSInjection::New(
+          std::move(sources), ConvertStyleOriginToCSSOrigin(injection_.origin),
+          mojom::CSSInjection::Operation::kAdd)),
+      frame_scope, frame_ids, ScriptExecutor::MATCH_ABOUT_BLANK,
+      kCSSRunLocation, ScriptExecutor::DEFAULT_PROCESS,
+      /* webview_src */ GURL(),
       base::BindOnce(&ScriptingInsertCSSFunction::OnCSSInserted, this));
 
   return true;
@@ -465,7 +577,7 @@ ExtensionFunction::ResponseAction ScriptingRemoveCSSFunction::Run() {
 
   ScriptExecutor* script_executor = nullptr;
   ScriptExecutor::FrameScope frame_scope = ScriptExecutor::SPECIFIED_FRAMES;
-  std::vector<int> frame_ids;
+  std::set<int> frame_ids;
   if (!CanAccessTarget(*extension()->permissions_data(), injection.target,
                        browser_context(), include_incognito_information(),
                        &script_executor, &frame_scope, &frame_ids, &error)) {
@@ -475,14 +587,22 @@ ExtensionFunction::ResponseAction ScriptingRemoveCSSFunction::Run() {
 
   DCHECK(code.empty() || !script_url.is_valid());
 
+  mojom::HostID host_id(mojom::HostID::HostType::kExtensions,
+                        extension()->id());
+  std::string injection_key =
+      ScriptExecutor::GenerateInjectionKey(host_id, script_url, code);
+
+  std::vector<mojom::CSSSourcePtr> sources;
+  sources.push_back(
+      mojom::CSSSource::New(std::move(code), std::move(injection_key)));
   script_executor->ExecuteScript(
-      HostID(HostID::EXTENSIONS, extension()->id()), UserScript::REMOVE_CSS,
-      std::move(code), frame_scope, frame_ids,
-      ScriptExecutor::MATCH_ABOUT_BLANK, kCSSRunLocation,
-      ScriptExecutor::DEFAULT_PROCESS,
-      /* webview_src */ GURL(), std::move(script_url), user_gesture(),
-      ConvertStyleOriginToCSSOrigin(injection.origin),
-      ScriptExecutor::NO_RESULT,
+      std::move(host_id),
+      mojom::CodeInjection::NewCss(mojom::CSSInjection::New(
+          std::move(sources), ConvertStyleOriginToCSSOrigin(injection.origin),
+          mojom::CSSInjection::Operation::kRemove)),
+      frame_scope, frame_ids, ScriptExecutor::MATCH_ABOUT_BLANK,
+      kCSSRunLocation, ScriptExecutor::DEFAULT_PROCESS,
+      /* webview_src */ GURL(),
       base::BindOnce(&ScriptingRemoveCSSFunction::OnCSSRemoved, this));
 
   return RespondLater();
@@ -498,6 +618,115 @@ void ScriptingRemoveCSSFunction::OnCSSRemoved(
   }
 
   Respond(NoArguments());
+}
+
+ScriptingRegisterContentScriptsFunction::
+    ScriptingRegisterContentScriptsFunction() = default;
+ScriptingRegisterContentScriptsFunction::
+    ~ScriptingRegisterContentScriptsFunction() = default;
+
+ExtensionFunction::ResponseAction
+ScriptingRegisterContentScriptsFunction::Run() {
+  std::unique_ptr<api::scripting::RegisterContentScripts::Params> params(
+      api::scripting::RegisterContentScripts::Params::Create(*args_));
+  EXTENSION_FUNCTION_VALIDATE(params);
+
+  std::vector<api::scripting::RegisteredContentScript>& scripts =
+      params->scripts;
+
+  ExtensionUserScriptLoader* loader =
+      ExtensionSystem::Get(browser_context())
+          ->user_script_manager()
+          ->GetUserScriptLoaderForExtension(extension()->id());
+  std::set<std::string> existing_script_ids = loader->GetDynamicScriptIDs();
+  std::set<std::string> new_script_ids;
+  for (const auto& script : scripts) {
+    if (script.id.empty())
+      return RespondNow(Error("Content script's ID must not be empty"));
+
+    if (script.id[0] == UserScript::kGeneratedIDPrefix) {
+      return RespondNow(Error(base::StringPrintf(
+          "Content script's ID '%s' must not start with '%c'",
+          script.id.c_str(), UserScript::kGeneratedIDPrefix)));
+    }
+
+    if (base::Contains(existing_script_ids, script.id) ||
+        base::Contains(new_script_ids, script.id)) {
+      return RespondNow(Error(
+          base::StringPrintf("Duplicate script ID '%s'", script.id.c_str())));
+    }
+
+    new_script_ids.insert(script.id);
+  }
+
+  std::u16string parse_error;
+  auto parsed_scripts = std::make_unique<UserScriptList>();
+  const int valid_schemes =
+      UserScript::ValidUserScriptSchemes(kScriptsCanExecuteEverywhere);
+
+  for (size_t i = 0; i < scripts.size(); ++i) {
+    // Parse/Create user script.
+    std::unique_ptr<UserScript> user_script = ParseUserScript(
+        *extension(), scripts[i], i, valid_schemes, &parse_error);
+    if (!user_script)
+      return RespondNow(Error(base::UTF16ToASCII(parse_error)));
+
+    parsed_scripts->push_back(std::move(user_script));
+  }
+
+  // Add new script IDs now in case another call with the same script IDs is
+  // made immediately following this one.
+  loader->AddPendingDynamicScriptIDs(std::move(new_script_ids));
+
+  base::PostTaskAndReplyWithResult(
+      GetExtensionFileTaskRunner().get(), FROM_HERE,
+      base::BindOnce(&ValidateParsedScriptsOnFileThread,
+                     script_parsing::GetSymlinkPolicy(extension()),
+                     std::move(parsed_scripts)),
+      base::BindOnce(&ScriptingRegisterContentScriptsFunction::
+                         OnContentScriptFilesValidated,
+                     this));
+
+  // Balanced in `OnContentScriptFilesValidated()` or
+  // `OnContentScriptsRegistered()`.
+  AddRef();
+  return RespondLater();
+}
+
+void ScriptingRegisterContentScriptsFunction::OnContentScriptFilesValidated(
+    ValidateContentScriptsResult result) {
+  auto error = result.second;
+  auto scripts = std::move(result.first);
+  ExtensionUserScriptLoader* loader =
+      ExtensionSystem::Get(browser_context())
+          ->user_script_manager()
+          ->GetUserScriptLoaderForExtension(extension()->id());
+
+  if (error.has_value()) {
+    std::set<std::string> ids_to_remove;
+    for (const auto& script : *scripts)
+      ids_to_remove.insert(script->id());
+
+    loader->RemovePendingDynamicScriptIDs(std::move(ids_to_remove));
+    Respond(Error(*error));
+    Release();  // Matches the `AddRef()` in `Run()`.
+    return;
+  }
+
+  loader->AddDynamicScripts(
+      std::move(scripts),
+      base::BindOnce(
+          &ScriptingRegisterContentScriptsFunction::OnContentScriptsRegistered,
+          this));
+}
+
+void ScriptingRegisterContentScriptsFunction::OnContentScriptsRegistered(
+    const absl::optional<std::string>& error) {
+  if (error.has_value())
+    Respond(Error(*error));
+  else
+    Respond(NoArguments());
+  Release();  // Matches the `AddRef()` in `Run()`.
 }
 
 }  // namespace extensions

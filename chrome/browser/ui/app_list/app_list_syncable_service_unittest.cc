@@ -14,6 +14,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/test/scoped_command_line.h"
 #include "base/test/scoped_feature_list.h"
+#include "build/build_config.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/app_list/app_list_model_updater.h"
@@ -28,6 +29,7 @@
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/crx_file/id_util.h"
+#include "components/sync/base/client_tag_hash.h"
 #include "components/sync/model/sync_error_factory.h"
 #include "components/sync/protocol/sync.pb.h"
 #include "components/sync/test/model/fake_sync_change_processor.h"
@@ -52,7 +54,8 @@ scoped_refptr<extensions::Extension> MakeApp(
   value.SetString("version", "0.0");
   value.SetString("app.launch.web_url", "http://google.com");
   scoped_refptr<extensions::Extension> app = extensions::Extension::Create(
-      base::FilePath(), extensions::Manifest::INTERNAL, value, flags, id, &err);
+      base::FilePath(), extensions::mojom::ManifestLocation::kInternal, value,
+      flags, id, &err);
   EXPECT_EQ(err, "");
   return app;
 }
@@ -128,7 +131,8 @@ syncer::SyncData CreateAppRemoteData(
   if (item_pin_ordinal != kUnset)
     app_list->set_item_pin_ordinal(item_pin_ordinal);
 
-  return syncer::SyncData::CreateRemoteData(specifics);
+  return syncer::SyncData::CreateRemoteData(
+      specifics, syncer::ClientTagHash::FromHashed("unused"));
 }
 
 syncer::SyncDataList CreateBadAppRemoteData(const std::string& id) {
@@ -230,13 +234,10 @@ class AppListSyncableServiceTest : public AppListTestBase {
   void SetUp() override {
     AppListTestBase::SetUp();
 
-    base::CommandLine::ForCurrentProcess()->AppendSwitch(
-        switches::kDisableDefaultApps);
-
     // Make sure we have a Profile Manager.
     DCHECK(temp_dir_.CreateUniqueTempDir());
     TestingBrowserProcess::GetGlobal()->SetProfileManager(
-        new ProfileManagerWithoutInit(temp_dir_.GetPath()));
+        std::make_unique<ProfileManagerWithoutInit>(temp_dir_.GetPath()));
 
     model_updater_factory_scope_ = std::make_unique<
         app_list::AppListSyncableService::ScopedModelUpdaterFactoryForTest>(
@@ -399,8 +400,6 @@ TEST_F(AppListSyncableServiceTest, OEMItemIgnoreSyncParent) {
   EXPECT_EQ(ash::kOemFolderId, oem_app_item->folder_id());
 }
 
-// Verifies that an OEM apps parent ID in sync data is not overridden to the OEM
-// folder.
 TEST_F(AppListSyncableServiceTest, OEMAppParentNotOverridenInSync) {
   const std::string oem_app_id = CreateNextAppId(extensions::kWebStoreAppId);
   scoped_refptr<extensions::Extension> oem_app = MakeApp(
@@ -569,8 +568,8 @@ class AppListInternalAppSyncableServiceTest
 
   void SetUp() override {
     AppListSyncableServiceTest::SetUp();
-    web_app::InstallDummyWebApp(testing_profile(), kOsSettingsUrl,
-                                GURL(kOsSettingsUrl));
+    web_app::test::InstallDummyWebApp(testing_profile(), kOsSettingsUrl,
+                                      GURL(kOsSettingsUrl));
   }
 
   ~AppListInternalAppSyncableServiceTest() override = default;
@@ -1254,7 +1253,7 @@ TEST_F(AppListSyncableServiceTest, FirstAvailablePosition) {
 
   // Populate the first page with items and leave 1 empty slot at the end.
   const int max_items_in_first_page =
-      ash::AppListConfig::instance().GetMaxNumOfItemsPerPage(0);
+      ash::SharedAppListConfig::instance().GetMaxNumOfItemsPerPage();
   syncer::StringOrdinal last_app_position =
       syncer::StringOrdinal::CreateInitialOrdinal();
   for (int i = 0; i < max_items_in_first_page - 1; ++i) {
@@ -1302,7 +1301,7 @@ TEST_F(AppListSyncableServiceTest, FirstAvailablePositionNotExist) {
 
   // Populate the first page with items and leave 1 empty slot at the end.
   const int max_items_in_first_page =
-      ash::AppListConfig::instance().GetMaxNumOfItemsPerPage(0);
+      ash::SharedAppListConfig::instance().GetMaxNumOfItemsPerPage();
   syncer::StringOrdinal last_app_position =
       syncer::StringOrdinal::CreateInitialOrdinal();
   for (int i = 0; i < max_items_in_first_page - 1; ++i) {

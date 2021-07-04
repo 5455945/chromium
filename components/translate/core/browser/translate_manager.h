@@ -93,17 +93,18 @@ class TranslateManager {
                                        language::LanguageModel* language_model);
 
   // Returns the language to translate to using the same logic as
-  // GetTargetLanguage but doesn't returned languages contained in
+  // GetTargetLanguage but doesn't return languages contained in
   // |skipped_languages| if |language_model| is not null and there is at least
   // one other suitable language.
   static std::string GetTargetLanguage(
       const TranslatePrefs* prefs,
       language::LanguageModel* language_model,
-      const std::set<std::string>& skipped_languages);
+      const std::set<std::string>& skipped_languages,
+      TranslateBrowserMetrics::TargetLanguageOrigin& target_language_origin);
 
-  // Returns the language to automatically translate to. |original_language| is
-  // the webpage's original language.
-  static std::string GetAutoTargetLanguage(const std::string& original_language,
+  // Returns the language to automatically translate to. |source_language| is
+  // the webpage's source language.
+  static std::string GetAutoTargetLanguage(const std::string& source_language,
                                            TranslatePrefs* translate_prefs);
 
   // Returns the target language for a manually triggered translation: the
@@ -140,6 +141,8 @@ class TranslateManager {
   // Logging should only be performed when this method is called to show the
   // translate menu item.
   bool CanManuallyTranslate(bool menuLogging = false);
+
+  bool IsMimeTypeSupported(const std::string& mime_type);
 
   // Shows the after translate or error infobar depending on the details.
   void PageTranslated(const std::string& source_lang,
@@ -213,14 +216,12 @@ class TranslateManager {
       const std::string& page_language_code,
       const std::string& target_language_code);
 
-  // Returns true if the decision should be overridden and logs the event
-  // appropriately. |event_type| must be one of the
-  // values defined by metrics::TranslateEventProto::EventType.
-  bool ShouldOverrideDecision(int event_type);
+  // Returns true if the MATCHES_PREVIOUS_LANGUAGE decision should be overridden
+  // and logs the event appropriately.
+  bool ShouldOverrideMatchesPreviousLanguageDecision();
 
   // Returns true if the BubbleUI should be suppressed.
-  bool ShouldSuppressBubbleUI(bool triggered_from_menu,
-                              const std::string& source_language);
+  bool ShouldSuppressBubbleUI();
 
   // Sets target language.
   void SetPredefinedTargetLanguage(const std::string& language_code);
@@ -260,8 +261,7 @@ class TranslateManager {
   // Initiates the translation.
   void OnTranslateScriptFetchComplete(const std::string& source_lang,
                                       const std::string& target_lang,
-                                      bool success,
-                                      const std::string& data);
+                                      bool success);
 
   // Helper function to initialize a translate event metric proto.
   void InitTranslateEvent(const std::string& src_lang,

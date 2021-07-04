@@ -4,11 +4,12 @@
 
 #include "components/webapps/browser/android/shortcut_info.h"
 
+#include <string>
+
 #include "base/feature_list.h"
-#include "base/optional.h"
-#include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/webapps/browser/android/webapps_icon_utils.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/manifest/manifest_icon_selector.h"
 
 namespace webapps {
@@ -60,18 +61,31 @@ std::unique_ptr<ShortcutInfo> ShortcutInfo::CreateShortcutInfo(
       WebappsIconUtils::GetIdealSplashImageSizeInPx();
   shortcut_info->minimum_splash_image_size_in_px =
       WebappsIconUtils::GetMinimumSplashImageSizeInPx();
-  shortcut_info->splash_image_url =
-      blink::ManifestIconSelector::FindBestMatchingSquareIcon(
-          manifest.icons, shortcut_info->ideal_splash_image_size_in_px,
-          shortcut_info->minimum_splash_image_size_in_px,
-          blink::mojom::ManifestImageResource_Purpose::ANY);
+  if (WebappsIconUtils::DoesAndroidSupportMaskableIcons()) {
+    shortcut_info->splash_image_url =
+        blink::ManifestIconSelector::FindBestMatchingSquareIcon(
+            manifest.icons, shortcut_info->ideal_splash_image_size_in_px,
+            shortcut_info->minimum_splash_image_size_in_px,
+            blink::mojom::ManifestImageResource_Purpose::MASKABLE);
+    shortcut_info->is_splash_image_maskable = true;
+  }
+  // If did not fetch maskable icon for splash image, or can not find a best
+  // match, fallback to ANY icon.
+  if (!shortcut_info->splash_image_url.is_valid()) {
+    shortcut_info->splash_image_url =
+        blink::ManifestIconSelector::FindBestMatchingSquareIcon(
+            manifest.icons, shortcut_info->ideal_splash_image_size_in_px,
+            shortcut_info->minimum_splash_image_size_in_px,
+            blink::mojom::ManifestImageResource_Purpose::ANY);
+    shortcut_info->is_splash_image_maskable = false;
+  }
 
   return shortcut_info;
 }
 
 void ShortcutInfo::UpdateFromManifest(const blink::Manifest& manifest) {
-  base::string16 s_name = manifest.short_name.value_or(base::string16());
-  base::string16 f_name = manifest.name.value_or(base::string16());
+  std::u16string s_name = manifest.short_name.value_or(std::u16string());
+  std::u16string f_name = manifest.name.value_or(std::u16string());
   if (!s_name.empty() || !f_name.empty()) {
     short_name = s_name;
     name = f_name;
@@ -82,7 +96,7 @@ void ShortcutInfo::UpdateFromManifest(const blink::Manifest& manifest) {
   }
   user_title = short_name;
 
-  description = manifest.description.value_or(base::string16());
+  description = manifest.description.value_or(std::u16string());
 
   // Set the url based on the manifest value, if any.
   if (manifest.start_url.is_valid())

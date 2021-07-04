@@ -28,6 +28,13 @@ extern const int kNetErrorCodeForSafeBrowsing;
 // The name of the histogram that records whether Safe Browsing is enabled.
 extern const char kSafeBrowsingEnabledHistogramName[];
 
+// Command-line flag for caching an artificial PhishGuard unsafe verdict.
+extern const char kArtificialCachedPhishGuardVerdictFlag[];
+
+// The bearer token prefix in authorization header. Used when various Safe
+// Browsing requests are GAIA-keyed by attaching oauth2 tokens as bearer tokens.
+extern const char kAuthHeaderBearer[];
+
 // Countries that has no endpoint for Safe Browsing.
 const std::vector<std::string> GetExcludedCountries();
 

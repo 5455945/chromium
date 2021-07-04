@@ -12,9 +12,9 @@
 #include "third_party/skia/include/core/SkPaint.h"
 #include "third_party/skia/include/core/SkPath.h"
 #include "third_party/skia/include/effects/SkDashPathEffect.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/text_constants.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 
 namespace ash {
 namespace hud_display {
@@ -23,7 +23,7 @@ namespace {
 
 constexpr SkColor kGridColor = SkColorSetRGB(162, 162, 220);
 
-base::string16 GenerateLabelText(float value, const base::string16& dimention) {
+std::u16string GenerateLabelText(float value, const std::u16string& dimention) {
   if (value == (int)value) {
     return base::ASCIIToUTF16(base::StringPrintf("%d ", (int)value).c_str()) +
            dimention;
@@ -43,8 +43,8 @@ Grid::Grid(float left,
            float top,
            float right,
            float bottom,
-           const base::string16& x_unit,
-           const base::string16& y_unit,
+           const std::u16string& x_unit,
+           const std::u16string& y_unit,
            int horizontal_points_number,
            int horizontal_ticks_interval,
            float vertical_ticks_interval)
@@ -63,13 +63,13 @@ Grid::Grid(float left,
 
   // Text is set later.
   right_top_label_ = AddChildView(std::make_unique<views::Label>(
-      base::string16(), views::style::CONTEXT_LABEL));
+      std::u16string(), views::style::CONTEXT_LABEL));
   right_middle_label_ = AddChildView(std::make_unique<views::Label>(
-      base::string16(), views::style::CONTEXT_LABEL));
+      std::u16string(), views::style::CONTEXT_LABEL));
   right_bottom_label_ = AddChildView(std::make_unique<views::Label>(
-      base::string16(), views::style::CONTEXT_LABEL));
+      std::u16string(), views::style::CONTEXT_LABEL));
   left_bottom_label_ = AddChildView(std::make_unique<views::Label>(
-      base::string16(), views::style::CONTEXT_LABEL));
+      std::u16string(), views::style::CONTEXT_LABEL));
 
   // Set label text.
   SetTopLabel(top_);
@@ -139,8 +139,9 @@ void Grid::OnPaint(gfx::Canvas* canvas) {
   SkPath solid_path;
 
   // Draw 50% dotted line.
-  dotted_path.moveTo({0, bounds().height() / 2});
-  dotted_path.lineTo({bounds().width(), bounds().height() / 2});
+  dotted_path.moveTo({0, bounds().height() / 2.0f});
+  dotted_path.lineTo(
+      {static_cast<SkScalar>(bounds().width()), bounds().height() / 2.0f});
 
   // Draw outside rectangle and ticks
   solid_path.addRect(SkRect::MakeXYWH(bounds().x(), bounds().y(),
@@ -159,7 +160,7 @@ void Grid::OnPaint(gfx::Canvas* canvas) {
         solid_path.lineTo({tick_length, line_y});
 
         solid_path.moveTo({bounds().width() - tick_length, line_y});
-        solid_path.lineTo({bounds().width(), line_y});
+        solid_path.lineTo({static_cast<SkScalar>(bounds().width()), line_y});
       }
       tick_bottom_offset += vertical_ticks_interval_;
     }
@@ -181,7 +182,7 @@ void Grid::OnPaint(gfx::Canvas* canvas) {
       solid_path.lineTo({line_x, tick_length});
 
       solid_path.moveTo({line_x, bounds().height() - tick_length});
-      solid_path.lineTo({line_x, bounds().height()});
+      solid_path.lineTo({line_x, static_cast<SkScalar>(bounds().height())});
     }
   }
 

@@ -5,13 +5,14 @@
 #include "base/barrier_closure.h"
 #include "base/path_service.h"
 #include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
+#include "build/chromeos_buildflags.h"
 #include "chrome/browser/sync/test/integration/apps_helper.h"
-#include "chrome/browser/sync/test/integration/profile_sync_service_harness.h"
+#include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/ui/views/web_apps/web_app_integration_browsertest_base.h"
-#include "chrome/browser/web_applications/test/web_app_install_observer.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
-#include "chrome/browser/web_applications/web_app_sync_bridge.h"
+#include "chrome/common/chrome_features.h"
 #include "content/public/test/browser_test.h"
 #include "services/network/public/cpp/network_switches.h"
 
@@ -19,7 +20,7 @@ namespace web_app {
 
 namespace {
 
-const std::string kTestCaseFileName =
+const char kTestCaseFileName[] =
     "web_app_integration_browsertest_sync_cases.csv";
 
 // Returns the path of the requested file in the test data directory.
@@ -44,7 +45,12 @@ class TwoClientWebAppsIntegrationSyncTest
       public WebAppIntegrationBrowserTestBase::TestDelegate,
       public testing::WithParamInterface<std::string> {
  public:
-  TwoClientWebAppsIntegrationSyncTest() : SyncTest(TWO_CLIENT), helper_(this) {}
+  TwoClientWebAppsIntegrationSyncTest() : SyncTest(TWO_CLIENT), helper_(this) {
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+    // Disable WebAppsCrosapi, so that Web Apps get synced in the Ash browser.
+    scoped_feature_list_.InitAndDisableFeature(features::kWebAppsCrosapi);
+#endif
+  }
 
   // WebAppIntegrationBrowserTestBase::TestDelegate
   Browser* CreateBrowser(Profile* profile) override {
@@ -63,6 +69,8 @@ class TwoClientWebAppsIntegrationSyncTest
     return SyncTest::GetAllProfiles();
   }
 
+  bool IsSyncTest() override { return true; }
+
   bool UserSigninInternal() override { return SyncTest::SetupSync(); }
 
   void TurnSyncOff() override {
@@ -76,7 +84,7 @@ class TwoClientWebAppsIntegrationSyncTest
       ASSERT_TRUE(client->StartSyncService());
     }
     ASSERT_TRUE(AwaitQuiescence());
-    AwaitWebAppQuiescence();
+    apps_helper::AwaitWebAppQuiescence(GetAllProfiles());
   }
 
   WebAppIntegrationBrowserTestBase helper_;
@@ -100,56 +108,8 @@ class TwoClientWebAppsIntegrationSyncTest
     ASSERT_TRUE(embedded_test_server()->Start());
     command_line->AppendSwitchASCII(
         network::switches::kUnsafelyTreatInsecureOriginAsSecure,
-        helper_.GetInstallableAppURL().GetOrigin().spec());
+        helper_.GetInstallableAppURL("site_a").GetOrigin().spec());
     command_line->AppendSwitch("disable-fake-server-failure-output");
-  }
-
-  // Helpers
-  void AwaitWebAppQuiescence() {
-    // Wait until all pending app installs and uninstalls have finished.
-    std::vector<std::unique_ptr<WebAppInstallObserver>> install_observers;
-    std::vector<std::unique_ptr<WebAppInstallObserver>> uninstall_observers;
-
-    for (auto* profile : GetAllProfiles()) {
-      install_observers.push_back(SetupSyncInstallObserverForProfile(profile));
-      uninstall_observers.push_back(
-          SetupSyncUninstallObserverForProfile(profile));
-    }
-    for (const auto& observer : install_observers) {
-      if (!observer) {
-        continue;
-      }
-      // This actually waits for all observed apps to be installed.
-      observer->AwaitNextInstall();
-    }
-    for (const auto& observer : uninstall_observers) {
-      if (!observer) {
-        continue;
-      }
-      // This actually waits for all observed apps to be uninstalled.
-      WebAppInstallObserver::AwaitNextUninstall(observer.get());
-    }
-
-    for (auto* profile : GetAllProfiles()) {
-      DCHECK(GetAppIdsToBeSyncInstalledForProfile(profile).empty());
-
-      std::set<AppId> apps_in_sync_uninstall =
-          helper_.GetProviderForProfile(profile)
-              ->registry_controller()
-              .AsWebAppSyncBridge()
-              ->GetAppsInSyncUninstallForTest();
-      DCHECK(apps_in_sync_uninstall.empty());
-    }
-  }
-
-  std::set<AppId> GetAppIdsToBeSyncInstalledForProfile(Profile* profile) {
-    WebAppRegistrar* registrar =
-        helper_.GetProviderForProfile(profile)->registrar().AsWebAppRegistrar();
-    // Make sure that |registrar| is a WebAppRegistrar instance.
-    DCHECK(registrar);
-    std::vector<AppId> profile_apps = registrar->GetAppsInSyncInstall();
-
-    return std::set<AppId>(profile_apps.begin(), profile_apps.end());
   }
 
   bool SetupClients() override {
@@ -166,38 +126,19 @@ class TwoClientWebAppsIntegrationSyncTest
     return true;
   }
 
-  std::unique_ptr<WebAppInstallObserver> SetupSyncInstallObserverForProfile(
-      Profile* profile) {
-    std::set<AppId> apps_to_be_sync_installed =
-        GetAppIdsToBeSyncInstalledForProfile(profile);
-
-    if (apps_to_be_sync_installed.empty()) {
-      return nullptr;
-    }
-    return WebAppInstallObserver::CreateInstallListener(
-        profile, apps_to_be_sync_installed);
-  }
-
-  std::unique_ptr<WebAppInstallObserver> SetupSyncUninstallObserverForProfile(
-      Profile* profile) {
-    base::flat_map<Profile*, std::unique_ptr<WebAppInstallObserver>> output;
-
-    std::set<AppId> apps_in_sync_uninstall =
-        helper_.GetProviderForProfile(profile)
-            ->registry_controller()
-            .AsWebAppSyncBridge()
-            ->GetAppsInSyncUninstallForTest();
-
-    if (apps_in_sync_uninstall.empty()) {
-      return nullptr;
-    }
-    return WebAppInstallObserver::CreateUninstallListener(
-        profile, apps_in_sync_uninstall);
-  }
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
+// This test is a part of the web app integration test suite, which is
+// documented in //chrome/browser/ui/views/web_apps/README.md. For information
+// about diagnosing, debugging and/or disabling tests, please look to the
+// README file.
 IN_PROC_BROWSER_TEST_P(TwoClientWebAppsIntegrationSyncTest, Default) {
   helper_.ParseParams(GetParam());
+  // Since this test framework differs from traditional browser tests, print
+  // some useful information for sheriffs and developers to help identify,
+  // diagnose, and disable failing tests.
+  LOG(INFO) << helper_.BuildLogForTest(helper_.testing_actions(), IsSyncTest());
 
   for (const auto& action : helper_.testing_actions()) {
     helper_.ExecuteAction(action);
@@ -208,4 +149,66 @@ INSTANTIATE_TEST_SUITE_P(All,
                          TwoClientWebAppsIntegrationSyncTest,
                          testing::ValuesIn(BuildAllPlatformTestCaseSet()));
 
+namespace {
+// TODO(jarrydg@chromium.org): Remove the macro disabling the following tests
+// when they can compile. https://crbug.com/1215791
+#if false
+IN_PROC_BROWSER_TEST_F(
+    TwoClientWebAppsIntegrationSyncTest,
+    WebAppIntegration_InstOmniboxSiteA_WindowCreated_SwitchProfileClientUserAClient2_InListNotLclyInstSiteA_NavSiteA_InstIconShown_LaunchIconShown) {
+  // Test contents are generated by script. Please do not modify!
+  // See `chrome/test/webapps/README.md` for more info.
+  // Sheriffs: Disabling this test is supported.
+  InstallOmniboxIcon("SiteA");
+  CheckWindowCreated();
+  SwitchProfileClients("UserAClient2");
+  CheckAppInListNotLocallyInstalled("SiteA");
+  NavigateBrowser("SiteA");
+  CheckInstallIconShown();
+  CheckLaunchIconNotShown();
+}
+
+IN_PROC_BROWSER_TEST_F(
+    WebAppSyncIntegrationTestBase,
+    WebAppIntegration_InstOmniboxSiteA_WindowCreated_SwitchProfileClientUserAClient2_InListNotLclyInstSiteA_TurnSyncOff) {
+  // Test contents are generated by script. Please do not modify!
+  // See `chrome/test/webapps/README.md` for more info.
+  // Sheriffs: Disabling this test is supported.
+  InstallOmniboxIcon("SiteA");
+  CheckWindowCreated();
+  SwitchProfileClients("UserAClient2");
+  CheckAppInListNotLocallyInstalled("SiteA");
+  SyncTurnOff();
+}
+
+IN_PROC_BROWSER_TEST_F(
+    WebAppSyncIntegrationTestBase,
+    WebAppIntegration_InstMenuOptionSiteA_WindowCreated_SwitchProfileClientUserAClient2_InListNotLclyInstSiteA_NavSiteA_InstIconShown_LaunchIconShown) {
+  // Test contents are generated by script. Please do not modify!
+  // See `chrome/test/webapps/README.md` for more info.
+  // Sheriffs: Disabling this test is supported.
+  InstallMenuOption("SiteA");
+  CheckWindowCreated();
+  SwitchProfileClients("UserAClient2");
+  CheckAppInListNotLocallyInstalled("SiteA");
+  NavigateBrowser("SiteA");
+  CheckInstallIconShown();
+  CheckLaunchIconNotShown();
+}
+
+IN_PROC_BROWSER_TEST_F(
+    WebAppSyncIntegrationTestBase,
+    WebAppIntegration_InstMenuOptionSiteA_WindowCreated_SwitchProfileClientUserAClient2_InListNotLclyInstSiteA_TurnSyncOff) {
+  // Test contents are generated by script. Please do not modify!
+  // See `chrome/test/webapps/README.md` for more info.
+  // Sheriffs: Disabling this test is supported.
+  InstallMenuOption("SiteA");
+  CheckWindowCreated();
+  SwitchProfileClients("UserAClient2");
+  CheckAppInListNotLocallyInstalled("SiteA");
+  SyncTurnOff();
+}
+#endif
+
+}  // namespace
 }  // namespace web_app

@@ -13,6 +13,7 @@
 #include <cstring>
 #include <functional>
 #include <iterator>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -22,7 +23,6 @@
 #include "base/path_service.h"
 #include "base/process/process_handle.h"
 #include "base/sequenced_task_runner.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -71,17 +71,16 @@ bool InstallValue(const base::Value& value,
       return key.WriteValue(name.c_str(), L"") == ERROR_SUCCESS;
 
     case base::Value::Type::BOOLEAN: {
-      bool bool_value;
-      if (!value.GetAsBoolean(&bool_value))
+      if (!value.is_bool())
         return false;
-      return key.WriteValue(name.c_str(), bool_value ? 1 : 0) == ERROR_SUCCESS;
+      return key.WriteValue(name.c_str(), value.GetBool() ? 1 : 0) ==
+             ERROR_SUCCESS;
     }
 
     case base::Value::Type::INTEGER: {
-      int int_value;
-      if (!value.GetAsInteger(&int_value))
+      if (!value.is_int())
         return false;
-      return key.WriteValue(name.c_str(), int_value) == ERROR_SUCCESS;
+      return key.WriteValue(name.c_str(), value.GetInt()) == ERROR_SUCCESS;
     }
 
     case base::Value::Type::DOUBLE: {
@@ -93,7 +92,7 @@ bool InstallValue(const base::Value& value,
     }
 
     case base::Value::Type::STRING: {
-      base::string16 str_value;
+      std::u16string str_value;
       if (!value.GetAsString(&str_value))
         return false;
       return key.WriteValue(name.c_str(), base::as_wcstr(str_value)) ==
@@ -132,14 +131,8 @@ bool InstallValue(const base::Value& value,
 
     case base::Value::Type::BINARY:
       return false;
-
-    // TODO(crbug.com/859477): Remove after root cause is found.
-    case base::Value::Type::DEAD:
-      CHECK(false);
-      return false;
   }
-  // TODO(crbug.com/859477): Revert to NOTREACHED() after root cause is found.
-  CHECK(false);
+  NOTREACHED();
   return false;
 }
 
@@ -338,11 +331,9 @@ void RegistryTestHarness::InstallStringListPolicy(
       KEY_ALL_ACCESS);
   ASSERT_TRUE(key.Valid());
   int index = 1;
-  for (base::ListValue::const_iterator element(policy_value->begin());
-       element != policy_value->end();
-       ++element) {
+  for (const auto& element : policy_value->GetList()) {
     std::string element_value;
-    if (!element->GetAsString(&element_value))
+    if (!element.GetAsString(&element_value))
       continue;
     std::string name(base::NumberToString(index++));
     key.WriteValue(base::UTF8ToWide(name).c_str(),

@@ -69,7 +69,6 @@ export let Policies;
  *   unitType: !MeasurementSystemUnitType,
  *   previewModifiable: boolean,
  *   previewIsFromArc: boolean,
- *   previewIsPdf: boolean,
  *   documentTitle: string,
  *   documentHasSelection: boolean,
  *   shouldPrintSelectionOnly: boolean,
@@ -80,8 +79,6 @@ export let Policies;
  *   pdfPrinterDisabled: boolean,
  *   destinationsManaged: boolean,
  *   cloudPrintURL: (string | undefined),
- *   userAccounts: (Array<string> | undefined),
- *   syncAvailable: boolean,
  *   isDriveMounted: (boolean | undefined),
  * }}
  * @see corresponding field name definitions in print_preview_handler.cc
@@ -165,7 +162,7 @@ export class NativeLayer {
    */
   saveAppState(appStateStr) {}
 
-  // <if expr="not chromeos and not is_win">
+  // <if expr="not chromeos and not lacros and not is_win">
   /** Shows the system's native printing dialog. */
   showSystemDialog() {}
   // </if>
@@ -239,7 +236,7 @@ export class NativeLayerImpl {
     chrome.send('saveAppState', [appStateStr]);
   }
 
-  // <if expr="not chromeos and not is_win">
+  // <if expr="not chromeos and not lacros and not is_win">
   /** @override */
   showSystemDialog() {
     chrome.send('showSystemDialog');

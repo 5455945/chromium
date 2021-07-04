@@ -329,7 +329,7 @@ bool ReturnCommand(const std::string& message,
   *type = internal::kCommandResponseMessageType;
   session_id->clear();
   command_response->id = expected_id;
-  command_response->result.reset(new base::DictionaryValue());
+  command_response->result = std::make_unique<base::DictionaryValue>();
   return true;
 }
 
@@ -342,7 +342,7 @@ bool ReturnBadResponse(const std::string& message,
   *type = internal::kCommandResponseMessageType;
   session_id->clear();
   command_response->id = expected_id;
-  command_response->result.reset(new base::DictionaryValue());
+  command_response->result = std::make_unique<base::DictionaryValue>();
   return false;
 }
 
@@ -355,7 +355,7 @@ bool ReturnCommandBadId(const std::string& message,
   *type = internal::kCommandResponseMessageType;
   session_id->clear();
   command_response->id = expected_id + 100;
-  command_response->result.reset(new base::DictionaryValue());
+  command_response->result = std::make_unique<base::DictionaryValue>();
   return true;
 }
 
@@ -404,13 +404,13 @@ bool ReturnEventThenResponse(
   if (*first) {
     *type = internal::kEventMessageType;
     event->method = "method";
-    event->params.reset(new base::DictionaryValue());
+    event->params = std::make_unique<base::DictionaryValue>();
     event->params->SetInteger("key", 1);
   } else {
     *type = internal::kCommandResponseMessageType;
     command_response->id = expected_id;
     base::DictionaryValue params;
-    command_response->result.reset(new base::DictionaryValue());
+    command_response->result = std::make_unique<base::DictionaryValue>();
     command_response->result->SetInteger("key", 2);
   }
   *first = false;
@@ -425,7 +425,7 @@ bool ReturnEvent(const std::string& message,
                  internal::InspectorCommandResponse* command_response) {
   *type = internal::kEventMessageType;
   event->method = "method";
-  event->params.reset(new base::DictionaryValue());
+  event->params = std::make_unique<base::DictionaryValue>();
   event->params->SetInteger("key", 1);
   return true;
 }
@@ -447,7 +447,7 @@ bool ReturnOutOfOrderResponses(
       client->SendCommand("method", params);
       *type = internal::kEventMessageType;
       event->method = "method";
-      event->params.reset(new base::DictionaryValue());
+      event->params = std::make_unique<base::DictionaryValue>();
       event->params->SetInteger("key", 1);
       return true;
     case 1:
@@ -460,7 +460,7 @@ bool ReturnOutOfOrderResponses(
       break;
   }
   *type = internal::kCommandResponseMessageType;
-  command_response->result.reset(new base::DictionaryValue());
+  command_response->result = std::make_unique<base::DictionaryValue>();
   command_response->result->SetInteger("key", key);
   return true;
 }
@@ -621,7 +621,7 @@ TEST(ParseInspectorMessage, CommandNoErrorOrResult) {
   ASSERT_TRUE(
       internal::ParseInspectorMessage("{\"id\":1,\"sessionId\":\"AB2AF3C\"}", 0,
                                       &session_id, &type, &event, &response));
-  ASSERT_TRUE(response.result->empty());
+  ASSERT_TRUE(response.result->DictEmpty());
   EXPECT_EQ("AB2AF3C", session_id);
 }
 
@@ -827,7 +827,7 @@ class OnConnectedSyncWebSocket : public MockSyncWebSocket {
     if (SendHelper(message, &dict, &method)) {
       base::DictionaryValue response;
       response.SetInteger("id", id_);
-      response.Set("result", std::make_unique<base::DictionaryValue>());
+      response.SetKey("result", base::DictionaryValue());
       std::string json_response;
       base::JSONWriter::Write(response, &json_response);
       queued_response_.push_back(json_response);
@@ -835,7 +835,7 @@ class OnConnectedSyncWebSocket : public MockSyncWebSocket {
       // Push one event.
       base::DictionaryValue event;
       event.SetString("method", "updateEvent");
-      event.Set("params", std::make_unique<base::DictionaryValue>());
+      event.SetKey("params", base::DictionaryValue());
       std::string json_event;
       base::JSONWriter::Write(event, &json_event);
       queued_response_.push_back(json_event);

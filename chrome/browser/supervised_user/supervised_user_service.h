@@ -16,9 +16,9 @@
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
 #include "base/observer_list.h"
-#include "base/scoped_observer.h"
-#include "base/strings/string16.h"
+#include "base/scoped_observation.h"
 #include "build/build_config.h"
+#include "build/chromeos_buildflags.h"
 #include "chrome/browser/net/file_downloader.h"
 #include "chrome/browser/supervised_user/supervised_user_denylist.h"
 #include "chrome/browser/supervised_user/supervised_user_url_filter.h"
@@ -29,7 +29,6 @@
 #include "extensions/buildflags/buildflags.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "base/strings/string16.h"
 #include "chrome/browser/ui/supervised_user/parent_permission_dialog.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
@@ -50,7 +49,7 @@ class SupervisedUserURLFilter;
 namespace base {
 class FilePath;
 class Version;
-}
+}  // namespace base
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 namespace extensions {
@@ -152,9 +151,7 @@ class SupervisedUserService : public KeyedService,
 
   // Returns a message saying that extensions can only be modified by the
   // custodian.
-  base::string16 GetExtensionsLockedMessage() const;
-
-  bool IsSupervisedUserIframeFilterEnabled() const;
+  std::u16string GetExtensionsLockedMessage() const;
 
   static std::string GetEduCoexistenceLoginUrl();
 
@@ -178,7 +175,7 @@ class SupervisedUserService : public KeyedService,
   void Shutdown() override;
 
   // SyncTypePreferenceProvider implementation:
-  bool IsEncryptEverythingAllowed() const override;
+  bool IsCustomPassphraseAllowed() const override;
 
 #if !defined(OS_ANDROID)
   // BrowserListObserver implementation:
@@ -224,6 +221,12 @@ class SupervisedUserService : public KeyedService,
   void RecordExtensionEnablementUmaMetrics(bool enabled) const;
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+  // Reports FamilyUser.WebFilterType and FamilyUser.ManagedSiteList metrics.
+  // Igores reporting when AreWebFilterPrefsDefault() is true.
+  void ReportNonDefaultWebFilterValue() const;
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+
  private:
   friend class SupervisedUserServiceExtensionTestBase;
   friend class SupervisedUserServiceFactory;
@@ -249,10 +252,10 @@ class SupervisedUserService : public KeyedService,
   // extensions::ManagementPolicy::Provider implementation:
   std::string GetDebugPolicyProviderName() const override;
   bool UserMayLoad(const extensions::Extension* extension,
-                   base::string16* error) const override;
+                   std::u16string* error) const override;
   bool MustRemainDisabled(const extensions::Extension* extension,
                           extensions::disable_reason::DisableReason* reason,
-                          base::string16* error) const override;
+                          std::u16string* error) const override;
 
   // extensions::ExtensionRegistryObserver overrides:
   void OnExtensionInstalled(content::BrowserContext* browser_context,
@@ -398,9 +401,9 @@ class SupervisedUserService : public KeyedService,
   std::vector<std::unique_ptr<PermissionRequestCreator>> permissions_creators_;
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-  ScopedObserver<extensions::ExtensionRegistry,
-                 extensions::ExtensionRegistryObserver>
-      registry_observer_{this};
+  base::ScopedObservation<extensions::ExtensionRegistry,
+                          extensions::ExtensionRegistryObserver>
+      registry_observation_{this};
 #endif
 
   base::ObserverList<SupervisedUserServiceObserver>::Unchecked observer_list_;
@@ -408,6 +411,16 @@ class SupervisedUserService : public KeyedService,
 #if !defined(OS_ANDROID)
   bool signout_required_after_supervision_enabled_ = false;
 #endif
+
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+  // When there is change between WebFilterType::kTryToBlockMatureSites and
+  // WebFilterType::kCertainSites, both
+  // prefs::kDefaultSupervisedUserFilteringBehavior and
+  // prefs::kSupervisedUserSafeSites change. Uses this member to avoid duplicate
+  // reports. Initialized in the SetActive().
+  SupervisedUserURLFilter::WebFilterType current_web_filter_type_ =
+      SupervisedUserURLFilter::WebFilterType::kMaxValue;
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
   base::WeakPtrFactory<SupervisedUserService> weak_ptr_factory_{this};
 

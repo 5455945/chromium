@@ -11,7 +11,6 @@
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/sequenced_task_runner.h"
-#include "base/stl_util.h"
 #include "base/task/post_task.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -30,7 +29,7 @@ using ownership::PublicKey;
 
 namespace em = enterprise_management;
 
-namespace chromeos {
+namespace ash {
 
 SessionManagerOperation::SessionManagerOperation(Callback callback)
     : callback_(std::move(callback)) {}
@@ -38,7 +37,7 @@ SessionManagerOperation::SessionManagerOperation(Callback callback)
 SessionManagerOperation::~SessionManagerOperation() {}
 
 void SessionManagerOperation::Start(
-    SessionManagerClient* session_manager_client,
+    chromeos::SessionManagerClient* session_manager_client,
     scoped_refptr<OwnerKeyUtil> owner_key_util,
     scoped_refptr<PublicKey> public_key) {
   session_manager_client_ = session_manager_client;
@@ -265,4 +264,4 @@ void StoreSettingsOperation::HandleStoreResult(bool success) {
     StartLoading();
 }
 
-}  // namespace chromeos
+}  // namespace ash

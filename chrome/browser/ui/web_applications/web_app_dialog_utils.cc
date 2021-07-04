@@ -15,6 +15,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_dialogs.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/web_applications/components/install_manager.h"
 #include "chrome/browser/web_applications/components/web_app_constants.h"
 #include "chrome/browser/web_applications/components/web_app_helpers.h"
@@ -82,13 +83,6 @@ bool CanCreateWebApp(const Browser* browser) {
   content::NavigationEntry* entry =
       web_contents->GetController().GetLastCommittedEntry();
   if (entry && entry->GetPageType() == content::PAGE_TYPE_ERROR)
-    return false;
-
-  // Check whether the app is externally installed.
-  webapps::AppBannerManager* app_banner_manager =
-      webapps::AppBannerManager::FromWebContents(web_contents);
-
-  if (app_banner_manager && app_banner_manager->IsExternallyInstalledWebApp())
     return false;
 
   return true;

@@ -11,7 +11,7 @@
 #include "ash/accessibility/accessibility_delegate.h"
 #include "ash/animation/animation_change_type.h"
 #include "ash/components/audio/sounds.h"
-#include "ash/public/cpp/app_types.h"
+#include "ash/constants/app_types.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/public/cpp/window_animation_types.h"
 #include "ash/public/cpp/window_properties.h"
@@ -27,6 +27,7 @@
 #include "ash/wm/window_state.h"
 #include "ash/wm/window_util.h"
 #include "base/auto_reset.h"
+#include "base/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/compositor/layer.h"
@@ -296,7 +297,7 @@ aura::Window* BackdropController::GetTopmostWindowWithBackdrop() {
     if (window == backdrop_window_)
       continue;
 
-    if (window->type() != aura::client::WINDOW_TYPE_NORMAL)
+    if (window->GetType() != aura::client::WINDOW_TYPE_NORMAL)
       continue;
 
     auto* window_state = WindowState::Get(window);
@@ -315,6 +316,9 @@ aura::Window* BackdropController::GetTopmostWindowWithBackdrop() {
     }
 
     if (!WindowShouldHaveBackdrop(window))
+      continue;
+
+    if (!window_util::ShouldShowForCurrentUser(window))
       continue;
 
     return window;
@@ -438,8 +442,8 @@ void BackdropController::EnsureBackdropWidget() {
   params.name = "Backdrop";
   // To disallow the MRU list from picking this window up it should not be
   // activateable.
-  params.activatable = views::Widget::InitParams::ACTIVATABLE_NO;
-  DCHECK_NE(kShellWindowId_Invalid, container_->id());
+  params.activatable = views::Widget::InitParams::Activatable::kNo;
+  DCHECK_NE(kShellWindowId_Invalid, container_->GetId());
   params.parent = container_;
   params.init_properties_container.SetProperty(kHideInOverviewKey, true);
   params.init_properties_container.SetProperty(kForceVisibleInMiniViewKey,
@@ -671,7 +675,7 @@ bool BackdropController::DoesWindowCauseBackdropUpdates(
   // recursive calls to UpdateBackdrop() from the WorkspaceLayoutManager caused
   // by the backdrop itself, even though we avoid recursion here via
   // |pause_update_|.
-  return window->type() != aura::client::WINDOW_TYPE_POPUP &&
+  return window->GetType() != aura::client::WINDOW_TYPE_POPUP &&
          (!backdrop_ || window != backdrop_->GetNativeWindow());
 }
 

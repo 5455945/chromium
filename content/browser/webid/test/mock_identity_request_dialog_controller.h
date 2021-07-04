@@ -23,8 +23,11 @@ class MockIdentityRequestDialogController
   MockIdentityRequestDialogController& operator=(
       const MockIdentityRequestDialogController&) = delete;
 
-  MOCK_METHOD3(ShowInitialPermissionDialog,
-               void(WebContents*, const GURL&, InitialApprovalCallback));
+  MOCK_METHOD4(ShowInitialPermissionDialog,
+               void(WebContents*,
+                    const GURL&,
+                    PermissionDialogMode,
+                    InitialApprovalCallback));
   MOCK_METHOD4(ShowIdProviderWindow,
                void(WebContents*,
                     WebContents*,
@@ -35,6 +38,12 @@ class MockIdentityRequestDialogController
                void(content::WebContents*,
                     const GURL&,
                     TokenExchangeApprovalCallback));
+  MOCK_METHOD5(ShowAccountsDialog,
+               void(WebContents*,
+                    WebContents*,
+                    const GURL&,
+                    AccountList,
+                    AccountSelectionCallback));
 };
 
 }  // namespace content

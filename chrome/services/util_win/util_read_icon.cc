@@ -6,10 +6,10 @@
 
 #include <windows.h>
 
+#include <string>
+
 #include "base/files/file_path.h"
-#include "base/strings/string16.h"
 #include "third_party/skia/include/core/SkBitmap.h"
-#include "ui/display/win/dpi.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/icon_util.h"
 #include "ui/gfx/image/image_skia.h"
@@ -46,6 +46,7 @@ UtilReadIcon::~UtilReadIcon() = default;
 // a downloaded file, such as an |.exe|.
 void UtilReadIcon::ReadIcon(const base::FilePath& filename,
                             IconSize icon_size,
+                            float scale,
                             ReadIconCallback callback) {
   int size = 0;
   // See IconLoader::IconSize.
@@ -62,6 +63,8 @@ void UtilReadIcon::ReadIcon(const base::FilePath& filename,
     default:
       NOTREACHED();
   }
+
+  size *= scale;
 
   gfx::ImageSkia image_ret;
 
@@ -96,8 +99,7 @@ void UtilReadIcon::ReadIcon(const base::FilePath& filename,
 
   const SkBitmap bitmap = IconUtil::CreateSkBitmapFromHICON(selected);
   if (!bitmap.isNull()) {
-    gfx::ImageSkia image_skia(
-        gfx::ImageSkiaRep(bitmap, display::win::GetDPIScale()));
+    gfx::ImageSkia image_skia(gfx::ImageSkiaRep(bitmap, scale));
     image_skia.MakeThreadSafe();
     image_ret = std::move(image_skia);
   }

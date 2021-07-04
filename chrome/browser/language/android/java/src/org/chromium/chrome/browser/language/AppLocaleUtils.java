@@ -8,16 +8,15 @@ import android.content.Context;
 import android.preference.PreferenceManager;
 import android.text.TextUtils;
 
-import com.google.android.play.core.splitinstall.SplitInstallManager;
-import com.google.android.play.core.splitinstall.SplitInstallManagerFactory;
-import com.google.android.play.core.splitinstall.SplitInstallRequest;
-
 import org.chromium.base.BundleUtils;
-import org.chromium.base.ContextUtils;
+import org.chromium.base.LocaleUtils;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.SharedPreferencesManager;
+import org.chromium.ui.base.ResourceBundle;
 
-import java.util.Locale;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.Objects;
 
 /**
  * Provides utility functions to assist with overriding the application language.
@@ -25,8 +24,6 @@ import java.util.Locale;
  */
 public class AppLocaleUtils {
     private AppLocaleUtils(){};
-
-    private static final String TAG = "AppLocale";
 
     // Value of AppLocale preference when the system language is used.
     public static final String SYSTEM_LANGUAGE_VALUE = null;
@@ -63,31 +60,70 @@ public class AppLocaleUtils {
     }
 
     /**
-     * Set the value of application language shared preference. If set to null
-     * the system language will be used.
+     * Set the application language shared preference and download the language split if needed. If
+     * set to null the system language will be used.
+     * @param languageName String BCP-47 code of language to download.
      */
     public static void setAppLanguagePref(String languageName) {
+        setAppLanguagePref(languageName, success -> {});
+    }
+
+    /**
+     * Set the application language shared preference and download the language split using the
+     * provided listener for callbacks. If called from an APK build where no bundle needs to be
+     * downloaded the listener's on complete function is immediately called, triggering the success
+     * UI. If languageName is null the system language will be used.
+     * @param languageName String BCP-47 code of language to download.
+     * @param listener LanguageSplitInstaller.InstallListener to use for callbacks.
+     */
+    public static void setAppLanguagePref(
+            String languageName, LanguageSplitInstaller.InstallListener listener) {
         SharedPreferencesManager.getInstance().writeString(
                 ChromePreferenceKeys.APPLICATION_OVERRIDE_LANGUAGE, languageName);
-        if (BundleUtils.isBundle()) {
-            ensureLanguageSplitInstalled(languageName);
+        if (BundleUtils.isBundle() && !TextUtils.equals(languageName, SYSTEM_LANGUAGE_VALUE)) {
+            LanguageSplitInstaller.getInstance().installLanguage(languageName, listener);
+        } else {
+            listener.onComplete(true);
         }
     }
 
     /**
-     * For bundle builds ensure that the language split for languageName is downloaded.
+     * Return true if the locale is an exact match for an available UI language.
+     * Note: "en" and "en-AU" will return false since the available locales are "en-GB" and "en-US".
+     * @param locale BCP-47 language tag representing a locale (e.g. "en-US")
      */
-    private static void ensureLanguageSplitInstalled(String languageName) {
-        SplitInstallManager splitInstallManager =
-                SplitInstallManagerFactory.create(ContextUtils.getApplicationContext());
-
-        // TODO(perrier): check if languageName is already installed. https://crbug.com/1103806
-        if (!TextUtils.equals(languageName, SYSTEM_LANGUAGE_VALUE)) {
-            SplitInstallRequest installRequest =
-                    SplitInstallRequest.newBuilder()
-                            .addLanguage(Locale.forLanguageTag(languageName))
-                            .build();
-            splitInstallManager.startInstall(installRequest);
-        }
+    public static boolean isAvailableExactUiLanguage(String locale) {
+        return isAvailableUiLanguage(locale, null);
     }
+
+    /**
+     * Return true if this locale is available or has a reasonable fallback language that can be
+     * used for UI. For example we do not have language packs for "en" or "pt" but fallback to the
+     * reasonable alternatives "en-US" and "pt-BR". Similarly, we have no language pack for "es-MX"
+     * or "es-AR" but will use "es-419" for both. However, for languages with no translations
+     * (e.g. "yo", "cy", ect.) the fallback is "en-US" which is not reasonable.
+     * @param locale BCP-47 language tag representing a locale (e.g. "en-US")
+     */
+    public static boolean isSupportedUiLanguage(String locale) {
+        return isAvailableUiLanguage(locale, BASE_LANGUAGE_COMPARATOR);
+    }
+
+    private static boolean isAvailableUiLanguage(String locale, Comparator<String> comparator) {
+        if (Objects.equals(locale, AppLocaleUtils.SYSTEM_LANGUAGE_VALUE)) return true;
+        return Arrays.binarySearch(ResourceBundle.getAvailableLocales(), locale, comparator) >= 0;
+    }
+
+    /**
+     * Comparator that removes any country or script information from either language tag
+     * since they are not needed for locale availability checks.
+     * Example: "es-MX" and "es-ES" will evaluate as equal.
+     */
+    private static final Comparator<String> BASE_LANGUAGE_COMPARATOR = new Comparator<String>() {
+        @Override
+        public int compare(String a, String b) {
+            String langA = LocaleUtils.toLanguage(a);
+            String langB = LocaleUtils.toLanguage(b);
+            return langA.compareTo(langB);
+        }
+    };
 }

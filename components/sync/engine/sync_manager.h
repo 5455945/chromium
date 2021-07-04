@@ -11,7 +11,6 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/files/file_path.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
@@ -38,11 +37,9 @@ class CancelationSignal;
 class DataTypeDebugInfoListener;
 class EngineComponentsFactory;
 class ExtensionsActivity;
-class JsBackend;
-class JsEventHandler;
 class ProtocolEvent;
 class SyncCycleSnapshot;
-class SyncStatusObserver;
+struct SyncStatus;
 
 // Unless stated otherwise, all methods of SyncManager should be called on the
 // same thread.
@@ -62,25 +59,14 @@ class SyncManager {
     // changed.
     virtual void OnConnectionStatusChange(ConnectionStatus status) = 0;
 
-    // Called when initialization is complete to the point that SyncManager can
-    // process changes. This does not necessarily mean authentication succeeded
-    // or that the SyncManager is online.
-    // IMPORTANT: Creating any type of transaction before receiving this
-    // notification is illegal!
-    // WARNING: Calling methods on the SyncManager before receiving this
-    // message, unless otherwise specified, produces undefined behavior.
-
-    virtual void OnInitializationComplete(
-        const WeakHandle<JsBackend>& js_backend,
-        const WeakHandle<DataTypeDebugInfoListener>& debug_info_listener,
-        bool success) = 0;
-
     virtual void OnActionableError(
         const SyncProtocolError& sync_protocol_error) = 0;
 
     virtual void OnMigrationRequested(ModelTypeSet types) = 0;
 
     virtual void OnProtocolEvent(const ProtocolEvent& event) = 0;
+
+    virtual void OnSyncStatusChanged(const SyncStatus&) = 0;
 
    protected:
     virtual ~Observer();
@@ -90,9 +76,6 @@ class SyncManager {
   struct InitArgs {
     InitArgs();
     ~InitArgs();
-
-    // Used to propagate events to chrome://sync-internals.  Optional.
-    WeakHandle<JsEventHandler> event_handler;
 
     // URL of the sync server.
     GURL service_url;
@@ -131,9 +114,6 @@ class SyncManager {
     std::string cache_guid;
     std::string birthday;
     std::string bag_of_chips;
-
-    // List of observers to be added to AllStatus.
-    std::vector<SyncStatusObserver*> sync_status_observers;
   };
 
   // The state of sync the feature. If the user turned on sync explicitly, it
@@ -205,6 +185,8 @@ class SyncManager {
   // Returns an instance of the main interface for registering sync types with
   // sync engine.
   virtual std::unique_ptr<ModelTypeConnector> GetModelTypeConnectorProxy() = 0;
+
+  virtual WeakHandle<DataTypeDebugInfoListener> GetDebugInfoListener() = 0;
 
   // Returns the cache_guid of the currently open database.
   // Requires that the SyncManager be initialized.

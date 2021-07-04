@@ -22,6 +22,7 @@
 #include "chromeos/network/onc/onc_signature.h"
 #include "chromeos/network/onc/onc_translation_tables.h"
 #include "chromeos/network/onc/onc_translator.h"
+#include "components/device_event_log/device_event_log.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
 namespace chromeos {
@@ -140,24 +141,33 @@ bool ParseCellularScanResults(const base::ListValue& list,
                               std::vector<CellularScanResult>* scan_results) {
   scan_results->clear();
   scan_results->reserve(list.GetSize());
-  for (const auto& value : list) {
+  for (const auto& value : list.GetList()) {
     const base::DictionaryValue* dict;
     if (!value.GetAsDictionary(&dict))
       return false;
     CellularScanResult scan_result;
     // If the network id property is not present then this network cannot be
     // connected to so don't include it in the results.
-    if (!dict->GetStringWithoutPathExpansion(shill::kNetworkIdProperty,
-                                             &scan_result.network_id))
+    const std::string* network_id =
+        dict->FindStringKey(shill::kNetworkIdProperty);
+    if (!network_id)
       continue;
-    dict->GetStringWithoutPathExpansion(shill::kStatusProperty,
-                                        &scan_result.status);
-    dict->GetStringWithoutPathExpansion(shill::kLongNameProperty,
-                                        &scan_result.long_name);
-    dict->GetStringWithoutPathExpansion(shill::kShortNameProperty,
-                                        &scan_result.short_name);
-    dict->GetStringWithoutPathExpansion(shill::kTechnologyProperty,
-                                        &scan_result.technology);
+    scan_result.network_id = *network_id;
+    const std::string* status = dict->FindStringKey(shill::kStatusProperty);
+    if (status)
+      scan_result.status = *status;
+    const std::string* long_name =
+        dict->FindStringKey(shill::kLongNameProperty);
+    if (long_name)
+      scan_result.long_name = *long_name;
+    const std::string* short_name =
+        dict->FindStringKey(shill::kShortNameProperty);
+    if (short_name)
+      scan_result.short_name = *short_name;
+    const std::string* technology =
+        dict->FindStringKey(shill::kTechnologyProperty);
+    if (technology)
+      scan_result.technology = *technology;
     scan_results->push_back(scan_result);
   }
   return true;
@@ -185,10 +195,9 @@ bool ParseCellularSIMSlotInfo(
     if (iccid)
       sim_slot_info.iccid = *iccid;
 
-    const std::string* primary =
-        value.FindStringKey(shill::kSIMSlotInfoPrimary);
-    if (primary)
-      sim_slot_info.primary = *primary;
+    absl::optional<bool> primary =
+        value.FindBoolKey(shill::kSIMSlotInfoPrimary);
+    sim_slot_info.primary = primary.has_value() ? *primary : false;
 
     sim_slot_infos->push_back(sim_slot_info);
   }

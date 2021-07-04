@@ -9,10 +9,9 @@
 
 #include "base/callback.h"
 #include "base/memory/weak_ptr.h"
-#include "base/optional.h"
-#include "base/strings/string16.h"
 #include "chrome/browser/profiles/profile.h"
 #include "google_apis/gaia/core_account_id.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class TokensLoadedCallbackRunner;
 
@@ -47,8 +46,8 @@ class DiceSignedInProfileCreator {
   // If |icon_index| is nullopt, a random icon will be selected.
   DiceSignedInProfileCreator(Profile* source_profile,
                              CoreAccountId account_id,
-                             const base::string16& local_profile_name,
-                             base::Optional<size_t> icon_index,
+                             const std::u16string& local_profile_name,
+                             absl::optional<size_t> icon_index,
                              bool use_guest_profile,
                              base::OnceCallback<void(Profile*)> callback);
 

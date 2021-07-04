@@ -144,8 +144,9 @@ public interface BrowserPaymentRequest {
     /**
      * Called when a new payment app is created.
      * @param paymentApp The new payment app.
+     * @return True if the payment app should be used; false if it should be ignored.
      */
-    default void onPaymentAppCreated(PaymentApp paymentApp) {}
+    boolean onPaymentAppCreated(PaymentApp paymentApp);
 
     /**
      * @return Whether payment sheet based payment app is supported, e.g., user entering credit
@@ -181,7 +182,7 @@ public interface BrowserPaymentRequest {
      * @param errorMessage Developer-facing error message to be used when rejecting the promise
      *                     returned from PaymentRequest.show().
      */
-    default void onInstrumentDetailsError(String errorMessage) {}
+    void onInstrumentDetailsError(String errorMessage);
 
     /**
      * Opens a payment handler window and creates a WebContents with the given url to display in it.

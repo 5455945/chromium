@@ -199,7 +199,7 @@ void SetupIDLCallbackInterfaceTemplate(
       V8AtomicString(isolate, wrapper_type_info->interface_name));
 }
 
-base::Optional<size_t> FindIndexInEnumStringTable(
+absl::optional<size_t> FindIndexInEnumStringTable(
     v8::Isolate* isolate,
     v8::Local<v8::Value> value,
     base::span<const char* const> enum_value_table,
@@ -207,13 +207,13 @@ base::Optional<size_t> FindIndexInEnumStringTable(
     ExceptionState& exception_state) {
   const String& str_value = NativeValueTraits<IDLStringV2>::NativeValue(
       isolate, value, exception_state);
-  if (exception_state.HadException())
-    return base::nullopt;
+  if (UNLIKELY(exception_state.HadException()))
+    return absl::nullopt;
 
-  base::Optional<size_t> index =
+  absl::optional<size_t> index =
       FindIndexInEnumStringTable(str_value, enum_value_table);
 
-  if (!index.has_value()) {
+  if (UNLIKELY(!index.has_value())) {
     exception_state.ThrowTypeError("The provided value '" + str_value +
                                    "' is not a valid enum value of type " +
                                    enum_type_name + ".");
@@ -221,14 +221,14 @@ base::Optional<size_t> FindIndexInEnumStringTable(
   return index;
 }
 
-base::Optional<size_t> FindIndexInEnumStringTable(
+absl::optional<size_t> FindIndexInEnumStringTable(
     const String& str_value,
     base::span<const char* const> enum_value_table) {
   for (size_t i = 0; i < enum_value_table.size(); ++i) {
     if (Equal(str_value.Impl(), enum_value_table[i]))
       return i;
   }
-  return base::nullopt;
+  return absl::nullopt;
 }
 
 void ReportInvalidEnumSetToAttribute(v8::Isolate* isolate,
@@ -450,7 +450,7 @@ void CSSPropertyAttributeSet(const v8::FunctionCallbackInfo<v8::Value>& info) {
   auto&& arg1_value =
       NativeValueTraits<IDLStringTreatNullAsEmptyStringV2>::NativeValue(
           isolate, v8_property_value, exception_state);
-  if (exception_state.HadException()) {
+  if (UNLIKELY(exception_state.HadException())) {
     return;
   }
   v8::Local<v8::Context> receiver_context = v8_receiver->CreationContext();
@@ -484,7 +484,7 @@ void PerformAttributeSetCEReactionsReflect(
   Element* blink_receiver = V8Element::ToWrappableUnsafe(info.This());
   auto&& arg_value = NativeValueTraits<IDLType>::NativeValue(isolate, info[0],
                                                              exception_state);
-  if (exception_state.HadException())
+  if (UNLIKELY(exception_state.HadException()))
     return;
 
   (blink_receiver->*MemFunc)(content_attribute, arg_value);

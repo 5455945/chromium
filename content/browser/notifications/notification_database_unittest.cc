@@ -9,7 +9,6 @@
 
 #include "base/files/scoped_temp_dir.h"
 #include "base/guid.h"
-#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
@@ -255,7 +254,7 @@ TEST_F(NotificationDatabaseTest, ReadNotificationDataDifferentOrigin) {
 
   NotificationDatabaseData database_data, read_database_data;
   database_data.notification_id = GenerateNotificationId();
-  database_data.notification_data.title = base::UTF8ToUTF16("My Notification");
+  database_data.notification_data.title = u"My Notification";
 
   ASSERT_EQ(NotificationDatabase::STATUS_OK,
             database->WriteNotificationData(origin, database_data));
@@ -285,11 +284,11 @@ TEST_F(NotificationDatabaseTest, ReadNotificationDataReflection) {
   GURL origin("https://example.com");
 
   blink::PlatformNotificationData notification_data;
-  notification_data.title = base::UTF8ToUTF16("My Notification");
+  notification_data.title = u"My Notification";
   notification_data.direction =
       blink::mojom::NotificationDirection::RIGHT_TO_LEFT;
   notification_data.lang = "nl-NL";
-  notification_data.body = base::UTF8ToUTF16("Hello, world!");
+  notification_data.body = u"Hello, world!";
   notification_data.tag = "replace id";
   notification_data.icon = GURL("https://example.com/icon.png");
   notification_data.silent = true;
@@ -355,7 +354,7 @@ TEST_F(NotificationDatabaseTest, ReadNotificationResourcesDifferentOrigin) {
   NotificationDatabaseData database_data;
   blink::NotificationResources database_resources;
   database_data.notification_id = GenerateNotificationId();
-  database_data.notification_data.title = base::UTF8ToUTF16("My Notification");
+  database_data.notification_data.title = u"My Notification";
   database_data.notification_resources = blink::NotificationResources();
 
   ASSERT_EQ(NotificationDatabase::STATUS_OK,
@@ -465,7 +464,7 @@ TEST_F(NotificationDatabaseTest, ReadNotificationUpdateInteraction) {
 
   NotificationDatabaseData database_data, read_database_data;
   database_data.notification_id = GenerateNotificationId();
-  database_data.notification_data.title = base::UTF8ToUTF16("My Notification");
+  database_data.notification_data.title = u"My Notification";
 
   ASSERT_EQ(NotificationDatabase::STATUS_OK,
             database->WriteNotificationData(origin, database_data));

@@ -30,13 +30,15 @@ class ShellMainDelegate : public ContentMainDelegate {
 
   // ContentMainDelegate implementation:
   bool BasicStartupComplete(int* exit_code) override;
+  bool ShouldCreateFeatureList() override;
   void PreSandboxStartup() override;
   int RunProcess(const std::string& process_type,
                  const MainFunctionParams& main_function_params) override;
 #if defined(OS_LINUX) || defined(OS_CHROMEOS)
   void ZygoteForked() override;
 #endif
-  void PreCreateMainMessageLoop() override;
+  void PreBrowserMain() override;
+  void PostEarlyInitialization(bool is_running_tests) override;
   ContentClient* CreateContentClient() override;
   ContentBrowserClient* CreateContentBrowserClient() override;
   ContentGpuClient* CreateContentGpuClient() override;

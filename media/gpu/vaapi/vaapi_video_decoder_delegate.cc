@@ -61,6 +61,8 @@ VaapiVideoDecoderDelegate::VaapiVideoDecoderDelegate(
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
   memset(&src_region_, 0, sizeof(src_region_));
   memset(&dst_region_, 0, sizeof(dst_region_));
+  transcryption_ = cdm_context && VaapiWrapper::GetImplementationType() ==
+                                      VAImplementation::kMesaGallium;
 }
 
 VaapiVideoDecoderDelegate::~VaapiVideoDecoderDelegate() {
@@ -102,7 +104,8 @@ bool VaapiVideoDecoderDelegate::SetDecryptConfig(
   // TODO(jkardatzke): Handle changing encryption modes midstream, the latest
   // OEMCrypto spec allows this, although we won't hit it in reality for now.
   // Check to make sure they are compatible.
-  if (decrypt_config->encryption_scheme() != encryption_scheme_) {
+  if (!transcryption_ &&
+      decrypt_config->encryption_scheme() != encryption_scheme_) {
     LOG(ERROR) << "Cannot change encryption modes midstream";
     return false;
   }
@@ -165,6 +168,11 @@ VaapiVideoDecoderDelegate::SetupDecryptDecode(
     VAEncryptionSegmentInfo segment_info = {};
     segment_info.segment_start_offset = offset;
     segment_info.segment_length = segment_info.init_byte_length = size;
+    if (decrypt_config_) {
+      // We need to specify the IV even if the segment is clear.
+      memcpy(segment_info.aes_cbc_iv_or_ctr, decrypt_config_->iv().data(),
+             DecryptConfig::kDecryptionKeySize);
+    }
     segments->emplace_back(std::move(segment_info));
     crypto_params->num_segments++;
     crypto_params->segment_info = &segments->front();
@@ -238,14 +246,17 @@ VaapiVideoDecoderDelegate::SetupDecryptDecode(
       segment_info.partial_aes_block_size = partial_block_size;
       memcpy(segment_info.aes_cbc_iv_or_ctr, iv.data(),
              DecryptConfig::kDecryptionKeySize);
-      // If we are finishing a block, increment the counter.
-      if (partial_block_size && entry.cypher_bytes > partial_block_size)
-        ctr128_inc64(iv.data());
-      // Increment the counter for every complete block we are adding.
-      for (size_t block = 0; block < (entry.cypher_bytes - partial_block_size) /
-                                         DecryptConfig::kDecryptionKeySize;
-           ++block)
-        ctr128_inc64(iv.data());
+      if (entry.cypher_bytes > partial_block_size) {
+        // If we are finishing a block, increment the counter.
+        if (partial_block_size)
+          ctr128_inc64(iv.data());
+        // Increment the counter for every complete block we are adding.
+        for (size_t block = 0;
+             block < (entry.cypher_bytes - partial_block_size) /
+                         DecryptConfig::kDecryptionKeySize;
+             ++block)
+          ctr128_inc64(iv.data());
+      }
       total_cypher_size += entry.cypher_bytes;
       segment_info.init_byte_length = entry.clear_bytes;
       offset += entry.clear_bytes + entry.cypher_bytes;
@@ -311,6 +322,11 @@ bool VaapiVideoDecoderDelegate::FillDecodeScalingIfNeeded(
   proc_buffer->num_additional_outputs = 1;
   proc_buffer->surface = decode_surface_id;
   return true;
+}
+
+std::string VaapiVideoDecoderDelegate::GetDecryptKeyId() const {
+  DCHECK(decrypt_config_);
+  return decrypt_config_->key_id();
 }
 
 void VaapiVideoDecoderDelegate::OnGetHwConfigData(

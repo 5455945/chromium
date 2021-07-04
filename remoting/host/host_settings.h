@@ -7,8 +7,6 @@
 
 #include <string>
 
-#include "base/values.h"
-
 namespace remoting {
 
 using HostSettingKey = char[];
@@ -27,6 +25,13 @@ class HostSettings {
   // Gets the value of the setting. Returns empty string if the value is not
   // found.
   virtual std::string GetString(const HostSettingKey key) const = 0;
+
+  // Sets a string value for |key| and writes it into the settings file.
+  //
+  // NOTE that the current implementation requires the whole instance to be used
+  // on the same sequence once SetString() is called.
+  virtual void SetString(const HostSettingKey key,
+                         const std::string& value) = 0;
 
   HostSettings(const HostSettings&) = delete;
   HostSettings& operator=(const HostSettings&) = delete;

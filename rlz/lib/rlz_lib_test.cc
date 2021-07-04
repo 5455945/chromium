@@ -50,8 +50,8 @@
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
+#include "base/cxx17_backports.h"
 #include "base/files/important_file_writer.h"
-#include "base/stl_util.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/debug_daemon/fake_debug_daemon_client.h"
 #include "rlz/chromeos/lib/rlz_value_store_chromeos.h"
@@ -629,11 +629,9 @@ TEST_F(RlzLibTest, SendFinancialPingDuringShutdown) {
   base::mac::ScopedNSAutoreleasePool pool;
 #endif
 
-  base::Thread::Options options;
-  options.message_pump_type = base::MessagePumpType::IO;
-
   base::Thread io_thread("rlz_unittest_io_thread");
-  ASSERT_TRUE(io_thread.StartWithOptions(options));
+  ASSERT_TRUE(io_thread.StartWithOptions(
+      base::Thread::Options(base::MessagePumpType::IO, 0)));
 
   network::TestURLLoaderFactory test_url_loader_factory;
   URLLoaderFactoryRAII set_factory(
@@ -1100,12 +1098,13 @@ class TestDebugDaemonClient : public chromeos::FakeDebugDaemonClient {
 
  private:
   int num_set_rlz_ping_sent_ = 0;
-  bool default_result_;
+  bool default_result_ = false;
   DISALLOW_COPY_AND_ASSIGN(TestDebugDaemonClient);
 };
 
 TEST_F(RlzLibTest, SetRlzPingSent) {
   TestDebugDaemonClient* debug_daemon_client = new TestDebugDaemonClient;
+  chromeos::DBusThreadManager::Initialize();
   chromeos::DBusThreadManager::GetSetterForTesting()->SetDebugDaemonClient(
       std::unique_ptr<chromeos::DebugDaemonClient>(debug_daemon_client));
   const char* kPingResponse =
@@ -1126,6 +1125,7 @@ TEST_F(RlzLibTest, SetRlzPingSent) {
       rlz_lib::ParsePingResponse(rlz_lib::TOOLBAR_NOTIFIER, kPingResponse));
   EXPECT_EQ(debug_daemon_client->num_set_rlz_ping_sent(),
             1 + rlz_lib::RlzValueStoreChromeOS::kMaxRetryCount);
+  chromeos::DBusThreadManager::Shutdown();
 }
 
 TEST_F(RlzLibTest, NoRecordCAFEvent) {

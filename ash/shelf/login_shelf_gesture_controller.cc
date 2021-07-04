@@ -10,6 +10,7 @@
 #include "ash/shelf/shelf.h"
 #include "ash/shelf/shelf_widget.h"
 #include "ash/shell.h"
+#include "base/bind.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_observer.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
@@ -84,7 +85,7 @@ class ImplicitAnimationCallbackRunner : public ui::ImplicitAnimationObserver {
 LoginShelfGestureController::LoginShelfGestureController(
     Shelf* shelf,
     DragHandle* drag_handle,
-    const base::string16& gesture_nudge,
+    const std::u16string& gesture_nudge,
     const base::RepeatingClosure fling_handler,
     base::OnceClosure exit_handler)
     : shelf_(shelf),

@@ -15,18 +15,27 @@ import androidx.annotation.StyleRes;
 import androidx.appcompat.app.AppCompatActivity;
 
 import org.chromium.base.ContextUtils;
+import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.base.SplitCompatUtils;
+import org.chromium.chrome.browser.flags.CachedFeatureFlags;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.language.GlobalAppLocaleController;
 import org.chromium.chrome.browser.night_mode.GlobalNightModeStateProviderHolder;
 import org.chromium.chrome.browser.night_mode.NightModeStateProvider;
 import org.chromium.chrome.browser.night_mode.NightModeUtils;
+import org.chromium.chrome.browser.ui.theme.ColorDelegateImpl;
+import org.chromium.ui.modaldialog.ModalDialogManager;
 
 /**
- * A subclass of {@link AppCompatActivity} that maintains states applied to all activities in
- * {@link ChromeApplication} (e.g. night mode).
+ * A subclass of {@link AppCompatActivity} that maintains states and objects applied to all
+ * activities in {@link ChromeApplication} (e.g. night mode).
  */
 public class ChromeBaseAppCompatActivity
         extends AppCompatActivity implements NightModeStateProvider.Observer {
+    private final ObservableSupplierImpl<ModalDialogManager> mModalDialogManagerSupplier =
+            new ObservableSupplierImpl<>();
     private NightModeStateProvider mNightModeStateProvider;
     private @StyleRes int mThemeResId;
 
@@ -48,9 +57,14 @@ public class ChromeBaseAppCompatActivity
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         getSupportFragmentManager().setFragmentFactory(SplitCompatUtils.createFragmentFactory());
+        mModalDialogManagerSupplier.set(createModalDialogManager());
 
         initializeNightModeStateProvider();
         mNightModeStateProvider.addObserver(this);
+        setTheme(R.style.ColorOverlay);
+        if (CachedFeatureFlags.isEnabled(ChromeFeatureList.DYNAMIC_COLOR_ANDROID)) {
+            new ColorDelegateImpl().applyDynamicColorsIfAvailable(this);
+        }
         super.onCreate(savedInstanceState);
 
         // Activity level locale overrides must be done in onCreate.
@@ -60,6 +74,10 @@ public class ChromeBaseAppCompatActivity
     @Override
     protected void onDestroy() {
         mNightModeStateProvider.removeObserver(this);
+        if (mModalDialogManagerSupplier.get() != null) {
+            mModalDialogManagerSupplier.get().destroy();
+            mModalDialogManagerSupplier.set(null);
+        }
         super.onDestroy();
     }
 
@@ -74,6 +92,22 @@ public class ChromeBaseAppCompatActivity
         super.onConfigurationChanged(newConfig);
         NightModeUtils.updateConfigurationForNightMode(
                 this, mNightModeStateProvider.isInNightMode(), newConfig, mThemeResId);
+    }
+
+    /**
+     * Returns the supplier of {@link ModalDialogManager} that manages the display of modal dialogs.
+     */
+    public ObservableSupplier<ModalDialogManager> getModalDialogManagerSupplier() {
+        return mModalDialogManagerSupplier;
+    }
+
+    /**
+     * Creates a {@link ModalDialogManager} for this class. Subclasses that need one should override
+     * this method.
+     */
+    @Nullable
+    protected ModalDialogManager createModalDialogManager() {
+        return null;
     }
 
     /**

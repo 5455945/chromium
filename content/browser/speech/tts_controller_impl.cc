@@ -43,7 +43,7 @@ const int kInvalidLength = -1;
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 bool VoiceIdMatches(
-    const base::Optional<TtsControllerDelegate::PreferredVoiceId>& id,
+    const absl::optional<TtsControllerDelegate::PreferredVoiceId>& id,
     const content::VoiceData& voice) {
   if (!id.has_value() || voice.name.empty() ||
       (voice.engine_id.empty() && !voice.native))
@@ -111,7 +111,10 @@ void TtsControllerImpl::SetStopSpeakingWhenHidden(bool value) {
   stop_speaking_when_hidden_ = value;
 }
 
-TtsControllerImpl::TtsControllerImpl() = default;
+TtsControllerImpl::TtsControllerImpl() {
+  net::NetworkChangeNotifier::AddNetworkChangeObserver(this);
+  OnNetworkChanged(net::NetworkChangeNotifier::GetConnectionType());
+}
 
 TtsControllerImpl::~TtsControllerImpl() {
   if (current_utterance_) {
@@ -121,6 +124,8 @@ TtsControllerImpl::~TtsControllerImpl() {
 
   // Clear any queued utterances too.
   ClearUtteranceQueue(false);  // Don't sent events.
+
+  net::NetworkChangeNotifier::RemoveNetworkChangeObserver(this);
 }
 
 void TtsControllerImpl::SpeakOrEnqueue(
@@ -296,19 +301,46 @@ void TtsControllerImpl::OnTtsEvent(int utterance_id,
 }
 
 void TtsControllerImpl::GetVoices(BrowserContext* browser_context,
+                                  const GURL& source_url,
                                   std::vector<VoiceData>* out_voices) {
+  std::vector<VoiceData> engine_delegate_voices;
   if (browser_context && engine_delegate_ &&
       engine_delegate_->IsBuiltInTtsEngineInitialized(browser_context)) {
-    engine_delegate_->GetVoices(browser_context, out_voices);
+    engine_delegate_->GetVoices(browser_context, source_url,
+                                &engine_delegate_voices);
   }
 
   TtsPlatform* tts_platform = GetTtsPlatform();
   DCHECK(tts_platform);
+  std::vector<VoiceData> platform_voices;
   // Ensure we have all built-in voices loaded. This is a no-op if already
   // loaded.
   tts_platform->LoadBuiltInTtsEngine(browser_context);
   if (TtsPlatformReady())
-    tts_platform->GetVoices(out_voices);
+    tts_platform->GetVoices(&platform_voices);
+
+  if (tts_platform->PreferEngineDelegateVoices()) {
+    out_voices->insert(out_voices->end(),
+                       std::make_move_iterator(engine_delegate_voices.begin()),
+                       std::make_move_iterator(engine_delegate_voices.end()));
+    out_voices->insert(out_voices->end(),
+                       std::make_move_iterator(platform_voices.begin()),
+                       std::make_move_iterator(platform_voices.end()));
+  } else {
+    out_voices->insert(out_voices->end(),
+                       std::make_move_iterator(platform_voices.begin()),
+                       std::make_move_iterator(platform_voices.end()));
+    out_voices->insert(out_voices->end(),
+                       std::make_move_iterator(engine_delegate_voices.begin()),
+                       std::make_move_iterator(engine_delegate_voices.end()));
+  }
+
+  if (!allow_remote_voices_) {
+    auto it =
+        std::remove_if(out_voices->begin(), out_voices->end(),
+                       [](const VoiceData& voice) { return voice.remote; });
+    out_voices->resize(it - out_voices->begin());
+  }
 }
 
 bool TtsControllerImpl::IsSpeaking() {
@@ -444,7 +476,7 @@ bool TtsControllerImpl::TtsPlatformLoading() {
 void TtsControllerImpl::SpeakNow(std::unique_ptr<TtsUtterance> utterance) {
   // Get all available voices and try to find a matching voice.
   std::vector<VoiceData> voices;
-  GetVoices(utterance->GetBrowserContext(), &voices);
+  GetVoices(utterance->GetBrowserContext(), utterance->GetSrcUrl(), &voices);
 
   // Get the best matching voice. If nothing matches, just set "native"
   // to true because that might trigger deferred loading of native voices.
@@ -468,14 +500,6 @@ void TtsControllerImpl::SpeakNow(std::unique_ptr<TtsUtterance> utterance) {
                         !utterance->GetSrcUrl().is_empty());
   UMA_HISTOGRAM_BOOLEAN("TextToSpeech.Utterance.HasVoiceName",
                         !utterance->GetVoiceName().empty());
-  UMA_HISTOGRAM_BOOLEAN("TextToSpeech.Utterance.HasLang",
-                        !utterance->GetLang().empty());
-  UMA_HISTOGRAM_BOOLEAN("TextToSpeech.Utterance.HasRate",
-                        utterance->GetContinuousParameters().rate != 1.0);
-  UMA_HISTOGRAM_BOOLEAN("TextToSpeech.Utterance.HasPitch",
-                        utterance->GetContinuousParameters().pitch != 1.0);
-  UMA_HISTOGRAM_BOOLEAN("TextToSpeech.Utterance.HasVolume",
-                        utterance->GetContinuousParameters().volume != 1.0);
   UMA_HISTOGRAM_BOOLEAN("TextToSpeech.Utterance.Native", voice.native);
 
   if (!voice.native) {
@@ -832,6 +856,27 @@ void TtsControllerImpl::WebContentsDestroyed() {
 void TtsControllerImpl::OnVisibilityChanged(Visibility visibility) {
   if (visibility == Visibility::HIDDEN && stop_speaking_when_hidden_)
     StopCurrentUtteranceAndRemoveUtterancesMatching(web_contents());
+}
+
+void TtsControllerImpl::OnNetworkChanged(
+    net::NetworkChangeNotifier::ConnectionType type) {
+  switch (type) {
+      // Non-cellular connections.
+    case net::NetworkChangeNotifier::ConnectionType::CONNECTION_UNKNOWN:
+    case net::NetworkChangeNotifier::ConnectionType::CONNECTION_ETHERNET:
+    case net::NetworkChangeNotifier::ConnectionType::CONNECTION_WIFI:
+    case net::NetworkChangeNotifier::ConnectionType::CONNECTION_BLUETOOTH:
+      allow_remote_voices_ = true;
+      break;
+
+      // Cellular connections.
+    case net::NetworkChangeNotifier::ConnectionType::CONNECTION_2G:
+    case net::NetworkChangeNotifier::ConnectionType::CONNECTION_3G:
+    case net::NetworkChangeNotifier::ConnectionType::CONNECTION_4G:
+    case net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE:
+    case net::NetworkChangeNotifier::ConnectionType::CONNECTION_5G:
+      allow_remote_voices_ = false;
+  }
 }
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)

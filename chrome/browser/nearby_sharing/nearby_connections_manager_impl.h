@@ -41,29 +41,30 @@ class NearbyConnectionsManagerImpl
                         PowerLevel power_level,
                         DataUsage data_usage,
                         ConnectionsCallback callback) override;
-  void StopAdvertising() override;
+  void StopAdvertising(ConnectionsCallback callback) override;
   void StartDiscovery(DiscoveryListener* listener,
                       DataUsage data_usage,
                       ConnectionsCallback callback) override;
   void StopDiscovery() override;
   void Connect(std::vector<uint8_t> endpoint_info,
                const std::string& endpoint_id,
-               base::Optional<std::vector<uint8_t>> bluetooth_mac_address,
+               absl::optional<std::vector<uint8_t>> bluetooth_mac_address,
                DataUsage data_usage,
                NearbyConnectionCallback callback) override;
   void Disconnect(const std::string& endpoint_id) override;
   void Send(const std::string& endpoint_id,
             PayloadPtr payload,
-            PayloadStatusListener* listener) override;
-  void RegisterPayloadStatusListener(int64_t payload_id,
-                                     PayloadStatusListener* listener) override;
+            base::WeakPtr<PayloadStatusListener> listener) override;
+  void RegisterPayloadStatusListener(
+      int64_t payload_id,
+      base::WeakPtr<PayloadStatusListener> listener) override;
   void RegisterPayloadPath(int64_t payload_id,
                            const base::FilePath& file_path,
                            ConnectionsCallback callback) override;
   Payload* GetIncomingPayload(int64_t payload_id) override;
   void Cancel(int64_t payload_id) override;
   void ClearIncomingPayloads() override;
-  base::Optional<std::vector<uint8_t>> GetRawAuthenticationToken(
+  absl::optional<std::vector<uint8_t>> GetRawAuthenticationToken(
       const std::string& endpoint_id) override;
   void UpgradeBandwidth(const std::string& endpoint_id) override;
 
@@ -131,7 +132,7 @@ class NearbyConnectionsManagerImpl
                      NearbyFileHandler::CreateFileResult result);
 
   // For metrics.
-  base::Optional<Medium> GetUpgradedMedium(
+  absl::optional<Medium> GetUpgradedMedium(
       const std::string& endpoint_id) const;
 
   chromeos::nearby::NearbyProcessManager* process_manager_;
@@ -153,8 +154,9 @@ class NearbyConnectionsManagerImpl
   // A map of endpoint_id to timers that timeout a connection request.
   base::flat_map<std::string, std::unique_ptr<base::OneShotTimer>>
       connect_timeout_timers_;
-  // A map of payload_id to PayloadStatusListener*.
-  base::flat_map<int64_t, PayloadStatusListener*> payload_status_listeners_;
+  // A map of payload_id to PayloadStatusListener weak pointer.
+  base::flat_map<int64_t, base::WeakPtr<PayloadStatusListener>>
+      payload_status_listeners_;
   // A map of payload_id to PayloadPtr.
   base::flat_map<int64_t, PayloadPtr> incoming_payloads_;
 

@@ -100,11 +100,10 @@ CastWebViewDefault::CastWebViewDefault(
       cast_web_contents_(web_contents_.get(), params.web_contents_params),
       window_(cast_content_window
                   ? std::move(cast_content_window)
-                  : web_service->CreateWindow(params.window_params)),
-      resize_window_when_navigation_starts_(true) {
+                  : web_service->CreateWindow(params.window_params)) {
   DCHECK(web_service_);
   DCHECK(window_);
-  content::WebContentsObserver::Observe(web_contents_.get());
+  window_->SetCastWebContents(&cast_web_contents_);
   web_contents_->SetDelegate(this);
 #if defined(USE_AURA)
   web_contents_->GetNativeView()->SetName(params.activity_id);
@@ -124,9 +123,6 @@ CastWebViewDefault::~CastWebViewDefault() {
       renderer_pool_ == RendererPool::OVERLAY) {
     web_service_->overlay_renderer_cache()->ReleaseRendererPrelauncher(
         prelaunch_url_);
-  }
-  for (Observer& observer : observer_list_) {
-    observer.OnPageDestroyed(this);
   }
 }
 
@@ -152,41 +148,6 @@ void CastWebViewDefault::CloseContents(content::WebContents* source) {
   // This will signal to the owner that |web_contents_| is no longer in use,
   // permitting the owner to tear down.
   cast_web_contents_.Stop(net::OK);
-}
-
-void CastWebViewDefault::ForceClose() {
-  shutdown_delay_ = base::TimeDelta();
-  cast_web_contents()->ClosePage();
-}
-
-void CastWebViewDefault::InitializeWindow(mojom::ZOrder z_order,
-                                          VisibilityPriority initial_priority) {
-  if (!window_)
-    return;
-  window_->CreateWindowForWebContents(&cast_web_contents_, z_order,
-                                      initial_priority);
-  web_contents_->Focus();
-}
-
-void CastWebViewDefault::GrantScreenAccess() {
-  if (!window_)
-    return;
-  window_->GrantScreenAccess();
-}
-
-void CastWebViewDefault::RevokeScreenAccess() {
-  resize_window_when_navigation_starts_ = false;
-  if (!window_)
-    return;
-  window_->RevokeScreenAccess();
-}
-
-void CastWebViewDefault::AddObserver(Observer* observer) {
-  observer_list_.AddObserver(observer);
-}
-
-void CastWebViewDefault::RemoveObserver(Observer* observer) {
-  observer_list_.RemoveObserver(observer);
 }
 
 content::WebContents* CastWebViewDefault::OpenURLFromTab(
@@ -224,15 +185,14 @@ bool CastWebViewDefault::CheckMediaAccessPermission(
 bool CastWebViewDefault::DidAddMessageToConsole(
     content::WebContents* source,
     blink::mojom::ConsoleMessageLevel log_level,
-    const base::string16& message,
+    const std::u16string& message,
     int32_t line_no,
-    const base::string16& source_id) {
+    const std::u16string& source_id) {
   if (!log_js_console_messages_)
     return true;
-  base::string16 single_line_message;
+  std::u16string single_line_message;
   // Mult-line message is not friendly to dumpstate redact.
-  base::ReplaceChars(message, base::ASCIIToUTF16("\n"),
-                     base::ASCIIToUTF16("\\n "), &single_line_message);
+  base::ReplaceChars(message, u"\n", u"\\n ", &single_line_message);
   logging::LogMessage("CONSOLE", line_no, ::logging::LOG_INFO).stream()
       << log_prefix_ << ": \"" << single_line_message
       << "\", source: " << source_id << " (" << line_no << ")";
@@ -314,23 +274,6 @@ bool CastWebViewDefault::ShouldAllowRunningInsecureContent(
       activity_id_, session_id_, sdk_version_,
       "Cast.Platform.AppRunningInsecureContent");
   return allowed_per_prefs;
-}
-
-void CastWebViewDefault::DidStartNavigation(
-    content::NavigationHandle* navigation_handle) {
-  if (!resize_window_when_navigation_starts_) {
-    return;
-  }
-  resize_window_when_navigation_starts_ = false;
-
-#if defined(USE_AURA)
-  // Resize window
-  gfx::Size display_size =
-      display::Screen::GetScreen()->GetPrimaryDisplay().size();
-  aura::Window* content_window = web_contents()->GetNativeView();
-  content_window->SetBounds(
-      gfx::Rect(display_size.width(), display_size.height()));
-#endif
 }
 
 }  // namespace chromecast

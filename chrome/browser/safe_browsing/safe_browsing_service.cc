@@ -27,10 +27,12 @@
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/safe_browsing/chrome_password_protection_service.h"
 #include "chrome/browser/safe_browsing/chrome_password_protection_service_factory.h"
 #include "chrome/browser/safe_browsing/safe_browsing_metrics_collector.h"
 #include "chrome/browser/safe_browsing/safe_browsing_metrics_collector_factory.h"
 #include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager.h"
+#include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager_factory.h"
 #include "chrome/browser/safe_browsing/services_delegate.h"
 #include "chrome/browser/safe_browsing/ui_manager.h"
 #include "chrome/common/chrome_paths.h"
@@ -39,15 +41,17 @@
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
 #include "components/safe_browsing/buildflags.h"
-#include "components/safe_browsing/content/web_ui/safe_browsing_ui.h"
-#include "components/safe_browsing/core/browser/safe_browsing_network_context.h"
+#include "components/safe_browsing/content/browser/client_side_phishing_model.h"
+#include "components/safe_browsing/content/browser/safe_browsing_network_context.h"
+#include "components/safe_browsing/content/browser/triggers/trigger_manager.h"
+#include "components/safe_browsing/content/browser/web_ui/safe_browsing_ui.h"
+#include "components/safe_browsing/content/common/file_type_policies.h"
+#include "components/safe_browsing/core/browser/db/database_manager.h"
+#include "components/safe_browsing/core/browser/ping_manager.h"
+#include "components/safe_browsing/core/browser/realtime/policy_engine.h"
+#include "components/safe_browsing/core/browser/referrer_chain_provider.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safebrowsing_constants.h"
-#include "components/safe_browsing/core/db/database_manager.h"
-#include "components/safe_browsing/core/features.h"
-#include "components/safe_browsing/core/file_type_policies.h"
-#include "components/safe_browsing/core/ping_manager.h"
-#include "components/safe_browsing/core/realtime/policy_engine.h"
-#include "components/safe_browsing/core/triggers/trigger_manager.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -60,7 +64,7 @@
 #endif
 
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
-#include "components/safe_browsing/content/password_protection/password_protection_service.h"
+#include "components/safe_browsing/content/browser/password_protection/password_protection_service.h"
 #endif
 
 #if BUILDFLAG(FULL_SAFE_BROWSING)
@@ -120,8 +124,6 @@ void SafeBrowsingService::Initialize() {
 
   ui_manager_ = CreateUIManager();
 
-  navigation_observer_manager_ = new SafeBrowsingNavigationObserverManager();
-
   services_delegate_->Initialize();
 
   // Needs to happen after |ui_manager_| is created.
@@ -146,7 +148,7 @@ void SafeBrowsingService::ShutDown() {
   // Remove Profile creation/destruction observers.
   if (g_browser_process->profile_manager())
     g_browser_process->profile_manager()->RemoveObserver(this);
-  observed_profiles_.RemoveAll();
+  observed_profiles_.RemoveAllObservations();
 
   // Delete the PrefChangeRegistrars, whose dtors also unregister |this| as an
   // observer of the preferences.
@@ -218,9 +220,11 @@ SafeBrowsingService::database_manager() const {
   return services_delegate_->database_manager();
 }
 
-scoped_refptr<SafeBrowsingNavigationObserverManager>
-SafeBrowsingService::navigation_observer_manager() {
-  return navigation_observer_manager_;
+ReferrerChainProvider*
+SafeBrowsingService::GetReferrerChainProviderFromBrowserContext(
+    content::BrowserContext* browser_context) {
+  return SafeBrowsingNavigationObserverManagerFactory::GetForBrowserContext(
+      browser_context);
 }
 
 PingManager* SafeBrowsingService::ping_manager() const {
@@ -398,7 +402,7 @@ void SafeBrowsingService::OnOffTheRecordProfileCreated(
 }
 
 void SafeBrowsingService::OnProfileWillBeDestroyed(Profile* profile) {
-  observed_profiles_.Remove(profile);
+  observed_profiles_.RemoveObservation(profile);
   services_delegate_->RemoveTelemetryService(profile);
   services_delegate_->RemoveSafeBrowsingNetworkContext(profile);
 
@@ -410,7 +414,7 @@ void SafeBrowsingService::OnProfileWillBeDestroyed(Profile* profile) {
 void SafeBrowsingService::CreateServicesForProfile(Profile* profile) {
   services_delegate_->CreateSafeBrowsingNetworkContext(profile);
   services_delegate_->CreateTelemetryService(profile);
-  observed_profiles_.Add(profile);
+  observed_profiles_.AddObservation(profile);
 }
 
 base::CallbackListSubscription SafeBrowsingService::RegisterStateCallback(
@@ -457,14 +461,18 @@ void SafeBrowsingService::SendSerializedDownloadReport(
 void SafeBrowsingService::CreateTriggerManager() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   trigger_manager_ = std::make_unique<TriggerManager>(
-      ui_manager_.get(), navigation_observer_manager_.get(),
-      g_browser_process->local_state());
+      ui_manager_.get(), g_browser_process->local_state());
 }
 
 network::mojom::NetworkContextParamsPtr
 SafeBrowsingService::CreateNetworkContextParams() {
   auto params = SystemNetworkContextManager::GetInstance()
                     ->CreateDefaultNetworkContextParams();
+  // |proxy_config_monitor_| should be deleted after shutdown, so don't
+  // re-create it.
+  if (shutdown_) {
+    return params;
+  }
   if (!proxy_config_monitor_) {
     proxy_config_monitor_ =
         std::make_unique<ProxyConfigMonitor>(g_browser_process->local_state());

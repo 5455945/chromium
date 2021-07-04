@@ -12,9 +12,9 @@
 #include "base/memory/ref_counted.h"
 #include "base/strings/string_util.h"
 #include "base/test/task_environment.h"
+#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
+#include "chrome/browser/ash/policy/core/device_policy_builder.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
-#include "chrome/browser/chromeos/login/users/fake_chrome_user_manager.h"
-#include "chrome/browser/chromeos/policy/device_policy_builder.h"
 #include "chromeos/dbus/session_manager/fake_session_manager_client.h"
 #include "components/ownership/mock_owner_key_util.h"
 #include "components/user_manager/scoped_user_manager.h"
@@ -23,9 +23,7 @@
 
 class TestingProfile;
 
-namespace chromeos {
-
-class DBusThreadManagerSetter;
+namespace ash {
 
 // Wraps the singleton device settings and initializes it to the point where it
 // reports OWNERSHIP_NONE for the ownership status.
@@ -79,8 +77,6 @@ class DeviceSettingsTestBase : public testing::Test {
   // with the global instance (DeviceSettingsService::Get()).
   std::unique_ptr<DeviceSettingsService> device_settings_service_;
 
-  std::unique_ptr<DBusThreadManagerSetter> dbus_setter_;
-
   std::unique_ptr<TestingProfile> profile_;
 
  private:
@@ -89,6 +85,13 @@ class DeviceSettingsTestBase : public testing::Test {
   DISALLOW_COPY_AND_ASSIGN(DeviceSettingsTestBase);
 };
 
+}  // namespace ash
+
+// TODO(https://crbug.com/1164001): remove when Chrome OS code migration is
+// done.
+namespace chromeos {
+using ::ash::DeviceSettingsTestBase;
+using ::ash::ScopedDeviceSettingsTestHelper;
 }  // namespace chromeos
 
 #endif  // CHROME_BROWSER_ASH_SETTINGS_DEVICE_SETTINGS_TEST_HELPER_H_

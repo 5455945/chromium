@@ -14,7 +14,6 @@
 #include "base/lazy_instance.h"
 #include "base/macros.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/stringprintf.h"
 #include "base/trace_event/trace_event.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -28,7 +27,6 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/common/extensions/api/identity.h"
 #include "chrome/common/url_constants.h"
-#include "components/signin/public/base/signin_pref_names.h"
 #include "extensions/browser/extension_function_dispatcher.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/common/extension.h"
@@ -67,12 +65,12 @@ void IdentityAPI::SetGaiaIdForExtension(const std::string& extension_id,
                                         std::make_unique<base::Value>(gaia_id));
 }
 
-base::Optional<std::string> IdentityAPI::GetGaiaIdForExtension(
+absl::optional<std::string> IdentityAPI::GetGaiaIdForExtension(
     const std::string& extension_id) {
   std::string gaia_id;
   if (!extension_prefs_->ReadPrefAsString(extension_id, kIdentityGaiaIdPref,
                                           &gaia_id)) {
-    return base::nullopt;
+    return absl::nullopt;
   }
   return gaia_id;
 }
@@ -92,7 +90,7 @@ void IdentityAPI::EraseStaleGaiaIdsForAllExtensions() {
   extensions::ExtensionIdList extensions;
   extension_prefs_->GetExtensions(&extensions);
   for (const ExtensionId& extension_id : extensions) {
-    base::Optional<std::string> gaia_id = GetGaiaIdForExtension(extension_id);
+    absl::optional<std::string> gaia_id = GetGaiaIdForExtension(extension_id);
     if (!gaia_id)
       continue;
     auto account_it = std::find_if(accounts.begin(), accounts.end(),
@@ -134,20 +132,8 @@ base::CallbackListSubscription IdentityAPI::RegisterOnShutdownCallback(
 }
 
 bool IdentityAPI::AreExtensionsRestrictedToPrimaryAccount() {
-  bool extensions_restricted_to_primary_account =
-      !AccountConsistencyModeManager::IsDiceEnabledForProfile(profile_) &&
-      !AccountConsistencyModeManager::IsMirrorEnabledForProfile(profile_);
-  if (extensions_restricted_to_primary_account) {
-    // TODO(crbug.com/1181236): Remove AreExtensionsRestrictedToPrimaryAccount
-    // as it always returns false when sign-in is allowed.
-    CHECK(!profile_->GetPrefs()->GetBoolean(prefs::kSigninAllowed))
-        << "This is temporary check to verify that "
-           "AreExtensionsRestrictedToPrimaryAccount() returns true iff sign-in "
-           "is not allowed. In this case, chrome.identity API returns errors "
-           "when fetching access tokens. Therefore method "
-           "AreExtensionsRestrictedToPrimaryAccount() can be removed.";
-  }
-  return extensions_restricted_to_primary_account;
+  return !AccountConsistencyModeManager::IsDiceEnabledForProfile(profile_) &&
+         !AccountConsistencyModeManager::IsMirrorEnabledForProfile(profile_);
 }
 
 IdentityAPI::IdentityAPI(Profile* profile,
@@ -190,7 +176,7 @@ void IdentityAPI::FireOnAccountSignInChanged(const std::string& gaia_id,
   api::identity::AccountInfo api_account_info;
   api_account_info.id = gaia_id;
 
-  std::unique_ptr<base::ListValue> args =
+  auto args =
       api::identity::OnSignInChanged::Create(api_account_info, is_signed_in);
   std::unique_ptr<Event> event(new Event(
       events::IDENTITY_ON_SIGN_IN_CHANGED,

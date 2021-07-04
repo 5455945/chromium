@@ -5,7 +5,6 @@
 import("//build/buildflag_header.gni")
 import("//build/config/chrome_build.gni")  # For branding_file_path.
 import("//build/config/chromeos/ui_mode.gni")
-import("//build/config/chromeos/ui_mode.gni")
 import("//build/util/process_version.gni")
 import("//chrome/browser/downgrade/buildflags.gni")
 import("//chrome/common/features.gni")
@@ -17,12 +16,9 @@ import("//media/media_options.gni")
 import("//mojo/public/tools/bindings/mojom.gni")
 import("//pdf/features.gni")
 import("//ppapi/buildflags/buildflags.gni")
+import("//printing/buildflags/buildflags.gni")
 import("//third_party/widevine/cdm/widevine.gni")
 import("//tools/grit/grit_rule.gni")
-
-if (enable_pdf) {
-  assert(enable_plugins, "PDF support requires plugins be enabled.")
-}
 
 grit("resources") {
   source = "common_resources.grd"
@@ -42,6 +38,7 @@ buildflag_header("buildflags") {
     "ENABLE_BACKGROUND_MODE=$enable_background_mode",
     "ENABLE_BACKGROUND_CONTENTS=$enable_background_contents",
     "ENABLE_BASIC_PRINT_DIALOG=$enable_basic_print_dialog",
+    "ENABLE_CHROME_NOTIFICATIONS=$enable_chrome_notifications",
     "ENABLE_CLICK_TO_CALL=$enable_click_to_call",
     "ENABLE_DOWNGRADE_PROCESSING=$enable_downgrade_processing",
     "ENABLE_HANGOUT_SERVICES_EXTENSION=$enable_hangout_services_extension",
@@ -99,12 +96,14 @@ source_set("ini_parser") {
 static_library("common") {
   sources = [
     "all_messages.h",
+    "child_process_host_flags.h",
     "child_process_logging.h",
     "chrome_content_client.cc",
     "chrome_content_client.h",
     "chrome_content_client_constants.cc",
     "chrome_descriptors.h",
     "chrome_isolated_world_ids.h",
+    "chrome_resource_request_blocked_reason.h",
     "chrome_result_codes.h",
     "common_message_generator.cc",
     "common_message_generator.h",
@@ -117,6 +116,8 @@ static_library("common") {
     "google_url_loader_throttle.h",
     "logging_chrome.cc",
     "logging_chrome.h",
+    "media/cdm_registration.cc",
+    "media/cdm_registration.h",
     "media/media_resource_provider.cc",
     "media/media_resource_provider.h",
     "media_galleries/metadata_types.h",
@@ -158,6 +159,7 @@ static_library("common") {
     "//base:base_static",
     "//base:i18n",
     "//base/util/values:values_util",
+    "//build:branding_buildflags",
     "//chrome:resources",
     "//chrome:strings",
     "//chrome/app/theme:theme_resources",
@@ -197,7 +199,7 @@ static_library("common") {
     "//components/policy/core/common",
     "//components/prefs",
     "//components/safe_browsing:buildflags",
-    "//components/safe_browsing/core/web_ui:constants",
+    "//components/safe_browsing/core/common",
     "//components/services/app_service/public/cpp:app_share_target",
     "//components/services/heap_profiling/public/cpp",
     "//components/strings",
@@ -237,15 +239,19 @@ static_library("common") {
   ]
 
   deps = [
-    "//build:branding_buildflags",
     "//build:chromeos_buildflags",
     "//components/crash/core/app",
     "//components/google/core/common",
+    "//components/live_caption:constants",
     "//components/metrics:call_stack_profile_builder",
     "//components/no_state_prefetch/common",
     "//components/no_state_prefetch/common:mojo_bindings",
     "//components/page_load_metrics/common:common",
   ]
+
+  if (enable_pdf) {
+    deps += [ "//components/pdf/common" ]
+  }
 
   if (enable_plugins) {
     public_deps += [ "//ppapi/shared_impl" ]
@@ -388,7 +394,7 @@ static_library("common") {
       }
       if (is_win) {
         sources += [
-          "chrome_utility_printing_messages.h",
+          "chrome_utility_printing_param_traits_macros.h",
           "service_process_util_win.cc",
         ]
 
@@ -403,7 +409,6 @@ static_library("common") {
       "media/chrome_media_drm_bridge_client.cc",
       "media/chrome_media_drm_bridge_client.h",
     ]
-    deps += [ "//components/embedder_support/android/common:url_constants" ]
   } else {
     # Non-Android.
     public_deps += [ "//chrome/common/importer" ]
@@ -461,10 +466,6 @@ static_library("common") {
   }
 
   if (enable_library_cdms) {
-    sources += [
-      "media/cdm_manifest.cc",
-      "media/cdm_manifest.h",
-    ]
     deps += [ "//media/cdm:cdm_paths" ]  # Needed by chrome_content_client.cc
 
     if (enable_widevine) {
@@ -534,12 +535,12 @@ static_library("non_code_constants") {
     ":buildflags",
     ":version_header",
     "//base",
-    "//build:branding_buildflags",
     "//build:chromeos_buildflags",
     "//ppapi/buildflags",
   ]
 
   public_deps = [
+    "//build:branding_buildflags",
     "//printing/buildflags",
     "//ui/base:buildflags",
   ]
@@ -589,6 +590,7 @@ static_library("constants") {
     ":non_code_constants",
     "//content/public/common:result_codes",
     "//rlz/buildflags",
+    "//third_party/widevine/cdm:buildflags",
   ]
 
   deps = [
@@ -702,6 +704,8 @@ mojom("mojo_bindings") {
   sources = [
     "cache_stats_recorder.mojom",
     "chrome_render_frame.mojom",
+    "draggable_regions.mojom",
+    "lite_video_service.mojom",
     "media/webrtc_logging.mojom",
     "metrics.mojom",
     "net/net_error_page_support.mojom",
@@ -720,8 +724,6 @@ mojom("mojo_bindings") {
 
   if (is_android) {
     sources += [ "sandbox_status_extension_android.mojom" ]
-  } else {
-    sources += [ "caption.mojom" ]
   }
 
   if (is_mac) {
@@ -788,4 +790,26 @@ mojom("available_offline_content_mojom") {
 mojom("offline_page_auto_fetcher_mojom") {
   sources = [ "offline_page_auto_fetcher.mojom" ]
   public_deps = [ "//url/mojom:url_mojom_gurl" ]
+}
+
+if (enable_basic_printing && is_win) {
+  mojom("cloud_print_utility_mojom") {
+    sources = [ "cloud_print_utility.mojom" ]
+    cpp_typemaps = [
+      {
+        types = [
+          {
+            mojom = "chrome.mojom.PrinterCapsAndDefaults"
+            cpp = "::printing::PrinterCapsAndDefaults"
+          },
+          {
+            mojom = "chrome.mojom.PrinterSemanticCapsAndDefaults"
+            cpp = "::printing::PrinterSemanticCapsAndDefaults"
+          },
+        ]
+        traits_headers = [ "chrome_utility_printing_param_traits_macros.h" ]
+        traits_public_deps = [ ":common" ]
+      },
+    ]
+  }
 }

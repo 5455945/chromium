@@ -62,7 +62,9 @@ IN_PROC_BROWSER_TEST_F(NativeBindingsApiTest, SimpleEndToEndTest) {
 // A simplistic app test for app-specific APIs.
 IN_PROC_BROWSER_TEST_F(NativeBindingsApiTest, SimpleAppTest) {
   ExtensionTestMessageListener ready_listener("ready", true);
-  ASSERT_TRUE(RunPlatformAppTest("native_bindings/platform_app")) << message_;
+  ASSERT_TRUE(RunExtensionTest("native_bindings/platform_app",
+                               {.launch_as_platform_app = true}))
+      << message_;
   ASSERT_TRUE(ready_listener.WaitUntilSatisfied());
 
   // On reply, the extension will try to close the app window and send a
@@ -136,9 +138,11 @@ IN_PROC_BROWSER_TEST_F(NativeBindingsApiTest, FileSystemApiGetDisplayPath) {
   FileSystemChooseEntryFunction::RegisterTempExternalFileSystemForTest(
       "test_root", test_dir);
   base::FilePath test_file = test_dir.AppendASCII("text.txt");
-  FileSystemChooseEntryFunction::SkipPickerAndAlwaysSelectPathForTest(
-      &test_file);
-  ASSERT_TRUE(RunPlatformAppTest("native_bindings/instance_of")) << message_;
+  FileSystemChooseEntryFunction::SkipPickerAndAlwaysSelectPathForTest picker(
+      test_file);
+  ASSERT_TRUE(RunExtensionTest("native_bindings/instance_of",
+                               {.launch_as_platform_app = true}))
+      << message_;
 }
 
 // Tests the webRequest API, which requires IO thread requests and custom

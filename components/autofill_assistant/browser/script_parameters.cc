@@ -13,12 +13,12 @@ namespace {
 // Converts a value to a target type. Returns nullopt for invalid or
 // non-existent values. Expects bool parameters as 'false' and 'true'.
 template <typename T>
-base::Optional<T> GetTypedParameter(
+absl::optional<T> GetTypedParameter(
     const std::map<std::string, std::string> parameters,
     const std::string& key) {
   auto iter = parameters.find(key);
   if (iter == parameters.end())
-    return base::nullopt;
+    return absl::nullopt;
 
   std::stringstream ss;
   ss << iter->second;
@@ -26,7 +26,7 @@ base::Optional<T> GetTypedParameter(
   if (!(ss >> std::boolalpha >> out)) {
     LOG(ERROR) << "Error trying to convert parameter '" << key
                << "' with value '" << iter->second << "' to target type";
-    return base::nullopt;
+    return absl::nullopt;
   }
   return out;
 }
@@ -62,13 +62,29 @@ const char kRequestTriggerScriptParameterName[] = "REQUEST_TRIGGER_SCRIPT";
 const char kStartImmediatelyParameterName[] = "START_IMMEDIATELY";
 
 // Mandatory parameter that MUST be present and set to true in all intents.
+// Note: this parameter is automatically removed from |ToProto|.
 const char kEnabledParameterName[] = "ENABLED";
+
+// The parameter key for the user's email, as indicated by the caller.
+const char kCallerEmailParameterName[] = "USER_EMAIL";
+
+// The original deeplink as indicated by the caller. Use this parameter instead
+// of the initial URL when available to avoid issues where the initial URL
+// points to a redirect rather than the actual deeplink.
+const char kOriginalDeeplinkParameterName[] = "ORIGINAL_DEEPLINK";
+
+// Special parameter for declaring a user to be in a trigger script experiment.
+const char kTriggerScriptExperimentParameterName[] =
+    "TRIGGER_SCRIPT_EXPERIMENT";
+
+// The intent parameter.
+const char kIntent[] = "INTENT";
 
 // The list of script parameters that trigger scripts are allowed to send to
 // the backend.
-constexpr std::array<const char*, 5> kAllowlistedTriggerScriptParameters = {
-    "DEBUG_BUNDLE_ID", "DEBUG_BUNDLE_VERSION", "DEBUG_SOCKET_ID",
-    "FALLBACK_BUNDLE_ID", "FALLBACK_BUNDLE_VERSION"};
+constexpr std::array<const char*, 6> kAllowlistedTriggerScriptParameters = {
+    "DEBUG_BUNDLE_ID",    "DEBUG_BUNDLE_VERSION",    "DEBUG_SOCKET_ID",
+    "FALLBACK_BUNDLE_ID", "FALLBACK_BUNDLE_VERSION", kIntent};
 
 // Parameters to specify details before the first backend roundtrip.
 const char kDetailsShowInitialParameterName[] = "DETAILS_SHOW_INITIAL";
@@ -130,6 +146,9 @@ ScriptParameters::ToProto(bool only_trigger_script_allowlisted) const {
 
   // TODO(arbesser): Send properly typed parameters to backend.
   for (const auto& parameter : parameters_) {
+    if (parameter.first == kEnabledParameterName) {
+      continue;
+    }
     auto* out_param = out.Add();
     out_param->set_name(parameter.first);
     out_param->set_value(parameter.second);
@@ -137,85 +156,102 @@ ScriptParameters::ToProto(bool only_trigger_script_allowlisted) const {
   return out;
 }
 
-base::Optional<std::string> ScriptParameters::GetParameter(
+absl::optional<std::string> ScriptParameters::GetParameter(
     const std::string& name) const {
   auto iter = parameters_.find(name);
   if (iter == parameters_.end())
-    return base::nullopt;
+    return absl::nullopt;
 
   return iter->second;
 }
 
-base::Optional<std::string> ScriptParameters::GetOverlayColors() const {
+absl::optional<std::string> ScriptParameters::GetOverlayColors() const {
   return GetParameter(kOverlayColorParameterName);
 }
 
-base::Optional<std::string> ScriptParameters::GetPasswordChangeUsername()
+absl::optional<std::string> ScriptParameters::GetPasswordChangeUsername()
     const {
   return GetParameter(kPasswordChangeUsernameParameterName);
 }
 
-base::Optional<std::string>
+absl::optional<std::string>
 ScriptParameters::GetBase64TriggerScriptsResponseProto() const {
   return GetParameter(kBase64TriggerScriptsResponseProtoParameterName);
 }
 
-base::Optional<bool> ScriptParameters::GetRequestsTriggerScript() const {
+absl::optional<bool> ScriptParameters::GetRequestsTriggerScript() const {
   return GetTypedParameter<bool>(parameters_,
                                  kRequestTriggerScriptParameterName);
 }
 
-base::Optional<bool> ScriptParameters::GetStartImmediately() const {
+absl::optional<bool> ScriptParameters::GetStartImmediately() const {
   return GetTypedParameter<bool>(parameters_, kStartImmediatelyParameterName);
 }
 
-base::Optional<bool> ScriptParameters::GetEnabled() const {
+absl::optional<bool> ScriptParameters::GetEnabled() const {
   return GetTypedParameter<bool>(parameters_, kEnabledParameterName);
 }
 
-base::Optional<bool> ScriptParameters::GetDetailsShowInitial() const {
+absl::optional<std::string> ScriptParameters::GetOriginalDeeplink() const {
+  return GetParameter(kOriginalDeeplinkParameterName);
+}
+
+absl::optional<bool> ScriptParameters::GetTriggerScriptExperiment() const {
+  return GetTypedParameter<bool>(parameters_,
+                                 kTriggerScriptExperimentParameterName);
+}
+
+absl::optional<std::string> ScriptParameters::GetIntent() const {
+  return GetParameter(kIntent);
+}
+
+absl::optional<std::string> ScriptParameters::GetCallerEmail() const {
+  return GetParameter(kCallerEmailParameterName);
+}
+
+absl::optional<bool> ScriptParameters::GetDetailsShowInitial() const {
   return GetTypedParameter<bool>(parameters_, kDetailsShowInitialParameterName);
 }
 
-base::Optional<std::string> ScriptParameters::GetDetailsTitle() const {
+absl::optional<std::string> ScriptParameters::GetDetailsTitle() const {
   return GetParameter(kDetailsTitleParameterName);
 }
 
-base::Optional<std::string> ScriptParameters::GetDetailsDescriptionLine1()
+absl::optional<std::string> ScriptParameters::GetDetailsDescriptionLine1()
     const {
   return GetParameter(kDetailsDescriptionLine1ParameterName);
 }
 
-base::Optional<std::string> ScriptParameters::GetDetailsDescriptionLine2()
+absl::optional<std::string> ScriptParameters::GetDetailsDescriptionLine2()
     const {
   return GetParameter(kDetailsDescriptionLine2ParameterName);
 }
 
-base::Optional<std::string> ScriptParameters::GetDetailsDescriptionLine3()
+absl::optional<std::string> ScriptParameters::GetDetailsDescriptionLine3()
     const {
   return GetParameter(kDetailsDescriptionLine3ParameterName);
 }
 
-base::Optional<std::string> ScriptParameters::GetDetailsImageUrl() const {
+absl::optional<std::string> ScriptParameters::GetDetailsImageUrl() const {
   return GetParameter(kDetailsImageUrl);
 }
 
-base::Optional<std::string> ScriptParameters::GetDetailsImageAccessibilityHint()
+absl::optional<std::string> ScriptParameters::GetDetailsImageAccessibilityHint()
     const {
   return GetParameter(kDetailsImageAccessibilityHint);
 }
 
-base::Optional<std::string> ScriptParameters::GetDetailsImageClickthroughUrl()
+absl::optional<std::string> ScriptParameters::GetDetailsImageClickthroughUrl()
     const {
   return GetParameter(kDetailsImageClickthroughUrl);
 }
 
-base::Optional<std::string> ScriptParameters::GetDetailsTotalPriceLabel()
+absl::optional<std::string> ScriptParameters::GetDetailsTotalPriceLabel()
     const {
   return GetParameter(kDetailsTotalPriceLabel);
 }
 
-base::Optional<std::string> ScriptParameters::GetDetailsTotalPrice() const {
+absl::optional<std::string> ScriptParameters::GetDetailsTotalPrice() const {
   return GetParameter(kDetailsTotalPrice);
 }
 

@@ -63,14 +63,14 @@
 #include "components/safe_browsing/content/browser/threat_details.h"
 #include "components/safe_browsing/content/common/safe_browsing.mojom.h"
 #include "components/safe_browsing/content/renderer/threat_dom_details.h"
+#include "components/safe_browsing/core/browser/db/database_manager.h"
+#include "components/safe_browsing/core/browser/db/fake_database_manager.h"
+#include "components/safe_browsing/core/browser/db/util.h"
+#include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
+#include "components/safe_browsing/core/browser/verdict_cache_manager.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
-#include "components/safe_browsing/core/db/database_manager.h"
-#include "components/safe_browsing/core/db/fake_database_manager.h"
-#include "components/safe_browsing/core/db/util.h"
-#include "components/safe_browsing/core/db/v4_protocol_manager_util.h"
-#include "components/safe_browsing/core/features.h"
-#include "components/safe_browsing/core/verdict_cache_manager.h"
-#include "components/safe_browsing/core/web_ui/constants.h"
+#include "components/safe_browsing/core/common/web_ui_constants.h"
 #include "components/security_interstitials/content/security_interstitial_controller_client.h"
 #include "components/security_interstitials/content/security_interstitial_tab_helper.h"
 #include "components/security_interstitials/content/ssl_blocking_page.h"
@@ -95,6 +95,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/prerender_test_util.h"
 #include "content/public/test/render_view_test.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
@@ -140,6 +141,8 @@ const char kCrossOriginMaliciousIframeHost[] = "malware.test";
 const char kMaliciousIframe[] = "/safe_browsing/malware_iframe.html";
 const char kUnrelatedUrl[] = "https://www.google.com";
 const char kEnhancedProtectionUrl[] = "chrome://settings/security?q=enhanced";
+const char kMaliciousJsPage[] = "/safe_browsing/malware_js.html";
+const char kMaliciousJs[] = "/safe_browsing/script.js";
 
 }  // namespace
 
@@ -224,10 +227,10 @@ bool Click(Browser* browser, const std::string& node_id) {
   // We don't use ExecuteScriptAndGetValue for this one, since clicking
   // the button/link may navigate away before the injected javascript can
   // reply, hanging the test.
-  rfh->ExecuteJavaScriptForTests(
-      base::ASCIIToUTF16("document.getElementById('" + node_id +
-                         "').click();\n"),
-      base::NullCallback());
+  rfh->ExecuteJavaScriptForTests(u"document.getElementById('" +
+                                     base::ASCIIToUTF16(node_id) +
+                                     u"').click();\n",
+                                 base::NullCallback());
   return true;
 }
 
@@ -421,7 +424,7 @@ class TestSafeBrowsingBlockingPageFactory
         IsEnhancedProtectionEnabled(*prefs), is_proceed_anyway_disabled,
         true,  // should_open_links_in_new_tab
         always_show_back_to_safety_,
-        IsEnhancedProtectionMessageInInterstitialsEnabled(),
+        /*is_enhanced_protection_message_enabled=*/true,
         IsSafeBrowsingPolicyManaged(*prefs),
         "cpn_safe_browsing" /* help_center_article_link */);
     return new TestSafeBrowsingBlockingPage(
@@ -454,7 +457,9 @@ class SafeBrowsingBlockingPageBrowserTest
     // Test UI manager and test database manager should be set before
     // the browser is started but after threads are created.
     factory_.SetTestUIManager(new FakeSafeBrowsingUIManager());
-    factory_.SetTestDatabaseManager(new FakeSafeBrowsingDatabaseManager());
+    factory_.SetTestDatabaseManager(new FakeSafeBrowsingDatabaseManager(
+        content::GetUIThreadTaskRunner({}),
+        content::GetIOThreadTaskRunner({})));
     SafeBrowsingService::RegisterFactory(&factory_);
     SafeBrowsingBlockingPage::RegisterFactory(&blocking_page_factory_);
     ThreatDetails::RegisterFactory(&details_factory_);
@@ -1669,6 +1674,29 @@ IN_PROC_BROWSER_TEST_P(SafeBrowsingBlockingPageBrowserTest,
   EXPECT_FALSE(IsShowingInterstitial(contents));
 }
 
+// Test that no safe browsing interstitial will be shown, if the subresource URL
+// matches enterprise safe browsing allowlist domains. Regression test for
+// https://crbug.com/1179276.
+IN_PROC_BROWSER_TEST_P(SafeBrowsingBlockingPageBrowserTest,
+                       VerifyEnterpriseAllowlistSubresource) {
+  GURL url = embedded_test_server()->GetURL(kMaliciousJsPage);
+  GURL js_url = embedded_test_server()->GetURL(kMaliciousJs);
+  // Add test server domain into the enterprise allowlist.
+  base::ListValue allowlist;
+  allowlist.AppendString(url.host());
+  browser()->profile()->GetPrefs()->Set(prefs::kSafeBrowsingAllowlistDomains,
+                                        allowlist);
+
+  SetURLThreatType(js_url, testing::get<0>(GetParam()));
+  // Open a new tab to rebind the allowlist to the renderer.
+  chrome::NewTab(browser());
+  ui_test_utils::NavigateToURL(browser(), url);
+  base::RunLoop().RunUntilIdle();
+  WebContents* contents = browser()->tab_strip_model()->GetActiveWebContents();
+  EXPECT_TRUE(content::WaitForRenderFrameReady(contents->GetMainFrame()));
+  EXPECT_FALSE(IsShowingInterstitial(contents));
+}
+
 INSTANTIATE_TEST_SUITE_P(
     SafeBrowsingBlockingPageBrowserTestWithThreatTypeAndIsolationSetting,
     SafeBrowsingBlockingPageBrowserTest,
@@ -1781,7 +1809,9 @@ class SafeBrowsingBlockingPageDelayedWarningBrowserTest
     // Test UI manager and test database manager should be set before
     // the browser is started but after threads are created.
     factory_.SetTestUIManager(new FakeSafeBrowsingUIManager());
-    factory_.SetTestDatabaseManager(new FakeSafeBrowsingDatabaseManager());
+    factory_.SetTestDatabaseManager(new FakeSafeBrowsingDatabaseManager(
+        content::GetUIThreadTaskRunner({}),
+        content::GetIOThreadTaskRunner({})));
     SafeBrowsingService::RegisterFactory(&factory_);
     SafeBrowsingBlockingPage::RegisterFactory(&blocking_page_factory_);
     ThreatDetails::RegisterFactory(&details_factory_);
@@ -2661,7 +2691,7 @@ IN_PROC_BROWSER_TEST_P(
   ASSERT_TRUE(page_info);
   EXPECT_EQ(page_info->GetWindowTitle(),
             l10n_util::GetStringFUTF16(IDS_PAGE_INFO_SAFETY_TIP_LOOKALIKE_TITLE,
-                                       base::ASCIIToUTF16("google.com")));
+                                       u"google.com"));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -2744,9 +2774,10 @@ INSTANTIATE_TEST_SUITE_P(
 // by Safe Browsing, the embedder is also treated as dangerous, and the
 // interstitial isn't delayed. This is similar to
 // PortalBrowserTest.EmbedderOfDangerousPortalConsideredDangerous.
+// TODO(crbug.com/1222099): Flaky.
 IN_PROC_BROWSER_TEST_P(
     SafeBrowsingBlockingPageDelayedWarningWithPortalBrowserTest,
-    Portal_WarningNotDelayed) {
+    DISABLED_Portal_WarningNotDelayed) {
   GURL main_url(embedded_test_server()->GetURL("a.com", "/title1.html"));
   GURL dangerous_url(
       embedded_test_server()->GetURL("evil.com", "/title2.html"));
@@ -2774,8 +2805,6 @@ class SafeBrowsingBlockingPageEnhancedProtectionMessageTest
   SafeBrowsingBlockingPageEnhancedProtectionMessageTest() = default;
 
   void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(
-        safe_browsing::kEnhancedProtectionMessageInInterstitials);
     InProcessBrowserTest::SetUp();
   }
 
@@ -2790,7 +2819,9 @@ class SafeBrowsingBlockingPageEnhancedProtectionMessageTest
     // Test UI manager and test database manager should be set before
     // the browser is started but after threads are created.
     factory_.SetTestUIManager(new FakeSafeBrowsingUIManager());
-    factory_.SetTestDatabaseManager(new FakeSafeBrowsingDatabaseManager());
+    factory_.SetTestDatabaseManager(new FakeSafeBrowsingDatabaseManager(
+        content::GetUIThreadTaskRunner({}),
+        content::GetIOThreadTaskRunner({})));
     SafeBrowsingService::RegisterFactory(&factory_);
     SafeBrowsingBlockingPage::RegisterFactory(&blocking_page_factory_);
     ThreatDetails::RegisterFactory(&details_factory_);
@@ -2931,7 +2962,9 @@ class SafeBrowsingBlockingPageRealTimeUrlCheckTest
     // Test UI manager and test database manager should be set before
     // the browser is started but after threads are created.
     factory_.SetTestUIManager(new FakeSafeBrowsingUIManager());
-    factory_.SetTestDatabaseManager(new FakeSafeBrowsingDatabaseManager());
+    factory_.SetTestDatabaseManager(new FakeSafeBrowsingDatabaseManager(
+        content::GetUIThreadTaskRunner({}),
+        content::GetIOThreadTaskRunner({})));
     SafeBrowsingService::RegisterFactory(&factory_);
     SafeBrowsingBlockingPage::RegisterFactory(&blocking_page_factory_);
   }
@@ -2943,7 +2976,7 @@ class SafeBrowsingBlockingPageRealTimeUrlCheckTest
         "mark_as_real_time_phishing",
         embedded_test_server()->GetURL("/empty.html").spec());
     safe_browsing::VerdictCacheManagerFactory::GetForProfile(profile)
-        ->CacheArtificialVerdict();
+        ->CacheArtificialRealTimeUrlVerdict();
   }
 
  private:
@@ -2995,6 +3028,103 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingBlockingPageRealTimeUrlCheckTest,
   ui_test_utils::NavigateToURL(browser(), url);
   ASSERT_FALSE(IsShowingInterstitial(
       browser()->tab_strip_model()->GetActiveWebContents()));
+}
+
+class SafeBrowsingPrerenderBrowserTest
+    : public SafeBrowsingBlockingPageBrowserTest {
+ public:
+  SafeBrowsingPrerenderBrowserTest()
+      : prerender_helper_(base::BindRepeating(
+            &SafeBrowsingPrerenderBrowserTest::GetWebContents,
+            base::Unretained(this))) {}
+  ~SafeBrowsingPrerenderBrowserTest() override = default;
+  SafeBrowsingPrerenderBrowserTest(const SafeBrowsingPrerenderBrowserTest&) =
+      delete;
+  SafeBrowsingPrerenderBrowserTest& operator=(
+      const SafeBrowsingPrerenderBrowserTest&) = delete;
+
+  void SetUpOnMainThread() override {
+    prerender_helper_.SetUpOnMainThread(embedded_test_server());
+    SafeBrowsingBlockingPageBrowserTest::SetUpOnMainThread();
+  }
+
+  content::test::PrerenderTestHelper& prerender_helper() {
+    return prerender_helper_;
+  }
+
+  content::WebContents* GetWebContents() {
+    return browser()->tab_strip_model()->GetActiveWebContents();
+  }
+
+ private:
+  content::test::PrerenderTestHelper prerender_helper_;
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    SafeBrowsingPrerenderBrowserTest,
+    // We simulate a SB_THREAT_TYPE_URL_CLIENT_SIDE_MALWARE to trigger DOM
+    // detail collection.
+    testing::Combine(testing::Values(SB_THREAT_TYPE_URL_CLIENT_SIDE_MALWARE),
+                     testing::Bool()));  // If isolate all sites for testing.
+
+// Test that the prerendering doesn't affect on the primary's threat report.
+IN_PROC_BROWSER_TEST_P(SafeBrowsingPrerenderBrowserTest,
+                       DontContainPrerenderingInfoInThreatReport) {
+  SetExtendedReportingPrefForTests(browser()->profile()->GetPrefs(), true);
+  const bool expect_threat_details =
+      SafeBrowsingBlockingPage::ShouldReportThreatDetails(
+          testing::get<0>(GetParam()));
+
+  auto threat_report_sent_runner = std::make_unique<base::RunLoop>();
+  if (expect_threat_details)
+    SetReportSentCallback(threat_report_sent_runner->QuitClosure());
+
+  // Navigate to a safe page which contains multiple potential DOM details
+  // on the primary page. (Despite the name, kMaliciousPage is not the page
+  // flagged as bad in this test.)
+  GURL primary_url = embedded_test_server()->GetURL(kMaliciousPage);
+  ui_test_utils::NavigateToURL(browser(), primary_url);
+  EXPECT_EQ(nullptr, details_factory_.get_details());
+
+  // Navigate to a different page on the prerendering page.
+  GURL prerender_url = embedded_test_server()->GetURL("/title1.html");
+  int host_id = prerender_helper().AddPrerender(prerender_url);
+  content::RenderFrameHost* prerender_render_frame_host =
+      prerender_helper().GetPrerenderedMainFrameHost(host_id);
+  EXPECT_NE(prerender_render_frame_host, nullptr);
+  EXPECT_EQ(prerender_url, prerender_render_frame_host->GetLastCommittedURL());
+
+  // Start navigation to bad page (kEmptyPage), which will be blocked before it
+  // is committed.
+  SetupWarningAndNavigate(browser());
+
+  ThreatDetails* threat_details = details_factory_.get_details();
+  EXPECT_EQ(expect_threat_details, threat_details != nullptr);
+
+  // Proceed through the warning.
+  EXPECT_TRUE(ClickAndWaitForDetach("proceed-link"));
+  AssertNoInterstitial(true);  // Assert the interstitial is gone
+
+  EXPECT_TRUE(IsExtendedReportingEnabled(*browser()->profile()->GetPrefs()));
+  EXPECT_EQ(primary_url,
+            browser()->tab_strip_model()->GetActiveWebContents()->GetURL());
+
+  if (expect_threat_details) {
+    threat_report_sent_runner->Run();
+    std::string serialized = GetReportSent();
+    ClientSafeBrowsingReportRequest report;
+    ASSERT_TRUE(report.ParseFromString(serialized));
+    // Verify the report is complete.
+    EXPECT_TRUE(report.complete());
+
+    // The threat report should not contain the prerender information.
+    EXPECT_NE(prerender_url.spec(), report.page_url());
+    EXPECT_NE(prerender_url.spec(), report.url());
+    ASSERT_EQ(3, report.resources_size());
+    for (const auto& resource : report.resources())
+      EXPECT_NE(prerender_url.spec(), resource.url());
+  }
 }
 
 }  // namespace safe_browsing

@@ -71,8 +71,8 @@ FakeContentLayerClient::PaintContentsToDisplayList() {
     display_list->push<DrawImageOp>(
         it->image, static_cast<float>(it->point.x()),
         static_cast<float>(it->point.y()),
-        SkSamplingOptions(it->flags.getFilterQuality(),
-                          SkSamplingOptions::kMedium_asMipmapLinear),
+        PaintFlags::FilterQualityToSkSamplingOptions(
+            it->flags.getFilterQuality()),
         &it->flags);
     display_list->push<RestoreOp>();
     display_list->EndPaintOfUnpaired(PaintableRegion());
@@ -120,7 +120,7 @@ FakeContentLayerClient::PaintContentsToDisplayList() {
   if (has_draw_text_op_) {
     display_list->StartPaint();
     display_list->push<DrawTextBlobOp>(
-        SkTextBlob::MakeFromString("any", SkFont()), 0, 0, PaintFlags());
+        SkTextBlob::MakeFromString("any", SkFont()), 0.0f, 0.0f, PaintFlags());
     display_list->EndPaintOfUnpaired(PaintableRegion());
   }
 

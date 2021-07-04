@@ -32,36 +32,13 @@
 <h1>Web App Internals</h1>
 
 <div class="section">
-  BMO enabled: <b>[[isBmoEnabled_]]</b>
-  <template is="dom-if" if="[[!isBmoEnabled_]]">
-    <p>
-      Web apps are using the extension system via bookmark apps, see
-      <a href="chrome://extensions-internals">
-       chrome://extensions-internals
-      </a>
-      for bookmark app details.
-    </p>
-    <p>
-      Enable BMO via
-      <a href="chrome://flags/#enable-desktop-pwas-without-extensions">
-        chrome://flags/#enable-desktop-pwas-without-extensions.
-      </a>
-    </p>
-  </template>
+  <p>Save JSON: <button id="saveButton">Save file</button></p>
+  <p>Load JSON: <input type="file" id="loadButton"></p>
 </div>
 
 <div class="section">
   <h2>Page Index:</h2>
   <h3><a href="#installed">Installed Web Apps</a></h3>
-  <template is="dom-repeat" items="[[webAppList_]]">
-    <div>
-      <a href="#[[item.id]]">
-        <img src="chrome://app-icon/[[item.id]]/32">
-        [[item.name]]
-      </a>
-    </div>
-  </template>
-
   <h3><a href="#preinstalled">Preinstalled Web Apps</a></h3>
   <template is="dom-if" if="[[preinstalledWebAppDebugInfo_]]">
     <div><a href="#preinstalled-errors">Parse Errors</a></div>
@@ -72,10 +49,19 @@
   </template>
 
   <h3><a href="#external-prefs">Externally Installed Web App Prefs</a></h3>
+  <h3><a href="#icon-error-log">Icon Error Log</a></h3>
 </div>
 
 <div class="section">
   <h2 id="installed">Installed Web Apps</h2>
+  <template is="dom-repeat" items="[[webAppList_]]">
+    <div>
+      <a href="#[[item.id]]">
+        <img src="chrome://app-icon/[[item.id]]/32" width="32" height="32">
+        [[item.name]]
+      </a>
+    </div>
+  </template>
   <template is="dom-repeat" items="[[webAppList_]]">
     <div class="section web-app" id="[[item.id]]">
       <h2>[[item.name]]</h2>
@@ -90,13 +76,17 @@
   <template is="dom-if" if="[[!preinstalledWebAppDebugInfo_]]">
     <p>
       No debugging info available! Please enable
-      <a href="chrome://flags/#record-web-app-debug-info">chrome://flags/#record-web-app-debug-info</a>.
+      <a href="chrome://flags/#record-web-app-debug-info">
+        chrome://flags/#record-web-app-debug-info
+      </a>.
     </p>
   </template>
 
   <template is="dom-if" if="[[preinstalledWebAppDebugInfo_]]">
     <p>
-      <a href="chrome://flags/#record-web-app-debug-info">chrome://flags/#record-web-app-debug-info</a>
+      <a href="chrome://flags/#record-web-app-debug-info">
+        chrome://flags/#record-web-app-debug-info
+      </a>
       flag is enabled, debugging info is being captured.
     </p>
 
@@ -160,4 +150,33 @@
 <div class="section">
   <h2 id="external-prefs">Externally Installed Web App Prefs</h2>
   <pre>[[externallyInstalledWebAppPrefs_]]</pre>
+</div>
+
+<div class="section">
+  <h2 id="icon-error-log">Icon Error Log</h2>
+  <template is="dom-if" if="[[!iconErrorLog_]]">
+    <p>
+      Icon error log unavailable! Please enable
+      <a href="chrome://flags/#record-web-app-debug-info">
+        chrome://flags/#record-web-app-debug-info
+      </a>.
+    </p>
+  </template>
+
+  <template is="dom-if" if="[[iconErrorLog_]]">
+    <p>
+      <a href="chrome://flags/#record-web-app-debug-info">
+        chrome://flags/#record-web-app-debug-info
+      </a>
+      flag is enabled, icon error log is being captured.
+    </p>
+  </template>
+
+  <template is="dom-if" if="[[iconErrorLog_]]">
+    <ul>
+      <template is="dom-repeat" items="[[iconErrorLog_]]">
+        <li>[[item]]</li>
+      </template>
+    </ul>
+  </template>
 </div>

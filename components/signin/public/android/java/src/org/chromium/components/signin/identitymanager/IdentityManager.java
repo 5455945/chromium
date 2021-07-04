@@ -17,6 +17,7 @@ import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.base.CoreAccountId;
 import org.chromium.components.signin.base.CoreAccountInfo;
 
+import java.util.List;
 /**
  * IdentityManager provides access to native IdentityManager's public API to java components.
  */
@@ -53,7 +54,7 @@ public class IdentityManager {
             extends ProfileOAuth2TokenServiceDelegate.GetAccessTokenCallback {}
 
     private long mNativeIdentityManager;
-    private ProfileOAuth2TokenServiceDelegate mProfileOAuth2TokenServiceDelegate;
+    private final ProfileOAuth2TokenServiceDelegate mProfileOAuth2TokenServiceDelegate;
 
     private final ObserverList<Observer> mObservers = new ObserverList<>();
 
@@ -61,15 +62,15 @@ public class IdentityManager {
      * Called by native to create an instance of IdentityManager.
      */
     @CalledByNative
-    private static IdentityManager create(long nativeIdentityManager,
+    @VisibleForTesting
+    public static IdentityManager create(long nativeIdentityManager,
             ProfileOAuth2TokenServiceDelegate profileOAuth2TokenServiceDelegate) {
-        assert nativeIdentityManager != 0;
         return new IdentityManager(nativeIdentityManager, profileOAuth2TokenServiceDelegate);
     }
 
-    @VisibleForTesting
-    public IdentityManager(long nativeIdentityManager,
+    private IdentityManager(long nativeIdentityManager,
             ProfileOAuth2TokenServiceDelegate profileOAuth2TokenServiceDelegate) {
+        assert nativeIdentityManager != 0;
         mNativeIdentityManager = nativeIdentityManager;
         mProfileOAuth2TokenServiceDelegate = profileOAuth2TokenServiceDelegate;
     }
@@ -158,24 +159,20 @@ public class IdentityManager {
      * Looks up and returns information for account with given |email|. If the account
      * cannot be found, return a null value.
      */
-    public @Nullable AccountInfo findExtendedAccountInfoForAccountWithRefreshTokenByEmailAddress(
-            String email) {
-        return IdentityManagerJni.get()
-                .findExtendedAccountInfoForAccountWithRefreshTokenByEmailAddress(
-                        mNativeIdentityManager, email);
+    public @Nullable AccountInfo findExtendedAccountInfoByEmailAddress(String email) {
+        return IdentityManagerJni.get().findExtendedAccountInfoByEmailAddress(
+                mNativeIdentityManager, email);
     }
 
     /**
      * Forces refreshing extended {@link AccountInfo} with image for the given
-     * {@link CoreAccountId}.
-     *
-     * This method should only be invoked by {@link ProfileDownloader} to fetch account information
-     * while users are signed out.
+     * list of {@link CoreAccountInfo}.
      */
-    public void forceRefreshOfExtendedAccountInfo(CoreAccountId coreAccountId) {
-        assert coreAccountId != null : "coreAccountId shouldn't be null!";
-        IdentityManagerJni.get().forceRefreshOfExtendedAccountInfo(
-                mNativeIdentityManager, coreAccountId);
+    public void forceRefreshOfExtendedAccountInfo(List<CoreAccountInfo> accountInfos) {
+        for (CoreAccountInfo accountInfo : accountInfos) {
+            IdentityManagerJni.get().forceRefreshOfExtendedAccountInfo(
+                    mNativeIdentityManager, accountInfo.getId());
+        }
     }
 
     /**
@@ -209,8 +206,7 @@ public class IdentityManager {
         @Nullable
         CoreAccountInfo getPrimaryAccountInfo(long nativeIdentityManager, int consentLevel);
         @Nullable
-        AccountInfo findExtendedAccountInfoForAccountWithRefreshTokenByEmailAddress(
-                long nativeIdentityManager, String email);
+        AccountInfo findExtendedAccountInfoByEmailAddress(long nativeIdentityManager, String email);
         CoreAccountInfo[] getAccountsWithRefreshTokens(long nativeIdentityManager);
         void forceRefreshOfExtendedAccountInfo(
                 long nativeIdentityManager, CoreAccountId coreAccountId);

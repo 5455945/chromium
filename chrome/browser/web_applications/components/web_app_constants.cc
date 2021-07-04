@@ -12,6 +12,8 @@
 
 namespace web_app {
 
+const char kRunOnOsLoginModeWindowed[] = "windowed";
+
 namespace {
 
 // Note: This can never return kBrowser. This is because the user has
@@ -34,11 +36,31 @@ DisplayMode ResolveAppDisplayModeForStandaloneLaunchContainer(
         return DisplayMode::kWindowControlsOverlay;
       else
         return DisplayMode::kStandalone;
+    case DisplayMode::kTabbed:
+      if (base::FeatureList::IsEnabled(features::kDesktopPWAsTabStrip))
+        return DisplayMode::kTabbed;
+      else
+        return DisplayMode::kStandalone;
   }
 }
 }  // namespace
 
 static_assert(Source::kMinValue == 0, "Source enum should be zero based");
+
+std::ostream& operator<<(std::ostream& os, Source::Type type) {
+  switch (type) {
+    case Source::Type::kSystem:
+      return os << "System";
+    case Source::Type::kPolicy:
+      return os << "Policy";
+    case Source::Type::kWebAppStore:
+      return os << "WebAppStore";
+    case Source::Type::kSync:
+      return os << "Sync";
+    case Source::Type::kDefault:
+      return os << "Default";
+  }
+}
 
 static_assert(OsHookType::kShortcuts == 0,
               "OsHookType enum should be zero based");
@@ -119,6 +141,7 @@ DisplayMode ResolveEffectiveDisplayMode(
     case DisplayMode::kMinimalUi:
     case DisplayMode::kFullscreen:
     case DisplayMode::kWindowControlsOverlay:
+    case DisplayMode::kTabbed:
       NOTREACHED();
       FALLTHROUGH;
     case DisplayMode::kStandalone:
@@ -143,12 +166,10 @@ apps::mojom::LaunchContainer ConvertDisplayModeToAppLaunchContainer(
     case DisplayMode::kBrowser:
       return apps::mojom::LaunchContainer::kLaunchContainerTab;
     case DisplayMode::kMinimalUi:
-      return apps::mojom::LaunchContainer::kLaunchContainerWindow;
     case DisplayMode::kStandalone:
-      return apps::mojom::LaunchContainer::kLaunchContainerWindow;
     case DisplayMode::kFullscreen:
-      return apps::mojom::LaunchContainer::kLaunchContainerWindow;
     case DisplayMode::kWindowControlsOverlay:
+    case DisplayMode::kTabbed:
       return apps::mojom::LaunchContainer::kLaunchContainerWindow;
     case DisplayMode::kUndefined:
       return apps::mojom::LaunchContainer::kLaunchContainerNone;

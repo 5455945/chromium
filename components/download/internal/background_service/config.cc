@@ -65,7 +65,7 @@ const base::TimeDelta kDefaultNetworkStartupDelay =
     base::TimeDelta::FromSeconds(25);
 #else
 const base::TimeDelta kDefaultNetworkStartupDelay =
-    base::TimeDelta::FromSeconds(0);
+    base::TimeDelta::FromSeconds(2);
 #endif  // defined(OS_ANDROID)
 
 // Default value for start up delay to wait for network stack ready when

@@ -7,8 +7,7 @@
 #include <vector>
 
 #include "base/macros.h"
-#include "base/test/scoped_feature_list.h"
-#include "chrome/browser/chromeos/arc/fileapi/arc_file_system_operation_runner.h"
+#include "chrome/browser/ash/arc/fileapi/arc_file_system_operation_runner.h"
 #include "chrome/browser/chromeos/file_manager/documents_provider_root_manager.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/arc/arc_features.h"
@@ -65,8 +64,6 @@ class DocumentsProviderRootManagerTest : public testing::Test {
   ~DocumentsProviderRootManagerTest() override = default;
 
   void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(
-        arc::kEnableDocumentsProviderInFilesAppFeature);
     arc_service_manager_ = std::make_unique<arc::ArcServiceManager>();
     profile_ = std::make_unique<TestingProfile>();
     arc::ArcFileSystemBridge::GetForBrowserContextForTesting(profile_.get());
@@ -114,7 +111,6 @@ class DocumentsProviderRootManagerTest : public testing::Test {
   std::unique_ptr<TestingProfile> profile_;
   std::unique_ptr<arc::ArcFileSystemOperationRunner> runner_;
   TestObserver observer_;
-  base::test::ScopedFeatureList scoped_feature_list_;
 
   DISALLOW_COPY_AND_ASSIGN(DocumentsProviderRootManagerTest);
 };
@@ -131,7 +127,7 @@ TEST_F(DocumentsProviderRootManagerTest, AddMultipleRoots) {
   EXPECT_EQ("authority2", observer().added_authorities()[1]);
 }
 
-TEST_F(DocumentsProviderRootManagerTest, ExcludeBlacklistedRoots) {
+TEST_F(DocumentsProviderRootManagerTest, ExcludeDenylistedRoots) {
   AddFakeRoot("authority1", "123", "", "", 10, 100);
   AddFakeRoot("com.android.externalstorage.documents", "", "", "", -1, -1);
   AddFakeRoot("com.android.providers.downloads.documents", "", "", "", -1, -1);

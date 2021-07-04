@@ -58,7 +58,6 @@ OverlaySurfaceCandidate MakeOverlayCandidate(int z_order,
 
   // The demo overlay instance is always ontop and not clipped. Clipped quads
   // cannot be placed in overlays.
-  overlay_candidate.is_clipped = false;
 
   return overlay_candidate;
 }
@@ -289,8 +288,8 @@ void SurfacelessGlRenderer::RenderFrame() {
 
 void SurfacelessGlRenderer::PostRenderFrameTask(
     gfx::SwapCompletionResult result) {
-  if (result.gpu_fence)
-    result.gpu_fence->Wait();
+  if (!result.release_fence.is_null())
+    gfx::GpuFence(std::move(result.release_fence)).Wait();
 
   switch (result.swap_result) {
     case gfx::SwapResult::SWAP_NAK_RECREATE_BUFFERS:
@@ -305,6 +304,7 @@ void SurfacelessGlRenderer::PostRenderFrameTask(
           FROM_HERE, base::BindOnce(&SurfacelessGlRenderer::RenderFrame,
                                     weak_ptr_factory_.GetWeakPtr()));
       break;
+    case gfx::SwapResult::SWAP_SKIPPED:
     case gfx::SwapResult::SWAP_FAILED:
       LOG(FATAL) << "Failed to swap buffers";
       break;

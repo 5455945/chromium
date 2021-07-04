@@ -9,7 +9,7 @@
 
 #include "base/unguessable_token.h"
 #include "third_party/blink/public/common/browser_interface_broker_proxy.h"
-#include "third_party/blink/public/mojom/feature_policy/feature_policy_feature.mojom-blink.h"
+#include "third_party/blink/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_serial_port_filter.h"
@@ -19,6 +19,7 @@
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/execution_context/navigator_base.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+#include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/modules/event_target_modules_names.h"
 #include "third_party/blink/renderer/modules/serial/serial_port.h"
 #include "third_party/blink/renderer/platform/heap/heap.h"
@@ -90,8 +91,9 @@ ScriptPromise Serial::getPorts(ScriptState* script_state,
     return ScriptPromise();
   }
 
-  if (!context->IsFeatureEnabled(mojom::blink::FeaturePolicyFeature::kSerial,
-                                 ReportOptions::kReportOnFailure)) {
+  if (!context->IsFeatureEnabled(
+          mojom::blink::PermissionsPolicyFeature::kSerial,
+          ReportOptions::kReportOnFailure)) {
     exception_state.ThrowSecurityError(kFeaturePolicyBlocked);
     return ScriptPromise();
   }
@@ -116,7 +118,7 @@ ScriptPromise Serial::requestPort(ScriptState* script_state,
   }
 
   if (!GetExecutionContext()->IsFeatureEnabled(
-          mojom::blink::FeaturePolicyFeature::kSerial,
+          mojom::blink::PermissionsPolicyFeature::kSerial,
           ReportOptions::kReportOnFailure)) {
     exception_state.ThrowSecurityError(kFeaturePolicyBlocked);
     return ScriptPromise();
@@ -199,9 +201,9 @@ void Serial::AddedEventListener(const AtomicString& event_type,
   }
 
   ExecutionContext* context = GetExecutionContext();
-  if (!context ||
-      !context->IsFeatureEnabled(mojom::blink::FeaturePolicyFeature::kSerial,
-                                 ReportOptions::kDoNotReport)) {
+  if (!context || !context->IsFeatureEnabled(
+                      mojom::blink::PermissionsPolicyFeature::kSerial,
+                      ReportOptions::kDoNotReport)) {
     return;
   }
 

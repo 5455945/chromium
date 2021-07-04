@@ -18,6 +18,7 @@
 #include "base/time/default_tick_clock.h"
 #include "net/base/test_proxy_delegate.h"
 #include "net/dns/mock_host_resolver.h"
+#include "net/dns/public/secure_dns_policy.h"
 #include "net/http/http_auth_cache.h"
 #include "net/http/http_auth_handler_factory.h"
 #include "net/http/http_response_headers.h"
@@ -221,8 +222,8 @@ class QuicProxyClientSocketTest : public ::testing::TestWithParam<TestParams>,
     EXPECT_CALL(*send_algorithm_, OnApplicationLimited(_)).Times(AnyNumber());
     EXPECT_CALL(*send_algorithm_, GetCongestionControlType())
         .Times(AnyNumber());
-    helper_.reset(
-        new QuicChromiumConnectionHelper(&clock_, &random_generator_));
+    helper_ = std::make_unique<QuicChromiumConnectionHelper>(
+        &clock_, &random_generator_);
     alarm_factory_ =
         std::make_unique<QuicChromiumAlarmFactory>(runner_.get(), &clock_);
 
@@ -256,9 +257,8 @@ class QuicProxyClientSocketTest : public ::testing::TestWithParam<TestParams>,
         base::WrapUnique(static_cast<QuicServerInfo*>(nullptr)),
         QuicSessionKey("mail.example.org", 80, PRIVACY_MODE_DISABLED,
                        SocketTag(), NetworkIsolationKey(),
-                       false /* disable_secure_dns */),
+                       SecureDnsPolicy::kAllow),
         /*require_confirmation=*/false,
-        /*max_allowed_push_id=*/0,
         /*migrate_session_early_v2=*/false,
         /*migrate_session_on_network_change_v2=*/false,
         /*default_network=*/NetworkChangeNotifier::kInvalidNetworkHandle,
@@ -588,10 +588,9 @@ class QuicProxyClientSocketTest : public ::testing::TestWithParam<TestParams>,
     if (!version_.HasIetfQuicFrames()) {
       return "";
     }
-    std::unique_ptr<char[]> buffer;
-    auto header_length =
-        quic::HttpEncoder::SerializeDataFrameHeader(body_len, &buffer);
-    return std::string(buffer.get(), header_length);
+    quic::QuicBuffer buffer = quic::HttpEncoder::SerializeDataFrameHeader(
+        body_len, quic::SimpleBufferAllocator::Get());
+    return std::string(buffer.data(), buffer.size());
   }
 
   RecordingBoundTestNetLog net_log_;
@@ -747,8 +746,8 @@ TEST_P(QuicProxyClientSocketTest, ConnectWithAuthCredentials) {
   Initialize();
 
   // Add auth to cache
-  const base::string16 kFoo(base::ASCIIToUTF16("foo"));
-  const base::string16 kBar(base::ASCIIToUTF16("bar"));
+  const std::u16string kFoo(u"foo");
+  const std::u16string kBar(u"bar");
   http_auth_cache_.Add(GURL(kProxyUrl), HttpAuth::AUTH_PROXY, "MyRealm1",
                        HttpAuth::AUTH_SCHEME_BASIC, NetworkIsolationKey(),
                        "Basic realm=MyRealm1", AuthCredentials(kFoo, kBar),

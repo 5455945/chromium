@@ -11,7 +11,6 @@
 
 #include "base/bind.h"
 #include "base/guid.h"
-#include "base/optional.h"
 #include "base/run_loop.h"
 #include "base/synchronization/waitable_event.h"
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
@@ -28,8 +27,8 @@
 #include "components/autofill/core/browser/webdata/autofill_table.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
 #include "components/autofill/core/common/form_field_data.h"
-#include "components/sync/driver/profile_sync_service.h"
 #include "components/webdata/common/web_database.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 using autofill::AutofillChangeList;
 using autofill::AutofillEntry;
@@ -118,7 +117,7 @@ std::vector<AutofillEntry> GetAllAutofillEntries(AutofillWebDataService* wds) {
 }
 
 bool ProfilesMatchImpl(
-    const base::Optional<unsigned int>& expected_count,
+    const absl::optional<unsigned int>& expected_count,
     int profile_a,
     const std::vector<AutofillProfile*>& autofill_profiles_a,
     int profile_b,
@@ -324,7 +323,7 @@ void RemoveProfile(int profile, const std::string& guid) {
 void UpdateProfile(int profile,
                    const std::string& guid,
                    const AutofillType& type,
-                   const base::string16& value,
+                   const std::u16string& value,
                    autofill::structured_address::VerificationStatus status) {
   std::vector<AutofillProfile> profiles;
   for (AutofillProfile* profile : GetAllAutoFillProfiles(profile)) {
@@ -383,7 +382,7 @@ bool ProfilesMatch(int profile_a, int profile_b) {
       GetAllAutoFillProfiles(profile_a);
   const std::vector<AutofillProfile*>& autofill_profiles_b =
       GetAllAutoFillProfiles(profile_b);
-  return ProfilesMatchImpl(base::nullopt, profile_a, autofill_profiles_a,
+  return ProfilesMatchImpl(absl::nullopt, profile_a, autofill_profiles_a,
                            profile_b, autofill_profiles_b);
 }
 
@@ -403,7 +402,7 @@ bool AutofillKeysChecker::IsExitConditionSatisfied(std::ostream* os) {
 AutofillProfileChecker::AutofillProfileChecker(
     int profile_a,
     int profile_b,
-    base::Optional<unsigned int> expected_count)
+    absl::optional<unsigned int> expected_count)
     : profile_a_(profile_a),
       profile_b_(profile_b),
       expected_count_(expected_count) {

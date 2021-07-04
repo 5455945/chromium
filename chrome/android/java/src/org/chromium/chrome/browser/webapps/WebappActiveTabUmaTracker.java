@@ -9,7 +9,7 @@ import androidx.annotation.VisibleForTesting;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.chrome.browser.ActivityTabProvider;
 import org.chromium.chrome.browser.ActivityTabProvider.ActivityTabTabObserver;
-import org.chromium.chrome.browser.browserservices.BrowserServicesIntentDataProvider;
+import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
 import org.chromium.chrome.browser.browserservices.ui.controller.CurrentPageVerifier;
 import org.chromium.chrome.browser.browserservices.ui.controller.CurrentPageVerifier.VerificationState;
 import org.chromium.chrome.browser.browserservices.ui.controller.CurrentPageVerifier.VerificationStatus;
@@ -38,7 +38,7 @@ public class WebappActiveTabUmaTracker extends ActivityTabTabObserver {
 
     @Override
     public void onDidFinishNavigation(Tab tab, NavigationHandle navigation) {
-        if (navigation.hasCommitted() && navigation.isInMainFrame()
+        if (navigation.hasCommitted() && navigation.isInPrimaryMainFrame()
                 && !navigation.isSameDocument()) {
             RecordHistogram.recordBooleanHistogram(
                     HISTOGRAM_NAVIGATION_STATUS, !navigation.isErrorPage());

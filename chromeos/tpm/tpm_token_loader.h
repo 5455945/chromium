@@ -14,12 +14,11 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
-#include "base/observer_list.h"
-#include "base/optional.h"
 #include "base/threading/thread_checker.h"
-#include "chromeos/dbus/cryptohome/cryptohome_client.h"
+#include "chromeos/dbus/userdataauth/userdataauth_client.h"
 #include "chromeos/login/login_state/login_state.h"
 #include "chromeos/tpm/tpm_token_info_getter.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 class SequencedTaskRunner;
@@ -33,7 +32,6 @@ namespace chromeos {
 // When the TPM token is loaded, or if the TPM should stay disabled for the
 // session, the observers are notified using |OnTPMTokenReady|.
 // Note: This currently initializes the token with the hard coded default id 0.
-// See CryptohomeClient::OnPkcs11GetTpmTokenInfo.
 class COMPONENT_EXPORT(CHROMEOS_TPM) TPMTokenLoader
     : public LoginState::Observer {
  public:
@@ -101,7 +99,7 @@ class COMPONENT_EXPORT(CHROMEOS_TPM) TPMTokenLoader
   void ContinueTokenInitialization();
   void OnTPMTokenEnabledForNSS();
   void OnGotTpmTokenInfo(
-      base::Optional<CryptohomeClient::TpmTokenInfo> token_info);
+      absl::optional<user_data_auth::TpmTokenInfo> token_info);
   void OnTPMTokenInitialized(bool success);
 
   // Notifies observers that the TPM token is ready.

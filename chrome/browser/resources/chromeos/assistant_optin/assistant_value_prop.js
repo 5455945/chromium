@@ -40,6 +40,37 @@ Polymer({
         return this.urlTemplate_.replace('$', 'en_us');
       }
     },
+
+    /**
+     * Whether new OOBE layout is enabled.
+     * @type {boolean}
+     */
+    newLayoutEnabled_: {
+      type: Boolean,
+      value() {
+        return loadTimeData.valueExists('newLayoutEnabled') &&
+            loadTimeData.getBoolean('newLayoutEnabled');
+      }
+    },
+
+    /**
+     * Indicates whether user is minor mode user (e.g. under age of 18).
+     */
+    isMinorMode_: {
+      type: Boolean,
+      value() {
+        return loadTimeData.valueExists('isMinorMode') &&
+            loadTimeData.getBoolean('isMinorMode');
+      }
+    },
+
+    /**
+     * Used to determine which activity control settings should be shown.
+     */
+    currentConsentStep_: {
+      type: Number,
+      value: 0,
+    },
   },
 
   setUrlTemplateForTesting(url) {
@@ -69,18 +100,11 @@ Polymer({
   loadingError_: false,
 
   /**
-   * The value prop webview object in vertical mode.
+   * The value prop webview object.
    * @type {Object}
    * @private
    */
-  valuePropViewVerticalMode_: null,
-
-  /**
-   * The value prop webview object in horizontal mode.
-   * @type {Object}
-   * @private
-   */
-  valuePropViewHorizontalMode_: null,
+  valuePropView_: null,
 
   /**
    * Whether the screen has been initialized.
@@ -95,13 +119,6 @@ Polymer({
    * @private
    */
   headerReceived_: false,
-
-  /**
-   * Whether the webview has been successfully loaded.
-   * @type {boolean}
-   * @private
-   */
-  webViewLoaded_: false,
 
   /**
    * Whether all the setting zippy has been successfully loaded.
@@ -192,7 +209,7 @@ Polymer({
   },
 
   /**
-   * Reloads value prop webview.
+   * Reloads value prop page by fetching setting zippy and consent string.
    */
   reloadPage() {
     this.fire('loading');
@@ -203,15 +220,18 @@ Polymer({
       this.consentStringLoaded_ = false;
     }
 
+    this.buttonsDisabled = true;
+    this.currentConsentStep_ = 0;
+  },
+
+  /**
+   * Reloads value prop animation webview.
+   */
+  reloadWebView() {
     this.loadingError_ = false;
     this.headerReceived_ = false;
     let locale = this.locale.replace('-', '_').toLowerCase();
-    this.valuePropViewVerticalMode_.src =
-        this.urlTemplate_.replace('$', locale);
-    this.valuePropViewHorizontalMode_.src =
-        this.urlTemplate_.replace('$', locale);
-
-    this.buttonsDisabled = true;
+    this.valuePropView_.src = this.urlTemplate_.replace('$', locale);
   },
 
   /**
@@ -233,14 +253,12 @@ Polymer({
       return;
     }
     if (this.reloadWithDefaultUrl_) {
-      this.valuePropViewVerticalMode_.src = this.defaultUrl;
-      this.valuePropViewHorizontalMode_.src = this.defaultUrl;
+      this.valuePropView_.src = this.defaultUrl;
       this.headerReceived_ = false;
       this.reloadWithDefaultUrl_ = false;
       return;
     }
 
-    this.webViewLoaded_ = true;
     if (this.settingZippyLoaded_ && this.consentStringLoaded_) {
       this.onPageLoaded();
     }
@@ -273,8 +291,9 @@ Polymer({
     this.$['value-prop-dialog'].setAttribute(
         'aria-label', data['valuePropTitle']);
     this.$['title-text'].textContent = data['valuePropTitle'];
-    this.$['intro-title-text'].textContent = data['valuePropIntroTitle'];
     this.$['intro-text'].textContent = data['valuePropIntro'];
+    this.$['user-image'].src = data['valuePropUserImage'];
+    this.$['user-name'].textContent = data['valuePropIdentity'];
     this.$['next-button'].labelForAria = data['valuePropNextButton'];
     this.$['next-button-text'].textContent = data['valuePropNextButton'];
     this.$['skip-button'].labelForAria = data['valuePropSkipButton'];
@@ -283,8 +302,8 @@ Polymer({
         this.sanitizer_.sanitizeHtml(data['valuePropFooter']);
 
     this.consentStringLoaded_ = true;
-    if (this.webViewLoaded_ && this.settingZippyLoaded_) {
-      this.onPageLoaded();
+    if (this.settingZippyLoaded_) {
+      this.reloadWebView();
     }
   },
 
@@ -293,49 +312,58 @@ Polymer({
    */
   addSettingZippy(zippy_data) {
     if (this.settingZippyLoaded_) {
-      if (this.webViewLoaded_ && this.consentStringLoaded_) {
-        this.onPageLoaded();
+      if (this.consentStringLoaded_) {
+        this.reloadWebView();
       }
       return;
     }
 
+    // `zippy_data` contains a list of lists, where each list contains the
+    // setting zippys that should be shown on the same screen.
     for (var i in zippy_data) {
-      var data = zippy_data[i];
-      var zippy = document.createElement('setting-zippy');
-      zippy.setAttribute(
-          'icon-src',
-          'data:text/html;charset=utf-8,' +
-              encodeURIComponent(
-                  zippy.getWrappedIcon(data['iconUri'], data['title'])));
+      for (var j in zippy_data[i]) {
+        var data = zippy_data[i][j];
+        var zippy = document.createElement('setting-zippy');
+        zippy.setAttribute(
+            'icon-src',
+            'data:text/html;charset=utf-8,' +
+                encodeURIComponent(
+                    zippy.getWrappedIcon(data['iconUri'], data['title'])));
+        zippy.setAttribute('step', i);
+        if (!this.newLayoutEnabled_) {
+          zippy.setAttribute('hide-line', true);
+        }
 
-      var title = document.createElement('div');
-      title.slot = 'title';
-      title.innerHTML = this.sanitizer_.sanitizeHtml(data['title']);
-      zippy.appendChild(title);
+        var title = document.createElement('div');
+        title.slot = 'title';
+        title.innerHTML = this.sanitizer_.sanitizeHtml(data['title']);
+        zippy.appendChild(title);
 
-      var description = document.createElement('div');
-      description.slot = 'content';
-      description.innerHTML = this.sanitizer_.sanitizeHtml(data['description']);
-      description.innerHTML += '&ensp;';
+        var description = document.createElement('div');
+        description.slot = 'content';
+        description.innerHTML =
+            this.sanitizer_.sanitizeHtml(data['description']);
+        description.innerHTML += '&ensp;';
 
-      var learnMoreLink = document.createElement('a');
-      learnMoreLink.slot = 'content';
-      learnMoreLink.textContent = data['popupLink'];
-      learnMoreLink.setAttribute('href', 'javascript:void(0)');
-      learnMoreLink.onclick = function(title, additionalInfo, focus) {
-        this.lastFocusedElement = focus;
-        this.showLearnMoreOverlay(title, additionalInfo);
-      }.bind(this, data['title'], data['additionalInfo'], learnMoreLink);
+        var learnMoreLink = document.createElement('a');
+        learnMoreLink.slot = 'content';
+        learnMoreLink.textContent = data['popupLink'];
+        learnMoreLink.setAttribute('href', 'javascript:void(0)');
+        learnMoreLink.onclick = function(title, additionalInfo, focus) {
+          this.lastFocusedElement = focus;
+          this.showLearnMoreOverlay(title, additionalInfo);
+        }.bind(this, data['title'], data['additionalInfo'], learnMoreLink);
 
-      description.appendChild(learnMoreLink);
-      zippy.appendChild(description);
-
-      this.$['consents-container'].appendChild(zippy);
+        description.appendChild(learnMoreLink);
+        zippy.appendChild(description);
+        this.$['consents-container'].appendChild(zippy);
+      }
     }
+    this.showSettingZippyForStep_(this.currentConsentStep_);
 
     this.settingZippyLoaded_ = true;
-    if (this.webViewLoaded_ && this.consentStringLoaded_) {
-      this.onPageLoaded();
+    if (this.consentStringLoaded_) {
+      this.reloadWebView();
     }
   },
 
@@ -365,18 +393,34 @@ Polymer({
         this, () => this.$['next-button'].focus());
 
     if (!this.initialized_) {
-      // We show value prop webview element based on orientation of the device.
-      // Horizontal mode element is in subtitle slot and it is shown in bottom
-      // left of the screen in horizontal mode. Vertical mode element is in
-      // content slot and allows scrolling with the rest of the content in
-      // vertical mode.
-      this.valuePropViewVerticalMode_ = this.$['value-prop-view-vertical-mode'];
-      this.valuePropViewHorizontalMode_ =
-          this.$['value-prop-view-horizontal-mode'];
-      this.initializeWebview_(this.valuePropViewVerticalMode_);
-      this.initializeWebview_(this.valuePropViewHorizontalMode_);
+      if (this.newLayoutEnabled_) {
+        this.valuePropView_ = this.$['value-prop-view'];
+      } else {
+        this.valuePropView_ = this.$['value-prop-view-old'];
+      }
+      this.initializeWebview_(this.valuePropView_);
       this.reloadPage();
       this.initialized_ = true;
+    }
+  },
+
+  /**
+   * Update the screen to show the next setting zippy. This is called only for
+   * minor users as settings are unbundled.
+   */
+  showNextSettingZippy() {
+    this.currentConsentStep_ += 1;
+    this.showSettingZippyForStep_(this.currentConsentStep_);
+    this.buttonsDisabled = false;
+  },
+
+  /**
+   * Update visibility of setting zippys for a given step.
+   * @param {number} step
+   */
+  showSettingZippyForStep_(step) {
+    for (let zippy of this.$['consents-container'].children) {
+      zippy.hidden = zippy.getAttribute('step') != step;
     }
   },
 
@@ -389,5 +433,12 @@ Polymer({
     webview.addEventListener(
         'contentload', this.onWebViewContentLoad.bind(this));
     webview.addContentScripts([webviewStripLinksContentScript]);
+  },
+
+  /**
+   * Returns the webview animation container.
+   */
+  getAnimationContainer() {
+    return this.$['animation-container'];
   },
 });

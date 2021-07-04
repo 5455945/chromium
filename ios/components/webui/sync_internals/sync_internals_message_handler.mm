@@ -17,7 +17,6 @@
 #include "components/sync/driver/sync_service.h"
 #include "components/sync/driver/sync_user_settings.h"
 #include "components/sync/engine/events/protocol_event.h"
-#include "components/sync/js/js_event_details.h"
 #include "components/sync/model/type_entities_count.h"
 #include "ios/components/webui/web_ui_provider.h"
 #include "ios/web/public/thread/web_thread.h"
@@ -43,10 +42,6 @@ SyncInternalsMessageHandler::SyncInternalsMessageHandler()
       weak_ptr_factory_(this) {}
 
 SyncInternalsMessageHandler::~SyncInternalsMessageHandler() {
-  if (js_controller_) {
-    js_controller_->RemoveJsEventHandler(this);
-  }
-
   syncer::SyncService* service = GetSyncService();
   if (service && service->HasObserver(this)) {
     service->RemoveObserver(this);
@@ -120,8 +115,6 @@ void SyncInternalsMessageHandler::HandleRequestDataAndRegisterForUpdates(
   if (service && !is_registered_) {
     service->AddObserver(this);
     service->AddProtocolEventObserver(this);
-    js_controller_ = service->GetJsController();
-    js_controller_->AddJsEventHandler(this);
     is_registered_ = true;
   }
 
@@ -156,15 +149,15 @@ void SyncInternalsMessageHandler::HandleRequestIncludeSpecificsInitialState(
 void SyncInternalsMessageHandler::HandleGetAllNodes(
     const base::ListValue* args) {
   DCHECK_EQ(1U, args->GetSize());
-  int request_id = 0;
-  bool success = ExtractIntegerValue(args, &request_id);
+  std::string callback_id;
+  bool success = args->GetString(0, &callback_id);
   DCHECK(success);
 
   syncer::SyncService* service = GetSyncService();
   if (service) {
     service->GetAllNodesForDebugging(
         base::BindOnce(&SyncInternalsMessageHandler::OnReceivedAllNodes,
-                       weak_ptr_factory_.GetWeakPtr(), request_id));
+                       weak_ptr_factory_.GetWeakPtr(), callback_id));
   }
 }
 
@@ -229,14 +222,14 @@ void SyncInternalsMessageHandler::HandleTriggerRefresh(
 }
 
 void SyncInternalsMessageHandler::OnReceivedAllNodes(
-    int request_id,
+    const std::string& callback_id,
     std::unique_ptr<base::ListValue> nodes) {
-  base::Value id(request_id);
+  base::Value id(callback_id);
   base::Value nodes_clone = nodes->Clone();
+  base::Value success(true);
 
-  std::vector<const base::Value*> args{&id, &nodes_clone};
-  web_ui()->CallJavascriptFunction(syncer::sync_ui_util::kGetAllNodesCallback,
-                                   args);
+  std::vector<const base::Value*> args{&id, &success, &nodes_clone};
+  web_ui()->CallJavascriptFunction("cr.webUIResponse", args);
 }
 
 void SyncInternalsMessageHandler::OnStateChanged(syncer::SyncService* sync) {
@@ -250,21 +243,13 @@ void SyncInternalsMessageHandler::OnProtocolEvent(
   DispatchEvent(syncer::sync_ui_util::kOnProtocolEvent, *value);
 }
 
-void SyncInternalsMessageHandler::HandleJsEvent(
-    const std::string& name,
-    const syncer::JsEventDetails& details) {
-  DVLOG(1) << "Handling event: " << name << " with details "
-           << details.ToString();
-  DispatchEvent(name, details.Get());
-}
-
 void SyncInternalsMessageHandler::SendAboutInfoAndEntityCounts() {
   // This class serves to display debug information to the user, so it's fine to
   // include sensitive data in ConstructAboutInformation().
   std::unique_ptr<base::DictionaryValue> value =
       syncer::sync_ui_util::ConstructAboutInformation(
           syncer::sync_ui_util::IncludeSensitiveData(true), GetSyncService(),
-          web_ui::GetChannel());
+          web_ui::GetChannelString());
   DispatchEvent(syncer::sync_ui_util::kOnAboutInfoUpdated, *value);
 
   if (syncer::SyncService* service = GetSyncService()) {
@@ -309,5 +294,5 @@ void SyncInternalsMessageHandler::DispatchEvent(
 
   std::vector<const base::Value*> args{&event_name, &details_value};
 
-  web_ui()->CallJavascriptFunction(syncer::sync_ui_util::kDispatchEvent, args);
+  web_ui()->CallJavascriptFunction("cr.webUIListenerCallback", args);
 }

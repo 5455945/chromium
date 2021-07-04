@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "ash/app_list/app_list_metrics.h"
+#include "ash/app_list/app_list_util.h"
 #include "ash/app_list/app_list_view_delegate.h"
 #include "ash/app_list/model/search/search_result.h"
 #include "ash/app_list/views/app_list_main_view.h"
@@ -23,14 +24,17 @@
 #include "ash/public/cpp/app_list/app_list_switches.h"
 #include "ash/public/cpp/app_list/app_list_types.h"
 #include "base/bind.h"
+#include "ui/accessibility/ax_node_data.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/font.h"
 #include "ui/gfx/image/image_skia_operations.h"
 #include "ui/gfx/render_text.h"
+#include "ui/gfx/skia_util.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/menu/menu_runner.h"
+#include "ui/views/image_model_utils.h"
 
 namespace ash {
 
@@ -74,6 +78,22 @@ class RoundedCornerImageView : public views::ImageView {
     ImageView::OnPaint(canvas);
   }
 };
+
+int OmniboxDisplayTypeToDimension(const SearchResultOmniboxDisplayType type) {
+  const auto& config = SharedAppListConfig::instance();
+  switch (type) {
+    case SearchResultOmniboxDisplayType::kAnswer:
+    case SearchResultOmniboxDisplayType::kCalculatorAnswer:
+      return config.search_list_answer_icon_dimension();
+    case SearchResultOmniboxDisplayType::kRichImage:
+      return config.search_list_image_icon_dimension();
+    case SearchResultOmniboxDisplayType::kFavicon:
+      return config.search_list_favicon_dimension();
+    case SearchResultOmniboxDisplayType::kDefault:
+    default:
+      return config.search_list_icon_dimension();
+  }
+}
 
 }  // namespace
 
@@ -135,7 +155,8 @@ void SearchResultView::CreateTitleRenderText() {
   render_text->SetText(result()->title());
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
   render_text->SetFontList(
-      rb.GetFontList(AppListConfig::instance().search_result_title_font_style())
+      rb.GetFontList(
+            SharedAppListConfig::instance().search_result_title_font_style())
           .DeriveWithSizeDelta(kSearchResultTitleTextSizeDelta));
   // When result is an omnibox non-url search, the matched tag indicates
   // proposed query. For all other cases, the matched tag indicates typed search
@@ -146,11 +167,10 @@ void SearchResultView::CreateTitleRenderText() {
   for (const auto& tag : tags) {
     if (tag.styles & SearchResult::Tag::URL) {
       render_text->ApplyColor(kUrlColor, tag.range);
-    } else if (tag.styles & SearchResult::Tag::MATCH) {
-      render_text->ApplyColor(
-          AppListColorProvider::Get()->GetSearchBoxTextColor(
-              kDeprecatedSearchBoxTextDefaultColor),
-          tag.range);
+    }
+    if (tag.styles & SearchResult::Tag::MATCH &&
+        app_list_features::IsLauncherQueryHighlightingEnabled()) {
+      render_text->ApplyWeight(gfx::Font::Weight::MEDIUM, tag.range);
     }
   }
   title_text_ = std::move(render_text);
@@ -172,8 +192,13 @@ void SearchResultView::CreateDetailsRenderText() {
       kDeprecatedSearchBoxTextDefaultColor));
   const SearchResult::Tags& tags = result()->details_tags();
   for (const auto& tag : tags) {
-    if (tag.styles & SearchResult::Tag::URL)
+    if (tag.styles & SearchResult::Tag::URL) {
       render_text->ApplyColor(kUrlColor, tag.range);
+    }
+    if (tag.styles & SearchResult::Tag::MATCH &&
+        app_list_features::IsLauncherQueryHighlightingEnabled()) {
+      render_text->ApplyWeight(gfx::Font::Weight::BOLD, tag.range);
+    }
   }
   details_text_ = std::move(render_text);
 }
@@ -186,7 +211,7 @@ void SearchResultView::OnQueryRemovalAccepted(bool accepted) {
 
   if (confirm_remove_by_long_press_) {
     confirm_remove_by_long_press_ = false;
-    SetSelected(false, base::nullopt);
+    SetSelected(false, absl::nullopt);
   }
 
   RecordZeroStateSearchResultRemovalHistogram(
@@ -223,7 +248,7 @@ void SearchResultView::Layout() {
   gfx::Rect badge_icon_bounds;
 
   const int badge_icon_dimension =
-      AppListConfig::instance().search_list_badge_icon_dimension();
+      SharedAppListConfig::instance().search_list_badge_icon_dimension();
   badge_icon_bounds = gfx::Rect(icon_bounds.right() - badge_icon_dimension / 2,
                                 icon_bounds.bottom() - badge_icon_dimension / 2,
                                 badge_icon_dimension, badge_icon_dimension);
@@ -375,7 +400,7 @@ void SearchResultView::OnGestureEvent(ui::GestureEvent* event) {
       if (actions_view()->IsValidActionIndex(
               OmniBoxZeroStateAction::kRemoveSuggestion)) {
         ScrollRectToVisible(GetLocalBounds());
-        SetSelected(true, base::nullopt);
+        SetSelected(true, absl::nullopt);
         confirm_remove_by_long_press_ = true;
         OnSearchResultActionActivated(
             OmniBoxZeroStateAction::kRemoveSuggestion);
@@ -397,45 +422,46 @@ void SearchResultView::OnMetadataChanged() {
   // clearing it out. It should work correctly as long as the SearchResult does
   // not forget to SetIcon when it's ready.
   if (result() && !result()->icon().isNull()) {
+    gfx::ImageSkia image = result()->icon();
+
+    // Calculate the image dimensions. Images could be rectangular, and we
+    // should preserve the aspect ratio.
+    const int dimension =
+        OmniboxDisplayTypeToDimension(result()->omnibox_type());
+    const int max = std::max(image.width(), image.height());
+    const bool is_square = image.width() == image.height();
+    const int width = is_square ? dimension : dimension * image.width() / max;
+    const int height = is_square ? dimension : dimension * image.height() / max;
+
     if (IsRichImage()) {
-      gfx::ImageSkia image = result()->icon();
-
-      // Images could be rectangular, and we should preserve the aspect ratio.
-      const int dimension =
-          AppListConfig::instance().search_list_image_icon_dimension();
-      int width = image.width();
-      int height = image.height();
-      if (width != height) {
-        const int max = std::max(width, height);
-        width = dimension * width / max;
-        height = dimension * height / max;
-        SetIconImage(image, image_icon_, gfx::Size(width, height));
-      } else {
-        SetIconImage(image, image_icon_, gfx::Size(dimension, dimension));
-      }
-
+      SetIconImage(image, image_icon_, gfx::Size(width, height));
       icon_->SetVisible(false);
       image_icon_->SetVisible(true);
     } else {
-      const int dimension =
-          IsAnswer()
-              ? AppListConfig::instance().search_list_answer_icon_dimension()
-              : AppListConfig::instance().search_list_icon_dimension();
-      SetIconImage(result()->icon(), icon_, gfx::Size(dimension, dimension));
+      SetIconImage(image, icon_, gfx::Size(width, height));
       icon_->SetVisible(true);
       image_icon_->SetVisible(false);
     }
   }
 
   // Updates |badge_icon_|.
-  const gfx::ImageSkia badge_icon(result() ? result()->badge_icon()
-                                           : gfx::ImageSkia());
-  if (badge_icon.isNull()) {
+  gfx::ImageSkia badge_icon_skia;
+  if (result() && !result()->badge_icon().IsEmpty()) {
+    const ui::ImageModel& badge_icon = result()->badge_icon();
+    gfx::ImageSkia badge_icon_skia =
+        views::GetImageSkiaFromImageModel(badge_icon, GetNativeTheme());
+
+    if (result()->use_badge_icon_background())
+      badge_icon_skia =
+          CreateIconWithCircleBackground(badge_icon_skia, SK_ColorWHITE);
+  }
+
+  if (badge_icon_skia.isNull()) {
     badge_icon_->SetVisible(false);
   } else {
     const int dimension =
-        AppListConfig::instance().search_list_badge_icon_dimension();
-    SetIconImage(badge_icon, badge_icon_, gfx::Size(dimension, dimension));
+        SharedAppListConfig::instance().search_list_badge_icon_dimension();
+    SetIconImage(badge_icon_skia, badge_icon_, gfx::Size(dimension, dimension));
     badge_icon_->SetVisible(true);
   }
 
@@ -478,7 +504,7 @@ void SearchResultView::OnSearchResultActionActivated(size_t index) {
                          weak_ptr_factory_.GetWeakPtr()));
       list_view_->app_list_main_view()
           ->contents_view()
-          ->search_results_page_view()
+          ->search_result_page_view()
           ->ShowAnchoredDialog(std::move(dialog));
     } else if (button_action == OmniBoxZeroStateAction::kAppendSuggestion) {
       RecordZeroStateSearchResultUserActionHistogram(
@@ -537,14 +563,9 @@ void SearchResultView::OnGetContextMenu(
   source->RequestFocus();
 }
 
-bool SearchResultView::IsAnswer() const {
-  return app_list_features::IsOmniboxRichEntitiesEnabled() && result() &&
-         result()->omnibox_type() == SearchResultOmniboxType::kAnswer;
-}
-
 bool SearchResultView::IsRichImage() const {
   return app_list_features::IsOmniboxRichEntitiesEnabled() && result() &&
-         result()->omnibox_type() == SearchResultOmniboxType::kRichImage;
+         result()->omnibox_type() == SearchResultOmniboxDisplayType::kRichImage;
 }
 
 }  // namespace ash

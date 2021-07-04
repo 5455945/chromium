@@ -4,29 +4,54 @@
 
 #include "chrome/browser/search/drive/drive_service.h"
 
+#include <algorithm>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
 
+#include "base/hash/hash.h"
+#include "base/metrics/field_trial_params.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/strings/stringprintf.h"
+#include "base/time/time.h"
+#include "build/build_config.h"
+#include "components/prefs/pref_registry_simple.h"
+#include "components/prefs/pref_service.h"
+#include "components/search/ntp_features.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/primary_account_access_token_fetcher.h"
 #include "components/signin/public/identity_manager/scope_set.h"
+#include "google_apis/gaia/gaia_constants.h"
+#include "mojo/public/cpp/bindings/clone_traits.h"
 #include "net/base/load_flags.h"
 
 namespace {
-// The scope required for an access token in order to query ItemSuggest.
-constexpr char kDriveScope[] = "https://www.googleapis.com/auth/drive.readonly";
-// TODO(crbug/1171898): Will need to change and verify client_info in the
-// future.
+#if OS_LINUX
+constexpr char kPlatform[] = "LINUX";
+#elif OS_WIN
+constexpr char kPlatform[] = "WINDOWS";
+#elif OS_MAC
+constexpr char kPlatform[] = "MAC_OS";
+#elif OS_CHROMEOS
+constexpr char kPlatform[] = "CHROME_OS";
+#else
+constexpr char kPlatform[] = "UNSPECIFIED_PLATFORM";
+#endif
+// TODO(crbug/1178869): Add language code to request.
 constexpr char kRequestBody[] = R"({
-      'client_info': {
-        'platform_type': 'UNSPECIFIED_PLATFORM',
-        'scenario_type': 'CHROME_NTP_FILES',
-        'request_type': 'LIVE_REQUEST'
-      },
-      'max_suggestions': 3,
-      'type_detail_fields': 'drive_item.title,drive_item.mimeType'
-    })";
+  "client_info": {
+    "platform_type": "%s",
+    "scenario_type": "CHROME_NTP_FILES",
+    "language_code": "%s",
+    "request_type": "LIVE_REQUEST",
+    "client_tags": {
+      "name": "%s"
+    }
+  },
+  "max_suggestions": 3,
+  "type_detail_fields": "drive_item.title,drive_item.mimeType"
+})";
 // Maximum accepted size of an ItemSuggest response. 1MB.
 constexpr int kMaxResponseSize = 1024 * 1024;
 const char server_url[] = "https://appsitemsuggest-pa.googleapis.com/v1/items";
@@ -67,37 +92,143 @@ constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
           }
         }
       })");
+constexpr char kFakeData[] = R"({
+  "item": [
+    {
+      "itemId": "foo",
+      "url": "https://docs.google.com",
+      "driveItem": {
+        "title": "foo doc",
+        "mimeType": "application/vnd.google-apps.document"
+      },
+      "justification": {
+        "displayText": { "textSegment": [{"text": "You opened yesterday"}]}
+      }
+    },
+    {
+      "itemId": "bar",
+      "url": "https://sheets.google.com",
+      "driveItem": {
+        "title": "bar sheet",
+        "mimeType": "application/vnd.google-apps.spreadsheet"
+      },
+      "justification": {
+        "displayText": { "textSegment": [{"text": "You opened today"}]}
+      }
+    },
+    {
+      "itemId": "baz",
+      "url": "https://slides.google.com",
+      "driveItem": {
+        "title": "baz slides",
+        "mimeType": "application/vnd.google-apps.presentation"
+      },
+      "justification": {
+        "displayText": { "textSegment": [{"text": "You opened on Monday"}]}
+      }
+    }
+  ]
+}
+)";
 }  // namespace
+
+// static
+const char DriveService::kLastDismissedTimePrefName[] =
+    "NewTabPage.Drive.LastDimissedTime";
+
+// static
+const base::TimeDelta DriveService::kDismissDuration =
+    base::TimeDelta::FromDays(14);
 
 DriveService::~DriveService() = default;
 
 DriveService::DriveService(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-    signin::IdentityManager* identity_manager)
+    signin::IdentityManager* identity_manager,
+    const std::string& application_locale,
+    PrefService* pref_service)
     : url_loader_factory_(std::move(url_loader_factory)),
-      identity_manager_(identity_manager) {}
+      identity_manager_(identity_manager),
+      application_locale_(application_locale),
+      pref_service_(pref_service) {}
+
+// static
+void DriveService::RegisterProfilePrefs(PrefRegistrySimple* registry) {
+  registry->RegisterTimePref(kLastDismissedTimePrefName, base::Time());
+}
 
 void DriveService::GetDriveFiles(GetFilesCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  callbacks_.push_back(std::move(callback));
+  if (callbacks_.size() > 1) {
+    return;
+  }
 
-  // TODO(crbug/1168763) May need to handle multiple requests after
-  // token_fetcher has been set.
+  // Bail if module is still dismissed.
+  if (!pref_service_->GetTime(kLastDismissedTimePrefName).is_null() &&
+      base::Time::Now() - pref_service_->GetTime(kLastDismissedTimePrefName) <
+          kDismissDuration) {
+    for (auto& callback : callbacks_) {
+      std::move(callback).Run(std::vector<drive::mojom::FilePtr>());
+    }
+    callbacks_.clear();
+    return;
+  }
+
+  // Skip fetch and jump straight to data parsing when serving fake data.
+  if (base::GetFieldTrialParamValueByFeature(
+          ntp_features::kNtpDriveModule,
+          ntp_features::kNtpDriveModuleDataParam) == "fake") {
+    data_decoder::DataDecoder::ParseJsonIsolated(
+        kFakeData, base::BindOnce(&DriveService::OnJsonParsed,
+                                  weak_factory_.GetWeakPtr()));
+    return;
+  }
+
   token_fetcher_ = std::make_unique<signin::PrimaryAccountAccessTokenFetcher>(
-      "ntp_drive_module", identity_manager_, signin::ScopeSet({kDriveScope}),
-      base::BindOnce(&DriveService::OnTokenReceived, weak_factory_.GetWeakPtr(),
-                     std::move(callback)),
+      "ntp_drive_module", identity_manager_,
+      signin::ScopeSet({GaiaConstants::kDriveReadOnlyOAuth2Scope}),
+      base::BindOnce(&DriveService::OnTokenReceived,
+                     weak_factory_.GetWeakPtr()),
       signin::PrimaryAccountAccessTokenFetcher::Mode::kImmediate,
       signin::ConsentLevel::kSync);
 }
 
-void DriveService::OnTokenReceived(GetFilesCallback callback,
-                                   GoogleServiceAuthError error,
+void DriveService::DismissModule() {
+  pref_service_->SetTime(kLastDismissedTimePrefName, base::Time::Now());
+}
+
+void DriveService::RestoreModule() {
+  pref_service_->SetTime(kLastDismissedTimePrefName, base::Time());
+}
+
+void DriveService::OnTokenReceived(GoogleServiceAuthError error,
                                    signin::AccessTokenInfo token_info) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   token_fetcher_.reset();
   if (error.state() != GoogleServiceAuthError::NONE) {
-    std::move(callback).Run(std::vector<drive::mojom::FilePtr>());
+    for (auto& callback : callbacks_) {
+      std::move(callback).Run(std::vector<drive::mojom::FilePtr>());
+    }
+    callbacks_.clear();
+    return;
+  }
+
+  // Skip fetch if data is cached and not expired.
+  // TODO(crbug.com/1221743): Leverage the standard HTTP cache once ItemSuggest
+  // supports GET requests.
+  if (cached_json_ && cached_json_token_ == token_info.token &&
+      /* We use std::max to guard against negative cache ages. This can happen,
+         for instance, when modifying the local clock. */
+      std::max((base::Time::Now() - cached_json_time_).InSeconds(),
+               INT64_C(0)) <
+          base::GetFieldTrialParamByFeatureAsInt(
+              ntp_features::kNtpDriveModule,
+              ntp_features::kNtpDriveModuleCacheMaxAgeSParam, 0)) {
+    data_decoder::DataDecoder::ParseJsonIsolated(
+        *cached_json_, base::BindOnce(&DriveService::OnJsonParsed,
+                                      weak_factory_.GetWeakPtr()));
     return;
   }
 
@@ -114,50 +245,63 @@ void DriveService::OnTokenReceived(GetFilesCallback callback,
   resource_request->headers.SetHeader(net::HttpRequestHeaders::kAuthorization,
                                       "Bearer " + token_info.token);
 
-  // TODO(crbug/1168763) Also need to handle multiple pending requests
-  // here as well.
-  if (url_loader_) {
-    return;
-  }
+  DCHECK(!url_loader_);
   url_loader_ = network::SimpleURLLoader::Create(std::move(resource_request),
                                                  kTrafficAnnotation);
   url_loader_->SetRetryOptions(0, network::SimpleURLLoader::RETRY_NEVER);
-  url_loader_->AttachStringForUpload(kRequestBody, "application/json");
+  url_loader_->AttachStringForUpload(
+      base::StringPrintf(kRequestBody, kPlatform, application_locale_.c_str(),
+                         base::GetFieldTrialParamValueByFeature(
+                             ntp_features::kNtpDriveModule,
+                             ntp_features::kNtpDriveModuleExperimentGroupParam)
+                             .c_str()),
+      "application/json");
   url_loader_->DownloadToString(
       url_loader_factory_.get(),
       base::BindOnce(&DriveService::OnJsonReceived, weak_factory_.GetWeakPtr(),
-                     std::move(callback)),
+                     token_info.token),
       kMaxResponseSize);
+  base::UmaHistogramSparse("NewTabPage.Modules.DataRequest",
+                           base::PersistentHash("drive"));
 }
 
-void DriveService::OnJsonReceived(
-    GetFilesCallback callback,
-    const std::unique_ptr<std::string> response_body) {
+void DriveService::OnJsonReceived(const std::string& token,
+                                  std::unique_ptr<std::string> response_body) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   const int net_error = url_loader_->NetError();
   url_loader_.reset();
 
   if (net_error != net::OK || !response_body) {
-    std::move(callback).Run(std::vector<drive::mojom::FilePtr>());
+    for (auto& callback : callbacks_) {
+      std::move(callback).Run(std::vector<drive::mojom::FilePtr>());
+    }
+    callbacks_.clear();
     return;
   }
+  cached_json_ = std::move(response_body);
+  cached_json_time_ = base::Time::Now();
+  cached_json_token_ = token;
   data_decoder::DataDecoder::ParseJsonIsolated(
-      *response_body,
-      base::BindOnce(&DriveService::OnJsonParsed, weak_factory_.GetWeakPtr(),
-                     std::move(callback)));
+      *cached_json_,
+      base::BindOnce(&DriveService::OnJsonParsed, weak_factory_.GetWeakPtr()));
 }
 
 void DriveService::OnJsonParsed(
-    GetFilesCallback callback,
     data_decoder::DataDecoder::ValueOrError result) {
   if (!result.value) {
-    std::move(callback).Run(std::vector<drive::mojom::FilePtr>());
+    for (auto& callback : callbacks_) {
+      std::move(callback).Run(std::vector<drive::mojom::FilePtr>());
+    }
+    callbacks_.clear();
     return;
   }
   auto* items = result.value->FindListPath("item");
   if (!items) {
-    std::move(callback).Run(std::vector<drive::mojom::FilePtr>());
+    for (auto& callback : callbacks_) {
+      std::move(callback).Run(std::vector<drive::mojom::FilePtr>());
+    }
+    callbacks_.clear();
     return;
   }
   std::vector<drive::mojom::FilePtr> document_list;
@@ -170,27 +314,30 @@ void DriveService::OnJsonParsed(
         justification_text_segments->GetList().size() == 0) {
       continue;
     }
-    // TODO(crbug/1179370): Verify what textSegments will be from ItemSuggest.
-    auto* justification_text =
-        justification_text_segments->GetList()[0].FindStringPath("text");
+    std::string justification_text;
+    for (auto& text_segment : justification_text_segments->GetList()) {
+      auto* justification_text_path = text_segment.FindStringPath("text");
+      if (!justification_text_path) {
+        continue;
+      }
+      justification_text += *justification_text_path;
+    }
     auto* id = item.FindStringKey("itemId");
-    if (!title || !mime_type || !justification_text || !id) {
+    auto* item_url = item.FindStringKey("url");
+    if (!title || !mime_type || justification_text.empty() || !id ||
+        !item_url || !GURL(*item_url).is_valid()) {
       continue;
     }
     auto mojo_drive_doc = drive::mojom::File::New();
     mojo_drive_doc->title = *title;
-    if (*mime_type == "application/vnd.google-apps.document") {
-      mojo_drive_doc->type = drive::mojom::FileType::kDoc;
-    } else if (*mime_type == "application/vnd.google-apps.spreadsheet") {
-      mojo_drive_doc->type = drive::mojom::FileType::kSheet;
-    } else if (*mime_type == "application/vnd.google-apps.presentation") {
-      mojo_drive_doc->type = drive::mojom::FileType::kSlide;
-    } else {
-      mojo_drive_doc->type = drive::mojom::FileType::kOther;
-    }
-    mojo_drive_doc->justification_text = *justification_text;
+    mojo_drive_doc->mime_type = *mime_type;
+    mojo_drive_doc->justification_text = justification_text;
     mojo_drive_doc->id = *id;
+    mojo_drive_doc->item_url = GURL(*item_url);
     document_list.push_back(std::move(mojo_drive_doc));
   }
-  std::move(callback).Run(std::move(document_list));
+  for (auto& callback : callbacks_) {
+    std::move(callback).Run(mojo::Clone(document_list));
+  }
+  callbacks_.clear();
 }

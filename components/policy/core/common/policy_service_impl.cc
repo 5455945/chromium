@@ -15,9 +15,8 @@
 #include "base/feature_list.h"
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/threading/sequenced_task_runner_handle.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
@@ -161,13 +160,19 @@ void RemapRenamedPolicies(PolicyMap* policies) {
 // Metrics should not be enforced so if this policy is set as mandatory
 // downgrade it to a recommended level policy.
 void DowngradeMetricsReportingToRecommendedPolicy(PolicyMap* policies) {
-  PolicyMap::Entry* policy =
-      policies->GetMutable(policy::key::kMetricsReportingEnabled);
-  if (policy && policy->level != POLICY_LEVEL_RECOMMENDED && policy->value() &&
-      policy->value()->is_bool() && policy->value()->GetBool()) {
-    policy->level = POLICY_LEVEL_RECOMMENDED;
-    policy->AddMessage(PolicyMap::MessageType::kInfo,
-                       IDS_POLICY_IGNORED_MANDATORY_REPORTING_POLICY);
+  // Capture both the Chrome-only and device-level policies on Chrome OS.
+  const std::vector<const char*> metrics_keys = {
+      policy::key::kMetricsReportingEnabled,
+      policy::key::kDeviceMetricsReportingEnabled};
+  for (const char* policy_key : metrics_keys) {
+    PolicyMap::Entry* policy = policies->GetMutable(policy_key);
+    if (policy && policy->level != POLICY_LEVEL_RECOMMENDED &&
+        policy->value() && policy->value()->is_bool() &&
+        policy->value()->GetBool()) {
+      policy->level = POLICY_LEVEL_RECOMMENDED;
+      policy->AddMessage(PolicyMap::MessageType::kInfo,
+                         IDS_POLICY_IGNORED_MANDATORY_REPORTING_POLICY);
+    }
   }
 }
 
@@ -198,7 +203,6 @@ PolicyServiceImpl::PolicyServiceImpl(Providers providers,
 
   for (auto* provider : providers_)
     provider->AddObserver(this);
-  CheckPolicyDomainStatus();
   // There are no observers yet, but calls to GetPolicies() should already get
   // the processed policy values.
   MergeAndTriggerUpdates();
@@ -214,20 +218,20 @@ PolicyServiceImpl::CreateWithThrottledInitialization(Providers providers,
 }
 
 PolicyServiceImpl::~PolicyServiceImpl() {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   for (auto* provider : providers_)
     provider->RemoveObserver(this);
 }
 
 void PolicyServiceImpl::AddObserver(PolicyDomain domain,
                                     PolicyService::Observer* observer) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   observers_[domain].AddObserver(observer);
 }
 
 void PolicyServiceImpl::RemoveObserver(PolicyDomain domain,
                                        PolicyService::Observer* observer) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   auto it = observers_.find(domain);
   if (it == observers_.end())
     return;
@@ -239,44 +243,44 @@ void PolicyServiceImpl::RemoveObserver(PolicyDomain domain,
 
 void PolicyServiceImpl::AddProviderUpdateObserver(
     ProviderUpdateObserver* observer) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   provider_update_observers_.AddObserver(observer);
 }
 
 void PolicyServiceImpl::RemoveProviderUpdateObserver(
     ProviderUpdateObserver* observer) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   provider_update_observers_.RemoveObserver(observer);
 }
 
 bool PolicyServiceImpl::HasProvider(
     ConfigurationPolicyProvider* provider) const {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return base::Contains(providers_, provider);
 }
 
 const PolicyMap& PolicyServiceImpl::GetPolicies(
     const PolicyNamespace& ns) const {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return policy_bundle_.Get(ns);
 }
 
 bool PolicyServiceImpl::IsInitializationComplete(PolicyDomain domain) const {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(domain >= 0 && domain < POLICY_DOMAIN_SIZE);
   return !initialization_throttled_ &&
          policy_domain_status_[domain] != PolicyDomainStatus::kUninitialized;
 }
 
 bool PolicyServiceImpl::IsFirstPolicyLoadComplete(PolicyDomain domain) const {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(domain >= 0 && domain < POLICY_DOMAIN_SIZE);
   return !initialization_throttled_ &&
          policy_domain_status_[domain] == PolicyDomainStatus::kPolicyReady;
 }
 
 void PolicyServiceImpl::RefreshPolicies(base::OnceClosure callback) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (!callback.is_null())
     refresh_callbacks_.push_back(std::move(callback));
@@ -285,7 +289,7 @@ void PolicyServiceImpl::RefreshPolicies(base::OnceClosure callback) {
     // Refresh is immediately complete if there are no providers. See the note
     // on OnUpdatePolicy() about why this is a posted task.
     update_task_ptr_factory_.InvalidateWeakPtrs();
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SequencedTaskRunnerHandle::Get()->PostTask(
         FROM_HERE, base::BindOnce(&PolicyServiceImpl::MergeAndTriggerUpdates,
                                   update_task_ptr_factory_.GetWeakPtr()));
   } else {
@@ -308,13 +312,15 @@ android::PolicyServiceAndroid* PolicyServiceImpl::GetPolicyServiceAndroid() {
 #endif
 
 void PolicyServiceImpl::UnthrottleInitialization() {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!initialization_throttled_)
     return;
 
   initialization_throttled_ = false;
+  std::vector<PolicyDomain> updated_domains;
   for (int domain = 0; domain < POLICY_DOMAIN_SIZE; ++domain)
-    MaybeNotifyPolicyDomainStatusChange(static_cast<PolicyDomain>(domain));
+    updated_domains.push_back(static_cast<PolicyDomain>(domain));
+  MaybeNotifyPolicyDomainStatusChange(updated_domains);
 }
 
 void PolicyServiceImpl::OnUpdatePolicy(ConfigurationPolicyProvider* provider) {
@@ -331,7 +337,7 @@ void PolicyServiceImpl::OnUpdatePolicy(ConfigurationPolicyProvider* provider) {
   // MergeAndTriggerUpdates. Also, cancel a pending update if there is any,
   // since both will produce the same PolicyBundle.
   update_task_ptr_factory_.InvalidateWeakPtrs();
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SequencedTaskRunnerHandle::Get()->PostTask(
       FROM_HERE, base::BindOnce(&PolicyServiceImpl::MergeAndTriggerUpdates,
                                 update_task_ptr_factory_.GetWeakPtr()));
 }
@@ -340,7 +346,7 @@ void PolicyServiceImpl::NotifyNamespaceUpdated(
     const PolicyNamespace& ns,
     const PolicyMap& previous,
     const PolicyMap& current) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   auto iterator = observers_.find(ns.domain);
   if (iterator != observers_.end()) {
     for (auto& observer : iterator->second)
@@ -402,6 +408,16 @@ void PolicyServiceImpl::MergeAndTriggerUpdates() {
   PolicyDictionaryMerger policy_dictionary_merger(
       std::move(policy_dictionaries_to_merge));
 
+  // Pass affiliation and CloudUserPolicyMerge values to both mergers.
+  const bool is_affiliated = chrome_policies.IsUserAffiliated();
+  const bool is_user_cloud_merging_enabled =
+      chrome_policies.GetValue(key::kCloudUserPolicyMerge) &&
+      chrome_policies.GetValue(key::kCloudUserPolicyMerge)->GetBool();
+  policy_list_merger.SetAllowUserCloudPolicyMerging(
+      is_affiliated && is_user_cloud_merging_enabled);
+  policy_dictionary_merger.SetAllowUserCloudPolicyMerging(
+      is_affiliated && is_user_cloud_merging_enabled);
+
   std::vector<PolicyMerger*> mergers{&policy_list_merger,
                                      &policy_dictionary_merger};
 
@@ -409,8 +425,8 @@ void PolicyServiceImpl::MergeAndTriggerUpdates() {
   if (atomic_policy_group_enabled)
     mergers.push_back(&policy_group_merger);
 
-  for (auto it = bundle.begin(); it != bundle.end(); ++it)
-    it->second->MergeValues(mergers);
+  for (auto& entry : bundle)
+    entry.second.MergeValues(mergers);
 
   for (auto& migrator : migrators_)
     migrator->Migrate(&bundle);
@@ -428,16 +444,16 @@ void PolicyServiceImpl::MergeAndTriggerUpdates() {
   while (it_new != end_new && it_old != end_old) {
     if (it_new->first < it_old->first) {
       // A new namespace is available.
-      NotifyNamespaceUpdated(it_new->first, kEmpty, *it_new->second);
+      NotifyNamespaceUpdated(it_new->first, kEmpty, it_new->second);
       ++it_new;
     } else if (it_old->first < it_new->first) {
       // A previously available namespace is now gone.
-      NotifyNamespaceUpdated(it_old->first, *it_old->second, kEmpty);
+      NotifyNamespaceUpdated(it_old->first, it_old->second, kEmpty);
       ++it_old;
     } else {
-      if (!it_new->second->Equals(*it_old->second)) {
+      if (!it_new->second.Equals(it_old->second)) {
         // An existing namespace's policies have changed.
-        NotifyNamespaceUpdated(it_new->first, *it_old->second, *it_new->second);
+        NotifyNamespaceUpdated(it_new->first, it_old->second, it_new->second);
       }
       ++it_new;
       ++it_old;
@@ -446,19 +462,24 @@ void PolicyServiceImpl::MergeAndTriggerUpdates() {
 
   // Send updates for the remaining new namespaces, if any.
   for (; it_new != end_new; ++it_new)
-    NotifyNamespaceUpdated(it_new->first, kEmpty, *it_new->second);
+    NotifyNamespaceUpdated(it_new->first, kEmpty, it_new->second);
 
   // Sends updates for the remaining removed namespaces, if any.
   for (; it_old != end_old; ++it_old)
-    NotifyNamespaceUpdated(it_old->first, *it_old->second, kEmpty);
+    NotifyNamespaceUpdated(it_old->first, it_old->second, kEmpty);
 
-  CheckPolicyDomainStatus();
+  const std::vector<PolicyDomain> updated_domains = UpdatePolicyDomainStatus();
   CheckRefreshComplete();
   NotifyProviderUpdatesPropagated();
+  // This has to go last as one of the observers might actually destroy `this`.
+  // See https://crbug.com/747817
+  MaybeNotifyPolicyDomainStatusChange(updated_domains);
 }
 
-void PolicyServiceImpl::CheckPolicyDomainStatus() {
-  DCHECK(thread_checker_.CalledOnValidThread());
+std::vector<PolicyDomain> PolicyServiceImpl::UpdatePolicyDomainStatus() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  std::vector<PolicyDomain> updated_domains;
 
   // Check if all the providers just became initialized for each domain; if so,
   // notify that domain's observers. If they were initialized, check if they had
@@ -483,25 +504,45 @@ void PolicyServiceImpl::CheckPolicyDomainStatus() {
       continue;
 
     policy_domain_status_[domain] = new_status;
-    MaybeNotifyPolicyDomainStatusChange(policy_domain);
+    updated_domains.push_back(static_cast<PolicyDomain>(domain));
   }
+  return updated_domains;
 }
+
 void PolicyServiceImpl::MaybeNotifyPolicyDomainStatusChange(
-    PolicyDomain policy_domain) {
-  if (initialization_throttled_ || policy_domain_status_[policy_domain] ==
-                                       PolicyDomainStatus::kUninitialized) {
-    return;
-  }
-
-  auto iter = observers_.find(policy_domain);
-  if (iter == observers_.end())
+    const std::vector<PolicyDomain>& updated_domains) {
+  if (initialization_throttled_)
     return;
 
-  for (auto& observer : iter->second) {
-    observer.OnPolicyServiceInitialized(policy_domain);
+  for (const auto policy_domain : updated_domains) {
     if (policy_domain_status_[policy_domain] ==
-        PolicyDomainStatus::kPolicyReady)
-      observer.OnFirstPoliciesLoaded(policy_domain);
+        PolicyDomainStatus::kUninitialized) {
+      continue;
+    }
+
+    auto iter = observers_.find(policy_domain);
+    if (iter == observers_.end())
+      continue;
+
+    // If and when crbug.com/1221454 gets fixed, we should drop the WeakPtr
+    // construction and checks here.
+    const auto weak_this = weak_ptr_factory_.GetWeakPtr();
+    for (auto& observer : iter->second) {
+      observer.OnPolicyServiceInitialized(policy_domain);
+      if (!weak_this) {
+        VLOG(1) << "PolicyService destroyed while notifying observers.";
+        return;
+      }
+      if (policy_domain_status_[policy_domain] ==
+          PolicyDomainStatus::kPolicyReady) {
+        observer.OnFirstPoliciesLoaded(policy_domain);
+        // If this gets hit, it implies that some OnFirstPoliciesLoaded()
+        // observer was changed to trigger the deletion of |this|. See
+        // crbug.com/1221454 for a similar problem with
+        // OnPolicyServiceInitialized().
+        CHECK(weak_this);
+      }
+    }
   }
 }
 

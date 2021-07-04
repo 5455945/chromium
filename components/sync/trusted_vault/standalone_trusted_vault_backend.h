@@ -18,10 +18,15 @@
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/sync/protocol/local_trusted_vault.pb.h"
 #include "components/sync/trusted_vault/trusted_vault_connection.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 class Clock;
 }  // namespace base
+
+namespace signin {
+struct AccountsInCookieJarInfo;
+}  // namespace signin
 
 namespace syncer {
 
@@ -80,12 +85,17 @@ class StandaloneTrustedVaultBackend
   // |account_info| will trigger a key download attempt.
   bool MarkKeysAsStale(const CoreAccountInfo& account_info);
 
-  // Removes all keys for all accounts from both memory and |file_path_|.
-  void RemoveAllStoredKeys();
-
   // Sets/resets |primary_account_|.
   void SetPrimaryAccount(
-      const base::Optional<CoreAccountInfo>& primary_account);
+      const absl::optional<CoreAccountInfo>& primary_account);
+
+  // Handles changes of accounts in cookie jar and removes keys for some
+  // accounts:
+  // 1. Non-primary account keys are removed if account isn't in cookie jar.
+  // 2. Primary account keys marked for deferred deletion if account isn't in
+  // cookie jar.
+  void UpdateAccountsInCookieJarInfo(
+      const signin::AccountsInCookieJarInfo& accounts_in_cookie_jar_info);
 
   // Returns whether recoverability of the keys is degraded and user action is
   // required to add a new method.
@@ -95,14 +105,15 @@ class StandaloneTrustedVaultBackend
   // Registers a new trusted recovery method that can be used to retrieve keys.
   void AddTrustedRecoveryMethod(const std::string& gaia_id,
                                 const std::vector<uint8_t>& public_key,
+                                int method_type_hint,
                                 base::OnceClosure cb);
 
-  base::Optional<CoreAccountInfo> GetPrimaryAccountForTesting() const;
+  absl::optional<CoreAccountInfo> GetPrimaryAccountForTesting() const;
 
   sync_pb::LocalDeviceRegistrationInfo GetDeviceRegistrationInfoForTesting(
       const std::string& gaia_id);
 
-  void SetRecoverabilityDegradedForTesting();
+  std::vector<uint8_t> GetLastAddedRecoveryMethodPublicKeyForTesting() const;
 
   void SetClockForTesting(base::Clock* clock);
 
@@ -117,18 +128,21 @@ class StandaloneTrustedVaultBackend
 
   // Attempts to register device in case it's not yet registered and currently
   // available local data is sufficient to do it.
-  void MaybeRegisterDevice(const std::string& gaia_id);
+  void MaybeRegisterDevice();
 
   // Called when device registration for |gaia_id| is completed (either
   // successfully or not). |data_| must contain LocalTrustedVaultPerUser for
   // given |gaia_id|.
-  void OnDeviceRegistered(const std::string& gaia_id,
-                          TrustedVaultRequestStatus status);
+  void OnDeviceRegistered(TrustedVaultRegistrationStatus status,
+                          int last_vault_key_version);
 
-  void OnKeysDownloaded(const std::string& gaia_id,
-                        TrustedVaultRequestStatus status,
+  void OnKeysDownloaded(TrustedVaultDownloadKeysStatus status,
                         const std::vector<std::vector<uint8_t>>& vault_keys,
                         int last_vault_key_version);
+
+  void OnTrustedRecoveryMethodAdded(base::OnceClosure cb,
+                                    TrustedVaultRegistrationStatus status,
+                                    int last_vault_key_version);
 
   void AbandonConnectionRequest();
 
@@ -138,11 +152,15 @@ class StandaloneTrustedVaultBackend
   // should be throttled now (certain amount of time should pass since the last
   // failed request). Handles the situation, when last failed request time is
   // set to the future.
-  bool AreConnectionRequestsThrottled(const std::string& gaia_id);
+  bool AreConnectionRequestsThrottled();
 
   // Records request failure time, that will be used to determine whether new
   // requests should be throttled.
-  void RecordFailedConnectionRequestForThrottling(const std::string& gaia_id);
+  void RecordFailedConnectionRequestForThrottling();
+
+  // Removes all data for non-primary accounts if they were previously marked
+  // for deletion due to accounts in cookie jar changes.
+  void RemoveNonPrimaryAccountKeysIfMarkedForDeletion();
 
   const base::FilePath file_path_;
 
@@ -159,22 +177,47 @@ class StandaloneTrustedVaultBackend
 
   // Only current |primary_account_| can be used for communication with trusted
   // vault server.
-  base::Optional<CoreAccountInfo> primary_account_;
+  absl::optional<CoreAccountInfo> primary_account_;
+
+  // If AddTrustedRecoveryMethod() gets invoked before SetPrimaryAccount(), the
+  // execution gets deferred until SetPrimaryAccount() is invoked.
+  struct PendingTrustedRecoveryMethod {
+    PendingTrustedRecoveryMethod();
+    PendingTrustedRecoveryMethod(PendingTrustedRecoveryMethod&) = delete;
+    PendingTrustedRecoveryMethod& operator=(PendingTrustedRecoveryMethod&) =
+        delete;
+    PendingTrustedRecoveryMethod(PendingTrustedRecoveryMethod&&);
+    PendingTrustedRecoveryMethod& operator=(PendingTrustedRecoveryMethod&&);
+    ~PendingTrustedRecoveryMethod();
+
+    std::string gaia_id;
+    std::vector<uint8_t> public_key;
+    int method_type_hint;
+    base::OnceClosure completion_callback;
+  };
+  absl::optional<PendingTrustedRecoveryMethod> pending_trusted_recovery_method_;
 
   // Used to plumb FetchKeys() result to the caller.
   FetchKeysCallback ongoing_fetch_keys_callback_;
 
   // Account used in last FetchKeys() call.
-  base::Optional<std::string> ongoing_fetch_keys_gaia_id_;
+  absl::optional<std::string> ongoing_fetch_keys_gaia_id_;
 
   // Destroying this will cancel the ongoing request.
   std::unique_ptr<TrustedVaultConnection::Request> ongoing_connection_request_;
+
+  // Same as above, but specifically used for recoverability-related requests.
+  // TODO(crbug.com/1201659): Move elsewhere.
+  std::unique_ptr<TrustedVaultConnection::Request>
+      ongoing_get_recoverability_request_;
+  std::unique_ptr<TrustedVaultConnection::Request>
+      ongoing_add_recovery_method_request_;
 
   // Used to determine current time, set to base::DefaultClock in prod and can
   // be overridden in tests.
   base::Clock* clock_;
 
-  bool is_recoverability_degraded_for_testing_ = false;
+  std::vector<uint8_t> last_added_recovery_method_public_key_for_testing_;
 };
 
 }  // namespace syncer

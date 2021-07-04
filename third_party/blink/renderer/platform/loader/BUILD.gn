@@ -12,14 +12,10 @@ make_names("make_platform_loader_generated_fetch_initiator_type_names") {
 }
 
 blink_platform_sources("loader") {
-  configs += [ "//build/config/compiler:noshadowing" ]
-
   sources = [
     "allowed_by_nosniff.cc",
     "allowed_by_nosniff.h",
     "child_url_loader_factory_bundle.cc",
-    "code_cache_loader.cc",
-    "code_cache_loader.h",
     "cors/cors.cc",
     "cors/cors.h",
     "cors/cors_error_string.cc",
@@ -56,6 +52,7 @@ blink_platform_sources("loader") {
     "fetch/https_state.h",
     "fetch/integrity_metadata.cc",
     "fetch/integrity_metadata.h",
+    "fetch/loader_freeze_mode.h",
     "fetch/loading_attribute_value.h",
     "fetch/loading_behavior_observer.h",
     "fetch/memory_cache.cc",
@@ -112,12 +109,18 @@ blink_platform_sources("loader") {
     "fetch/stale_revalidation_resource_client.cc",
     "fetch/stale_revalidation_resource_client.h",
     "fetch/subresource_web_bundle.h",
+    "fetch/subresource_web_bundle_list.cc",
+    "fetch/subresource_web_bundle_list.h",
     "fetch/text_resource_decoder_options.cc",
     "fetch/text_resource_decoder_options.h",
     "fetch/trust_token_params_conversion.cc",
     "fetch/trust_token_params_conversion.h",
     "fetch/unique_identifier.cc",
     "fetch/unique_identifier.h",
+    "fetch/url_loader/code_cache_loader.cc",
+    "fetch/url_loader/code_cache_loader.h",
+    "fetch/url_loader/dedicated_or_shared_worker_fetch_context_impl.cc",
+    "fetch/url_loader/dedicated_or_shared_worker_fetch_context_impl.h",
     "fetch/url_loader/mojo_url_loader_client.cc",
     "fetch/url_loader/mojo_url_loader_client.h",
     "fetch/url_loader/request_conversion.cc",
@@ -163,6 +166,7 @@ blink_platform_sources("loader") {
     "//services/metrics/public/cpp:ukm_builders",
     "//services/network/public/cpp",
     "//services/network/public/mojom:mojom_blink",
+    "//third_party/blink/public/common:buildflags",
     "//third_party/blink/public/mojom:mojom_platform_blink",
     "//third_party/blink/renderer/platform/blob:blob",
     "//third_party/blink/renderer/platform/instrumentation:instrumentation",

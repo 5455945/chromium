@@ -5,8 +5,10 @@
 #ifndef CHROME_BROWSER_ENTERPRISE_CONNECTORS_DEVICE_TRUST_SIGNAL_REPORTER_H_
 #define CHROME_BROWSER_ENTERPRISE_CONNECTORS_DEVICE_TRUST_SIGNAL_REPORTER_H_
 
-#include "chrome/browser/policy/messaging_layer/public/report_client.h"
+#include "base/threading/sequenced_task_runner_handle.h"
+#include "components/enterprise/common/proto/device_trust_report_event.pb.h"
 #include "components/policy/core/common/cloud/dm_token.h"
+#include "components/reporting/client/report_queue_provider.h"
 
 namespace enterprise_connectors {
 
@@ -15,32 +17,50 @@ class DeviceTrustSignalReporter {
   DeviceTrustSignalReporter();
   virtual ~DeviceTrustSignalReporter();
 
+  using Callback = base::OnceCallback<void(bool)>;
+
   // Before sending each message, |policy_check| is used to verify that
   // the specific ReportQueue is still allowed. Because the creation of
-  // ReportQueue is posted as an asynchronous task, |done_cb| is always called
-  // when ReportQueue initialization is finished, but this class is only usable
-  // after |done_cb| is called back with true.
-  void Init(base::RepeatingCallback<bool(void)> policy_check,
-            base::OnceCallback<void(bool)> done_cb);
+  // ReportQueue is posted as an asynchronous task, |done_cb| is always
+  // called when ReportQueue initialization is finished, but this class
+  // is only usable after |done_cb| is called back with true.
+  virtual void Init(base::RepeatingCallback<bool()> policy_check,
+                    Callback done_cb);
 
   // Init() must have completed and |done_cb| above must have been called
   // without error before calling SendReport(), otherwise browser will crash.
   // ReportQueue::Enqueue with |sent_cb|.
-  void SendReport(base::Value value, base::OnceCallback<void(bool)> sent_cb);
+  virtual void SendReport(base::Value value, Callback sent_cb) const;
+  virtual void SendReport(const DeviceTrustReportEvent* report,
+                          Callback sent_cb) const;
 
  protected:
-  void OnCreateReportQueueResponse(
-      base::OnceCallback<void(bool)> create_queue_cb,
-      reporting::ReportingClient::CreateReportQueueResponse
-          report_queue_result);
-
-  // Helper methods made virtual to be overwritten in unit tests.
+  // Helper methods made virtual and protected to be overridden in unit tests:
   virtual policy::DMToken GetDmToken() const;
-  virtual void PostCreateReportQueueTask(
-      reporting::ReportingClient::CreateReportQueueCallback create_queue_cb,
-      std::unique_ptr<reporting::ReportQueueConfiguration> config);
+
+  using QueueConfig = reporting::ReportQueueConfiguration;
+  using QueueConfigStatusOr = reporting::StatusOr<std::unique_ptr<QueueConfig>>;
+  using CreateQueueCallback =
+      reporting::ReportQueueProvider::CreateReportQueueCallback;
+  virtual QueueConfigStatusOr CreateQueueConfiguration(
+      const std::string& dm_token,
+      base::RepeatingCallback<bool()> policy_check) const;
+  virtual void PostCreateReportQueueTask(std::unique_ptr<QueueConfig> config,
+                                         CreateQueueCallback create_queue_cb);
+
+  // Override task posted in PostCreateReportQueueTask() for tests.
+  using QueueCreation = base::OnceCallback<void(std::unique_ptr<QueueConfig>,
+                                                CreateQueueCallback)>;
+  void SetQueueCreationForTesting(QueueCreation function);
 
  private:
+  void OnCreateReportQueueResponse(
+      Callback create_queue_cb,
+      reporting::ReportQueueProvider::CreateReportQueueResponse
+          report_queue_result);
+
+  QueueCreation create_queue_function_;
+
   std::unique_ptr<reporting::ReportQueue> report_queue_;
 
   enum class CreateQueueStatus { NOT_STARTED, IN_PROGRESS, DONE };

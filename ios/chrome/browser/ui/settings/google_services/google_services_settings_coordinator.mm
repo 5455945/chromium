@@ -6,6 +6,8 @@
 
 #include "base/mac/foundation_util.h"
 #include "components/google/core/common/google_util.h"
+#import "components/signin/public/identity_manager/identity_manager.h"
+#import "components/strings/grit/components_strings.h"
 #include "components/sync/driver/sync_service_utils.h"
 #include "ios/chrome/browser/application_context.h"
 #include "ios/chrome/browser/browser_state/chrome_browser_state.h"
@@ -14,10 +16,13 @@
 #include "ios/chrome/browser/signin/authentication_service.h"
 #import "ios/chrome/browser/signin/authentication_service_factory.h"
 #include "ios/chrome/browser/signin/identity_manager_factory.h"
-#include "ios/chrome/browser/sync/profile_sync_service_factory.h"
+#include "ios/chrome/browser/sync/sync_service_factory.h"
 #include "ios/chrome/browser/sync/sync_setup_service.h"
 #include "ios/chrome/browser/sync/sync_setup_service_factory.h"
+#import "ios/chrome/browser/ui/alert_coordinator/action_sheet_coordinator.h"
 #import "ios/chrome/browser/ui/authentication/authentication_flow.h"
+#import "ios/chrome/browser/ui/authentication/authentication_ui_util.h"
+#import "ios/chrome/browser/ui/authentication/signout_action_sheet_coordinator.h"
 #import "ios/chrome/browser/ui/commands/application_commands.h"
 #import "ios/chrome/browser/ui/commands/browsing_data_commands.h"
 #import "ios/chrome/browser/ui/commands/command_dispatcher.h"
@@ -32,7 +37,9 @@
 #import "ios/chrome/browser/ui/settings/sync/sync_encryption_passphrase_table_view_controller.h"
 #import "ios/chrome/browser/ui/table_view/table_view_utils.h"
 #include "ios/chrome/browser/ui/ui_feature_flags.h"
+#import "ios/chrome/grit/ios_strings.h"
 #import "ios/public/provider/chrome/browser/chrome_browser_provider.h"
+#include "ui/base/l10n/l10n_util.h"
 
 #if !defined(__has_feature) || !__has_feature(objc_arc)
 #error "This file requires ARC support."
@@ -56,6 +63,8 @@ using signin_metrics::PromoAction;
 @property(nonatomic, assign, readonly) AuthenticationService* authService;
 // Manages the authentication flow for a given identity.
 @property(nonatomic, strong) AuthenticationFlow* authenticationFlow;
+// Manages user's Google identities.
+@property(nonatomic, assign, readonly) signin::IdentityManager* identityManager;
 // View controller presented by this coordinator.
 @property(nonatomic, strong, readonly)
     GoogleServicesSettingsViewController* googleServicesSettingsViewController;
@@ -68,7 +77,10 @@ using signin_metrics::PromoAction;
 // be dismissed and the sync setup flag should not be marked as done. The sync
 // should be kept undecided, not marked as disabled.
 @property(nonatomic, assign) BOOL signinInterrupted;
-
+// Action sheets that provides options for sign out.
+@property(nonatomic, strong) ActionSheetCoordinator* signOutCoordinator;
+@property(nonatomic, strong)
+    SignoutActionSheetCoordinator* dataRetentionStrategyCoordinator;
 @end
 
 @implementation GoogleServicesSettingsCoordinator
@@ -112,8 +124,8 @@ using signin_metrics::PromoAction;
       self.browser->GetBrowserState());
   self.mediator.commandHandler = self;
   self.mediator.syncErrorHandler = self;
-  self.mediator.syncService = ProfileSyncServiceFactory::GetForBrowserState(
-      self.browser->GetBrowserState());
+  self.mediator.syncService =
+      SyncServiceFactory::GetForBrowserState(self.browser->GetBrowserState());
   viewController.modelDelegate = self.mediator;
   viewController.serviceDelegate = self.mediator;
   viewController.dispatcher = static_cast<
@@ -164,6 +176,11 @@ using signin_metrics::PromoAction;
 - (GoogleServicesSettingsViewController*)googleServicesSettingsViewController {
   return base::mac::ObjCCast<GoogleServicesSettingsViewController>(
       self.viewController);
+}
+
+- (signin::IdentityManager*)identityManager {
+  return IdentityManagerFactory::GetForBrowserState(
+      self.browser->GetBrowserState());
 }
 
 #pragma mark - SyncSettingsViewState
@@ -229,16 +246,29 @@ using signin_metrics::PromoAction;
   [self.baseNavigationController pushViewController:controller animated:YES];
 }
 
-- (void)openTrustedVaultReauth {
+- (void)openTrustedVaultReauthForFetchKeys {
   id<ApplicationCommands> applicationCommands =
       static_cast<id<ApplicationCommands>>(
           self.browser->GetCommandDispatcher());
   [applicationCommands
-      showTrustedVaultReauthenticationFromViewController:
+      showTrustedVaultReauthForFetchKeysFromViewController:
           self.googleServicesSettingsViewController
-                                        retrievalTrigger:
-                                            syncer::KeyRetrievalTriggerForUMA::
-                                                kSettings];
+                                                   trigger:
+                                                       syncer::
+                                                           KeyRetrievalTriggerForUMA::
+                                                               kSettings];
+}
+
+- (void)openTrustedVaultReauthForDegradedRecoverability {
+  id<ApplicationCommands> applicationCommands =
+      static_cast<id<ApplicationCommands>>(
+          self.browser->GetCommandDispatcher());
+  [applicationCommands
+      showTrustedVaultReauthForDegradedRecoverabilityFromViewController:
+          self.viewController
+                                                                trigger:
+                                                                    syncer::KeyRetrievalTriggerForUMA::
+                                                                        kSettings];
 }
 
 #pragma mark - GoogleServicesSettingsCommandHandler
@@ -259,6 +289,96 @@ using signin_metrics::PromoAction;
                }];
   [self.handler showSignin:command
         baseViewController:self.googleServicesSettingsViewController];
+}
+
+- (void)showSignOutFromTargetRect:(CGRect)targetRect
+                       completion:(signin_ui::CompletionCallback)completion {
+  DCHECK(completion);
+  SyncSetupService* syncSetupService =
+      SyncSetupServiceFactory::GetForBrowserState(
+          self.browser->GetBrowserState());
+  BOOL isSyncConsentGiven =
+      syncSetupService && syncSetupService->IsFirstSetupComplete();
+  NSString* title =
+      isSyncConsentGiven
+          ? l10n_util::GetNSString(IDS_IOS_SIGNOUT_DIALOG_TITLE_WITHOUT_SYNC)
+          : nil;
+  NSString* message =
+      isSyncConsentGiven
+          ? l10n_util::GetNSString(IDS_IOS_SIGNOUT_DIALOG_MESSAGE_WITH_SYNC)
+          : nil;
+  self.signOutCoordinator = [[ActionSheetCoordinator alloc]
+      initWithBaseViewController:self.viewController
+                         browser:self.browser
+                           title:title
+                         message:message
+                            rect:targetRect
+                            view:self.viewController.view];
+
+  __weak GoogleServicesSettingsCoordinator* weakSelf = self;
+  [self.signOutCoordinator
+      addItemWithTitle:l10n_util::GetNSString(
+                           IDS_IOS_SIGNOUT_DIALOG_SIGN_OUT_BUTTON)
+                action:^{
+                  if (!weakSelf) {
+                    return;
+                  }
+                  // Provide additional data retention options if the user is
+                  // syncing their data.
+                  if (weakSelf.identityManager->HasPrimaryAccount(
+                          signin::ConsentLevel::kSync)) {
+                    [weakSelf
+                        showDataRetentionOptionsWithTargetRect:targetRect
+                                                    completion:completion];
+                    return;
+                  }
+                  [weakSelf signOutWithCompletion:completion];
+                }
+                 style:UIAlertActionStyleDestructive];
+
+  [self.signOutCoordinator
+      addItemWithTitle:l10n_util::GetNSString(IDS_CANCEL)
+                action:^{
+                  weakSelf.signOutCoordinator = nil;
+                  completion(NO);
+                }
+                 style:UIAlertActionStyleCancel];
+  [self.signOutCoordinator start];
+}
+
+// Displays the option to keep or clear data for a syncing user.
+- (void)showDataRetentionOptionsWithTargetRect:(CGRect)targetRect
+                                    completion:(signin_ui::CompletionCallback)
+                                                   completion {
+  DCHECK(completion);
+  self.dataRetentionStrategyCoordinator = [[SignoutActionSheetCoordinator alloc]
+      initWithBaseViewController:self.viewController
+                         browser:self.browser
+                            rect:targetRect
+                            view:self.viewController.view];
+  __weak GoogleServicesSettingsCoordinator* weakSelf = self;
+  self.dataRetentionStrategyCoordinator.completion = ^(BOOL success) {
+    completion(success);
+    [weakSelf.dataRetentionStrategyCoordinator stop];
+    weakSelf.dataRetentionStrategyCoordinator = nil;
+  };
+  [self.dataRetentionStrategyCoordinator start];
+}
+
+// Signs the user out of Chrome, only clears data for managed accounts.
+- (void)signOutWithCompletion:(signin_ui::CompletionCallback)completion {
+  DCHECK(completion);
+  [self.baseViewController.view setUserInteractionEnabled:NO];
+  __weak GoogleServicesSettingsCoordinator* weakSelf = self;
+  self.authService->SignOut(
+      signin_metrics::USER_CLICKED_SIGNOUT_SETTINGS,
+      /*force_clear_browsing_data=*/NO, ^{
+        if (!weakSelf) {
+          return;
+        }
+        weakSelf.baseViewController.view.userInteractionEnabled = YES;
+        completion(YES);
+      });
 }
 
 - (void)signinFinishedWithSuccess:(BOOL)success {
@@ -313,6 +433,10 @@ using signin_metrics::PromoAction;
   DCHECK_EQ(self.manageSyncSettingsCoordinator, coordinator);
   [self.manageSyncSettingsCoordinator stop];
   self.manageSyncSettingsCoordinator = nil;
+}
+
+- (NSString*)manageSyncSettingsCoordinatorTitle {
+  return l10n_util::GetNSString(IDS_IOS_MANAGE_SYNC_SETTINGS_TITLE);
 }
 
 @end

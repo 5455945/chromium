@@ -9,7 +9,6 @@
 
 #include "ash/frame_throttler/frame_throttling_controller.h"
 #include "ash/keyboard/ui/keyboard_ui_controller.h"
-#include "ash/public/cpp/ash_features.h"
 #include "ash/public/cpp/window_properties.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
@@ -28,10 +27,11 @@
 #include "ash/wm/window_state.h"
 #include "ash/wm/window_util.h"
 #include "base/bind.h"
+#include "base/containers/cxx20_erase.h"
 #include "base/containers/unique_ptr_adapters.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/stl_util.h"
 #include "base/threading/thread_task_runner_handle.h"
+#include "base/trace_event/trace_event.h"
 #include "ui/views/widget/widget.h"
 #include "ui/wm/core/window_util.h"
 #include "ui/wm/public/activation_client.h"
@@ -117,7 +117,8 @@ OverviewController::~OverviewController() {
   }
 }
 
-bool OverviewController::StartOverview(OverviewEnterExitType type) {
+bool OverviewController::StartOverview(OverviewStartAction action,
+                                       OverviewEnterExitType type) {
   // No need to start overview if overview is currently active.
   if (InOverviewSession())
     return true;
@@ -126,10 +127,12 @@ bool OverviewController::StartOverview(OverviewEnterExitType type) {
     return false;
 
   ToggleOverview(type);
+  RecordOverviewStartAction(action);
   return true;
 }
 
-bool OverviewController::EndOverview(OverviewEnterExitType type) {
+bool OverviewController::EndOverview(OverviewEndAction action,
+                                     OverviewEnterExitType type) {
   // No need to end overview if overview is already ended.
   if (!InOverviewSession())
     return true;
@@ -138,6 +141,7 @@ bool OverviewController::EndOverview(OverviewEnterExitType type) {
     return false;
 
   ToggleOverview(type);
+  RecordOverviewEndAction(action);
   return true;
 }
 
@@ -447,7 +451,7 @@ void OverviewController::ToggleOverview(OverviewEnterExitType type) {
       OnStartingAnimationComplete(/*canceled=*/false);
 
     if (!last_overview_session_time_.is_null()) {
-      UMA_HISTOGRAM_LONG_TIMES("Ash.WindowSelector.TimeBetweenUse",
+      UMA_HISTOGRAM_LONG_TIMES("Ash.Overview.TimeBetweenUse",
                                base::Time::Now() - last_overview_session_time_);
     }
   }

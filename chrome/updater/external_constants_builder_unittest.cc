@@ -14,21 +14,25 @@
 #include "chrome/updater/constants.h"
 #include "chrome/updater/external_constants.h"
 #include "chrome/updater/external_constants_builder.h"
+#include "chrome/updater/external_constants_default.h"
 #include "chrome/updater/external_constants_override.h"
 #include "chrome/updater/updater_branding.h"
+#include "chrome/updater/updater_scope.h"
 #include "chrome/updater/util.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 namespace updater {
-
 namespace {
 
 void DeleteOverridesFile() {
-  base::FilePath target;
-  if (!GetBaseDirectory(&target)) {
+  const absl::optional<base::FilePath> target =
+      GetBaseDirectory(GetUpdaterScope());
+  if (!target) {
     LOG(ERROR) << "Could not get base directory to clean out overrides file.";
+    return;
   }
-  if (!base::DeleteFile(target.AppendASCII(kDevOverrideFileName))) {
+  if (!base::DeleteFile(target->AppendASCII(kDevOverrideFileName))) {
     // Note: base::DeleteFile returns `true` if there is no such file, which
     // is what we want; "file already doesn't exist" is not an error here.
     LOG(ERROR) << "Could not delete override file.";
@@ -56,7 +60,7 @@ TEST_F(ExternalConstantsBuilderTests, TestOverridingNothing) {
 
   std::unique_ptr<ExternalConstantsOverrider> verifier =
       ExternalConstantsOverrider::FromDefaultJSONFile(
-          CreateDefaultExternalConstantsForTesting());
+          CreateDefaultExternalConstants());
 
   EXPECT_TRUE(verifier->UseCUP());
 
@@ -78,7 +82,7 @@ TEST_F(ExternalConstantsBuilderTests, TestOverridingEverything) {
 
   std::unique_ptr<ExternalConstantsOverrider> verifier =
       ExternalConstantsOverrider::FromDefaultJSONFile(
-          CreateDefaultExternalConstantsForTesting());
+          CreateDefaultExternalConstants());
 
   EXPECT_FALSE(verifier->UseCUP());
 
@@ -99,7 +103,7 @@ TEST_F(ExternalConstantsBuilderTests, TestPartialOverrideWithMultipleURLs) {
 
   std::unique_ptr<ExternalConstantsOverrider> verifier =
       ExternalConstantsOverrider::FromDefaultJSONFile(
-          CreateDefaultExternalConstantsForTesting());
+          CreateDefaultExternalConstants());
 
   EXPECT_TRUE(verifier->UseCUP());
 
@@ -127,7 +131,7 @@ TEST_F(ExternalConstantsBuilderTests, TestClearedEverything) {
 
   std::unique_ptr<ExternalConstantsOverrider> verifier =
       ExternalConstantsOverrider::FromDefaultJSONFile(
-          CreateDefaultExternalConstantsForTesting());
+          CreateDefaultExternalConstants());
   EXPECT_TRUE(verifier->UseCUP());
 
   std::vector<GURL> urls = verifier->UpdateURL();
@@ -154,7 +158,7 @@ TEST_F(ExternalConstantsBuilderTests, TestOverSet) {
   // Only the second set of values should be observed.
   std::unique_ptr<ExternalConstantsOverrider> verifier =
       ExternalConstantsOverrider::FromDefaultJSONFile(
-          CreateDefaultExternalConstantsForTesting());
+          CreateDefaultExternalConstants());
   EXPECT_FALSE(verifier->UseCUP());
 
   std::vector<GURL> urls = verifier->UpdateURL();
@@ -177,7 +181,7 @@ TEST_F(ExternalConstantsBuilderTests, TestReuseBuilder) {
 
   std::unique_ptr<ExternalConstantsOverrider> verifier =
       ExternalConstantsOverrider::FromDefaultJSONFile(
-          CreateDefaultExternalConstantsForTesting());
+          CreateDefaultExternalConstants());
 
   EXPECT_FALSE(verifier->UseCUP());
 
@@ -197,7 +201,7 @@ TEST_F(ExternalConstantsBuilderTests, TestReuseBuilder) {
   // We need a new overrider to verify because it only loads once.
   std::unique_ptr<ExternalConstantsOverrider> verifier2 =
       ExternalConstantsOverrider::FromDefaultJSONFile(
-          CreateDefaultExternalConstantsForTesting());
+          CreateDefaultExternalConstants());
 
   EXPECT_FALSE(verifier2->UseCUP());  // Not updated, value should be retained.
 

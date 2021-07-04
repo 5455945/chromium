@@ -6,10 +6,11 @@
 
 #include "base/run_loop.h"
 #include "build/build_config.h"
+#include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/views/controls/menu/menu_controller.h"
 
-#if defined(OS_APPLE)
+#if defined(OS_MAC)
 #include "ui/views/controls/menu/menu_closure_animation_mac.h"
 #endif
 
@@ -80,13 +81,13 @@ void MenuControllerTestApi::SetShowing(bool showing) {
 }
 
 void DisableMenuClosureAnimations() {
-#if defined(OS_APPLE)
+#if defined(OS_MAC)
   MenuClosureAnimationMac::DisableAnimationsForTesting();
 #endif
 }
 
 void WaitForMenuClosureAnimation() {
-#if defined(OS_APPLE)
+#if defined(OS_MAC)
   // TODO(https://crbug.com/982815): Replace this with Quit+Run.
   base::RunLoop().RunUntilIdle();
 #endif

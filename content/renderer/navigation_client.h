@@ -20,13 +20,13 @@ class NavigationClient : mojom::NavigationClient {
 
   // mojom::NavigationClient implementation:
   void CommitNavigation(
-      mojom::CommonNavigationParamsPtr common_params,
-      mojom::CommitNavigationParamsPtr commit_params,
+      blink::mojom::CommonNavigationParamsPtr common_params,
+      blink::mojom::CommitNavigationParamsPtr commit_params,
       network::mojom::URLResponseHeadPtr response_head,
       mojo::ScopedDataPipeConsumerHandle response_body,
       network::mojom::URLLoaderClientEndpointsPtr url_loader_client_endpoints,
       std::unique_ptr<blink::PendingURLLoaderFactoryBundle> subresource_loaders,
-      base::Optional<std::vector<blink::mojom::TransferrableURLLoaderPtr>>
+      absl::optional<std::vector<blink::mojom::TransferrableURLLoaderPtr>>
           subresource_overrides,
       blink::mojom::ControllerServiceWorkerInfoPtr
           controller_service_worker_info,
@@ -37,12 +37,13 @@ class NavigationClient : mojom::NavigationClient {
       blink::mojom::PolicyContainerPtr policy_container,
       CommitNavigationCallback callback) override;
   void CommitFailedNavigation(
-      mojom::CommonNavigationParamsPtr common_params,
-      mojom::CommitNavigationParamsPtr commit_params,
+      blink::mojom::CommonNavigationParamsPtr common_params,
+      blink::mojom::CommitNavigationParamsPtr commit_params,
       bool has_stale_copy_in_cache,
       int error_code,
+      int extended_error_code,
       const net::ResolveErrorInfo& resolve_error_info,
-      const base::Optional<std::string>& error_page_content,
+      const absl::optional<std::string>& error_page_content,
       std::unique_ptr<blink::PendingURLLoaderFactoryBundle> subresource_loaders,
       blink::mojom::PolicyContainerPtr policy_container,
       CommitFailedNavigationCallback callback) override;

@@ -43,7 +43,7 @@ Here's what works well:
 Please keep this doc up-to-date. VS Code is still in active development and
 subject to changes. This doc is checked into the Chromium git repo, so if you
 make changes, read the [documentation
-guidelines](https://chromium.googlesource.com/chromium/src/+/master/docs/documentation_guidelines.md)
+guidelines](https://chromium.googlesource.com/chromium/src/+/main/docs/documentation_guidelines.md)
 and [submit a change list](https://www.chromium.org/developers/contributing-code).
 
 All file paths and commands have been tested on Linux. Windows and Mac might
@@ -381,6 +381,26 @@ You might want to disable git status autorefresh to save battery.
 
 ```
 "git.autorefresh": false,
+```
+
+#### Editing in multiple Git repositories
+If you frequently work in multiple Git repositories that are part of the Chromium repository, you might find that the built-in tooling does not work as expected for files that exist below folders that are part of a `.gitignore` file checked in to Chromium.
+
+To work around this, you can add the directories you edit as separate `folders` entries in your workspace configuration, and ensure that the directories that are ignored in Chromium are listed **before** the Chromium `src` path.
+
+To edit this, go to `Settings` -> Select the `Workspace` tab, and choose to open as JSON (button in the top right), and configure `folders` like this (change paths to match your local setup and usage):
+
+```
+{
+  "folders": [
+    {
+      "path": "chromium/src/third_party/perfetto"
+    },
+    {
+      "path": "chromium/src"
+    }
+  ]
+}
 ```
 
 ### Unable to open $File resource is not available when debugging Chromium on Linux

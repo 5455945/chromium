@@ -287,7 +287,7 @@ V8PerIsolateData::FindOrCreateEternalNameCache(
   auto it = eternal_name_cache_.find(lookup_key);
   const Vector<v8::Eternal<v8::Name>>* vector = nullptr;
   if (UNLIKELY(it == eternal_name_cache_.end())) {
-    v8::Isolate* isolate = this->GetIsolate();
+    v8::Isolate* isolate = GetIsolate();
     Vector<v8::Eternal<v8::Name>> new_vector(names.size());
     std::transform(names.begin(), names.end(), new_vector.begin(),
                    [isolate](const char* name) {
@@ -358,6 +358,16 @@ void V8PerIsolateData::SetProfilerGroup(
 
 V8PerIsolateData::GarbageCollectedData* V8PerIsolateData::ProfilerGroup() {
   return profiler_group_;
+}
+
+void V8PerIsolateData::SetCanvasResourceTracker(
+    V8PerIsolateData::GarbageCollectedData* canvas_resource_tracker) {
+  canvas_resource_tracker_ = canvas_resource_tracker;
+}
+
+V8PerIsolateData::GarbageCollectedData*
+V8PerIsolateData::CanvasResourceTracker() {
+  return canvas_resource_tracker_;
 }
 
 }  // namespace blink

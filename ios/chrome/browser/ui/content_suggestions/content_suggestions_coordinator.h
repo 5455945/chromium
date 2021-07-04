@@ -13,9 +13,12 @@ class WebState;
 
 @class BubblePresenter;
 @class ContentSuggestionsHeaderViewController;
+@class DiscoverFeedMetricsRecorder;
 @protocol NewTabPageCommands;
 @protocol NewTabPageControllerDelegate;
+@protocol NewTabPageFeedDelegate;
 @class NTPHomeMediator;
+@protocol ThumbStripSupporting;
 @class ViewRevealingVerticalPanHandler;
 
 // Coordinator to manage the Suggestions UI via a
@@ -39,6 +42,10 @@ class WebState;
 // The pan gesture handler for the view controller.
 @property(nonatomic, weak) ViewRevealingVerticalPanHandler* panGestureHandler;
 
+// Allows for the in-flight enabling/disabling of the thumb strip.
+@property(nonatomic, weak, readonly) id<ThumbStripSupporting>
+    thumbStripSupporting;
+
 // NTP Mediator used by this Coordinator.
 // TODO(crbug.com/1114792): Move all usage of this mediator to NTPCoordinator.
 // It might also be necessary to split it and create a ContentSuggestions
@@ -48,8 +55,15 @@ class WebState;
 // Command handler for NTP related commands.
 @property(nonatomic, weak) id<NewTabPageCommands> ntpCommandHandler;
 
+// Delegate for providing information relating to the feed.
+@property(nonatomic, weak) id<NewTabPageFeedDelegate> ntpFeedDelegate;
+
 // Bubble presenter for displaying IPH bubbles relating to the NTP.
 @property(nonatomic, strong) BubblePresenter* bubblePresenter;
+
+// Metrics recorder for the Discover feed events related to ContentSuggestions.
+@property(nonatomic, strong)
+    DiscoverFeedMetricsRecorder* discoverFeedMetricsRecorder;
 
 // Dismisses all modals owned by the NTP mediator.
 - (void)dismissModals;
@@ -79,9 +93,8 @@ class WebState;
 // Constrains the named layout guide for the Discover header menu button.
 - (void)constrainDiscoverHeaderMenuButtonNamedGuide;
 
-// YES if the Discover feed is currently visible.
-- (BOOL)isDiscoverFeedVisible;
-
+// Configure Content Suggestions if showing the Start Surface.
+- (void)configureStartSurfaceIfNeeded;
 @end
 
 #endif  // IOS_CHROME_BROWSER_UI_CONTENT_SUGGESTIONS_CONTENT_SUGGESTIONS_COORDINATOR_H_

@@ -34,8 +34,8 @@
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #include "base/files/file_path.h"
+#include "chrome/browser/ash/policy/core/browser_policy_connector_chromeos.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
 #include "chrome/browser/device_identity/device_identity_provider.h"
 #include "chrome/browser/device_identity/device_oauth2_token_service_factory.h"
 #include "components/user_manager/user_manager.h"
@@ -58,9 +58,8 @@ std::unique_ptr<InvalidationService> CreateInvalidationServiceForSenderId(
       base::BindRepeating(
           &PerUserTopicSubscriptionManager::Create, identity_provider,
           profile->GetPrefs(),
-          base::RetainedRef(
-              content::BrowserContext::GetDefaultStoragePartition(profile)
-                  ->GetURLLoaderFactoryForBrowserProcess())),
+          base::RetainedRef(profile->GetDefaultStoragePartition()
+                                ->GetURLLoaderFactoryForBrowserProcess())),
       instance_id::InstanceIDProfileServiceFactory::GetForProfile(profile)
           ->driver(),
       profile->GetPrefs(), sender_id);
@@ -124,7 +123,7 @@ KeyedService* ProfileInvalidationProviderFactory::BuildServiceInstanceFor(
       g_browser_process->platform_part()->browser_policy_connector_chromeos();
   if (user_manager::UserManager::IsInitialized() &&
       user_manager::UserManager::Get()->IsLoggedInAsKioskApp() &&
-      connector->IsEnterpriseManaged()) {
+      connector->IsDeviceEnterpriseManaged()) {
     identity_provider = std::make_unique<DeviceIdentityProvider>(
         DeviceOAuth2TokenServiceFactory::Get());
   }
@@ -133,8 +132,8 @@ KeyedService* ProfileInvalidationProviderFactory::BuildServiceInstanceFor(
   Profile* profile = Profile::FromBrowserContext(context);
 
   if (!identity_provider) {
-    identity_provider.reset(new ProfileIdentityProvider(
-        IdentityManagerFactory::GetForProfile(profile)));
+    identity_provider = std::make_unique<ProfileIdentityProvider>(
+        IdentityManagerFactory::GetForProfile(profile));
   }
   auto service =
       CreateInvalidationServiceForSenderId(profile, identity_provider.get(),

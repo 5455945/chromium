@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "base/containers/circular_deque.h"
-#include "base/optional.h"
 #include "base/threading/thread_checker.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/timer/timer.h"
@@ -28,6 +27,7 @@
 #include "media/gpu/android/surface_chooser_helper.h"
 #include "media/gpu/android/video_frame_factory.h"
 #include "media/gpu/media_gpu_export.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace media {
 
@@ -79,7 +79,6 @@ class MEDIA_GPU_EXPORT MediaCodecVideoDecoder final : public VideoDecoder {
       std::unique_ptr<VideoFrameFactory> video_frame_factory);
 
   // VideoDecoder implementation:
-  std::string GetDisplayName() const override;
   VideoDecoderType GetDecoderType() const override;
   void Initialize(const VideoDecoderConfig& config,
                   bool low_delay,
@@ -243,7 +242,7 @@ class MEDIA_GPU_EXPORT MediaCodecVideoDecoder final : public VideoDecoder {
   bool waiting_for_key_ = false;
 
   // The reason for the current drain operation if any.
-  base::Optional<DrainType> drain_type_;
+  absl::optional<DrainType> drain_type_;
 
   // The current reset cb if a Reset() is in progress.
   base::OnceClosure reset_cb_;
@@ -331,6 +330,9 @@ class MEDIA_GPU_EXPORT MediaCodecVideoDecoder final : public VideoDecoder {
 
   // Width, in pixels, of the resolution that we last told the codec about.
   int last_width_ = 0;
+
+  // KEY_MAX_INPUT_SIZE configured for the current codec.
+  size_t max_input_size_ = 0;
 
   // Optional crypto object from the Cdm.
   base::android::ScopedJavaGlobalRef<jobject> media_crypto_;

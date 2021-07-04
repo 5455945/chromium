@@ -28,6 +28,15 @@ extern const char kSixthTabOpened[];
 // The user made a new tab group.
 extern const char kTabGroupCreated[];
 
+// A tab was closed when there are eight or more tabs in the browser.
+extern const char kClosedTabWithEightOrMore[];
+// A tab was added to reading list.
+extern const char kReadingListItemAdded[];
+// Reading list was opened.
+extern const char kReadingListMenuOpened[];
+// Bookmark star button was clicked opening the menu.
+extern const char kBookmarkStarMenuOpened[];
+
 // All conditions for reopen closed tab IPH were met. Since this IPH needs to
 // track user events (opening/closing tabs, focusing the omnibox, etc) on the
 // second level, it must be done manually.
@@ -49,6 +58,9 @@ extern const char kFocusModeOpened[];
 // All conditions for show Focus Mode IPH were met.
 extern const char kFocusModeConditionsMet[];
 
+// Tab Search tab strip was opened by the user.
+extern const char kTabSearchOpened[];
+
 // The WebUI tab strip was closed by the user.
 extern const char kWebUITabStripClosed[];
 // The WebUI tab strip was opened by the user.
@@ -56,6 +68,9 @@ extern const char kWebUITabStripOpened[];
 
 // The PWA was installed by the user.
 extern const char kDesktopPwaInstalled[];
+
+// Omnibox displayed the updated connection security indicator.
+extern const char kUpdatedConnectionSecurityIndicatorDisplayed[];
 
 #endif  // defined(OS_WIN) || defined(OS_APPLE) || defined(OS_LINUX) ||
         // defined(OS_CHROMEOS)

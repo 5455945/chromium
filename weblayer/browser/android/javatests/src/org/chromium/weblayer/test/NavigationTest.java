@@ -96,6 +96,7 @@ public class NavigationTest {
             private Uri mUri;
             private boolean mIsSameDocument;
             private int mHttpStatusCode;
+            private Map<String, String> mResponseHeaders;
             private List<Uri> mRedirectChain;
             private @LoadError int mLoadError;
             private @NavigationState int mNavigationState;
@@ -105,6 +106,7 @@ public class NavigationTest {
             private boolean mIsFormSubmission;
             private Uri mReferrer;
             private Page mPage;
+            private int mNavigationEntryOffset;
 
             public void notifyCalled(Navigation navigation) {
                 notifyCalled(navigation, false);
@@ -130,6 +132,12 @@ public class NavigationTest {
                     if (getPage) {
                         mPage = navigation.getPage();
                     }
+                }
+                if (majorVersion >= 91) {
+                    mResponseHeaders = navigation.getResponseHeaders();
+                }
+                if (majorVersion >= 92) {
+                    mNavigationEntryOffset = navigation.getNavigationEntryOffset();
                 }
                 notifyCalled();
             }
@@ -163,6 +171,10 @@ public class NavigationTest {
                 return mHttpStatusCode;
             }
 
+            public Map<String, String> getResponseHeaders() {
+                return mResponseHeaders;
+            }
+
             @NavigationState
             public int getNavigationState() {
                 return mNavigationState;
@@ -190,6 +202,10 @@ public class NavigationTest {
 
             public Page getPage() {
                 return mPage;
+            }
+
+            public int getNavigationEntryOffset() {
+                return mNavigationEntryOffset;
             }
         }
 
@@ -1150,10 +1166,10 @@ public class NavigationTest {
     }
 
     private void navigateToStream(InstrumentationActivity activity, String mimeType,
-            String cacheControl) throws Exception {
+            String cacheControl, String html) throws Exception {
         int curOnFirstContentfulPaintCount =
                 mCallback.onFirstContentfulPaintCallback.getCallCount();
-        InputStream stream = new ByteArrayInputStream(STREAM_HTML.getBytes(StandardCharsets.UTF_8));
+        InputStream stream = new ByteArrayInputStream(html.getBytes(StandardCharsets.UTF_8));
         WebResourceResponse response = new WebResourceResponse(mimeType, "UTF-8", stream);
         if (cacheControl != null) {
             Map<String, String> headers = new HashMap<>();
@@ -1167,6 +1183,11 @@ public class NavigationTest {
                         -> activity.getTab().getNavigationController().navigate(
                                 Uri.parse(STREAM_URL), params));
         mCallback.onFirstContentfulPaintCallback.waitForCallback(curOnFirstContentfulPaintCount);
+    }
+
+    private void navigateToStream(InstrumentationActivity activity, String mimeType,
+            String cacheControl) throws Exception {
+        navigateToStream(activity, mimeType, cacheControl, STREAM_HTML);
     }
 
     private void assertStreamContent() throws Exception {
@@ -1286,6 +1307,39 @@ public class NavigationTest {
         runOnUiThreadBlocking(() -> { activity.getTab().getNavigationController().goBack(); });
         mCallback.onFailedCallback.assertCalledWith(
                 curFailedCount, STREAM_URL, LoadError.CONNECTIVITY_ERROR);
+    }
+
+    // Verifies that a request which uses a stream can still set the user agent that is used for
+    // subresources.
+    @Test
+    @SmallTest
+    // The flags are necessary for the following reasons:
+    // ignore-certificate-errors: TestWebServer doesn't have a real cert.
+    @CommandLineFlags.Add({"ignore-certificate-errors"})
+    public void testWebResponseWithUserAgent() throws Exception {
+        InstrumentationActivity activity = mActivityTestRule.launchShellWithUrl(URL1);
+        TestThreadUtils.runOnUiThreadBlocking(() -> { activity.getBrowser().setTopView(null); });
+        setNavigationCallback(activity);
+
+        // Avoid mixed http/https errors since the stream url is https.
+        TestWebServer testServer = TestWebServer.startSsl();
+        String scriptUrl = testServer.setResponse("/foo.js", "", null);
+        String streamHtml = "<html><script src='" + scriptUrl + "'/>bar</html>";
+
+        String customUserAgent = "custom-ua";
+        UserAgentSetter setter = new UserAgentSetter(customUserAgent);
+        registerNavigationCallback(setter);
+
+        navigateToStream(activity, "", null, streamHtml);
+
+        // Ensure the script is fetched.
+        CriteriaHelper.pollInstrumentationThread(
+                ()
+                        -> Criteria.checkThat(
+                                testServer.getLastRequest("/foo.js"), Matchers.notNullValue()));
+
+        String actualUserAgent = testServer.getLastRequest("/foo.js").headerValue("User-Agent");
+        assertEquals(customUserAgent, actualUserAgent);
     }
 
     @MinWebLayerVersion(88)
@@ -1446,5 +1500,55 @@ public class NavigationTest {
         assertEquals(page1, page3);
 
         mCallback.onPageDestroyedCallback.assertCalledWith(curOnPageDestroyedCount, page2);
+    }
+
+    @MinWebLayerVersion(91)
+    @Test
+    @SmallTest
+    public void testResponseHeaders() throws Exception {
+        InstrumentationActivity activity = mActivityTestRule.launchShellWithUrl(null);
+        setNavigationCallback(activity);
+
+        int curCompletedCount = mCallback.onCompletedCallback.getCallCount();
+
+        String url = mActivityTestRule.getTestServer().getURL("/echo");
+        mActivityTestRule.navigateAndWait(url);
+
+        mCallback.onCompletedCallback.assertCalledWith(curCompletedCount, url);
+
+        Map<String, String> headers = mCallback.onCompletedCallback.getResponseHeaders();
+        assertEquals(headers.get("Content-Type"), "text/html");
+    }
+
+    @MinWebLayerVersion(92)
+    @Test
+    @SmallTest
+    public void testGetNavigationEntryOffset() throws Exception {
+        InstrumentationActivity activity = mActivityTestRule.launchShellWithUrl(URL1);
+        setNavigationCallback(activity);
+
+        mActivityTestRule.navigateAndWait(URL2);
+        assertEquals(1, mCallback.onCompletedCallback.getNavigationEntryOffset());
+
+        mActivityTestRule.navigateAndWait(URL3);
+        assertEquals(1, mCallback.onCompletedCallback.getNavigationEntryOffset());
+
+        NavigationController navigationController =
+                runOnUiThreadBlocking(() -> activity.getTab().getNavigationController());
+
+        navigateAndWaitForCompletion(URL2, () -> navigationController.goBack());
+        assertEquals(-1, mCallback.onCompletedCallback.getNavigationEntryOffset());
+
+        navigateAndWaitForCompletion(URL3, () -> navigationController.goForward());
+        assertEquals(1, mCallback.onCompletedCallback.getNavigationEntryOffset());
+
+        navigateAndWaitForCompletion(URL3, () -> navigationController.reload());
+        assertEquals(0, mCallback.onCompletedCallback.getNavigationEntryOffset());
+
+        navigateAndWaitForCompletion(URL1, () -> navigationController.goToIndex(0));
+        assertEquals(-2, mCallback.onCompletedCallback.getNavigationEntryOffset());
+
+        navigateAndWaitForCompletion(URL3, () -> navigationController.goToIndex(2));
+        assertEquals(2, mCallback.onCompletedCallback.getNavigationEntryOffset());
     }
 }

@@ -10,9 +10,11 @@
 #include "base/containers/flat_map.h"
 #include "base/macros.h"
 #include "base/observer_list.h"
+#include "base/sequence_checker.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "cc/paint/paint_canvas.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/models/menu_separator_types.h"
 #include "ui/gfx/geometry/rect.h"
@@ -146,14 +148,6 @@ class NATIVE_THEME_EXPORT NativeTheme {
                             // Win)
   };
 
-  // This enum represents the available unique security chip color states.
-  enum class SecurityChipColorId {
-    DEFAULT,
-    SECURE,
-    SECURE_WITH_CERT,
-    DANGEROUS,
-  };
-
   // Each structure below holds extra information needed when painting a given
   // part.
 
@@ -219,6 +213,7 @@ class NATIVE_THEME_EXPORT NativeTheme {
     SkColor arrow_color;
     SkColor background_color;
     int classic_state;  // Used on Windows when uxtheme is not available.
+    float zoom;
   };
 
   struct MenuBackgroundExtraParams {
@@ -232,6 +227,7 @@ class NATIVE_THEME_EXPORT NativeTheme {
     int value_rect_y;
     int value_rect_width;
     int value_rect_height;
+    float zoom;
   };
 
   struct ScrollbarArrowExtraParams {
@@ -275,6 +271,7 @@ class NATIVE_THEME_EXPORT NativeTheme {
     bool is_overlay;
     ScrollbarOverlayColorTheme scrollbar_theme;
     ScrollbarOrientation orientation;  // Used on Mac for drawing gradients.
+    float scale_from_dip;
   };
 #endif
 
@@ -298,6 +295,7 @@ class NATIVE_THEME_EXPORT NativeTheme {
     int classic_state;  // Used on Windows when uxtheme is not available.
     bool has_border;
     bool auto_complete_active;
+    float zoom;
   };
 
   struct TrackbarExtraParams {
@@ -340,13 +338,13 @@ class NATIVE_THEME_EXPORT NativeTheme {
                                        float height) const;
 
   // Paint the part to the canvas.
-  virtual void Paint(
-      cc::PaintCanvas* canvas,
-      Part part,
-      State state,
-      const gfx::Rect& rect,
-      const ExtraParams& extra,
-      ColorScheme color_scheme = ColorScheme::kDefault) const = 0;
+  virtual void Paint(cc::PaintCanvas* canvas,
+                     Part part,
+                     State state,
+                     const gfx::Rect& rect,
+                     const ExtraParams& extra,
+                     ColorScheme color_scheme = ColorScheme::kDefault,
+                     const absl::optional<SkColor>& accent_color = 0) const = 0;
 
   // Paint part during state transition, used for overlay scrollbar state
   // transition animation.
@@ -396,10 +394,15 @@ class NATIVE_THEME_EXPORT NativeTheme {
     kMaxValue = kWindowText,
   };
 
-  // Return a color from the system theme.
-  virtual SkColor GetSystemColor(
+  // Returns a color from the system theme.
+  SkColor GetSystemColor(
       ColorId color_id,
       ColorScheme color_scheme = ColorScheme::kDefault) const;
+
+  // Returns an un-tinted or unprocessed color from the system theme before
+  // processing.
+  SkColor GetUnprocessedSystemColor(ColorId color_id,
+                                    ColorScheme color_scheme) const;
 
   // Returns a shared instance of the native theme that should be used for web
   // rendering. Do not use it in a normal application context (i.e. browser).
@@ -423,7 +426,10 @@ class NATIVE_THEME_EXPORT NativeTheme {
   void RemoveObserver(NativeThemeObserver* observer);
 
   // Notify observers of native theme changes.
-  virtual void NotifyObservers();
+  virtual void NotifyOnNativeThemeUpdated();
+
+  // Notify observers of caption style changes.
+  virtual void NotifyOnCaptionStyleUpdated();
 
   // Returns whether the user has an explicit contrast preference, i.e. whether
   // we are in forced colors mode or PreferredContrast is set.
@@ -453,13 +459,13 @@ class NATIVE_THEME_EXPORT NativeTheme {
   virtual PreferredContrast GetPreferredContrast() const;
 
   // Returns the system's caption style.
-  virtual base::Optional<CaptionStyle> GetSystemCaptionStyle() const;
+  virtual absl::optional<CaptionStyle> GetSystemCaptionStyle() const;
 
   virtual ColorScheme GetDefaultSystemColorScheme() const;
 
   virtual const std::map<SystemThemeColor, SkColor>& GetSystemColors() const;
 
-  base::Optional<SkColor> GetSystemThemeColor(
+  absl::optional<SkColor> GetSystemThemeColor(
       SystemThemeColor theme_color) const;
 
   bool HasDifferentSystemColors(
@@ -496,6 +502,10 @@ class NATIVE_THEME_EXPORT NativeTheme {
   explicit NativeTheme(bool should_only_use_dark_colors);
   virtual ~NativeTheme();
 
+  // Gets the color from the color provider if using a color provider is enable.
+  absl::optional<SkColor> GetColorProviderColor(ColorId color_id,
+                                                ColorScheme color_scheme) const;
+
   // Whether high contrast is forced via command-line flag.
   bool IsForcedHighContrast() const;
   // Whether dark mode is forced via command-line flag.
@@ -521,6 +531,14 @@ class NATIVE_THEME_EXPORT NativeTheme {
   // platform behaviors.
   virtual void ConfigureWebInstance() {}
 
+  // TODO(http://crbug.com/1057754): Remove this.
+  virtual bool AllowColorPipelineRedirection(ColorScheme color_scheme) const;
+
+  // Returns a color from the system theme, pre-Color Pipeline.
+  virtual SkColor GetSystemColorDeprecated(ColorId color_id,
+                                           ColorScheme color_scheme,
+                                           bool apply_processing) const;
+
   // Allows one native theme to observe changes in another. For example, the
   // web native theme for Windows observes the corresponding ui native theme in
   // order to receive changes regarding the state of dark mode, forced colors
@@ -544,6 +562,10 @@ class NATIVE_THEME_EXPORT NativeTheme {
   mutable std::map<SystemThemeColor, SkColor> system_colors_;
 
  private:
+  SkColor GetSystemColorCommon(ColorId color_id,
+                               ColorScheme color_scheme,
+                               bool apply_processing) const;
+
   // Observers to notify when the native theme changes.
   base::ObserverList<NativeThemeObserver>::Unchecked native_theme_observers_;
 
@@ -551,6 +573,8 @@ class NATIVE_THEME_EXPORT NativeTheme {
   bool forced_colors_ = false;
   PreferredColorScheme preferred_color_scheme_ = PreferredColorScheme::kLight;
   PreferredContrast preferred_contrast_ = PreferredContrast::kNoPreference;
+
+  SEQUENCE_CHECKER(sequence_checker_);
 
   DISALLOW_COPY_AND_ASSIGN(NativeTheme);
 };

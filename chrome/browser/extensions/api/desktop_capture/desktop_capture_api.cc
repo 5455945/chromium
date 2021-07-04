@@ -6,7 +6,6 @@
 
 #include "base/command_line.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/extensions/chrome_extension_function_details.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_switches.h"
@@ -46,7 +45,7 @@ DesktopCaptureChooseDesktopMediaFunction::Run() {
   DesktopCaptureRequestsRegistry::GetInstance()->AddRequest(source_process_id(),
                                                             request_id_, this);
 
-  args_->Remove(0, NULL);
+  args_->EraseListIter(args_->GetList().begin());
 
   std::unique_ptr<api::desktop_capture::ChooseDesktopMedia::Params> params =
       api::desktop_capture::ChooseDesktopMedia::Params::Create(*args_);
@@ -55,7 +54,7 @@ DesktopCaptureChooseDesktopMediaFunction::Run() {
   // |web_contents| is the WebContents for which the stream is created, and will
   // also be used to determine where to show the picker's UI.
   content::WebContents* web_contents = NULL;
-  base::string16 target_name;
+  std::u16string target_name;
   GURL origin;
   if (params->target_tab) {
     if (!params->target_tab->url) {
@@ -81,10 +80,10 @@ DesktopCaptureChooseDesktopMediaFunction::Run() {
       return RespondNow(Error(kDesktopCaptureApiNoTabIdError));
     }
 
-    ChromeExtensionFunctionDetails details(this);
-    if (!ExtensionTabUtil::GetTabById(*(params->target_tab->id),
-                                      details.GetProfile(), true,
-                                      &web_contents)) {
+    if (!ExtensionTabUtil::GetTabById(
+            *(params->target_tab->id),
+            Profile::FromBrowserContext(browser_context()), true,
+            &web_contents)) {
       return RespondNow(Error(kDesktopCaptureApiInvalidTabIdError));
     }
     DCHECK(web_contents);

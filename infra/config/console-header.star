@@ -14,7 +14,7 @@ HEADER = headers.header(
         ),
         headers.oncall(
             name = "Chromium Branches",
-            branch_selector = branches.STANDARD_BRANCHES,
+            branch_selector = [branches.STANDARD_BRANCHES, branches.DESKTOP_EXTENDED_STABLE_BRANCHES],
             url = "https://chrome-ops-rotation-proxy.appspot.com/current/oncallator:chrome-branch-sheriff",
         ),
         headers.oncall(
@@ -23,7 +23,7 @@ HEADER = headers.header(
         ),
         headers.oncall(
             name = "iOS",
-            url = "https://chrome-ops-rotation-proxy.appspot.com/current/grotation:chrome-ios-build-sheriff",
+            url = "https://chrome-ops-rotation-proxy.appspot.com/current/oncallator:chrome-ios",
         ),
         headers.oncall(
             name = "ChromeOS",
@@ -31,7 +31,7 @@ HEADER = headers.header(
         ),
         headers.oncall(
             name = "GPU",
-            url = "https://chrome-ops-rotation-proxy.appspot.com/current/grotation:chrome-gpu-pixel-wrangling",
+            url = "https://chrome-ops-rotation-proxy.appspot.com/current/oncallator:chrome-gpu-pixel-wrangler",
         ),
         headers.oncall(
             name = "ANGLE",
@@ -206,7 +206,7 @@ HEADER = headers.header(
                 ),
                 headers.link(
                     text = "chromiumos",
-                    branch_selector = branches.LTS_MILESTONE,
+                    branch_selector = branches.CROS_LTS_MILESTONE,
                     url = "/p/{}/g/chromium.chromiumos".format(settings.project),
                     alt = "ChromiumOS console",
                 ),
@@ -256,7 +256,7 @@ HEADER = headers.header(
                 ),
                 headers.link(
                     text = "chromiumos",
-                    branch_selector = branches.LTS_MILESTONE,
+                    branch_selector = branches.CROS_LTS_MILESTONE,
                     url = "/p/{}/g/tryserver.chromium.chromiumos/builders".format(settings.project),
                     alt = "ChromiumOS",
                 ),
@@ -344,7 +344,7 @@ HEADER = headers.header(
             ]],
         ),
         headers.console_group(
-            branch_selector = branches.LTS_BRANCHES,
+            branch_selector = branches.CROS_LTS_BRANCHES,
             console_ids = ["{}/{}".format(settings.project, c) for c in [
                 "chromium.chromiumos",
             ]],

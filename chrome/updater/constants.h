@@ -13,6 +13,9 @@ namespace updater {
 // The updater specific app ID.
 extern const char kUpdaterAppId[];
 
+// The app ID used to qualify the updater.
+extern const char kQualificationAppId[];
+
 // "0.0.0.0". Historically, a null version has been used to indicate a
 // new install.
 extern const char kNullVersion[];
@@ -192,6 +195,12 @@ constexpr int kErrorFailedToLockPrefsMutex = 1;
 constexpr int kErrorFailedToSwap = 2;
 
 // Policy Management constants.
+// The maximum value allowed for policy AutoUpdateCheckPeriodMinutes.
+constexpr int kMaxAutoUpdateCheckPeriodMinutes = 43200;
+
+// The maximum value allowed for policy UpdatesSuppressedDurationMin.
+constexpr int kMaxUpdatesSuppressedDurationMinutes = 960;
+
 extern const char kProxyModeDirect[];
 extern const char kProxyModeAutoDetect[];
 extern const char kProxyModePacScript[];
@@ -218,6 +227,10 @@ constexpr int kErrorFailedToMoveDownloadedFile = 5;
 
 constexpr double kInitialDelay = 60;
 constexpr int kServerKeepAliveSeconds = 10;
+
+// The maximum number of server starts before the updater uninstalls itself
+// while waiting for the first app registration.
+constexpr int kMaxServerStartsBeforeFirstReg = 24;
 
 }  // namespace updater
 

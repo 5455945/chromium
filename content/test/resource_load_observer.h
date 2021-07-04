@@ -54,7 +54,7 @@ class ResourceLoadObserver : public WebContentsObserver {
       const base::TimeTicks& after_request);
 
   // Returns the resource with the given url if found, otherwise nullptr.
-  blink::mojom::ResourceLoadInfoPtr* FindResource(const GURL& original_url);
+  blink::mojom::ResourceLoadInfoPtr* GetResource(const GURL& original_url);
 
   void Reset();
 
@@ -67,6 +67,7 @@ class ResourceLoadObserver : public WebContentsObserver {
       const GlobalRequestID& request_id,
       const blink::mojom::ResourceLoadInfo& resource_load_info) override;
   void DidLoadResourceFromMemoryCache(
+      content::RenderFrameHost* render_frame_host,
       const GURL& url,
       const std::string& mime_type,
       network::mojom::RequestDestination request_destination) override;

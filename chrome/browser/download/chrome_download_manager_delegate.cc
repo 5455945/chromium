@@ -5,6 +5,7 @@
 #include "chrome/browser/download/chrome_download_manager_delegate.h"
 
 #include <algorithm>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -19,7 +20,6 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/path_service.h"
 #include "base/rand_util.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
@@ -28,8 +28,6 @@
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/data_reduction_proxy/data_reduction_proxy_chrome_settings.h"
-#include "chrome/browser/data_reduction_proxy/data_reduction_proxy_chrome_settings_factory.h"
 #include "chrome/browser/download/download_core_service.h"
 #include "chrome/browser/download/download_core_service_factory.h"
 #include "chrome/browser/download/download_crx_util.h"
@@ -71,7 +69,8 @@
 #include "components/prefs/pref_member.h"
 #include "components/prefs/pref_service.h"
 #include "components/safe_browsing/buildflags.h"
-#include "components/safe_browsing/core/file_type_policies.h"
+#include "components/safe_browsing/content/browser/download/download_stats.h"
+#include "components/safe_browsing/content/common/file_type_policies.h"
 #include "components/services/quarantine/public/mojom/quarantine.mojom.h"
 #include "components/services/quarantine/quarantine_impl.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -89,7 +88,6 @@
 #include "net/base/mime_util.h"
 #include "net/base/network_change_notifier.h"
 #include "ppapi/buildflags/buildflags.h"
-#include "services/network/public/cpp/network_connection_tracker.h"
 #include "ui/base/l10n/l10n_util.h"
 
 #if defined(OS_ANDROID)
@@ -101,7 +99,7 @@
 #include "chrome/browser/download/android/download_open_source.h"
 #include "chrome/browser/download/android/download_utils.h"
 #include "chrome/browser/download/android/mixed_content_download_infobar_delegate.h"
-#include "chrome/browser/infobars/infobar_service.h"
+#include "components/infobars/content/content_infobar_manager.h"
 #include "net/http/http_content_disposition.h"
 #else
 #include "chrome/browser/ui/browser.h"
@@ -133,6 +131,7 @@ using download::DownloadPathReservationTracker;
 using download::PathValidationResult;
 using safe_browsing::DownloadFileType;
 using safe_browsing::DownloadProtectionService;
+using ConnectionType = net::NetworkChangeNotifier::ConnectionType;
 
 namespace {
 
@@ -226,7 +225,7 @@ using CanDownloadCallback =
 void CheckCanDownload(const content::WebContents::Getter& web_contents_getter,
                       const GURL& url,
                       const std::string& request_method,
-                      base::Optional<url::Origin> request_initiator,
+                      absl::optional<url::Origin> request_initiator,
                       bool from_download_cross_origin_redirect,
                       CanDownloadCallback can_download_cb) {
   DownloadRequestLimiter* limiter =
@@ -246,7 +245,7 @@ void OnDownloadAcquireFileAccessPermissionDone(
     const content::WebContents::Getter& web_contents_getter,
     const GURL& url,
     const std::string& request_method,
-    base::Optional<url::Origin> request_initiator,
+    absl::optional<url::Origin> request_initiator,
     CanDownloadCallback can_download_cb,
     bool granted) {
   if (granted) {
@@ -271,7 +270,7 @@ void OnDownloadDialogClosed(
       break;
     case DownloadLocationDialogResult::USER_CANCELED:
       std::move(callback).Run(DownloadConfirmationResult::CANCELED,
-                              base::FilePath(), base::nullopt);
+                              base::FilePath(), absl::nullopt);
       break;
     case DownloadLocationDialogResult::DUPLICATE_DIALOG:
       // TODO(xingliu): Figure out the dialog behavior on multiple downloads.
@@ -368,8 +367,8 @@ void MaybeReportDangerousDownloadBlocked(
     router->OnDangerousDownloadEvent(
         download->GetURL(), download_path,
         base::HexEncode(raw_digest_sha256.data(), raw_digest_sha256.size()),
-        danger_type, download->GetMimeType(), download->GetTotalBytes(),
-        safe_browsing::EventResult::BLOCKED);
+        danger_type, download->GetMimeType(), /*scan_id*/ "",
+        download->GetTotalBytes(), safe_browsing::EventResult::BLOCKED);
   }
 #endif
 }
@@ -383,7 +382,7 @@ ChromeDownloadManagerDelegate::ChromeDownloadManagerDelegate(Profile* profile)
       download_prefs_(new DownloadPrefs(profile)),
       is_file_picker_showing_(false) {
 #if defined(OS_ANDROID)
-  download_dialog_bridge_.reset(new DownloadDialogBridge);
+  download_dialog_bridge_ = std::make_unique<DownloadDialogBridge>();
 #endif
 }
 
@@ -412,9 +411,16 @@ void ChromeDownloadManagerDelegate::ShowDownloadDialog(
     bool supports_later_dialog,
     DownloadDialogBridge::DialogCallback callback) {
   DCHECK(download_dialog_bridge_);
-  download_dialog_bridge_->ShowDialog(native_window, total_bytes, dialog_type,
-                                      suggested_path, supports_later_dialog,
-                                      std::move(callback));
+  auto connection_type = net::NetworkChangeNotifier::GetConnectionType();
+  bool show_date_time_picker = DownloadDialogBridge::ShouldShowDateTimePicker();
+
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          download::switches::kDownloadLaterDebugOnWifi)) {
+    connection_type = net::NetworkChangeNotifier::ConnectionType::CONNECTION_2G;
+  }
+  download_dialog_bridge_->ShowDialog(
+      native_window, total_bytes, connection_type, dialog_type, suggested_path,
+      supports_later_dialog, show_date_time_picker, std::move(callback));
 }
 
 void ChromeDownloadManagerDelegate::SetDownloadDialogBridgeForTesting(
@@ -457,8 +463,8 @@ void ChromeDownloadManagerDelegate::GetNextId(
     content::DownloadIdCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   if (profile_->IsOffTheRecord()) {
-    content::BrowserContext::GetDownloadManager(profile_->GetOriginalProfile())
-        ->GetNextId(std::move(callback));
+    profile_->GetOriginalProfile()->GetDownloadManager()->GetNextId(
+        std::move(callback));
     return;
   }
   if (!next_id_retrieved_) {
@@ -671,8 +677,7 @@ bool ChromeDownloadManagerDelegate::ShouldOpenDownload(
     // CRX_INSTALLER_DONE will fire when the install completes.  At that
     // time, Observe() will call the passed callback.
     registrar_.Add(
-        this,
-        extensions::NOTIFICATION_CRX_INSTALLER_DONE,
+        this, extensions::NOTIFICATION_CRX_INSTALLER_DONE,
         content::Source<extensions::CrxInstaller>(crx_installer.get()));
 
     crx_installers_[crx_installer.get()] = std::move(callback);
@@ -835,8 +840,7 @@ bool ChromeDownloadManagerDelegate::IsMostRecentDownloadItemAtFilePath(
 
   std::vector<DownloadItem*> all_downloads;
   for (auto* profile : profiles_to_check) {
-    content::DownloadManager* manager =
-        content::BrowserContext::GetDownloadManager(profile);
+    content::DownloadManager* manager = profile->GetDownloadManager();
     if (manager)
       manager->GetAllDownloads(&all_downloads);
   }
@@ -879,7 +883,7 @@ ChromeDownloadManagerDelegate::ApplicationClientIdForFileScanning() {
 }
 
 DownloadProtectionService*
-    ChromeDownloadManagerDelegate::GetDownloadProtectionService() {
+ChromeDownloadManagerDelegate::GetDownloadProtectionService() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 #if BUILDFLAG(FULL_SAFE_BROWSING)
   safe_browsing::SafeBrowsingService* sb_service =
@@ -950,12 +954,11 @@ void ChromeDownloadManagerDelegate::RequestConfirmation(
 #if defined(OS_ANDROID)
   content::WebContents* web_contents =
       content::DownloadItemUtils::GetWebContents(download);
-  if (base::FeatureList::IsEnabled(features::kDownloadsLocationChange)) {
     if (reason == DownloadConfirmationReason::SAVE_AS) {
       // If this is a 'Save As' download, just run without confirmation.
       std::move(callback).Run(
           DownloadConfirmationResult::CONTINUE_WITHOUT_CONFIRMATION,
-          suggested_path, base::nullopt /*download_schedule*/);
+          suggested_path, absl::nullopt /*download_schedule*/);
       return;
     }
 
@@ -966,7 +969,7 @@ void ChromeDownloadManagerDelegate::RequestConfirmation(
       if (reason == DownloadConfirmationReason::PREFERENCE) {
         std::move(callback).Run(
             DownloadConfirmationResult::CONTINUE_WITHOUT_CONFIRMATION,
-            suggested_path, base::nullopt /*download_schedule*/);
+            suggested_path, absl::nullopt /*download_schedule*/);
         return;
       }
 
@@ -974,7 +977,7 @@ void ChromeDownloadManagerDelegate::RequestConfirmation(
         OnDownloadCanceled(download, true /* has_no_external_storage */);
         std::move(callback).Run(DownloadConfirmationResult::CANCELED,
                                 base::FilePath(),
-                                base::nullopt /*download_schedule*/);
+                                absl::nullopt /*download_schedule*/);
         return;
       }
 
@@ -985,7 +988,7 @@ void ChromeDownloadManagerDelegate::RequestConfirmation(
       OnDownloadCanceled(download, false /* has_no_external_storage */);
       std::move(callback).Run(DownloadConfirmationResult::CANCELED,
                               base::FilePath(),
-                              base::nullopt /*download_schedule*/);
+                              absl::nullopt /*download_schedule*/);
       return;
     }
 
@@ -997,15 +1000,16 @@ void ChromeDownloadManagerDelegate::RequestConfirmation(
       if (!base::android::GetDownloadsDirectory(&download_dir)) {
         std::move(callback).Run(DownloadConfirmationResult::CANCELED,
                                 base::FilePath(),
-                                base::nullopt /*download_schedule*/);
+                                absl::nullopt /*download_schedule*/);
         return;
       }
 
-      if (!ShouldShowDownloadLaterDialog() &&
+      bool show_download_later_dialog = ShouldShowDownloadLaterDialog(download);
+      if (!show_download_later_dialog &&
           !download_prefs_->PromptForDownload() && web_contents) {
         android::ChromeDuplicateDownloadInfoBarDelegate::Create(
-            InfoBarService::FromWebContents(web_contents), download,
-            suggested_path, std::move(callback));
+            infobars::ContentInfoBarManager::FromWebContents(web_contents),
+            download, suggested_path, std::move(callback));
         return;
       }
 
@@ -1017,7 +1021,7 @@ void ChromeDownloadManagerDelegate::RequestConfirmation(
           base::BindOnce(
               &ChromeDownloadManagerDelegate::GenerateUniqueFileNameDone,
               weak_ptr_factory_.GetWeakPtr(), native_window,
-              std::move(callback)));
+              show_download_later_dialog, std::move(callback)));
       return;
     }
 
@@ -1046,61 +1050,9 @@ void ChromeDownloadManagerDelegate::RequestConfirmation(
     gfx::NativeWindow native_window = web_contents->GetTopLevelNativeWindow();
     ShowDownloadDialog(
         native_window, download->GetTotalBytes(), dialog_type, suggested_path,
-        ShouldShowDownloadLaterDialog(),
+        ShouldShowDownloadLaterDialog(download),
         base::BindOnce(&OnDownloadDialogClosed, std::move(callback)));
     return;
-  }
-
-  switch (reason) {
-    case DownloadConfirmationReason::NONE:
-      NOTREACHED();
-      return;
-
-    case DownloadConfirmationReason::TARGET_PATH_NOT_WRITEABLE:
-      OnDownloadCanceled(download, true /* has_no_external_storage */);
-      std::move(callback).Run(DownloadConfirmationResult::CANCELED,
-                              base::FilePath(),
-                              base::nullopt /*download_schedule*/);
-      return;
-
-    case DownloadConfirmationReason::PREFERENCE:
-    case DownloadConfirmationReason::NAME_TOO_LONG:
-    case DownloadConfirmationReason::TARGET_NO_SPACE:
-      // These are errors. But rather than cancel the download we are going
-      // to continue with the current path so that the download will get
-      // interrupted again.
-      //
-      // Ideally we'd allow the user to try another location, but on
-      // Android, the user doesn't have much of a choice (currently). So we
-      // skip the prompt and try the same location.
-
-    case DownloadConfirmationReason::SAVE_AS:
-      std::move(callback).Run(
-          DownloadConfirmationResult::CONTINUE_WITHOUT_CONFIRMATION,
-          suggested_path, base::nullopt /*download_schedule*/);
-      return;
-
-    case DownloadConfirmationReason::TARGET_CONFLICT:
-      if (web_contents) {
-        android::ChromeDuplicateDownloadInfoBarDelegate::Create(
-            InfoBarService::FromWebContents(web_contents), download,
-            suggested_path, std::move(callback));
-        return;
-      }
-      FALLTHROUGH;
-
-    // If we cannot reserve the path and the WebContent is already gone,
-    // there is no way to prompt user for an infobar. This could happen
-    // after chrome gets killed, and user tries to resume a download while
-    // another app has created the target file (not the temporary
-    // .crdownload file).
-    case DownloadConfirmationReason::UNEXPECTED:
-      OnDownloadCanceled(download, false /* has_no_external_storage */);
-      std::move(callback).Run(DownloadConfirmationResult::CANCELED,
-                              base::FilePath(),
-                              base::nullopt /*download_schedule*/);
-      return;
-  }
 
 #else   // !OS_ANDROID
   // Desktop Chrome displays a file picker for all confirmation needs. We can do
@@ -1122,7 +1074,7 @@ void ChromeDownloadManagerDelegate::OnConfirmationCallbackComplete(
     DownloadConfirmationResult result,
     const base::FilePath& virtual_path) {
   std::move(callback).Run(result, virtual_path,
-                          base::nullopt /*download_schedule*/);
+                          absl::nullopt /*download_schedule*/);
   if (!file_picker_callbacks_.empty()) {
     base::ThreadTaskRunnerHandle::Get()->PostTask(
         FROM_HERE, std::move(file_picker_callbacks_.front()));
@@ -1161,6 +1113,7 @@ void ChromeDownloadManagerDelegate::ShowFilePickerForDownload(
 #if defined(OS_ANDROID)
 void ChromeDownloadManagerDelegate::GenerateUniqueFileNameDone(
     gfx::NativeWindow native_window,
+    bool show_download_later_dialog,
     DownloadTargetDeterminerDelegate::ConfirmationCallback callback,
     PathValidationResult result,
     const base::FilePath& target_path) {
@@ -1168,12 +1121,11 @@ void ChromeDownloadManagerDelegate::GenerateUniqueFileNameDone(
   // with the filename automatically set to be the unique filename.
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (result == PathValidationResult::SUCCESS) {
-    bool show_download_later = ShouldShowDownloadLaterDialog();
-    if (download_prefs_->PromptForDownload() || show_download_later) {
+    if (download_prefs_->PromptForDownload() || show_download_later_dialog) {
       ShowDownloadDialog(
           native_window, 0 /* total_bytes */,
           DownloadLocationDialogType::NAME_CONFLICT, target_path,
-          show_download_later,
+          show_download_later_dialog,
           base::BindOnce(&OnDownloadDialogClosed, std::move(callback)));
       return;
     }
@@ -1182,12 +1134,12 @@ void ChromeDownloadManagerDelegate::GenerateUniqueFileNameDone(
     // target path.
     std::move(callback).Run(
         DownloadConfirmationResult::CONTINUE_WITHOUT_CONFIRMATION, target_path,
-        base::nullopt /*download_schedule*/);
+        absl::nullopt /*download_schedule*/);
   } else {
     // If the name generation failed, fail the download.
     std::move(callback).Run(DownloadConfirmationResult::FAILED,
                             base::FilePath(),
-                            base::nullopt /*download_schedule*/);
+                            absl::nullopt /*download_schedule*/);
   }
 }
 
@@ -1196,48 +1148,34 @@ void ChromeDownloadManagerDelegate::OnDownloadCanceled(
     bool has_no_external_storage) {
   DownloadManagerService::OnDownloadCanceled(download, has_no_external_storage);
 }
-#endif  // defined(OS_ANDROID)
 
-bool ChromeDownloadManagerDelegate::ShouldShowDownloadLaterDialog() const {
+bool ChromeDownloadManagerDelegate::ShouldShowDownloadLaterDialog(
+    const download::DownloadItem* download) const {
   if (!base::FeatureList::IsEnabled(download::features::kDownloadLater) ||
-      profile_->IsOffTheRecord()) {
+      profile_->IsOffTheRecord() || !download_prefs_->PromptDownloadLater()) {
     return false;
   }
 
-  bool require_cellular = base::GetFieldTrialParamByFeatureAsBool(
-      download::features::kDownloadLater,
-      download::features::kDownloadLaterRequireCellular,
-      /*default_value=*/true);
+  // Show download later dialog on slow network connection types.
+  using ConnectionType = net::NetworkChangeNotifier::ConnectionType;
+  auto network_type = net::NetworkChangeNotifier::GetConnectionType();
+  bool met_network_condition =
+      network_type == ConnectionType::CONNECTION_2G ||
+      network_type == ConnectionType::CONNECTION_BLUETOOTH;
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           download::switches::kDownloadLaterDebugOnWifi)) {
-    require_cellular = false;
+    met_network_condition = true;
   }
 
-  bool on_cellular = network::NetworkConnectionTracker::IsConnectionCellular(
-      network::mojom::ConnectionType(
-          net::NetworkChangeNotifier::GetConnectionType()));
+  int64_t min_file_size_kb =
+      static_cast<int64_t>(DownloadDialogBridge::GetDownloadLaterMinFileSize());
 
-  // Check whether network condition is met.
-  if (require_cellular && !on_cellular)
-    return false;
-
-  // Check lite mode if the download later prompt is never shown before.
-  if (!download_prefs_->HasDownloadLaterPromptShown()) {
-    bool require_lite_mode = base::GetFieldTrialParamByFeatureAsBool(
-        download::features::kDownloadLater,
-        download::features::kDownloadLaterRequireLiteMode,
-        /*default_value=*/false);
-    auto* data_reduction_settings =
-        DataReductionProxyChromeSettingsFactory::GetForBrowserContext(profile_);
-    bool lite_mode_enabled =
-        data_reduction_settings->IsDataReductionProxyEnabled();
-
-    if (require_lite_mode && !lite_mode_enabled)
-      return false;
-  }
-
-  return download_prefs_->PromptDownloadLater();
+  // Show download later dialog on large download file.
+  bool met_file_size_condition =
+      download && download->GetTotalBytes() >= min_file_size_kb * 1024;
+  return (met_network_condition || met_file_size_condition);
 }
+#endif  // defined(OS_ANDROID)
 
 void ChromeDownloadManagerDelegate::DetermineLocalPath(
     DownloadItem* download,
@@ -1371,6 +1309,10 @@ void ChromeDownloadManagerDelegate::CheckClientDownloadDone(
         danger_type =
             download::DOWNLOAD_DANGER_TYPE_BLOCKED_UNSUPPORTED_FILETYPE;
         break;
+      case safe_browsing::DownloadCheckResult::DANGEROUS_ACCOUNT_COMPROMISE:
+        danger_type =
+            download::DOWNLOAD_DANGER_TYPE_DANGEROUS_ACCOUNT_COMPROMISE;
+        break;
     }
     DCHECK_NE(danger_type,
               download::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT);
@@ -1473,13 +1415,15 @@ void ChromeDownloadManagerDelegate::OnDownloadTargetDetermined(
       (mcs == download::DownloadItem::MixedContentStatus::BLOCK ||
        mcs == download::DownloadItem::MixedContentStatus::WARN)) {
     auto* web_contents = content::DownloadItemUtils::GetWebContents(item);
-    auto* infobar_service =
-        web_contents ? InfoBarService::FromWebContents(web_contents) : nullptr;
-    if (infobar_service) {
-      // There is always an infobar service except when running in a unit test,
+    auto* infobar_manager =
+        web_contents
+            ? infobars::ContentInfoBarManager::FromWebContents(web_contents)
+            : nullptr;
+    if (infobar_manager) {
+      // There is always an infobar manager except when running in a unit test,
       // and those tests assume no infobar is shown.
       MixedContentDownloadInfoBarDelegate::Create(
-          infobar_service, target_path.BaseName(), mcs,
+          infobar_manager, target_path.BaseName(), mcs,
           base::BindOnce(HandleMixedDownloadInfoBarResult, item,
                          std::move(target_info), std::move(callback)));
       return;
@@ -1552,13 +1496,17 @@ bool ChromeDownloadManagerDelegate::ShouldBlockFile(
     case (DownloadPrefs::DownloadRestriction::DANGEROUS_FILES): {
       return (danger_type == download::DOWNLOAD_DANGER_TYPE_DANGEROUS_CONTENT ||
               danger_type == download::DOWNLOAD_DANGER_TYPE_DANGEROUS_FILE ||
-              danger_type == download::DOWNLOAD_DANGER_TYPE_DANGEROUS_URL);
+              danger_type == download::DOWNLOAD_DANGER_TYPE_DANGEROUS_URL ||
+              danger_type ==
+                  download::DOWNLOAD_DANGER_TYPE_DANGEROUS_ACCOUNT_COMPROMISE);
     }
 
     case (DownloadPrefs::DownloadRestriction::MALICIOUS_FILES): {
       return (danger_type == download::DOWNLOAD_DANGER_TYPE_DANGEROUS_CONTENT ||
               danger_type == download::DOWNLOAD_DANGER_TYPE_DANGEROUS_HOST ||
-              danger_type == download::DOWNLOAD_DANGER_TYPE_DANGEROUS_URL);
+              danger_type == download::DOWNLOAD_DANGER_TYPE_DANGEROUS_URL ||
+              danger_type ==
+                  download::DOWNLOAD_DANGER_TYPE_DANGEROUS_ACCOUNT_COMPROMISE);
     }
 
     case (DownloadPrefs::DownloadRestriction::ALL_FILES):
@@ -1583,13 +1531,16 @@ void ChromeDownloadManagerDelegate::MaybeSendDangerousDownloadOpenedReport(
                                                     show_download_in_folder);
   }
 #endif
+  safe_browsing::RecordDownloadOpened(download->GetDangerType(),
+                                      base::Time::Now(), download->GetEndTime(),
+                                      show_download_in_folder);
 }
 
 void ChromeDownloadManagerDelegate::CheckDownloadAllowed(
     const content::WebContents::Getter& web_contents_getter,
     const GURL& url,
     const std::string& request_method,
-    base::Optional<url::Origin> request_initiator,
+    absl::optional<url::Origin> request_initiator,
     bool from_download_cross_origin_redirect,
     bool content_initiated,
     content::CheckDownloadAllowedCallback check_download_allowed_cb) {
@@ -1619,7 +1570,7 @@ void ChromeDownloadManagerDelegate::CheckDownloadAllowed(
       web_contents_getter,
       base::BindOnce(&OnDownloadAcquireFileAccessPermissionDone,
                      web_contents_getter, url, request_method,
-                     std::move(request_initiator), base::Passed(&cb)));
+                     std::move(request_initiator), std::move(cb)));
 #else
   CheckCanDownload(web_contents_getter, url, request_method,
                    std::move(request_initiator),

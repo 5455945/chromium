@@ -4,11 +4,13 @@
 
 #include "chrome/browser/ash/login/saml/in_session_password_sync_manager.h"
 
+#include "ash/constants/ash_features.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/time/default_clock.h"
+#include "chrome/browser/ash/login/login_pref_names.h"
 #include "chrome/browser/ash/login/saml/mock_lock_handler.h"
-#include "chrome/browser/chromeos/login/login_pref_names.h"
-#include "chrome/browser/chromeos/login/users/fake_chrome_user_manager.h"
-#include "chrome/browser/chromeos/login/users/mock_user_manager.h"
+#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
+#include "chrome/browser/ash/login/users/mock_user_manager.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
@@ -32,7 +34,9 @@ const char kSAMLUserEmail2[] = "bob@corp.example.com";
 constexpr base::TimeDelta kSamlOnlineShortDelay =
     base::TimeDelta::FromSeconds(10);
 
-class FakeUserManagerWithLocalState : public chromeos::FakeChromeUserManager {
+const char kFakeToken[] = "fake-token";
+
+class FakeUserManagerWithLocalState : public FakeChromeUserManager {
  public:
   FakeUserManagerWithLocalState()
       : test_local_state_(std::make_unique<TestingPrefServiceSimple>()) {
@@ -63,6 +67,7 @@ class InSessionPasswordSyncManagerTest : public testing::Test {
   void DestroyInSessionSyncManager();
 
   InSessionPasswordSyncManager::ReauthenticationReason InSessionReauthReason();
+  bool IsTokenFetcherCreated();
   void LockScreen();
   void UnlockScreen();
 
@@ -83,10 +88,15 @@ class InSessionPasswordSyncManagerTest : public testing::Test {
   std::unique_ptr<user_manager::ScopedUserManager> scoped_user_manager_;
   std::unique_ptr<MockLockHandler> lock_handler_;
   std::unique_ptr<InSessionPasswordSyncManager> manager_;
+  base::test::ScopedFeatureList feature_list_;
+  std::unique_ptr<user_manager::KnownUser> known_user_;
 };
 
 InSessionPasswordSyncManagerTest::InSessionPasswordSyncManagerTest()
     : manager_(nullptr) {
+  feature_list_.InitAndEnableFeature(
+      features::kEnableSamlReauthenticationOnLockscreen);
+
   std::unique_ptr<FakeChromeUserManager> fake_user_manager =
       std::make_unique<FakeUserManagerWithLocalState>();
   scoped_user_manager_ = std::make_unique<user_manager::ScopedUserManager>(
@@ -94,6 +104,8 @@ InSessionPasswordSyncManagerTest::InSessionPasswordSyncManagerTest()
 
   user_manager_ =
       static_cast<FakeChromeUserManager*>(user_manager::UserManager::Get());
+  known_user_ =
+      std::make_unique<user_manager::KnownUser>(user_manager_->GetLocalState());
 }
 
 InSessionPasswordSyncManagerTest::~InSessionPasswordSyncManagerTest() {
@@ -149,6 +161,10 @@ InSessionPasswordSyncManagerTest::InSessionReauthReason() {
   return manager_->lock_screen_reauth_reason_;
 }
 
+bool InSessionPasswordSyncManagerTest::IsTokenFetcherCreated() {
+  return bool(manager_->password_sync_token_fetcher_);
+}
+
 TEST_F(InSessionPasswordSyncManagerTest, ReauthenticateSetInSession) {
   primary_profile_->GetPrefs()->SetBoolean(
       prefs::kLockScreenReauthenticationEnabled, true);
@@ -184,7 +200,7 @@ TEST_F(InSessionPasswordSyncManagerTest, ReauthenticateSetOnLock) {
   EXPECT_CALL(*lock_handler_,
               SetAuthType(saml_login_account_id1_,
                           proximity_auth::mojom::AuthType::ONLINE_SIGN_IN,
-                          base::string16()))
+                          std::u16string()))
       .Times(1);
   user_manager_->SaveForceOnlineSignin(saml_login_account_id1_, true);
   manager_->MaybeForceReauthOnLockScreen(
@@ -204,7 +220,7 @@ TEST_F(InSessionPasswordSyncManagerTest, AuthenticateWithIncorrectUser) {
   EXPECT_CALL(*lock_handler_,
               SetAuthType(saml_login_account_id1_,
                           proximity_auth::mojom::AuthType::ONLINE_SIGN_IN,
-                          base::string16()))
+                          std::u16string()))
       .Times(1);
   EXPECT_CALL(*lock_handler_, Unlock(saml_login_account_id1_)).Times(0);
   user_manager_->SaveForceOnlineSignin(saml_login_account_id1_, true);
@@ -222,9 +238,9 @@ TEST_F(InSessionPasswordSyncManagerTest, AuthenticateWithIncorrectUser) {
 
 TEST_F(InSessionPasswordSyncManagerTest, AuthenticateWithCorrectUser) {
   base::Time now = test_environment_.GetMockClock()->Now();
-  user_manager::known_user::SetLastOnlineSignin(saml_login_account_id1_, now);
-  user_manager::known_user::SetOfflineSigninLimit(saml_login_account_id1_,
-                                                  kSamlOnlineShortDelay);
+  known_user_->SetLastOnlineSignin(saml_login_account_id1_, now);
+  known_user_->SetOfflineSigninLimit(saml_login_account_id1_,
+                                     kSamlOnlineShortDelay);
   base::Time expected_signin_time = now + kSamlOnlineShortDelay;
 
   primary_profile_->GetPrefs()->SetBoolean(
@@ -234,7 +250,7 @@ TEST_F(InSessionPasswordSyncManagerTest, AuthenticateWithCorrectUser) {
   EXPECT_CALL(*lock_handler_,
               SetAuthType(saml_login_account_id1_,
                           proximity_auth::mojom::AuthType::ONLINE_SIGN_IN,
-                          base::string16()))
+                          std::u16string()))
       .Times(1);
   EXPECT_CALL(*lock_handler_, Unlock(saml_login_account_id1_)).Times(1);
   user_manager_->SaveForceOnlineSignin(saml_login_account_id1_, true);
@@ -248,8 +264,39 @@ TEST_F(InSessionPasswordSyncManagerTest, AuthenticateWithCorrectUser) {
   manager_->OnAuthSuccess(user_context);
   EXPECT_EQ(InSessionReauthReason(),
             InSessionPasswordSyncManager::ReauthenticationReason::kNone);
-  now = user_manager::known_user::GetLastOnlineSignin(saml_login_account_id1_);
+  now = known_user_->GetLastOnlineSignin(saml_login_account_id1_);
   EXPECT_EQ(now, expected_signin_time);
+}
+
+TEST_F(InSessionPasswordSyncManagerTest, AuthenticateTokenNotInitialized) {
+  primary_profile_->GetPrefs()->SetBoolean(
+      prefs::kLockScreenReauthenticationEnabled, true);
+  CreateInSessionSyncManager();
+  LockScreen();
+  EXPECT_CALL(*lock_handler_,
+              SetAuthType(saml_login_account_id1_,
+                          proximity_auth::mojom::AuthType::ONLINE_SIGN_IN,
+                          std::u16string()))
+      .Times(1);
+  EXPECT_CALL(*lock_handler_, Unlock(saml_login_account_id1_)).Times(1);
+  user_manager_->SaveForceOnlineSignin(saml_login_account_id1_, true);
+  manager_->MaybeForceReauthOnLockScreen(
+      InSessionPasswordSyncManager::ReauthenticationReason::kInvalidToken);
+  EXPECT_EQ(
+      InSessionReauthReason(),
+      InSessionPasswordSyncManager::ReauthenticationReason::kInvalidToken);
+  UserContext user_context(user_manager::USER_TYPE_REGULAR,
+                           saml_login_account_id1_);
+  manager_->OnAuthSuccess(user_context);
+  manager_->OnApiCallFailed(PasswordSyncTokenFetcher::ErrorType::kGetNoList);
+  EXPECT_TRUE(IsTokenFetcherCreated());
+  manager_->OnTokenCreated(kFakeToken);
+  EXPECT_EQ(InSessionReauthReason(),
+            InSessionPasswordSyncManager::ReauthenticationReason::kNone);
+  EXPECT_FALSE(IsTokenFetcherCreated());
+  std::string sync_token =
+      known_user_->GetPasswordSyncToken(saml_login_account_id1_);
+  EXPECT_EQ(kFakeToken, sync_token);
 }
 
 TEST_F(InSessionPasswordSyncManagerTest, PolicySetToFalse) {

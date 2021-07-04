@@ -25,6 +25,7 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -86,7 +87,7 @@ void PrivetNotificationsListener::DeviceChanged(
   }
 
   std::unique_ptr<DeviceContext>& device_context = devices_seen_[name];
-  device_context.reset(new DeviceContext);
+  device_context = std::make_unique<DeviceContext>();
   device_context->notification_may_be_active = false;
   device_context->registered = !description.id.empty();
 
@@ -244,11 +245,11 @@ void PrivetNotificationService::AddNotification(
       message_center::ButtonInfo(l10n_util::GetStringUTF16(
           IDS_LOCAL_DISCOVERY_NOTIFICATIONS_DISABLE_BUTTON_LABEL)));
 
-  base::string16 title = l10n_util::GetPluralStringFUTF16(
+  std::u16string title = l10n_util::GetPluralStringFUTF16(
       IDS_LOCAL_DISCOVERY_NOTIFICATION_TITLE_PRINTER, devices_active);
-  base::string16 body = l10n_util::GetPluralStringFUTF16(
+  std::u16string body = l10n_util::GetPluralStringFUTF16(
       IDS_LOCAL_DISCOVERY_NOTIFICATION_CONTENTS_PRINTER, devices_active);
-  base::string16 product_name =
+  std::u16string product_name =
       l10n_util::GetStringUTF16(IDS_LOCAL_DISCOVERY_SERVICE_NAME_PRINTER);
 
   Profile* profile = Profile::FromBrowserContext(profile_);
@@ -280,8 +281,8 @@ void PrivetNotificationService::Start() {
       Profile::FromBrowserContext(profile_));
 
   // Only show notifications for signed-in accounts. https://crbug.com/349098
-  if (!identity_manager || !identity_manager->HasPrimaryAccount(
-                               signin::ConsentLevel::kNotRequired)) {
+  if (!identity_manager ||
+      !identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin)) {
     return;
   }
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
@@ -322,18 +323,19 @@ void PrivetNotificationService::OnNotificationsEnabledChanged() {
 void PrivetNotificationService::StartLister() {
   service_discovery_client_ =
       local_discovery::ServiceDiscoverySharedClient::GetInstance();
-  device_lister_.reset(
-      new PrivetDeviceListerImpl(service_discovery_client_.get(), this));
+  device_lister_ = std::make_unique<PrivetDeviceListerImpl>(
+      service_discovery_client_.get(), this);
   device_lister_->Start();
   device_lister_->DiscoverNewDevices();
 
   std::unique_ptr<PrivetHTTPAsynchronousFactory> http_factory(
       PrivetHTTPAsynchronousFactory::CreateInstance(
-          content::BrowserContext::GetDefaultStoragePartition(profile_)
+          profile_->GetDefaultStoragePartition()
               ->GetURLLoaderFactoryForBrowserProcess()));
 
-  privet_notifications_listener_.reset(
-      new PrivetNotificationsListener(std::move(http_factory), this));
+  privet_notifications_listener_ =
+      std::make_unique<PrivetNotificationsListener>(std::move(http_factory),
+                                                    this);
 }
 
 PrivetNotificationDelegate*
@@ -348,8 +350,8 @@ PrivetNotificationDelegate::~PrivetNotificationDelegate() {
 }
 
 void PrivetNotificationDelegate::Click(
-    const base::Optional<int>& button_index,
-    const base::Optional<base::string16>& reply) {
+    const absl::optional<int>& button_index,
+    const absl::optional<std::u16string>& reply) {
   if (!button_index)
     return;
 

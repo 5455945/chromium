@@ -5,7 +5,7 @@
 #include "ash/shelf/drag_handle.h"
 
 #include "ash/accessibility/accessibility_controller_impl.h"
-#include "ash/public/cpp/ash_features.h"
+#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/shelf_config.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shelf/contextual_tooltip.h"
@@ -19,6 +19,7 @@
 #include "base/timer/timer.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/wm/core/coordinate_conversion.h"
 
@@ -84,7 +85,7 @@ class HideNudgeObserver : public ui::ImplicitAnimationObserver {
 
 }  // namespace
 
-DragHandle::DragHandle(int drag_handle_corner_radius, Shelf* shelf)
+DragHandle::DragHandle(float drag_handle_corner_radius, Shelf* shelf)
     : views::Button(base::BindRepeating(&DragHandle::ButtonPressed,
                                         base::Unretained(this))),
       shelf_(shelf) {
@@ -272,7 +273,7 @@ gfx::Rect DragHandle::GetAnchorBoundsInScreen() const {
 void DragHandle::GetAccessibleNodeData(ui::AXNodeData* node_data) {
   Button::GetAccessibleNodeData(node_data);
 
-  base::string16 accessible_name = base::string16();
+  std::u16string accessible_name = std::u16string();
   switch (shelf_->shelf_layout_manager()->hotseat_state()) {
     case HotseatState::kNone:
     case HotseatState::kShownClamshell:

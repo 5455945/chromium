@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// clang-format off
 
 function loadCommonComponents() {
 // TODO(crbug.com/1111387) - Remove excessive logging.
@@ -9,22 +10,17 @@ function loadCommonComponents() {
 // This inclusion is types-only. No actual code to execute.
 // <include src="../components/oobe_types.js">
 
-// <include src="../components/login_screen_behavior.js">
-// <include src="../components/multi_step_behavior.js">
-// <include src="../components/oobe_buttons.js">
 // <include src="../components/oobe_modal_dialog.js">
 // <include src="../components/html-echo.js">
 // <include src="../notification_card.js">
 // <include src="../gaia_dialog.js">
 
 // <include src="../gaia_buttons.js">
-// <include src="../gaia_card.js">
 // <include src="../gaia_header.js">
 // <include src="../gaia_input_form.js">
-// <include src="../navigation_bar.js">
 
 // <include src="../oobe_a11y_option.js">
-// <include src="../network_select_login.js">
+// <include src="../components/network_select_login.js">
 // <include src="../checking_downloading_update.js">
 
 // <include src="../screen_gaia_signin.js">

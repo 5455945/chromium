@@ -8,7 +8,6 @@
 #include <memory>
 
 #include "base/containers/flat_set.h"
-#include "base/optional.h"
 #include "base/time/time.h"
 #include "cc/input/compositor_input_interfaces.h"
 #include "cc/input/event_listener_properties.h"
@@ -20,6 +19,7 @@
 #include "cc/metrics/frame_sequence_metrics.h"
 #include "cc/paint/element_id.h"
 #include "components/viz/common/frame_sinks/begin_frame_args.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/events/types/scroll_input_type.h"
 
 namespace gfx {
@@ -240,9 +240,11 @@ class CC_EXPORT ThreadedInputHandler : public InputHandler,
   InputHandler::ScrollStatus TryScroll(const ScrollTree& scroll_tree,
                                        ScrollNode* scroll_node) const;
 
+  enum class SnapReason { kGestureScrollEnd, kScrollOffsetAnimationFinished };
+
   // Creates an animation curve and returns true if we need to update the
   // scroll position to a snap point. Otherwise returns false.
-  bool SnapAtScrollEnd();
+  bool SnapAtScrollEnd(SnapReason reason);
 
   // |layer| is returned from a regular hit test, and
   // |first_scrolling_layer_or_drawn_scrollbar| is returned from a hit test
@@ -340,6 +342,8 @@ class CC_EXPORT ThreadedInputHandler : public InputHandler,
   gfx::Vector2dF UserScrollableDelta(const ScrollNode& node,
                                      const gfx::Vector2dF& delta) const;
 
+  void AdjustScrollDeltaForScrollbarSnap(ScrollState* scroll_state);
+
   FrameSequenceTrackerType GetTrackerTypeForScroll(
       ui::ScrollInputType input_type) const;
 
@@ -370,12 +374,12 @@ class CC_EXPORT ThreadedInputHandler : public InputHandler,
 
   // The source device type that started the scroll gesture. Only set between a
   // ScrollBegin and ScrollEnd.
-  base::Optional<ui::ScrollInputType> latched_scroll_type_;
+  absl::optional<ui::ScrollInputType> latched_scroll_type_;
 
   // Tracks the last scroll update/begin state received. Used to infer the most
   // recent scroll type and direction.
-  base::Optional<ScrollState> last_scroll_begin_state_;
-  base::Optional<ScrollState> last_scroll_update_state_;
+  absl::optional<ScrollState> last_scroll_begin_state_;
+  absl::optional<ScrollState> last_scroll_update_state_;
 
   // If a scroll snap is being animated, then the value of this will be the
   // element id(s) of the target(s). Otherwise, the ids will be invalid.
@@ -386,7 +390,7 @@ class CC_EXPORT ThreadedInputHandler : public InputHandler,
   // A set of elements that scroll-snapped to a new target since the last
   // begin main frame. The snap target ids of these elements will be sent to
   // the main thread in the next begin main frame.
-  base::flat_set<ElementId> updated_snapped_elements_;
+  base::flat_map<ElementId, TargetSnapAreaElementIds> updated_snapped_elements_;
 
   ElementId scroll_element_id_mouse_currently_over_;
   ElementId scroll_element_id_mouse_currently_captured_;

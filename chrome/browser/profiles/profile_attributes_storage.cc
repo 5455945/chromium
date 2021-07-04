@@ -5,14 +5,16 @@
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 
 #include <algorithm>
+#include <memory>
 #include <unordered_set>
 #include <utility>
 
 #include "base/bind.h"
+#include "base/containers/contains.h"
+#include "base/cxx17_backports.h"
 #include "base/files/file_util.h"
 #include "base/i18n/number_formatting.h"
 #include "base/i18n/string_compare.h"
-#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/post_task.h"
@@ -117,6 +119,12 @@ bool SaveBitmap(std::unique_ptr<ImageData> data,
   return true;
 }
 
+void DeleteBitmap(const base::FilePath& image_path) {
+  base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
+                                                base::BlockingType::MAY_BLOCK);
+  base::DeleteFile(image_path);
+}
+
 void RunCallbackIfFileMissing(const base::FilePath& file_path,
                               base::OnceClosure callback) {
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
@@ -145,7 +153,7 @@ class ProfileAttributesSortComparator {
   }
 
  private:
-  base::string16 GetValue(const ProfileAttributesEntry* const entry) const {
+  std::u16string GetValue(const ProfileAttributesEntry* const entry) const {
     if (use_local_name_)
       return entry->GetLocalProfileName();
 
@@ -245,12 +253,11 @@ ProfileAttributesStorage::~ProfileAttributesStorage() {
 }
 
 std::vector<ProfileAttributesEntry*>
-ProfileAttributesStorage::GetAllProfilesAttributes(bool include_guest_profile) {
+ProfileAttributesStorage::GetAllProfilesAttributes(
+    bool include_guest_profile) const {
   std::vector<ProfileAttributesEntry*> ret;
-  for (const auto& path_and_entry : profile_attributes_entries_) {
-    // Initialize any entries that are not yet initialized.
-    ProfileAttributesEntry* entry =
-        GetProfileAttributesWithPath(base::FilePath(path_and_entry.first));
+  for (auto& path_and_entry : profile_attributes_entries_) {
+    ProfileAttributesEntry* entry = &path_and_entry.second;
     DCHECK(entry);
     if (!entry->IsGuest() || include_guest_profile)
       ret.push_back(entry);
@@ -260,7 +267,7 @@ ProfileAttributesStorage::GetAllProfilesAttributes(bool include_guest_profile) {
 
 std::vector<ProfileAttributesEntry*>
 ProfileAttributesStorage::GetAllProfilesAttributesSorted(
-    bool use_local_profile_name) {
+    bool use_local_profile_name) const {
   std::vector<ProfileAttributesEntry*> ret =
       GetAllProfilesAttributes(/*include_guest_profile=*/false);
   // Do not allocate the collator and sort if it is not necessary.
@@ -281,18 +288,40 @@ ProfileAttributesStorage::GetAllProfilesAttributesSorted(
 }
 
 std::vector<ProfileAttributesEntry*>
-ProfileAttributesStorage::GetAllProfilesAttributesSortedByName() {
+ProfileAttributesStorage::GetAllProfilesAttributesSortedByName() const {
   return GetAllProfilesAttributesSorted(false);
 }
 
 std::vector<ProfileAttributesEntry*>
-ProfileAttributesStorage::GetAllProfilesAttributesSortedByLocalProfilName() {
+ProfileAttributesStorage::GetAllProfilesAttributesSortedByLocalProfilName()
+    const {
   return GetAllProfilesAttributesSorted(true);
 }
 
-base::string16 ProfileAttributesStorage::ChooseNameForNewProfile(
+ProfileAttributesEntry* ProfileAttributesStorage::GetProfileAttributesWithPath(
+    const base::FilePath& path) {
+  const auto entry_iter = profile_attributes_entries_.find(path.value());
+  if (entry_iter == profile_attributes_entries_.end())
+    return nullptr;
+
+  return &entry_iter->second;
+}
+
+size_t ProfileAttributesStorage::GetNumberOfProfiles(
+    bool include_guest_profile) const {
+  // Ephemeral Guest profile is registered in profile attributes storage,
+  // because if Chrome crashes we need the registry to find and delete it.
+  // But it should not be counted as a regular profile.
+  return std::count_if(
+      profile_attributes_entries_.begin(), profile_attributes_entries_.end(),
+      [include_guest_profile](const auto& key_value) {
+        return !key_value.second.IsGuest() || include_guest_profile;
+      });
+}
+
+std::u16string ProfileAttributesStorage::ChooseNameForNewProfile(
     size_t icon_index) const {
-  base::string16 name;
+  std::u16string name;
   for (int name_index = 1; ; ++name_index) {
 #if !BUILDFLAG(IS_CHROMEOS_ASH) && !defined(OS_ANDROID)
     // Using native digits will break IsDefaultProfileName() below because
@@ -332,11 +361,11 @@ base::string16 ProfileAttributesStorage::ChooseNameForNewProfile(
 }
 
 bool ProfileAttributesStorage::IsDefaultProfileName(
-    const base::string16& name,
+    const std::u16string& name,
     bool include_check_for_legacy_profile_name) const {
   // Check whether it's one of the "Person %d" style names.
-  std::string default_name_format = l10n_util::GetStringFUTF8(
-      IDS_NEW_NUMBERED_PROFILE_NAME, base::ASCIIToUTF16("%d"));
+  std::string default_name_format =
+      l10n_util::GetStringFUTF8(IDS_NEW_NUMBERED_PROFILE_NAME, u"%d");
   int generic_profile_number;  // Unused. Just a placeholder for sscanf.
   int assignments =
       sscanf(base::UTF16ToUTF8(name).c_str(), default_name_format.c_str(),
@@ -402,6 +431,35 @@ const gfx::Image* ProfileAttributesStorage::LoadAvatarPictureFromPath(
                      profile_path, key));
   return nullptr;
 }
+bool ProfileAttributesStorage::IsGAIAPictureLoaded(
+    const std::string& key) const {
+  return base::Contains(cached_avatar_images_, key);
+}
+
+void ProfileAttributesStorage::SaveGAIAImageAtPath(
+    const base::FilePath& profile_path,
+    const std::string& key,
+    gfx::Image image,
+    const base::FilePath& image_path,
+    const std::string& image_url_with_size) {
+  cached_avatar_images_.erase(key);
+  SaveAvatarImageAtPath(
+      profile_path, image, key, image_path,
+      base::BindOnce(&ProfileAttributesStorage::OnGAIAPictureSaved, AsWeakPtr(),
+                     image_url_with_size, profile_path));
+}
+
+void ProfileAttributesStorage::DeleteGAIAImageAtPath(
+    const base::FilePath& profile_path,
+    const std::string& key,
+    const base::FilePath& image_path) {
+  cached_avatar_images_.erase(key);
+  file_task_runner_->PostTask(FROM_HERE,
+                              base::BindOnce(&DeleteBitmap, image_path));
+  ProfileAttributesEntry* entry = GetProfileAttributesWithPath(profile_path);
+  DCHECK(entry);
+  entry->SetLastDownloadedGAIAPictureUrlWithSize(std::string());
+}
 
 void ProfileAttributesStorage::AddObserver(Observer* obs) {
   observer_list_.AddObserver(obs);
@@ -466,6 +524,53 @@ void ProfileAttributesStorage::NotifyOnProfileAvatarChanged(
     observer.OnProfileAvatarChanged(profile_path);
 }
 
+void ProfileAttributesStorage::NotifyIsSigninRequiredChanged(
+    const base::FilePath& profile_path) const {
+  for (auto& observer : observer_list_)
+    observer.OnProfileSigninRequiredChanged(profile_path);
+}
+
+void ProfileAttributesStorage::NotifyProfileAuthInfoChanged(
+    const base::FilePath& profile_path) const {
+  for (auto& observer : observer_list_)
+    observer.OnProfileAuthInfoChanged(profile_path);
+}
+
+void ProfileAttributesStorage::NotifyIfProfileNamesHaveChanged() const {
+  std::vector<ProfileAttributesEntry*> entries = GetAllProfilesAttributes();
+  for (ProfileAttributesEntry* entry : entries) {
+    std::u16string old_display_name = entry->GetLastNameToDisplay();
+    if (entry->HasProfileNameChanged()) {
+      for (auto& observer : observer_list_)
+        observer.OnProfileNameChanged(entry->GetPath(), old_display_name);
+    }
+  }
+}
+
+void ProfileAttributesStorage::NotifyProfileSupervisedUserIdChanged(
+    const base::FilePath& profile_path) const {
+  for (auto& observer : observer_list_)
+    observer.OnProfileSupervisedUserIdChanged(profile_path);
+}
+
+void ProfileAttributesStorage::NotifyProfileIsOmittedChanged(
+    const base::FilePath& profile_path) const {
+  for (auto& observer : observer_list_)
+    observer.OnProfileIsOmittedChanged(profile_path);
+}
+
+void ProfileAttributesStorage::NotifyProfileThemeColorsChanged(
+    const base::FilePath& profile_path) const {
+  for (auto& observer : observer_list_)
+    observer.OnProfileThemeColorsChanged(profile_path);
+}
+
+void ProfileAttributesStorage::NotifyProfileHostedDomainChanged(
+    const base::FilePath& profile_path) const {
+  for (auto& observer : observer_list_)
+    observer.OnProfileHostedDomainChanged(profile_path);
+}
+
 void ProfileAttributesStorage::NotifyOnProfileHighResAvatarLoaded(
     const base::FilePath& profile_path) const {
   for (auto& observer : observer_list_)
@@ -482,7 +587,7 @@ void ProfileAttributesStorage::DownloadHighResAvatarIfNeeded(
 
   // If this is the placeholder avatar, it is already included in the
   // resources, so it doesn't need to be downloaded (and it will never be
-  // requested from disk by GetHighResAvatarOfProfileAtIndex).
+  // requested from disk by `ProfileAttributesEntry::GetHighResAvatar()`).
   if (icon_index == profiles::GetPlaceholderAvatarIndex())
     return;
 
@@ -512,10 +617,10 @@ void ProfileAttributesStorage::DownloadHighResAvatar(
   // completes, or if that never happens, when the storage is destroyed.
   std::unique_ptr<ProfileAvatarDownloader>& current_downloader =
       avatar_images_downloads_in_progress_[file_name];
-  current_downloader.reset(new ProfileAvatarDownloader(
+  current_downloader = std::make_unique<ProfileAvatarDownloader>(
       icon_index,
       base::BindOnce(&ProfileAttributesStorage::SaveAvatarImageAtPathNoCallback,
-                     AsWeakPtr(), profile_path)));
+                     AsWeakPtr(), profile_path));
 
   current_downloader->Start();
 #endif
@@ -591,6 +696,15 @@ void ProfileAttributesStorage::OnAvatarPictureSaved(
     std::move(callback).Run();
 
   NotifyOnProfileHighResAvatarLoaded(profile_path);
+}
+
+void ProfileAttributesStorage::OnGAIAPictureSaved(
+    const std::string& image_url_with_size,
+    const base::FilePath& profile_path) {
+  ProfileAttributesEntry* entry = GetProfileAttributesWithPath(profile_path);
+  // Profile could have been destroyed while saving picture to disk.
+  if (entry)
+    entry->SetLastDownloadedGAIAPictureUrlWithSize(image_url_with_size);
 }
 
 void ProfileAttributesStorage::SaveAvatarImageAtPathNoCallback(

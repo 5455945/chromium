@@ -7,7 +7,6 @@
 #include <utility>
 
 #include "ash/accessibility/accessibility_delegate.h"
-#include "ash/public/cpp/ash_switches.h"
 #include "ash/public/cpp/shelf_config.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/session/session_controller_impl.h"
@@ -23,7 +22,6 @@
 #include "base/command_line.h"
 #include "base/metrics/histogram.h"
 #include "base/time/time.h"
-#include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/chromeos/devicetype_utils.h"
@@ -74,7 +72,7 @@ views::View* PowerTrayView::GetTooltipHandlerForPoint(const gfx::Point& point) {
   return GetLocalBounds().Contains(point) ? this : nullptr;
 }
 
-base::string16 PowerTrayView::GetTooltipText(const gfx::Point& p) const {
+std::u16string PowerTrayView::GetTooltipText(const gfx::Point& p) const {
   return tooltip_;
 }
 

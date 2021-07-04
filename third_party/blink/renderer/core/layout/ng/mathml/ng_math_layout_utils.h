@@ -5,6 +5,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_NG_MATHML_NG_MATH_LAYOUT_UTILS_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_NG_MATHML_NG_MATH_LAYOUT_UTILS_H_
 
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/platform/fonts/opentype/open_type_math_support.h"
 
@@ -12,6 +13,7 @@ namespace blink {
 
 struct LogicalSize;
 struct MinMaxSizes;
+struct MinMaxSizesResult;
 class NGBlockNode;
 class NGConstraintSpace;
 class NGLayoutInputNode;
@@ -23,6 +25,12 @@ NGConstraintSpace CreateConstraintSpaceForMathChild(
     const LogicalSize& child_available_size,
     const NGConstraintSpace& parent_constraint_space,
     const NGLayoutInputNode&);
+
+MinMaxSizesResult ComputeMinAndMaxContentContributionForMathChild(
+    const ComputedStyle& parent_style,
+    const NGConstraintSpace& parent_constraint_space,
+    const NGBlockNode& child,
+    LayoutUnit child_available_block_size);
 
 NGLayoutInputNode FirstChildInFlow(const NGBlockNode&);
 NGLayoutInputNode NextSiblingInFlow(const NGBlockNode&);
@@ -41,7 +49,7 @@ inline float RuleThicknessFallback(const ComputedStyle& style) {
 
 LayoutUnit MathAxisHeight(const ComputedStyle& style);
 
-inline base::Optional<float> MathConstant(
+inline absl::optional<float> MathConstant(
     const ComputedStyle& style,
     OpenTypeMathSupport::MathConstants constant) {
   const SimpleFontData* font_data = style.GetFont().PrimaryFont();

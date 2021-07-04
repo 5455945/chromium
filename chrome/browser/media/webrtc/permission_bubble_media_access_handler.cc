@@ -46,10 +46,10 @@
 
 using content::BrowserThread;
 
-using RepeatingMediaResponseCallback =
-    base::RepeatingCallback<void(const blink::MediaStreamDevices& devices,
-                                 blink::mojom::MediaStreamRequestResult result,
-                                 std::unique_ptr<content::MediaStreamUI> ui)>;
+using MediaResponseCallback =
+    base::OnceCallback<void(const blink::MediaStreamDevices& devices,
+                            blink::mojom::MediaStreamRequestResult result,
+                            std::unique_ptr<content::MediaStreamUI> ui)>;
 
 #if defined(OS_MAC)
 using system_media_permissions::SystemPermission;
@@ -121,14 +121,13 @@ void UpdatePageSpecificContentSettings(
 
 struct PermissionBubbleMediaAccessHandler::PendingAccessRequest {
   PendingAccessRequest(const content::MediaStreamRequest& request,
-                       RepeatingMediaResponseCallback callback)
-      : request(request), callback(callback) {}
-  ~PendingAccessRequest() {}
+                       MediaResponseCallback callback)
+      : request(request), callback(std::move(callback)) {}
 
   // TODO(gbillock): make the MediaStreamDevicesController owned by
   // this object when we're using bubbles.
   content::MediaStreamRequest request;
-  RepeatingMediaResponseCallback callback;
+  MediaResponseCallback callback;
 };
 
 PermissionBubbleMediaAccessHandler::PermissionBubbleMediaAccessHandler()
@@ -200,10 +199,8 @@ void PermissionBubbleMediaAccessHandler::HandleRequest(
   web_contents_collection_.StartObserving(web_contents);
 
   RequestsMap& requests_map = pending_requests_[web_contents];
-  requests_map.emplace(
-      next_request_id_++,
-      PendingAccessRequest(
-          request, base::AdaptCallbackForRepeating(std::move(callback))));
+  requests_map.emplace(next_request_id_++,
+                       PendingAccessRequest(request, std::move(callback)));
 
   // If this is the only request then show the infobar.
   if (requests_map.size() == 1)
@@ -223,7 +220,7 @@ void PermissionBubbleMediaAccessHandler::ProcessQueuedAccessRequest(
 
   DCHECK(!it->second.empty());
 
-  const int request_id = it->second.begin()->first;
+  const int64_t request_id = it->second.begin()->first;
   const content::MediaStreamRequest& request =
       it->second.begin()->second.request;
 #if defined(OS_ANDROID)
@@ -284,11 +281,11 @@ void PermissionBubbleMediaAccessHandler::RegisterProfilePrefs(
 
 void PermissionBubbleMediaAccessHandler::OnMediaStreamRequestResponse(
     content::WebContents* web_contents,
-    int request_id,
+    int64_t request_id,
     content::MediaStreamRequest request,
     const blink::MediaStreamDevices& devices,
     blink::mojom::MediaStreamRequestResult result,
-    bool blocked_by_feature_policy,
+    bool blocked_by_permissions_policy,
     ContentSetting audio_setting,
     ContentSetting video_setting) {
   if (pending_requests_.find(web_contents) == pending_requests_.end()) {
@@ -296,10 +293,10 @@ void PermissionBubbleMediaAccessHandler::OnMediaStreamRequestResponse(
     return;
   }
 
-  // If the kill switch is, or the request was blocked because of feature
+  // If the kill switch is, or the request was blocked because of permissions
   // policy we don't update the tab context.
   if (result != blink::mojom::MediaStreamRequestResult::KILL_SWITCH_ON &&
-      !blocked_by_feature_policy) {
+      !blocked_by_permissions_policy) {
     UpdatePageSpecificContentSettings(web_contents, request, audio_setting,
                                       video_setting);
   }
@@ -316,7 +313,7 @@ void PermissionBubbleMediaAccessHandler::OnMediaStreamRequestResponse(
 
 void PermissionBubbleMediaAccessHandler::OnAccessRequestResponse(
     content::WebContents* web_contents,
-    int request_id,
+    int64_t request_id,
     const blink::MediaStreamDevices& devices,
     blink::mojom::MediaStreamRequestResult result,
     std::unique_ptr<content::MediaStreamUI> ui) {
@@ -403,8 +400,7 @@ void PermissionBubbleMediaAccessHandler::OnAccessRequestResponse(
   }
 #endif  // defined(OS_MAC)
 
-  RepeatingMediaResponseCallback callback =
-      std::move(request_it->second.callback);
+  MediaResponseCallback callback = std::move(request_it->second.callback);
   requests_map.erase(request_it);
 
   if (!requests_map.empty()) {

@@ -6,7 +6,6 @@
 #define COMPONENTS_SYNC_TRUSTED_VAULT_TRUSTED_VAULT_CONNECTION_IMPL_H_
 
 #include <memory>
-#include <string>
 #include <vector>
 
 #include "base/memory/scoped_refptr.h"
@@ -38,17 +37,21 @@ class TrustedVaultConnectionImpl : public TrustedVaultConnection {
 
   std::unique_ptr<Request> RegisterAuthenticationFactor(
       const CoreAccountInfo& account_info,
-      const base::Optional<TrustedVaultKeyAndVersion>&
-          last_trusted_vault_key_and_version,
+      const TrustedVaultKeyAndVersion& last_trusted_vault_key_and_version,
       const SecureBoxPublicKey& authentication_factor_public_key,
+      AuthenticationFactorType authentication_factor_type,
+      absl::optional<int> authentication_factor_type_hint,
       RegisterAuthenticationFactorCallback callback) override;
 
   std::unique_ptr<Request> DownloadNewKeys(
       const CoreAccountInfo& account_info,
-      const base::Optional<TrustedVaultKeyAndVersion>&
-          last_trusted_vault_key_and_version,
+      const TrustedVaultKeyAndVersion& last_trusted_vault_key_and_version,
       std::unique_ptr<SecureBoxKeyPair> device_key_pair,
       DownloadNewKeysCallback callback) override;
+
+  std::unique_ptr<Request> RetrieveIsRecoverabilityDegraded(
+      const CoreAccountInfo& account_info,
+      IsRecoverabilityDegradedCallback callback) override;
 
  private:
   // SharedURLLoaderFactory is created lazily, because it needs to be done on

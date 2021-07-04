@@ -12,6 +12,7 @@
 #include "chrome/browser/android/oom_intervention/oom_intervention_config.h"
 #include "chrome/browser/android/oom_intervention/oom_intervention_decider.h"
 #include "chrome/browser/ui/android/infobars/near_oom_reduction_infobar.h"
+#include "components/back_forward_cache/back_forward_cache_disable.h"
 #include "content/public/browser/back_forward_cache.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/navigation_handle.h"
@@ -47,9 +48,9 @@ OomInterventionTabHelper::OomInterventionTabHelper(
     content::WebContents* web_contents)
     : content::WebContentsObserver(web_contents),
       decider_(OomInterventionDecider::GetForBrowserContext(
-          web_contents->GetBrowserContext())),
-      scoped_observer_(this) {
-  scoped_observer_.Add(crash_reporter::CrashMetricsReporter::GetInstance());
+          web_contents->GetBrowserContext())) {
+  scoped_observation_.Observe(
+      crash_reporter::CrashMetricsReporter::GetInstance());
 }
 
 OomInterventionTabHelper::~OomInterventionTabHelper() = default;
@@ -136,7 +137,10 @@ void OomInterventionTabHelper::DidStartNavigation(
 
   // Filter out sub-frame's navigation or if the navigation happens without
   // changing document.
-  if (!navigation_handle->IsInMainFrame() ||
+  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
+  // frames. This caller was converted automatically to the primary main frame
+  // to preserve its semantics. Follow up to confirm correctness.
+  if (!navigation_handle->IsInPrimaryMainFrame() ||
       navigation_handle->IsSameDocument()) {
     return;
   }
@@ -172,7 +176,8 @@ void OomInterventionTabHelper::OnVisibilityChanged(
   }
 }
 
-void OomInterventionTabHelper::DocumentOnLoadCompletedInMainFrame() {
+void OomInterventionTabHelper::DocumentOnLoadCompletedInMainFrame(
+    content::RenderFrameHost* render_frame_host) {
   load_finished_ = true;
   if (IsLastVisibleWebContents(web_contents()))
     StartMonitoringIfNeeded();
@@ -269,7 +274,9 @@ void OomInterventionTabHelper::StartDetectionInRenderer() {
   // Connections to the renderer will not be recreated when coming out of the
   // cache so prevent us from getting in there in the first place.
   content::BackForwardCache::DisableForRenderFrameHost(
-      main_frame, "OomInterventionTabHelper");
+      main_frame,
+      back_forward_cache::DisabledReason(
+          back_forward_cache::DisabledReasonId::kOomInterventionTabHelper));
 
   content::RenderProcessHost* render_process_host = main_frame->GetProcess();
   DCHECK(render_process_host);

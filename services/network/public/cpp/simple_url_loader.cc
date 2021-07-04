@@ -41,6 +41,7 @@
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_url_loader_stream_consumer.h"
 #include "services/network/public/mojom/data_pipe_getter.mojom.h"
+#include "services/network/public/mojom/early_hints.mojom.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
@@ -235,11 +236,12 @@ class SimpleURLLoaderImpl : public SimpleURLLoader,
 
   int NetError() const override;
   const mojom::URLResponseHead* ResponseInfo() const override;
-  const base::Optional<URLLoaderCompletionStatus>& CompletionStatus()
+  const absl::optional<URLLoaderCompletionStatus>& CompletionStatus()
       const override;
   const GURL& GetFinalURL() const override;
   bool LoadedFromCache() const override;
   int64_t GetContentSize() const override;
+  int GetNumRetries() const override;
 
   // Called by BodyHandler when the BodyHandler body handler is done. If |error|
   // is not net::OK, some error occurred reading or consuming the body. If it is
@@ -286,7 +288,7 @@ class SimpleURLLoaderImpl : public SimpleURLLoader,
 
     mojom::URLResponseHeadPtr response_info;
 
-    base::Optional<URLLoaderCompletionStatus> completion_status;
+    absl::optional<URLLoaderCompletionStatus> completion_status;
   };
 
   // Prepares internal state to start a request, and then calls StartRequest().
@@ -301,6 +303,7 @@ class SimpleURLLoaderImpl : public SimpleURLLoader,
   void Retry();
 
   // mojom::URLLoaderClient implementation;
+  void OnReceiveEarlyHints(network::mojom::EarlyHintsPtr early_hints) override;
   void OnReceiveResponse(mojom::URLResponseHeadPtr response_head) override;
   void OnReceiveRedirect(const net::RedirectInfo& redirect_info,
                          mojom::URLResponseHeadPtr response_head) override;
@@ -348,6 +351,7 @@ class SimpleURLLoaderImpl : public SimpleURLLoader,
   int retry_mode_ = RETRY_NEVER;
   uint32_t url_loader_factory_options_ = 0;
   int32_t request_id_ = 0;
+  int num_retries_ = 0;
 
   // The next values contain all the information required to restart the
   // request.
@@ -1410,13 +1414,17 @@ int64_t SimpleURLLoaderImpl::GetContentSize() const {
   return request_state_->received_body_size;
 }
 
+int SimpleURLLoaderImpl::GetNumRetries() const {
+  return num_retries_;
+}
+
 const mojom::URLResponseHead* SimpleURLLoaderImpl::ResponseInfo() const {
   // Should only be called once the request is complete.
   DCHECK(request_state_->finished);
   return request_state_->response_info.get();
 }
 
-const base::Optional<URLLoaderCompletionStatus>&
+const absl::optional<URLLoaderCompletionStatus>&
 SimpleURLLoaderImpl::CompletionStatus() const {
   // Should only be called once the request is complete.
   DCHECK(request_state_->finished);
@@ -1434,7 +1442,7 @@ void SimpleURLLoaderImpl::OnBodyHandlerDone(net::Error error,
     // Reset the completion status since the contained metrics like encoded body
     // length and net error are not reliable when the body itself was not
     // successfully completed.
-    request_state_->completion_status = base::nullopt;
+    request_state_->completion_status = absl::nullopt;
     // When |allow_partial_results_| is true, a valid body|file_path is
     // passed to the completion callback even in the case of failures.
     // For consistency, it makes sense to also hold the actual decompressed
@@ -1540,7 +1548,7 @@ void SimpleURLLoaderImpl::StartRequest(
         string_upload_data_pipe_getter_->GetRemoteForNewUpload());
   }
   url_loader_factory->CreateLoaderAndStart(
-      url_loader_.BindNewPipeAndPassReceiver(), 0 /* routing_id */, request_id_,
+      url_loader_.BindNewPipeAndPassReceiver(), request_id_,
       url_loader_factory_options_, *resource_request_,
       client_receiver_.BindNewPipeAndPassRemote(),
       net::MutableNetworkTrafficAnnotationTag(annotation_tag_));
@@ -1567,6 +1575,7 @@ void SimpleURLLoaderImpl::Retry() {
   DCHECK(url_loader_factory_remote_);
   DCHECK_GT(remaining_retries_, 0);
   --remaining_retries_;
+  ++num_retries_;
 
   client_receiver_.reset();
   url_loader_.reset();
@@ -1576,6 +1585,9 @@ void SimpleURLLoaderImpl::Retry() {
       &SimpleURLLoaderImpl::StartRequest, weak_ptr_factory_.GetWeakPtr(),
       url_loader_factory_remote_.get()));
 }
+
+void SimpleURLLoaderImpl::OnReceiveEarlyHints(
+    network::mojom::EarlyHintsPtr early_hints) {}
 
 void SimpleURLLoaderImpl::OnReceiveResponse(
     mojom::URLResponseHeadPtr response_head) {
@@ -1692,7 +1704,7 @@ void SimpleURLLoaderImpl::OnComplete(const URLLoaderCompletionStatus& status) {
   // URLLoader is violating the API contract.
   if (request_state_->net_error == net::OK && !request_state_->body_started) {
     request_state_->net_error = net::ERR_UNEXPECTED;
-    request_state_->completion_status = base::nullopt;
+    request_state_->completion_status = absl::nullopt;
   }
 
   MaybeComplete();
@@ -1711,7 +1723,7 @@ void SimpleURLLoaderImpl::OnMojoDisconnect() {
 
   request_state_->request_completed = true;
   request_state_->net_error = net::ERR_FAILED;
-  request_state_->completion_status = base::nullopt;
+  request_state_->completion_status = absl::nullopt;
 
   // Wait to receive any pending data on the data pipe before reporting the
   // failure.
@@ -1760,14 +1772,14 @@ void SimpleURLLoaderImpl::MaybeComplete() {
         request_state_->received_body_size) {
       // The body pipe was closed before it received the entire body.
       request_state_->net_error = net::ERR_FAILED;
-      request_state_->completion_status = base::nullopt;
+      request_state_->completion_status = absl::nullopt;
     } else {
       // The caller provided more data through the pipe than it reported in
       // URLLoaderCompletionStatus, so the URLLoader is violating the
       // API contract. Just fail the request and delete the retained completion
       // status.
       request_state_->net_error = net::ERR_UNEXPECTED;
-      request_state_->completion_status = base::nullopt;
+      request_state_->completion_status = absl::nullopt;
     }
   }
 

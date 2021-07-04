@@ -28,7 +28,9 @@
 #include "content/test/test_content_browser_client.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/notifications/notification_resources.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_registration_options.mojom.h"
 #include "third_party/leveldatabase/leveldb_chrome.h"
 #include "url/gurl.h"
 
@@ -347,8 +349,7 @@ TEST_F(PlatformNotificationContextTest, WriteReadReplacedNotification) {
   notification_database_data.service_worker_registration_id =
       kFakeServiceWorkerRegistrationId;
   notification_database_data.origin = origin;
-  notification_database_data.notification_data.title =
-      base::ASCIIToUTF16("First");
+  notification_database_data.notification_data.title = u"First";
   notification_database_data.notification_data.tag = tag;
 
   // Write the first notification with the given |tag|.
@@ -365,8 +366,7 @@ TEST_F(PlatformNotificationContextTest, WriteReadReplacedNotification) {
   ASSERT_TRUE(success());
   EXPECT_FALSE(read_notification_id.empty());
 
-  notification_database_data.notification_data.title =
-      base::ASCIIToUTF16("Second");
+  notification_database_data.notification_data.title = u"Second";
 
   // Write the second notification with the given |tag|.
   context->WriteNotificationData(
@@ -388,8 +388,7 @@ TEST_F(PlatformNotificationContextTest, WriteReadReplacedNotification) {
   ASSERT_EQ(1u, notification_database_datas.size());
 
   EXPECT_EQ(tag, notification_database_datas[0].notification_data.tag);
-  EXPECT_EQ(base::ASCIIToUTF16("Second"),
-            notification_database_datas[0].notification_data.title);
+  EXPECT_EQ(u"Second", notification_database_datas[0].notification_data.title);
 }
 
 TEST_F(PlatformNotificationContextTest, DeleteInvalidNotification) {
@@ -578,6 +577,7 @@ TEST_F(PlatformNotificationContextTest, ServiceWorkerUnregistered) {
 
   GURL origin("https://example.com");
   GURL script_url("https://example.com/worker.js");
+  blink::StorageKey key(url::Origin::Create(origin));
 
   int64_t service_worker_registration_id =
       blink::mojom::kInvalidServiceWorkerRegistrationId;
@@ -586,9 +586,10 @@ TEST_F(PlatformNotificationContextTest, ServiceWorkerUnregistered) {
   blink::mojom::ServiceWorkerRegistrationOptions options;
   options.scope = origin;
   embedded_worker_test_helper->context()->RegisterServiceWorker(
-      script_url, options, blink::mojom::FetchClientSettingsObject::New(),
+      script_url, key, options, blink::mojom::FetchClientSettingsObject::New(),
       base::BindOnce(&PlatformNotificationContextTest::DidRegisterServiceWorker,
-                     base::Unretained(this), &service_worker_registration_id));
+                     base::Unretained(this), &service_worker_registration_id),
+      /*requesting_frame_id=*/GlobalRenderFrameHostId());
 
   base::RunLoop().RunUntilIdle();
   ASSERT_NE(service_worker_registration_id,
@@ -613,7 +614,8 @@ TEST_F(PlatformNotificationContextTest, ServiceWorkerUnregistered) {
 
   // Now drop the Service Worker registration which owns that notification.
   embedded_worker_test_helper->context()->UnregisterServiceWorker(
-      origin, /*is_immediate=*/false,
+      origin, key,
+      /*is_immediate=*/false,
       base::BindOnce(
           &PlatformNotificationContextTest::DidUnregisterServiceWorker,
           base::Unretained(this), &unregister_status));

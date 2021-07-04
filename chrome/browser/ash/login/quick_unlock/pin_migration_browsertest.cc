@@ -3,15 +3,15 @@
 // found in the LICENSE file.
 
 #include "base/test/bind.h"
+#include "chrome/browser/ash/login/login_manager_test.h"
 #include "chrome/browser/ash/login/quick_unlock/pin_backend.h"
 #include "chrome/browser/ash/login/quick_unlock/pin_storage_prefs.h"
 #include "chrome/browser/ash/login/quick_unlock/quick_unlock_factory.h"
 #include "chrome/browser/ash/login/quick_unlock/quick_unlock_storage.h"
-#include "chrome/browser/chromeos/login/login_manager_test.h"
-#include "chrome/browser/chromeos/login/startup_utils.h"
+#include "chrome/browser/ash/login/startup_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "chromeos/dbus/cryptohome/fake_cryptohome_client.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
+#include "chromeos/dbus/userdataauth/fake_userdataauth_client.h"
 #include "components/account_id/account_id.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -29,10 +29,10 @@ class PinMigrationTest : public LoginManagerTest {
   ~PinMigrationTest() override = default;
 
   void SetUp() override {
-    // Initialize CryptohomeClient and configure it for testing. It will be
+    // Initialize UserDataAuthClient and configure it for testing. It will be
     // destroyed in ChromeBrowserMain.
-    CryptohomeClient::InitializeFake();
-    FakeCryptohomeClient::Get()->set_supports_low_entropy_credentials(true);
+    UserDataAuthClient::InitializeFake();
+    FakeUserDataAuthClient::Get()->set_supports_low_entropy_credentials(true);
 
     LoginManagerTest::SetUp();
   }
@@ -61,7 +61,7 @@ IN_PROC_BROWSER_TEST_F(PinMigrationTest, PRE_Migrate) {
 
   // Validate PIN is set.
   base::RunLoop run_loop;
-  base::Optional<bool> has_pin_result;
+  absl::optional<bool> has_pin_result;
   PinBackend::GetInstance()->IsSet(
       test_account, base::BindLambdaForTesting([&](bool has_pin) {
         has_pin_result = has_pin;
@@ -87,7 +87,7 @@ IN_PROC_BROWSER_TEST_F(PinMigrationTest, Migrate) {
   // Since prefs-based PIN is not set, calling IsSet on PinBackend will only
   // return true if the PIN is set in cryptohome.
   base::RunLoop run_loop;
-  base::Optional<bool> has_pin_result;
+  absl::optional<bool> has_pin_result;
   PinBackend::GetInstance()->IsSet(
       test_account, base::BindLambdaForTesting([&](bool has_pin) {
         has_pin_result = has_pin;

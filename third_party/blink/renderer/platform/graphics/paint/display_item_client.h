@@ -5,11 +5,11 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_PAINT_DISPLAY_ITEM_CLIENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_PAINT_DISPLAY_ITEM_CLIENT_H_
 
+#include "base/dcheck_is_on.h"
 #include "third_party/blink/renderer/platform/geometry/int_rect.h"
 #include "third_party/blink/renderer/platform/graphics/dom_node_id.h"
 #include "third_party/blink/renderer/platform/graphics/paint_invalidation_reason.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/wtf/assertions.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
@@ -32,6 +32,8 @@ class PLATFORM_EXPORT DisplayItemClient {
     OnCreate();
 #endif
   }
+  DisplayItemClient(const DisplayItemClient&) = delete;
+  DisplayItemClient& operator=(const DisplayItemClient&) = delete;
   virtual ~DisplayItemClient() {
 #if DCHECK_IS_ON()
     OnDestroy();
@@ -57,13 +59,6 @@ class PLATFORM_EXPORT DisplayItemClient {
   virtual RasterEffectOutset VisualRectOutsetForRasterEffects() const {
     return RasterEffectOutset::kNone;
   }
-
-  // The rect that needs to be invalidated partially for rasterization in this
-  // client. It's in the same coordinate space as VisualRect().
-  virtual IntRect PartialInvalidationVisualRect() const { return IntRect(); }
-
-  // Called by PaintController::FinishCycle() for all clients after painting.
-  virtual void ClearPartialInvalidationVisualRect() const {}
 
   // Indicates that the client will paint display items different from the ones
   // cached by PaintController. However, PaintController allows a client to
@@ -123,8 +118,6 @@ class PLATFORM_EXPORT DisplayItemClient {
 
   mutable PaintInvalidationReason paint_invalidation_reason_ =
       PaintInvalidationReason::kJustCreated;
-
-  DISALLOW_COPY_AND_ASSIGN(DisplayItemClient);
 };
 
 inline bool operator==(const DisplayItemClient& client1,

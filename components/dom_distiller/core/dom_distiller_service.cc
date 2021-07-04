@@ -43,7 +43,10 @@ DomDistillerService::DomDistillerService(
       distilled_page_prefs_(std::move(distilled_page_prefs)),
       distiller_ui_handle_(std::move(distiller_ui_handle)) {}
 
-DomDistillerService::~DomDistillerService() {}
+DomDistillerService::~DomDistillerService() {
+  // There shouldn't be any tasks pending at this point.
+  DCHECK(tasks_.empty());
+}
 
 std::unique_ptr<DistillerPage> DomDistillerService::CreateDefaultDistillerPage(
     const gfx::Size& render_view_size) {
@@ -62,7 +65,7 @@ std::unique_ptr<ViewerHandle> DomDistillerService::ViewUrl(
     std::unique_ptr<DistillerPage> distiller_page,
     const GURL& url) {
   if (!url.is_valid()) {
-    return std::unique_ptr<ViewerHandle>();
+    return nullptr;
   }
 
   TaskTracker* task_tracker = nullptr;

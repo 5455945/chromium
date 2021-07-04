@@ -4,12 +4,12 @@
 
 #include "third_party/blink/renderer/modules/animationworklet/animator.h"
 
-#include "base/stl_util.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_animate_callback.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_state_callback.h"
-#include "third_party/blink/renderer/bindings/modules/v8/worklet_animation_effect_or_worklet_group_effect.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_union_workletanimationeffect_workletgroupeffect.h"
 #include "third_party/blink/renderer/modules/animationworklet/animator_definition.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/bindings/v8_binding.h"
 #include "v8/include/v8.h"
 
 namespace blink {
@@ -19,7 +19,7 @@ Animator::Animator(v8::Isolate* isolate,
                    v8::Local<v8::Value> instance,
                    const String& name,
                    WorkletAnimationOptions options,
-                   const Vector<base::Optional<base::TimeDelta>>& local_times,
+                   const Vector<absl::optional<base::TimeDelta>>& local_times,
                    const Vector<Timing>& timings)
     : definition_(definition),
       instance_(isolate, instance),
@@ -48,11 +48,15 @@ bool Animator::Animate(
   if (IsUndefinedOrNull(instance))
     return false;
 
-  WorkletAnimationEffectOrWorkletGroupEffect effect;
+  V8UnionWorkletAnimationEffectOrWorkletGroupEffect* effect = nullptr;
   if (group_effect_->getChildren().size() == 1) {
-    effect.SetWorkletAnimationEffect(group_effect_->getChildren()[0]);
+    effect =
+        MakeGarbageCollected<V8UnionWorkletAnimationEffectOrWorkletGroupEffect>(
+            group_effect_->getChildren()[0]);
   } else {
-    effect.SetWorkletGroupEffect(group_effect_);
+    effect =
+        MakeGarbageCollected<V8UnionWorkletAnimationEffectOrWorkletGroupEffect>(
+            group_effect_);
   }
 
   v8::TryCatch try_catch(isolate);

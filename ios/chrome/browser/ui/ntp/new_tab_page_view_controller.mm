@@ -9,8 +9,11 @@
 #import "base/check.h"
 #import "ios/chrome/browser/ui/content_suggestions/content_suggestions_header_synchronizing.h"
 #import "ios/chrome/browser/ui/content_suggestions/content_suggestions_layout.h"
+#import "ios/chrome/browser/ui/content_suggestions/discover_feed_metrics_recorder.h"
 #import "ios/chrome/browser/ui/content_suggestions/ntp_home_constant.h"
+#import "ios/chrome/browser/ui/gestures/view_revealing_vertical_pan_handler.h"
 #import "ios/chrome/browser/ui/ntp/discover_feed_wrapper_view_controller.h"
+#import "ios/chrome/browser/ui/ntp/new_tab_page_constants.h"
 #import "ios/chrome/browser/ui/ntp/new_tab_page_content_delegate.h"
 #import "ios/chrome/browser/ui/ntp/new_tab_page_header_constants.h"
 #import "ios/chrome/browser/ui/ntp/new_tab_page_omnibox_positioning.h"
@@ -33,13 +36,8 @@ namespace {
 const CGFloat kOffsetToPinOmnibox = 100;
 }
 
-@interface NewTabPageViewController () <NewTabPageOmniboxPositioning>
-
-// View controller representing the NTP content suggestions. These suggestions
-// include the most visited site tiles, the shortcut tiles, the fake omnibox and
-// the Google doodle.
-@property(nonatomic, strong)
-    UICollectionViewController* contentSuggestionsViewController;
+@interface NewTabPageViewController () <NewTabPageOmniboxPositioning,
+                                        UIGestureRecognizerDelegate>
 
 // The overscroll actions controller managing accelerators over the toolbar.
 @property(nonatomic, strong)
@@ -62,6 +60,18 @@ const CGFloat kOffsetToPinOmnibox = 100;
 @property(nonatomic, strong)
     NSArray<NSLayoutConstraint*>* fakeOmniboxConstraints;
 
+// Whether or not this NTP has fully appeared for the first time yet. This value
+// remains YES if viewDidAppear has been called.
+@property(nonatomic, assign) BOOL viewDidAppear;
+
+// |YES| if the initial scroll position is from the saved web state (when
+// navigating away and back), and |NO| if it is the top of the NTP.
+@property(nonatomic, assign, getter=isInitialOffsetFromSavedState)
+    BOOL initialOffsetFromSavedState;
+
+// The scroll position when a scrolling event starts.
+@property(nonatomic, assign) int scrollStartPosition;
+
 @end
 
 @implementation NewTabPageViewController
@@ -70,31 +80,27 @@ const CGFloat kOffsetToPinOmnibox = 100;
 @synthesize headerSynchronizer = _headerSynchronizer;
 @synthesize scrolledToTop = _scrolledToTop;
 
-- (instancetype)initWithContentSuggestionsViewController:
-    (UICollectionViewController*)contentSuggestionsViewController {
-  self = [super initWithNibName:nil bundle:nil];
-  if (self) {
-    _contentSuggestionsViewController = contentSuggestionsViewController;
-    // TODO(crbug.com/1114792): Instantiate this depending on the initial scroll
-    // position.
-    // TODO(crbug.com/1114792): Stick the fake omnibox based on default scroll
-    // position.
-    _scrolledIntoFeed = NO;
-  }
-
-  return self;
+- (instancetype)init {
+  return [super initWithNibName:nil bundle:nil];
 }
 
 - (void)dealloc {
   [self.overscrollActionsController invalidate];
+  [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 - (void)viewDidLoad {
   [super viewDidLoad];
 
   DCHECK(self.discoverFeedWrapperViewController);
+  DCHECK(self.contentSuggestionsViewController);
+
+  // Prevent the NTP from spilling behind the toolbar and tab strip.
+  self.view.clipsToBounds = YES;
 
   UIView* discoverFeedView = self.discoverFeedWrapperViewController.view;
+
+  self.collectionView.accessibilityIdentifier = kNTPCollectionViewIdentifier;
 
   [self.discoverFeedWrapperViewController willMoveToParentViewController:self];
   [self addChildViewController:self.discoverFeedWrapperViewController];
@@ -109,11 +115,21 @@ const CGFloat kOffsetToPinOmnibox = 100;
                                          .discoverFeed];
   [self.discoverFeedWrapperViewController.discoverFeed
       addChildViewController:self.contentSuggestionsViewController];
-  [self.discoverFeedWrapperViewController.feedCollectionView
-      addSubview:self.contentSuggestionsViewController.view];
+  [self.collectionView addSubview:self.contentSuggestionsViewController.view];
   [self.contentSuggestionsViewController
       didMoveToParentViewController:self.discoverFeedWrapperViewController
                                         .discoverFeed];
+
+  // TODO(crbug.com/1170995): The feedCollectionView width might be narrower
+  // than the ContentSuggestions view. This causes elements to be hidden. As a
+  // temporary workaround set clipsToBounds to NO to display these elements, and
+  // add a gesture recognizer to interact with them.
+  self.collectionView.clipsToBounds = NO;
+  UITapGestureRecognizer* singleTapRecognizer = [[UITapGestureRecognizer alloc]
+      initWithTarget:self
+              action:@selector(handleSingleTapInView:)];
+  singleTapRecognizer.delegate = self;
+  [self.view addGestureRecognizer:singleTapRecognizer];
 
   // Ensures that there is never any nested scrolling, since we are nesting the
   // content suggestions collection view in the feed collection view.
@@ -122,18 +138,7 @@ const CGFloat kOffsetToPinOmnibox = 100;
       NO;
   self.contentSuggestionsViewController.collectionView.scrollEnabled = NO;
 
-  // Overscroll action does not work well with content offset, so set this
-  // to never and internally offset the UI to account for safe area insets.
-  self.discoverFeedWrapperViewController.feedCollectionView
-      .contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
-
-  self.overscrollActionsController = [[OverscrollActionsController alloc]
-      initWithScrollView:self.discoverFeedWrapperViewController
-                             .feedCollectionView];
-  [self.overscrollActionsController
-      setStyle:OverscrollStyle::NTP_NON_INCOGNITO];
-  self.overscrollActionsController.delegate = self.overscrollDelegate;
-  [self updateOverscrollActionsState];
+  [self configureOverscrollActionsController];
 
   self.view.backgroundColor = ntp_home::kNTPBackgroundColor();
 
@@ -142,6 +147,8 @@ const CGFloat kOffsetToPinOmnibox = 100;
           .collectionViewLayout);
   _contentSuggestionsLayout.isScrolledIntoFeed = self.isScrolledIntoFeed;
   _contentSuggestionsLayout.omniboxPositioner = self;
+
+  [self registerNotifications];
 }
 
 - (void)viewWillLayoutSubviews {
@@ -154,6 +161,8 @@ const CGFloat kOffsetToPinOmnibox = 100;
 
 - (void)viewWillAppear:(BOOL)animated {
   [super viewWillAppear:animated];
+
+  self.headerSynchronizer.showing = YES;
 
   // Set these constraints in viewWillAppear so ContentSuggestions View uses its
   // intrinsic height in the initial layout instead of
@@ -172,7 +181,7 @@ const CGFloat kOffsetToPinOmnibox = 100;
                                           .collectionView.contentSize.height];
 
     [NSLayoutConstraint activateConstraints:@[
-      [self.discoverFeedWrapperViewController.feedCollectionView.topAnchor
+      [self.collectionView.topAnchor
           constraintEqualToAnchor:contentSuggestionsView.bottomAnchor],
       [containerView.safeAreaLayoutGuide.leadingAnchor
           constraintEqualToAnchor:contentSuggestionsView.leadingAnchor],
@@ -180,8 +189,6 @@ const CGFloat kOffsetToPinOmnibox = 100;
           constraintEqualToAnchor:contentSuggestionsView.trailingAnchor],
       self.contentSuggestionsHeightConstraint,
     ]];
-
-    [self setContentOffset:-[self adjustedContentSuggestionsHeight]];
   }
 
   [self updateContentSuggestionForCurrentLayout];
@@ -193,6 +200,7 @@ const CGFloat kOffsetToPinOmnibox = 100;
   // Updates omnibox to ensure that the dimensions are correct when navigating
   // back to the NTP.
   [self.headerSynchronizer updateFakeOmniboxForScrollPosition];
+  self.viewDidAppear = YES;
 }
 
 - (void)viewDidDisappear:(BOOL)animated {
@@ -203,9 +211,13 @@ const CGFloat kOffsetToPinOmnibox = 100;
 - (void)viewSafeAreaInsetsDidChange {
   [super viewSafeAreaInsetsDidChange];
 
-  [self updateFeedInsetsForContentSuggestions];
-  [self updateHeaderSynchronizerOffset];
   [self.headerSynchronizer updateConstraints];
+  // Only update the insets if this NTP is being viewed for this first time. If
+  // we are reopening an existing NTP, the insets are already ok.
+  // TODO(crbug.com/1170995): Remove this once we use a custom feed header.
+  if (!self.viewDidAppear) {
+    [self updateFeedInsetsForContentSuggestions];
+  }
 }
 
 - (void)viewWillTransitionToSize:(CGSize)size
@@ -213,20 +225,42 @@ const CGFloat kOffsetToPinOmnibox = 100;
            (id<UIViewControllerTransitionCoordinator>)coordinator {
   [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
 
-  void (^alongsideBlock)(id<UIViewControllerTransitionCoordinatorContext>) =
-      ^(id<UIViewControllerTransitionCoordinatorContext> context) {
-        [self.headerSynchronizer updateFakeOmniboxOnNewWidth:size.width];
-        [self.contentSuggestionsViewController.collectionView
-                .collectionViewLayout invalidateLayout];
-      };
-  [coordinator animateAlongsideTransition:alongsideBlock completion:nil];
-}
+  __weak NewTabPageViewController* weakSelf = self;
 
-- (void)willMoveToParentViewController:(UIViewController*)parent {
-  if (self.parentViewController) {
-    [self removeFromParentViewController];
-  }
-  [super willMoveToParentViewController:parent];
+  CGFloat yOffsetBeforeRotation = self.collectionView.contentOffset.y;
+  BOOL isScrolledToTop =
+      [self adjustedContentSuggestionsHeight] <= (-yOffsetBeforeRotation) + 1;
+
+  void (^alongsideBlock)(id<UIViewControllerTransitionCoordinatorContext>) = ^(
+      id<UIViewControllerTransitionCoordinatorContext> context) {
+    [weakSelf handleFakeOmniboxForScrollPosition:weakSelf.collectionView
+                                                     .contentOffset.y
+                                           force:YES];
+    // Rotating the device can change the content suggestions height. This
+    // ensures that it is adjusted if necessary.
+    // TODO(crbug.com/1170995): Remove once the Feed supports a custom
+    // header.
+    if (isScrolledToTop &&
+        -yOffsetBeforeRotation < [weakSelf adjustedContentSuggestionsHeight]) {
+      weakSelf.collectionView.contentOffset =
+          CGPointMake(0, -[weakSelf adjustedContentSuggestionsHeight]);
+      [weakSelf updateContentSuggestionForCurrentLayout];
+    } else {
+      [weakSelf.contentSuggestionsViewController.collectionView
+              .collectionViewLayout invalidateLayout];
+    }
+    [weakSelf.view setNeedsLayout];
+    [weakSelf.view layoutIfNeeded];
+
+    // Pinned offset is different based on the orientation, so we reevaluate the
+    // minimum scroll position upon device rotation.
+    CGFloat pinnedOffsetY = [weakSelf.headerSynchronizer pinnedOffsetY];
+    if ([weakSelf.headerSynchronizer isOmniboxFocused] &&
+        weakSelf.collectionView.contentOffset.y < pinnedOffsetY) {
+      weakSelf.collectionView.contentOffset = CGPointMake(0, pinnedOffsetY);
+    }
+  };
+  [coordinator animateAlongsideTransition:alongsideBlock completion:nil];
 }
 
 - (void)traitCollectionDidChange:(UITraitCollection*)previousTraitCollection {
@@ -257,30 +291,39 @@ const CGFloat kOffsetToPinOmnibox = 100;
 }
 
 - (void)stopScrolling {
-  UIScrollView* scrollView =
-      self.discoverFeedWrapperViewController.feedCollectionView;
+  UIScrollView* scrollView = self.collectionView;
   [scrollView setContentOffset:scrollView.contentOffset animated:NO];
 }
 
-- (void)setContentOffset:(CGFloat)offset {
-  self.discoverFeedWrapperViewController.feedCollectionView.contentOffset =
-      CGPointMake(0, offset);
-  self.scrolledIntoFeed = offset > kOffsetToPinOmnibox;
+- (void)setSavedContentOffset:(CGFloat)offset {
+  self.initialOffsetFromSavedState = YES;
+  [self setContentOffset:offset];
 }
 
-- (void)updateLayoutForContentSuggestions {
-  [self updateContentSuggestionForCurrentLayout];
+- (void)setContentOffsetToTop {
+  [self setContentOffset:-[self adjustedContentSuggestionsHeight]];
+}
+
+- (void)updateContentSuggestionForCurrentLayout {
+  [self updateFeedInsetsForContentSuggestions];
+
+  // Reload data to ensure the Most Visited tiles and fake omnibox are correctly
+  // positioned, in particular during a rotation while a ViewController is
+  // presented in front of the NTP.
+  [self.headerSynchronizer
+      updateFakeOmniboxOnNewWidth:self.collectionView.bounds.size.width];
+  [self.contentSuggestionsViewController.collectionView
+          .collectionViewLayout invalidateLayout];
+  // Ensure initial fake omnibox layout.
+  [self.headerSynchronizer updateFakeOmniboxForScrollPosition];
+  if (!self.viewDidAppear && ![self isInitialOffsetFromSavedState]) {
+    [self setContentOffset:-[self adjustedContentSuggestionsHeight]];
+  }
 }
 
 - (CGFloat)contentSuggestionsContentHeight {
   return self.contentSuggestionsViewController.collectionView.contentSize
       .height;
-}
-
-- (void)handleDeviceRotation {
-  [self.headerSynchronizer unfocusOmnibox];
-  [self.contentSuggestionsViewController.collectionView
-          .collectionViewLayout invalidateLayout];
 }
 
 #pragma mark - UIScrollViewDelegate
@@ -294,29 +337,26 @@ const CGFloat kOffsetToPinOmnibox = 100;
   }
 
   [self.overscrollActionsController scrollViewDidScroll:scrollView];
+  [self.panGestureHandler scrollViewDidScroll:scrollView];
   [self.headerSynchronizer updateFakeOmniboxForScrollPosition];
+
+  CGFloat scrollPosition = scrollView.contentOffset.y;
   self.scrolledToTop =
-      scrollView.contentOffset.y >= [self.headerSynchronizer pinnedOffsetY];
+      scrollPosition >= [self.headerSynchronizer pinnedOffsetY];
   // Fixes the content suggestions collection view layout so that the header
   // scrolls at the same rate as the rest.
-  if (scrollView.contentOffset.y > -self.contentSuggestionsViewController
-                                        .collectionView.contentSize.height) {
+  if (scrollPosition > -self.contentSuggestionsViewController.collectionView
+                            .contentSize.height) {
     [self.contentSuggestionsViewController.collectionView
             .collectionViewLayout invalidateLayout];
   }
-  // Changes ownership of fake omnibox view based on scroll position.
-  if (!self.isScrolledIntoFeed &&
-      scrollView.contentOffset.y > -kOffsetToPinOmnibox) {
-    [self stickFakeOmniboxToTop];
-  } else if (self.isScrolledIntoFeed &&
-             scrollView.contentOffset.y <= -kOffsetToPinOmnibox) {
-    [self resetFakeOmnibox];
-  }
+  [self handleFakeOmniboxForScrollPosition:scrollPosition force:NO];
 }
 
 - (void)scrollViewWillBeginDragging:(UIScrollView*)scrollView {
   [self.overscrollActionsController scrollViewWillBeginDragging:scrollView];
-  // TODO(crbug.com/1114792): Add metrics recorder.
+  [self.panGestureHandler scrollViewWillBeginDragging:scrollView];
+  self.scrollStartPosition = scrollView.contentOffset.y;
 }
 
 - (void)scrollViewWillEndDragging:(UIScrollView*)scrollView
@@ -326,12 +366,19 @@ const CGFloat kOffsetToPinOmnibox = 100;
       scrollViewWillEndDragging:scrollView
                    withVelocity:velocity
             targetContentOffset:targetContentOffset];
+  [self.panGestureHandler scrollViewWillEndDragging:scrollView
+                                       withVelocity:velocity
+                                targetContentOffset:targetContentOffset];
 }
 
 - (void)scrollViewDidEndDragging:(UIScrollView*)scrollView
                   willDecelerate:(BOOL)decelerate {
   [self.overscrollActionsController scrollViewDidEndDragging:scrollView
                                               willDecelerate:decelerate];
+  [self.panGestureHandler scrollViewDidEndDragging:scrollView
+                                    willDecelerate:decelerate];
+  [self.discoverFeedMetricsRecorder
+      recordFeedScrolled:scrollView.contentOffset.y - self.scrollStartPosition];
 }
 
 - (void)scrollViewDidScrollToTop:(UIScrollView*)scrollView {
@@ -379,7 +426,60 @@ const CGFloat kOffsetToPinOmnibox = 100;
          self.view.safeAreaInsets.top;
 }
 
+#pragma mark - ThumbStripSupporting
+
+- (BOOL)isThumbStripEnabled {
+  return self.panGestureHandler != nil;
+}
+
+- (void)thumbStripEnabledWithPanHandler:
+    (ViewRevealingVerticalPanHandler*)panHandler {
+  DCHECK(!self.thumbStripEnabled);
+  self.panGestureHandler = panHandler;
+}
+
+- (void)thumbStripDisabled {
+  DCHECK(self.thumbStripEnabled);
+  self.panGestureHandler = nil;
+}
+
+#pragma mark - UIGestureRecognizerDelegate
+
+// TODO(crbug.com/1170995): Remove once the Feed header properly supports
+// ContentSuggestions.
+- (BOOL)gestureRecognizer:(UIGestureRecognizer*)gestureRecognizer
+       shouldReceiveTouch:(UITouch*)touch {
+  // Ignore all touches inside the Feed CollectionView, which includes
+  // ContentSuggestions.
+  UIView* viewToIgnoreTouches = self.collectionView;
+  CGRect ignoreBoundsInView =
+      [viewToIgnoreTouches convertRect:viewToIgnoreTouches.bounds
+                                toView:self.view];
+  return !(CGRectContainsPoint(ignoreBoundsInView,
+                               [touch locationInView:self.view]));
+}
+
 #pragma mark - Private
+
+// Configures overscroll actions controller.
+- (void)configureOverscrollActionsController {
+  // Ensure the feed's scroll view exists to prevent crashing the overscroll
+  // controller.
+  if (!self.collectionView) {
+    return;
+  }
+  // Overscroll action does not work well with content offset, so set this
+  // to never and internally offset the UI to account for safe area insets.
+  self.collectionView.contentInsetAdjustmentBehavior =
+      UIScrollViewContentInsetAdjustmentNever;
+
+  self.overscrollActionsController = [[OverscrollActionsController alloc]
+      initWithScrollView:self.collectionView];
+  [self.overscrollActionsController
+      setStyle:OverscrollStyle::NTP_NON_INCOGNITO];
+  self.overscrollActionsController.delegate = self.overscrollDelegate;
+  [self updateOverscrollActionsState];
+}
 
 // Enables or disables overscroll actions.
 - (void)updateOverscrollActionsState {
@@ -441,23 +541,6 @@ const CGFloat kOffsetToPinOmnibox = 100;
   [self.ntpContentDelegate reloadContentSuggestions];
 }
 
-// Updates the ContentSuggestionsViewController and its header for the current
-// layout.
-- (void)updateContentSuggestionForCurrentLayout {
-  [self updateFeedInsetsForContentSuggestions];
-
-  self.headerSynchronizer.showing = YES;
-  // Reload data to ensure the Most Visited tiles and fake omnibox are correctly
-  // positioned, in particular during a rotation while a ViewController is
-  // presented in front of the NTP.
-  [self.headerSynchronizer
-      updateFakeOmniboxOnNewWidth:self.collectionView.bounds.size.width];
-  [self.contentSuggestionsViewController.collectionView
-          .collectionViewLayout invalidateLayout];
-  // Ensure initial fake omnibox layout.
-  [self.headerSynchronizer updateFakeOmniboxForScrollPosition];
-}
-
 // Sets an inset to the Discover feed equal to the content suggestions height,
 // so that the content suggestions could act as the feed header.
 - (void)updateFeedInsetsForContentSuggestions {
@@ -465,7 +548,7 @@ const CGFloat kOffsetToPinOmnibox = 100;
   self.contentSuggestionsViewController.view.frame = CGRectMake(
       0, -[self contentSuggestionsContentHeight], self.view.frame.size.width,
       [self contentSuggestionsContentHeight]);
-  self.discoverFeedWrapperViewController.feedCollectionView.contentInset =
+  self.collectionView.contentInset =
       UIEdgeInsetsMake([self adjustedContentSuggestionsHeight], 0, 0, 0);
   self.contentSuggestionsHeightConstraint.constant =
       [self contentSuggestionsContentHeight];
@@ -478,6 +561,55 @@ const CGFloat kOffsetToPinOmnibox = 100;
   self.headerSynchronizer.additionalOffset =
       [self contentSuggestionsContentHeight] + self.view.safeAreaInsets.top;
 }
+
+// TODO(crbug.com/1170995): Remove once the Feed header properly supports
+// ContentSuggestions.
+- (void)handleSingleTapInView:(UITapGestureRecognizer*)recognizer {
+  CGPoint location = [recognizer locationInView:[recognizer.view superview]];
+  CGRect discBoundsInView =
+      [self.identityDiscButton convertRect:self.identityDiscButton.bounds
+                                    toView:self.view];
+  if (CGRectContainsPoint(discBoundsInView, location)) {
+    [self.identityDiscButton
+        sendActionsForControlEvents:UIControlEventTouchUpInside];
+  } else {
+    [self.headerSynchronizer unfocusOmnibox];
+  }
+}
+
+// Handles ownership of the fake omnibox view based on scroll position.
+// If |force| is YES, the fake omnibox will always be set based on the scroll
+// position. If |force| is NO, the fake omnibox will only based on
+// |isScrolledIntoFeed| to prevent setting it multiple times.
+- (void)handleFakeOmniboxForScrollPosition:(CGFloat)scrollPosition
+                                     force:(BOOL)force {
+  if ((!self.isScrolledIntoFeed || force) &&
+      scrollPosition > -kOffsetToPinOmnibox) {
+    [self stickFakeOmniboxToTop];
+  } else if ((self.isScrolledIntoFeed || force) &&
+             scrollPosition <= -kOffsetToPinOmnibox) {
+    [self resetFakeOmnibox];
+  }
+}
+
+// Registers notifications for certain actions on the NTP.
+- (void)registerNotifications {
+  NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
+  [center addObserver:self
+             selector:@selector(deviceOrientationDidChange)
+                 name:UIDeviceOrientationDidChangeNotification
+               object:nil];
+}
+
+// Handles device rotation.
+- (void)deviceOrientationDidChange {
+  if (self.viewDidAppear) {
+    [self.discoverFeedMetricsRecorder
+        recordDeviceOrientationChanged:[[UIDevice currentDevice] orientation]];
+  }
+}
+
+#pragma mark - Helpers
 
 // Content suggestions height adjusted with the safe area top insets.
 - (CGFloat)adjustedContentSuggestionsHeight {
@@ -494,6 +626,13 @@ const CGFloat kOffsetToPinOmnibox = 100;
 - (void)setIsScrolledIntoFeed:(BOOL)scrolledIntoFeed {
   _scrolledIntoFeed = scrolledIntoFeed;
   self.contentSuggestionsLayout.isScrolledIntoFeed = scrolledIntoFeed;
+}
+
+// Sets the feed collection contentOffset to |offset| to set the initial scroll
+// position.
+- (void)setContentOffset:(CGFloat)offset {
+  self.collectionView.contentOffset = CGPointMake(0, offset);
+  self.scrolledIntoFeed = offset > kOffsetToPinOmnibox;
 }
 
 @end

@@ -19,6 +19,7 @@
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/ime/text_input_type.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/combobox_model.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/native_theme/native_theme.h"
@@ -36,32 +37,46 @@
 namespace payments {
 namespace {
 
-std::unique_ptr<views::View> CreateErrorLabelView(
-    const base::string16& error,
-    autofill::ServerFieldType type) {
-  std::unique_ptr<views::View> view = std::make_unique<views::View>();
+class ErrorLabelView : public views::View {
+ public:
+  METADATA_HEADER(ErrorLabelView);
 
-  std::unique_ptr<views::BoxLayout> layout = std::make_unique<views::BoxLayout>(
-      views::BoxLayout::Orientation::kVertical);
-  layout->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kStart);
-  layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kStretch);
-  // This is the space between the input field and the error label.
-  constexpr int kErrorLabelTopPadding = 6;
-  layout->set_inside_border_insets(gfx::Insets(kErrorLabelTopPadding, 0, 0, 0));
-  view->SetLayoutManager(std::move(layout));
+  ErrorLabelView(const std::u16string& error, autofill::ServerFieldType type)
+      : error_label_(AddChildView(
+            std::make_unique<views::Label>(error,
+                                           CONTEXT_DIALOG_BODY_TEXT_SMALL))) {
+    std::unique_ptr<views::BoxLayout> layout =
+        std::make_unique<views::BoxLayout>(
+            views::BoxLayout::Orientation::kVertical);
+    layout->set_main_axis_alignment(
+        views::BoxLayout::MainAxisAlignment::kStart);
+    layout->set_cross_axis_alignment(
+        views::BoxLayout::CrossAxisAlignment::kStretch);
+    // This is the space between the input field and the error label.
+    constexpr int kErrorLabelTopPadding = 6;
+    layout->set_inside_border_insets(
+        gfx::Insets(kErrorLabelTopPadding, 0, 0, 0));
+    SetLayoutManager(std::move(layout));
 
-  std::unique_ptr<views::Label> error_label =
-      std::make_unique<views::Label>(error, CONTEXT_DIALOG_BODY_TEXT_SMALL);
-  error_label->SetID(static_cast<int>(DialogViewID::ERROR_LABEL_OFFSET) + type);
-  error_label->SetEnabledColor(error_label->GetNativeTheme()->GetSystemColor(
-      ui::NativeTheme::kColorId_AlertSeverityHigh));
-  error_label->SetMultiLine(true);
-  error_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+    error_label_->SetID(static_cast<int>(DialogViewID::ERROR_LABEL_OFFSET) +
+                        type);
+    error_label_->SetMultiLine(true);
+    error_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+  }
 
-  view->AddChildView(std::move(error_label));
-  return view;
-}
+  // views::View:
+  void OnThemeChanged() override {
+    View::OnThemeChanged();
+    error_label_->SetEnabledColor(GetNativeTheme()->GetSystemColor(
+        ui::NativeTheme::kColorId_AlertSeverityHigh));
+  }
+
+ private:
+  views::Label* const error_label_;
+};
+
+BEGIN_METADATA(ErrorLabelView, views::View)
+END_METADATA
 
 }  // namespace
 
@@ -80,7 +95,7 @@ EditorViewController::~EditorViewController() {}
 
 void EditorViewController::DisplayErrorMessageForField(
     autofill::ServerFieldType type,
-    const base::string16& error_message) {
+    const std::u16string& error_message) {
   AddOrUpdateErrorMessageForField(type, error_message);
   RelayoutPane();
 }
@@ -99,7 +114,7 @@ std::unique_ptr<views::View> EditorViewController::CreateCustomFieldView(
     autofill::ServerFieldType type,
     views::View** focusable_field,
     bool* valid,
-    base::string16* error_message) {
+    std::u16string* error_message) {
   return nullptr;
 }
 
@@ -120,11 +135,11 @@ bool EditorViewController::ValidateInputFields() {
   return true;
 }
 
-base::string16 EditorViewController::GetPrimaryButtonLabel() {
+std::u16string EditorViewController::GetPrimaryButtonLabel() {
   return l10n_util::GetStringUTF16(IDS_DONE);
 }
 
-views::Button::PressedCallback
+PaymentRequestSheetController::ButtonCallback
 EditorViewController::GetPrimaryButtonCallback() {
   return base::BindRepeating(&EditorViewController::SaveButtonPressed,
                              base::Unretained(this));
@@ -175,7 +190,7 @@ views::View* EditorViewController::GetFirstFocusedView() {
 
 std::unique_ptr<ValidatingCombobox>
 EditorViewController::CreateComboboxForField(const EditorField& field,
-                                             base::string16* error_message) {
+                                             std::u16string* error_message) {
   std::unique_ptr<ValidationDelegate> delegate =
       CreateValidationDelegate(field);
   ValidationDelegate* delegate_ptr = delegate.get();
@@ -184,7 +199,7 @@ EditorViewController::CreateComboboxForField(const EditorField& field,
                                            std::move(delegate));
   combobox->SetAccessibleName(field.label);
 
-  base::string16 initial_value = GetInitialValueForType(field.type);
+  std::u16string initial_value = GetInitialValueForType(field.type);
   if (!initial_value.empty())
     combobox->SelectValue(initial_value);
   if (IsEditingExistingItem()) {
@@ -202,7 +217,7 @@ EditorViewController::CreateComboboxForField(const EditorField& field,
 }
 
 void EditorViewController::ContentsChanged(views::Textfield* sender,
-                                           const base::string16& new_contents) {
+                                           const std::u16string& new_contents) {
   ValidatingTextfield* sender_cast = static_cast<ValidatingTextfield*>(sender);
   sender_cast->OnContentsChanged();
   primary_button()->SetEnabled(ValidateInputFields());
@@ -356,7 +371,7 @@ views::View* EditorViewController::CreateInputField(views::GridLayout* layout,
                               views::GridLayout::kFixedSize, kInputRowSpacing);
 
   std::unique_ptr<views::Label> label = std::make_unique<views::Label>(
-      field.required ? field.label + base::ASCIIToUTF16("*") : field.label);
+      field.required ? field.label + u"*" : field.label);
 
   label->SetMultiLine(true);
   label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
@@ -365,7 +380,7 @@ views::View* EditorViewController::CreateInputField(views::GridLayout* layout,
   views::View* focusable_field = nullptr;
   constexpr int kInputFieldHeight = 28;
 
-  base::string16 error_message;
+  std::u16string error_message;
   switch (field.control_type) {
     case EditorField::ControlType::TEXTFIELD:
     case EditorField::ControlType::TEXTFIELD_NUMBER: {
@@ -373,7 +388,7 @@ views::View* EditorViewController::CreateInputField(views::GridLayout* layout,
           CreateValidationDelegate(field);
       ValidationDelegate* delegate_ptr = validation_delegate.get();
 
-      base::string16 initial_value = GetInitialValueForType(field.type);
+      std::u16string initial_value = GetInitialValueForType(field.type);
       auto text_field =
           std::make_unique<ValidatingTextfield>(std::move(validation_delegate));
       // Set the initial value and validity state.
@@ -476,7 +491,7 @@ int EditorViewController::ComputeWidestExtraViewWidth(
 
 void EditorViewController::AddOrUpdateErrorMessageForField(
     autofill::ServerFieldType type,
-    const base::string16& error_message) {
+    const std::u16string& error_message) {
   const auto& label_view_it = error_labels_.find(type);
   DCHECK(label_view_it != error_labels_.end());
 
@@ -486,7 +501,7 @@ void EditorViewController::AddOrUpdateErrorMessageForField(
     if (label_view_it->second->children().empty()) {
       // If there was no error label view, add it.
       label_view_it->second->AddChildView(
-          CreateErrorLabelView(error_message, type).release());
+          std::make_unique<ErrorLabelView>(error_message, type).release());
     } else {
       // The error view is the only child, and has a Label as only child itself.
       static_cast<views::Label*>(

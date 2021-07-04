@@ -10,7 +10,6 @@ assert(enable_extensions)
 
 schema_sources_ = [
   "accessibility_features.json",
-  "accessibility_private.json",
   "activity_log_private.json",
   "autofill_private.idl",
   "autotest_private.idl",
@@ -20,7 +19,6 @@ schema_sources_ = [
   "chrome_web_view_internal.json",
   "command_line_private.json",
   "content_settings.json",
-  "context_menus_internal.json",
   "context_menus.json",
   "cookies.json",
   "cryptotoken_private.idl",
@@ -32,6 +30,7 @@ schema_sources_ = [
   "downloads.idl",
   "downloads_internal.idl",
   "enterprise_hardware_platform.idl",
+  "enterprise_reporting_private.idl",
   "font_settings.json",
   "gcm.json",
   "history.json",
@@ -75,10 +74,6 @@ if (!is_android) {
   schema_sources_ += [ "processes.idl" ]
 }
 
-if (is_chromeos_ash || is_mac || is_win) {
-  schema_sources_ += [ "networking_cast_private.idl" ]
-}
-
 if (is_chromeos_ash || is_chromeos_lacros) {
   schema_sources_ += [
     "enterprise_device_attributes.idl",
@@ -91,6 +86,7 @@ if (is_chromeos_ash || is_chromeos_lacros) {
 
 if (is_chromeos_ash) {
   schema_sources_ += [
+    "accessibility_private.json",
     "certificate_provider.idl",
     "certificate_provider_internal.idl",
     "document_scan.idl",
@@ -104,7 +100,6 @@ if (is_chromeos_ash) {
     "file_system_provider_internal.idl",
     "input_ime.json",
     "input_method_private.json",
-    "launcher_search_provider.idl",
     "login.idl",
     "login_screen_storage.idl",
     "login_screen_ui.idl",
@@ -123,10 +118,6 @@ if (is_chromeos_ash) {
   }
 } else if (is_linux || is_chromeos || is_win) {
   schema_sources_ += [ "input_ime.json" ]
-}
-
-if (!is_chromeos_ash) {
-  schema_sources_ += [ "enterprise_reporting_private.idl" ]
 }
 
 if (enable_service_discovery) {

@@ -8,7 +8,6 @@
 #include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_property.h"
-#include "third_party/blink/renderer/bindings/modules/v8/gpu_buffer_or_array_buffer.h"
 #include "third_party/blink/renderer/core/dom/events/event_target.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/modules/webgpu/dawn_callback.h"
@@ -17,6 +16,7 @@
 namespace blink {
 
 class ExecutionContext;
+class HTMLCanvasElement;
 class HTMLVideoElement;
 class GPUAdapter;
 class GPUAdapter;
@@ -45,6 +45,8 @@ class GPUSampler;
 class GPUSamplerDescriptor;
 class GPUShaderModule;
 class GPUShaderModuleDescriptor;
+class GPUSupportedFeatures;
+class GPUSupportedLimits;
 class GPUTexture;
 class GPUTextureDescriptor;
 class ScriptPromiseResolver;
@@ -66,17 +68,19 @@ class GPUDevice final : public EventTargetWithInlineData,
 
   // gpu_device.idl
   GPUAdapter* adapter() const;
-  Vector<String> features() const;
-  Vector<String> extensions();
+  GPUSupportedFeatures* features() const;
+  GPUSupportedLimits* limits() const { return limits_; }
   ScriptPromise lost(ScriptState* script_state);
 
   GPUQueue* queue();
-  GPUQueue* defaultQueue();
 
   GPUBuffer* createBuffer(const GPUBufferDescriptor* descriptor);
   GPUTexture* createTexture(const GPUTextureDescriptor* descriptor,
                             ExceptionState& exception_state);
   GPUTexture* experimentalImportTexture(HTMLVideoElement* video,
+                                        unsigned int usage_flags,
+                                        ExceptionState& exception_state);
+  GPUTexture* experimentalImportTexture(HTMLCanvasElement* canvas,
                                         unsigned int usage_flags,
                                         ExceptionState& exception_state);
   GPUSampler* createSampler(const GPUSamplerDescriptor* descriptor);
@@ -96,11 +100,12 @@ class GPUDevice final : public EventTargetWithInlineData,
       ScriptState* script_state,
       const GPURenderPipelineDescriptor* descriptor);
   GPUComputePipeline* createComputePipeline(
-      const GPUComputePipelineDescriptor* descriptor);
-  ScriptPromise createReadyRenderPipeline(
+      const GPUComputePipelineDescriptor* descriptor,
+      ExceptionState& exception_state);
+  ScriptPromise createRenderPipelineAsync(
       ScriptState* script_state,
       const GPURenderPipelineDescriptor* descriptor);
-  ScriptPromise createReadyComputePipeline(
+  ScriptPromise createComputePipelineAsync(
       ScriptState* script_state,
       const GPUComputePipelineDescriptor* descriptor);
 
@@ -128,19 +133,34 @@ class GPUDevice final : public EventTargetWithInlineData,
       ScriptPromiseProperty<Member<GPUDeviceLostInfo>, ToV8UndefinedGenerator>;
 
   void OnUncapturedError(WGPUErrorType errorType, const char* message);
+  void OnLogging(WGPULoggingType loggingType, const char* message);
   void OnDeviceLostError(const char* message);
 
   void OnPopErrorScopeCallback(ScriptPromiseResolver* resolver,
                                WGPUErrorType type,
                                const char* message);
 
+  void OnCreateRenderPipelineAsyncCallback(ScriptPromiseResolver* resolver,
+                                           WGPUCreatePipelineAsyncStatus status,
+                                           WGPURenderPipeline render_pipeline,
+                                           const char* message);
+  void OnCreateComputePipelineAsyncCallback(
+      ScriptPromiseResolver* resolver,
+      WGPUCreatePipelineAsyncStatus status,
+      WGPUComputePipeline compute_pipeline,
+      const char* message);
+
   Member<GPUAdapter> adapter_;
-  Vector<String> feature_name_list_;
+  Member<GPUSupportedFeatures> features_;
+  Member<GPUSupportedLimits> limits_;
   Member<GPUQueue> queue_;
   Member<LostProperty> lost_property_;
   std::unique_ptr<
       DawnCallback<base::RepeatingCallback<void(WGPUErrorType, const char*)>>>
       error_callback_;
+  std::unique_ptr<
+      DawnCallback<base::RepeatingCallback<void(WGPULoggingType, const char*)>>>
+      logging_callback_;
   // lost_callback_ is stored as a unique_ptr since it may never be called.
   // We need to be sure to free it on deletion of the device.
   // Inside OnDeviceLostError we'll release the unique_ptr to avoid a double

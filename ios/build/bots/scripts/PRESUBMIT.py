@@ -7,6 +7,8 @@ See http://dev.chromium.org/developers/how-tos/depottools/presubmit-scripts
 for more details about the presubmit API built into depot_tools.
 """
 
+USE_PYTHON3 = True
+
 
 def _RunTestRunnerUnitTests(input_api, output_api):
   """ Runs iOS test runner unit tests """
@@ -23,6 +25,7 @@ def _RunTestRunnerUnitTests(input_api, output_api):
       # 'test_runner_test.py',
       'wpr_runner_test.py',
       'xcode_log_parser_test.py',
+      'xcode_util_test.py',
       # 'xcodebuild_runner_test.py',
   ]
 

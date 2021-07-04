@@ -19,21 +19,16 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/logging.h"
-#include "base/optional.h"
 #include "base/rand_util.h"
 #include "base/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "build/buildflag.h"
-#include "chromeos/assistant/buildflags.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/power_manager/power_supply_properties.pb.h"
 #include "chromeos/services/assistant/assistant_interaction_logger.h"
 #include "chromeos/services/assistant/assistant_manager_service.h"
-#include "chromeos/services/assistant/assistant_manager_service_delegate_impl.h"
-#include "chromeos/services/assistant/fake_assistant_manager_service_impl.h"
-#include "chromeos/services/assistant/fake_assistant_settings_impl.h"
-#include "chromeos/services/assistant/public/cpp/assistant_client.h"
+#include "chromeos/services/assistant/assistant_manager_service_impl.h"
+#include "chromeos/services/assistant/public/cpp/assistant_browser_delegate.h"
 #include "chromeos/services/assistant/public/cpp/assistant_prefs.h"
 #include "chromeos/services/assistant/public/cpp/device_actions.h"
 #include "chromeos/services/assistant/public/cpp/features.h"
@@ -44,23 +39,16 @@
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/scope_set.h"
 #include "components/user_manager/known_user.h"
+#include "google_apis/gaia/gaia_constants.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
-
-#if BUILDFLAG(ENABLE_CROS_LIBASSISTANT)
-#include "chromeos/assistant/internal/internal_constants.h"
-#include "chromeos/services/assistant/assistant_manager_service_impl.h"
-#include "chromeos/services/assistant/assistant_settings_impl.h"
-#endif
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace chromeos {
 namespace assistant {
 
 namespace {
 
-using CommunicationErrorType = AssistantManagerService::CommunicationErrorType;
-
-constexpr char kScopeAuthGcm[] = "https://www.googleapis.com/auth/gcm";
 constexpr char kScopeAssistant[] =
     "https://www.googleapis.com/auth/assistant-sdk-prototype";
 
@@ -88,19 +76,17 @@ AssistantStatus ToAssistantStatus(AssistantManagerService::State state) {
   }
 }
 
-#if BUILDFLAG(ENABLE_CROS_LIBASSISTANT)
-base::Optional<std::string> GetS3ServerUriOverride() {
+absl::optional<std::string> GetS3ServerUriOverride() {
   if (g_s3_server_uri_override)
     return g_s3_server_uri_override;
-  return base::nullopt;
+  return absl::nullopt;
 }
 
-base::Optional<std::string> GetDeviceIdOverride() {
+absl::optional<std::string> GetDeviceIdOverride() {
   if (g_device_id_override)
     return g_device_id_override;
-  return base::nullopt;
+  return absl::nullopt;
 }
-#endif
 
 // In the signed-out mode, we are going to run Assistant service without
 // using user's signed in account information.
@@ -205,7 +191,7 @@ Service::Service(std::unique_ptr<network::PendingSharedURLLoaderFactory>
   DCHECK(identity_manager_);
   chromeos::PowerManagerClient* power_manager_client =
       context_->power_manager_client();
-  power_manager_observer_.Add(power_manager_client);
+  power_manager_observation_.Observe(power_manager_client);
   power_manager_client->RequestStatusUpdate();
 }
 
@@ -279,7 +265,7 @@ void Service::OnSessionActivated(bool activated) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   session_active_ = activated;
 
-  AssistantClient::Get()->OnAssistantStatusChanged(
+  AssistantBrowserDelegate::Get()->OnAssistantStatusChanged(
       ToAssistantStatus(assistant_manager_service_->GetState()));
   UpdateListeningState();
 }
@@ -334,9 +320,8 @@ void Service::OnLockedFullScreenStateChanged(bool enabled) {
   UpdateListeningState();
 }
 
-void Service::OnCommunicationError(CommunicationErrorType error_type) {
-  if (error_type == CommunicationErrorType::AuthenticationError)
-    RequestAccessToken();
+void Service::OnAuthenticationError() {
+  RequestAccessToken();
 }
 
 void Service::OnStateChanged(AssistantManagerService::State new_state) {
@@ -347,7 +332,7 @@ void Service::OnStateChanged(AssistantManagerService::State new_state) {
   if (new_state == AssistantManagerService::State::RUNNING)
     DVLOG(1) << "Assistant is running";
 
-  AssistantClient::Get()->OnAssistantStatusChanged(
+  AssistantBrowserDelegate::Get()->OnAssistantStatusChanged(
       ToAssistantStatus(new_state));
   UpdateListeningState();
 }
@@ -368,7 +353,7 @@ void Service::UpdateAssistantManagerState() {
   if (IsSignedOutMode()) {
     // Clear |access_token_| in signed-out mode to keep it synced with what we
     // will pass to the |assistant_manager_service_|.
-    access_token_ = base::nullopt;
+    access_token_ = absl::nullopt;
   }
 
   if (!assistant_manager_service_)
@@ -417,8 +402,8 @@ void Service::UpdateAssistantManagerState() {
 }
 
 CoreAccountInfo Service::RetrievePrimaryAccountInfo() const {
-  CoreAccountInfo account_info = identity_manager_->GetPrimaryAccountInfo(
-      signin::ConsentLevel::kNotRequired);
+  CoreAccountInfo account_info =
+      identity_manager_->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin);
   CHECK(!account_info.account_id.empty());
   CHECK(!account_info.gaia.empty());
   return account_info;
@@ -448,7 +433,7 @@ void Service::RequestAccessToken() {
 
   signin::ScopeSet scopes;
   scopes.insert(kScopeAssistant);
-  scopes.insert(kScopeAuthGcm);
+  scopes.insert(GaiaConstants::kGCMGroupServerOAuth2Scope);
 
   access_token_fetcher_ = identity_manager_->CreateAccessTokenFetcherForAccount(
       account_info.account_id, "cros_assistant", scopes,
@@ -495,7 +480,7 @@ void Service::CreateAssistantManagerService() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   assistant_manager_service_ = CreateAndReturnAssistantManagerService();
-  assistant_manager_service_->AddCommunicationErrorObserver(this);
+  assistant_manager_service_->AddAuthenticationStateObserver(this);
   assistant_manager_service_->AddAndFireStateObserver(this);
 
   if (AssistantInteractionLogger::IsLoggingEnabled()) {
@@ -510,18 +495,11 @@ Service::CreateAndReturnAssistantManagerService() {
   if (assistant_manager_service_for_testing_)
     return std::move(assistant_manager_service_for_testing_);
 
-#if BUILDFLAG(ENABLE_CROS_LIBASSISTANT)
-  auto delegate =
-      std::make_unique<AssistantManagerServiceDelegateImpl>(context());
-
   // |assistant_manager_service_| is only created once.
   DCHECK(pending_url_loader_factory_);
   return std::make_unique<AssistantManagerServiceImpl>(
-      context(), std::move(delegate), std::move(pending_url_loader_factory_),
+      context(), std::move(pending_url_loader_factory_),
       GetS3ServerUriOverride(), GetDeviceIdOverride());
-#else
-  return std::make_unique<FakeAssistantManagerServiceImpl>();
-#endif
 }
 
 void Service::FinalizeAssistantManagerService() {
@@ -547,7 +525,8 @@ void Service::StopAssistantManagerService() {
 
   assistant_manager_service_->Stop();
   weak_ptr_factory_.InvalidateWeakPtrs();
-  AssistantClient::Get()->OnAssistantStatusChanged(AssistantStatus::NOT_READY);
+  AssistantBrowserDelegate::Get()->OnAssistantStatusChanged(
+      AssistantStatus::NOT_READY);
 }
 
 void Service::AddAshSessionObserver() {
@@ -579,12 +558,12 @@ void Service::UpdateListeningState() {
                                             ShouldEnableHotword());
 }
 
-base::Optional<AssistantManagerService::UserInfo> Service::GetUserInfo() const {
+absl::optional<AssistantManagerService::UserInfo> Service::GetUserInfo() const {
   if (access_token_) {
     return AssistantManagerService::UserInfo(RetrievePrimaryAccountInfo().gaia,
                                              access_token_.value());
   }
-  return base::nullopt;
+  return absl::nullopt;
 }
 
 bool Service::ShouldEnableHotword() {

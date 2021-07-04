@@ -4,7 +4,7 @@
 
 #include "ash/wm/gestures/back_gesture/back_gesture_contextual_nudge_controller_impl.h"
 
-#include "ash/public/cpp/ash_features.h"
+#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/ash_pref_names.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shelf/contextual_tooltip.h"
@@ -38,6 +38,14 @@ class BackGestureContextualNudgeControllerTest : public NoSessionAshTestBase {
  public:
   explicit BackGestureContextualNudgeControllerTest(bool can_go_back = true)
       : can_go_back_(can_go_back) {
+    scoped_feature_list_.InitWithFeatures(
+        {features::kContextualNudges, features::kHideShelfControlsInTabletMode},
+        {});
+  }
+  BackGestureContextualNudgeControllerTest(
+      base::test::TaskEnvironment::TimeSource time,
+      bool can_go_back = true)
+      : NoSessionAshTestBase(time), can_go_back_(can_go_back) {
     scoped_feature_list_.InitWithFeatures(
         {features::kContextualNudges, features::kHideShelfControlsInTabletMode},
         {});
@@ -146,7 +154,17 @@ class BackGestureContextualNudgeControllerTestCantGoBack
 
 class BackGestureContextualNudgeControllerTestA11yPrefs
     : public BackGestureContextualNudgeControllerTest,
-      public ::testing::WithParamInterface<std::string> {};
+      public ::testing::WithParamInterface<std::string> {
+ public:
+  BackGestureContextualNudgeControllerTestA11yPrefs()
+      : BackGestureContextualNudgeControllerTest(
+            base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
+  BackGestureContextualNudgeControllerTestA11yPrefs(
+      const BackGestureContextualNudgeControllerTestA11yPrefs&) = delete;
+  BackGestureContextualNudgeControllerTestA11yPrefs& operator=(
+      const BackGestureContextualNudgeControllerTestA11yPrefs&) = delete;
+  ~BackGestureContextualNudgeControllerTestA11yPrefs() override = default;
+};
 
 INSTANTIATE_TEST_SUITE_P(
     All,

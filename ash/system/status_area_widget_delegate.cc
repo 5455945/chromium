@@ -78,7 +78,6 @@ class OverflowGradientBackground : public views::Background {
 StatusAreaWidgetDelegate::StatusAreaWidgetDelegate(Shelf* shelf)
     : shelf_(shelf), focus_cycler_for_testing_(nullptr) {
   DCHECK(shelf_);
-  set_owned_by_client();
   SetOwnedByWidget(true);
 
   // Allow the launcher to surrender the focus to another window upon
@@ -112,6 +111,19 @@ void StatusAreaWidgetDelegate::OnStatusAreaCollapseStateChanged(
       SetBackground(nullptr);
       break;
   }
+}
+
+void StatusAreaWidgetDelegate::Shutdown() {
+  // TODO(pbos): Investigate if this is necessary. This is a bit defensive but
+  // it's done to make sure that StatusAreaWidget isn't accessed by the View
+  // hierarchy during its destruction.
+  RemoveAllChildViews(/*delete=*/true);
+  // StatusAreaWidgetDelegate uses a GridLayout which unfortunately doesn't
+  // handle child add/removal. Remove the LayoutManager early to prevent UAFs
+  // during Widget destruction.
+  // TODO(pbos): This really shouldn't be necessary. It's a deficiency in
+  // GridLayout.
+  SetLayoutManager(nullptr);
 }
 
 views::View* StatusAreaWidgetDelegate::GetDefaultFocusableChild() {
@@ -209,10 +221,12 @@ gfx::Rect StatusAreaWidgetDelegate::GetTargetBounds() const {
 }
 
 void StatusAreaWidgetDelegate::UpdateLayout(bool animate) {
-  if (animate)
+  if (animate) {
     StatusAreaWidgetDelegateAnimationSettings settings(layer());
-
-  Layout();
+    Layout();
+  } else {
+    Layout();
+  }
 }
 
 void StatusAreaWidgetDelegate::ChildPreferredSizeChanged(View* child) {
@@ -221,8 +235,17 @@ void StatusAreaWidgetDelegate::ChildPreferredSizeChanged(View* child) {
   if (new_size == current_size)
     return;
   // Need to re-layout the shelf when trays or items are added/removed.
-  StatusAreaWidgetDelegateAnimationSettings settings(layer());
-
+  // don't run uring login or unlock if the shelf container is animating.
+  std::unique_ptr<StatusAreaWidgetDelegateAnimationSettings> settings;
+  if (!shelf_->shelf_widget()
+           ->GetNativeWindow()
+           ->parent()
+           ->layer()
+           ->GetAnimator()
+           ->is_animating()) {
+    settings =
+        std::make_unique<StatusAreaWidgetDelegateAnimationSettings>(layer());
+  }
   shelf_->shelf_layout_manager()->LayoutShelf(/*animate=*/false);
 }
 

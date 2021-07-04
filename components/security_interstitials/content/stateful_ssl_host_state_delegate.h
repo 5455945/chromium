@@ -10,7 +10,6 @@
 
 #include "base/feature_list.h"
 #include "base/macros.h"
-#include "base/time/time.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "content/public/browser/ssl_host_state_delegate.h"
 
@@ -19,7 +18,8 @@ class PrefService;
 
 namespace base {
 class Clock;
-class DictionaryValue;
+class Value;
+class FilePath;
 }  //  namespace base
 
 namespace content {
@@ -120,8 +120,8 @@ class StatefulSSLHostStateDelegate : public content::SSLHostStateDelegate,
   // GetValidCertDecisionsDict will create a new set of entries within the
   // dictionary if they do not already exist. Otherwise will fail and return if
   // NULL if they do not exist.
-  base::DictionaryValue* GetValidCertDecisionsDict(
-      base::DictionaryValue* dict,
+  base::Value* GetValidCertDecisionsDict(
+      base::Value* dict,
       CreateDictionaryEntriesDisposition create_entries);
 
   std::unique_ptr<base::Clock> clock_;

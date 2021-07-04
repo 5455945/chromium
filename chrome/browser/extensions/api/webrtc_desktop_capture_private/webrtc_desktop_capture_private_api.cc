@@ -44,7 +44,7 @@ WebrtcDesktopCapturePrivateChooseDesktopMediaFunction::Run() {
   DesktopCaptureRequestsRegistry::GetInstance()->AddRequest(source_process_id(),
                                                             request_id_, this);
 
-  args_->Remove(0, NULL);
+  args_->EraseListIter(args_->GetList().begin());
 
   std::unique_ptr<Params> params = Params::Create(*args_);
   EXTENSION_FUNCTION_VALIDATE(params.get());
@@ -63,7 +63,7 @@ WebrtcDesktopCapturePrivateChooseDesktopMediaFunction::Run() {
       !network::IsUrlPotentiallyTrustworthy(origin)) {
     return RespondNow(Error(kUrlNotSecure));
   }
-  base::string16 target_name =
+  std::u16string target_name =
       base::UTF8ToUTF16(network::IsUrlPotentiallyTrustworthy(origin)
                             ? net::GetHostAndOptionalPort(origin)
                             : origin.spec());

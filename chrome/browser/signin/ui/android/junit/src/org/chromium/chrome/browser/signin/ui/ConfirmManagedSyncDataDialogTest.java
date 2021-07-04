@@ -6,7 +6,6 @@ package org.chromium.chrome.browser.signin.ui;
 
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
-import static org.mockito.MockitoAnnotations.initMocks;
 
 import android.widget.Button;
 
@@ -16,13 +15,20 @@ import androidx.fragment.app.FragmentManager;
 
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
+import org.mockito.quality.Strictness;
 import org.robolectric.Robolectric;
 import org.robolectric.shadows.ShadowAlertDialog;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.components.browser_ui.modaldialog.AppModalPresenter;
+import org.chromium.ui.modaldialog.ModalDialogManager;
+import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogType;
 
 /**
  * Tests for {@link ConfirmManagedSyncDataDialog}.
@@ -30,6 +36,9 @@ import org.chromium.base.test.BaseRobolectricTestRunner;
 @RunWith(BaseRobolectricTestRunner.class)
 public class ConfirmManagedSyncDataDialogTest {
     private static final String TEST_DOMAIN = "test.domain.example.com";
+
+    @Rule
+    public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
     @Mock
     private ConfirmManagedSyncDataDialog.Listener mMockListener;
@@ -40,10 +49,10 @@ public class ConfirmManagedSyncDataDialogTest {
 
     @Before
     public void setUp() {
-        initMocks(this);
         mActivity = Robolectric.setupActivity(FragmentActivity.class);
-        mStateMachineDelegate =
-                new ConfirmSyncDataStateMachineDelegate(mActivity.getSupportFragmentManager());
+        mStateMachineDelegate = new ConfirmSyncDataStateMachineDelegate(mActivity,
+                mActivity.getSupportFragmentManager(),
+                new ModalDialogManager(new AppModalPresenter(mActivity), ModalDialogType.APP));
     }
 
     @Test

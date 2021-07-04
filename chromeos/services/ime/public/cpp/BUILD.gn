@@ -13,6 +13,10 @@ buildflag_header("buildflags") {
   flags = [ "ENABLE_CROS_IME_SHARED_DATA=$enable_cros_ime_shared_data" ]
 }
 
+source_set("structs") {
+  sources = [ "suggestions.h" ]
+}
+
 source_set("rulebased") {
   sources = [
     "rulebased/def/ar.cc",
@@ -89,6 +93,7 @@ source_set("rulebased") {
 
   deps = [
     "//base",
+    "//chromeos/services/ime/public/mojom:mojom",
     "//third_party/re2",
   ]
 }
@@ -98,6 +103,7 @@ source_set("rulebased_unit_tests") {
   deps = [
     ":rulebased",
     "//base",
+    "//chromeos/services/ime/public/mojom:mojom_shared_cpp_sources",
     "//testing/gmock",
     "//testing/gtest:gtest",
   ]

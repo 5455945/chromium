@@ -28,7 +28,7 @@
 #include "third_party/blink/renderer/core/html/parser/html_preload_scanner.h"
 
 #include <memory>
-#include "base/optional.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/mojom/script/script_type.mojom-blink.h"
 #include "third_party/blink/renderer/core/css/css_primitive_value.h"
@@ -52,6 +52,7 @@
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
 #include "third_party/blink/renderer/core/html/parser/html_srcset_parser.h"
 #include "third_party/blink/renderer/core/html/parser/html_tokenizer.h"
+#include "third_party/blink/renderer/core/html/parser/subresource_redirect_origins_preloader.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/input_type_names.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
@@ -86,7 +87,7 @@ bool Match(const String& name, const QualifiedName& q_name) {
 }
 
 const StringImpl* TagImplFor(const HTMLToken::DataVector& data) {
-  AtomicString tag_name(data);
+  AtomicString tag_name = data.AsAtomicString();
   const StringImpl* result = tag_name.Impl();
   if (result->IsStatic())
     return result;
@@ -155,7 +156,6 @@ class TokenPreloadScanner::StartTagScanner {
         link_is_preconnect_(false),
         link_is_preload_(false),
         link_is_modulepreload_(false),
-        link_is_import_(false),
         link_is_webbundle_(false),
         matched_(true),
         input_is_image_(false),
@@ -273,14 +273,14 @@ class TokenPreloadScanner::StartTagScanner {
       bool treat_links_as_in_body) {
     PreloadRequest::RequestType request_type =
         PreloadRequest::kRequestTypePreload;
-    base::Optional<ResourceType> type;
+    absl::optional<ResourceType> type;
     if (ShouldPreconnect()) {
       request_type = PreloadRequest::kRequestTypePreconnect;
     } else {
       if (IsLinkRelPreload()) {
         request_type = PreloadRequest::kRequestTypeLinkRelPreload;
         type = ResourceTypeForLinkPreload();
-        if (type == base::nullopt)
+        if (type == absl::nullopt)
           return nullptr;
       } else if (IsLinkRelModulePreload()) {
         request_type = PreloadRequest::kRequestTypeLinkRelPreload;
@@ -310,7 +310,7 @@ class TokenPreloadScanner::StartTagScanner {
       resource_width.is_set = true;
     }
 
-    if (type == base::nullopt)
+    if (type == absl::nullopt)
       type = GetResourceType();
 
     // The element's 'referrerpolicy' attribute (if present) takes precedence
@@ -342,7 +342,10 @@ class TokenPreloadScanner::StartTagScanner {
 
     RenderBlockingBehavior render_blocking_behavior =
         RenderBlockingBehavior::kUnset;
-    if (is_script && (is_module || defer_ == FetchParameters::kLazyLoad)) {
+    if (request_type == PreloadRequest::kRequestTypeLinkRelPreload) {
+      render_blocking_behavior = RenderBlockingBehavior::kNonBlocking;
+    } else if (is_script &&
+               (is_module || defer_ == FetchParameters::kLazyLoad)) {
       render_blocking_behavior =
           is_async_ ? RenderBlockingBehavior::kPotentiallyBlocking
                     : RenderBlockingBehavior::kNonBlocking;
@@ -356,6 +359,11 @@ class TokenPreloadScanner::StartTagScanner {
     }
     request->SetRenderBlockingBehavior(render_blocking_behavior);
 
+    if (type == ResourceType::kImage &&
+        document_parameters.subresource_redirect_origins_preloader) {
+      document_parameters.subresource_redirect_origins_preloader
+          ->AddImagePreloadRequest(predicted_base_url, url_to_load_);
+    }
     if (type == ResourceType::kImage && Match(tag_impl_, html_names::kImgTag) &&
         IsLazyLoadImageDeferable(document_parameters)) {
       return nullptr;
@@ -494,7 +502,6 @@ class TokenPreloadScanner::StartTagScanner {
       link_is_preconnect_ = rel.IsPreconnect();
       link_is_preload_ = rel.IsLinkPreload();
       link_is_modulepreload_ = rel.IsModulePreload();
-      link_is_import_ = rel.IsImport();
       link_is_webbundle_ = rel.IsWebBundle();
     } else if (Match(attribute_name, html_names::kMediaAttr)) {
       matched_ &= MediaAttributeMatches(*media_values_, attribute_value);
@@ -656,7 +663,7 @@ class TokenPreloadScanner::StartTagScanner {
     return charset_;
   }
 
-  base::Optional<ResourceType> ResourceTypeForLinkPreload() const {
+  absl::optional<ResourceType> ResourceTypeForLinkPreload() const {
     DCHECK(link_is_preload_);
     return PreloadHelper::GetResourceTypeFromAsAttribute(as_attribute_value_);
   }
@@ -672,8 +679,6 @@ class TokenPreloadScanner::StartTagScanner {
       return ResourceType::kCSSStyleSheet;
     if (link_is_preconnect_)
       return ResourceType::kRaw;
-    if (Match(tag_impl_, html_names::kLinkTag) && link_is_import_)
-      return ResourceType::kImportResource;
     NOTREACHED();
     return ResourceType::kRaw;
   }
@@ -697,7 +702,7 @@ class TokenPreloadScanner::StartTagScanner {
     return Match(tag_impl_, html_names::kLinkTag) && link_is_webbundle_;
   }
 
-  bool ShouldPreloadLink(base::Optional<ResourceType>& type) const {
+  bool ShouldPreloadLink(absl::optional<ResourceType>& type) const {
     if (link_is_style_sheet_) {
       return type_attribute_value_.IsEmpty() ||
              MIMETypeRegistry::IsSupportedStyleSheetMIMEType(
@@ -717,16 +722,14 @@ class TokenPreloadScanner::StartTagScanner {
                type_from_attribute))) {
         return false;
       }
+      return true;
     } else if (link_is_modulepreload_) {
       return true;
-    } else if (!link_is_import_) {
-      return false;
     }
-
-    return true;
+    return false;
   }
 
-  bool ShouldPreload(base::Optional<ResourceType>& type) const {
+  bool ShouldPreload(absl::optional<ResourceType>& type) const {
     if (url_to_load_.IsEmpty())
       return false;
     if (!matched_)
@@ -746,6 +749,11 @@ class TokenPreloadScanner::StartTagScanner {
 
         case ScriptLoader::ScriptTypeAtPrepare::kImportMap:
           // TODO(crbug.com/922212): External import maps are not yet supported.
+          return false;
+
+        case ScriptLoader::ScriptTypeAtPrepare::kSpeculationRules:
+          // TODO(crbug.com/1182803): External speculation rules are not yet
+          // supported.
           return false;
 
         case ScriptLoader::ScriptTypeAtPrepare::kClassic:
@@ -797,7 +805,6 @@ class TokenPreloadScanner::StartTagScanner {
   bool link_is_preconnect_;
   bool link_is_preload_;
   bool link_is_modulepreload_;
-  bool link_is_import_;
   bool link_is_webbundle_;
   bool matched_;
   bool input_is_image_;
@@ -888,7 +895,7 @@ void TokenPreloadScanner::RewindTo(
 void TokenPreloadScanner::Scan(const HTMLToken& token,
                                const SegmentedString& source,
                                PreloadRequestStream& requests,
-                               base::Optional<ViewportDescription>* viewport,
+                               absl::optional<ViewportDescription>* viewport,
                                bool* is_csp_meta_tag) {
   ScanCommon(token, source, requests, viewport, is_csp_meta_tag);
 }
@@ -896,7 +903,7 @@ void TokenPreloadScanner::Scan(const HTMLToken& token,
 void TokenPreloadScanner::Scan(const CompactHTMLToken& token,
                                const SegmentedString& source,
                                PreloadRequestStream& requests,
-                               base::Optional<ViewportDescription>* viewport,
+                               absl::optional<ViewportDescription>* viewport,
                                bool* is_csp_meta_tag) {
   ScanCommon(token, source, requests, viewport, is_csp_meta_tag);
 }
@@ -905,7 +912,7 @@ static void HandleMetaViewport(
     const String& attribute_value,
     const CachedDocumentParameters* document_parameters,
     MediaValuesCached* media_values,
-    base::Optional<ViewportDescription>* viewport) {
+    absl::optional<ViewportDescription>* viewport) {
   if (!document_parameters->viewport_meta_enabled)
     return;
   ViewportDescription description(ViewportDescription::kViewportMeta);
@@ -942,7 +949,7 @@ static void HandleMetaNameAttribute(
     CachedDocumentParameters* document_parameters,
     MediaValuesCached* media_values,
     CSSPreloadScanner* css_scanner,
-    base::Optional<ViewportDescription>* viewport) {
+    absl::optional<ViewportDescription>* viewport) {
   const typename Token::Attribute* name_attribute =
       token.GetAttributeItem(html_names::kNameAttr);
   if (!name_attribute)
@@ -972,7 +979,7 @@ void TokenPreloadScanner::ScanCommon(
     const Token& token,
     const SegmentedString& source,
     PreloadRequestStream& requests,
-    base::Optional<ViewportDescription>* viewport,
+    absl::optional<ViewportDescription>* viewport,
     bool* is_csp_meta_tag) {
   if (!document_parameters_->do_html_preload_scanning)
     return;
@@ -1009,13 +1016,13 @@ void TokenPreloadScanner::ScanCommon(
       return;
     }
     case HTMLToken::kStartTag: {
-      if (template_count_)
-        return;
       const StringImpl* tag_impl = TagImplFor(token.Data());
       if (Match(tag_impl, html_names::kTemplateTag)) {
         ++template_count_;
         return;
       }
+      if (template_count_)
+        return;
       if (Match(tag_impl, html_names::kStyleTag)) {
         in_style_ = true;
         return;
@@ -1098,7 +1105,9 @@ void TokenPreloadScanner::ScanCommon(
       }
       return;
     }
-    default: { return; }
+    default: {
+      return;
+    }
   }
 }
 
@@ -1109,8 +1118,9 @@ void TokenPreloadScanner::UpdatePredictedBaseURL(const Token& token) {
           token.GetAttributeItem(html_names::kHrefAttr)) {
     KURL url(document_url_, StripLeadingAndTrailingHTMLSpaces(
                                 href_attribute->Value8BitIfNecessary()));
-    predicted_base_element_url_ =
-        url.IsValid() && !url.ProtocolIsData() ? url.Copy() : KURL();
+    bool is_valid_base_url =
+        url.IsValid() && !url.ProtocolIsData() && !url.ProtocolIsJavaScript();
+    predicted_base_element_url_ = is_valid_base_url ? url.Copy() : KURL();
   }
 }
 
@@ -1135,7 +1145,7 @@ void HTMLPreloadScanner::AppendToEnd(const SegmentedString& source) {
 
 PreloadRequestStream HTMLPreloadScanner::Scan(
     const KURL& starting_base_element_url,
-    base::Optional<ViewportDescription>* viewport,
+    absl::optional<ViewportDescription>* viewport,
     bool& has_csp_meta_tag) {
   // HTMLTokenizer::updateStateFor only works on the main thread.
   DCHECK(IsMainThread());
@@ -1198,6 +1208,8 @@ CachedDocumentParameters::CachedDocumentParameters(Document* document) {
   }
   probe::GetDisabledImageTypes(document->GetExecutionContext(),
                                &disabled_image_types);
+  subresource_redirect_origins_preloader =
+      SubresourceRedirectOriginsPreloader::From(*document);
 }
 
 }  // namespace blink

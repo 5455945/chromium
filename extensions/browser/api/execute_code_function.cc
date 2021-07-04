@@ -11,11 +11,15 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "extensions/browser/api/extension_types_utils.h"
 #include "extensions/browser/extension_api_frame_id_map.h"
 #include "extensions/browser/load_and_localize_file.h"
 #include "extensions/common/error_utils.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_resource.h"
+#include "extensions/common/mojom/css_origin.mojom-shared.h"
+#include "extensions/common/mojom/run_location.mojom-shared.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace {
 
@@ -78,12 +82,6 @@ bool ExecuteCodeFunction::Execute(const std::string& code_string,
 
   DCHECK(!(ShouldInsertCSS() && ShouldRemoveCSS()));
 
-  auto action_type = UserScript::ActionType::ADD_JAVASCRIPT;
-  if (ShouldInsertCSS())
-    action_type = UserScript::ActionType::ADD_CSS;
-  else if (ShouldRemoveCSS())
-    action_type = UserScript::ActionType::REMOVE_CSS;
-
   ScriptExecutor::FrameScope frame_scope =
       details_->all_frames.get() && *details_->all_frames
           ? ScriptExecutor::INCLUDE_SUB_FRAMES
@@ -98,40 +96,49 @@ bool ExecuteCodeFunction::Execute(const std::string& code_string,
           ? ScriptExecutor::MATCH_ABOUT_BLANK
           : ScriptExecutor::DONT_MATCH_ABOUT_BLANK;
 
-  UserScript::RunLocation run_at = UserScript::UNDEFINED;
-  switch (details_->run_at) {
-    case api::extension_types::RUN_AT_NONE:
-    case api::extension_types::RUN_AT_DOCUMENT_IDLE:
-      run_at = UserScript::DOCUMENT_IDLE;
-      break;
-    case api::extension_types::RUN_AT_DOCUMENT_START:
-      run_at = UserScript::DOCUMENT_START;
-      break;
-    case api::extension_types::RUN_AT_DOCUMENT_END:
-      run_at = UserScript::DOCUMENT_END;
-      break;
-  }
-  CHECK_NE(UserScript::UNDEFINED, run_at);
+  mojom::RunLocation run_at = ConvertRunLocation(details_->run_at);
 
-  CSSOrigin css_origin = CSSOrigin::kAuthor;
+  mojom::CSSOrigin css_origin = mojom::CSSOrigin::kAuthor;
   switch (details_->css_origin) {
     case api::extension_types::CSS_ORIGIN_NONE:
     case api::extension_types::CSS_ORIGIN_AUTHOR:
-      css_origin = CSSOrigin::kAuthor;
+      css_origin = mojom::CSSOrigin::kAuthor;
       break;
     case api::extension_types::CSS_ORIGIN_USER:
-      css_origin = CSSOrigin::kUser;
+      css_origin = mojom::CSSOrigin::kUser;
       break;
   }
 
+  mojom::CodeInjectionPtr injection;
+  bool is_css_injection = ShouldInsertCSS() || ShouldRemoveCSS();
+  if (is_css_injection) {
+    absl::optional<std::string> injection_key;
+    if (host_id_.type == mojom::HostID::HostType::kExtensions) {
+      injection_key = ScriptExecutor::GenerateInjectionKey(
+          host_id_, script_url_, code_string);
+    }
+    mojom::CSSInjection::Operation operation =
+        ShouldInsertCSS() ? mojom::CSSInjection::Operation::kAdd
+                          : mojom::CSSInjection::Operation::kRemove;
+    std::vector<mojom::CSSSourcePtr> sources;
+    sources.push_back(
+        mojom::CSSSource::New(code_string, std::move(injection_key)));
+    injection = mojom::CodeInjection::NewCss(
+        mojom::CSSInjection::New(std::move(sources), css_origin, operation));
+  } else {
+    bool wants_result = has_callback();
+    std::vector<mojom::JSSourcePtr> sources;
+    sources.push_back(mojom::JSSource::New(code_string, script_url_));
+    injection = mojom::CodeInjection::NewJs(mojom::JSInjection::New(
+        std::move(sources), wants_result, user_gesture()));
+  }
+
   executor->ExecuteScript(
-      host_id_, action_type, code_string, frame_scope, {root_frame_id_},
+      host_id_, std::move(injection), frame_scope, {root_frame_id_},
       match_about_blank, run_at,
       IsWebView() ? ScriptExecutor::WEB_VIEW_PROCESS
                   : ScriptExecutor::DEFAULT_PROCESS,
-      GetWebViewSrc(), script_url_, user_gesture(), css_origin,
-      has_callback() ? ScriptExecutor::JSON_SERIALIZED_RESULT
-                     : ScriptExecutor::NO_RESULT,
+      GetWebViewSrc(),
       base::BindOnce(&ExecuteCodeFunction::OnExecuteCodeFinished, this));
   return true;
 }

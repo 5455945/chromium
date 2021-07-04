@@ -5,13 +5,12 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_SCHEDULER_COMMON_THROTTLING_TASK_QUEUE_THROTTLER_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_SCHEDULER_COMMON_THROTTLING_TASK_QUEUE_THROTTLER_H_
 
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "base/optional.h"
 #include "base/task/sequence_manager/task_queue.h"
 #include "base/task/sequence_manager/time_domain.h"
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/scheduler/common/cancelable_closure_holder.h"
 #include "third_party/blink/renderer/platform/scheduler/common/throttling/budget_pool.h"
@@ -74,6 +73,8 @@ class PLATFORM_EXPORT TaskQueueThrottler : public BudgetPoolController {
   // of this class is always its member, so has the same lifetime.
   TaskQueueThrottler(ThreadSchedulerImpl* thread_scheduler,
                      TraceableVariableController* tracing_controller);
+  TaskQueueThrottler(const TaskQueueThrottler&) = delete;
+  TaskQueueThrottler& operator=(const TaskQueueThrottler&) = delete;
 
   ~TaskQueueThrottler() override;
 
@@ -126,8 +127,7 @@ class PLATFORM_EXPORT TaskQueueThrottler : public BudgetPoolController {
                              base::TimeTicks start_time,
                              base::TimeTicks end_time);
 
-  void WriteIntoTracedValue(perfetto::TracedValue context,
-                            base::TimeTicks now) const;
+  void WriteIntoTrace(perfetto::TracedValue context, base::TimeTicks now) const;
 
   base::WeakPtr<TaskQueueThrottler> AsWeakPtr() {
     return weak_factory_.GetWeakPtr();
@@ -138,6 +138,8 @@ class PLATFORM_EXPORT TaskQueueThrottler : public BudgetPoolController {
    public:
     Metadata(base::sequence_manager::TaskQueue* queue,
              TaskQueueThrottler* throttler);
+    Metadata(const Metadata&) = delete;
+    Metadata& operator=(const Metadata&) = delete;
 
     ~Metadata() override;
 
@@ -163,7 +165,7 @@ class PLATFORM_EXPORT TaskQueueThrottler : public BudgetPoolController {
       next_granted_run_time_ = next_granted_run_time;
     }
 
-    void WriteIntoTracedValue(perfetto::TracedValue context) const;
+    void WriteIntoTrace(perfetto::TracedValue context) const;
 
    private:
     base::sequence_manager::TaskQueue* const queue_;
@@ -178,8 +180,6 @@ class PLATFORM_EXPORT TaskQueueThrottler : public BudgetPoolController {
     // - A wake up just happened and the next granted run time is about to be
     //   re-evaluated.
     base::TimeTicks next_granted_run_time_ = base::TimeTicks::Max();
-
-    DISALLOW_COPY_AND_ASSIGN(Metadata);
   };
 
   using TaskQueueMap =
@@ -187,9 +187,8 @@ class PLATFORM_EXPORT TaskQueueThrottler : public BudgetPoolController {
 
   void PumpThrottledTasks();
 
-  // Note |unthrottled_runtime| might be in the past. When this happens we
-  // compute the delay to the next runtime based on now rather than
-  // unthrottled_runtime.
+  // Note |runtime| might be in the past. When this happens we compute the delay
+  // to the next runtime based on now rather than |runtime|.
   void MaybeSchedulePumpThrottledTasks(const base::Location& from_here,
                                        base::TimeTicks now,
                                        base::TimeTicks runtime);
@@ -219,7 +218,7 @@ class PLATFORM_EXPORT TaskQueueThrottler : public BudgetPoolController {
       base::sequence_manager::TaskQueue* queue,
       bool is_wake_up);
 
-  base::Optional<QueueBlockType> GetQueueBlockType(
+  absl::optional<QueueBlockType> GetQueueBlockType(
       base::TimeTicks now,
       base::sequence_manager::TaskQueue* queue);
 
@@ -234,14 +233,12 @@ class PLATFORM_EXPORT TaskQueueThrottler : public BudgetPoolController {
   std::unique_ptr<ThrottledTimeDomain> time_domain_;
 
   CancelableClosureHolder pump_throttled_tasks_closure_;
-  base::Optional<base::TimeTicks> pending_pump_throttled_tasks_runtime_;
+  absl::optional<base::TimeTicks> pending_pump_throttled_tasks_runtime_;
   bool allow_throttling_;
 
   HashMap<BudgetPool*, std::unique_ptr<BudgetPool>> budget_pools_;
 
   base::WeakPtrFactory<TaskQueueThrottler> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(TaskQueueThrottler);
 };
 
 }  // namespace scheduler

@@ -19,6 +19,7 @@
 #include "components/autofill/core/browser/payments/payments_client.h"
 #include "components/autofill/core/browser/payments/upi_vpa_save_manager.h"
 #include "components/autofill/core/browser/personal_data_manager.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class SaveCardOfferObserver;
 
@@ -28,7 +29,7 @@ class AddressProfileSaveManager;
 
 // Manages logic for importing address profiles and credit card information from
 // web forms into the user's Autofill profile via the PersonalDataManager.
-// Owned by AutofillManager.
+// Owned by BrowserAutofillManager.
 class FormDataImporter {
  public:
   // Record type of the credit card imported from the form, if one exists.
@@ -67,6 +68,10 @@ class FormDataImporter {
                                       const std::string& finch_country_code,
                                       const std::string& app_locale,
                                       LogBuffer* import_log_buffer);
+
+  // Cache the last four of the fetched virtual card so we don't offer saving
+  // them.
+  void CacheFetchedVirtualCard(const std::u16string& last_four);
 
 #if !defined(OS_ANDROID) && !defined(OS_IOS)
   LocalCardMigrationManager* local_card_migration_manager() {
@@ -107,7 +112,7 @@ class FormDataImporter {
                       bool credit_card_autofill_enabled,
                       bool should_return_local_card,
                       std::unique_ptr<CreditCard>* imported_credit_card,
-                      base::Optional<std::string>* imported_upi_id);
+                      absl::optional<std::string>* imported_upi_id);
 
   // Go through the |form| fields and attempt to extract and import valid
   // address profiles. Returns true on extraction success of at least one
@@ -139,7 +144,7 @@ class FormDataImporter {
 
   // Go through the |form| fields and find a UPI ID to import. The return value
   // will be empty if no UPI ID was found.
-  base::Optional<std::string> ImportUpiId(const FormStructure& form);
+  absl::optional<std::string> ImportUpiId(const FormStructure& form);
 
   // Whether a dynamic change form is imported.
   bool from_dynamic_change_form_ = false;
@@ -166,7 +171,7 @@ class FormDataImporter {
 #endif  // #if !defined(OS_ANDROID) && !defined(OS_IOS)
 
   // The personal data manager, used to save and load personal data to/from the
-  // web database.  This is overridden by the AutofillManagerTest.
+  // web database.  This is overridden by the BrowserAutofillManagerTest.
   // Weak reference.
   // May be NULL.  NULL indicates OTR.
   PersonalDataManager* personal_data_manager_;
@@ -177,6 +182,9 @@ class FormDataImporter {
   ImportedCreditCardRecordType imported_credit_card_record_type_;
 
   std::string app_locale_;
+
+  // Used to store the last four digits of the fetched virtual cards.
+  base::flat_set<std::u16string> fetched_virtual_cards_;
 
   friend class AutofillMergeTest;
   friend class FormDataImporterTest;
@@ -215,6 +223,9 @@ class FormDataImporter {
   FRIEND_TEST_ALL_PREFIXES(
       FormDataImporterTest,
       ImportFormData_ImportCreditCardRecordType_NoCard_InvalidCardNumber);
+  FRIEND_TEST_ALL_PREFIXES(
+      FormDataImporterTest,
+      ImportFormData_ImportCreditCardRecordType_NoCard_VirtualCard);
   FRIEND_TEST_ALL_PREFIXES(
       FormDataImporterTest,
       ImportFormData_ImportCreditCardRecordType_NoCard_NoCardOnForm);

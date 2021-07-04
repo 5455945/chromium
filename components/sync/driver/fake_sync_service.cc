@@ -143,10 +143,6 @@ void FakeSyncService::AddProtocolEventObserver(
 void FakeSyncService::RemoveProtocolEventObserver(
     ProtocolEventObserver* observer) {}
 
-base::WeakPtr<JsController> FakeSyncService::GetJsController() {
-  return base::WeakPtr<JsController>();
-}
-
 void FakeSyncService::GetAllNodesForDebugging(
     base::OnceCallback<void(std::unique_ptr<base::ListValue>)> callback) {}
 
@@ -160,6 +156,7 @@ void FakeSyncService::AddTrustedVaultDecryptionKeysFromWeb(
 void FakeSyncService::AddTrustedVaultRecoveryMethodFromWeb(
     const std::string& gaia_id,
     const std::vector<uint8_t>& public_key,
+    int method_type_hint,
     base::OnceClosure callback) {}
 
 void FakeSyncService::Shutdown() {}

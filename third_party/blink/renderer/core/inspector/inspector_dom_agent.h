@@ -32,7 +32,6 @@
 
 #include <memory>
 #include "base/callback.h"
-#include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/bindings/core/v8/source_location.h"
 #include "third_party/blink/renderer/core/core_export.h"
@@ -94,12 +93,16 @@ class CORE_EXPORT InspectorDOMAgent final
   static protocol::Response ToResponse(ExceptionState&);
   static protocol::DOM::PseudoType ProtocolPseudoElementType(PseudoId);
   static protocol::DOM::ShadowRootType GetShadowRootType(ShadowRoot*);
+  static protocol::DOM::CompatibilityMode GetDocumentCompatibilityMode(
+      Document*);
   static ShadowRoot* UserAgentShadowRoot(Node*);
   static Color ParseColor(protocol::DOM::RGBA*);
 
   InspectorDOMAgent(v8::Isolate*,
                     InspectedFrames*,
                     v8_inspector::V8InspectorSession*);
+  InspectorDOMAgent(const InspectorDOMAgent&) = delete;
+  InspectorDOMAgent& operator=(const InspectorDOMAgent&) = delete;
   ~InspectorDOMAgent() override;
   void Trace(Visitor*) const override;
 
@@ -251,12 +254,18 @@ class CORE_EXPORT InspectorDOMAgent final
   protocol::Response getFileInfo(const String& object_id,
                                  String* path) override;
 
+  protocol::Response getContainerForNode(
+      int node_id,
+      protocol::Maybe<String> container_name,
+      protocol::Maybe<int>* container_node_id) override;
+
   bool Enabled() const;
   void ReleaseDanglingNodes();
 
   // Methods called from the InspectorInstrumentation.
   void DomContentLoadedEventFired(LocalFrame*);
   void DidCommitLoad(LocalFrame*, DocumentLoader*);
+  void DidRestoreFromBackForwardCache(LocalFrame*);
   void DidInsertDOMNode(Node*);
   void WillRemoveDOMNode(Node*);
   void WillModifyDOMAttr(Element*,
@@ -394,7 +403,6 @@ class CORE_EXPORT InspectorDOMAgent final
   bool suppress_attribute_modified_event_;
   InspectorAgentState::Boolean enabled_;
   InspectorAgentState::Boolean capture_node_stack_traces_;
-  DISALLOW_COPY_AND_ASSIGN(InspectorDOMAgent);
 };
 
 }  // namespace blink

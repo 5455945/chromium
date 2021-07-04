@@ -143,6 +143,24 @@ public class ManualFillingIntegrationTest {
 
     @Test
     @SmallTest
+    @EnableFeatures({ChromeFeatureList.AUTOFILL_MANUAL_FALLBACK_ANDROID})
+    public void testAccessorySheetShown() throws TimeoutException {
+        mHelper.loadTestPage(false);
+        // Register a sheet data provider so that sheet is available when needed.
+        mHelper.registerSheetDataProvider(AccessoryTabType.CREDIT_CARDS);
+
+        // Show the passwords accessory sheet without focusing on any fields.
+        TestThreadUtils.runOnUiThreadBlocking(
+                ()
+                        -> mHelper.getManualFillingCoordinator().showAccessorySheetTab(
+                                AccessoryTabType.CREDIT_CARDS));
+
+        // Verify that the accessory sheet is shown.
+        whenDisplayed(withChild(withId(R.id.keyboard_accessory_sheet)));
+    }
+
+    @Test
+    @SmallTest
     @DisableIf.
     Build(sdk_is_greater_than = VERSION_CODES.LOLLIPOP_MR1, sdk_is_less_than = VERSION_CODES.N,
             message = "Flaky on Marshmallow https://crbug.com/1102302")
@@ -246,8 +264,8 @@ public class ManualFillingIntegrationTest {
         mHelper.waitForKeyboardAccessoryToBeShown();
         whenDisplayed(allOf(isDisplayed(), isKeyboardAccessoryTabLayout()));
 
-        // Clicking the email field hides the accessory again.
-        mHelper.clickEmailField(false);
+        // Clicking a field without completion hides the accessory again.
+        mHelper.clickFieldWithoutCompletion();
         mHelper.waitForKeyboardAccessoryToDisappear();
     }
 
@@ -463,8 +481,8 @@ public class ManualFillingIntegrationTest {
         whenDisplayed(withChild(withId(R.id.keyboard_accessory_sheet)));
         onView(withText(kSnackbarText)).check(matches(isCompletelyDisplayed()));
 
-        // Click into the email field to dismiss the keyboard accessory.
-        mHelper.clickEmailField(false);
+        // Click into a field without completion to dismiss the keyboard accessory.
+        mHelper.clickFieldWithoutCompletion();
         mHelper.waitForKeyboardAccessoryToDisappear();
         onView(withText(kSnackbarText)).check(matches(isCompletelyDisplayed()));
     }

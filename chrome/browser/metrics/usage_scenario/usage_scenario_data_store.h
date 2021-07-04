@@ -6,12 +6,18 @@
 #define CHROME_BROWSER_METRICS_USAGE_SCENARIO_USAGE_SCENARIO_DATA_STORE_H_
 
 #include "base/containers/flat_map.h"
+#include "base/containers/flat_set.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
+#include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "base/types/pass_key.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "url/origin.h"
+
+namespace metrics {
+class TabUsageScenarioTrackerBrowserTest;
+}
 
 // Stores the data necessary to analyze the usage pattern during a given
 // interval of time. There are 2 types of data tracked by this class:
@@ -25,7 +31,8 @@
 //
 // The interval's length needs to be enforced by the owner of this class, it
 // should call ResetIntervalData regularly to get the usage data and reset it.
-class UsageScenarioDataStore {
+class UsageScenarioDataStore
+    : public base::SupportsWeakPtr<UsageScenarioDataStore> {
  public:
   UsageScenarioDataStore();
   UsageScenarioDataStore(const UsageScenarioDataStore& rhs) = delete;
@@ -57,6 +64,11 @@ class UsageScenarioDataStore {
     base::TimeDelta time_capturing_video;
     // The time spent playing video in at least one visible tab.
     base::TimeDelta time_playing_video_in_visible_tab;
+    // The time spent playing audio in at least one tab.
+    base::TimeDelta time_playing_audio;
+    // The time since the last user interaction with the browser at the end of
+    // the interval. This time can exceed the length of the interval.
+    base::TimeDelta time_since_last_user_interaction_with_browser;
 
     // The SourceID that has been visible for the longest period of time for the
     // origin that has been visible for the longest period of time during the
@@ -74,6 +86,12 @@ class UsageScenarioDataStore {
 
     // The visibility time for |source_id_for_longest_visible_origin|.
     base::TimeDelta source_id_for_longest_visible_origin_duration;
+
+    // The visibility time for the Origin associated with
+    // |source_id_for_longest_visible_origin|. This could be greater than
+    // |source_id_for_longest_visible_origin_duration| if there's multiple tabs
+    // for the longest visible origin visible during the interval.
+    base::TimeDelta longest_visible_origin_duration;
   };
 
   // Reset the interval data with the current state information and returns the
@@ -117,6 +135,8 @@ class UsageScenarioDataStoreImpl : public UsageScenarioDataStore {
   void OnWebRTCConnectionClosed();
   void OnIsCapturingVideoStarted();
   void OnIsCapturingVideoEnded();
+  void OnAudioStarts();
+  void OnAudioStops();
 
   // Should be called when a video starts in a visible tab or when a non visible
   // tab playing video becomes visible.
@@ -137,11 +157,18 @@ class UsageScenarioDataStoreImpl : public UsageScenarioDataStore {
 
   const IntervalData& GetIntervalDataForTesting() { return interval_data_; }
 
-  base::WeakPtr<UsageScenarioDataStore> GetWeakPtr() {
-    return weak_factory_.GetWeakPtr();
+  uint16_t current_tab_count_for_testing() { return current_tab_count_; }
+  uint16_t current_visible_window_count_for_testing() {
+    return current_visible_window_count_;
   }
 
+  base::flat_set<ukm::SourceId> GetVisibleSourceIdsForTesting();
+
  private:
+  friend class metrics::TabUsageScenarioTrackerBrowserTest;
+
+  explicit UsageScenarioDataStoreImpl(const base::TickClock* tick_clock);
+
   // Information about a ukm::SourceId that has been visible during an interval
   // of time.
   struct SourceIdData {
@@ -158,6 +185,9 @@ class UsageScenarioDataStoreImpl : public UsageScenarioDataStore {
   // |interval_details_| and |origin_info_map_| and remove the SourceIdData that
   // don't need to be tracked anymore.
   void FinalizeIntervalData(base::TimeTicks now);
+
+  // The clock used by this class.
+  const base::TickClock* tick_clock_;
 
   // The current tab count.
   uint16_t current_tab_count_ = 0;
@@ -186,6 +216,14 @@ class UsageScenarioDataStoreImpl : public UsageScenarioDataStore {
   // ends (when ResetIntervalData is called).
   base::TimeTicks capturing_video_since_;
 
+  // The number of tabs playing audio.
+  uint16_t tabs_playing_audio_ = 0;
+
+  // The timestamp of the beginning of an audio session that has caused
+  // |tabs_playing_audio_| to increase to 1. Reset to |now| when an interval
+  // ends (when ResetIntervalData is called).
+  base::TimeTicks playing_audio_since_;
+
   // The number of visible tabs playing at least one video.
   uint16_t visible_tabs_playing_video_ = 0;
 
@@ -196,12 +234,14 @@ class UsageScenarioDataStoreImpl : public UsageScenarioDataStore {
   // The application start time.
   const base::TimeTicks start_time_;
 
+  // The timestamp of the most recent call to OnUserInteraction(), equal to
+  // |start_time_| if this hasn't been called yet.
+  base::TimeTicks last_interaction_with_browser_timestamp_;
+
   // Information about the origins that have been visible during the interval.
   OriginInfoMap origin_info_map_;
 
   IntervalData interval_data_;
-
-  base::WeakPtrFactory<UsageScenarioDataStore> weak_factory_{this};
 
   SEQUENCE_CHECKER(sequence_checker_);
 };

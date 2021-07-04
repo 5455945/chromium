@@ -8,16 +8,17 @@
 #include <vector>
 
 #include "ash/public/cpp/ash_public_export.h"
+#include "ash/public/cpp/holding_space/holding_space_item.h"
 
 namespace base {
 class TimeDelta;
 }  // namespace base
 
 namespace ash {
-
-class HoldingSpaceItem;
-
 namespace holding_space_metrics {
+
+// Returns the numeric representation of the extension for `file_path`.
+ASH_PUBLIC_EXPORT size_t FilePathToExtension(const base::FilePath& file_path);
 
 // Enumeration of actions that can be taken on the holding space pod in the
 // shelf. These values are persisted to logs. Entries should not be renumbered
@@ -82,6 +83,12 @@ ASH_PUBLIC_EXPORT void RecordItemAction(
 // Records counts for the specified holding space `items`.
 ASH_PUBLIC_EXPORT void RecordItemCounts(
     const std::vector<const HoldingSpaceItem*>& items);
+
+// Records a failure to launch a holding space item of the specified `type`
+// backed by the file at the specified `file_path`.
+ASH_PUBLIC_EXPORT void RecordItemFailureToLaunch(
+    HoldingSpaceItem::Type type,
+    const base::FilePath& file_path);
 
 // Records time from the first availability of the holding space feature to the
 // first item being added to holding space.

@@ -5,8 +5,11 @@
 #import <XCTest/XCTest.h>
 
 #include "base/ios/ios_util.h"
+#include "base/mac/foundation_util.h"
+#import "ios/chrome/browser/ui/popup_menu/popup_menu_constants.h"
 #include "ios/chrome/browser/ui/settings/cells/clear_browsing_data_constants.h"
 #include "ios/chrome/grit/ios_strings.h"
+#import "ios/chrome/test/earl_grey/chrome_actions.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey_ui.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
@@ -19,6 +22,17 @@
 #endif
 
 namespace {
+
+// Identifier used to find the 'Learn more' link.
+NSString* const kLearnMoreIdentifier = @"Learn more";
+
+// URL of the help center page.
+char kHelpCenterURL[] = "support.google.com";
+
+// Matcher for the history button in the tools menu.
+id<GREYMatcher> HistoryButton() {
+  return grey_accessibilityID(kToolsMenuHistoryId);
+}
 
 // Matcher for an element with or without the
 // UIAccessibilityTraitSelected accessibility trait depending on |selected|.
@@ -60,15 +74,18 @@ using chrome_test_util::WindowWithNumber;
 
 @implementation ClearBrowsingDataSettingsTestCase
 
-- (void)tearDown {
-  // No-op if only one window presents.
-  [EarlGrey setRootMatcherForSubsequentInteractions:nil];
-  [ChromeEarlGrey closeAllExtraWindows];
-  [super tearDown];
-}
-
 - (void)openClearBrowsingDataDialog {
   [ChromeEarlGreyUI openSettingsMenu];
+  [ChromeEarlGreyUI tapSettingsMenuButton:SettingsMenuPrivacyButton()];
+
+  NSString* clearBrowsingDataDialogLabel =
+      l10n_util::GetNSString(IDS_IOS_CLEAR_BROWSING_DATA_TITLE);
+  [ChromeEarlGreyUI tapPrivacyMenuButton:ButtonWithAccessibilityLabel(
+                                             clearBrowsingDataDialogLabel)];
+}
+
+- (void)openClearBrowsingDataDialogInWindowWithNumber:(int)windowNumber {
+  [ChromeEarlGreyUI openSettingsMenuInWindowWithNumber:windowNumber];
   [ChromeEarlGreyUI tapSettingsMenuButton:SettingsMenuPrivacyButton()];
 
   NSString* clearBrowsingDataDialogLabel =
@@ -116,14 +133,12 @@ using chrome_test_util::WindowWithNumber;
   if (![ChromeEarlGrey areMultipleWindowsSupported])
     EARL_GREY_TEST_DISABLED(@"Multiple windows can't be opened.");
 
-  [EarlGrey setRootMatcherForSubsequentInteractions:WindowWithNumber(0)];
-  [self openClearBrowsingDataDialog];
+  [self openClearBrowsingDataDialogInWindowWithNumber:0];
 
   [ChromeEarlGrey openNewWindow];
   [ChromeEarlGrey waitForForegroundWindowCount:2];
 
-  [EarlGrey setRootMatcherForSubsequentInteractions:WindowWithNumber(1)];
-  [self openClearBrowsingDataDialog];
+  [self openClearBrowsingDataDialogInWindowWithNumber:1];
 
   // Grab start states.
   [EarlGrey setRootMatcherForSubsequentInteractions:WindowWithNumber(0)];
@@ -236,6 +251,61 @@ using chrome_test_util::WindowWithNumber;
   [EarlGrey setRootMatcherForSubsequentInteractions:WindowWithNumber(1)];
   [[EarlGrey selectElementWithMatcher:SettingsDoneButton()]
       performAction:grey_tap()];
+}
+
+// Tests that tapping the "Learn more" link opens the help center.
+- (void)testTapLearnMore {
+  if (!base::ios::IsRunningOnIOS13OrLater()) {
+    EARL_GREY_TEST_DISABLED(@"Fails on iOS 12.");
+  }
+
+  [self openClearBrowsingDataDialog];
+
+  [[EarlGrey
+      selectElementWithMatcher:
+          grey_accessibilityID(kClearBrowsingDataViewAccessibilityIdentifier)]
+      performAction:grey_swipeFastInDirection(kGREYDirectionUp)];
+  [[EarlGrey
+      selectElementWithMatcher:grey_allOf(grey_accessibilityLabel(
+                                              kLearnMoreIdentifier),
+                                          grey_kindOfClassName(
+                                              @"UIAccessibilityLinkSubelement"),
+                                          nil)]
+      performAction:chrome_test_util::TapAtPointPercentage(0.95, 0.05)];
+
+  // Check that the URL of the help center was opened.
+  GREYAssertEqual(kHelpCenterURL, [ChromeEarlGrey webStateVisibleURL].host(),
+                  @"Did not navigate to the help center url.");
+}
+
+// Tests that opening the Clear Browsing interface from the History and tapping
+// the "Learn more" link opens the help center.
+- (void)testTapLearnMoreFromHistory {
+  if (!base::ios::IsRunningOnIOS13OrLater()) {
+    EARL_GREY_TEST_DISABLED(@"Fails on iOS 12.");
+  }
+
+  [ChromeEarlGreyUI openToolsMenu];
+  [ChromeEarlGreyUI tapToolsMenuButton:HistoryButton()];
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::
+                                          HistoryClearBrowsingDataButton()]
+      performAction:grey_tap()];
+
+  [[EarlGrey
+      selectElementWithMatcher:
+          grey_accessibilityID(kClearBrowsingDataViewAccessibilityIdentifier)]
+      performAction:grey_swipeFastInDirection(kGREYDirectionUp)];
+  [[EarlGrey
+      selectElementWithMatcher:grey_allOf(grey_accessibilityLabel(
+                                              kLearnMoreIdentifier),
+                                          grey_kindOfClassName(
+                                              @"UIAccessibilityLinkSubelement"),
+                                          nil)]
+      performAction:chrome_test_util::TapAtPointPercentage(0.95, 0.05)];
+
+  // Check that the URL of the help center was opened.
+  GREYAssertEqual(kHelpCenterURL, [ChromeEarlGrey webStateVisibleURL].host(),
+                  @"Did not navigate to the help center url.");
 }
 
 @end

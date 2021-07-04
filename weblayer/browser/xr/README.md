@@ -20,5 +20,3 @@ the demo should work. If it is not installed or not up to date, then the demo wi
 
 WebLayer should support an [install flow](https://crbug.com/1177948) for handling the case when Play Services for AR is
 not up to date.
-
-If [overlay video support](https://crbug.com/1177948) is added, `ArCompositorDelegateProvider` will have to be updated.

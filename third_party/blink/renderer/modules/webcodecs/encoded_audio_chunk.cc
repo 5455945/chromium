@@ -15,28 +15,49 @@ namespace blink {
 
 EncodedAudioChunk* EncodedAudioChunk::Create(
     const EncodedAudioChunkInit* init) {
-  EncodedAudioMetadata metadata;
-  metadata.timestamp = base::TimeDelta::FromMicroseconds(init->timestamp());
-  metadata.key_frame = (init->type() == "key");
+  auto timestamp = base::TimeDelta::FromMicroseconds(init->timestamp());
+  bool key_frame = (init->type() == "key");
   DOMArrayPiece piece(init->data());
 
   // A full copy of the data happens here.
   auto* buffer = piece.IsNull()
                      ? nullptr
                      : DOMArrayBuffer::Create(piece.Data(), piece.ByteLength());
-  return MakeGarbageCollected<EncodedAudioChunk>(metadata, buffer);
+  return MakeGarbageCollected<EncodedAudioChunk>(timestamp, key_frame, buffer);
 }
 
-EncodedAudioChunk::EncodedAudioChunk(EncodedAudioMetadata metadata,
+EncodedAudioChunk::EncodedAudioChunk(base::TimeDelta timestamp,
+                                     bool key_frame,
                                      DOMArrayBuffer* buffer)
-    : metadata_(metadata), buffer_(buffer) {}
+    : timestamp_(timestamp), key_frame_(key_frame), buffer_(buffer) {}
 
 String EncodedAudioChunk::type() const {
-  return metadata_.key_frame ? "key" : "delta";
+  return key_frame_ ? "key" : "delta";
 }
 
-uint64_t EncodedAudioChunk::timestamp() const {
-  return metadata_.timestamp.InMicroseconds();
+int64_t EncodedAudioChunk::timestamp() const {
+  return timestamp_.InMicroseconds();
+}
+
+uint64_t EncodedAudioChunk::byteLength() const {
+  return buffer_->ByteLength();
+}
+
+void EncodedAudioChunk::copyTo(const V8BufferSource* destination,
+                               ExceptionState& exception_state) {
+  // Validate destination buffer.
+  DOMArrayPiece dest_wrapper(destination);
+  if (dest_wrapper.IsDetached()) {
+    exception_state.ThrowTypeError("destination is detached.");
+    return;
+  }
+  if (dest_wrapper.ByteLength() < buffer_->ByteLength()) {
+    exception_state.ThrowTypeError("destination is not large enough.");
+    return;
+  }
+
+  // Copy data.
+  memcpy(dest_wrapper.Bytes(), buffer_->Data(), buffer_->ByteLength());
 }
 
 DOMArrayBuffer* EncodedAudioChunk::data() const {

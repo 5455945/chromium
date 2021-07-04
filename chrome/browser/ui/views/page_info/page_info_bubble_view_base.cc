@@ -4,13 +4,14 @@
 
 #include "chrome/browser/ui/views/page_info/page_info_bubble_view_base.h"
 
-#include "base/strings/string16.h"
+#include <string>
+
 #include "chrome/browser/ui/page_info/page_info_dialog.h"
 #include "components/page_info/page_info_ui.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/buildflags.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 
@@ -64,16 +65,6 @@ void PageInfoBubbleViewBase::OnWidgetDestroying(views::Widget* widget) {
   g_page_info_bubble = nullptr;
 }
 
-PageInfoUI::SecurityDescriptionType
-PageInfoBubbleViewBase::GetSecurityDescriptionType() const {
-  return security_description_type_;
-}
-
-void PageInfoBubbleViewBase::SetSecurityDescriptionType(
-    const PageInfoUI::SecurityDescriptionType& type) {
-  security_description_type_ = type;
-}
-
 void PageInfoBubbleViewBase::RenderFrameDeleted(
     content::RenderFrameHost* render_frame_host) {
   if (render_frame_host == web_contents()->GetMainFrame()) {
@@ -89,7 +80,10 @@ void PageInfoBubbleViewBase::OnVisibilityChanged(
 
 void PageInfoBubbleViewBase::DidStartNavigation(
     content::NavigationHandle* handle) {
-  if (handle->IsInMainFrame())
+  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
+  // frames. This caller was converted automatically to the primary main frame
+  // to preserve its semantics. Follow up to confirm correctness.
+  if (handle->IsInPrimaryMainFrame())
     GetWidget()->Close();
 }
 
@@ -98,17 +92,5 @@ void PageInfoBubbleViewBase::DidChangeVisibleSecurityState() {
   GetWidget()->Close();
 }
 
-DEFINE_ENUM_CONVERTERS(PageInfoUI::SecurityDescriptionType,
-                       {PageInfoUI::SecurityDescriptionType::CONNECTION,
-                        STRING16_LITERAL("CONNECTION")},
-                       {PageInfoUI::SecurityDescriptionType::INTERNAL,
-                        STRING16_LITERAL("INTERNAL")},
-                       {PageInfoUI::SecurityDescriptionType::SAFE_BROWSING,
-                        STRING16_LITERAL("SAFE_BROWSING")},
-                       {PageInfoUI::SecurityDescriptionType::SAFETY_TIP,
-                        STRING16_LITERAL("SAFETY_TIP")})
-
 BEGIN_METADATA(PageInfoBubbleViewBase, views::BubbleDialogDelegateView)
-ADD_PROPERTY_METADATA(PageInfoUI::SecurityDescriptionType,
-                      SecurityDescriptionType)
 END_METADATA

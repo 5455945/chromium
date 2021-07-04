@@ -8,83 +8,112 @@
  * linear UI range to a range of real values.  When |value| does not map exactly
  * to a tick mark, it interpolates to the nearest tick.
  */
-Polymer({
-  is: 'settings-slider',
+import '../settings_vars_css.js';
 
-  behaviors: [CrPolicyPrefBehavior],
+import {SliderTick} from '//resources/cr_elements/cr_slider/cr_slider.js';
+import {CrPolicyPrefBehavior, CrPolicyPrefBehaviorInterface} from '//resources/cr_elements/policy/cr_policy_pref_behavior.m.js';
+import {assert} from '//resources/js/assert.m.js';
+import {html, mixinBehaviors, PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
-  properties: {
-    /** @type {!chrome.settingsPrivate.PrefObject} */
-    pref: Object,
+import {loadTimeData} from '../i18n_setup.js';
 
-    /**
-     * Values corresponding to each tick.
-     * @type {!Array<cr_slider.SliderTick>|!Array<number>}
-     */
-    ticks: {
-      type: Array,
-      value: () => [],
-    },
+/**
+ * @constructor
+ * @extends {PolymerElement}
+ * @implements {CrPolicyPrefBehaviorInterface}
+ */
+const SettingsSliderElementBase =
+    mixinBehaviors([CrPolicyPrefBehavior], PolymerElement);
 
-    /**
-     * A scale factor used to support fractional pref values. This is not
-     * compatible with |ticks|, i.e. if |scale| is not 1 then |ticks| must be
-     * empty.
-     */
-    scale: {
-      type: Number,
-      value: 1,
-    },
+/** @polymer */
+class SettingsSliderElement extends SettingsSliderElementBase {
+  static get is() {
+    return 'settings-slider';
+  }
 
-    min: Number,
+  static get template() {
+    return html`{__html_template__}`;
+  }
 
-    max: Number,
+  static get properties() {
+    return {
+      /** @type {!chrome.settingsPrivate.PrefObject} */
+      pref: Object,
 
-    labelAria: String,
+      /**
+       * Values corresponding to each tick.
+       * @type {!Array<SliderTick>|!Array<number>}
+       */
+      ticks: {
+        type: Array,
+        value: () => [],
+      },
 
-    labelMin: String,
+      /**
+       * A scale factor used to support fractional pref values. This is not
+       * compatible with |ticks|, i.e. if |scale| is not 1 then |ticks| must be
+       * empty.
+       */
+      scale: {
+        type: Number,
+        value: 1,
+      },
 
-    labelMax: String,
+      min: Number,
 
-    disabled: Boolean,
+      max: Number,
 
-    showMarkers: Boolean,
+      labelAria: String,
 
-    /** @private */
-    disableSlider_: {
-      computed: 'computeDisableSlider_(pref.*, disabled, ticks.*)',
-      type: Boolean,
-    },
+      labelMin: String,
 
-    updateValueInstantly: {
-      type: Boolean,
-      value: true,
-      observer: 'onSliderChanged_',
-    },
+      labelMax: String,
 
-    loaded_: Boolean,
-  },
+      disabled: Boolean,
 
-  observers: [
-    'valueChanged_(pref.*, ticks.*, loaded_)',
-  ],
+      showMarkers: Boolean,
 
-  attached() {
+      /** @private */
+      disableSlider_: {
+        computed: 'computeDisableSlider_(pref.*, disabled, ticks.*)',
+        type: Boolean,
+      },
+
+      updateValueInstantly: {
+        type: Boolean,
+        value: true,
+        observer: 'onSliderChanged_',
+      },
+
+      loaded_: Boolean,
+    };
+  }
+
+  static get observers() {
+    return [
+      'valueChanged_(pref.*, ticks.*, loaded_)',
+    ];
+  }
+
+  /** @override */
+  connectedCallback() {
+    super.connectedCallback();
+
     this.loaded_ = true;
-  },
+  }
 
   /** @override */
   focus() {
     this.$.slider.focus();
-  },
+  }
 
   /**
-   * @param {number|cr_slider.SliderTick} tick
+   * @param {number|SliderTick} tick
    * @return {number|undefined}
    */
   getTickValue_(tick) {
     return typeof tick === 'object' ? tick.value : tick;
-  },
+  }
 
   /**
    * @param {number} index
@@ -93,7 +122,7 @@ Polymer({
    */
   getTickValueAtIndex_(index) {
     return this.getTickValue_(this.ticks[index]);
-  },
+  }
 
   /**
    * Sets the |pref.value| property to the value corresponding to the knob
@@ -119,12 +148,12 @@ Polymer({
     }
 
     this.set('pref.value', newValue);
-  },
+  }
 
   /** @private */
   computeDisableSlider_() {
     return this.disabled || this.isPrefEnforced();
-  },
+  }
 
   /**
    * Updates the knob position when |pref.value| changes. If the knob is still
@@ -175,7 +204,7 @@ Polymer({
     if (this.pref.value !== tickValue) {
       this.set('pref.value', tickValue);
     }
-  },
+  }
 
   /**
    * @return {string}
@@ -184,5 +213,7 @@ Polymer({
   getRoleDescription_() {
     return loadTimeData.getStringF(
         'settingsSliderRoleDescription', this.labelMin, this.labelMax);
-  },
-});
+  }
+}
+
+customElements.define(SettingsSliderElement.is, SettingsSliderElement);

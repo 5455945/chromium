@@ -15,6 +15,7 @@
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/variations/net/variations_http_headers.h"
+#include "components/variations/scoped_variations_ids_provider.h"
 #include "components/variations/variations_associated_data.h"
 #include "components/variations/variations_ids_provider.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -45,12 +46,12 @@ class DocumentSuggestionsServiceTest : public testing::Test {
             identity_test_env_.identity_manager(),
             shared_url_loader_factory_)) {
     // Set up identity manager.
-    identity_test_env_.SetPrimaryAccount("foo@gmail.com");
+    identity_test_env_.SetPrimaryAccount("foo@gmail.com",
+                                         signin::ConsentLevel::kSync);
     identity_test_env_.SetRefreshTokenForPrimaryAccount();
     identity_test_env_.SetAutomaticIssueOfAccessTokens(true);
 
     // Set up a variation.
-    variations::VariationsIdsProvider::GetInstance()->ResetForTesting();
     variations::AssociateGoogleVariationID(
         variations::GOOGLE_WEB_PROPERTIES_ANY_CONTEXT, "trial name",
         "group name", kVariationID);
@@ -62,6 +63,8 @@ class DocumentSuggestionsServiceTest : public testing::Test {
       const DocumentSuggestionsServiceTest&) = delete;
 
   base::test::TaskEnvironment task_environment_;
+  variations::ScopedVariationsIdsProvider scoped_variations_ids_provider_{
+      variations::VariationsIdsProvider::Mode::kUseSignedInState};
   network::TestURLLoaderFactory test_url_loader_factory_;
   scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory_;
   sync_preferences::TestingPrefServiceSyncable prefs_;
@@ -79,8 +82,7 @@ TEST_F(DocumentSuggestionsServiceTest, VariationHeaders) {
       }));
 
   document_suggestions_service_->CreateDocumentSuggestionsRequest(
-      base::ASCIIToUTF16(""), false,
-      base::BindOnce(OnDocumentSuggestionsLoaderAvailable),
+      u"", false, base::BindOnce(OnDocumentSuggestionsLoaderAvailable),
       base::BindOnce(OnURLLoadComplete));
 
   base::RunLoop().RunUntilIdle();

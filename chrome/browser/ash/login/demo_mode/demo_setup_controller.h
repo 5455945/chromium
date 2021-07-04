@@ -11,7 +11,6 @@
 #include "base/files/file_path.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "base/strings/string16.h"
 #include "chrome/browser/ash/login/demo_mode/demo_session.h"
 #include "chrome/browser/ash/login/enrollment/enterprise_enrollment_helper.h"
 #include "chrome/browser/component_updater/cros_component_installer_chromeos.h"
@@ -20,8 +19,7 @@
 
 class PrefRegistrySimple;
 
-namespace chromeos {
-
+namespace ash {
 class DemoResources;
 
 // Controls enrollment flow for setting up Demo Mode.
@@ -150,8 +148,8 @@ class DemoSetupController
     ErrorCode error_code() const { return error_code_; }
     RecoveryMethod recovery_method() const { return recovery_method_; }
 
-    base::string16 GetLocalizedErrorMessage() const;
-    base::string16 GetLocalizedRecoveryMessage() const;
+    std::u16string GetLocalizedErrorMessage() const;
+    std::u16string GetLocalizedRecoveryMessage() const;
     std::string GetDebugDescription() const;
 
    private:
@@ -231,7 +229,6 @@ class DemoSetupController
   void OnOtherError(EnterpriseEnrollmentHelper::OtherError error) override;
   void OnDeviceAttributeUploadCompleted(bool success) override;
   void OnDeviceAttributeUpdatePermission(bool granted) override;
-  void OnRestoreAfterRollbackCompleted() override;
 
   void SetCrOSComponentLoadErrorForTest(
       component_updater::CrOSComponentManager::Error error);
@@ -264,7 +261,7 @@ class DemoSetupController
 
   // Called when the device local account policy for the offline demo mode is
   // loaded.
-  void OnDeviceLocalAccountPolicyLoaded(base::Optional<std::string> blob);
+  void OnDeviceLocalAccountPolicyLoaded(absl::optional<std::string> blob);
 
   // Called when device is marked as registered and the second part of OOBE flow
   // is completed. This is the last step of demo mode setup flow.
@@ -330,6 +327,12 @@ class DemoSetupController
   DISALLOW_COPY_AND_ASSIGN(DemoSetupController);
 };
 
-}  //  namespace chromeos
+}  //  namespace ash
+
+// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
+// source migration is finished.
+namespace chromeos {
+using ::ash::DemoSetupController;
+}
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_DEMO_MODE_DEMO_SETUP_CONTROLLER_H_

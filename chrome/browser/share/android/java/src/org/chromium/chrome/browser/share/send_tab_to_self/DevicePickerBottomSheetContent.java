@@ -17,8 +17,8 @@ import android.widget.TextView;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.share.send_tab_to_self.SendTabToSelfMetrics.SendTabToSelfShareClickResult;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.settings.SettingsLauncher;
@@ -175,17 +175,32 @@ public class DevicePickerBottomSheetContent implements BottomSheetContent, OnIte
 
     @Override
     public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
-        SendTabToSelfShareClickResult.recordClickResult(
-                SendTabToSelfShareClickResult.ClickType.CLICK_ITEM);
+        MetricsRecorder.recordDeviceClickedInShareSheet();
         TargetDeviceInfo targetDeviceInfo = mAdapter.getItem(position);
 
         SendTabToSelfAndroidBridge.addEntry(
                 mProfile, mUrl, mTitle, mNavigationTime, targetDeviceInfo.cacheGuid);
 
         Resources res = mContext.getResources();
-        String toastMessage =
-                res.getString(R.string.send_tab_to_self_toast, targetDeviceInfo.deviceName);
-        Toast.makeText(mContext, toastMessage, Toast.LENGTH_SHORT).show();
+
+        if (ChromeFeatureList.isEnabled(ChromeFeatureList.SEND_TAB_TO_SELF_V2)) {
+            String deviceType = res.getString(R.string.send_tab_to_self_device_type_generic);
+            if (targetDeviceInfo.deviceType == TargetDeviceInfo.DeviceType.PHONE) {
+                deviceType = res.getString(R.string.send_tab_to_self_device_type_phone);
+            } else if (targetDeviceInfo.deviceType == TargetDeviceInfo.DeviceType.WIN
+                    || targetDeviceInfo.deviceType == TargetDeviceInfo.DeviceType.MACOSX
+                    || targetDeviceInfo.deviceType == TargetDeviceInfo.DeviceType.LINUX
+                    || targetDeviceInfo.deviceType == TargetDeviceInfo.DeviceType.CHROMEOS) {
+                deviceType = res.getString(R.string.send_tab_to_self_device_type_computer);
+            }
+
+            String toastMessage = res.getString(R.string.send_tab_to_self_v2_toast, deviceType);
+            Toast.makeText(mContext, toastMessage, Toast.LENGTH_SHORT).show();
+        } else {
+            String toastMessage =
+                    res.getString(R.string.send_tab_to_self_toast, targetDeviceInfo.deviceName);
+            Toast.makeText(mContext, toastMessage, Toast.LENGTH_SHORT).show();
+        }
 
         mController.hideContent(this, true);
     }

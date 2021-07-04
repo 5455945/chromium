@@ -49,17 +49,8 @@ const std::set<std::string> GetUnconsentedOAuth2Scopes() {
       // Required by cloud policy.
       GaiaConstants::kDeviceManagementServiceOAuth,
 
-      // Required by CRoS.
-      GaiaConstants::kGCMGroupServerOAuth2Scope,
-
-      // Required by Suggestions.
-      GaiaConstants::kDriveReadOnlyOAuth2Scope,
-
       // Required by Permission Request Creator.
       GaiaConstants::kClassifyUrlKidPermissionOAuth2Scope,
-
-      // Required by Enterprise policy extensions.
-      GaiaConstants::kChromeWebstoreOAuth2Scope,
 
       // Required by ChromeOS only.
 #if BUILDFLAG(IS_CHROMEOS_ASH)
@@ -70,7 +61,10 @@ const std::set<std::string> GetUnconsentedOAuth2Scopes() {
       GaiaConstants::kClearCutOAuth2Scope,
       GaiaConstants::kCloudTranslationOAuth2Scope,
       GaiaConstants::kDriveOAuth2Scope,
+      GaiaConstants::kDriveReadOnlyOAuth2Scope,
+      GaiaConstants::kGCMGroupServerOAuth2Scope,
       GaiaConstants::kKidFamilyReadonlyOAuth2Scope,
+      GaiaConstants::kKidManagementOAuth2Scope,
       GaiaConstants::kKidManagementPrivilegedOAuth2Scope,
       GaiaConstants::kKidsSupervisionSetupChildOAuth2Scope,
       GaiaConstants::kNearbyShareOAuth2Scope,

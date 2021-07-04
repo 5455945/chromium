@@ -9,8 +9,8 @@
 #include <memory>
 
 #include "base/check_op.h"
+#include "base/containers/cxx20_erase.h"
 #include "base/notreached.h"
-#include "base/stl_util.h"
 #include "base/threading/sequenced_task_runner_handle.h"
 #include "components/password_manager/core/browser/insecure_credentials_table.h"
 #include "components/password_manager/core/browser/login_database.h"
@@ -113,9 +113,9 @@ bool TestPasswordSyncMetadataStore::HasUnsyncedDeletions() {
 TestPasswordStore::TestPasswordStore(
     password_manager::IsAccountStore is_account_store)
     : is_account_store_(is_account_store),
-      metadata_store_(std::make_unique<TestPasswordSyncMetadataStore>()) {}
-
-TestPasswordStore::~TestPasswordStore() = default;
+      metadata_store_(std::make_unique<TestPasswordSyncMetadataStore>()) {
+  backend_ = this;
+}
 
 const TestPasswordStore::PasswordMap& TestPasswordStore::stored_passwords()
     const {
@@ -137,9 +137,37 @@ bool TestPasswordStore::IsEmpty() {
   return number_of_passwords == 0u;
 }
 
+TestPasswordStore::~TestPasswordStore() = default;
+
 scoped_refptr<base::SequencedTaskRunner>
 TestPasswordStore::CreateBackgroundTaskRunner() const {
   return base::SequencedTaskRunnerHandle::Get();
+}
+
+void TestPasswordStore::GetAllLoginsAsync(LoginsReply callback) {
+  background_task_runner()->PostTaskAndReplyWithResult(
+      FROM_HERE,
+      base::BindOnce(&TestPasswordStore::GetAllLoginsInternal,
+                     RetainedRef(this)),
+      std::move(callback));
+}
+
+void TestPasswordStore::GetAutofillableLoginsAsync(LoginsReply callback) {
+  background_task_runner()->PostTaskAndReplyWithResult(
+      FROM_HERE,
+      base::BindOnce(&TestPasswordStore::GetAutofillableLoginsInternal,
+                     RetainedRef(this)),
+      std::move(callback));
+}
+
+void TestPasswordStore::FillMatchingLoginsAsync(
+    LoginsReply callback,
+    const std::vector<PasswordFormDigest>& forms) {
+  background_task_runner()->PostTaskAndReplyWithResult(
+      FROM_HERE,
+      base::BindOnce(&TestPasswordStore::FillMatchingLoginsBulk,
+                     base::Unretained(this), forms),
+      std::move(callback));
 }
 
 PasswordStoreChangeList TestPasswordStore::AddLoginImpl(
@@ -210,7 +238,7 @@ PasswordStoreChangeList TestPasswordStore::RemoveLoginImpl(
 }
 
 std::vector<std::unique_ptr<PasswordForm>>
-TestPasswordStore::FillMatchingLogins(const FormDigest& form) {
+TestPasswordStore::FillMatchingLogins(const PasswordFormDigest& form) {
   ++fill_matching_logins_calls_;
   std::vector<std::unique_ptr<PasswordForm>> matched_forms;
   for (const auto& elements : stored_passwords_) {
@@ -241,7 +269,7 @@ TestPasswordStore::FillMatchingLogins(const FormDigest& form) {
 
 std::vector<std::unique_ptr<PasswordForm>>
 TestPasswordStore::FillMatchingLoginsByPassword(
-    const base::string16& plain_text_password) {
+    const std::u16string& plain_text_password) {
   std::vector<std::unique_ptr<PasswordForm>> matched_forms;
   for (const auto& elements : stored_passwords_) {
     for (const auto& password_form : elements.second) {
@@ -250,28 +278,6 @@ TestPasswordStore::FillMatchingLoginsByPassword(
     }
   }
   return matched_forms;
-}
-
-bool TestPasswordStore::FillAutofillableLogins(
-    std::vector<std::unique_ptr<PasswordForm>>* forms) {
-  for (const auto& forms_for_realm : stored_passwords_) {
-    for (const PasswordForm& form : forms_for_realm.second) {
-      if (!form.blocked_by_user)
-        forms->push_back(std::make_unique<PasswordForm>(form));
-    }
-  }
-  return true;
-}
-
-bool TestPasswordStore::FillBlocklistLogins(
-    std::vector<std::unique_ptr<PasswordForm>>* forms) {
-  for (const auto& forms_for_realm : stored_passwords_) {
-    for (const PasswordForm& form : forms_for_realm.second) {
-      if (form.blocked_by_user)
-        forms->push_back(std::make_unique<PasswordForm>(form));
-    }
-  }
-  return true;
 }
 
 DatabaseCleanupResult TestPasswordStore::DeleteUndecryptableLogins() {
@@ -326,11 +332,6 @@ void TestPasswordStore::RemoveSiteStatsImpl(const GURL& origin_domain) {
   NOTIMPLEMENTED();
 }
 
-std::vector<InteractionsStats> TestPasswordStore::GetAllSiteStatsImpl() {
-  NOTIMPLEMENTED();
-  return std::vector<InteractionsStats>();
-}
-
 PasswordStoreChangeList TestPasswordStore::AddInsecureCredentialImpl(
     const InsecureCredential& insecure_credential) {
   InsecureCredential cred = insecure_credential;
@@ -349,7 +350,7 @@ PasswordStoreChangeList TestPasswordStore::AddInsecureCredentialImpl(
 
 PasswordStoreChangeList TestPasswordStore::RemoveInsecureCredentialsImpl(
     const std::string& signon_realm,
-    const base::string16& username,
+    const std::u16string& username,
     RemoveInsecureCredentialsReason reason) {
   const size_t old_size = insecure_credentials_.size();
   base::EraseIf(insecure_credentials_, [&](const auto& credential) {
@@ -448,6 +449,40 @@ bool TestPasswordStore::DeleteAndRecreateDatabaseFile() {
   stored_passwords_.clear();
   metadata_store_->DeleteAllSyncMetadata();
   return true;
+}
+
+LoginsResult TestPasswordStore::GetAllLoginsInternal() {
+  LoginsResult forms;
+  for (const auto& elements : stored_passwords_) {
+    for (const auto& password_form : elements.second) {
+      forms.push_back(std::make_unique<PasswordForm>(password_form));
+    }
+  }
+  return forms;
+}
+
+LoginsResult TestPasswordStore::GetAutofillableLoginsInternal() {
+  LoginsResult forms;
+  for (const auto& forms_for_realm : stored_passwords_) {
+    for (const PasswordForm& form : forms_for_realm.second) {
+      if (!form.blocked_by_user)
+        forms.push_back(std::make_unique<PasswordForm>(form));
+    }
+  }
+  return forms;
+}
+
+LoginsResult TestPasswordStore::FillMatchingLoginsBulk(
+    const std::vector<PasswordFormDigest>& forms) {
+  std::vector<std::unique_ptr<PasswordForm>> results;
+  for (const auto& form : forms) {
+    std::vector<std::unique_ptr<PasswordForm>> matched_forms =
+        FillMatchingLogins(form);
+    results.insert(results.end(),
+                   std::make_move_iterator(matched_forms.begin()),
+                   std::make_move_iterator(matched_forms.end()));
+  }
+  return results;
 }
 
 }  // namespace password_manager

@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "base/bind.h"
-#include "base/stl_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_destroyer.h"
 #include "components/media_router/browser/presentation/presentation_navigation_policy.h"
@@ -124,7 +123,8 @@ class OffscreenTab::WindowAdoptionAgent final : protected aura::WindowObserver {
 OffscreenTab::OffscreenTab(Owner* owner, content::BrowserContext* context)
     : owner_(owner),
       otr_profile_(Profile::FromBrowserContext(context)->GetOffTheRecordProfile(
-          Profile::OTRProfileID::CreateUniqueForMediaRouter())),
+          Profile::OTRProfileID::CreateUniqueForMediaRouter(),
+          /*create_if_needed=*/true)),
       content_capture_was_detected_(false),
       navigation_policy_(
           std::make_unique<media_router::DefaultNavigationPolicy>()) {

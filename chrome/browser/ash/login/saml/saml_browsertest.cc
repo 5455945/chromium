@@ -19,7 +19,6 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/post_task.h"
@@ -27,32 +26,32 @@
 #include "base/test/gmock_callback_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/values.h"
+#include "chrome/browser/ash/attestation/mock_machine_certificate_uploader.h"
+#include "chrome/browser/ash/attestation/tpm_challenge_key.h"
+#include "chrome/browser/ash/login/existing_user_controller.h"
 #include "chrome/browser/ash/login/saml/fake_saml_idp_mixin.h"
+#include "chrome/browser/ash/login/startup_utils.h"
+#include "chrome/browser/ash/login/test/device_state_mixin.h"
+#include "chrome/browser/ash/login/test/enrollment_ui_mixin.h"
+#include "chrome/browser/ash/login/test/fake_gaia_mixin.h"
+#include "chrome/browser/ash/login/test/https_forwarder.h"
+#include "chrome/browser/ash/login/test/js_checker.h"
+#include "chrome/browser/ash/login/test/local_policy_test_server_mixin.h"
+#include "chrome/browser/ash/login/test/login_manager_mixin.h"
+#include "chrome/browser/ash/login/test/oobe_base_test.h"
+#include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
+#include "chrome/browser/ash/login/test/session_manager_state_waiter.h"
+#include "chrome/browser/ash/login/ui/login_display_host.h"
+#include "chrome/browser/ash/login/users/chrome_user_manager.h"
+#include "chrome/browser/ash/login/users/test_users.h"
+#include "chrome/browser/ash/login/wizard_controller.h"
+#include "chrome/browser/ash/policy/affiliation/affiliation_test_helper.h"
+#include "chrome/browser/ash/policy/core/device_policy_builder.h"
+#include "chrome/browser/ash/policy/core/device_policy_cros_browser_test.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
 #include "chrome/browser/ash/settings/stub_cros_settings_provider.h"
-#include "chrome/browser/chromeos/attestation/mock_machine_certificate_uploader.h"
-#include "chrome/browser/chromeos/attestation/tpm_challenge_key.h"
-#include "chrome/browser/chromeos/login/existing_user_controller.h"
-#include "chrome/browser/chromeos/login/startup_utils.h"
-#include "chrome/browser/chromeos/login/test/device_state_mixin.h"
-#include "chrome/browser/chromeos/login/test/enrollment_ui_mixin.h"
-#include "chrome/browser/chromeos/login/test/fake_gaia_mixin.h"
-#include "chrome/browser/chromeos/login/test/https_forwarder.h"
-#include "chrome/browser/chromeos/login/test/js_checker.h"
-#include "chrome/browser/chromeos/login/test/local_policy_test_server_mixin.h"
-#include "chrome/browser/chromeos/login/test/login_manager_mixin.h"
-#include "chrome/browser/chromeos/login/test/oobe_base_test.h"
-#include "chrome/browser/chromeos/login/test/oobe_screen_waiter.h"
-#include "chrome/browser/chromeos/login/test/session_manager_state_waiter.h"
-#include "chrome/browser/chromeos/login/ui/login_display_host.h"
-#include "chrome/browser/chromeos/login/users/chrome_user_manager.h"
-#include "chrome/browser/chromeos/login/users/test_users.h"
-#include "chrome/browser/chromeos/login/wizard_controller.h"
-#include "chrome/browser/chromeos/policy/affiliation_test_helper.h"
-#include "chrome/browser/chromeos/policy/device_policy_builder.h"
-#include "chrome/browser/chromeos/policy/device_policy_cros_browser_test.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/profiles/profile.h"
@@ -72,14 +71,14 @@
 #include "chromeos/dbus/attestation/fake_attestation_client.h"
 #include "chromeos/dbus/attestation/interface.pb.h"
 #include "chromeos/dbus/constants/attestation_constants.h"
-#include "chromeos/dbus/cryptohome/cryptohome_client.h"
-#include "chromeos/dbus/cryptohome/fake_cryptohome_client.h"
 #include "chromeos/dbus/cryptohome/key.pb.h"
 #include "chromeos/dbus/cryptohome/rpc.pb.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/session_manager/fake_session_manager_client.h"
 #include "chromeos/dbus/session_manager/session_manager_client.h"
 #include "chromeos/dbus/shill/shill_manager_client.h"
+#include "chromeos/dbus/userdataauth/fake_cryptohome_misc_client.h"
+#include "chromeos/dbus/userdataauth/fake_userdataauth_client.h"
 #include "chromeos/login/auth/key.h"
 #include "chromeos/login/auth/saml_password_attributes.h"
 #include "chromeos/settings/cros_settings_names.h"
@@ -175,36 +174,31 @@ constexpr char kTestRefreshToken[] = "fake-refresh-token";
 
 constexpr char kAffiliationID[] = "some-affiliation-id";
 
-
-// A FakeCryptohomeClient that stores the salted and hashed secret passed to
+// A FakeUserDataAuthClient that stores the salted and hashed secret passed to
 // MountEx().
-class SecretInterceptingFakeCryptohomeClient : public FakeCryptohomeClient {
+class SecretInterceptingFakeUserDataAuthClient : public FakeUserDataAuthClient {
  public:
-  SecretInterceptingFakeCryptohomeClient();
+  SecretInterceptingFakeUserDataAuthClient();
 
-  void MountEx(const cryptohome::AccountIdentifier& id,
-               const cryptohome::AuthorizationRequest& auth,
-               const cryptohome::MountRequest& request,
-               DBusMethodCallback<cryptohome::BaseReply> callback) override;
+  void Mount(const ::user_data_auth::MountRequest& request,
+             MountCallback callback) override;
 
   const std::string& salted_hashed_secret() { return salted_hashed_secret_; }
 
  private:
   std::string salted_hashed_secret_;
 
-  DISALLOW_COPY_AND_ASSIGN(SecretInterceptingFakeCryptohomeClient);
+  DISALLOW_COPY_AND_ASSIGN(SecretInterceptingFakeUserDataAuthClient);
 };
 
-SecretInterceptingFakeCryptohomeClient::
-    SecretInterceptingFakeCryptohomeClient() {}
+SecretInterceptingFakeUserDataAuthClient::
+    SecretInterceptingFakeUserDataAuthClient() {}
 
-void SecretInterceptingFakeCryptohomeClient::MountEx(
-    const cryptohome::AccountIdentifier& id,
-    const cryptohome::AuthorizationRequest& auth,
-    const cryptohome::MountRequest& request,
-    DBusMethodCallback<cryptohome::BaseReply> callback) {
-  salted_hashed_secret_ = auth.key().secret();
-  FakeCryptohomeClient::MountEx(id, auth, request, std::move(callback));
+void SecretInterceptingFakeUserDataAuthClient::Mount(
+    const ::user_data_auth::MountRequest& request,
+    MountCallback callback) {
+  salted_hashed_secret_ = request.authorization().key().secret();
+  FakeUserDataAuthClient::Mount(request, std::move(callback));
 }
 
 }  // namespace
@@ -212,9 +206,6 @@ void SecretInterceptingFakeCryptohomeClient::MountEx(
 class SamlTest : public OobeBaseTest {
  public:
   SamlTest() {
-    // TODO(crbug.com/1121910): Fix tests.
-    feature_list_.InitAndDisableFeature(
-        chromeos::features::kChildSpecificSignin);
     fake_gaia_.set_initialize_fake_merge_session(false);
   }
   ~SamlTest() override {}
@@ -231,8 +222,8 @@ class SamlTest : public OobeBaseTest {
   }
 
   void SetUpInProcessBrowserTestFixture() override {
-    // Creates a fake CryptohomeClient. Will be destroyed in browser shutdown.
-    cryptohome_client_ = new SecretInterceptingFakeCryptohomeClient();
+    // Creates a fake UserDataAuthClient. Will be destroyed in browser shutdown.
+    cryptohome_client_ = new SecretInterceptingFakeUserDataAuthClient();
 
     OobeBaseTest::SetUpInProcessBrowserTestFixture();
   }
@@ -332,8 +323,7 @@ class SamlTest : public OobeBaseTest {
   FakeSamlIdpMixin* fake_saml_idp() { return &fake_saml_idp_mixin_; }
 
  protected:
-
-  SecretInterceptingFakeCryptohomeClient* cryptohome_client_;
+  SecretInterceptingFakeUserDataAuthClient* cryptohome_client_;
 
   FakeGaiaMixin fake_gaia_{&mixin_host_, embedded_test_server()};
 
@@ -421,13 +411,15 @@ IN_PROC_BROWSER_TEST_F(SamlTest, IdpRequiresHttpAuth) {
   LoginHandler* handler = *login_prompt_observer.handlers().begin();
   // Note that the actual credentials don't matter because `fake_saml_idp()`
   // doesn't check those (only that something has been provided).
-  handler->SetAuth(base::UTF8ToUTF16("user"), base::UTF8ToUTF16("pwd"));
+  handler->SetAuth(u"user", u"pwd");
 
   // Now the SAML sign-in form should actually load.
   std::string message;
   do {
     ASSERT_TRUE(message_queue.WaitForMessage(&message));
   } while (message != "\"SamlLoaded\"");
+
+  test::OobeJS().ExpectPathDisplayed(false, kBackButton);
 
   // Fill-in the SAML IdP form and submit.
   SigninFrameJS().TypeIntoPath("fake_user", {"Email"});
@@ -464,16 +456,18 @@ IN_PROC_BROWSER_TEST_F(SamlTest, CredentialPassingAPI) {
   Key key("actual_password");
   key.Transform(Key::KEY_TYPE_SALTED_SHA256_TOP_HALF,
                 SystemSaltGetter::ConvertRawSaltToHexString(
-                    FakeCryptohomeClient::GetStubSystemSalt()));
+                    FakeCryptohomeMiscClient::GetStubSystemSalt()));
   EXPECT_EQ(key.GetSecret(), cryptohome_client_->salted_hashed_secret());
 
-  EXPECT_TRUE(user_manager::known_user::GetIsUsingSAMLPrincipalsAPI(
-      AccountId::FromUserEmailGaiaId(
-          saml_test_users::kFirstUserCorpExampleComEmail,
-          kFirstSAMLUserGaiaId)));
+  EXPECT_TRUE(
+      user_manager::KnownUser(user_manager::UserManager::Get()->GetLocalState())
+          .GetIsUsingSAMLPrincipalsAPI(AccountId::FromUserEmailGaiaId(
+              saml_test_users::kFirstUserCorpExampleComEmail,
+              kFirstSAMLUserGaiaId)));
 
   histogram_tester.ExpectUniqueSample("ChromeOS.SAML.APILogin", 1, 1);
   histogram_tester.ExpectUniqueSample("ChromeOS.SAML.Provider", 1, 1);
+  histogram_tester.ExpectTotalCount("OOBE.GaiaLoginTime", 0);
 }
 
 // Tests the sign-in flow when the credentials passing API is used w/o 'confirm'
@@ -500,16 +494,18 @@ IN_PROC_BROWSER_TEST_F(SamlTest, CredentialPassingAPIWithoutConfirm) {
   Key key("last_password");
   key.Transform(Key::KEY_TYPE_SALTED_SHA256_TOP_HALF,
                 SystemSaltGetter::ConvertRawSaltToHexString(
-                    FakeCryptohomeClient::GetStubSystemSalt()));
+                    FakeCryptohomeMiscClient::GetStubSystemSalt()));
   EXPECT_EQ(key.GetSecret(), cryptohome_client_->salted_hashed_secret());
 
-  EXPECT_TRUE(user_manager::known_user::GetIsUsingSAMLPrincipalsAPI(
-      AccountId::FromUserEmailGaiaId(
-          saml_test_users::kFirstUserCorpExampleComEmail,
-          kFirstSAMLUserGaiaId)));
+  EXPECT_TRUE(
+      user_manager::KnownUser(user_manager::UserManager::Get()->GetLocalState())
+          .GetIsUsingSAMLPrincipalsAPI(AccountId::FromUserEmailGaiaId(
+              saml_test_users::kFirstUserCorpExampleComEmail,
+              kFirstSAMLUserGaiaId)));
 
   histogram_tester.ExpectUniqueSample("ChromeOS.SAML.APILogin", 1, 1);
   histogram_tester.ExpectUniqueSample("ChromeOS.SAML.Provider", 1, 1);
+  histogram_tester.ExpectTotalCount("OOBE.GaiaLoginTime", 0);
 }
 
 // Tests the single password scraped flow.
@@ -542,14 +538,16 @@ IN_PROC_BROWSER_TEST_F(SamlTest, ScrapedSingle) {
 
   test::WaitForPrimaryUserSessionStart();
 
-  EXPECT_FALSE(user_manager::known_user::GetIsUsingSAMLPrincipalsAPI(
-      AccountId::FromUserEmailGaiaId(
-          saml_test_users::kFirstUserCorpExampleComEmail,
-          kFirstSAMLUserGaiaId)));
+  EXPECT_FALSE(
+      user_manager::KnownUser(user_manager::UserManager::Get()->GetLocalState())
+          .GetIsUsingSAMLPrincipalsAPI(AccountId::FromUserEmailGaiaId(
+              saml_test_users::kFirstUserCorpExampleComEmail,
+              kFirstSAMLUserGaiaId)));
 
   histogram_tester.ExpectUniqueSample("ChromeOS.SAML.APILogin", 2, 1);
   histogram_tester.ExpectUniqueSample("ChromeOS.SAML.Scraping.PasswordCountAll",
                                       1, 1);
+  histogram_tester.ExpectTotalCount("OOBE.GaiaLoginTime", 0);
 }
 
 // Tests password scraping from a dynamically created password field.
@@ -575,10 +573,11 @@ IN_PROC_BROWSER_TEST_F(SamlTest, ScrapedDynamic) {
   SigninFrameJS().TapOn("Submit");
   test::WaitForPrimaryUserSessionStart();
 
-  EXPECT_FALSE(user_manager::known_user::GetIsUsingSAMLPrincipalsAPI(
-      AccountId::FromUserEmailGaiaId(
-          saml_test_users::kFirstUserCorpExampleComEmail,
-          kFirstSAMLUserGaiaId)));
+  EXPECT_FALSE(
+      user_manager::KnownUser(user_manager::UserManager::Get()->GetLocalState())
+          .GetIsUsingSAMLPrincipalsAPI(AccountId::FromUserEmailGaiaId(
+              saml_test_users::kFirstUserCorpExampleComEmail,
+              kFirstSAMLUserGaiaId)));
 }
 
 // Tests the multiple password scraped flow.
@@ -604,14 +603,16 @@ IN_PROC_BROWSER_TEST_F(SamlTest, ScrapedMultiple) {
   SendConfirmPassword("password1");
   test::WaitForPrimaryUserSessionStart();
 
-  EXPECT_FALSE(user_manager::known_user::GetIsUsingSAMLPrincipalsAPI(
-      AccountId::FromUserEmailGaiaId(
-          saml_test_users::kFirstUserCorpExampleComEmail,
-          kFirstSAMLUserGaiaId)));
+  EXPECT_FALSE(
+      user_manager::KnownUser(user_manager::UserManager::Get()->GetLocalState())
+          .GetIsUsingSAMLPrincipalsAPI(AccountId::FromUserEmailGaiaId(
+              saml_test_users::kFirstUserCorpExampleComEmail,
+              kFirstSAMLUserGaiaId)));
 
   histogram_tester.ExpectUniqueSample("ChromeOS.SAML.APILogin", 2, 1);
   histogram_tester.ExpectUniqueSample("ChromeOS.SAML.Scraping.PasswordCountAll",
                                       2, 1);
+  histogram_tester.ExpectTotalCount("OOBE.GaiaLoginTime", 0);
 }
 
 // Tests the no password scraped flow.
@@ -638,14 +639,16 @@ IN_PROC_BROWSER_TEST_F(SamlTest, ScrapedNone) {
   SetManualPasswords("Test1", "Test1");
   test::WaitForPrimaryUserSessionStart();
 
-  EXPECT_FALSE(user_manager::known_user::GetIsUsingSAMLPrincipalsAPI(
-      AccountId::FromUserEmailGaiaId(
-          saml_test_users::kFirstUserCorpExampleComEmail,
-          kFirstSAMLUserGaiaId)));
+  EXPECT_FALSE(
+      user_manager::KnownUser(user_manager::UserManager::Get()->GetLocalState())
+          .GetIsUsingSAMLPrincipalsAPI(AccountId::FromUserEmailGaiaId(
+              saml_test_users::kFirstUserCorpExampleComEmail,
+              kFirstSAMLUserGaiaId)));
 
   histogram_tester.ExpectUniqueSample("ChromeOS.SAML.APILogin", 2, 1);
   histogram_tester.ExpectUniqueSample("ChromeOS.SAML.Scraping.PasswordCountAll",
                                       0, 1);
+  histogram_tester.ExpectTotalCount("OOBE.GaiaLoginTime", 0);
 }
 
 // Types the second user e-mail into the GAIA login form but then authenticates
@@ -853,7 +856,7 @@ void SAMLEnrollmentTest::StartSamlAndWaitForIdpPageLoad(
   WaitForGaiaPageBackButtonUpdate();
   auto flow_change_waiter =
       OobeBaseTest::CreateGaiaPageEventWaiter("authFlowChange");
-  SigninFrameJS().TypeIntoPath(gaia_email, {"identifier"});
+  SigninFrameJS().TypeIntoPath(gaia_email, FakeGaiaMixin::kEmailPath);
   test::OobeJS().ClickOnPath(kEnterprisePrimaryButton);
   flow_change_waiter->Wait();
 }
@@ -978,20 +981,20 @@ void SAMLPolicyTest::SetUpOnMainThread() {
   // Give affiliated users appropriate affiliation IDs.
   std::set<std::string> user_affiliation_ids;
   user_affiliation_ids.insert(kAffiliationID);
-  chromeos::ChromeUserManager::Get()->SetUserAffiliation(
+  ChromeUserManager::Get()->SetUserAffiliation(
       AccountId::FromUserEmailGaiaId(
           saml_test_users::kFirstUserCorpExampleComEmail, kFirstSAMLUserGaiaId),
       user_affiliation_ids);
-  chromeos::ChromeUserManager::Get()->SetUserAffiliation(
+  ChromeUserManager::Get()->SetUserAffiliation(
       AccountId::FromUserEmailGaiaId(
           saml_test_users::kSecondUserCorpExampleComEmail,
           kSecondSAMLUserGaiaId),
       user_affiliation_ids);
-  chromeos::ChromeUserManager::Get()->SetUserAffiliation(
+  ChromeUserManager::Get()->SetUserAffiliation(
       AccountId::FromUserEmailGaiaId(
           saml_test_users::kThirdUserCorpExampleComEmail, kThirdSAMLUserGaiaId),
       user_affiliation_ids);
-  chromeos::ChromeUserManager::Get()->SetUserAffiliation(
+  ChromeUserManager::Get()->SetUserAffiliation(
       AccountId::FromUserEmailGaiaId(kNonSAMLUserEmail, kNonSAMLUserGaiaId),
       user_affiliation_ids);
 
@@ -1130,7 +1133,7 @@ void SAMLPolicyTest::GetCookies() {
       user_manager::UserManager::Get()->GetActiveUser());
   ASSERT_TRUE(profile);
   base::RunLoop run_loop;
-  content::BrowserContext::GetDefaultStoragePartition(profile)
+  profile->GetDefaultStoragePartition()
       ->GetCookieManagerForBrowserProcess()
       ->GetAllCookies(base::BindLambdaForTesting(
           [&](const std::vector<net::CanonicalCookie>& cookies) {
@@ -1556,6 +1559,19 @@ void SAMLDeviceAttestationTest::SetAllowedUrlsPolicy(
                           base::Value(std::move(allowed_urls_values)));
 }
 
+class SAMLDeviceAttestationEnrolledTest : public SAMLDeviceAttestationTest {
+ public:
+  SAMLDeviceAttestationEnrolledTest() {
+    device_state_.SetState(
+        DeviceStateMixin::State::OOBE_COMPLETED_CLOUD_ENROLLED);
+  }
+
+  void SetUpInProcessBrowserTestFixture() override {
+    SAMLDeviceAttestationTest::SetUpInProcessBrowserTestFixture();
+    stub_install_attributes_.Get()->SetCloudManaged("google.com", "device_id");
+  }
+};
+
 // Verify that device attestation is not available when
 // DeviceWebBasedAttestationAllowedUrls policy is not set.
 IN_PROC_BROWSER_TEST_F(SAMLDeviceAttestationTest, DefaultPolicy) {
@@ -1611,11 +1627,10 @@ IN_PROC_BROWSER_TEST_F(SAMLDeviceAttestationTest, NotEnterpriseEnrolledError) {
 
 // Verify that device attestation is not available when device attestation is
 // not enabled.
-IN_PROC_BROWSER_TEST_F(SAMLDeviceAttestationTest,
+IN_PROC_BROWSER_TEST_F(SAMLDeviceAttestationEnrolledTest,
                        DeviceAttestationNotEnabledError) {
   base::HistogramTester histogram_tester;
   SetAllowedUrlsPolicy({fake_saml_idp()->GetIdpHost()});
-  stub_install_attributes_.Get()->SetCloudManaged("google.com", "device_id");
 
   StartSamlAndWaitForIdpPageLoad(
       saml_test_users::kFourthUserCorpExampleTestEmail);
@@ -1631,10 +1646,9 @@ IN_PROC_BROWSER_TEST_F(SAMLDeviceAttestationTest,
 }
 
 // Verify that device attestation works when all policies configured correctly.
-IN_PROC_BROWSER_TEST_F(SAMLDeviceAttestationTest, Success) {
+IN_PROC_BROWSER_TEST_F(SAMLDeviceAttestationEnrolledTest, Success) {
   base::HistogramTester histogram_tester;
   SetAllowedUrlsPolicy({fake_saml_idp()->GetIdpHost()});
-  stub_install_attributes_.Get()->SetCloudManaged("google.com", "device_id");
   settings_provider_->SetBoolean(chromeos::kDeviceAttestationEnabled, true);
 
   StartSamlAndWaitForIdpPageLoad(
@@ -1654,10 +1668,9 @@ IN_PROC_BROWSER_TEST_F(SAMLDeviceAttestationTest, Success) {
 
 // Verify that device attestation is not available for URLs that are not in the
 // allowed URLs list.
-IN_PROC_BROWSER_TEST_F(SAMLDeviceAttestationTest, PolicyNoMatchError) {
+IN_PROC_BROWSER_TEST_F(SAMLDeviceAttestationEnrolledTest, PolicyNoMatchError) {
   base::HistogramTester histogram_tester;
   SetAllowedUrlsPolicy({fake_saml_idp()->GetIdpDomain()});
-  stub_install_attributes_.Get()->SetCloudManaged("google.com", "device_id");
   settings_provider_->SetBoolean(chromeos::kDeviceAttestationEnabled, true);
 
   StartSamlAndWaitForIdpPageLoad(
@@ -1676,10 +1689,9 @@ IN_PROC_BROWSER_TEST_F(SAMLDeviceAttestationTest, PolicyNoMatchError) {
 
 // Verify that device attestation is available for URLs that match a pattern
 // from allowed URLs list.
-IN_PROC_BROWSER_TEST_F(SAMLDeviceAttestationTest, PolicyRegexSuccess) {
+IN_PROC_BROWSER_TEST_F(SAMLDeviceAttestationEnrolledTest, PolicyRegexSuccess) {
   base::HistogramTester histogram_tester;
   SetAllowedUrlsPolicy({"[*.]" + fake_saml_idp()->GetIdpDomain()});
-  stub_install_attributes_.Get()->SetCloudManaged("google.com", "device_id");
   settings_provider_->SetBoolean(chromeos::kDeviceAttestationEnabled, true);
 
   StartSamlAndWaitForIdpPageLoad(
@@ -1699,10 +1711,10 @@ IN_PROC_BROWSER_TEST_F(SAMLDeviceAttestationTest, PolicyRegexSuccess) {
 
 // Verify that device attestation works in case of multiple items in allowed
 // URLs list.
-IN_PROC_BROWSER_TEST_F(SAMLDeviceAttestationTest, PolicyTwoEntriesSuccess) {
+IN_PROC_BROWSER_TEST_F(SAMLDeviceAttestationEnrolledTest,
+                       PolicyTwoEntriesSuccess) {
   base::HistogramTester histogram_tester;
   SetAllowedUrlsPolicy({"example2.com", fake_saml_idp()->GetIdpHost()});
-  stub_install_attributes_.Get()->SetCloudManaged("google.com", "device_id");
   settings_provider_->SetBoolean(chromeos::kDeviceAttestationEnabled, true);
 
   StartSamlAndWaitForIdpPageLoad(
@@ -1720,10 +1732,9 @@ IN_PROC_BROWSER_TEST_F(SAMLDeviceAttestationTest, PolicyTwoEntriesSuccess) {
       attestation::TpmChallengeKeyResultCode::kSuccess, 1);
 }
 
-IN_PROC_BROWSER_TEST_F(SAMLDeviceAttestationTest, TimeoutError) {
+IN_PROC_BROWSER_TEST_F(SAMLDeviceAttestationEnrolledTest, TimeoutError) {
   base::HistogramTester histogram_tester;
   SetAllowedUrlsPolicy({"example2.com", fake_saml_idp()->GetIdpHost()});
-  stub_install_attributes_.Get()->SetCloudManaged("google.com", "device_id");
   settings_provider_->SetBoolean(chromeos::kDeviceAttestationEnabled, true);
 
   AttestationClient::Get()

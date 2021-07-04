@@ -4,8 +4,9 @@
 
 #import "ios/chrome/browser/ui/overlays/infobar_banner/passwords/update_password_infobar_banner_overlay_mediator.h"
 
+#include <string>
+
 #include "base/feature_list.h"
-#include "base/strings/string16.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/infobars/core/infobar.h"
@@ -62,7 +63,7 @@ TEST_F(UpdatePasswordInfobarBannerOverlayMediatorTest, SetUpConsumer) {
   NSString* subtitle =
       [NSString stringWithFormat:@"%@ %@", kUsername, password];
   NSString* bannerAccessibilityLabel =
-      [NSString stringWithFormat:@"%@, %@, %@", title, kUsername,
+      [NSString stringWithFormat:@"%@,%@, %@", title, kUsername,
                                  l10n_util::GetNSString(
                                      IDS_IOS_SETTINGS_PASSWORD_HIDDEN_LABEL)];
   EXPECT_NSEQ(bannerAccessibilityLabel, consumer.bannerAccessibilityLabel);

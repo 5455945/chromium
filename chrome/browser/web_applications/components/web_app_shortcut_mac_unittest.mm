@@ -28,6 +28,7 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #import "testing/gtest_mac.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/image/image.h"
@@ -109,7 +110,7 @@ class WebAppAutoLoginUtilMock : public WebAppAutoLoginUtil {
 std::unique_ptr<ShortcutInfo> GetShortcutInfo() {
   std::unique_ptr<ShortcutInfo> info(new ShortcutInfo);
   info->extension_id = "extensionid";
-  info->title = base::ASCIIToUTF16("Shortcut Title");
+  info->title = u"Shortcut Title";
   info->url = GURL("http://example.com/");
   info->profile_path = base::FilePath("user_data_dir").Append("Profile 1");
   info->profile_name = "profile name";
@@ -147,7 +148,9 @@ class WebAppShortcutCreatorTest : public testing::Test {
     user_data_dir_ = base::MakeAbsoluteFilePath(user_data_dir_);
     app_data_dir_ = base::MakeAbsoluteFilePath(app_data_dir_);
 
-    SetChromeAppsFolderForTesting(destination_dir_);
+    ShortcutOverrideForTesting shortcut_override;
+    shortcut_override.chrome_apps_folder = destination_dir_;
+    web_app::SetShortcutOverrideForTesting(shortcut_override);
 
     info_ = GetShortcutInfo();
     fallback_shim_base_name_ =
@@ -163,7 +166,7 @@ class WebAppShortcutCreatorTest : public testing::Test {
 
   void TearDown() override {
     WebAppAutoLoginUtil::SetInstanceForTesting(nullptr);
-    SetChromeAppsFolderForTesting(base::FilePath());
+    web_app::SetShortcutOverrideForTesting(absl::nullopt);
     testing::Test::TearDown();
   }
 
@@ -224,16 +227,16 @@ TEST_F(WebAppShortcutCreatorTest, CreateShortcuts) {
   NSDictionary* plist = [NSDictionary
       dictionaryWithContentsOfFile:base::mac::FilePathToNSString(plist_path)];
   EXPECT_NSEQ(base::SysUTF8ToNSString(info_->extension_id),
-              [plist objectForKey:app_mode::kCrAppModeShortcutIDKey]);
+              plist[app_mode::kCrAppModeShortcutIDKey]);
   EXPECT_NSEQ(base::SysUTF16ToNSString(info_->title),
-              [plist objectForKey:app_mode::kCrAppModeShortcutNameKey]);
+              plist[app_mode::kCrAppModeShortcutNameKey]);
   EXPECT_NSEQ(base::SysUTF8ToNSString(info_->url.spec()),
-              [plist objectForKey:app_mode::kCrAppModeShortcutURLKey]);
+              plist[app_mode::kCrAppModeShortcutURLKey]);
 
   EXPECT_NSEQ(base::SysUTF8ToNSString(version_info::GetVersionNumber()),
-              [plist objectForKey:app_mode::kCrBundleVersionKey]);
+              plist[app_mode::kCrBundleVersionKey]);
   EXPECT_NSEQ(base::SysUTF8ToNSString(info_->version_for_display),
-              [plist objectForKey:app_mode::kCFBundleShortVersionStringKey]);
+              plist[app_mode::kCFBundleShortVersionStringKey]);
 
   // Make sure all values in the plist are actually filled in.
   for (id key in plist) {
@@ -261,8 +264,7 @@ TEST_F(WebAppShortcutCreatorTest, FileHandlers) {
   {
     NSDictionary* plist = [NSDictionary
         dictionaryWithContentsOfFile:base::mac::FilePathToNSString(plist_path)];
-    NSArray* doc_types_array =
-        [plist objectForKey:app_mode::kCFBundleDocumentTypesKey];
+    NSArray* doc_types_array = plist[app_mode::kCFBundleDocumentTypesKey];
     EXPECT_EQ(doc_types_array, nil);
   }
   EXPECT_TRUE(base::DeletePathRecursively(shim_path_));
@@ -278,24 +280,21 @@ TEST_F(WebAppShortcutCreatorTest, FileHandlers) {
   {
     NSDictionary* plist = [NSDictionary
         dictionaryWithContentsOfFile:base::mac::FilePathToNSString(plist_path)];
-    NSArray* doc_types_array =
-        [plist objectForKey:app_mode::kCFBundleDocumentTypesKey];
+    NSArray* doc_types_array = plist[app_mode::kCFBundleDocumentTypesKey];
     EXPECT_NE(doc_types_array, nil);
     EXPECT_EQ(1u, [doc_types_array count]);
-    NSDictionary* doc_types_dict = [doc_types_array objectAtIndex:0];
+    NSDictionary* doc_types_dict = doc_types_array[0];
     EXPECT_NE(doc_types_dict, nil);
-    NSArray* mime_types =
-        [doc_types_dict objectForKey:app_mode::kCFBundleTypeMIMETypesKey];
+    NSArray* mime_types = doc_types_dict[app_mode::kCFBundleTypeMIMETypesKey];
     EXPECT_NE(mime_types, nil);
-    NSArray* extensions =
-        [doc_types_dict objectForKey:app_mode::kCFBundleTypeExtensionsKey];
+    NSArray* extensions = doc_types_dict[app_mode::kCFBundleTypeExtensionsKey];
     EXPECT_EQ(extensions, nil);
 
     // The mime types should be listed in sorted order (note that sorted order
     // does matter for correct behavior).
     EXPECT_EQ(2u, [mime_types count]);
-    EXPECT_NSEQ([mime_types objectAtIndex:0], @"foo/bar");
-    EXPECT_NSEQ([mime_types objectAtIndex:1], @"moo/cow");
+    EXPECT_NSEQ(mime_types[0], @"foo/bar");
+    EXPECT_NSEQ(mime_types[1], @"moo/cow");
   }
   EXPECT_TRUE(base::DeletePathRecursively(shim_path_));
 
@@ -308,26 +307,23 @@ TEST_F(WebAppShortcutCreatorTest, FileHandlers) {
   {
     NSDictionary* plist = [NSDictionary
         dictionaryWithContentsOfFile:base::mac::FilePathToNSString(plist_path)];
-    NSArray* doc_types_array =
-        [plist objectForKey:app_mode::kCFBundleDocumentTypesKey];
+    NSArray* doc_types_array = plist[app_mode::kCFBundleDocumentTypesKey];
     EXPECT_NE(doc_types_array, nil);
     EXPECT_EQ(1u, [doc_types_array count]);
-    NSDictionary* doc_types_dict = [doc_types_array objectAtIndex:0];
+    NSDictionary* doc_types_dict = doc_types_array[0];
     EXPECT_NE(doc_types_dict, nil);
-    NSArray* mime_types =
-        [doc_types_dict objectForKey:app_mode::kCFBundleTypeMIMETypesKey];
+    NSArray* mime_types = doc_types_dict[app_mode::kCFBundleTypeMIMETypesKey];
     EXPECT_NE(mime_types, nil);
-    NSArray* extensions =
-        [doc_types_dict objectForKey:app_mode::kCFBundleTypeExtensionsKey];
+    NSArray* extensions = doc_types_dict[app_mode::kCFBundleTypeExtensionsKey];
     EXPECT_NE(extensions, nil);
 
     EXPECT_EQ(2u, [mime_types count]);
-    EXPECT_NSEQ([mime_types objectAtIndex:0], @"foo/bar");
-    EXPECT_NSEQ([mime_types objectAtIndex:1], @"moo/cow");
+    EXPECT_NSEQ(mime_types[0], @"foo/bar");
+    EXPECT_NSEQ(mime_types[1], @"moo/cow");
     EXPECT_EQ(3u, [extensions count]);
-    EXPECT_NSEQ([extensions objectAtIndex:0], @"bbq");
-    EXPECT_NSEQ([extensions objectAtIndex:1], @"cow");
-    EXPECT_NSEQ([extensions objectAtIndex:2], @"pig");
+    EXPECT_NSEQ(extensions[0], @"bbq");
+    EXPECT_NSEQ(extensions[1], @"cow");
+    EXPECT_NSEQ(extensions[2], @"pig");
   }
   EXPECT_TRUE(base::DeletePathRecursively(shim_path_));
 
@@ -338,23 +334,68 @@ TEST_F(WebAppShortcutCreatorTest, FileHandlers) {
   {
     NSDictionary* plist = [NSDictionary
         dictionaryWithContentsOfFile:base::mac::FilePathToNSString(plist_path)];
-    NSArray* doc_types_array =
-        [plist objectForKey:app_mode::kCFBundleDocumentTypesKey];
+    NSArray* doc_types_array = plist[app_mode::kCFBundleDocumentTypesKey];
     EXPECT_NE(doc_types_array, nil);
     EXPECT_EQ(1u, [doc_types_array count]);
-    NSDictionary* doc_types_dict = [doc_types_array objectAtIndex:0];
+    NSDictionary* doc_types_dict = doc_types_array[0];
     EXPECT_NE(doc_types_dict, nil);
-    NSArray* mime_types =
-        [doc_types_dict objectForKey:app_mode::kCFBundleTypeMIMETypesKey];
+    NSArray* mime_types = doc_types_dict[app_mode::kCFBundleTypeMIMETypesKey];
     EXPECT_EQ(mime_types, nil);
-    NSArray* extensions =
-        [doc_types_dict objectForKey:app_mode::kCFBundleTypeExtensionsKey];
+    NSArray* extensions = doc_types_dict[app_mode::kCFBundleTypeExtensionsKey];
     EXPECT_NE(extensions, nil);
 
     EXPECT_EQ(3u, [extensions count]);
-    EXPECT_NSEQ([extensions objectAtIndex:0], @"bbq");
-    EXPECT_NSEQ([extensions objectAtIndex:1], @"cow");
-    EXPECT_NSEQ([extensions objectAtIndex:2], @"pig");
+    EXPECT_NSEQ(extensions[0], @"bbq");
+    EXPECT_NSEQ(extensions[1], @"cow");
+    EXPECT_NSEQ(extensions[2], @"pig");
+  }
+  EXPECT_TRUE(base::DeletePathRecursively(shim_path_));
+}
+
+TEST_F(WebAppShortcutCreatorTest, ProtocolHandlers) {
+  const base::FilePath plist_path =
+      shim_path_.Append("Contents").Append("Info.plist");
+  NiceMock<WebAppShortcutCreatorMock> shortcut_creator(app_data_dir_,
+                                                       info_.get());
+
+  // CFBundleURLTypes should not be set, because we set no protocol
+  // handlers.
+  EXPECT_TRUE(shortcut_creator.CreateShortcuts(SHORTCUT_CREATION_AUTOMATED,
+                                               ShortcutLocations()));
+  {
+    NSDictionary* plist = [NSDictionary
+        dictionaryWithContentsOfFile:base::mac::FilePathToNSString(plist_path)];
+    NSArray* protocol_types_value = plist[app_mode::kCFBundleURLTypesKey];
+    EXPECT_EQ(protocol_types_value, nil);
+  }
+  EXPECT_TRUE(base::DeletePathRecursively(shim_path_));
+
+  // Register 2 valid protocol handlers.
+  info_->protocol_handlers.insert("mailto");
+  info_->protocol_handlers.insert("web+testing");
+  EXPECT_TRUE(shortcut_creator.CreateShortcuts(SHORTCUT_CREATION_AUTOMATED,
+                                               ShortcutLocations()));
+  {
+    NSDictionary* plist = [NSDictionary
+        dictionaryWithContentsOfFile:base::mac::FilePathToNSString(plist_path)];
+    NSArray* protocol_types_value = plist[app_mode::kCFBundleURLTypesKey];
+    EXPECT_NE(protocol_types_value, nil);
+    EXPECT_EQ(1u, [protocol_types_value count]);
+    NSDictionary* protocol_types_dict = protocol_types_value[0];
+    EXPECT_NE(protocol_types_dict, nil);
+
+    // Verify CFBundleURLName is set.
+    EXPECT_NSEQ(
+        protocol_types_dict[app_mode::kCFBundleURLNameKey],
+        base::SysUTF8ToNSString(base::mac::BaseBundleID() +
+                                std::string(".app.") + info_->extension_id));
+
+    // Verify CFBundleURLSchemes is set, and contains the expected values.
+    NSArray* handlers = protocol_types_dict[app_mode::kCFBundleURLSchemesKey];
+    EXPECT_NE(handlers, nil);
+    EXPECT_EQ(2u, [handlers count]);
+    EXPECT_NSEQ(handlers[0], @"mailto");
+    EXPECT_NSEQ(handlers[1], @"web+testing");
   }
   EXPECT_TRUE(base::DeletePathRecursively(shim_path_));
 }
@@ -403,11 +444,11 @@ TEST_F(WebAppShortcutCreatorTest, NormalizeTitle) {
   NiceMock<WebAppShortcutCreatorMock> shortcut_creator(app_data_dir_,
                                                        info_.get());
 
-  info_->title = base::UTF8ToUTF16("../../Evil/");
+  info_->title = u"../../Evil/";
   EXPECT_EQ(destination_dir_.Append(":..:Evil:.app"),
             shortcut_creator.GetApplicationsShortcutPath(false));
 
-  info_->title = base::UTF8ToUTF16("....");
+  info_->title = u"....";
   EXPECT_EQ(destination_dir_.Append(fallback_shim_base_name_),
             shortcut_creator.GetApplicationsShortcutPath(false));
 }
@@ -599,7 +640,9 @@ TEST_F(WebAppShortcutCreatorTest, RunShortcut) {
 TEST_F(WebAppShortcutCreatorTest, CreateFailure) {
   base::FilePath non_existent_path =
       destination_dir_.Append("not-existent").Append("name.app");
-  SetChromeAppsFolderForTesting(non_existent_path);
+  ShortcutOverrideForTesting shortcut_override;
+  shortcut_override.chrome_apps_folder = non_existent_path;
+  web_app::SetShortcutOverrideForTesting(shortcut_override);
 
   NiceMock<WebAppShortcutCreatorMock> shortcut_creator(app_data_dir_,
                                                        info_.get());

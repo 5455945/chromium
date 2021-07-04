@@ -13,7 +13,6 @@
 #include "base/callback_helpers.h"
 #include "base/command_line.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/optional.h"
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/threading/thread_task_runner_handle.h"
@@ -33,26 +32,34 @@
 #include "components/enterprise/common/proto/connectors.pb.h"
 #include "components/enterprise/common/strings.h"
 #include "components/prefs/pref_service.h"
-#include "components/safe_browsing/content/web_ui/safe_browsing_ui.h"
+#include "components/safe_browsing/content/browser/web_ui/safe_browsing_ui.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
-#include "components/safe_browsing/core/features.h"
+
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "net/base/url_util.h"
 #include "net/http/http_status_code.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace safe_browsing {
 namespace {
+
+// The command line flag to control the max amount of concurrent active
+// requests.
+// TODO(crbug.com/1191061): Tweak this number to an "optimal" value.
+constexpr char kMaxParallelActiveRequests[] = "wp-max-parallel-active-requests";
+constexpr int kDefaultMaxParallelActiveRequests = 50;
 
 const int kScanningTimeoutSeconds = 5 * 60;  // 5 minutes
 
 const char kSbEnterpriseUploadUrl[] =
     "https://safebrowsing.google.com/safebrowsing/uploads/scan";
 
-const char kSbAppUploadUrl[] =
-    "https://safebrowsing.google.com/safebrowsing/uploads/app";
+const char kSbConsumerUploadUrl[] =
+    "https://safebrowsing.google.com/safebrowsing/uploads/consumer";
 
-bool IsAdvancedProtectionRequest(const BinaryUploadService::Request& request) {
+bool IsConsumerScanRequest(const BinaryUploadService::Request& request) {
   for (const std::string& tag : request.content_analysis_request().tags()) {
     if (tag == "dlp")
       return false;
@@ -80,16 +87,18 @@ std::string ResultToString(BinaryUploadService::Result result) {
       return "FILE_ENCRYPTED";
     case BinaryUploadService::Result::DLP_SCAN_UNSUPPORTED_FILE_TYPE:
       return "DLP_SCAN_UNSUPPORTED_FILE_TYPE";
+    case BinaryUploadService::Result::TOO_MANY_REQUESTS:
+      return "TOO_MANY_REQUESTS";
   }
 }
 
 constexpr char kBinaryUploadServiceUrlFlag[] = "binary-upload-service-url";
 
-base::Optional<GURL> GetUrlOverride() {
+absl::optional<GURL> GetUrlOverride() {
   // Ignore this flag on Stable and Beta to avoid abuse.
   if (!g_browser_process || !g_browser_process->browser_policy_connector()
                                  ->IsCommandLineSwitchSupported()) {
-    return base::nullopt;
+    return absl::nullopt;
   }
 
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
@@ -102,7 +111,7 @@ base::Optional<GURL> GetUrlOverride() {
       LOG(ERROR) << "--binary-upload-service-url is set to an invalid URL";
   }
 
-  return base::nullopt;
+  return absl::nullopt;
 }
 
 net::NetworkTrafficAnnotationTag GetTrafficAnnotationTag(bool is_app) {
@@ -177,6 +186,24 @@ net::NetworkTrafficAnnotationTag GetTrafficAnnotationTag(bool is_app) {
 
 }  // namespace
 
+// static
+size_t BinaryUploadService::GetParallelActiveRequestsMax() {
+  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(kMaxParallelActiveRequests)) {
+    int parsed_max;
+    if (base::StringToInt(
+            command_line->GetSwitchValueASCII(kMaxParallelActiveRequests),
+            &parsed_max) &&
+        parsed_max > 0) {
+      return parsed_max;
+    } else {
+      LOG(ERROR) << "wp-max-parallel-active-requests had invalid value";
+    }
+  }
+
+  return kDefaultMaxParallelActiveRequests;
+}
+
 BinaryUploadService::BinaryUploadService(Profile* profile)
     : url_loader_factory_(profile->GetURLLoaderFactory()),
       binary_fcm_service_(BinaryFCMService::Create(profile)),
@@ -207,12 +234,18 @@ BinaryUploadService::~BinaryUploadService() {}
 void BinaryUploadService::MaybeUploadForDeepScanning(
     std::unique_ptr<BinaryUploadService::Request> request) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (IsAdvancedProtectionRequest(*request)) {
-    MaybeUploadForDeepScanningCallback(
-        std::move(request),
-        /*authorized=*/safe_browsing::AdvancedProtectionStatusManagerFactory::
-            GetForProfile(profile_)
-                ->IsUnderAdvancedProtection());
+  if (IsConsumerScanRequest(*request)) {
+    const bool is_advanced_protection =
+        safe_browsing::AdvancedProtectionStatusManagerFactory::GetForProfile(
+            profile_)
+            ->IsUnderAdvancedProtection();
+    const bool is_enhanced_protection =
+        profile_ && IsEnhancedProtectionEnabled(*profile_->GetPrefs());
+
+    const bool is_deep_scan_authorized =
+        is_advanced_protection || is_enhanced_protection;
+    MaybeUploadForDeepScanningCallback(std::move(request),
+                                       /*authorized=*/is_deep_scan_authorized);
     return;
   }
 
@@ -253,7 +286,15 @@ void BinaryUploadService::MaybeUploadForDeepScanningCallback(
                            enterprise_connectors::ContentAnalysisResponse());
     return;
   }
-  UploadForDeepScanning(std::move(request));
+  QueueForDeepScanning(std::move(request));
+}
+
+void BinaryUploadService::QueueForDeepScanning(
+    std::unique_ptr<BinaryUploadService::Request> request) {
+  if (active_requests_.size() >= GetParallelActiveRequestsMax())
+    request_queue_.push(std::move(request));
+  else
+    UploadForDeepScanning(std::move(request));
 }
 
 void BinaryUploadService::UploadForDeepScanning(
@@ -333,15 +374,23 @@ void BinaryUploadService::OnGetRequestData(Request* request,
 
   GURL url = request->GetUrlWithParams();
   if (!url.is_valid())
-    url = GetUploadUrl(IsAdvancedProtectionRequest(*request));
-  auto upload_request = MultipartUploadRequest::Create(
-      url_loader_factory_, std::move(url), metadata, data.contents,
-      GetTrafficAnnotationTag(IsAdvancedProtectionRequest(*request)),
-      base::BindOnce(&BinaryUploadService::OnUploadComplete,
-                     weakptr_factory_.GetWeakPtr(), request));
+    url = GetUploadUrl(IsConsumerScanRequest(*request));
+  net::NetworkTrafficAnnotationTag traffic_annotation =
+      GetTrafficAnnotationTag(IsConsumerScanRequest(*request));
+  auto callback = base::BindOnce(&BinaryUploadService::OnUploadComplete,
+                                 weakptr_factory_.GetWeakPtr(), request);
+  auto upload_request =
+      data.contents.empty()
+          ? MultipartUploadRequest::CreateFileRequest(
+                url_loader_factory_, std::move(url), metadata, data.path,
+                std::move(traffic_annotation), std::move(callback))
+          : MultipartUploadRequest::CreateStringRequest(
+                url_loader_factory_, std::move(url), metadata, data.contents,
+                std::move(traffic_annotation), std::move(callback));
 
   WebUIInfoSingleton::GetInstance()->AddToDeepScanRequests(
-      request->tab_url(), request->content_analysis_request());
+      request->tab_url(), request->per_profile_request(),
+      request->content_analysis_request());
 
   // |request| might have been deleted by the call to Start() in tests, so don't
   // dereference it afterwards.
@@ -351,9 +400,16 @@ void BinaryUploadService::OnGetRequestData(Request* request,
 
 void BinaryUploadService::OnUploadComplete(Request* request,
                                            bool success,
+                                           int http_status,
                                            const std::string& response_data) {
   if (!IsActive(request))
     return;
+
+  if (http_status == net::HTTP_TOO_MANY_REQUESTS) {
+    FinishRequest(request, Result::TOO_MANY_REQUESTS,
+                  enterprise_connectors::ContentAnalysisResponse());
+    return;
+  }
 
   if (!success) {
     FinishRequest(request, Result::UPLOAD_FAILURE,
@@ -428,13 +484,18 @@ void BinaryUploadService::FinishRequest(
   // We add the request here in case we never actually uploaded anything, so it
   // wasn't added in OnGetRequestData
   WebUIInfoSingleton::GetInstance()->AddToDeepScanRequests(
-      request->tab_url(), request->content_analysis_request());
+      request->tab_url(), request->per_profile_request(),
+      request->content_analysis_request());
   WebUIInfoSingleton::GetInstance()->AddToDeepScanResponses(
       active_tokens_[request], ResultToString(result), response);
 
   std::string instance_id = request->fcm_notification_token();
   request->FinishRequest(result, response);
   FinishRequestCleanup(request, instance_id);
+
+  // Now that a request has been cleaned up, we can try to allocate resources
+  // for queued uploads.
+  PopRequestQueue();
 }
 
 void BinaryUploadService::FinishRequestCleanup(Request* request,
@@ -514,6 +575,8 @@ void BinaryUploadService::RecordRequestMetrics(
 }
 
 BinaryUploadService::Request::Data::Data() = default;
+BinaryUploadService::Request::Data::Data(const Data&) = default;
+BinaryUploadService::Request::Data::~Data() = default;
 
 BinaryUploadService::Request::Request(ContentAnalysisCallback callback,
                                       GURL url)
@@ -527,6 +590,15 @@ void BinaryUploadService::Request::set_tab_url(const GURL& tab_url) {
 
 const GURL& BinaryUploadService::Request::tab_url() const {
   return tab_url_;
+}
+
+void BinaryUploadService::Request::set_per_profile_request(
+    bool per_profile_request) {
+  per_profile_request_ = per_profile_request;
+}
+
+bool BinaryUploadService::Request::per_profile_request() const {
+  return per_profile_request_;
 }
 
 void BinaryUploadService::Request::set_fcm_token(const std::string& token) {
@@ -576,6 +648,11 @@ void BinaryUploadService::Request::add_tag(const std::string& tag) {
 
 void BinaryUploadService::Request::set_email(const std::string& email) {
   content_analysis_request_.mutable_request_data()->set_email(email);
+}
+
+void BinaryUploadService::Request::set_client_metadata(
+    enterprise_connectors::ClientMetadata metadata) {
+  *content_analysis_request_.mutable_client_metadata() = std::move(metadata);
 }
 
 enterprise_connectors::AnalysisConnector
@@ -699,7 +776,7 @@ void BinaryUploadService::IsAuthorized(
           url);
       request->set_device_token(dm_token);
       request->set_analysis_connector(connector);
-      UploadForDeepScanning(std::move(request));
+      QueueForDeepScanning(std::move(request));
     }
     return;
   }
@@ -766,9 +843,21 @@ void BinaryUploadService::SetAuthForTesting(const std::string& dm_token,
 }
 
 // static
-GURL BinaryUploadService::GetUploadUrl(bool is_advanced_protection) {
-  return is_advanced_protection ? GURL(kSbAppUploadUrl)
-                                : GURL(kSbEnterpriseUploadUrl);
+GURL BinaryUploadService::GetUploadUrl(bool is_consumer_scan_eligible) {
+  if (is_consumer_scan_eligible) {
+    return GURL(kSbConsumerUploadUrl);
+  } else {
+    return GURL(kSbEnterpriseUploadUrl);
+  }
+}
+
+void BinaryUploadService::PopRequestQueue() {
+  while (active_requests_.size() < GetParallelActiveRequestsMax() &&
+         !request_queue_.empty()) {
+    std::unique_ptr<Request> request = std::move(request_queue_.front());
+    request_queue_.pop();
+    UploadForDeepScanning(std::move(request));
+  }
 }
 
 }  // namespace safe_browsing

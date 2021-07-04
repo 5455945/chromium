@@ -6,12 +6,12 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "base/bind.h"
-#include "base/callback_forward.h"
 #include "base/macros.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
@@ -109,7 +109,7 @@ class ProfileStatisticsAggregatorState {
   void SetRequiredStatCountAndCreateRunLoop(size_t required_stat_count) {
     EXPECT_GE(num_of_stats_categories_, required_stat_count);
     required_stat_count_ = required_stat_count;
-    run_loop_.reset(new base::RunLoop());
+    run_loop_ = std::make_unique<base::RunLoop>();
   }
 
   void WaitForStats() {

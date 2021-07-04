@@ -26,6 +26,7 @@
 #include "net/cookies/cookie_store_test_helpers.h"
 #include "net/cookies/test_cookie_access_delegate.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 #if defined(OS_IOS)
@@ -195,9 +196,11 @@ class CookieStoreTest : public testing::Test {
       const GURL& url,
       const std::string& cookie_line,
       const CookieOptions& options,
-      base::Optional<base::Time> server_time = base::nullopt) {
-    auto cookie = CanonicalCookie::Create(url, cookie_line, base::Time::Now(),
-                                          server_time);
+      absl::optional<base::Time> server_time = absl::nullopt,
+      absl::optional<base::Time> system_time = absl::nullopt) {
+    auto cookie = CanonicalCookie::Create(
+        url, cookie_line, system_time.value_or(base::Time::Now()), server_time);
+
     if (!cookie)
       return false;
     DCHECK(cs);
@@ -225,6 +228,19 @@ class CookieStoreTest : public testing::Test {
     return callback.result().status.IsInclude();
   }
 
+  bool SetCookieWithSystemTime(CookieStore* cs,
+                               const GURL& url,
+                               const std::string& cookie_line,
+                               const base::Time& system_time) {
+    CookieOptions options;
+    if (!CookieStoreTestTraits::supports_http_only)
+      options.set_include_httponly();
+    options.set_same_site_cookie_context(
+        net::CookieOptions::SameSiteCookieContext::MakeInclusive());
+    return CreateAndSetCookie(cs, url, cookie_line, options, absl::nullopt,
+                              absl::make_optional(system_time));
+  }
+
   bool SetCookieWithServerTime(CookieStore* cs,
                                const GURL& url,
                                const std::string& cookie_line,
@@ -235,7 +251,7 @@ class CookieStoreTest : public testing::Test {
     options.set_same_site_cookie_context(
         net::CookieOptions::SameSiteCookieContext::MakeInclusive());
     return CreateAndSetCookie(cs, url, cookie_line, options,
-                              base::make_optional(server_time));
+                              absl::make_optional(server_time));
   }
 
   bool SetCookie(CookieStore* cs,
@@ -255,7 +271,7 @@ class CookieStoreTest : public testing::Test {
       const std::string& cookie_line) {
     CookieInclusionStatus create_status;
     auto cookie = CanonicalCookie::Create(url, cookie_line, base::Time::Now(),
-                                          base::nullopt /* server_time */,
+                                          absl::nullopt /* server_time */,
                                           &create_status);
     if (!cookie)
       return create_status;
@@ -580,7 +596,7 @@ TYPED_TEST_P(CookieStoreTest, SetCanonicalCookieTest) {
   CookieInclusionStatus status;
   auto cookie = CanonicalCookie::Create(
       this->http_www_foo_.url(), "foo=1; Secure", base::Time::Now(),
-      base::nullopt /* server_time */, &status);
+      absl::nullopt /* server_time */, &status);
   EXPECT_TRUE(cookie->IsSecure());
   EXPECT_TRUE(status.IsInclude());
   EXPECT_TRUE(this->SetCanonicalCookieReturnAccessResult(
@@ -629,7 +645,7 @@ TYPED_TEST_P(CookieStoreTest, SetCanonicalCookieTest) {
     CookieInclusionStatus create_status;
     auto c = CanonicalCookie::Create(
         this->http_www_foo_.url(), "bar=1; HttpOnly", base::Time::Now(),
-        base::nullopt /* server_time */, &create_status);
+        absl::nullopt /* server_time */, &create_status);
     EXPECT_TRUE(c->IsHttpOnly());
     EXPECT_TRUE(create_status.IsInclude());
     EXPECT_TRUE(this->SetCanonicalCookieReturnAccessResult(
@@ -1251,8 +1267,8 @@ TYPED_TEST_P(CookieStoreTest, EmptyExpires) {
   this->MatchCookieLines(cookie_line,
                          this->GetCookiesWithOptions(cs, url, options));
 
-  base::Optional<base::Time> server_time =
-      base::make_optional(base::Time::Now() - base::TimeDelta::FromHours(1));
+  absl::optional<base::Time> server_time =
+      absl::make_optional(base::Time::Now() - base::TimeDelta::FromHours(1));
   this->CreateAndSetCookie(cs, url, set_cookie_line, options, server_time);
   this->MatchCookieLines(cookie_line,
                          this->GetCookiesWithOptions(cs, url, options));

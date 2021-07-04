@@ -34,18 +34,6 @@ FeatureNames FeatureToNames(WebSchedulerTrackedFeature feature) {
     case WebSchedulerTrackedFeature::kSubresourceHasCacheControlNoStore:
       return {"SubresourceHasCacheControlNoStore",
               "subresource has Cache-Control: No-Store"};
-    case WebSchedulerTrackedFeature::kPageShowEventListener:
-      return {"PageShowEventListener", "onpageshow() event listener"};
-    case WebSchedulerTrackedFeature::kPageHideEventListener:
-      return {"PageHideEventListener", "onpagehide() event listener"};
-    case WebSchedulerTrackedFeature::kBeforeUnloadEventListener:
-      return {"BeforeUnloadEventListener", "onbeforeunload() event listener"};
-    case WebSchedulerTrackedFeature::kUnloadEventListener:
-      return {"UnloadEventListener", "onunload() event listener"};
-    case WebSchedulerTrackedFeature::kFreezeEventListener:
-      return {"FreezeEventListener", "onfreeze() event listener"};
-    case WebSchedulerTrackedFeature::kResumeEventListener:
-      return {"ResumeEventListener", "onresume() event listener"};
     case WebSchedulerTrackedFeature::kContainsPlugins:
       return {"ContainsPlugins", "page contains plugins"};
     case WebSchedulerTrackedFeature::kDocumentLoaded:
@@ -91,8 +79,6 @@ FeatureNames FeatureToNames(WebSchedulerTrackedFeature feature) {
       return {"BroadcastChannel", "requested broadcast channel permission"};
     case WebSchedulerTrackedFeature::kIndexedDBConnection:
       return {"IndexedDBConnection", "IndexedDB connection present"};
-    case WebSchedulerTrackedFeature::kWebVR:
-      return {"WebVR", "WebVR"};
     case WebSchedulerTrackedFeature::kWebXR:
       return {"WebXR", "WebXR"};
     case WebSchedulerTrackedFeature::kWebLocks:
@@ -133,6 +119,13 @@ FeatureNames FeatureToNames(WebSchedulerTrackedFeature feature) {
     case WebSchedulerTrackedFeature::kOutstandingNetworkRequestDirectSocket:
       return {"OutstandingNetworkRequestDirectSocket",
               "outstanding network request (direct socket)"};
+    case WebSchedulerTrackedFeature::kIsolatedWorldScript:
+      return {"IsolatedWorldScript", "Isolated world ran script"};
+    case WebSchedulerTrackedFeature::kInjectedStyleSheet:
+      return {"InjectedStyleSheet", "External systesheet injected"};
+    case WebSchedulerTrackedFeature::kMediaSessionImplOnServiceCreated:
+      return {"MediaSessionImplOnServiceCreated",
+              "MediaSessionImplOnServiceCreated"};
   }
   return {};
 }
@@ -163,12 +156,12 @@ std::string FeatureToHumanReadableString(WebSchedulerTrackedFeature feature) {
   return FeatureToNames(feature).human_readable;
 }
 
-base::Optional<WebSchedulerTrackedFeature> StringToFeature(
+absl::optional<WebSchedulerTrackedFeature> StringToFeature(
     const std::string& str) {
   auto map = ShortStringToFeatureMap();
   auto it = map.find(str);
   if (it == map.end()) {
-    return base::nullopt;
+    return absl::nullopt;
   }
   return it->second;
 }
@@ -186,12 +179,6 @@ uint64_t StickyFeaturesBitmask() {
              WebSchedulerTrackedFeature::kSubresourceHasCacheControlNoStore) |
          FeatureToBit(
              WebSchedulerTrackedFeature::kSubresourceHasCacheControlNoCache) |
-         FeatureToBit(WebSchedulerTrackedFeature::kPageShowEventListener) |
-         FeatureToBit(WebSchedulerTrackedFeature::kPageHideEventListener) |
-         FeatureToBit(WebSchedulerTrackedFeature::kBeforeUnloadEventListener) |
-         FeatureToBit(WebSchedulerTrackedFeature::kUnloadEventListener) |
-         FeatureToBit(WebSchedulerTrackedFeature::kFreezeEventListener) |
-         FeatureToBit(WebSchedulerTrackedFeature::kResumeEventListener) |
          FeatureToBit(WebSchedulerTrackedFeature::kContainsPlugins) |
          FeatureToBit(WebSchedulerTrackedFeature::kDocumentLoaded) |
          FeatureToBit(
@@ -218,7 +205,9 @@ uint64_t StickyFeaturesBitmask() {
          FeatureToBit(WebSchedulerTrackedFeature::kIdleManager) |
          FeatureToBit(WebSchedulerTrackedFeature::kPaymentManager) |
          FeatureToBit(WebSchedulerTrackedFeature::kKeyboardLock) |
-         FeatureToBit(WebSchedulerTrackedFeature::kWebOTPService);
+         FeatureToBit(WebSchedulerTrackedFeature::kWebOTPService) |
+         FeatureToBit(WebSchedulerTrackedFeature::kIsolatedWorldScript) |
+         FeatureToBit(WebSchedulerTrackedFeature::kInjectedStyleSheet);
 }
 
 }  // namespace scheduler

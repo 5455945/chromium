@@ -41,13 +41,13 @@ MediaValuesCached::MediaValuesCachedData::MediaValuesCachedData()
       forced_colors(ForcedColors::kNone),
       navigation_controls(NavigationControls::kNone),
       screen_spanning(ScreenSpanning::kNone),
-      screen_fold_posture(ScreenFoldPosture::kNoFold) {}
+      device_posture(DevicePosture::kNoFold) {}
 
 MediaValuesCached::MediaValuesCachedData::MediaValuesCachedData(
     Document& document)
     : MediaValuesCached::MediaValuesCachedData() {
   DCHECK(IsMainThread());
-  LocalFrame* frame = document.GetFrameOfTreeRootDocument();
+  LocalFrame* frame = document.GetFrame();
   // TODO(hiroshige): Clean up |frame->view()| conditions.
   DCHECK(!frame || frame->View());
   if (frame && frame->View()) {
@@ -83,10 +83,10 @@ MediaValuesCached::MediaValuesCachedData::MediaValuesCachedData(
     preferred_contrast = MediaValues::CalculatePreferredContrast(frame);
     prefers_reduced_motion = MediaValues::CalculatePrefersReducedMotion(frame);
     prefers_reduced_data = MediaValues::CalculatePrefersReducedData(frame);
-    forced_colors = MediaValues::CalculateForcedColors();
+    forced_colors = MediaValues::CalculateForcedColors(frame);
     navigation_controls = MediaValues::CalculateNavigationControls(frame);
     screen_spanning = MediaValues::CalculateScreenSpanning(frame);
-    screen_fold_posture = MediaValues::CalculateScreenFoldPosture(frame);
+    device_posture = MediaValues::CalculateDevicePosture(frame);
   }
 }
 
@@ -227,8 +227,8 @@ ScreenSpanning MediaValuesCached::GetScreenSpanning() const {
   return data_.screen_spanning;
 }
 
-ScreenFoldPosture MediaValuesCached::GetScreenFoldPosture() const {
-  return data_.screen_fold_posture;
+DevicePosture MediaValuesCached::GetDevicePosture() const {
+  return data_.device_posture;
 }
 
 }  // namespace blink

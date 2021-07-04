@@ -295,6 +295,11 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
         return mDelegate.canShowAppBanners();
     }
 
+    @CalledByNative
+    private boolean isTabLargeEnoughForDesktopSite() {
+        return TabUtils.isTabLargeEnoughForDesktopSite(mTab);
+    }
+
     /**
      * @return the WebAPK manifest scope. This gives frames within the scope increased privileges
      * such as autoplaying media unmuted.
@@ -349,6 +354,11 @@ final class TabWebContentsDelegateAndroidImpl extends TabWebContentsDelegateAndr
     @Override
     public boolean shouldAnimateBrowserControlsHeightChanges() {
         return mDelegate.shouldAnimateBrowserControlsHeightChanges();
+    }
+
+    @Override
+    public boolean controlsResizeView() {
+        return mDelegate.controlsResizeView();
     }
 
     @VisibleForTesting

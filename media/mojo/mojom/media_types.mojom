@@ -151,7 +151,6 @@ struct VideoColorSpace {
   RangeID range;
 };
 
-
 // This defines a mojo transport format for media::AudioDecoderConfig.
 // See media/base/audio_decoder_config.h for descriptions.
 struct AudioDecoderConfig {
@@ -186,6 +185,15 @@ struct VideoDecoderConfig {
 // Native struct media::SubsampleEntry;
 [Native]
 struct SubsampleEntry;
+
+// See media::CdmSessionClosedReason for descriptions.
+enum CdmSessionClosedReason {
+  kInternalError,
+  kClose,
+  kReleaseAcknowledged,
+  kHardwareContextReset,
+  kResourceEvicted,
+};
 
 // This defines a mojo transport format for media::DecryptConfig.
 // See media/base/decrypt_config.h for descriptions.
@@ -372,7 +380,6 @@ struct VideoFrame {
 union VideoFrameData {
   EosVideoFrameData eos_data;
   SharedBufferVideoFrameData shared_buffer_data;
-  DmabufVideoFrameData dmabuf_data;
   GpuMemoryBufferVideoFrameData gpu_memory_buffer_data;
   MailboxVideoFrameData mailbox_data;
 };
@@ -391,12 +398,6 @@ struct SharedBufferVideoFrameData {
   // of |frame_data|.
   array<int32> strides;
   array<uint32> offsets;
-};
-
-// This defines video frame data stored in dmabuf.
-struct DmabufVideoFrameData {
-  // Size depends on media::VideoFrame::NumPlanes with frame format.
-  array<handle<platform>> dmabuf_fds;
 };
 
 struct GpuMemoryBufferVideoFrameData {
@@ -445,14 +446,14 @@ struct PredictionTargets {
 };
 
 // See media/base/pipeline_status.h for descriptions.
-struct AudioDecoderInfo {
+struct AudioPipelineInfo {
   AudioDecoderType decoder_type;
   bool is_platform_decoder = false;
   bool has_decrypting_demuxer_stream = false;
 };
 
 // See media/base/pipeline_status.h for descriptions.
-struct VideoDecoderInfo {
+struct VideoPipelineInfo {
   VideoDecoderType decoder_type;
   bool is_platform_decoder = false;
   bool has_decrypting_demuxer_stream = false;
@@ -465,4 +466,38 @@ struct Status {
   array<mojo_base.mojom.Value> frames;
   array<media.mojom.Status> causes;
   mojo_base.mojom.Value? data;
+};
+
+// Types of media stream, categorised by the media stream's source.
+// The enum values are emitted to metrics. Do not reorder.
+enum MediaStreamType {
+  kLocalElementCapture = 0, // The source is a local capture from element.
+  kLocalDeviceCapture = 1, // The source is a local device capture, e.g. webcam.
+  kLocalTabCapture = 2, // The source is a local tab capture.
+  kLocalDesktopCapture = 3, // The source is a local desktop capture.
+  kLocalDisplayCapture = 4, // The source is a local display capture.
+  kRemote = 5, // The source is a remote peer connection.
+  kNone = 6, // Not a media stream.
+};
+
+// Error codes propagated by Input media streams OnError methods to indicate the
+// reason for an error.
+enum InputStreamErrorCode {
+  kUnknown = 0,
+  kSystemPermissions = 1,
+  kDeviceInUse = 2,
+};
+
+// See media/base/renderer_factory_selector.h for description.
+enum RendererType {
+  kDefault = 0,          // DefaultRendererFactory
+  kMojo = 1,             // MojoRendererFactory
+  kMediaPlayer = 2,      // MediaPlayerRendererClientFactory
+  kCourier = 3,          // CourierRendererFactory
+  kFlinging = 4,         // FlingingRendererClientFactory
+  kCast = 5,             // CastRendererClientFactory
+  kMediaFoundation = 6,  // MediaFoundationRendererClientFactory
+  kFuchsia = 7,          // FuchsiaRendererFactory
+  kRemoting = 8,         // RemotingRendererFactory for remoting::Receiver
+  kCastStreaming = 9,    // CastStreamingRendererFactory
 };

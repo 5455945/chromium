@@ -15,6 +15,7 @@
 #include "media/base/audio_parameters.h"
 #include "media/base/media_export.h"
 #include "media/base/status.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace media {
 
@@ -55,7 +56,7 @@ class MEDIA_EXPORT AudioEncoder {
     Options(const Options&);
     ~Options();
 
-    base::Optional<int> bitrate;
+    absl::optional<int> bitrate;
 
     int channels;
 
@@ -69,7 +70,7 @@ class MEDIA_EXPORT AudioEncoder {
   // invoked on the same sequence on which EncodeAudio() is called.
   using OutputCB =
       base::RepeatingCallback<void(EncodedAudioBuffer output,
-                                   base::Optional<CodecDescription>)>;
+                                   absl::optional<CodecDescription>)>;
 
   // Signature of the callback to report errors.
   using StatusCB = base::OnceCallback<void(Status error)>;

@@ -18,6 +18,7 @@
 #include "base/scoped_observation.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/types/strong_alias.h"
+#include "build/build_config.h"
 #include "components/password_manager/core/browser/insecure_credentials_table.h"
 #include "components/password_manager/core/browser/leak_detection/bulk_leak_check.h"
 #include "components/password_manager/core/browser/password_store.h"
@@ -88,8 +89,8 @@ constexpr bool IsWeak(const InsecureCredentialTypeFlags& flag) {
 struct CredentialView {
   CredentialView(std::string signon_realm,
                  GURL url,
-                 base::string16 username,
-                 base::string16 password);
+                 std::u16string username,
+                 std::u16string password);
   // Enable explicit construction from PasswordForm for convenience.
   explicit CredentialView(const PasswordForm& form);
   CredentialView(const CredentialView& credential);
@@ -100,8 +101,8 @@ struct CredentialView {
 
   std::string signon_realm;
   GURL url;
-  base::string16 username;
-  base::string16 password;
+  std::u16string username;
+  std::u16string password;
 };
 
 // All information needed by UI to represent InsecureCredential. It's a result
@@ -163,9 +164,11 @@ class InsecureCredentialsManager : public InsecureCredentialsReader::Observer,
 
   void Init();
 
+#if !defined(OS_ANDROID) && !defined(OS_IOS)
   // Computes weak credentials in a separate thread and then passes the result
   // to OnWeakCheckDone.
   void StartWeakCheck(base::OnceClosure on_check_done = base::DoNothing());
+#endif
 
   // Marks all saved credentials which have same username & password as
   // insecure.
@@ -208,7 +211,7 @@ class InsecureCredentialsManager : public InsecureCredentialsReader::Observer,
   // Updates |weak_passwords| set and notifies observers that weak credentials
   // were changed.
   void OnWeakCheckDone(base::ElapsedTimer timer_since_weak_check_start,
-                       base::flat_set<base::string16> weak_passwords);
+                       base::flat_set<std::u16string> weak_passwords);
 
   // InsecureCredentialsReader::Observer:
   void OnInsecureCredentialsChanged(
@@ -245,7 +248,7 @@ class InsecureCredentialsManager : public InsecureCredentialsReader::Observer,
   std::vector<InsecureCredential> insecure_credentials_;
 
   // Cache of the most recently obtained weak passwords.
-  base::flat_set<base::string16> weak_passwords_;
+  base::flat_set<std::u16string> weak_passwords_;
 
   // A map that matches CredentialView to corresponding PasswordForms, latest
   // create_type and combined insecure type.

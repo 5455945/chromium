@@ -39,6 +39,14 @@
     "channel": "stable",
     "extension_types": ["platform_app"]
   },
+  "automation": [{
+    "channel": "dev",
+    "extension_types": ["extension", "legacy_packaged_app", "platform_app"]
+  }, {
+    "channel": "stable",
+    "extension_types": ["extension", "legacy_packaged_app"],
+    "allowlist": [ "2FCBCE08B34CCA1728A85F1EFBD9A34DD2558B2E" ]
+  }],
   "background": {
     "channel": "stable",
     "extension_types": [
@@ -110,6 +118,16 @@
     "extension_types": [
       "extension", "legacy_packaged_app", "login_screen_extension"
     ]
+  },
+  "cross_origin_embedder_policy": {
+    // TODO(crbug.com/1199491): Enable on stable.
+    "channel": "trunk",
+    "extension_types": ["extension"]
+  },
+  "cross_origin_opener_policy": {
+    // TODO(crbug.com/1199491): Enable on stable.
+    "channel": "trunk",
+    "extension_types": ["extension"]
   },
   "current_locale": {
     "channel": "stable",

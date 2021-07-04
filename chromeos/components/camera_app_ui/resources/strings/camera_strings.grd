@@ -30,6 +30,7 @@
     <output filename="chromeos_camera_app_strings_hr.pak" type="data_package" lang="hr" />
     <output filename="chromeos_camera_app_strings_hu.pak" type="data_package" lang="hu" />
     <output filename="chromeos_camera_app_strings_id.pak" type="data_package" lang="id" />
+    <output filename="chromeos_camera_app_strings_is.pak" type="data_package" lang="is" />
     <output filename="chromeos_camera_app_strings_it.pak" type="data_package" lang="it" />
     <output filename="chromeos_camera_app_strings_ja.pak" type="data_package" lang="ja" />
     <output filename="chromeos_camera_app_strings_kn.pak" type="data_package" lang="kn" />
@@ -172,6 +173,15 @@
       <message desc="Label for the exporting button." name="IDS_EXPORT_BUTTON">
         Export to disk
       </message>
+      <message desc="Label for the button to open pan tilt zoom control panel" name="IDS_OPEN_PTZ_PANEL_BUTTON">
+        Pan tilt zoom
+      </message>
+      <message desc="Message notifying user about new controls available" name="IDS_NEW_CONTROL_TOAST">
+        Additional camera controls available
+      </message>
+      <message desc="Label for message notifying user about new controls available and how to navigate to controls UI with accessibility tool" name="IDS_LABEL_NEW_CONTROL_TOAST">
+        Additional camera controls available. Search + Right arrow to access.
+      </message>
       <message desc="Label for the checkbox to toggle the 3 seconds countdown timer." name="IDS_TOGGLE_TIMER_3S_BUTTON">
         3 seconds timer
       </message>
@@ -301,20 +311,41 @@
       <message desc="Label for expert mode option: scan barcode." name="IDS_EXPERT_SCAN_BARCODE">
         Scan barcode
       </message>
+      <message desc="Label for expert mode option: custom video parameters." name="IDS_EXPERT_CUSTOM_VIDEO_PARAMETERS">
+        Custom video parameters
+      </message>
+      <message desc="Label for expert mode option: enable expert mode." name="IDS_EXPERT_ENABLE_EXPERT_MODE">
+        Enable expert mode
+      </message>
+      <message desc="Error message when the device does not support expert mode but tries to enable it." name="IDS_ERROR_MSG_EXPERT_MODE_NOT_SUPPORTED">
+        Expert mode is not supported on this device
+      </message>
       <message desc="Label for snackbar message when a link is copied" name="IDS_SNACKBAR_LINK_COPIED">
         Link copied
       </message>
       <message desc="Label for snackbar message when a link is copied" name="IDS_SNACKBAR_TEXT_COPIED">
         Text copied
       </message>
-      <message desc="Label for expert mode option: show camera pan/tilt/zoom options." name="IDS_EXPERT_SHOW_PTZ_OPTIONS">
-        Show pan tilt zoom options
+      <message desc="Label for tilt up camera preview" name="IDS_TILT_UP_BUTTON">
+        Tilt up
       </message>
-      <message desc="Label for expert mode option: custom video parameters." name="IDS_EXPERT_CUSTOM_VIDEO_PARAMETERS">
-        Custom video parameters
+      <message desc="Label for pan right camera preview" name="IDS_PAN_RIGHT_BUTTON">
+        Pan right
       </message>
-      <message desc="Error message when the device does not support expert mode but tries to enable it." name="IDS_ERROR_MSG_EXPERT_MODE_NOT_SUPPORTED">
-        Expert mode is not supported on this device
+      <message desc="Label for tilt down camera preview" name="IDS_TILT_DOWN_BUTTON">
+        Tilt down
+      </message>
+      <message desc="Label for pan left camera preview" name="IDS_PAN_LEFT_BUTTON">
+        Pan left
+      </message>
+      <message desc="Label for zoom in camera preview" name="IDS_ZOOM_IN_BUTTON">
+        Zoom in
+      </message>
+      <message desc="Label for zoom out camera preview" name="IDS_ZOOM_OUT_BUTTON">
+        Zoom out
+      </message>
+      <message desc="Label for button that resets all pan/tilt/zoom controls to the default value" name="IDS_PTZ_RESET_ALL_BUTTON">
+        Reset all
       </message>
       <message desc="Label for the feedback button." name="IDS_FEEDBACK_BUTTON">
         Send feedback
@@ -351,6 +382,12 @@
       </message>
       <message desc="Status message for spoken feedback when switching over to another camera." name="IDS_STATUS_MSG_CAMERA_SWITCHED">
         <ph name="camera">$1<ex>USB WebCam (12ab:5678) User-facing</ex></ph> active
+      </message>
+      <message desc="Message for spoken feedback when an external camera plug into the device." name="IDS_STATUS_MSG_CAMERA_PLUGGED">
+        <ph name="camera">$1<ex>USB WebCam (12ab:5678)</ex></ph> is plugged in.
+      </message>
+      <message desc="Message for spoken feedback when an external camera unplug from the device." name="IDS_STATUS_MSG_CAMERA_UNPLUGGED">
+        <ph name="camera">$1<ex>USB WebCam (12ab:5678)</ex></ph> is unplugged.
       </message>
       <message desc="Name of the Camera App." name="IDS_NAME">
         Camera
@@ -431,6 +468,9 @@ If your feedback is about image or video quality, please attach a sample photo o
       </message>
       <message desc="Error message shown on camera app window when the app is paused." name="IDS_ERROR_MSG_CAMERA_PAUSED">
         Paused
+      </message>
+      <message desc="Error message shown when users capture a video which is too short." name="IDS_ERROR_MSG_VIDEO_TOO_SHORT">
+        Video isn't saved since it's too short
       </message>
     </messages>
   </release>

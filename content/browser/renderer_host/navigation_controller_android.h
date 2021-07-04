@@ -11,6 +11,7 @@
 #include "base/compiler_specific.h"
 #include "base/macros.h"
 #include "content/common/content_export.h"
+#include "url/origin.h"
 
 namespace content {
 
@@ -80,7 +81,16 @@ class CONTENT_EXPORT NavigationControllerAndroid {
       const base::android::JavaParamRef<jstring>& data_url_as_string,
       jboolean can_load_local_resources,
       jboolean is_renderer_initiated,
-      jboolean should_replace_current_entry);
+      jboolean should_replace_current_entry,
+      const base::android::JavaParamRef<jobject>& j_initiator_origin,
+      jboolean has_user_gesture,
+      jboolean should_clear_history_list,
+      jlong input_start,
+      const base::android::JavaParamRef<jstring>& source_package_name,
+      const base::android::JavaParamRef<jstring>& attribution_source_event_id,
+      const base::android::JavaParamRef<jstring>& attribution_destination,
+      const base::android::JavaParamRef<jstring>& attribution_report_to,
+      jlong attributionExpiry);
   void ClearSslPreferences(
       JNIEnv* env,
       const base::android::JavaParamRef<jobject>& /* obj */);
@@ -137,6 +147,8 @@ class CONTENT_EXPORT NavigationControllerAndroid {
       jint index);
 
  private:
+  url::Origin OriginFromPackageName(const std::string& package);
+
   NavigationControllerImpl* navigation_controller_;
   base::android::ScopedJavaGlobalRef<jobject> obj_;
 

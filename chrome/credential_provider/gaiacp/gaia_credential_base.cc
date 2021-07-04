@@ -16,12 +16,12 @@
 #include "base/bind.h"
 #include "base/callback_helpers.h"
 #include "base/command_line.h"
+#include "base/cxx17_backports.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/path_service.h"
-#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -649,7 +649,7 @@ HRESULT ValidateResult(const base::Value& result, BSTR* status_text) {
   DCHECK(status_text);
 
   // Check the exit_code to see if any errors were detected by the GLS.
-  base::Optional<int> exit_code = result.FindIntKey(kKeyExitCode);
+  absl::optional<int> exit_code = result.FindIntKey(kKeyExitCode);
   if (exit_code.value() != kUiecSuccess) {
     switch (exit_code.value()) {
       case kUiecAbort:
@@ -1379,9 +1379,9 @@ void CGaiaCredentialBase::TellOmahaDidRun() {
 
 void CGaiaCredentialBase::PreventDenyAccessUpdate() {
   if (!token_update_locker_) {
-    token_update_locker_.reset(
-        new AssociatedUserValidator::ScopedBlockDenyAccessUpdate(
-            AssociatedUserValidator::Get()));
+    token_update_locker_ =
+        std::make_unique<AssociatedUserValidator::ScopedBlockDenyAccessUpdate>(
+            AssociatedUserValidator::Get());
   }
 }
 
@@ -2476,7 +2476,7 @@ HRESULT CGaiaCredentialBase::OnUserAuthenticated(BSTR authentication_info,
   base::WideToUTF8(OLE2CW(authentication_info),
                    ::SysStringLen(authentication_info), &json_string);
 
-  base::Optional<base::Value> properties =
+  absl::optional<base::Value> properties =
       base::JSONReader::Read(json_string, base::JSON_ALLOW_TRAILING_COMMAS);
 
   SecurelyClearString(json_string);

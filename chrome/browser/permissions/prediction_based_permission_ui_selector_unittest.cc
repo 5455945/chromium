@@ -33,7 +33,7 @@ class PredictionBasedPermissionUiSelectorTest : public testing::Test {
 
     safe_browsing::SetSafeBrowsingState(
         testing_profile_->GetPrefs(),
-        safe_browsing::SafeBrowsingState::ENHANCED_PROTECTION);
+        safe_browsing::SafeBrowsingState::STANDARD_PROTECTION);
   }
 
   void RecordHistoryActions(size_t action_count,
@@ -49,11 +49,11 @@ class PredictionBasedPermissionUiSelectorTest : public testing::Test {
 
   Decision SelectUiToUseAndGetDecision(
       PredictionBasedPermissionUiSelector* selector) {
-    base::Optional<Decision> actual_decision;
+    absl::optional<Decision> actual_decision;
     base::RunLoop run_loop;
 
     permissions::MockPermissionRequest request(
-        "request", permissions::RequestType::kNotifications,
+        u"request", permissions::RequestType::kNotifications,
         permissions::PermissionRequestGestureType::GESTURE);
 
     selector->SelectUiToUse(

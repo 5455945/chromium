@@ -19,6 +19,34 @@ namespace chromeos {
 
 namespace sync_wifi {
 
+namespace {
+
+bool IsAuthenticationError(ConnectionFailureReason reason) {
+  switch (reason) {
+    case ConnectionFailureReason::kFailedToConnect:
+    case ConnectionFailureReason::kDhcpFailure:
+    case ConnectionFailureReason::kDnsLookupFailure:
+    case ConnectionFailureReason::kOutOfRange:
+    case ConnectionFailureReason::kNotAssociated:
+    case ConnectionFailureReason::kTooManySTAs:
+      return false;
+
+    case ConnectionFailureReason::kBadPassphrase:
+    case ConnectionFailureReason::kNoFailure:
+    case ConnectionFailureReason::kBadWepKey:
+    case ConnectionFailureReason::kEapAuthentication:
+    case ConnectionFailureReason::kEapLocalTls:
+    case ConnectionFailureReason::kEapRemoteTls:
+    case ConnectionFailureReason::kPinMissing:
+    case ConnectionFailureReason::kNotAuthenticated:
+    case ConnectionFailureReason::kUnknown:
+    default:
+      return true;
+  }
+}
+
+}  // namespace
+
 // static
 ConnectionFailureReason
 SyncedNetworkMetricsLogger::ConnectionFailureReasonToEnum(
@@ -157,10 +185,14 @@ void SyncedNetworkMetricsLogger::NetworkConnectionStateChanged(
   }
 
   if (network->connection_state() == shill::kStateFailure) {
-    base::UmaHistogramBoolean(kConnectionResultAllHistogram, false);
-    base::UmaHistogramEnumeration(
-        kConnectionFailureReasonAllHistogram,
-        ConnectionFailureReasonToEnum(network->GetError()));
+    ConnectionFailureReason reason =
+        ConnectionFailureReasonToEnum(network->GetError());
+
+    // Don't consider non-auth errors as failures.
+    if (IsAuthenticationError(reason)) {
+      base::UmaHistogramBoolean(kConnectionResultAllHistogram, false);
+    }
+    base::UmaHistogramEnumeration(kConnectionFailureReasonAllHistogram, reason);
   } else if (network->IsConnectedState()) {
     base::UmaHistogramBoolean(kConnectionResultAllHistogram, true);
   }
@@ -186,7 +218,7 @@ bool SyncedNetworkMetricsLogger::IsEligible(const NetworkState* network) {
 void SyncedNetworkMetricsLogger::OnConnectErrorGetProperties(
     const std::string& error_name,
     const std::string& service_path,
-    base::Optional<base::Value> shill_properties) {
+    absl::optional<base::Value> shill_properties) {
   if (!shill_properties) {
     base::UmaHistogramBoolean(kConnectionResultManualHistogram, false);
     base::UmaHistogramEnumeration(kConnectionFailureReasonManualHistogram,

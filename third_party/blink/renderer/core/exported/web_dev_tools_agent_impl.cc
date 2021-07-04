@@ -281,7 +281,8 @@ void WebDevToolsAgentImpl::AttachSession(DevToolsSession* session,
       &inspected_frames->Root()->GetPage()->GetInspectorIssueStorage(),
       inspected_frames));
 
-  session->Append(MakeGarbageCollected<InspectorMediaAgent>(inspected_frames));
+  session->Append(MakeGarbageCollected<InspectorMediaAgent>(
+      inspected_frames, /*worker_global_scope=*/nullptr));
 
   // TODO(dgozman): we should actually pass the view instead of frame, but
   // during remote->local transition we cannot access mainFrameImpl() yet, so
@@ -484,14 +485,9 @@ void WebDevToolsAgentImpl::DispatchBufferedTouchEvents() {
     it.value->DispatchBufferedTouchEvents();
 }
 
-void WebDevToolsAgentImpl::PageScrollStarted() {
+void WebDevToolsAgentImpl::SetPageIsScrolling(bool is_scrolling) {
   for (auto& it : overlay_agents_)
-    it.value->PageScrollStarted();
-}
-
-void WebDevToolsAgentImpl::PageScrollEnded() {
-  for (auto& it : overlay_agents_)
-    it.value->PageScrollEnded();
+    it.value->SetPageIsScrolling(is_scrolling);
 }
 
 WebInputEventResult WebDevToolsAgentImpl::HandleInputEvent(

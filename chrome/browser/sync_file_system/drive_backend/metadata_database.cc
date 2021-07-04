@@ -5,6 +5,7 @@
 #include "chrome/browser/sync_file_system/drive_backend/metadata_database.h"
 
 #include <algorithm>
+#include <memory>
 #include <unordered_set>
 #include <utility>
 
@@ -14,7 +15,6 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/location.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_piece.h"
@@ -188,7 +188,7 @@ std::unique_ptr<FileTracker> CreateInitialAppRootTracker(
 std::unique_ptr<FileTracker> CloneFileTracker(const FileTracker* obj) {
   if (!obj)
     return nullptr;
-  return std::unique_ptr<FileTracker>(new FileTracker(*obj));
+  return std::make_unique<FileTracker>(*obj);
 }
 
 // Returns true if |db| has no content.
@@ -218,15 +218,12 @@ SyncStatusCode OpenDatabase(const base::FilePath& path,
   std::unique_ptr<leveldb::DB> db;
   leveldb::Status db_status =
       leveldb_env::OpenDB(options, path.AsUTF8Unsafe(), &db);
-  UMA_HISTOGRAM_ENUMERATION("SyncFileSystem.Database.Open",
-                            leveldb_env::GetLevelDBStatusUMAValue(db_status),
-                            leveldb_env::LEVELDB_STATUS_MAX);
   SyncStatusCode status = LevelDBStatusToSyncStatusCode(db_status);
   if (status != SYNC_STATUS_OK) {
     return status;
   }
 
-  db_out->reset(new LevelDBWrapper(std::move(db)));
+  *db_out = std::make_unique<LevelDBWrapper>(std::move(db));
   *created = IsDatabaseEmpty(db_out->get());
   return status;
 }
@@ -1637,10 +1634,10 @@ std::unique_ptr<base::ListValue> MetadataDatabase::DumpTrackers() {
     "active", "dirty", "folder_listing", "demoted",
     "title", "kind", "md5", "etag", "missing", "change_id",
   };
-  std::vector<std::string> key_strings(trackerKeys,
-                                       trackerKeys + base::size(trackerKeys));
   auto keys = std::make_unique<base::ListValue>();
-  keys->AppendStrings(key_strings);
+  for (const char* str : trackerKeys) {
+    keys->Append(str);
+  }
   metadata->SetString("title", "Trackers");
   metadata->Set("keys", std::move(keys));
   trackers->Append(std::move(metadata));
@@ -1699,10 +1696,10 @@ std::unique_ptr<base::ListValue> MetadataDatabase::DumpMetadata() {
     "file_id", "title", "type", "md5", "etag", "missing",
     "change_id", "parents"
   };
-  std::vector<std::string> key_strings(fileKeys,
-                                       fileKeys + base::size(fileKeys));
   auto keys = std::make_unique<base::ListValue>();
-  keys->AppendStrings(key_strings);
+  for (const char* str : fileKeys) {
+    keys->Append(str);
+  }
   metadata->SetString("title", "Metadata");
   metadata->Set("keys", std::move(keys));
   files->Append(std::move(metadata));

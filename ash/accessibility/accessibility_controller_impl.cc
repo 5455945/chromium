@@ -7,16 +7,19 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <string>
 #include <utility>
 
 #include "ash/accelerators/accelerator_controller_impl.h"
-#include "ash/accessibility/accessibility_highlight_controller.h"
 #include "ash/accessibility/accessibility_observer.h"
-#include "ash/accessibility/accessibility_panel_layout_manager.h"
-#include "ash/accessibility/point_scan_controller.h"
-#include "ash/autoclick/autoclick_controller.h"
+#include "ash/accessibility/autoclick/autoclick_controller.h"
+#include "ash/accessibility/sticky_keys/sticky_keys_controller.h"
+#include "ash/accessibility/switch_access/point_scan_controller.h"
+#include "ash/accessibility/ui/accessibility_highlight_controller.h"
+#include "ash/accessibility/ui/accessibility_panel_layout_manager.h"
 #include "ash/components/audio/cras_audio_handler.h"
 #include "ash/components/audio/sounds.h"
+#include "ash/constants/ash_constants.h"
 #include "ash/events/accessibility_event_rewriter.h"
 #include "ash/events/select_to_speak_event_handler.h"
 #include "ash/high_contrast/high_contrast_controller.h"
@@ -33,12 +36,11 @@
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
-#include "ash/sticky_keys/sticky_keys_controller.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/system/accessibility/accessibility_feature_disable_dialog.h"
 #include "ash/system/accessibility/floating_accessibility_controller.h"
-#include "ash/system/accessibility/select_to_speak_menu_bubble_controller.h"
-#include "ash/system/accessibility/switch_access_menu_bubble_controller.h"
+#include "ash/system/accessibility/select_to_speak/select_to_speak_menu_bubble_controller.h"
+#include "ash/system/accessibility/switch_access/switch_access_menu_bubble_controller.h"
 #include "ash/system/power/backlights_forced_off_setter.h"
 #include "ash/system/power/power_status.h"
 #include "ash/system/power/scoped_backlights_forced_off.h"
@@ -47,7 +49,6 @@
 #include "base/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/user_metrics.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_number_conversions.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_change_registrar.h"
@@ -55,6 +56,7 @@
 #include "components/prefs/pref_service.h"
 #include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/accessibility_switches.h"
+#include "ui/accessibility/aura/aura_window_properties.h"
 #include "ui/aura/window.h"
 #include "ui/base/cursor/cursor_size.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -161,6 +163,7 @@ constexpr const char* const kCopiedOnSigninAccessibilityPrefs[]{
     prefs::kAccessibilityCursorColorEnabled,
     prefs::kAccessibilityCursorColor,
     prefs::kAccessibilityDictationEnabled,
+    prefs::kAccessibilityDictationLocale,
     prefs::kAccessibilityFocusHighlightEnabled,
     prefs::kAccessibilityHighContrastEnabled,
     prefs::kAccessibilityLargeCursorEnabled,
@@ -228,7 +231,7 @@ bool IsSigninPrefService(PrefService* pref_service) {
 
 // Returns true if the current session is the guest session.
 bool IsCurrentSessionGuest() {
-  const base::Optional<user_manager::UserType> user_type =
+  const absl::optional<user_manager::UserType> user_type =
       Shell::Get()->session_controller()->GetUserType();
   return user_type && *user_type == user_manager::USER_TYPE_GUEST;
 }
@@ -324,8 +327,8 @@ void ShowAccessibilityNotification(A11yNotificationType type) {
   if (type == A11yNotificationType::kNone)
     return;
 
-  base::string16 text;
-  base::string16 title;
+  std::u16string text;
+  std::u16string title;
   if (type == A11yNotificationType::kBrailleDisplayConnected) {
     text = l10n_util::GetStringUTF16(
         IDS_ASH_STATUS_TRAY_BRAILLE_DISPLAY_CONNECTED);
@@ -349,7 +352,7 @@ void ShowAccessibilityNotification(A11yNotificationType type) {
   std::unique_ptr<message_center::Notification> notification =
       ash::CreateSystemNotification(
           message_center::NOTIFICATION_TYPE_SIMPLE, kNotificationId, title,
-          text, base::string16(), GURL(),
+          text, std::u16string(), GURL(),
           message_center::NotifierId(
               message_center::NotifierType::SYSTEM_COMPONENT,
               kNotifierAccessibility),
@@ -602,7 +605,67 @@ void AccessibilityControllerImpl::CreateAccessibilityFeatures() {
 // static
 void AccessibilityControllerImpl::RegisterProfilePrefs(
     PrefRegistrySimple* registry) {
+  //
+  // Non-syncable prefs.
+  //
+  // These prefs control whether an accessibility feature is enabled. They are
+  // not synced due to the impact they have on device interaction.
   registry->RegisterBooleanPref(prefs::kAccessibilityAutoclickEnabled, false);
+  registry->RegisterBooleanPref(prefs::kAccessibilityCursorColorEnabled, false);
+  registry->RegisterBooleanPref(prefs::kAccessibilityCaretHighlightEnabled,
+                                false);
+  registry->RegisterBooleanPref(prefs::kAccessibilityCursorHighlightEnabled,
+                                false);
+  registry->RegisterBooleanPref(prefs::kAccessibilityDictationEnabled, false);
+  registry->RegisterBooleanPref(prefs::kAccessibilityFloatingMenuEnabled,
+                                false);
+  registry->RegisterBooleanPref(prefs::kAccessibilityFocusHighlightEnabled,
+                                false);
+  registry->RegisterBooleanPref(prefs::kAccessibilityHighContrastEnabled,
+                                false);
+  registry->RegisterBooleanPref(prefs::kAccessibilityLargeCursorEnabled, false);
+  registry->RegisterBooleanPref(prefs::kAccessibilityMonoAudioEnabled, false);
+  registry->RegisterBooleanPref(prefs::kAccessibilityScreenMagnifierEnabled,
+                                false);
+  registry->RegisterBooleanPref(prefs::kAccessibilitySpokenFeedbackEnabled,
+                                false);
+  registry->RegisterBooleanPref(prefs::kAccessibilitySelectToSpeakEnabled,
+                                false);
+  registry->RegisterBooleanPref(prefs::kAccessibilityStickyKeysEnabled, false);
+  registry->RegisterBooleanPref(prefs::kAccessibilityShortcutsEnabled, true);
+  registry->RegisterBooleanPref(prefs::kAccessibilitySwitchAccessEnabled,
+                                false);
+  registry->RegisterBooleanPref(prefs::kAccessibilityVirtualKeyboardEnabled,
+                                false);
+  registry->RegisterBooleanPref(
+      prefs::kAccessibilityTabletModeShelfNavigationButtonsEnabled, false);
+
+  // Not syncable because it might change depending on application locale,
+  // user settings, and because different languages can cause SODA
+  // speech recognition download.
+  registry->RegisterStringPref(prefs::kAccessibilityDictationLocale,
+                               std::string());
+
+  // A pref in this list is associated with accepting for the first time,
+  // enabling of some pref above. Non-syncable like all of the above prefs.
+  registry->RegisterBooleanPref(
+      prefs::kHighContrastAcceleratorDialogHasBeenAccepted, false);
+  registry->RegisterBooleanPref(
+      prefs::kScreenMagnifierAcceleratorDialogHasBeenAccepted, false);
+  registry->RegisterBooleanPref(
+      prefs::kDockedMagnifierAcceleratorDialogHasBeenAccepted, false);
+  registry->RegisterBooleanPref(
+      prefs::kDictationAcceleratorDialogHasBeenAccepted, false);
+  registry->RegisterBooleanPref(
+      prefs::kDisplayRotationAcceleratorDialogHasBeenAccepted2, false);
+  registry->RegisterBooleanPref(prefs::kShouldAlwaysShowAccessibilityMenu,
+                                false);
+
+  //
+  // Syncable prefs.
+  //
+  // These prefs pertain to specific features. They are synced to preserve
+  // behaviors tied to user accounts once that user enables a feature.
   registry->RegisterIntegerPref(
       prefs::kAccessibilityAutoclickDelayMs, kDefaultAutoclickDelayMs,
       user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF);
@@ -624,51 +687,32 @@ void AccessibilityControllerImpl::RegisterProfilePrefs(
       prefs::kAccessibilityAutoclickMenuPosition,
       static_cast<int>(kDefaultAutoclickMenuPosition),
       user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF);
-  registry->RegisterIntegerPref(
-      prefs::kAccessibilityScreenMagnifierMouseFollowingMode,
-      static_cast<int>(MagnifierMouseFollowingMode::kEdge),
-      user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF);
-  registry->RegisterBooleanPref(prefs::kAccessibilityCaretHighlightEnabled,
-                                false);
-  registry->RegisterBooleanPref(prefs::kAccessibilityCursorHighlightEnabled,
-                                false);
-  registry->RegisterBooleanPref(prefs::kAccessibilityCursorColorEnabled, false);
+
   registry->RegisterIntegerPref(
       prefs::kAccessibilityCursorColor, 0,
       user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF);
-  registry->RegisterBooleanPref(prefs::kAccessibilityDictationEnabled, false);
-  registry->RegisterBooleanPref(prefs::kAccessibilityFloatingMenuEnabled,
-                                false);
+
   registry->RegisterIntegerPref(
       prefs::kAccessibilityFloatingMenuPosition,
       static_cast<int>(kDefaultFloatingMenuPosition),
       user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF);
-  registry->RegisterBooleanPref(prefs::kAccessibilityFocusHighlightEnabled,
-                                false);
-  registry->RegisterBooleanPref(prefs::kAccessibilityHighContrastEnabled,
-                                false);
-  registry->RegisterBooleanPref(prefs::kAccessibilityLargeCursorEnabled, false);
+
   registry->RegisterIntegerPref(prefs::kAccessibilityLargeCursorDipSize,
                                 kDefaultLargeCursorSize);
-  registry->RegisterBooleanPref(prefs::kAccessibilityMonoAudioEnabled, false);
+
+  registry->RegisterIntegerPref(
+      prefs::kAccessibilityScreenMagnifierMouseFollowingMode,
+      static_cast<int>(MagnifierMouseFollowingMode::kEdge),
+      user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF);
   registry->RegisterBooleanPref(
       prefs::kAccessibilityScreenMagnifierCenterFocus, true,
       user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF);
-  registry->RegisterBooleanPref(prefs::kAccessibilityScreenMagnifierEnabled,
-                                false);
   registry->RegisterBooleanPref(
       prefs::kAccessibilityScreenMagnifierFocusFollowingEnabled, true,
       user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF);
   registry->RegisterDoublePref(prefs::kAccessibilityScreenMagnifierScale,
                                std::numeric_limits<double>::min());
-  registry->RegisterBooleanPref(prefs::kAccessibilitySpokenFeedbackEnabled,
-                                false);
-  registry->RegisterBooleanPref(prefs::kAccessibilitySelectToSpeakEnabled,
-                                false);
-  registry->RegisterBooleanPref(prefs::kAccessibilityStickyKeysEnabled, false);
-  registry->RegisterBooleanPref(prefs::kAccessibilityShortcutsEnabled, true);
-  registry->RegisterBooleanPref(prefs::kAccessibilitySwitchAccessEnabled,
-                                false);
+
   registry->RegisterDictionaryPref(
       prefs::kAccessibilitySwitchAccessSelectDeviceKeyCodes,
       base::Value(base::Value::Type::DICTIONARY),
@@ -696,23 +740,6 @@ void AccessibilityControllerImpl::RegisterProfilePrefs(
       prefs::kAccessibilitySwitchAccessPointScanSpeedDipsPerSecond,
       kDefaultSwitchAccessPointScanSpeedDipsPerSecond,
       user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF);
-  registry->RegisterBooleanPref(prefs::kAccessibilityVirtualKeyboardEnabled,
-                                false);
-  registry->RegisterBooleanPref(
-      prefs::kAccessibilityTabletModeShelfNavigationButtonsEnabled, false);
-  registry->RegisterBooleanPref(
-      prefs::kHighContrastAcceleratorDialogHasBeenAccepted, false);
-  registry->RegisterBooleanPref(
-      prefs::kScreenMagnifierAcceleratorDialogHasBeenAccepted, false);
-  registry->RegisterBooleanPref(
-      prefs::kDockedMagnifierAcceleratorDialogHasBeenAccepted, false);
-  registry->RegisterBooleanPref(
-      prefs::kDictationAcceleratorDialogHasBeenAccepted, false);
-  registry->RegisterBooleanPref(
-      prefs::kDisplayRotationAcceleratorDialogHasBeenAccepted2, false);
-
-  registry->RegisterBooleanPref(prefs::kShouldAlwaysShowAccessibilityMenu,
-                                false);
 }
 
 void AccessibilityControllerImpl::Shutdown() {
@@ -1095,9 +1122,7 @@ bool AccessibilityControllerImpl::IsPointScanEnabled() {
 }
 
 void AccessibilityControllerImpl::StartPointScan() {
-  if (::switches::IsSwitchAccessPointScanningEnabled()) {
-    if (!point_scan_controller_)
-      point_scan_controller_ = std::make_unique<PointScanController>();
+  if (features::IsSwitchAccessPointScanningEnabled()) {
     point_scan_controller_->Start();
   }
 }
@@ -1111,6 +1136,14 @@ void AccessibilityControllerImpl::SetA11yOverrideWindow(
 void AccessibilityControllerImpl::StopPointScan() {
   if (point_scan_controller_)
     point_scan_controller_->HideAll();
+}
+
+void AccessibilityControllerImpl::SetPointScanSpeedDipsPerSecond(
+    int point_scan_speed_dips_per_second) {
+  if (point_scan_controller_) {
+    point_scan_controller_->SetSpeedDipsPerSecond(
+        point_scan_speed_dips_per_second);
+  }
 }
 
 void AccessibilityControllerImpl::
@@ -1323,6 +1356,22 @@ void AccessibilityControllerImpl::OnActiveUserPrefServiceChanged(
   // needed here.
   CopySigninPrefsIfNeeded(active_user_prefs_, prefs);
   ObservePrefs(prefs);
+}
+
+void AccessibilityControllerImpl::OnSessionStateChanged(
+    session_manager::SessionState state) {
+  // Everything behind the lock screen is in
+  // kShellWindowId_NonLockScreenContainersContainer. If the session state is
+  // changed to block the user session due to the lock screen or similar,
+  // everything in that window should be made invisible for accessibility.
+  // This keeps a11y features from being able to access parts of the tree
+  // that are visibly hidden behind the lock screen.
+  aura::Window* container =
+      Shell::GetContainer(Shell::GetPrimaryRootWindow(),
+                          kShellWindowId_NonLockScreenContainersContainer);
+  container->SetProperty(
+      ui::kAXConsiderInvisibleAndIgnoreChildren,
+      Shell::Get()->session_controller()->IsUserSessionBlocked());
 }
 
 AccessibilityEventRewriter*
@@ -1734,8 +1783,8 @@ void AccessibilityControllerImpl::UpdateSwitchAccessKeyCodesFromPref(
     base::UmaHistogramEnumeration(uma_name, uma_value);
   }
 
-    accessibility_event_rewriter_->SetKeyCodesForSwitchAccessCommand(key_codes,
-                                                                     command);
+  accessibility_event_rewriter_->SetKeyCodesForSwitchAccessCommand(key_codes,
+                                                                   command);
 }
 
 void AccessibilityControllerImpl::UpdateSwitchAccessAutoScanEnabledFromPref() {
@@ -1772,6 +1821,11 @@ void AccessibilityControllerImpl::
 
 void AccessibilityControllerImpl::UpdateSwitchAccessPointScanSpeedFromPref() {
   // TODO(accessibility): Log histogram for point scan speed
+  DCHECK(active_user_prefs_);
+  const int point_scan_speed_dips_per_second = active_user_prefs_->GetInteger(
+      prefs::kAccessibilitySwitchAccessPointScanSpeedDipsPerSecond);
+
+  SetPointScanSpeedDipsPerSecond(point_scan_speed_dips_per_second);
   SyncSwitchAccessPrefsToSignInProfile();
 }
 
@@ -1803,7 +1857,9 @@ void AccessibilityControllerImpl::UpdateKeyCodesAfterSwitchAccessEnabled() {
 void AccessibilityControllerImpl::ActivateSwitchAccess() {
   switch_access_bubble_controller_ =
       std::make_unique<SwitchAccessMenuBubbleController>();
+  point_scan_controller_ = std::make_unique<PointScanController>();
   UpdateKeyCodesAfterSwitchAccessEnabled();
+  UpdateSwitchAccessPointScanSpeedFromPref();
   if (skip_switch_access_notification_) {
     skip_switch_access_notification_ = false;
     return;
@@ -1815,6 +1871,7 @@ void AccessibilityControllerImpl::ActivateSwitchAccess() {
 void AccessibilityControllerImpl::DeactivateSwitchAccess() {
   if (client_)
     client_->OnSwitchAccessDisabled();
+  point_scan_controller_.reset();
   switch_access_bubble_controller_.reset();
 }
 
@@ -1867,7 +1924,7 @@ void AccessibilityControllerImpl::
   NotifyAccessibilityStatusChanged();
 }
 
-base::string16 AccessibilityControllerImpl::GetBatteryDescription() const {
+std::u16string AccessibilityControllerImpl::GetBatteryDescription() const {
   // Pass battery status as string to callback function.
   return PowerStatus::Get()->GetAccessibleNameString(
       /*full_description=*/true);
@@ -1909,6 +1966,28 @@ void AccessibilityControllerImpl::SuspendSwitchAccessKeyHandling(bool suspend) {
 
 void AccessibilityControllerImpl::EnableChromeVoxVolumeSlideGesture() {
   enable_chromevox_volume_slide_gesture_ = true;
+}
+
+void AccessibilityControllerImpl::ShowConfirmationDialog(
+    const std::u16string& title,
+    const std::u16string& description,
+    base::OnceClosure on_accept_callback,
+    base::OnceClosure on_cancel_callback,
+    base::OnceClosure on_close_callback) {
+  if (confirmation_dialog_) {
+    // If a dialog is already being shown we do not show a new one.
+    // Instead, run the on_close_callback on the new dialog to indicate
+    // it was closed without the user taking any action.
+    // This is consistent with AcceleratorController.
+    std::move(on_close_callback).Run();
+    return;
+  }
+  auto* dialog = new AccessibilityConfirmationDialog(
+      title, description, std::move(on_accept_callback),
+      std::move(on_cancel_callback), std::move(on_close_callback));
+  // Save the dialog so it doesn't go out of scope before it is
+  // used and closed.
+  confirmation_dialog_ = dialog->GetWeakPtr();
 }
 
 void AccessibilityControllerImpl::UpdateFeatureFromPref(FeatureType feature) {

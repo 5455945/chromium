@@ -19,7 +19,8 @@
 #import "ios/chrome/browser/ui/commands/load_query_commands.h"
 #import "ios/chrome/browser/ui/commands/open_new_tab_command.h"
 #import "ios/chrome/browser/ui/commands/text_zoom_commands.h"
-#import "ios/chrome/browser/ui/popup_menu/popup_menu_action_handler_commands.h"
+#import "ios/chrome/browser/ui/default_promo/default_browser_utils.h"
+#import "ios/chrome/browser/ui/popup_menu/popup_menu_action_handler_delegate.h"
 #import "ios/chrome/browser/ui/popup_menu/public/cells/popup_menu_item.h"
 #import "ios/chrome/browser/ui/popup_menu/public/popup_menu_table_view_controller.h"
 #import "ios/chrome/browser/ui/ui_feature_flags.h"
@@ -42,7 +43,7 @@ using base::UserMetricsAction;
                        didSelectItem:(TableViewItem<PopupMenuItem>*)item
                               origin:(CGPoint)origin {
   DCHECK(self.dispatcher);
-  DCHECK(self.commandHandler);
+  DCHECK(self.delegate);
 
   PopupMenuAction identifier = item.actionIdentifier;
   switch (identifier) {
@@ -68,10 +69,11 @@ using base::UserMetricsAction;
       break;
     case PopupMenuActionReadLater:
       RecordAction(UserMetricsAction("MobileMenuReadLater"));
-      [self.commandHandler readPageLater];
+      [self.delegate readPageLater];
       break;
     case PopupMenuActionPageBookmark:
       RecordAction(UserMetricsAction("MobileMenuAddToBookmarks"));
+      LogLikelyInterestedDefaultBrowserUserActivity(DefaultPromoTypeAllTabs);
       [self.dispatcher bookmarkCurrentPage];
       break;
     case PopupMenuActionTranslate:
@@ -110,6 +112,7 @@ using base::UserMetricsAction;
     case PopupMenuActionOpenDownloads:
       RecordAction(
           UserMetricsAction("MobileDownloadFolderUIShownFromToolsMenu"));
+      [self.delegate recordDownloadsMetricsPerProfile];
       [self.dispatcher showDownloadsFolder];
       break;
     case PopupMenuActionTextZoom:
@@ -128,6 +131,7 @@ using base::UserMetricsAction;
       break;
     case PopupMenuActionBookmarks:
       RecordAction(UserMetricsAction("MobileMenuAllBookmarks"));
+      LogLikelyInterestedDefaultBrowserUserActivity(DefaultPromoTypeAllTabs);
       [self.dispatcher showBookmarksManager];
       break;
     case PopupMenuActionReadingList:
@@ -144,6 +148,7 @@ using base::UserMetricsAction;
       break;
     case PopupMenuActionSettings:
       RecordAction(UserMetricsAction("MobileMenuSettings"));
+      [self.delegate recordSettingsMetricsPerProfile];
       [self.dispatcher showSettingsFromViewController:self.baseViewController];
       break;
     case PopupMenuActionCloseTab:
@@ -152,7 +157,7 @@ using base::UserMetricsAction;
       break;
     case PopupMenuActionNavigate:
       // No metrics for this item.
-      [self.commandHandler navigateToPageForItem:item];
+      [self.delegate navigateToPageForItem:item];
       break;
     case PopupMenuActionVoiceSearch:
       RecordAction(UserMetricsAction("MobileMenuVoiceSearch"));
@@ -181,7 +186,7 @@ using base::UserMetricsAction;
       ClipboardRecentContent* clipboardRecentContent =
           ClipboardRecentContent::GetInstance();
       clipboardRecentContent->GetRecentImageFromClipboard(
-          base::BindOnce(^(base::Optional<gfx::Image> image) {
+          base::BindOnce(^(absl::optional<gfx::Image> image) {
             // Sometimes, the image can be nil even though the clipboard said it
             // had an image. This most likely a UIKit issue, but practice
             // defensive coding.
@@ -197,7 +202,7 @@ using base::UserMetricsAction;
       ClipboardRecentContent* clipboardRecentContent =
           ClipboardRecentContent::GetInstance();
       clipboardRecentContent->GetRecentTextFromClipboard(
-          base::BindOnce(^(base::Optional<base::string16> optional_text) {
+          base::BindOnce(^(absl::optional<std::u16string> optional_text) {
             if (!optional_text) {
               return;
             }
@@ -212,7 +217,7 @@ using base::UserMetricsAction;
       ClipboardRecentContent* clipboardRecentContent =
           ClipboardRecentContent::GetInstance();
       clipboardRecentContent->GetRecentURLFromClipboard(
-          base::BindOnce(^(base::Optional<GURL> optional_url) {
+          base::BindOnce(^(absl::optional<GURL> optional_url) {
             if (!optional_url) {
               return;
             }

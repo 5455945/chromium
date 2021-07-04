@@ -26,8 +26,10 @@
 #include "base/memory/ptr_util.h"
 #include "base/numerics/clamped_math.h"
 #include "third_party/blink/renderer/core/css/counter_style.h"
+#include "third_party/blink/renderer/core/css/style_engine.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
+#include "third_party/blink/renderer/core/dom/flat_tree_traversal.h"
 #include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/dom/pseudo_element.h"
 #include "third_party/blink/renderer/core/html/html_olist_element.h"
@@ -251,7 +253,7 @@ bool FindPlaceForCounter(LayoutObject& counter_owner,
   Element* current_element =
       PreviousInPreOrderRespectingContainment(*counter_owner_element);
   previous_sibling = nullptr;
-  scoped_refptr<CounterNode> previous_sibling_protector = nullptr;
+  scoped_refptr<CounterNode> previous_sibling_protector;
   while (current_element) {
     CounterNode* current_counter = nullptr;
     if (LayoutObject* current_layout_object =
@@ -403,8 +405,8 @@ CounterNode* MakeCounterNodeIfNeeded(LayoutObject& object,
       !always_create_counter)
     return nullptr;
 
-  scoped_refptr<CounterNode> new_parent = nullptr;
-  scoped_refptr<CounterNode> new_previous_sibling = nullptr;
+  scoped_refptr<CounterNode> new_parent;
+  scoped_refptr<CounterNode> new_previous_sibling;
   scoped_refptr<CounterNode> new_node =
       CounterNode::Create(object, type_mask, value);
 
@@ -412,8 +414,8 @@ CounterNode* MakeCounterNodeIfNeeded(LayoutObject& object,
     // Find the place where we would've inserted the new node if it was a
     // non-reset node. We have to move every non-reset sibling after the
     // insertion point to a child of the new node.
-    scoped_refptr<CounterNode> old_parent = nullptr;
-    scoped_refptr<CounterNode> old_previous_sibling = nullptr;
+    scoped_refptr<CounterNode> old_parent;
+    scoped_refptr<CounterNode> old_previous_sibling;
     if (FindPlaceForCounter(object, identifier, false, old_parent,
                             old_previous_sibling)) {
       if (!object.IsDescendantOf(&old_parent->Owner())) {
@@ -485,12 +487,9 @@ CounterNode* MakeCounterNodeIfNeeded(LayoutObject& object,
 String GenerateCounterText(const CounterStyle* counter_style,
                            EListStyleType deprecated_list_style_type,
                            int value) {
-  if (RuntimeEnabledFeatures::CSSAtRuleCounterStyleEnabled()) {
-    if (!counter_style)
-      return g_empty_string;
-    return counter_style->GenerateRepresentation(value);
-  }
-  return list_marker_text::GetText(deprecated_list_style_type, value);
+  if (!counter_style)
+    return g_empty_string;
+  return counter_style->GenerateRepresentation(value);
 }
 
 }  // namespace
@@ -599,17 +598,13 @@ scoped_refptr<StringImpl> LayoutCounter::OriginalText() const {
   int value = ValueForText(child);
   const CounterStyle* counter_style = nullptr;
   EListStyleType list_style = EListStyleType::kNone;
-  if (RuntimeEnabledFeatures::CSSAtRuleCounterStyleEnabled()) {
-    // Note: CSS3 spec doesn't allow 'none' but CSS2.1 allows it. We currently
-    // allow it for backward compatibility.
-    // See https://github.com/w3c/csswg-drafts/issues/5795 for details.
-    if (counter_->ListStyle() != "none") {
-      counter_style =
-          &GetDocument().GetStyleEngine().FindCounterStyleAcrossScopes(
-              counter_->ListStyle(), counter_->GetTreeScope());
-    }
-  } else {
-    list_style = counter_->ToDeprecatedListStyleTypeEnum();
+  // Note: CSS3 spec doesn't allow 'none' but CSS2.1 allows it. We currently
+  // allow it for backward compatibility.
+  // See https://github.com/w3c/csswg-drafts/issues/5795 for details.
+  if (counter_->ListStyle() != "none") {
+    counter_style =
+        &GetDocument().GetStyleEngine().FindCounterStyleAcrossScopes(
+            counter_->ListStyle(), counter_->GetTreeScope());
   }
   String text = GenerateCounterText(counter_style, list_style, value);
   // If the separator exists, we need to append all of the parent values as well,
@@ -741,8 +736,8 @@ static void UpdateCounters(LayoutObject& layout_object) {
       MakeCounterNodeIfNeeded(layout_object, it->key, false);
       continue;
     }
-    scoped_refptr<CounterNode> new_parent = nullptr;
-    scoped_refptr<CounterNode> new_previous_sibling = nullptr;
+    scoped_refptr<CounterNode> new_parent;
+    scoped_refptr<CounterNode> new_previous_sibling;
 
     FindPlaceForCounter(layout_object, it->key, node->HasResetType(),
                         new_parent, new_previous_sibling);

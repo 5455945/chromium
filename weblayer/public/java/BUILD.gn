@@ -5,7 +5,6 @@
 import("//build/config/android/config.gni")
 import("//build/config/android/rules.gni")
 import("//build/util/process_version.gni")
-import("//device/vr/buildflags/buildflags.gni")
 
 _version_constants_java_file =
     "$target_gen_dir/org/chromium/weblayer/WebLayerClientVersionConstants.java"
@@ -41,8 +40,9 @@ android_library("java") {
     "org/chromium/weblayer/BroadcastReceiver.java",
     "org/chromium/weblayer/Browser.java",
     "org/chromium/weblayer/BrowserControlsOffsetCallback.java",
-    "org/chromium/weblayer/BrowserEmbeddingMode.java",
+    "org/chromium/weblayer/BrowserEmbeddabilityMode.java",
     "org/chromium/weblayer/BrowserFragment.java",
+    "org/chromium/weblayer/BrowserFragmentCreateParams.java",
     "org/chromium/weblayer/BrowserRestoreCallback.java",
     "org/chromium/weblayer/BrowsingDataType.java",
     "org/chromium/weblayer/Callback.java",
@@ -61,6 +61,8 @@ android_library("java") {
     "org/chromium/weblayer/DownloadState.java",
     "org/chromium/weblayer/ErrorPage.java",
     "org/chromium/weblayer/ErrorPageCallback.java",
+    "org/chromium/weblayer/ExternalIntentInIncognitoCallback.java",
+    "org/chromium/weblayer/ExternalIntentInIncognitoUserDecision.java",
     "org/chromium/weblayer/FaviconCallback.java",
     "org/chromium/weblayer/FaviconFetcher.java",
     "org/chromium/weblayer/FindInPageCallback.java",
@@ -86,7 +88,9 @@ android_library("java") {
     "org/chromium/weblayer/NewTabCallback.java",
     "org/chromium/weblayer/NewTabType.java",
     "org/chromium/weblayer/ObserverList.java",
+    "org/chromium/weblayer/OpenUrlCallback.java",
     "org/chromium/weblayer/Page.java",
+    "org/chromium/weblayer/PaymentDetailsUpdateServiceWrapper.java",
     "org/chromium/weblayer/PrerenderController.java",
     "org/chromium/weblayer/Profile.java",
     "org/chromium/weblayer/RemoteFragment.java",

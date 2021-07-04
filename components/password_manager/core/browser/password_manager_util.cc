@@ -11,10 +11,10 @@
 
 #include "base/bind.h"
 #include "base/containers/contains.h"
+#include "base/containers/cxx20_erase.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/ranges/algorithm.h"
-#include "base/stl_util.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/autofill/core/browser/logging/log_manager.h"
@@ -24,6 +24,7 @@
 #include "components/password_manager/core/browser/credentials_cleaner.h"
 #include "components/password_manager/core/browser/credentials_cleaner_runner.h"
 #include "components/password_manager/core/browser/http_credentials_cleaner.h"
+#include "components/password_manager/core/browser/old_google_credentials_cleaner.h"
 #include "components/password_manager/core/browser/password_feature_manager.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_generation_frame_helper.h"
@@ -70,13 +71,13 @@ password_manager::SyncState GetPasswordSyncState(
     const syncer::SyncService* sync_service) {
   if (!sync_service ||
       !sync_service->GetActiveDataTypes().Has(syncer::PASSWORDS)) {
-    return password_manager::NOT_SYNCING;
+    return password_manager::SyncState::kNotSyncing;
   }
 
   if (sync_service->IsSyncFeatureActive()) {
-    return sync_service->GetUserSettings()->IsUsingSecondaryPassphrase()
-               ? password_manager::SYNCING_WITH_CUSTOM_PASSPHRASE
-               : password_manager::SYNCING_NORMAL_ENCRYPTION;
+    return sync_service->GetUserSettings()->IsUsingExplicitPassphrase()
+               ? password_manager::SyncState::kSyncingWithCustomPassphrase
+               : password_manager::SyncState::kSyncingNormalEncryption;
   }
 
   DCHECK(base::FeatureList::IsEnabled(
@@ -84,12 +85,7 @@ password_manager::SyncState GetPasswordSyncState(
   // Account passwords are enabled only for users with normal encryption at
   // the moment. Data types won't become active for non-sync users with custom
   // passphrase.
-  return password_manager::ACCOUNT_PASSWORDS_ACTIVE_NORMAL_ENCRYPTION;
-}
-
-bool IsSyncingWithNormalEncryption(const syncer::SyncService* sync_service) {
-  return GetPasswordSyncState(sync_service) ==
-         password_manager::SYNCING_NORMAL_ENCRYPTION;
+  return password_manager::SyncState::kAccountPasswordsActiveNormalEncryption;
 }
 
 void TrimUsernameOnlyCredentials(
@@ -190,6 +186,12 @@ void RemoveUselessCredentials(
   }
 #endif  // !defined(OS_IOS)
 
+  // TODO(crbug.com/450621): Remove this when enough number of clients switch
+  // to the new version of Chrome.
+  cleaning_tasks_runner->MaybeAddCleaningTask(
+      std::make_unique<password_manager::OldGoogleCredentialCleaner>(store,
+                                                                     prefs));
+
   if (cleaning_tasks_runner->HasPendingTasks()) {
     // The runner will delete itself once the clearing tasks are done, thus we
     // are releasing ownership here.
@@ -239,7 +241,7 @@ void FindBestMatches(
   std::sort(non_federated_same_scheme->begin(),
             non_federated_same_scheme->end(), IsBetterMatch);
 
-  std::set<std::pair<PasswordForm::Store, base::string16>> store_usernames;
+  std::set<std::pair<PasswordForm::Store, std::u16string>> store_usernames;
   for (const auto* match : *non_federated_same_scheme) {
     auto store_username =
         std::make_pair(match->in_store, match->username_value);
@@ -256,7 +258,7 @@ void FindBestMatches(
 
 const PasswordForm* FindFormByUsername(
     const std::vector<const PasswordForm*>& forms,
-    const base::string16& username_value) {
+    const std::u16string& username_value) {
   for (const PasswordForm* form : forms) {
     if (form->username_value == username_value)
       return form;
@@ -314,7 +316,7 @@ const PasswordForm* GetMatchForUpdating(
 }
 
 PasswordForm MakeNormalizedBlocklistedForm(
-    password_manager::PasswordStore::FormDigest digest) {
+    password_manager::PasswordFormDigest digest) {
   PasswordForm result;
   result.blocked_by_user = true;
   result.scheme = std::move(digest.scheme);

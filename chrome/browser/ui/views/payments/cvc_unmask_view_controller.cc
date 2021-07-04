@@ -32,6 +32,8 @@
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/models/image_model.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/views/border.h"
@@ -40,6 +42,32 @@
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/layout/grid_layout.h"
+
+namespace {
+
+class ErrorLabelView : public views::Label {
+ public:
+  METADATA_HEADER(ErrorLabelView);
+
+  ErrorLabelView() {
+    SetID(static_cast<int>(payments::DialogViewID::CVC_ERROR_LABEL));
+    SetMultiLine(true);
+    SetHorizontalAlignment(gfx::ALIGN_LEFT);
+    SetVisible(false);
+  }
+
+  // views::View:
+  void OnThemeChanged() override {
+    Label::OnThemeChanged();
+    SetEnabledColor(GetNativeTheme()->GetSystemColor(
+        ui::NativeTheme::kColorId_AlertSeverityHigh));
+  }
+};
+
+BEGIN_METADATA(ErrorLabelView, views::Label)
+END_METADATA
+
+}  // namespace
 
 namespace payments {
 
@@ -54,11 +82,10 @@ CvcUnmaskViewController::CvcUnmaskViewController(
     : PaymentRequestSheetController(spec, state, dialog),
       year_combobox_model_(credit_card.expiration_year()),
       credit_card_(credit_card),
-      frame_routing_id_(
-          web_contents->GetMainFrame()->GetGlobalFrameRoutingId()),
+      frame_routing_id_(web_contents->GetMainFrame()->GetGlobalId()),
       payments_client_(
-          content::BrowserContext::GetDefaultStoragePartition(
-              web_contents->GetBrowserContext())
+          web_contents->GetBrowserContext()
+              ->GetDefaultStoragePartition()
               ->GetURLLoaderFactoryForBrowserProcess(),
           IdentityManagerFactory::GetForProfile(
               Profile::FromBrowserContext(web_contents->GetBrowserContext())
@@ -123,12 +150,16 @@ void CvcUnmaskViewController::OnUnmaskVerificationResult(
       DisplayError(l10n_util::GetStringUTF16(
           IDS_AUTOFILL_CARD_UNMASK_PROMPT_ERROR_NETWORK));
       break;
+    case autofill::AutofillClient::VCN_RETRIEVAL_TRY_AGAIN_FAILURE:
+    case autofill::AutofillClient::VCN_RETRIEVAL_PERMANENT_FAILURE:
+      NOTREACHED();
+      break;
   }
 
   dialog()->HideProcessingSpinner();
 }
 
-base::string16 CvcUnmaskViewController::GetSheetTitle() {
+std::u16string CvcUnmaskViewController::GetSheetTitle() {
   return l10n_util::GetStringFUTF16(IDS_AUTOFILL_CARD_UNMASK_PROMPT_TITLE,
                                     credit_card_.NetworkAndLastFourDigits());
 }
@@ -246,29 +277,20 @@ void CvcUnmaskViewController::FillContentView(views::View* content_view) {
   layout->StartRow(views::GridLayout::kFixedSize, 2);
   auto error_icon = std::make_unique<views::ImageView>();
   error_icon->SetID(static_cast<int>(DialogViewID::CVC_ERROR_ICON));
-  error_icon->SetImage(
-      gfx::CreateVectorIcon(vector_icons::kWarningIcon, 16,
-                            error_icon->GetNativeTheme()->GetSystemColor(
-                                ui::NativeTheme::kColorId_AlertSeverityHigh)));
+  error_icon->SetImage(ui::ImageModel::FromVectorIcon(
+      vector_icons::kWarningIcon, ui::NativeTheme::kColorId_AlertSeverityHigh,
+      16));
   error_icon->SetVisible(false);
   layout->AddView(std::move(error_icon));
 
-  auto error_label = std::make_unique<views::Label>();
-  error_label->SetID(static_cast<int>(DialogViewID::CVC_ERROR_LABEL));
-  error_label->SetMultiLine(true);
-  error_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-  error_label->SetEnabledColor(error_label->GetNativeTheme()->GetSystemColor(
-      ui::NativeTheme::kColorId_AlertSeverityHigh));
-  error_label->SetVisible(false);
-
-  layout->AddView(std::move(error_label));
+  layout->AddView(std::make_unique<ErrorLabelView>());
 }
 
-base::string16 CvcUnmaskViewController::GetPrimaryButtonLabel() {
+std::u16string CvcUnmaskViewController::GetPrimaryButtonLabel() {
   return l10n_util::GetStringUTF16(IDS_CONFIRM);
 }
 
-views::Button::PressedCallback
+PaymentRequestSheetController::ButtonCallback
 CvcUnmaskViewController::GetPrimaryButtonCallback() {
   return base::BindRepeating(&CvcUnmaskViewController::CvcConfirmed,
                              base::Unretained(this));
@@ -288,7 +310,7 @@ bool CvcUnmaskViewController::ShouldShowSecondaryButton() {
 }
 
 void CvcUnmaskViewController::CvcConfirmed() {
-  const base::string16& cvc = cvc_field_->GetText();
+  const std::u16string& cvc = cvc_field_->GetText();
   if (unmask_delegate_) {
     autofill::CardUnmaskDelegate::UserProvidedUnmaskDetails details;
     details.cvc = cvc;
@@ -307,7 +329,7 @@ void CvcUnmaskViewController::CvcConfirmed() {
   }
 }
 
-void CvcUnmaskViewController::DisplayError(base::string16 error) {
+void CvcUnmaskViewController::DisplayError(std::u16string error) {
   views::Label* error_label = static_cast<views::Label*>(
       dialog()->GetViewByID(static_cast<int>(DialogViewID::CVC_ERROR_LABEL)));
   error_label->SetText(error);
@@ -319,7 +341,7 @@ void CvcUnmaskViewController::DisplayError(base::string16 error) {
 }
 
 void CvcUnmaskViewController::UpdatePayButtonState() {
-  base::string16 trimmed_text;
+  std::u16string trimmed_text;
   base::TrimWhitespace(cvc_field_->GetText(), base::TRIM_ALL, &trimmed_text);
   bool cvc_valid = autofill::IsValidCreditCardSecurityCode(
       trimmed_text, credit_card_.network());
@@ -384,7 +406,7 @@ void CvcUnmaskViewController::BackButtonPressed() {
 
 void CvcUnmaskViewController::ContentsChanged(
     views::Textfield* sender,
-    const base::string16& new_contents) {
+    const std::u16string& new_contents) {
   UpdatePayButtonState();
 }
 

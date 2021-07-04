@@ -105,8 +105,8 @@ void ProximityAuthProfilePrefManager::SyncPrefsToLocalState() {
 
   DictionaryPrefUpdate update(local_state_,
                               prefs::kEasyUnlockLocalStateUserPrefs);
-  update->SetWithoutPathExpansion(account_id_.GetUserEmail(),
-                                  std::move(user_prefs_dict));
+  update->SetKey(account_id_.GetUserEmail(),
+                 base::Value::FromUniquePtrValue(std::move(user_prefs_dict)));
 }
 
 bool ProximityAuthProfilePrefManager::IsEasyUnlockAllowed() const {
@@ -195,10 +195,9 @@ bool ProximityAuthProfilePrefManager::HasShownLoginDisabledMessage() const {
     return false;
   }
 
-  bool pref_value = false;
-  current_user_prefs->GetBooleanWithoutPathExpansion(
-      prefs::kProximityAuthHasShownLoginDisabledMessage, &pref_value);
-  return pref_value;
+  return current_user_prefs
+      ->FindBoolKey(prefs::kProximityAuthHasShownLoginDisabledMessage)
+      .value_or(false);
 }
 
 void ProximityAuthProfilePrefManager::OnFeatureStatesChanged(

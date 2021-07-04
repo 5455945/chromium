@@ -127,6 +127,9 @@ component("message_center") {
         frameworks = [ "Foundation.framework" ]
       }
     }
+    if (is_chromeos_ash) {
+      deps += [ "//ash/constants" ]
+    }
   } else {
     # Notification service disabled.
     sources = [ "dummy_message_center.cc" ]
@@ -188,6 +191,7 @@ if (enable_message_center) {
       "//ui/gl",
       "//ui/gl:test_support",
       "//ui/message_center/public/cpp",
+      "//ui/native_theme",
       "//ui/resources",
       "//ui/resources:ui_test_pak",
       "//url",

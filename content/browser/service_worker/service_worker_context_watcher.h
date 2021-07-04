@@ -16,7 +16,10 @@
 #include "content/browser/service_worker/service_worker_context_core_observer.h"
 #include "content/browser/service_worker/service_worker_info.h"
 #include "content/common/content_export.h"
-#include "third_party/blink/public/mojom/service_worker/service_worker_container_type.mojom.h"
+
+namespace blink {
+class StorageKey;
+}  // namespace blink
 
 namespace content {
 
@@ -66,6 +69,7 @@ class CONTENT_EXPORT ServiceWorkerContextWatcher
   void SendRegistrationInfo(
       int64_t registration_id,
       const GURL& scope,
+      const blink::StorageKey& key,
       ServiceWorkerRegistrationInfo::DeleteFlag delete_flag);
   void SendVersionInfo(const ServiceWorkerVersionInfo& version);
 
@@ -128,7 +132,7 @@ class CONTENT_EXPORT ServiceWorkerContextWatcher
   WorkerErrorReportedCallback error_callback_;
   // Should be used on UI thread only.
   bool stop_called_ = false;
-  // Should be used on IO thread only.
+  // Should be used on UI thread only.
   bool is_stopped_ = false;
 };
 

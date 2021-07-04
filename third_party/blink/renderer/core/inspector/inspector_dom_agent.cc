@@ -47,6 +47,7 @@
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/dom/dom_node_ids.h"
 #include "third_party/blink/renderer/core/dom/element.h"
+#include "third_party/blink/renderer/core/dom/flat_tree_traversal.h"
 #include "third_party/blink/renderer/core/dom/node.h"
 #include "third_party/blink/renderer/core/dom/pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
@@ -63,8 +64,6 @@
 #include "third_party/blink/renderer/core/html/html_link_element.h"
 #include "third_party/blink/renderer/core/html/html_slot_element.h"
 #include "third_party/blink/renderer/core/html/html_template_element.h"
-#include "third_party/blink/renderer/core/html/imports/html_import_child.h"
-#include "third_party/blink/renderer/core/html/imports/html_import_loader.h"
 #include "third_party/blink/renderer/core/html/portal/document_portals.h"
 #include "third_party/blink/renderer/core/html/portal/html_portal_element.h"
 #include "third_party/blink/renderer/core/html/portal/portal_contents.h"
@@ -185,6 +184,8 @@ protocol::DOM::PseudoType InspectorDOMAgent::ProtocolPseudoElementType(
       return protocol::DOM::PseudoTypeEnum::SpellingError;
     case kPseudoIdGrammarError:
       return protocol::DOM::PseudoTypeEnum::GrammarError;
+    case kPseudoIdHighlight:
+      return protocol::DOM::PseudoTypeEnum::Highlight;
     case kPseudoIdFirstLineInherited:
       return protocol::DOM::PseudoTypeEnum::FirstLineInherited;
     case kPseudoIdScrollbar:
@@ -346,11 +347,6 @@ void InspectorDOMAgent::Unbind(Node* node) {
       Unbind(element->GetPseudoElement(kPseudoIdAfter));
     if (element->GetPseudoElement(kPseudoIdMarker))
       Unbind(element->GetPseudoElement(kPseudoIdMarker));
-
-    if (auto* link_element = DynamicTo<HTMLLinkElement>(*element)) {
-      if (link_element->IsImport() && link_element->import())
-        Unbind(link_element->import());
-    }
   }
 
   NotifyWillRemoveDOMNode(node);
@@ -558,7 +554,7 @@ Response InspectorDOMAgent::getNodesForSubtreeByStyle(
 
   HashMap<CSSPropertyID, HashSet<String>> properties;
   for (const auto& style : *computed_styles) {
-    base::Optional<CSSPropertyName> property_name = CSSPropertyName::From(
+    absl::optional<CSSPropertyName> property_name = CSSPropertyName::From(
         document_->GetExecutionContext(), style->getName());
     if (!property_name)
       return Response::InvalidParams("Invalid CSS property name");
@@ -604,7 +600,7 @@ Response InspectorDOMAgent::getFlattenedDocument(
   if (sanitized_depth == -1)
     sanitized_depth = INT_MAX;
 
-  nodes->reset(new protocol::Array<protocol::DOM::Node>());
+  *nodes = std::make_unique<protocol::Array<protocol::DOM::Node>>();
   (*nodes)->emplace_back(BuildObjectForNode(
       document_.Get(), sanitized_depth, pierce.fromMaybe(false),
       document_node_to_id_map_.Get(), nodes->get()));
@@ -1525,6 +1521,24 @@ Response InspectorDOMAgent::requestNode(const String& object_id, int* node_id) {
   return Response::Success();
 }
 
+Response InspectorDOMAgent::getContainerForNode(
+    int node_id,
+    protocol::Maybe<String> container_name,
+    Maybe<int>* container_node_id) {
+  Element* element = nullptr;
+  Response response = AssertElement(node_id, element);
+  if (!response.IsSuccess())
+    return response;
+
+  element->GetDocument().UpdateStyleAndLayoutTreeForNode(element);
+  StyleResolver& style_resolver = element->GetDocument().GetStyleResolver();
+  Element* container = style_resolver.FindContainerForElement(
+      element, AtomicString(container_name.fromMaybe(g_null_atom)));
+  if (container)
+    *container_node_id = PushNodePathToFrontend(container);
+  return Response::Success();
+}
+
 // static
 String InspectorDOMAgent::DocumentURLString(Document* document) {
   if (!document || document->Url().IsNull())
@@ -1550,6 +1564,21 @@ protocol::DOM::ShadowRootType InspectorDOMAgent::GetShadowRootType(
   }
   NOTREACHED();
   return protocol::DOM::ShadowRootTypeEnum::UserAgent;
+}
+
+// static
+protocol::DOM::CompatibilityMode
+InspectorDOMAgent::GetDocumentCompatibilityMode(Document* document) {
+  switch (document->GetCompatibilityMode()) {
+    case Document::CompatibilityMode::kQuirksMode:
+      return protocol::DOM::CompatibilityModeEnum::QuirksMode;
+    case Document::CompatibilityMode::kLimitedQuirksMode:
+      return protocol::DOM::CompatibilityModeEnum::LimitedQuirksMode;
+    case Document::CompatibilityMode::kNoQuirksMode:
+      return protocol::DOM::CompatibilityModeEnum::NoQuirksMode;
+  }
+  NOTREACHED();
+  return protocol::DOM::CompatibilityModeEnum::NoQuirksMode;
 }
 
 std::unique_ptr<protocol::DOM::Node> InspectorDOMAgent::BuildObjectForNode(
@@ -1623,14 +1652,8 @@ std::unique_ptr<protocol::DOM::Node> InspectorDOMAgent::BuildObjectForNode(
       force_push_children = true;
     }
 
-    if (auto* link_element = DynamicTo<HTMLLinkElement>(*element)) {
-      if (link_element->IsImport() && link_element->import() &&
-          InnerParentNode(link_element->import()) == link_element) {
-        value->setImportedDocument(BuildObjectForNode(
-            link_element->import(), 0, pierce, nodes_map, flatten_result));
-      }
+    if (auto* link_element = DynamicTo<HTMLLinkElement>(*element))
       force_push_children = true;
-    }
 
     if (auto* template_element = DynamicTo<HTMLTemplateElement>(*element)) {
       // The inspector should not try to access the .content() property of
@@ -1665,6 +1688,7 @@ std::unique_ptr<protocol::DOM::Node> InspectorDOMAgent::BuildObjectForNode(
     value->setDocumentURL(DocumentURLString(document));
     value->setBaseURL(DocumentBaseURLString(document));
     value->setXmlVersion(document->xmlVersion());
+    value->setCompatibilityMode(GetDocumentCompatibilityMode(document));
   } else if (auto* doc_type = DynamicTo<DocumentType>(node)) {
     value->setPublicId(doc_type->publicId());
     value->setSystemId(doc_type->systemId());
@@ -1836,8 +1860,6 @@ unsigned InspectorDOMAgent::InnerChildNodeCount(Node* node) {
 // static
 Node* InspectorDOMAgent::InnerParentNode(Node* node) {
   if (auto* document = DynamicTo<Document>(node)) {
-    if (HTMLImportLoader* loader = document->ImportLoader())
-      return loader->FirstImport()->Link();
     return document->LocalOwner();
   }
   return node->ParentOrShadowHostNode();
@@ -1875,13 +1897,6 @@ void InspectorDOMAgent::CollectNodes(
     ShadowRoot* root = element->GetShadowRoot();
     if (pierce && root)
       CollectNodes(root, depth, pierce, filter, result);
-
-    if (auto* link_element = DynamicTo<HTMLLinkElement>(*element)) {
-      if (link_element->IsImport() && link_element->import() &&
-          InnerParentNode(link_element->import()) == link_element) {
-        CollectNodes(link_element->import(), depth, pierce, filter, result);
-      }
-    }
   }
 
   for (Node* child = InnerFirstChild(node); child;
@@ -1934,6 +1949,19 @@ void InspectorDOMAgent::DidCommitLoad(LocalFrame*, DocumentLoader* loader) {
   }
 
   SetDocument(inspected_frame->GetDocument());
+}
+
+void InspectorDOMAgent::DidRestoreFromBackForwardCache(LocalFrame* frame) {
+  if (!enabled_.Get())
+    return;
+  DCHECK_EQ(frame, inspected_frames_->Root());
+  Document* document = frame->GetDocument();
+  DCHECK_EQ(document_, document);
+  // We don't load a new document for BFCache navigations, so |document_|
+  // doesn't actually update (the agent is initialized with the restored main
+  // document), but the frontend doesn't know this yet, and we need to notify
+  // it.
+  GetFrontend()->documentUpdated();
 }
 
 void InspectorDOMAgent::DidInsertDOMNode(Node* node) {

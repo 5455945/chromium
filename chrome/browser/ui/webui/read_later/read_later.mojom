@@ -35,14 +35,22 @@ interface PageHandler {
   // Get unread and read read later entries.
   GetReadLaterEntries() => (ReadLaterEntriesByStatus entries);
 
-  // Open a saved read later entry.
-  OpenSavedEntry(url.mojom.Url url);
+  // Open a saved read later entry and mark as read if needed. Reading list
+  // items are marked as read when opened, while Bookmark links do not need to
+  // be mark as read when opened.
+  OpenURL(url.mojom.Url url, bool mark_as_read);
 
   // Updates a read later entry's read status.
   UpdateReadStatus(url.mojom.Url url, bool read);
 
+  // Adds the current tab to the reading list.
+  AddCurrentTab();
+
   // Removes a read later entry.
   RemoveEntry(url.mojom.Url url);
+
+  // Shows a context menu for a read later entry.
+  ShowContextMenuForURL(url.mojom.Url url, int32 x, int32 y);
 
   // Notify the backend that the UI is ready to be shown.
   ShowUI();

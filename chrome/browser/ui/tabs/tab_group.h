@@ -10,11 +10,12 @@
 
 #include <map>
 #include <memory>
+#include <string>
 #include <vector>
 
-#include "base/strings/string16.h"
 #include "components/tab_groups/tab_group_id.h"
 #include "components/tab_groups/tab_group_visual_data.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/range/range.h"
 
 class TabGroupController;
@@ -47,7 +48,7 @@ class TabGroup {
   // "Google Search and 3 other tabs". Used for accessibly describing the group,
   // as well as for displaying in context menu items and tooltips when the group
   // is unnamed.
-  base::string16 GetContentString() const;
+  std::u16string GetContentString() const;
 
   // Updates internal bookkeeping for group contents, and notifies the
   // controller that contents changed when a tab is added.
@@ -70,12 +71,12 @@ class TabGroup {
   // Gets the model index of this group's first tab, or nullopt if it is
   // empty. Similar to ListTabs() it traverses through TabStripModel's
   // tabs. Unlike ListTabs() this is always safe to call.
-  base::Optional<int> GetFirstTab() const;
+  absl::optional<int> GetFirstTab() const;
 
   // Gets the model index of this group's last tab, or nullopt if it is
   // empty. Similar to ListTabs() it traverses through TabStripModel's
   // tabs. Unlike ListTabs() this is always safe to call.
-  base::Optional<int> GetLastTab() const;
+  absl::optional<int> GetLastTab() const;
 
   // Returns the range of tab model indices this group contains. Notably
   // does not rely on the TabGroup's internal metadata, but rather

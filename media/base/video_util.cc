@@ -14,7 +14,6 @@
 #include "base/numerics/safe_conversions.h"
 #include "base/numerics/safe_math.h"
 #include "gpu/GLES2/gl2extchromium.h"
-#include "gpu/command_buffer/client/gpu_memory_buffer_manager.h"
 #include "gpu/command_buffer/client/raster_interface.h"
 #include "media/base/status_codes.h"
 #include "media/base/video_frame.h"
@@ -257,100 +256,7 @@ scoped_refptr<VideoFrame> ReadbackTextureBackedFrameToMemorySyncOOP(
   return result;
 }
 
-scoped_refptr<VideoFrame> ConvertToMemoryMappedFrameDXGI(
-    scoped_refptr<VideoFrame> video_frame,
-    gpu::GpuMemoryBufferManager* gpu_memory_buffer_manager,
-    media::SharedMemoryPool* pool) {
-  DCHECK_EQ(video_frame->format(), PIXEL_FORMAT_NV12);
-
-  // TODO(crbug.com/1181292): change to DCHECK once all the users of
-  // ConvertToMemoryMappedFrame can provide the required parameters.
-  if (!gpu_memory_buffer_manager || !pool)
-    return nullptr;
-
-  auto handle = pool->MaybeAllocateBuffer(VideoFrame::AllocationSize(
-      video_frame->format(), video_frame->coded_size()));
-  if (!handle) {
-    DLOG(ERROR) << "Failed to allocate shared memory";
-    return nullptr;
-  }
-
-  base::UnsafeSharedMemoryRegion* shared_memory = handle->GetRegion();
-  auto* gmb = video_frame->GetGpuMemoryBuffer();
-  bool converted = gpu_memory_buffer_manager->CopyGpuMemoryBufferSync(
-      gmb->CloneHandle(), shared_memory->Duplicate());
-  if (!converted) {
-    DLOG(ERROR) << "Failed to copy DXGI buffer to memory";
-    return nullptr;
-  }
-  auto* mapping = handle->GetMapping();
-
-  // NV12 always has 2 planes.
-  uint8_t* src_plane0 =
-      const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(mapping->memory()));
-  uint8_t* src_plane1 =
-      src_plane0 + video_frame->row_bytes(0) * video_frame->rows(0);
-
-  auto memory_frame = VideoFrame::WrapExternalYuvData(
-      video_frame->format(), video_frame->coded_size(),
-      video_frame->visible_rect(), video_frame->natural_size(), gmb->stride(0),
-      gmb->stride(1), src_plane0, src_plane1, video_frame->timestamp());
-  if (!memory_frame) {
-    return nullptr;
-  }
-
-  memory_frame->BackWithSharedMemory(shared_memory);
-  memory_frame->set_color_space(video_frame->ColorSpace());
-  memory_frame->metadata().MergeMetadataFrom(video_frame->metadata());
-
-  // Hold onto the shared memory holder until the frame is destroyed.
-  memory_frame->AddDestructionObserver(base::BindOnce(
-      base::DoNothing::Once<
-          std::unique_ptr<media::SharedMemoryPool::SharedMemoryHandle>>(),
-      std::move(handle)));
-  return memory_frame;
-}
-
 }  // namespace
-
-double GetPixelAspectRatio(const gfx::Rect& visible_rect,
-                           const gfx::Size& natural_size) {
-  double visible_width = visible_rect.width();
-  double visible_height = visible_rect.height();
-  double natural_width = natural_size.width();
-  double natural_height = natural_size.height();
-  return (visible_height * natural_width) / (visible_width * natural_height);
-}
-
-gfx::Size GetNaturalSize(const gfx::Rect& visible_rect,
-                         double pixel_aspect_ratio) {
-  // TODO(sandersd): Also handle conversion back to integers overflowing.
-  if (!std::isfinite(pixel_aspect_ratio) || pixel_aspect_ratio <= 0.0)
-    return gfx::Size();
-
-  // The HTML spec requires that we always grow a dimension to match aspect
-  // ratio, rather than modify just the width:
-  // github.com/whatwg/html/commit/2e94aa64fcf9adbd2f70d8c2aecd192c8678e298
-  if (pixel_aspect_ratio >= 1.0) {
-    return gfx::Size(std::round(visible_rect.width() * pixel_aspect_ratio),
-                     visible_rect.height());
-  }
-
-  return gfx::Size(visible_rect.width(),
-                   std::round(visible_rect.height() / pixel_aspect_ratio));
-}
-
-gfx::Size GetNaturalSize(const gfx::Size& visible_size,
-                         int aspect_ratio_numerator,
-                         int aspect_ratio_denominator) {
-  if (aspect_ratio_denominator <= 0 || aspect_ratio_numerator <= 0)
-    return gfx::Size();
-
-  double pixel_aspect_ratio =
-      aspect_ratio_numerator / static_cast<double>(aspect_ratio_denominator);
-
-  return GetNaturalSize(gfx::Rect(visible_size), pixel_aspect_ratio);
-}
 
 void FillYUV(VideoFrame* frame, uint8_t y, uint8_t u, uint8_t v) {
   // Fill the Y plane.
@@ -664,19 +570,11 @@ gfx::Size PadToMatchAspectRatio(const gfx::Size& size,
 }
 
 scoped_refptr<VideoFrame> ConvertToMemoryMappedFrame(
-    scoped_refptr<VideoFrame> video_frame,
-    gpu::GpuMemoryBufferManager* gpu_memory_buffer_manager,
-    media::SharedMemoryPool* pool) {
+    scoped_refptr<VideoFrame> video_frame) {
   DCHECK(video_frame);
   DCHECK(video_frame->HasGpuMemoryBuffer());
 
   auto* gmb = video_frame->GetGpuMemoryBuffer();
-
-  if (gmb->GetType() == gfx::GpuMemoryBufferType::DXGI_SHARED_HANDLE) {
-    return ConvertToMemoryMappedFrameDXGI(video_frame,
-                                          gpu_memory_buffer_manager, pool);
-  }
-
   if (!gmb->Map())
     return nullptr;
 
@@ -1007,29 +905,40 @@ Status ConvertAndScaleFrame(const VideoFrame& src_frame,
       .WithData("dst", dst_frame.AsHumanReadableString());
 }
 
+MEDIA_EXPORT VideoPixelFormat
+VideoPixelFormatFromSkColorType(SkColorType sk_color_type, bool is_opaque) {
+  switch (sk_color_type) {
+    case kRGBA_8888_SkColorType:
+      return is_opaque ? media::PIXEL_FORMAT_XBGR : media::PIXEL_FORMAT_ABGR;
+    case kBGRA_8888_SkColorType:
+      return is_opaque ? media::PIXEL_FORMAT_XRGB : media::PIXEL_FORMAT_ARGB;
+    default:
+      // TODO(crbug.com/1073995): Add F16 support.
+      return media::PIXEL_FORMAT_UNKNOWN;
+  }
+}
+
 scoped_refptr<VideoFrame> CreateFromSkImage(sk_sp<SkImage> sk_image,
                                             const gfx::Rect& visible_rect,
                                             const gfx::Size& natural_size,
-                                            base::TimeDelta timestamp) {
+                                            base::TimeDelta timestamp,
+                                            bool force_opaque) {
   DCHECK(!sk_image->isTextureBacked());
 
-  // TODO(crbug.com/1073995): Add F16 support.
-  auto sk_color_type = sk_image->colorType();
-  if (sk_color_type != kRGBA_8888_SkColorType &&
-      sk_color_type != kBGRA_8888_SkColorType) {
+  // A given SkImage may not exist until it's rasterized.
+  if (sk_image->isLazyGenerated())
+    sk_image = sk_image->makeRasterImage();
+
+  const auto format = VideoPixelFormatFromSkColorType(
+      sk_image->colorType(), sk_image->isOpaque() || force_opaque);
+  if (VideoFrameLayout::NumPlanes(format) != 1) {
+    DLOG(ERROR) << "Invalid SkColorType for CreateFromSkImage";
     return nullptr;
   }
 
   SkPixmap pm;
   const bool peek_result = sk_image->peekPixels(&pm);
   DCHECK(peek_result);
-
-  const auto format =
-      sk_image->isOpaque()
-          ? (sk_color_type == kRGBA_8888_SkColorType ? PIXEL_FORMAT_XBGR
-                                                     : PIXEL_FORMAT_XRGB)
-          : (sk_color_type == kRGBA_8888_SkColorType ? PIXEL_FORMAT_ABGR
-                                                     : PIXEL_FORMAT_ARGB);
 
   auto coded_size = gfx::Size(sk_image->width(), sk_image->height());
   auto layout = VideoFrameLayout::CreateWithStrides(

@@ -27,7 +27,7 @@ OfferNotificationBubbleViews::OfferNotificationBubbleViews(
   SetButtons(ui::DIALOG_BUTTON_OK);
   SetButtonLabel(ui::DIALOG_BUTTON_OK, controller->GetOkButtonLabel());
   set_margins(ChromeLayoutProvider::Get()->GetDialogInsetsForContentType(
-      views::TEXT, views::TEXT));
+      views::DialogContentType::kText, views::DialogContentType::kText));
 }
 
 OfferNotificationBubbleViews::~OfferNotificationBubbleViews() {
@@ -60,8 +60,8 @@ void OfferNotificationBubbleViews::AddedToWidget() {
       std::make_unique<TitleWithIconAndSeparatorView>(GetWindowTitle()));
 }
 
-base::string16 OfferNotificationBubbleViews::GetWindowTitle() const {
-  return controller_ ? controller_->GetWindowTitle() : base::string16();
+std::u16string OfferNotificationBubbleViews::GetWindowTitle() const {
+  return controller_ ? controller_->GetWindowTitle() : std::u16string();
 }
 
 void OfferNotificationBubbleViews::WindowClosing() {

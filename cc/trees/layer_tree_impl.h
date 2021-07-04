@@ -15,7 +15,6 @@
 
 #include "base/containers/flat_set.h"
 #include "base/time/time.h"
-#include "base/values.h"
 #include "cc/base/synced_property.h"
 #include "cc/input/browser_controls_offset_manager.h"
 #include "cc/input/event_listener_properties.h"
@@ -47,6 +46,7 @@ class ContextProvider;
 
 namespace cc {
 
+enum class ActivelyScrollingType;
 class DebugRectHistory;
 class DocumentTransitionRequest;
 class DroppedFrameCounter;
@@ -303,6 +303,7 @@ class CC_EXPORT LayerTreeImpl {
         const_cast<const LayerTreeImpl*>(this)
             ->OverscrollElasticityTransformNode());
   }
+  ElementId OverscrollElasticityEffectElementId() const;
   const TransformNode* PageScaleTransformNode() const;
   TransformNode* PageScaleTransformNode() {
     return const_cast<TransformNode*>(
@@ -707,7 +708,7 @@ class CC_EXPORT LayerTreeImpl {
   void ResetAllChangeTracking();
 
   void HandleTickmarksVisibilityChange();
-  void HandleScrollbarShowRequestsFromMain();
+  void HandleScrollbarShowRequests();
 
   void InvalidateRegionForImages(
       const PaintImageIdFlatSet& images_to_invalidate);
@@ -730,15 +731,19 @@ class CC_EXPORT LayerTreeImpl {
     return host_impl_->IsInSynchronousComposite();
   }
 
+  ActivelyScrollingType GetActivelyScrollingType() const {
+    return host_impl_->GetActivelyScrollingType();
+  }
+
   // These functions are used for plumbing DelegatedInkMetadata from blink
   // through the compositor and into viz via a compositor frame. They should
   // only be called after the JS API |updateInkTrailStartPoint| has been
   // called, which populates the metadata with provided information.
   void set_delegated_ink_metadata(
-      std::unique_ptr<viz::DelegatedInkMetadata> metadata) {
+      std::unique_ptr<gfx::DelegatedInkMetadata> metadata) {
     delegated_ink_metadata_ = std::move(metadata);
   }
-  std::unique_ptr<viz::DelegatedInkMetadata> take_delegated_ink_metadata() {
+  std::unique_ptr<gfx::DelegatedInkMetadata> take_delegated_ink_metadata() {
     return std::move(delegated_ink_metadata_);
   }
 
@@ -748,6 +753,10 @@ class CC_EXPORT LayerTreeImpl {
 
   bool device_viewport_rect_changed() const {
     return device_viewport_rect_changed_;
+  }
+
+  bool viewport_mobile_optimized() const {
+    return host_impl_->viewport_mobile_optimized();
   }
 
   // Add a document transition request from the embedder.
@@ -914,7 +923,7 @@ class CC_EXPORT LayerTreeImpl {
   // Event metrics that are reported back from the main thread.
   EventMetrics::List events_metrics_from_main_thread_;
 
-  std::unique_ptr<viz::DelegatedInkMetadata> delegated_ink_metadata_;
+  std::unique_ptr<gfx::DelegatedInkMetadata> delegated_ink_metadata_;
 
   // Document transition requests to be transferred to Viz.
   std::vector<std::unique_ptr<DocumentTransitionRequest>>

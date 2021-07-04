@@ -110,8 +110,12 @@ void DocumentAnimations::UpdateAnimationTimingIfNeeded() {
 
 void DocumentAnimations::UpdateAnimations(
     DocumentLifecycle::LifecycleState required_lifecycle_state,
-    const PaintArtifactCompositor* paint_artifact_compositor) {
+    const PaintArtifactCompositor* paint_artifact_compositor,
+    bool compositor_properties_updated) {
   DCHECK(document_->Lifecycle().GetState() >= required_lifecycle_state);
+
+  if (compositor_properties_updated)
+    MarkPendingIfCompositorPropertyAnimationChanges(paint_artifact_compositor);
 
   if (document_->GetPendingAnimations().Update(paint_artifact_compositor)) {
     DCHECK(document_->View());
@@ -121,6 +125,14 @@ void DocumentAnimations::UpdateAnimations(
   document_->GetWorkletAnimationController().UpdateAnimationStates();
   for (auto& timeline : timelines_)
     timeline->ScheduleNextService();
+}
+
+void DocumentAnimations::MarkPendingIfCompositorPropertyAnimationChanges(
+    const PaintArtifactCompositor* paint_artifact_compositor) {
+  for (auto& timeline : timelines_) {
+    timeline->MarkPendingIfCompositorPropertyAnimationChanges(
+        paint_artifact_compositor);
+  }
 }
 
 size_t DocumentAnimations::GetAnimationsCount() {
@@ -169,21 +181,10 @@ void DocumentAnimations::ValidateTimelines() {
   unvalidated_timelines_.clear();
 }
 
-void DocumentAnimations::CacheCSSScrollTimeline(CSSScrollTimeline& timeline) {
-  // We cache the least seen CSSScrollTimeline for a given name.
-  cached_css_timelines_.Set(timeline.Name(), &timeline);
-}
-
-CSSScrollTimeline* DocumentAnimations::FindCachedCSSScrollTimeline(
-    const AtomicString& name) {
-  return To<CSSScrollTimeline>(cached_css_timelines_.at(name));
-}
-
 void DocumentAnimations::Trace(Visitor* visitor) const {
   visitor->Trace(document_);
   visitor->Trace(timelines_);
   visitor->Trace(unvalidated_timelines_);
-  visitor->Trace(cached_css_timelines_);
 }
 
 void DocumentAnimations::GetAnimationsTargetingTreeScope(

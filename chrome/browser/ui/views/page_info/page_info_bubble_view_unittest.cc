@@ -19,6 +19,9 @@
 #include "chrome/browser/ui/views/page_info/permission_selector_row.h"
 #include "chrome/browser/usb/usb_chooser_context.h"
 #include "chrome/browser/usb/usb_chooser_context_factory.h"
+#include "chrome/common/pref_names.h"
+#include "chrome/test/base/scoped_testing_local_state.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/views/chrome_test_views_delegate.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
@@ -91,7 +94,7 @@ class PageInfoBubbleViewTestApi {
   bool reload_prompt() const { return *reload_prompt_; }
   views::Widget::ClosedReason closed_reason() const { return *closed_reason_; }
 
-  base::string16 GetWindowTitle() { return view_->GetWindowTitle(); }
+  std::u16string GetWindowTitle() { return view_->GetWindowTitle(); }
   PageInfoUI::SecurityDescriptionType GetSecurityDescriptionType() {
     return view_->GetSecurityDescriptionType();
   }
@@ -102,7 +105,7 @@ class PageInfoBubbleViewTestApi {
 
   // Returns the number of cookies shown on the link or button to open the
   // collected cookies dialog. This should always be shown.
-  base::string16 GetCookiesLinkText() {
+  std::u16string GetCookiesLinkText() {
     EXPECT_TRUE(view_->cookie_button_);
     ui::AXNodeData data;
     view_->cookie_button_->GetAccessibleNodeData(&data);
@@ -111,11 +114,11 @@ class PageInfoBubbleViewTestApi {
     return base::ASCIIToUTF16(name);
   }
 
-  base::string16 GetPermissionLabelTextAt(int index) {
+  std::u16string GetPermissionLabelTextAt(int index) {
     return GetPermissionSelectorAt(index)->label_->GetText();
   }
 
-  base::string16 GetPermissionComboboxTextAt(int index) {
+  std::u16string GetPermissionComboboxTextAt(int index) {
     auto* combobox = GetPermissionSelectorAt(index)->combobox_;
     return combobox->GetTextForRow(combobox->GetSelectedRow());
   }
@@ -137,7 +140,7 @@ class PageInfoBubbleViewTestApi {
     CreateView();
   }
 
-  base::string16 GetCertificateButtonSubtitleText() const {
+  std::u16string GetCertificateButtonSubtitleText() const {
     EXPECT_TRUE(view_->certificate_button_);
     EXPECT_TRUE(view_->certificate_button_->subtitle());
     return view_->certificate_button_->subtitle()->GetText();
@@ -161,8 +164,8 @@ class PageInfoBubbleViewTestApi {
   Profile* profile_;
   content::WebContents* web_contents_;
   base::RunLoop run_loop_;
-  base::Optional<bool> reload_prompt_;
-  base::Optional<views::Widget::ClosedReason> closed_reason_;
+  absl::optional<bool> reload_prompt_;
+  absl::optional<views::Widget::ClosedReason> closed_reason_;
 
   DISALLOW_COPY_AND_ASSIGN(PageInfoBubbleViewTestApi);
 };
@@ -177,15 +180,21 @@ namespace {
 class ScopedWebContentsTestHelper {
  public:
   ScopedWebContentsTestHelper() {
-    web_contents_ = factory_.CreateWebContents(&profile_);
+    TestingProfile::Builder profile_builder;
+    profile_builder.AddTestingFactory(
+        HistoryServiceFactory::GetInstance(),
+        HistoryServiceFactory::GetDefaultFactory());
+    profile_ = profile_builder.Build();
+
+    web_contents_ = factory_.CreateWebContents(profile_.get());
   }
 
-  Profile* profile() { return &profile_; }
+  Profile* profile() { return profile_.get(); }
   content::WebContents* web_contents() { return web_contents_; }
 
  private:
   content::BrowserTaskEnvironment task_environment_;
-  TestingProfile profile_;
+  std::unique_ptr<TestingProfile> profile_;
   content::TestWebContentsFactory factory_;
   content::WebContents* web_contents_;  // Weak. Owned by factory_.
 
@@ -194,7 +203,8 @@ class ScopedWebContentsTestHelper {
 
 class PageInfoBubbleViewTest : public testing::Test {
  public:
-  PageInfoBubbleViewTest() {}
+  PageInfoBubbleViewTest()
+      : testing_local_state_(TestingBrowserProcess::GetGlobal()) {}
 
   // testing::Test:
   void SetUp() override {
@@ -218,6 +228,7 @@ class PageInfoBubbleViewTest : public testing::Test {
   }
 
  protected:
+  ScopedTestingLocalState testing_local_state_;
   ScopedWebContentsTestHelper web_contents_helper_;
   views::ScopedViewsTestHelper views_helper_{
       std::make_unique<ChromeTestViewsDelegate<>>()};
@@ -229,6 +240,34 @@ class PageInfoBubbleViewTest : public testing::Test {
   DISALLOW_COPY_AND_ASSIGN(PageInfoBubbleViewTest);
 };
 
+base::Value ReadJson(base::StringPiece json) {
+  base::JSONReader::ValueWithError result =
+      base::JSONReader::ReadAndReturnValueWithError(json);
+  EXPECT_TRUE(result.value) << result.error_message;
+  return result.value ? std::move(*result.value) : base::Value();
+}
+
+const views::View::Views& GetChosenObjectChildren(
+    ChosenObjectView* object_view) {
+  views::View* row_view = object_view->children()[0];
+  return row_view->children();
+}
+
+views::Label* GetChosenObjectTitle(const views::View::Views& children) {
+  views::View* labels_container = children[1];
+  return static_cast<views::Label*>(labels_container->children()[0]);
+}
+
+views::Button* GetChosenObjectButton(const views::View::Views& children) {
+  return static_cast<views::Button*>(children[2]);
+}
+
+views::Label* GetChosenObjectDescriptionLabel(
+    const views::View::Views& children) {
+  views::View* labels_container = children[1];
+  return static_cast<views::Label*>(labels_container->children()[1]);
+}
+
 }  // namespace
 
 // Each permission selector row is like this: [icon] [label] [selector]
@@ -239,7 +278,6 @@ TEST_F(PageInfoBubbleViewTest, NotificationPermissionRevokeUkm) {
   TestingProfile* profile =
       static_cast<TestingProfile*>(web_contents_helper_.profile());
   ukm::TestAutoSetUkmRecorder ukm_recorder;
-  ASSERT_TRUE(profile->CreateHistoryService());
   auto* history_service = HistoryServiceFactory::GetForProfile(
       profile, ServiceAccessType::EXPLICIT_ACCESS);
   history_service->AddPage(origin_url, base::Time::Now(),
@@ -251,7 +289,6 @@ TEST_F(PageInfoBubbleViewTest, NotificationPermissionRevokeUkm) {
   PermissionInfoList list(1);
   list.back().type = ContentSettingsType::NOTIFICATIONS;
   list.back().source = content_settings::SETTING_SOURCE_USER;
-  list.back().is_incognito = false;
 
   list.back().setting = CONTENT_SETTING_ALLOW;
   api_->SetPermissionInfo(list);
@@ -268,8 +305,10 @@ TEST_F(PageInfoBubbleViewTest, NotificationPermissionRevokeUkm) {
   ukm_recorder.ExpectEntrySourceHasUrl(entry, origin_url);
   EXPECT_EQ(*ukm_recorder.GetEntryMetric(entry, "Source"),
             static_cast<int64_t>(permissions::PermissionSourceUI::OIB));
+  size_t num_values = 0;
   EXPECT_EQ(*ukm_recorder.GetEntryMetric(entry, "PermissionType"),
-            static_cast<int64_t>(ContentSettingsType::NOTIFICATIONS));
+            ContentSettingTypeToHistogramValue(
+                ContentSettingsType::NOTIFICATIONS, &num_values));
   EXPECT_EQ(*ukm_recorder.GetEntryMetric(entry, "Action"),
             static_cast<int64_t>(permissions::PermissionAction::REVOKED));
 }
@@ -283,14 +322,9 @@ TEST_F(PageInfoBubbleViewTest, SetPermissionInfo) {
   // This test creates settings that are left at their defaults, leading to zero
   // checked options, and checks that the text on the MenuButtons is right.
 
-  TestingProfile* profile =
-      static_cast<TestingProfile*>(web_contents_helper_.profile());
-  ASSERT_TRUE(profile->CreateHistoryService());
-
   PermissionInfoList list(1);
   list.back().type = ContentSettingsType::GEOLOCATION;
   list.back().source = content_settings::SETTING_SOURCE_USER;
-  list.back().is_incognito = false;
   list.back().setting = CONTENT_SETTING_BLOCK;
 
   // Initially, no permissions are shown because they are all set to default.
@@ -306,24 +340,23 @@ TEST_F(PageInfoBubbleViewTest, SetPermissionInfo) {
   EXPECT_TRUE(selector);
 
   // Verify labels match the settings on the PermissionInfoList.
-  EXPECT_EQ(base::ASCIIToUTF16("Location"), api_->GetPermissionLabelTextAt(0));
-  EXPECT_EQ(base::ASCIIToUTF16("Allow"), api_->GetPermissionComboboxTextAt(0));
+  EXPECT_EQ(u"Location", api_->GetPermissionLabelTextAt(0));
+  EXPECT_EQ(u"Allow", api_->GetPermissionComboboxTextAt(0));
 
   // Verify calling SetPermissionInfo() directly updates the UI.
   list.back().setting = CONTENT_SETTING_BLOCK;
   api_->SetPermissionInfo(list);
-  EXPECT_EQ(base::ASCIIToUTF16("Block"), api_->GetPermissionComboboxTextAt(0));
+  EXPECT_EQ(u"Block", api_->GetPermissionComboboxTextAt(0));
 
   // Simulate a user selection via the UI. Note this will also cover logic in
   // PageInfo to update the pref.
   api_->SimulateUserSelectingComboboxItemAt(0, 1);
   EXPECT_EQ(num_expected_children, api_->permissions_view()->children().size());
-  EXPECT_EQ(base::ASCIIToUTF16("Allow"), api_->GetPermissionComboboxTextAt(0));
+  EXPECT_EQ(u"Allow", api_->GetPermissionComboboxTextAt(0));
 
   // Setting to the default via the UI should keep the button around.
   api_->SimulateUserSelectingComboboxItemAt(0, 0);
-  EXPECT_EQ(base::ASCIIToUTF16("Ask (default)"),
-            api_->GetPermissionComboboxTextAt(0));
+  EXPECT_EQ(u"Ask (default)", api_->GetPermissionComboboxTextAt(0));
   EXPECT_EQ(num_expected_children, api_->permissions_view()->children().size());
 
   // However, since the setting is now default, recreating the dialog with those
@@ -353,7 +386,7 @@ TEST_F(PageInfoBubbleViewTest, SetPermissionInfoWithUsbDevice) {
 
   auto device_info = usb_device_manager.CreateAndAddDevice(
       0, 0, "Google", "Gizmo", "1234567890");
-  store->GrantDevicePermission(origin, origin, *device_info);
+  store->GrantDevicePermission(origin, *device_info);
 
   PermissionInfoList list;
   api_->SetPermissionInfo(list);
@@ -361,24 +394,24 @@ TEST_F(PageInfoBubbleViewTest, SetPermissionInfoWithUsbDevice) {
 
   ChosenObjectView* object_view = static_cast<ChosenObjectView*>(
       api_->permissions_view()->children()[kExpectedChildren]);
-  const auto& children = object_view->children();
-  EXPECT_EQ(4u, children.size());
+  const auto& children = GetChosenObjectChildren(object_view);
+  EXPECT_EQ(3u, children.size());
 
-  views::Label* label = static_cast<views::Label*>(children[1]);
-  EXPECT_EQ(base::ASCIIToUTF16("Gizmo"), label->GetText());
+  views::Label* label = GetChosenObjectTitle(children);
+  EXPECT_EQ(u"Gizmo", label->GetText());
 
-  views::Button* button = static_cast<views::Button*>(children[2]);
+  views::Button* button = GetChosenObjectButton(children);
   const ui::MouseEvent event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
                              ui::EventTimeForNow(), 0, 0);
   views::test::ButtonTestApi(button).NotifyClick(event);
   api_->SetPermissionInfo(list);
   EXPECT_EQ(kExpectedChildren, api_->permissions_view()->children().size());
-  EXPECT_FALSE(store->HasDevicePermission(origin, origin, *device_info));
+  EXPECT_FALSE(store->HasDevicePermission(origin, *device_info));
 }
 
 namespace {
 
-constexpr char kPolicySetting[] = R"(
+constexpr char kWebUsbPolicySetting[] = R"(
     [
       {
         "devices": [{ "vendor_id": 6353, "product_id": 5678 }],
@@ -398,10 +431,10 @@ TEST_F(PageInfoBubbleViewTest, SetPermissionInfoWithPolicyUsbDevices) {
   // Add the policy setting to prefs.
   Profile* profile = web_contents_helper_.profile();
   profile->GetPrefs()->Set(prefs::kManagedWebUsbAllowDevicesForUrls,
-                           *base::JSONReader::ReadDeprecated(kPolicySetting));
+                           ReadJson(kWebUsbPolicySetting));
   UsbChooserContext* store = UsbChooserContextFactory::GetForProfile(profile);
 
-  auto objects = store->GetGrantedObjects(origin, origin);
+  auto objects = store->GetGrantedObjects(origin);
   EXPECT_EQ(objects.size(), 1u);
 
   PermissionInfoList list;
@@ -410,19 +443,17 @@ TEST_F(PageInfoBubbleViewTest, SetPermissionInfoWithPolicyUsbDevices) {
 
   ChosenObjectView* object_view = static_cast<ChosenObjectView*>(
       api_->permissions_view()->children()[kExpectedChildren]);
-  const auto& children = object_view->children();
-  EXPECT_EQ(4u, children.size());
+  const auto& children = GetChosenObjectChildren(object_view);
+  EXPECT_EQ(3u, children.size());
 
-  views::Label* label = static_cast<views::Label*>(children[1]);
-  EXPECT_EQ(base::ASCIIToUTF16("Unknown product 0x162E from Google Inc."),
-            label->GetText());
+  views::Label* label = GetChosenObjectTitle(children);
+  EXPECT_EQ(u"Unknown product 0x162E from Google Inc.", label->GetText());
 
-  views::Button* button = static_cast<views::Button*>(children[2]);
+  views::Button* button = GetChosenObjectButton(children);
   EXPECT_EQ(button->GetState(), views::Button::STATE_DISABLED);
 
-  views::Label* desc_label = static_cast<views::Label*>(children[3]);
-  EXPECT_EQ(base::ASCIIToUTF16("USB device allowed by your administrator"),
-            desc_label->GetText());
+  views::Label* desc_label = GetChosenObjectDescriptionLabel(children);
+  EXPECT_EQ(u"USB device allowed by your administrator", desc_label->GetText());
 
   // Policy granted USB permissions should not be able to be deleted.
   const ui::MouseEvent event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
@@ -443,7 +474,7 @@ TEST_F(PageInfoBubbleViewTest, SetPermissionInfoWithUserAndPolicyUsbDevices) {
   // Add the policy setting to prefs.
   Profile* profile = web_contents_helper_.profile();
   profile->GetPrefs()->Set(prefs::kManagedWebUsbAllowDevicesForUrls,
-                           *base::JSONReader::ReadDeprecated(kPolicySetting));
+                           ReadJson(kWebUsbPolicySetting));
 
   // Connect the UsbChooserContext with FakeUsbDeviceManager.
   device::FakeUsbDeviceManager usb_device_manager;
@@ -455,9 +486,9 @@ TEST_F(PageInfoBubbleViewTest, SetPermissionInfoWithUserAndPolicyUsbDevices) {
 
   auto device_info = usb_device_manager.CreateAndAddDevice(
       0, 0, "Google", "Gizmo", "1234567890");
-  store->GrantDevicePermission(origin, origin, *device_info);
+  store->GrantDevicePermission(origin, *device_info);
 
-  auto objects = store->GetGrantedObjects(origin, origin);
+  auto objects = store->GetGrantedObjects(origin);
   EXPECT_EQ(objects.size(), 2u);
 
   PermissionInfoList list;
@@ -471,23 +502,23 @@ TEST_F(PageInfoBubbleViewTest, SetPermissionInfoWithUserAndPolicyUsbDevices) {
   {
     ChosenObjectView* object_view = static_cast<ChosenObjectView*>(
         api_->permissions_view()->children()[kExpectedChildren]);
-    const auto& children = object_view->children();
-    EXPECT_EQ(4u, children.size());
+    const auto& children = GetChosenObjectChildren(object_view);
+    EXPECT_EQ(3u, children.size());
 
-    views::Label* label = static_cast<views::Label*>(children[1]);
-    EXPECT_EQ(base::ASCIIToUTF16("Gizmo"), label->GetText());
+    views::Label* label = GetChosenObjectTitle(children);
+    EXPECT_EQ(u"Gizmo", label->GetText());
 
-    views::Button* button = static_cast<views::Button*>(children[2]);
+    views::Button* button = GetChosenObjectButton(children);
     EXPECT_NE(button->GetState(), views::Button::STATE_DISABLED);
 
-    views::Label* desc_label = static_cast<views::Label*>(children[3]);
-    EXPECT_EQ(base::ASCIIToUTF16("USB device"), desc_label->GetText());
+    views::Label* desc_label = GetChosenObjectDescriptionLabel(children);
+    EXPECT_EQ(u"USB device", desc_label->GetText());
 
     views::test::ButtonTestApi(button).NotifyClick(event);
     api_->SetPermissionInfo(list);
     EXPECT_EQ(kExpectedChildren + 1,
               api_->permissions_view()->children().size());
-    EXPECT_FALSE(store->HasDevicePermission(origin, origin, *device_info));
+    EXPECT_FALSE(store->HasDevicePermission(origin, *device_info));
   }
 
   // The policy granted permission should now be the first child, since the user
@@ -495,18 +526,17 @@ TEST_F(PageInfoBubbleViewTest, SetPermissionInfoWithUserAndPolicyUsbDevices) {
   {
     ChosenObjectView* object_view = static_cast<ChosenObjectView*>(
         api_->permissions_view()->children()[kExpectedChildren]);
-    const auto& children = object_view->children();
-    EXPECT_EQ(4u, children.size());
+    const auto& children = GetChosenObjectChildren(object_view);
+    EXPECT_EQ(3u, children.size());
 
-    views::Label* label = static_cast<views::Label*>(children[1]);
-    EXPECT_EQ(base::ASCIIToUTF16("Unknown product 0x162E from Google Inc."),
-              label->GetText());
+    views::Label* label = GetChosenObjectTitle(children);
+    EXPECT_EQ(u"Unknown product 0x162E from Google Inc.", label->GetText());
 
-    views::Button* button = static_cast<views::Button*>(children[2]);
+    views::Button* button = GetChosenObjectButton(children);
     EXPECT_EQ(button->GetState(), views::Button::STATE_DISABLED);
 
-    views::Label* desc_label = static_cast<views::Label*>(children[3]);
-    EXPECT_EQ(base::ASCIIToUTF16("USB device allowed by your administrator"),
+    views::Label* desc_label = GetChosenObjectDescriptionLabel(children);
+    EXPECT_EQ(u"USB device allowed by your administrator",
               desc_label->GetText());
 
     views::test::ButtonTestApi(button).NotifyClick(event);
@@ -525,7 +555,6 @@ TEST_F(PageInfoBubbleViewTest, SetPermissionInfoForUsbGuard) {
   PermissionInfoList list(1);
   list.back().type = ContentSettingsType::USB_GUARD;
   list.back().source = content_settings::SETTING_SOURCE_USER;
-  list.back().is_incognito = false;
   list.back().setting = CONTENT_SETTING_ASK;
 
   // Initially, no permissions are shown because they are all set to default.
@@ -536,18 +565,17 @@ TEST_F(PageInfoBubbleViewTest, SetPermissionInfoForUsbGuard) {
   num_expected_children += kViewsPerPermissionRow * list.size();
   list.back().setting = CONTENT_SETTING_BLOCK;
   api_->SetPermissionInfo(list);
-  EXPECT_EQ(base::ASCIIToUTF16("Block"), api_->GetPermissionComboboxTextAt(0));
+  EXPECT_EQ(u"Block", api_->GetPermissionComboboxTextAt(0));
 
   // Simulate a user selection via the UI. Note this will also cover logic in
   // PageInfo to update the pref.
   api_->SimulateUserSelectingComboboxItemAt(0, 2);
   EXPECT_EQ(num_expected_children, api_->permissions_view()->children().size());
-  EXPECT_EQ(base::ASCIIToUTF16("Ask"), api_->GetPermissionComboboxTextAt(0));
+  EXPECT_EQ(u"Ask", api_->GetPermissionComboboxTextAt(0));
 
   // Setting to the default via the UI should keep the button around.
   api_->SimulateUserSelectingComboboxItemAt(0, 0);
-  EXPECT_EQ(base::ASCIIToUTF16("Ask (default)"),
-            api_->GetPermissionComboboxTextAt(0));
+  EXPECT_EQ(u"Ask (default)", api_->GetPermissionComboboxTextAt(0));
   EXPECT_EQ(num_expected_children, api_->permissions_view()->children().size());
 
   // However, since the setting is now default, recreating the dialog with
@@ -558,6 +586,47 @@ TEST_F(PageInfoBubbleViewTest, SetPermissionInfoForUsbGuard) {
   // permission is not being omitted from the UI.
   api_->SetPermissionInfo(list);
   EXPECT_EQ(num_expected_children, api_->permissions_view()->children().size());
+}
+
+// Test UI construction and reconstruction with policy USB devices.
+TEST_F(PageInfoBubbleViewTest, SetPermissionInfoWithPolicySerialPorts) {
+  constexpr size_t kExpectedChildren = 0;
+  EXPECT_EQ(kExpectedChildren, api_->permissions_view()->children().size());
+
+  // Add the policy setting to prefs.
+  testing_local_state_.Get()->Set(prefs::kManagedSerialAllowUsbDevicesForUrls,
+                                  ReadJson(R"([
+               {
+                 "devices": [{ "vendor_id": 6353, "product_id": 5678 }],
+                 "urls": [ "http://www.example.com" ]
+               }
+             ])"));
+
+  PermissionInfoList list;
+  api_->SetPermissionInfo(list);
+  EXPECT_EQ(kExpectedChildren + 1, api_->permissions_view()->children().size());
+
+  ChosenObjectView* object_view = static_cast<ChosenObjectView*>(
+      api_->permissions_view()->children()[kExpectedChildren]);
+  const auto& children = GetChosenObjectChildren(object_view);
+  EXPECT_EQ(3u, children.size());
+
+  views::Label* label = GetChosenObjectTitle(children);
+  EXPECT_EQ(u"USB device from Google Inc. (product 162E)", label->GetText());
+
+  views::Button* button = GetChosenObjectButton(children);
+  EXPECT_EQ(button->GetState(), views::Button::STATE_DISABLED);
+
+  views::Label* desc_label = GetChosenObjectDescriptionLabel(children);
+  EXPECT_EQ(u"Serial port allowed by your administrator",
+            desc_label->GetText());
+
+  // Policy granted serial port permissions should not be able to be deleted.
+  const ui::MouseEvent event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
+                             ui::EventTimeForNow(), 0, 0);
+  views::test::ButtonTestApi(button).NotifyClick(event);
+  api_->SetPermissionInfo(list);
+  EXPECT_EQ(kExpectedChildren + 1, api_->permissions_view()->children().size());
 }
 
 // Test that updating the number of cookies used by the current page doesn't add
@@ -589,7 +658,7 @@ TEST_F(PageInfoBubbleViewTest, UpdatingSiteDataRetainsLayout) {
   EXPECT_EQ(kExpectedChildren, api_->view()->children().size());
 
   // Check the number of cookies shown is correct.
-  base::string16 expected = l10n_util::GetPluralStringFUTF16(
+  std::u16string expected = l10n_util::GetPluralStringFUTF16(
       IDS_PAGE_INFO_NUM_COOKIES_PARENTHESIZED,
       first_party_cookies.allowed + third_party_cookies.allowed);
   size_t index = api_->GetCookiesLinkText().find(expected);
@@ -676,7 +745,7 @@ TEST_F(PageInfoBubbleViewTest, CertificateButtonShowsEvCertDetails) {
   // name and country of incorporation.
   EXPECT_EQ(l10n_util::GetStringFUTF16(
                 IDS_PAGE_INFO_SECURITY_TAB_SECURE_IDENTITY_EV_VERIFIED,
-                base::UTF8ToUTF16("Test Org"), base::UTF8ToUTF16("US")),
+                u"Test Org", u"US"),
             api_->GetCertificateButtonSubtitleText());
 }
 
@@ -717,6 +786,6 @@ TEST_F(PageInfoBubbleViewTest, EvDetailsShowForCertWithStateButNoLocality) {
   // name and country of incorporation.
   EXPECT_EQ(l10n_util::GetStringFUTF16(
                 IDS_PAGE_INFO_SECURITY_TAB_SECURE_IDENTITY_EV_VERIFIED,
-                base::UTF8ToUTF16("Test Org"), base::UTF8ToUTF16("US")),
+                u"Test Org", u"US"),
             api_->GetCertificateButtonSubtitleText());
 }

@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/views/toolbar/toolbar_ink_drop_util.h"
 
+#include "base/bind.h"
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
@@ -13,6 +14,8 @@
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/gfx/skia_util.h"
+#include "ui/views/animation/ink_drop.h"
 #include "ui/views/animation/ink_drop_host_view.h"
 #include "ui/views/animation/ink_drop_impl.h"
 #include "ui/views/animation/installable_ink_drop_config.h"
@@ -32,13 +35,14 @@ class ToolbarButtonHighlightPathGenerator
     rect.Inset(GetToolbarInkDropInsets(view));
 
     const int radii = ChromeLayoutProvider::Get()->GetCornerRadiusMetric(
-        views::EMPHASIS_MAXIMUM, rect.size());
+        views::Emphasis::kMaximum, rect.size());
 
     SkPath path;
     path.addRoundRect(gfx::RectToSkRect(rect), radii, radii);
     return path;
   }
 };
+
 }  // namespace
 
 gfx::Insets GetToolbarInkDropInsets(const views::View* host_view) {
@@ -59,13 +63,6 @@ gfx::Insets GetToolbarInkDropInsets(const views::View* host_view) {
   return inkdrop_insets;
 }
 
-std::unique_ptr<views::InkDropHighlight> CreateToolbarInkDropHighlight(
-    const views::InkDropHostView* host_view) {
-  auto highlight = host_view->views::InkDropHostView::CreateInkDropHighlight();
-  highlight->set_visible_opacity(kToolbarInkDropHighlightVisibleOpacity);
-  return highlight;
-}
-
 SkColor GetToolbarInkDropBaseColor(const views::View* host_view) {
   const auto* theme_provider = host_view->GetThemeProvider();
   // There may be no theme provider in unit tests.
@@ -83,16 +80,14 @@ views::InstallableInkDropConfig GetToolbarInstallableInkDropConfig(
   return config;
 }
 
-void InstallToolbarButtonHighlightPathGenerator(views::View* host) {
-  views::HighlightPathGenerator::Install(
-      host, std::make_unique<ToolbarButtonHighlightPathGenerator>());
-}
-
 void ConfigureInkDropForToolbar(views::Button* host) {
   host->SetHasInkDropActionOnClick(true);
-  InstallToolbarButtonHighlightPathGenerator(host);
-  host->SetInkDropMode(views::InkDropHostView::InkDropMode::ON);
-  host->SetInkDropVisibleOpacity(kToolbarInkDropVisibleOpacity);
-  host->SetInkDropHighlightOpacity(kToolbarInkDropHighlightVisibleOpacity);
-  host->SetInkDropBaseColor(GetToolbarInkDropBaseColor(host));
+  views::HighlightPathGenerator::Install(
+      host, std::make_unique<ToolbarButtonHighlightPathGenerator>());
+  views::InkDrop::Get(host)->SetMode(views::InkDropHost::InkDropMode::ON);
+  views::InkDrop::Get(host)->SetVisibleOpacity(kToolbarInkDropVisibleOpacity);
+  views::InkDrop::Get(host)->SetHighlightOpacity(
+      kToolbarInkDropHighlightVisibleOpacity);
+  views::InkDrop::Get(host)->SetBaseColorCallback(
+      base::BindRepeating(&GetToolbarInkDropBaseColor, host));
 }

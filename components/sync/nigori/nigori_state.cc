@@ -63,7 +63,7 @@ bool EncryptKeyBag(const CryptographerImpl& cryptographer,
 void UpdateNigoriSpecificsFromEncryptedTypes(
     ModelTypeSet encrypted_types,
     sync_pb::NigoriSpecifics* specifics) {
-  static_assert(39 == ModelType::NUM_ENTRIES,
+  static_assert(38 == GetNumModelTypes(),
                 "If adding an encryptable type, update handling below.");
   specifics->set_encrypt_bookmarks(encrypted_types.Has(BOOKMARKS));
   specifics->set_encrypt_preferences(encrypted_types.Has(PREFERENCES));
@@ -90,6 +90,7 @@ void UpdateNigoriSpecificsFromEncryptedTypes(
       encrypted_types.Has(SEND_TAB_TO_SELF));
   specifics->set_encrypt_web_apps(encrypted_types.Has(WEB_APPS));
   specifics->set_encrypt_os_preferences(encrypted_types.Has(OS_PREFERENCES));
+  specifics->set_encrypt_workspace_desk(encrypted_types.Has(WORKSPACE_DESK));
 }
 
 void UpdateSpecificsFromKeyDerivationParams(
@@ -157,6 +158,8 @@ NigoriState NigoriState::CreateFromLocalProto(
         proto.last_default_trusted_vault_key_name();
   }
 
+  state.trusted_vault_debug_info = proto.trusted_vault_debug_info();
+
   return state;
 }
 
@@ -219,6 +222,7 @@ sync_pb::NigoriModel NigoriState::ToLocalProto() const {
     proto.set_last_default_trusted_vault_key_name(
         *last_default_trusted_vault_key_name);
   }
+  *proto.mutable_trusted_vault_debug_info() = trusted_vault_debug_info;
   return proto;
 }
 
@@ -237,7 +241,7 @@ sync_pb::NigoriSpecifics NigoriState::ToSpecificsProto() const {
   specifics.set_keybag_is_frozen(true);
   specifics.set_encrypt_everything(encrypt_everything);
   if (encrypt_everything) {
-    UpdateNigoriSpecificsFromEncryptedTypes(EncryptableUserTypes(), &specifics);
+    UpdateNigoriSpecificsFromEncryptedTypes(GetEncryptedTypes(), &specifics);
   }
   specifics.set_passphrase_type(passphrase_type);
   if (passphrase_type == sync_pb::NigoriSpecifics::CUSTOM_PASSPHRASE) {
@@ -271,12 +275,13 @@ sync_pb::NigoriSpecifics NigoriState::ToSpecificsProto() const {
     specifics.set_custom_passphrase_time(
         TimeToProtoTime(custom_passphrase_time));
   }
+  *specifics.mutable_trusted_vault_debug_info() = trusted_vault_debug_info;
   return specifics;
 }
 
 NigoriState NigoriState::Clone() const {
   NigoriState result;
-  result.cryptographer = cryptographer->CloneImpl();
+  result.cryptographer = cryptographer->Clone();
   result.pending_keys = pending_keys;
   result.passphrase_type = passphrase_type;
   result.keystore_migration_time = keystore_migration_time;
@@ -288,6 +293,7 @@ NigoriState NigoriState::Clone() const {
   result.pending_keystore_decryptor_token = pending_keystore_decryptor_token;
   result.last_default_trusted_vault_key_name =
       last_default_trusted_vault_key_name;
+  result.trusted_vault_debug_info = trusted_vault_debug_info;
   return result;
 }
 
@@ -307,6 +313,14 @@ bool NigoriState::NeedsKeystoreReencryption() const {
   // Migration from backward compatible to full keystore mode.
   return base::FeatureList::IsEnabled(
       switches::kSyncTriggerFullKeystoreMigration);
+}
+
+ModelTypeSet NigoriState::GetEncryptedTypes() const {
+  if (!encrypt_everything) {
+    return AlwaysEncryptedUserTypes();
+  }
+
+  return EncryptableUserTypes();
 }
 
 }  // namespace syncer

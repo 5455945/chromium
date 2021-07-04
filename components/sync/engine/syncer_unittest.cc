@@ -14,12 +14,12 @@
 #include <set>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "base/bind.h"
 #include "base/callback_helpers.h"
 #include "base/compiler_specific.h"
 #include "base/location.h"
-#include "base/stl_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
@@ -108,15 +108,6 @@ class SyncerTest : public testing::Test,
 
   void OnSyncCycleEvent(const SyncCycleEvent& event) override {
     DVLOG(1) << "HandleSyncEngineEvent in unittest " << event.what_happened;
-    // we only test for entry-specific events, not status changed ones.
-    switch (event.what_happened) {
-      case SyncCycleEvent::SYNC_CYCLE_BEGIN:  // Fall through.
-      case SyncCycleEvent::STATUS_CHANGED:
-      case SyncCycleEvent::SYNC_CYCLE_ENDED:
-        return;
-      default:
-        FAIL() << "Handling unknown error type in unit tests!!";
-    }
   }
 
   void OnActionableError(const SyncProtocolError& error) override {}
@@ -133,7 +124,7 @@ class SyncerTest : public testing::Test,
     ResetCycle();
 
     // Pretend we've seen a local change, to make the nudge_tracker look normal.
-    nudge_tracker_.RecordLocalChange(ModelTypeSet(BOOKMARKS));
+    nudge_tracker_.RecordLocalChange(BOOKMARKS);
 
     return syncer_->NormalSyncShare(context_->GetEnabledTypes(),
                                     &nudge_tracker_, cycle_.get());

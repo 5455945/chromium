@@ -7,13 +7,13 @@
 #include <memory>
 
 #include "base/command_line.h"
-#include "base/optional.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "chrome/browser/web_applications/components/web_app_helpers.h"
 #include "chrome/browser/web_applications/components/web_app_prefs_utils.h"
 #include "chrome/browser/web_applications/components/web_application_info.h"
+#include "chrome/browser/web_applications/policy/web_app_policy_manager.h"
 #include "chrome/browser/web_applications/test/test_file_utils.h"
 #include "chrome/browser/web_applications/test/test_web_app_registry_controller.h"
 #include "chrome/browser/web_applications/test/test_web_app_ui_manager.h"
@@ -22,6 +22,7 @@
 #include "chrome/browser/web_applications/web_app_install_finalizer.h"
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 namespace web_app {
@@ -53,9 +54,10 @@ class InstallFinalizerUnitTest : public WebAppTest {
     auto file_utils = std::make_unique<TestFileUtils>();
     icon_manager_ = std::make_unique<WebAppIconManager>(profile(), registrar(),
                                                         std::move(file_utils));
+    policy_manager_ = std::make_unique<WebAppPolicyManager>(profile());
     ui_manager_ = std::make_unique<TestWebAppUiManager>();
     finalizer_ = std::make_unique<WebAppInstallFinalizer>(
-        profile(), icon_manager_.get(), /*legacy_finalizer=*/nullptr);
+        profile(), icon_manager_.get(), policy_manager_.get());
 
     finalizer_->SetSubsystems(
         &registrar(), ui_manager_.get(),
@@ -68,6 +70,7 @@ class InstallFinalizerUnitTest : public WebAppTest {
   void TearDown() override {
     finalizer_.reset();
     ui_manager_.reset();
+    policy_manager_.reset();
     icon_manager_.reset();
     test_registry_controller_.reset();
     WebAppTest::TearDown();
@@ -99,6 +102,7 @@ class InstallFinalizerUnitTest : public WebAppTest {
  private:
   std::unique_ptr<TestWebAppRegistryController> test_registry_controller_;
   std::unique_ptr<WebAppIconManager> icon_manager_;
+  std::unique_ptr<WebAppPolicyManager> policy_manager_;
   std::unique_ptr<WebAppUiManager> ui_manager_;
   std::unique_ptr<InstallFinalizer> finalizer_;
 };
@@ -106,25 +110,24 @@ class InstallFinalizerUnitTest : public WebAppTest {
 TEST_F(InstallFinalizerUnitTest, BasicInstallSucceeds) {
   auto info = std::make_unique<WebApplicationInfo>();
   info->start_url = GURL("https://foo.example");
-  info->title = base::ASCIIToUTF16("Foo Title");
+  info->title = u"Foo Title";
   InstallFinalizer::FinalizeOptions options;
   options.install_source = webapps::WebappInstallSource::INTERNAL_DEFAULT;
 
   FinalizeInstallResult result = AwaitFinalizeInstall(*info, options);
 
   EXPECT_EQ(InstallResultCode::kSuccessNewInstall, result.code);
-  EXPECT_EQ(result.installed_app_id,
-            web_app::GenerateAppIdFromURL(info->start_url));
+  EXPECT_EQ(result.installed_app_id, GenerateAppIdFromURL(info->start_url));
 }
 
 TEST_F(InstallFinalizerUnitTest, ConcurrentInstallSucceeds) {
   auto info1 = std::make_unique<WebApplicationInfo>();
   info1->start_url = GURL("https://foo1.example");
-  info1->title = base::ASCIIToUTF16("Foo1 Title");
+  info1->title = u"Foo1 Title";
 
   auto info2 = std::make_unique<WebApplicationInfo>();
   info2->start_url = GURL("https://foo2.example");
-  info2->title = base::ASCIIToUTF16("Foo2 Title");
+  info2->title = u"Foo2 Title";
 
   InstallFinalizer::FinalizeOptions options;
   options.install_source = webapps::WebappInstallSource::INTERNAL_DEFAULT;
@@ -137,11 +140,10 @@ TEST_F(InstallFinalizerUnitTest, ConcurrentInstallSucceeds) {
   {
     finalizer().FinalizeInstall(
         *info1, options,
-        base::BindLambdaForTesting([&](const web_app::AppId& installed_app_id,
-                                       web_app::InstallResultCode code) {
-          EXPECT_EQ(web_app::InstallResultCode::kSuccessNewInstall, code);
-          EXPECT_EQ(installed_app_id,
-                    web_app::GenerateAppIdFromURL(info1->start_url));
+        base::BindLambdaForTesting([&](const AppId& installed_app_id,
+                                       InstallResultCode code) {
+          EXPECT_EQ(InstallResultCode::kSuccessNewInstall, code);
+          EXPECT_EQ(installed_app_id, GenerateAppIdFromURL(info1->start_url));
           callback1_called = true;
           if (callback2_called)
             run_loop.Quit();
@@ -152,11 +154,10 @@ TEST_F(InstallFinalizerUnitTest, ConcurrentInstallSucceeds) {
   {
     finalizer().FinalizeInstall(
         *info2, options,
-        base::BindLambdaForTesting([&](const web_app::AppId& installed_app_id,
-                                       web_app::InstallResultCode code) {
-          EXPECT_EQ(web_app::InstallResultCode::kSuccessNewInstall, code);
-          EXPECT_EQ(installed_app_id,
-                    web_app::GenerateAppIdFromURL(info2->start_url));
+        base::BindLambdaForTesting([&](const AppId& installed_app_id,
+                                       InstallResultCode code) {
+          EXPECT_EQ(InstallResultCode::kSuccessNewInstall, code);
+          EXPECT_EQ(installed_app_id, GenerateAppIdFromURL(info2->start_url));
           callback2_called = true;
           if (callback1_called)
             run_loop.Quit();
@@ -172,13 +173,13 @@ TEST_F(InstallFinalizerUnitTest, ConcurrentInstallSucceeds) {
 TEST_F(InstallFinalizerUnitTest, InstallStoresLatestWebAppInstallSource) {
   auto info = std::make_unique<WebApplicationInfo>();
   info->start_url = GURL("https://foo.example");
-  info->title = base::ASCIIToUTF16("Foo Title");
+  info->title = u"Foo Title";
   InstallFinalizer::FinalizeOptions options;
   options.install_source = webapps::WebappInstallSource::INTERNAL_DEFAULT;
 
   FinalizeInstallResult result = AwaitFinalizeInstall(*info, options);
 
-  base::Optional<int> install_source =
+  absl::optional<int> install_source =
       GetIntWebAppPref(profile()->GetPrefs(), result.installed_app_id,
                        kLatestWebAppInstallSource);
   EXPECT_TRUE(install_source.has_value());

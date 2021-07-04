@@ -94,7 +94,7 @@ class SoftwareRendererTest : public testing::Test {
     // Makes a resource id that refers to the registered SharedBitmapId.
     return child_resource_provider_->ImportResource(
         TransferableResource::MakeSoftware(shared_bitmap_id, size, RGBA_8888),
-        SingleReleaseCallback::Create(base::DoNothing()));
+        base::DoNothing());
   }
 
   std::unique_ptr<SkBitmap> DrawAndCopyOutput(AggregatedRenderPassList* list,
@@ -121,7 +121,9 @@ class SoftwareRendererTest : public testing::Test {
                                std::unique_ptr<CopyOutputResult> result) {
     DCHECK(!result->IsEmpty());
     DCHECK_EQ(result->format(), CopyOutputResult::Format::RGBA_BITMAP);
-    *bitmap_result = std::make_unique<SkBitmap>(result->AsSkBitmap());
+    auto scoped_bitmap = result->ScopedAccessSkBitmap();
+    (*bitmap_result) =
+        std::make_unique<SkBitmap>(scoped_bitmap.GetOutScopedBitmap());
     DCHECK((*bitmap_result)->readyToDraw());
     std::move(quit_closure).Run();
   }
@@ -153,7 +155,7 @@ TEST_F(SoftwareRendererTest, SolidColorQuad) {
   SharedQuadState* shared_quad_state =
       root_render_pass->CreateAndAppendSharedQuadState();
   shared_quad_state->SetAll(gfx::Transform(), outer_rect, outer_rect,
-                            gfx::MaskFilterInfo(), outer_rect, false, true, 1.0,
+                            gfx::MaskFilterInfo(), absl::nullopt, true, 1.0,
                             SkBlendMode::kSrcOver, 0);
   auto* inner_quad =
       root_render_pass->CreateAndAppendDrawQuad<SolidColorDrawQuad>();
@@ -221,7 +223,7 @@ TEST_F(SoftwareRendererTest, TileQuad) {
   SharedQuadState* shared_quad_state =
       root_render_pass->CreateAndAppendSharedQuadState();
   shared_quad_state->SetAll(gfx::Transform(), outer_rect, outer_rect,
-                            gfx::MaskFilterInfo(), outer_rect, false, true, 1.0,
+                            gfx::MaskFilterInfo(), absl::nullopt, true, 1.0,
                             SkBlendMode::kSrcOver, 0);
   auto* inner_quad = root_render_pass->CreateAndAppendDrawQuad<TileDrawQuad>();
   inner_quad->SetNew(shared_quad_state, inner_rect, inner_rect, needs_blending,
@@ -283,7 +285,7 @@ TEST_F(SoftwareRendererTest, TileQuadVisibleRect) {
   SharedQuadState* shared_quad_state =
       root_render_pass->CreateAndAppendSharedQuadState();
   shared_quad_state->SetAll(gfx::Transform(), tile_rect, tile_rect,
-                            gfx::MaskFilterInfo(), tile_rect, false, true, 1.0,
+                            gfx::MaskFilterInfo(), absl::nullopt, true, 1.0,
                             SkBlendMode::kSrcOver, 0);
   auto* quad = root_render_pass->CreateAndAppendDrawQuad<TileDrawQuad>();
   quad->SetNew(shared_quad_state, tile_rect, tile_rect, needs_blending,
@@ -445,7 +447,7 @@ TEST_F(SoftwareRendererTest, ClipRoundRect) {
         root_pass->CreateAndAppendSharedQuadState();
     shared_quad_state->SetAll(gfx::Transform(), outer_rect, outer_rect,
                               gfx::MaskFilterInfo(), gfx::Rect(1, 1, 30, 30),
-                              true, true, 1.0, SkBlendMode::kSrcOver, 0);
+                              true, 1.0, SkBlendMode::kSrcOver, 0);
     auto* outer_quad = root_pass->CreateAndAppendDrawQuad<SolidColorDrawQuad>();
     outer_quad->SetNew(shared_quad_state, outer_rect, outer_rect, SK_ColorGREEN,
                        false);
@@ -461,7 +463,7 @@ TEST_F(SoftwareRendererTest, ClipRoundRect) {
     shared_quad_state->SetAll(
         gfx::Transform(), inner_rect, inner_rect,
         gfx::MaskFilterInfo(gfx::RRectF(gfx::RectF(5, 5, 10, 10), 2)),
-        inner_rect, false, true, 1.0, SkBlendMode::kSrcOver, 0);
+        absl::nullopt, true, 1.0, SkBlendMode::kSrcOver, 0);
     auto* inner_quad = root_pass->CreateAndAppendDrawQuad<SolidColorDrawQuad>();
     inner_quad->SetNew(shared_quad_state, inner_rect, inner_rect, SK_ColorRED,
                        false);
@@ -495,8 +497,8 @@ class PartialSwapSoftwareOutputDevice : public SoftwareOutputDevice {
   // SoftwareOutputDevice overrides.
   SkCanvas* BeginPaint(const gfx::Rect& damage_rect) override {
     damage_rect_at_start_ = damage_rect;
-    canvas_.reset(new ClipTrackingCanvas(viewport_pixel_size_.width(),
-                                         viewport_pixel_size_.height()));
+    canvas_ = std::make_unique<ClipTrackingCanvas>(
+        viewport_pixel_size_.width(), viewport_pixel_size_.height());
     canvas_->addCanvas(SoftwareOutputDevice::BeginPaint(damage_rect));
     return canvas_.get();
   }

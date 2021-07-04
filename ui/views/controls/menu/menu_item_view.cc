@@ -21,8 +21,9 @@
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/accessibility/platform/ax_platform_node.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/menu_model.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/keycodes/dom/dom_code.h"
 #include "ui/gfx/animation/animation.h"
@@ -45,22 +46,21 @@
 #include "ui/views/controls/menu/new_badge.h"
 #include "ui/views/controls/menu/submenu_view.h"
 #include "ui/views/controls/separator.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
+#include "ui/views/image_model_utils.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/vector_icons.h"
 #include "ui/views/view_class_properties.h"
-#include "ui/views/views_features.h"
 #include "ui/views/widget/widget.h"
 
-#if defined(OS_APPLE)
+#if defined(OS_MAC)
 #include "ui/views/accessibility/view_accessibility.h"
-#endif  //  defined(OS_APPLE)
+#endif  //  defined(OS_MAC)
 
 namespace views {
 
 namespace {
 
-// EmptyMenuMenuItem ---------------------------------------------------------
+// EmptyMenuMenuItem ----------------------------------------------------------
 
 // EmptyMenuMenuItem is used when a menu has no menu items. EmptyMenuMenuItem
 // is itself a MenuItemView, but it uses a different ID so that it isn't
@@ -76,14 +76,46 @@ class EmptyMenuMenuItem : public MenuItemView {
     SetEnabled(false);
   }
 
-  base::string16 GetTooltipText(const gfx::Point& p) const override {
+  std::u16string GetTooltipText(const gfx::Point& p) const override {
     // Empty menu items shouldn't have a tooltip.
-    return base::string16();
+    return std::u16string();
   }
 
  private:
   DISALLOW_COPY_AND_ASSIGN(EmptyMenuMenuItem);
 };
+
+// VerticalSeparator ----------------------------------------------------------
+
+class VerticalSeparator : public Separator {
+ public:
+  METADATA_HEADER(VerticalSeparator);
+  VerticalSeparator();
+  VerticalSeparator(const VerticalSeparator&) = delete;
+  VerticalSeparator& operator=(const VerticalSeparator&) = delete;
+  ~VerticalSeparator() override = default;
+
+  // Separator:
+  void OnThemeChanged() override;
+};
+
+VerticalSeparator::VerticalSeparator() {
+  SetFocusBehavior(FocusBehavior::NEVER);
+  const MenuConfig& config = MenuConfig::instance();
+  SetPreferredSize(
+      gfx::Size(config.actionable_submenu_vertical_separator_width,
+                config.actionable_submenu_vertical_separator_height));
+  SetCanProcessEventsWithinSubtree(false);
+}
+
+void VerticalSeparator::OnThemeChanged() {
+  Separator::OnThemeChanged();
+  SetColor(GetNativeTheme()->GetSystemColor(
+      ui::NativeTheme::kColorId_MenuSeparatorColor));
+}
+
+BEGIN_METADATA(VerticalSeparator, Separator)
+END_METADATA
 
 }  // namespace
 
@@ -122,19 +154,19 @@ void MenuItemView::ChildPreferredSizeChanged(View* child) {
   PreferredSizeChanged();
 }
 
-base::string16 MenuItemView::GetTooltipText(const gfx::Point& p) const {
+std::u16string MenuItemView::GetTooltipText(const gfx::Point& p) const {
   if (!tooltip_.empty())
     return tooltip_;
 
   if (type_ == Type::kSeparator)
-    return base::string16();
+    return std::u16string();
 
   const MenuController* controller = GetMenuController();
   if (!controller ||
       controller->exit_type() != MenuController::ExitType::kNone) {
     // Either the menu has been closed or we're in the process of closing the
     // menu. Don't attempt to query the delegate as it may no longer be valid.
-    return base::string16();
+    return std::u16string();
   }
 
   const MenuItemView* root_menu_item = GetRootMenuItem();
@@ -142,12 +174,12 @@ base::string16 MenuItemView::GetTooltipText(const gfx::Point& p) const {
     // TODO(sky): if |canceled_| is true, controller->exit_type() should be
     // something other than ExitType::kNone, but crash reports seem to indicate
     // otherwise. Figure out why this is needed.
-    return base::string16();
+    return std::u16string();
   }
 
   const MenuDelegate* delegate = GetDelegate();
   if (!delegate)
-    return base::string16();
+    return std::u16string();
 
   gfx::Point location(p);
   ConvertPointToScreen(this, &location);
@@ -168,7 +200,7 @@ void MenuItemView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
       break;
   }
 
-  base::string16 item_text;
+  std::u16string item_text;
   if (IsContainer()) {
     // The first child is taking over, just use its accessible name instead of
     // |title_|.
@@ -206,11 +238,11 @@ void MenuItemView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
       break;
   }
 
-  base::char16 mnemonic = GetMnemonic();
+  char16_t mnemonic = GetMnemonic();
   if (mnemonic != '\0') {
     node_data->AddStringAttribute(
         ax::mojom::StringAttribute::kKeyShortcuts,
-        base::UTF16ToUTF8(base::string16(1, mnemonic)));
+        base::UTF16ToUTF8(std::u16string(1, mnemonic)));
   }
 
   if (IsTraversableByKeyboard()) {
@@ -250,8 +282,7 @@ View::FocusBehavior MenuItemView::GetFocusBehavior() const {
   // The rest of the MenuItemView types are presumably focusable, at least by
   // assistive technologies. But if they lack presentable information, then
   // there won't be anything for ATs to convey to the user. Filter those out.
-  if (title_.empty() && secondary_title_.empty() && minor_text_.empty() &&
-      vector_icon_.empty()) {
+  if (title_.empty() && secondary_title_.empty() && minor_text_.empty()) {
     return FocusBehavior::NEVER;
   }
 
@@ -260,23 +291,31 @@ View::FocusBehavior MenuItemView::GetFocusBehavior() const {
 
 // static
 bool MenuItemView::IsBubble(MenuAnchorPosition anchor) {
-  return anchor == MenuAnchorPosition::kBubbleAbove ||
-         anchor == MenuAnchorPosition::kBubbleBelow ||
-         anchor == MenuAnchorPosition::kBubbleLeft ||
-         anchor == MenuAnchorPosition::kBubbleRight;
+  switch (anchor) {
+    case MenuAnchorPosition::kTopLeft:
+    case MenuAnchorPosition::kTopRight:
+    case MenuAnchorPosition::kBottomCenter:
+      return false;
+    case MenuAnchorPosition::kBubbleTopLeft:
+    case MenuAnchorPosition::kBubbleTopRight:
+    case MenuAnchorPosition::kBubbleLeft:
+    case MenuAnchorPosition::kBubbleRight:
+    case MenuAnchorPosition::kBubbleBelow:
+      return true;
+  }
 }
 
 // static
-base::string16 MenuItemView::GetAccessibleNameForMenuItem(
-    const base::string16& item_text,
-    const base::string16& minor_text,
+std::u16string MenuItemView::GetAccessibleNameForMenuItem(
+    const std::u16string& item_text,
+    const std::u16string& minor_text,
     bool is_new_feature) {
-  base::string16 accessible_name = item_text;
+  std::u16string accessible_name = item_text;
 
   // Filter out the "&" for accessibility clients.
   size_t index = 0;
-  const base::char16 amp = '&';
-  while ((index = accessible_name.find(amp, index)) != base::string16::npos &&
+  const char16_t amp = '&';
+  while ((index = accessible_name.find(amp, index)) != std::u16string::npos &&
          index + 1 < accessible_name.length()) {
     accessible_name.replace(index, accessible_name.length() - index,
                             accessible_name.substr(index + 1));
@@ -310,19 +349,18 @@ void MenuItemView::Cancel() {
 MenuItemView* MenuItemView::AddMenuItemAt(
     int index,
     int item_id,
-    const base::string16& label,
-    const base::string16& secondary_label,
-    const base::string16& minor_text,
-    const ui::ThemedVectorIcon& minor_icon,
-    const gfx::ImageSkia& icon,
-    const ui::ThemedVectorIcon& vector_icon,
+    const std::u16string& label,
+    const std::u16string& secondary_label,
+    const std::u16string& minor_text,
+    const ui::ImageModel& minor_icon,
+    const ui::ImageModel& icon,
     Type type,
     ui::MenuSeparatorType separator_style) {
   DCHECK_NE(type, Type::kEmpty);
   DCHECK_GE(index, 0);
   if (!submenu_)
     CreateSubmenu();
-  DCHECK_LE(size_t{index}, submenu_->children().size());
+  DCHECK_LE(static_cast<size_t>(index), submenu_->children().size());
   if (type == Type::kSeparator) {
     submenu_->AddChildViewAt(std::make_unique<MenuSeparator>(separator_style),
                              index);
@@ -336,12 +374,7 @@ MenuItemView* MenuItemView::AddMenuItemAt(
   item->SetSecondaryTitle(secondary_label);
   item->SetMinorText(minor_text);
   item->SetMinorIcon(minor_icon);
-  if (!vector_icon.empty()) {
-    DCHECK(icon.isNull());
-    item->SetIcon(vector_icon);
-  }
-  if (!icon.isNull())
-    item->SetIcon(icon);
+  item->SetIcon(icon);
   if (type == Type::kSubMenu || type == Type::kActionableSubMenu)
     item->CreateSubmenu();
   if (type == Type::kHighlighted) {
@@ -372,47 +405,48 @@ void MenuItemView::RemoveAllMenuItems() {
 }
 
 MenuItemView* MenuItemView::AppendMenuItem(int item_id,
-                                           const base::string16& label,
+                                           const std::u16string& label,
                                            const gfx::ImageSkia& icon) {
   return AppendMenuItemImpl(item_id, label, icon, Type::kNormal);
 }
 
 MenuItemView* MenuItemView::AppendSubMenu(int item_id,
-                                          const base::string16& label,
+                                          const std::u16string& label,
                                           const gfx::ImageSkia& icon) {
   return AppendMenuItemImpl(item_id, label, icon, Type::kSubMenu);
 }
 
 void MenuItemView::AppendSeparator() {
-  AppendMenuItemImpl(0, base::string16(), gfx::ImageSkia(), Type::kSeparator);
+  AppendMenuItemImpl(0, std::u16string(), gfx::ImageSkia(), Type::kSeparator);
 }
 
 void MenuItemView::AddSeparatorAt(int index) {
-  AddMenuItemAt(index, /*item_id=*/0, /*label=*/base::string16(),
-                /*secondary_label=*/base::string16(),
-                /*minor_text=*/base::string16(),
-                /*minor_icon=*/ui::ThemedVectorIcon(),
-                /*icon=*/gfx::ImageSkia(),
-                /*vector_icon=*/ui::ThemedVectorIcon(),
+  AddMenuItemAt(index, /*item_id=*/0, /*label=*/std::u16string(),
+                /*secondary_label=*/std::u16string(),
+                /*minor_text=*/std::u16string(),
+                /*minor_icon=*/ui::ImageModel(),
+                /*icon=*/ui::ImageModel(),
                 /*type=*/Type::kSeparator,
                 /*separator_style=*/ui::NORMAL_SEPARATOR);
 }
 
 MenuItemView* MenuItemView::AppendMenuItemImpl(int item_id,
-                                               const base::string16& label,
+                                               const std::u16string& label,
                                                const gfx::ImageSkia& icon,
                                                Type type) {
-  const int index = submenu_ ? int{submenu_->children().size()} : 0;
-  return AddMenuItemAt(index, item_id, label, base::string16(),
-                       base::string16(), ui::ThemedVectorIcon(), icon,
-                       ui::ThemedVectorIcon(), type, ui::NORMAL_SEPARATOR);
+  const int index =
+      submenu_ ? static_cast<int>(submenu_->children().size()) : 0;
+  return AddMenuItemAt(index, item_id, label, std::u16string(),
+                       std::u16string(), ui::ImageModel(),
+                       ui::ImageModel::FromImageSkia(icon), type,
+                       ui::NORMAL_SEPARATOR);
 }
 
 SubmenuView* MenuItemView::CreateSubmenu() {
   if (!submenu_) {
     submenu_ = new SubmenuView(this);
 
-#if defined(OS_APPLE)
+#if defined(OS_MAC)
     // All MenuItemViews of Type kSubMenu have a respective SubmenuView.
     // However, in the Views hierarchy, this SubmenuView is not a child of the
     // MenuItemView. This confuses VoiceOver, because it expects the submenu
@@ -422,7 +456,7 @@ SubmenuView* MenuItemView::CreateSubmenu() {
         std::make_unique<AXVirtualView>();
     virtual_child->GetCustomData().role = ax::mojom::Role::kMenu;
     GetViewAccessibility().AddVirtualChildView(std::move(virtual_child));
-#endif  //  defined(OS_APPLE)
+#endif  //  defined(OS_MAC)
 
     // Initialize the submenu indicator icon (arrow).
     submenu_arrow_image_view_ = AddChildView(std::make_unique<ImageView>());
@@ -443,22 +477,22 @@ bool MenuItemView::SubmenuIsShowing() const {
   return HasSubmenu() && GetSubmenu()->IsShowing();
 }
 
-void MenuItemView::SetTitle(const base::string16& title) {
+void MenuItemView::SetTitle(const std::u16string& title) {
   title_ = title;
   invalidate_dimensions();  // Triggers preferred size recalculation.
 }
 
-void MenuItemView::SetSecondaryTitle(const base::string16& secondary_title) {
+void MenuItemView::SetSecondaryTitle(const std::u16string& secondary_title) {
   secondary_title_ = secondary_title;
   invalidate_dimensions();  // Triggers preferred size recalculation.
 }
 
-void MenuItemView::SetMinorText(const base::string16& minor_text) {
+void MenuItemView::SetMinorText(const std::u16string& minor_text) {
   minor_text_ = minor_text;
   invalidate_dimensions();  // Triggers preferred size recalculation.
 }
 
-void MenuItemView::SetMinorIcon(const ui::ThemedVectorIcon& minor_icon) {
+void MenuItemView::SetMinorIcon(const ui::ImageModel& minor_icon) {
   minor_icon_ = minor_icon;
   invalidate_dimensions();  // Triggers preferred size recalculation.
 }
@@ -486,42 +520,20 @@ void MenuItemView::SetSelectionOfActionableSubmenu(
   SchedulePaint();
 }
 
-void MenuItemView::SetTooltip(const base::string16& tooltip, int item_id) {
+void MenuItemView::SetTooltip(const std::u16string& tooltip, int item_id) {
   MenuItemView* item = GetMenuItemByID(item_id);
   DCHECK(item);
   item->tooltip_ = tooltip;
 }
 
-void MenuItemView::SetIcon(const gfx::ImageSkia& icon, int item_id) {
-  MenuItemView* item = GetMenuItemByID(item_id);
-  DCHECK(item);
-  item->SetIcon(icon);
-}
-
-void MenuItemView::SetIcon(const gfx::ImageSkia& icon) {
-  vector_icon_.clear();
-
-  if (icon.isNull()) {
+void MenuItemView::SetIcon(const ui::ImageModel& icon) {
+  if (icon.IsEmpty()) {
     SetIconView(nullptr);
     return;
   }
 
   auto icon_view = std::make_unique<ImageView>();
-  icon_view->SetImage(&icon);
-  SetIconView(std::move(icon_view));
-}
-
-void MenuItemView::SetIcon(const ui::ThemedVectorIcon& icon) {
-  vector_icon_ = icon;
-  UpdateIconViewFromVectorIconAndTheme();
-}
-
-void MenuItemView::UpdateIconViewFromVectorIconAndTheme() {
-  if (vector_icon_.empty())
-    return;
-
-  auto icon_view = std::make_unique<ImageView>();
-  icon_view->SetImage(vector_icon_.GetImageSkia(GetNativeTheme()));
+  icon_view->SetImage(icon);
   SetIconView(std::move(icon_view));
 }
 
@@ -561,11 +573,6 @@ int MenuItemView::GetHeightForWidth(int width) const {
   height += margins.height();
 
   return height;
-}
-
-void MenuItemView::OnThemeChanged() {
-  View::OnThemeChanged();
-  UpdateIconViewFromVectorIconAndTheme();
 }
 
 gfx::Rect MenuItemView::GetSubmenuAreaOfActionableSubmenu() const {
@@ -611,7 +618,7 @@ const MenuItemView* MenuItemView::GetRootMenuItem() const {
   return item;
 }
 
-base::char16 MenuItemView::GetMnemonic() {
+char16_t MenuItemView::GetMnemonic() {
   if (!GetRootMenuItem()->has_mnemonics_ ||
       !MenuConfig::instance().use_mnemonics || !may_have_mnemonics()) {
     return 0;
@@ -620,9 +627,9 @@ base::char16 MenuItemView::GetMnemonic() {
   size_t index = 0;
   do {
     index = title_.find('&', index);
-    if (index != base::string16::npos) {
+    if (index != std::u16string::npos) {
       if (index + 1 != title_.size() && title_[index + 1] != '&') {
-        base::char16 char_array[] = {title_[index + 1], 0};
+        char16_t char_array[] = {title_[index + 1], 0};
         // TODO(jshin): What about Turkish locale? See http://crbug.com/81719.
         // If the mnemonic is capital I and the UI language is Turkish,
         // lowercasing it results in 'small dotless i', which is different
@@ -631,7 +638,7 @@ base::char16 MenuItemView::GetMnemonic() {
       }
       index++;
     }
-  } while (index != base::string16::npos);
+  } while (index != std::u16string::npos);
   return 0;
 }
 
@@ -710,7 +717,7 @@ void MenuItemView::Layout() {
     if (icon_view_) {
       icon_view_->SizeToPreferredSize();
       gfx::Size size = icon_view_->GetPreferredSize();
-      int x = config.item_horizontal_padding + left_icon_margin_ +
+      int x = config.item_horizontal_padding +
               (icon_area_width_ - size.width()) / 2;
       if (config.icons_in_label || type_ == Type::kCheckbox ||
           type_ == Type::kRadio)
@@ -724,7 +731,7 @@ void MenuItemView::Layout() {
     }
 
     if (radio_check_image_view_) {
-      int x = config.item_horizontal_padding + left_icon_margin_;
+      int x = config.item_horizontal_padding;
       if (GetMenuController() && GetMenuController()->use_touchable_layout())
         x = config.touchable_item_horizontal_padding;
       int y =
@@ -779,9 +786,7 @@ void MenuItemView::SetAlerted() {
 }
 
 bool MenuItemView::ShouldShowNewBadge() const {
-  static const bool feature_enabled =
-      base::FeatureList::IsEnabled(features::kEnableNewBadgeOnMenuItems);
-  return feature_enabled && is_new_;
+  return is_new_;
 }
 
 bool MenuItemView::IsTraversableByKeyboard() const {
@@ -822,27 +827,19 @@ void MenuItemView::UpdateMenuPartSizes() {
       (use_touchable_layout ? config.touchable_item_horizontal_padding
                             : config.item_horizontal_padding) +
       icon_area_width_;
-  int padding = 0;
-  if (config.always_use_icon_to_label_padding) {
-    padding = LayoutProvider::Get()->GetDistanceMetric(
-        DISTANCE_RELATED_LABEL_HORIZONTAL);
-  } else if (!config.icons_in_label) {
-    padding = (has_icons_ || HasChecksOrRadioButtons())
-                  ? LayoutProvider::Get()->GetDistanceMetric(
-                        DISTANCE_RELATED_LABEL_HORIZONTAL)
-                  : 0;
-  }
-  if (use_touchable_layout)
-    padding = LayoutProvider::Get()->GetDistanceMetric(
-        DISTANCE_RELATED_LABEL_HORIZONTAL);
+
+  const bool use_padding = config.always_use_icon_to_label_padding ||
+                           (!config.icons_in_label && has_icons_) ||
+                           HasChecksOrRadioButtons() || use_touchable_layout;
+  int padding = use_padding ? LayoutProvider::Get()->GetDistanceMetric(
+                                  DISTANCE_RELATED_LABEL_HORIZONTAL)
+                            : 0;
 
   label_start_ += padding;
 
   EmptyMenuMenuItem menu_item(this);
   menu_item.set_controller(GetMenuController());
   pref_menu_height_ = menu_item.GetPreferredSize().height();
-
-  UpdateIconViewFromVectorIconAndTheme();
 }
 
 void MenuItemView::Init(MenuItemView* parent,
@@ -864,18 +861,8 @@ void MenuItemView::Init(MenuItemView* parent,
     radio_check_image_view_->SetCanProcessEventsWithinSubtree(false);
   }
 
-  if (type_ == Type::kActionableSubMenu) {
-    vertical_separator_ = AddChildView(std::make_unique<Separator>());
-    vertical_separator_->SetVisible(true);
-    vertical_separator_->SetFocusBehavior(FocusBehavior::NEVER);
-    const MenuConfig& config = MenuConfig::instance();
-    vertical_separator_->SetColor(GetNativeTheme()->GetSystemColor(
-        ui::NativeTheme::kColorId_MenuSeparatorColor));
-    vertical_separator_->SetPreferredSize(
-        gfx::Size(config.actionable_submenu_vertical_separator_width,
-                  config.actionable_submenu_vertical_separator_height));
-    vertical_separator_->SetCanProcessEventsWithinSubtree(false);
-  }
+  if (type_ == Type::kActionableSubMenu)
+    vertical_separator_ = AddChildView(std::make_unique<VerticalSeparator>());
 
   if (submenu_arrow_image_view_)
     submenu_arrow_image_view_->SetVisible(HasSubmenu());
@@ -977,7 +964,6 @@ void MenuItemView::AdjustBoundsForRTLUI(gfx::Rect* rect) const {
 }
 
 void MenuItemView::PaintButton(gfx::Canvas* canvas, PaintButtonMode mode) {
-  const MenuConfig& config = MenuConfig::instance();
   bool render_selection =
       (mode == PaintButtonMode::kNormal && IsSelected() &&
        parent_menu_item_->GetSubmenu()->GetShowSelection(this) &&
@@ -1026,10 +1012,7 @@ void MenuItemView::PaintButton(gfx::Canvas* canvas, PaintButtonMode mode) {
   int accel_width = parent_menu_item_->GetSubmenu()->max_minor_text_width();
   int label_start = GetLabelStartForThisItem();
 
-  int width = this->width() - label_start - accel_width -
-              (!delegate || delegate->ShouldReserveSpaceForSubmenuIndicator()
-                   ? item_right_margin_
-                   : config.arrow_to_edge_padding);
+  int width = this->width() - label_start - accel_width - item_right_margin_;
   gfx::Rect text_bounds(label_start, top_margin, width, text_height);
   text_bounds.set_x(GetMirroredXForRect(text_bounds));
   int flags = GetDrawStringFlags();
@@ -1119,9 +1102,9 @@ void MenuItemView::PaintBackground(gfx::Canvas* canvas,
 void MenuItemView::PaintMinorIconAndText(
     gfx::Canvas* canvas,
     const MenuDelegate::LabelStyle& style) {
-  base::string16 minor_text = GetMinorText();
-  const ui::ThemedVectorIcon minor_icon = GetMinorIcon();
-  if (minor_text.empty() && minor_icon.empty())
+  std::u16string minor_text = GetMinorText();
+  const ui::ImageModel minor_icon = GetMinorIcon();
+  if (minor_text.empty() && minor_icon.IsEmpty())
     return;
 
   int available_height = height() - GetTopMargin() - GetBottomMargin();
@@ -1148,8 +1131,9 @@ void MenuItemView::PaintMinorIconAndText(
     render_text->Draw(canvas);
   }
 
-  if (!minor_icon.empty()) {
-    gfx::ImageSkia image = minor_icon.GetImageSkia(style.foreground);
+  if (!minor_icon.IsEmpty()) {
+    const gfx::ImageSkia image =
+        GetImageSkiaFromImageModel(minor_icon, GetNativeTheme());
 
     int image_x = GetMirroredRect(minor_text_bounds).right() -
                   render_text->GetContentWidth() -
@@ -1279,7 +1263,7 @@ MenuItemView::MenuItemDimensions MenuItemView::CalculateDimensions() const {
     return dimensions;
   }
 
-  base::string16 minor_text = GetMinorText();
+  std::u16string minor_text = GetMinorText();
 
   dimensions.height = child_size.height();
   // Adjust item content height if menu has both items with and without icons.
@@ -1301,20 +1285,10 @@ MenuItemView::MenuItemDimensions MenuItemView::CalculateDimensions() const {
 
   dimensions.height += GetBottomMargin() + GetTopMargin();
 
-  // Get Icon margin overrides for this particular item.
-  const MenuDelegate* delegate = GetDelegate();
-  if (delegate) {
-    delegate->GetHorizontalIconMargins(command_, icon_area_width_,
-                                       &left_icon_margin_, &right_icon_margin_);
-  } else {
-    left_icon_margin_ = 0;
-    right_icon_margin_ = 0;
-  }
-  int label_start = GetLabelStartForThisItem();
-
-  // Determine the length of the label text.
   int string_width = gfx::GetStringWidth(title_, style.font_list);
+  int label_start = GetLabelStartForThisItem();
   dimensions.standard_width = string_width + label_start + item_right_margin_;
+
   // Determine the length of the right-side text.
   dimensions.minor_text_width =
       (minor_text.empty() ? 0
@@ -1371,7 +1345,7 @@ int MenuItemView::GetLabelStartForThisItem() const {
            icon_view_->GetPreferredSize().width();
   }
 
-  int label_start = label_start_ + left_icon_margin_ + right_icon_margin_;
+  int label_start = label_start_;
   if ((config.icons_in_label || type_ == Type::kCheckbox ||
        type_ == Type::kRadio) &&
       icon_view_) {
@@ -1383,20 +1357,20 @@ int MenuItemView::GetLabelStartForThisItem() const {
   return label_start;
 }
 
-base::string16 MenuItemView::GetMinorText() const {
+std::u16string MenuItemView::GetMinorText() const {
   if (GetID() == kEmptyMenuItemViewID) {
     // Don't query the delegate for menus that represent no children.
-    return base::string16();
+    return std::u16string();
   }
 
-  base::string16 accel_text;
+  std::u16string accel_text;
   if (MenuConfig::instance().ShouldShowAcceleratorText(this, &accel_text))
     return accel_text;
 
   return minor_text_;
 }
 
-ui::ThemedVectorIcon MenuItemView::GetMinorIcon() const {
+ui::ImageModel MenuItemView::GetMinorIcon() const {
   return minor_icon_;
 }
 
@@ -1420,7 +1394,7 @@ gfx::Insets MenuItemView::GetContainerMargins() const {
 }
 
 int MenuItemView::NonIconChildViewsCount() const {
-  return int{children().size()} - (icon_view_ ? 1 : 0) -
+  return static_cast<int>(children().size()) - (icon_view_ ? 1 : 0) -
          (radio_check_image_view_ ? 1 : 0) -
          (submenu_arrow_image_view_ ? 1 : 0) - (vertical_separator_ ? 1 : 0);
 }

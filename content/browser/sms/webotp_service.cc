@@ -15,7 +15,6 @@
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/optional.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/sms/sms_metrics.h"
 #include "content/browser/sms/user_consent_handler.h"
@@ -27,6 +26,7 @@
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/sms/webotp_constants.h"
 #include "third_party/blink/public/mojom/sms/webotp_service.mojom-shared.h"
 
@@ -88,7 +88,7 @@ WebOTPService::WebOTPService(
     const OriginList& origin_list,
     RenderFrameHost* host,
     mojo::PendingReceiver<blink::mojom::WebOTPService> receiver)
-    : FrameServiceBase(host, std::move(receiver)),
+    : DocumentServiceBase(host, std::move(receiver)),
       fetcher_(fetcher),
       origin_list_(origin_list),
       timeout_timer_(FROM_HERE,
@@ -141,16 +141,14 @@ void WebOTPService::Receive(ReceiveCallback callback) {
   WebContents* web_contents =
       content::WebContents::FromRenderFrameHost(render_frame_host());
   if (!web_contents->GetDelegate()) {
-    std::move(callback).Run(SmsStatus::kCancelled, base::nullopt);
+    std::move(callback).Run(SmsStatus::kCancelled, absl::nullopt);
     return;
   }
 
   DCHECK(!origin_list_.empty());
-  // Abort the last request if there is we have not yet handled it.
-  if (callback_) {
-    std::move(callback_).Run(SmsStatus::kCancelled, base::nullopt);
-    fetcher_->Unsubscribe(origin_list_, this);
-  }
+  // Cancels the last request if there is we have not yet handled it.
+  if (callback_)
+    CompleteRequest(SmsStatus::kCancelled);
 
   start_time_ = base::TimeTicks::Now();
   callback_ = std::move(callback);
@@ -170,11 +168,13 @@ void WebOTPService::Receive(ReceiveCallback callback) {
   fetcher_->Subscribe(origin_list_, this, render_frame_host());
 }
 
-void WebOTPService::OnReceive(const std::string& one_time_code,
+void WebOTPService::OnReceive(const OriginList& origin_list,
+                              const std::string& one_time_code,
                               UserConsent consent_requirement) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!one_time_code_);
   DCHECK(!start_time_.is_null());
+  DCHECK(!origin_list.empty());
 
   receive_time_ = base::TimeTicks::Now();
   RecordSmsReceiveTime(receive_time_ - start_time_,
@@ -183,6 +183,18 @@ void WebOTPService::OnReceive(const std::string& one_time_code,
                          render_frame_host()->GetPageUkmSourceId());
 
   one_time_code_ = one_time_code;
+
+  WebContents* web_contents =
+      content::WebContents::FromRenderFrameHost(render_frame_host());
+  // With UserConsent API, users can see and interact with the permission prompt
+  // when they are on the different page other than the one that calls WebOTP.
+  // This is considered as a bad UX and we should measure how many successful
+  // verifications are exercising the UserConsent backend which is implied by
+  // UserConsent::kObtained.
+  if (consent_requirement == UserConsent::kObtained) {
+    RecordWebContentsVisibilityOnReceive(web_contents->GetVisibility() ==
+                                         Visibility::VISIBLE);
+  }
 
   // Create a new consent handler for each OTP request. While we could
   // potentially cache these across request but they are lightweight enought to
@@ -207,7 +219,11 @@ void WebOTPService::OnFailure(FailureType failure_type) {
       // could use such information for targeting. By using a timeout in all
       // cases, it is not possible to distinguish between sms not being received
       // and received but not shared.
+      // Note that we still unsubscribe it from the fetcher and |Unsubscribe|
+      // will be called again during the normal |CompleteRequest| process but it
+      // should be no-op.
       prompt_failure_ = failure_type;
+      fetcher_->Unsubscribe(origin_list_, this);
       return;
     case FailureType::kBackendNotAvailable:
       CompleteRequest(SmsStatus::kBackendNotAvailable);
@@ -231,6 +247,7 @@ void WebOTPService::OnFailure(FailureType failure_type) {
     case FailureType::kPromptTimeout:
     case FailureType::kPromptCancelled:
     case FailureType::kBackendNotAvailable:
+    case FailureType::kNoFailure:
       NOTREACHED();
       break;
   }
@@ -262,7 +279,7 @@ void WebOTPService::NavigationEntryCommitted(
 void WebOTPService::CompleteRequest(blink::mojom::SmsStatus status) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  base::Optional<std::string> code = base::nullopt;
+  absl::optional<std::string> code = absl::nullopt;
   if (status == SmsStatus::kSuccess) {
     DCHECK(one_time_code_);
     code = one_time_code_;
@@ -327,6 +344,20 @@ void WebOTPService::OnTimeout() {
 }
 
 void WebOTPService::RecordMetrics(blink::mojom::SmsStatus status) {
+  // Record ContinueOn timing values only if we are using an asynchronous
+  // consent handler (i.e. showing user prompts).
+  auto* consent_handler = GetConsentHandler();
+  if (consent_handler && consent_handler->is_async()) {
+    if (status == SmsStatus::kSuccess) {
+      DCHECK(!receive_time_.is_null());
+      RecordContinueOnSuccessTime(base::TimeTicks::Now() - receive_time_);
+    } else if (prompt_failure_ &&
+               prompt_failure_.value() == FailureType::kPromptCancelled) {
+      DCHECK(!receive_time_.is_null());
+      RecordCancelOnSuccessTime(base::TimeTicks::Now() - receive_time_);
+    }
+  }
+
   ukm::SourceId source_id = render_frame_host()->GetPageUkmSourceId();
   ukm::UkmRecorder* recorder = ukm::UkmRecorder::Get();
 
@@ -336,6 +367,30 @@ void WebOTPService::RecordMetrics(blink::mojom::SmsStatus status) {
   // impact and implications. e.g. does user decline more often if the API is
   // used in an cross-origin iframe.
   bool is_cross_origin_frame = IsCrossOriginFrame(render_frame_host());
+  // For privacy, we do not reject the request immediately when user declines
+  // the permission prompt. Therefore the recording of such outcome is also
+  // delayed. We record it at one of the following scenarios:
+  //   1. at the timeout when the delayed timer fires
+  //   2. before the timeout if the request is aborted
+  //   3. before the timeout if |this| gets destroyed (e.g. website navigates)
+  //   4. before the timeout if the request is cancelled in favor of a new
+  //   request by the website.
+  // In 2, 3 and 4, there is a different SmsStatus when trying to record metrics
+  // so we need to do it based on prompt_failure_.
+  if (prompt_failure_) {
+    DCHECK_NE(status, SmsStatus::kSuccess);
+    if (prompt_failure_.value() == FailureType::kPromptCancelled) {
+      RecordSmsOutcome(Outcome::kUserCancelled, source_id, recorder,
+                       is_cross_origin_frame);
+      RecordSmsUserCancelTime(base::TimeTicks::Now() - start_time_, source_id,
+                              recorder);
+    } else if (prompt_failure_.value() == FailureType::kPromptTimeout) {
+      RecordSmsOutcome(Outcome::kTimeout, source_id, recorder,
+                       is_cross_origin_frame);
+    }
+    prompt_failure_.reset();
+    return;
+  }
 
   if (status == SmsStatus::kSuccess) {
     RecordSmsOutcome(Outcome::kSuccess, source_id, recorder,
@@ -352,17 +407,6 @@ void WebOTPService::RecordMetrics(blink::mojom::SmsStatus status) {
     RecordSmsOutcome(Outcome::kCancelled, source_id, recorder,
                      is_cross_origin_frame);
     RecordSmsCancelTime(base::TimeTicks::Now() - start_time_);
-  } else if (status == SmsStatus::kTimeout) {
-    if (prompt_failure_ &&
-        prompt_failure_.value() == FailureType::kPromptCancelled) {
-      RecordSmsOutcome(Outcome::kUserCancelled, source_id, recorder,
-                       is_cross_origin_frame);
-      RecordSmsUserCancelTime(base::TimeTicks::Now() - start_time_, source_id,
-                              recorder);
-    } else {
-      RecordSmsOutcome(Outcome::kTimeout, source_id, recorder,
-                       is_cross_origin_frame);
-    }
   } else if (status == SmsStatus::kBackendNotAvailable) {
     // Records when the backend is not available AND the request gets cancelled.
     // i.e. client specifies GmsBackend.VERIFICATION but it's unavailable. If
@@ -373,20 +417,8 @@ void WebOTPService::RecordMetrics(blink::mojom::SmsStatus status) {
     RecordSmsOutcome(Outcome::kBackendNotAvailable, source_id, recorder,
                      is_cross_origin_frame);
   }
-
-  // Record ContinueOn timing values only if we are using an asynchronous
-  // consent handler (i.e. showing user prompts).
-  auto* consent_handler = GetConsentHandler();
-  if (consent_handler && consent_handler->is_async()) {
-    if (status == SmsStatus::kSuccess) {
-      DCHECK(!receive_time_.is_null());
-      RecordContinueOnSuccessTime(base::TimeTicks::Now() - receive_time_);
-    } else if (prompt_failure_ &&
-               prompt_failure_.value() == FailureType::kPromptCancelled) {
-      DCHECK(!receive_time_.is_null());
-      RecordCancelOnSuccessTime(base::TimeTicks::Now() - receive_time_);
-    }
-  }
+  // The status |kTimeout| has been handled as part of the |prompt_failure_|
+  // handling logic.
 }
 
 void WebOTPService::OnUserConsentComplete(UserConsentResult result) {

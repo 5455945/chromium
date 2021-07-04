@@ -17,6 +17,8 @@
 #include "chrome/grit/theme_resources.h"
 #include "components/vector_icons/vector_icons.h"
 #include "third_party/skia/include/core/SkPath.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/insets.h"
@@ -27,8 +29,6 @@
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
-#include "ui/views/metadata/metadata_header_macros.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/view_class_properties.h"
 
 namespace {
@@ -64,8 +64,8 @@ END_METADATA
 
 CredentialsItemView::CredentialsItemView(
     PressedCallback callback,
-    const base::string16& upper_text,
-    const base::string16& lower_text,
+    const std::u16string& upper_text,
+    const std::u16string& lower_text,
     const password_manager::PasswordForm* form,
     network::mojom::URLLoaderFactory* loader_factory,
     int upper_text_style,
@@ -134,7 +134,7 @@ CredentialsItemView::CredentialsItemView(
   }
 
   if (!upper_text.empty() && !lower_text.empty())
-    SetAccessibleName(upper_text + base::ASCIIToUTF16("\n") + lower_text);
+    SetAccessibleName(upper_text + u"\n" + lower_text);
   else
     SetAccessibleName(upper_text + lower_text);
 

@@ -26,7 +26,6 @@ button {
 .lookalike-url button,
 .main-frame-blocked button,
 .neterror button,
-.offline button,
 .pdf button,
 .ssl button,
 .safe-browsing-billing button {
@@ -82,7 +81,7 @@ button:active {
 
 .error-code {
   color: var(--error-code-color);
-  font-size: .86667em;
+  font-size: .8em;
   text-transform: uppercase;
   margin-top: 12px;
 }

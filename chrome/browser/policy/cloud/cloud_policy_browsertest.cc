@@ -61,10 +61,10 @@
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/chromeos/policy/user_cloud_policy_manager_chromeos.h"
+#include "chrome/browser/ash/policy/core/user_cloud_policy_manager_chromeos.h"
 #include "chromeos/cryptohome/cryptohome_parameters.h"
-#include "chromeos/dbus/constants/dbus_paths.h"
-#include "chromeos/dbus/cryptohome/cryptohome_client.h"
+#include "chromeos/dbus/constants/dbus_paths.h"  // nogncheck
+#include "chromeos/dbus/userdataauth/userdataauth_client.h"
 #include "components/account_id/account_id.h"
 #include "components/user_manager/user_names.h"
 #else
@@ -191,7 +191,7 @@ class CloudPolicyTest : public InProcessBrowserTest,
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     ASSERT_NO_FATAL_FAILURE(SetServerPolicy(GetEmptyPolicy()));
 
-    test_server_.reset(new LocalPolicyTestServer(policy_file_path()));
+    test_server_ = std::make_unique<LocalPolicyTestServer>(policy_file_path());
     ASSERT_TRUE(test_server_->Start());
 
     std::string url = test_server_->GetServiceURL().spec();
@@ -226,7 +226,8 @@ class CloudPolicyTest : public InProcessBrowserTest,
     auto* identity_manager =
         IdentityManagerFactory::GetForProfile(browser()->profile());
     ASSERT_TRUE(identity_manager);
-    signin::SetPrimaryAccount(identity_manager, GetTestUser());
+    signin::SetPrimaryAccount(identity_manager, GetTestUser(),
+                              signin::ConsentLevel::kSync);
 
     UserCloudPolicyManager* policy_manager =
         browser()->profile()->GetUserCloudPolicyManager();
@@ -287,7 +288,7 @@ class CloudPolicyTest : public InProcessBrowserTest,
     ASSERT_TRUE(base::PathService::Get(
         chromeos::dbus_paths::DIR_USER_POLICY_KEYS, &user_policy_key_dir));
     std::string sanitized_username =
-        chromeos::CryptohomeClient::GetStubSanitizedUsername(
+        chromeos::UserDataAuthClient::GetStubSanitizedUsername(
             cryptohome::CreateAccountIdentifierFromAccountId(
                 AccountId::FromUserEmail(GetTestUser())));
     user_policy_key_file_ = user_policy_key_dir.AppendASCII(sanitized_username)
@@ -335,7 +336,13 @@ class CloudPolicyTest : public InProcessBrowserTest,
   base::OnceClosure on_policy_updated_;
 };
 
-IN_PROC_BROWSER_TEST_F(CloudPolicyTest, FetchPolicy) {
+// crbug.com/1224925 flaky on Win.
+#if defined(OS_WIN)
+#define MAYBE_FetchPolicy DISABLED_FetchPolicy
+#else
+#define MAYBE_FetchPolicy FetchPolicy
+#endif
+IN_PROC_BROWSER_TEST_F(CloudPolicyTest, MAYBE_FetchPolicy) {
   PolicyService* policy_service = GetPolicyService();
   {
     base::RunLoop run_loop;
@@ -385,7 +392,13 @@ IN_PROC_BROWSER_TEST_F(CloudPolicyTest, EnsureDefaultPoliciesSet) {
 }
 #endif
 
-IN_PROC_BROWSER_TEST_F(CloudPolicyTest, InvalidatePolicy) {
+// crbug.com/1224925 flaky on Win.
+#if defined(OS_WIN)
+#define MAYBE_InvalidatePolicy DISABLED_InvalidatePolicy
+#else
+#define MAYBE_InvalidatePolicy InvalidatePolicy
+#endif
+IN_PROC_BROWSER_TEST_F(CloudPolicyTest, MAYBE_InvalidatePolicy) {
   PolicyService* policy_service = GetPolicyService();
   policy_service->AddObserver(POLICY_DOMAIN_CHROME, this);
 

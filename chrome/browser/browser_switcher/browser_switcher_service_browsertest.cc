@@ -10,6 +10,7 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/run_loop.h"
+#include "base/strings/stringprintf.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
@@ -737,15 +738,16 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherServiceTest,
   // No policies configured.
 
   // LBS extension is installed.
-  auto extension = extensions::ExtensionBuilder()
-                       .SetLocation(extensions::Manifest::INTERNAL)
-                       .SetID(kLBSExtensionId)
-                       .SetManifest(extensions::DictionaryBuilder()
-                                        .Set("name", "Legacy Browser Support")
-                                        .Set("manifest_version", 2)
-                                        .Set("version", "5.9")
-                                        .Build())
-                       .Build();
+  auto extension =
+      extensions::ExtensionBuilder()
+          .SetLocation(extensions::mojom::ManifestLocation::kInternal)
+          .SetID(kLBSExtensionId)
+          .SetManifest(extensions::DictionaryBuilder()
+                           .Set("name", "Legacy Browser Support")
+                           .Set("manifest_version", 2)
+                           .Set("version", "5.9")
+                           .Build())
+          .Build();
   extensions::ExtensionSystem::Get(browser()->profile())
       ->extension_service()
       ->AddExtension(extension.get());

@@ -4,6 +4,10 @@
 
 import("//third_party/wayland/wayland_protocol.gni")
 
+wayland_protocol("gtk_shell_protocol") {
+  sources = [ "gtk/gdk/wayland/protocol/gtk-shell.xml" ]
+}
+
 wayland_protocol("gtk_primary_selection_protocol") {
   sources = [ "unstable/gtk-primary-selection/gtk-primary-selection.xml" ]
 }
@@ -135,4 +139,8 @@ wayland_protocol("extended_drag") {
 
 wayland_protocol("weston_test") {
   sources = [ "unstable/weston-test/weston-test.xml" ]
+}
+
+wayland_protocol("org_kde_kwin_idle") {
+  sources = [ "kde/src/protocols/idle.xml" ]
 }

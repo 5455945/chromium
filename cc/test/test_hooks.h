@@ -38,7 +38,8 @@ class TestHooks : public AnimationDelegate {
   virtual std::unique_ptr<RasterBufferProvider> CreateRasterBufferProvider(
       LayerTreeHostImpl* host_impl);
   virtual void WillBeginImplFrameOnThread(LayerTreeHostImpl* host_impl,
-                                          const viz::BeginFrameArgs& args) {}
+                                          const viz::BeginFrameArgs& args,
+                                          bool has_damage) {}
   virtual void DidFinishImplFrameOnThread(LayerTreeHostImpl* host_impl) {}
   virtual void WillSendBeginMainFrameOnThread(LayerTreeHostImpl* host_impl) {}
   virtual void DidSendBeginMainFrameOnThread(LayerTreeHostImpl* host_impl) {}
@@ -118,7 +119,6 @@ class TestHooks : public AnimationDelegate {
   virtual void DidCommit() {}
   virtual void DidCommitAndDrawFrame() {}
   virtual void DidReceiveCompositorFrameAck() {}
-  virtual void ScheduleComposite() {}
   virtual void DidActivateSyncTree() {}
   virtual void NotifyThroughputTrackerResults(CustomTrackerResults results) {}
 
@@ -138,7 +138,7 @@ class TestHooks : public AnimationDelegate {
       base::TimeTicks animation_start_time,
       std::unique_ptr<gfx::AnimationCurve> curve) override {}
   void NotifyLocalTimeUpdated(
-      base::Optional<base::TimeDelta> local_time) override {}
+      absl::optional<base::TimeDelta> local_time) override {}
 
   // OutputSurface indirections to the LayerTreeTest, that can be further
   // overridden.

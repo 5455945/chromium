@@ -8,11 +8,10 @@
 #include <string>
 #include <vector>
 
-#include "base/optional.h"
-#include "base/strings/string16.h"
 #include "base/time/time.h"
-#include "components/autofill/core/common/renderer_id.h"
+#include "components/autofill/core/common/unique_ids.h"
 #include "components/password_manager/core/browser/form_parsing/password_field_prediction.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace password_manager {
 
@@ -27,7 +26,8 @@ constexpr auto kMaxDelayBetweenTypingUsernameAndSubmission =
 struct PossibleUsernameData {
   PossibleUsernameData(std::string signon_realm,
                        autofill::FieldRendererId renderer_id,
-                       base::string16 value,
+                       const std::u16string& field_name,
+                       const std::u16string& value,
                        base::Time last_change,
                        int driver_id);
   PossibleUsernameData(const PossibleUsernameData&);
@@ -35,7 +35,8 @@ struct PossibleUsernameData {
 
   std::string signon_realm;
   autofill::FieldRendererId renderer_id;
-  base::string16 value;
+  std::u16string field_name;
+  std::u16string value;
   base::Time last_change;
 
   // Id of PasswordManagerDriver which corresponds to the frame of this field.
@@ -43,7 +44,7 @@ struct PossibleUsernameData {
   int driver_id;
 
   // Predictions for the form which contains a field with |renderer_id|.
-  base::Optional<FormPredictions> form_predictions;
+  absl::optional<FormPredictions> form_predictions;
 };
 
 // Checks that |possible_username| might represent an username:
@@ -55,7 +56,7 @@ struct PossibleUsernameData {
 bool IsPossibleUsernameValid(
     const PossibleUsernameData& possible_username,
     const std::string& submitted_signon_realm,
-    const std::vector<base::string16>& possible_usernames);
+    const std::vector<std::u16string>& possible_usernames);
 
 }  // namespace password_manager
 

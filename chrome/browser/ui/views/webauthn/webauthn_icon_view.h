@@ -8,7 +8,7 @@
 #include "base/containers/flat_map.h"
 #include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
 #include "chrome/browser/webauthn/authenticator_request_dialog_model.h"
-#include "ui/views/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/widget/widget_observer.h"
 
 class WebAuthnBubbleView;
@@ -35,7 +35,7 @@ class WebAuthnIconView : public PageActionIconView,
   // PageActionIconView:
   void OnExecuting(PageActionIconView::ExecuteSource execute_source) override;
   const gfx::VectorIcon& GetVectorIcon() const override;
-  base::string16 GetTextForTooltipAndAccessibleName() const override;
+  std::u16string GetTextForTooltipAndAccessibleName() const override;
 
   // views::WidgetObserver:
   void OnWidgetDestroying(views::Widget* widget) override;

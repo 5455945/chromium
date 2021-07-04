@@ -30,13 +30,14 @@
 #include <memory>
 #include <utility>
 
+#include "base/logging.h"
 #include "base/memory/ptr_util.h"
+#include "base/stl_util.h"
 #include "base/trace_event/traced_value.h"
 #include "cc/layers/layer.h"
 #include "cc/layers/picture_layer.h"
 #include "cc/paint/display_item_list.h"
 #include "third_party/blink/public/platform/platform.h"
-#include "third_party/blink/public/platform/web_size.h"
 #include "third_party/blink/renderer/platform/geometry/float_rect.h"
 #include "third_party/blink/renderer/platform/geometry/geometry_as_json.h"
 #include "third_party/blink/renderer/platform/geometry/layout_rect.h"
@@ -124,8 +125,7 @@ void GraphicsLayer::AppendAdditionalInfoAsJSON(LayerTreeFlags flags,
 
   if ((flags & (kLayerTreeIncludesInvalidations |
                 kLayerTreeIncludesDetailedInvalidations)) &&
-      Client().IsTrackingRasterInvalidations() &&
-      GetRasterInvalidationTracking()) {
+      IsTrackingRasterInvalidations() && GetRasterInvalidationTracking()) {
     GetRasterInvalidationTracking()->AsJSON(
         &json, flags & kLayerTreeIncludesDetailedInvalidations);
   }
@@ -351,6 +351,11 @@ void GraphicsLayer::Paint(Vector<PreCompositedLayerInfo>& pre_composited_layers,
   }
 
   auto& paint_controller = GetPaintController();
+
+  absl::optional<PaintChunkSubset> previous_chunks;
+  if (ShouldCreateLayersAfterPaint())
+    previous_chunks.emplace(paint_controller.GetPaintArtifactShared());
+
   PaintController::ScopedBenchmarkMode scoped_benchmark_mode(paint_controller,
                                                              benchmark_mode);
   bool cached = !paint_controller.ShouldForcePaintForBenchmark() &&
@@ -381,6 +386,17 @@ void GraphicsLayer::Paint(Vector<PreCompositedLayerInfo>& pre_composited_layers,
   PaintChunkSubset chunks(paint_controller.GetPaintArtifactShared());
   pre_composited_layers.push_back(PreCompositedLayerInfo{chunks, this});
 
+  if (ShouldCreateLayersAfterPaint()) {
+    if (auto* paint_artifact_compositor =
+            client_.GetPaintArtifactCompositor()) {
+      // This is checked even when |cached| is true because the paint controller
+      // may be fully cached while the PaintChunks within are marked as not
+      // cacheable.
+      paint_artifact_compositor->SetNeedsFullUpdateAfterPaintIfNeeded(
+          *previous_chunks, chunks);
+    }
+  }
+
   if (cached && !needs_check_raster_invalidation_ &&
       paint_controller.GetBenchmarkMode() !=
           PaintBenchmarkMode::kForceRasterInvalidationAndConvert) {
@@ -395,7 +411,7 @@ void GraphicsLayer::Paint(Vector<PreCompositedLayerInfo>& pre_composited_layers,
     EnsureRasterInvalidator().Generate(raster_invalidation_function_, chunks,
                                        layer_bounds, property_tree_state, this);
 
-    base::Optional<RasterUnderInvalidationCheckingParams>
+    absl::optional<RasterUnderInvalidationCheckingParams>
         raster_under_invalidation_params;
     if (RuntimeEnabledFeatures::PaintUnderInvalidationCheckingEnabled() &&
         PaintsContentOrHitTest()) {
@@ -424,7 +440,6 @@ void GraphicsLayer::Paint(Vector<PreCompositedLayerInfo>& pre_composited_layers,
 
 void GraphicsLayer::SetShouldCreateLayersAfterPaint(
     bool should_create_layers_after_paint) {
-  DCHECK(RuntimeEnabledFeatures::CompositeSVGEnabled());
   if (should_create_layers_after_paint != should_create_layers_after_paint_) {
     should_create_layers_after_paint_ = should_create_layers_after_paint;
     // Depending on |should_create_layers_after_paint_|, raster invalidation
@@ -491,14 +506,21 @@ RasterInvalidator& GraphicsLayer::EnsureRasterInvalidator() {
   if (!raster_invalidator_) {
     raster_invalidator_ = std::make_unique<RasterInvalidator>();
     raster_invalidator_->SetTracksRasterInvalidations(
-        client_.IsTrackingRasterInvalidations());
+        IsTrackingRasterInvalidations());
   }
   return *raster_invalidator_;
 }
 
+bool GraphicsLayer::IsTrackingRasterInvalidations() const {
+#if DCHECK_IS_ON()
+  if (VLOG_IS_ON(3))
+    return true;
+#endif
+  return Client().IsTrackingRasterInvalidations();
+}
+
 void GraphicsLayer::UpdateTrackingRasterInvalidations() {
-  bool should_track = client_.IsTrackingRasterInvalidations();
-  if (should_track)
+  if (IsTrackingRasterInvalidations())
     EnsureRasterInvalidator().SetTracksRasterInvalidations(true);
   else if (raster_invalidator_)
     raster_invalidator_->SetTracksRasterInvalidations(false);

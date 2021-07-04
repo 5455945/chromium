@@ -6,14 +6,16 @@
 
 #include <stddef.h>
 
+#include <memory>
+
 #include "base/command_line.h"
-#include "base/stl_util.h"
+#include "base/cxx17_backports.h"
 #include "build/build_config.h"
 #include "chrome/browser/ash/login/easy_unlock/easy_unlock_key_manager.h"
 #include "chromeos/components/proximity_auth/screenlock_bridge.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace chromeos {
+namespace ash {
 namespace {
 
 // Fake user ids used in tests.
@@ -83,14 +85,14 @@ class TestLockHandler : public proximity_auth::ScreenlockBridge::LockHandler {
   }
 
   // proximity_auth::ScreenlockBridge::LockHandler implementation:
-  void ShowBannerMessage(const base::string16& message,
+  void ShowBannerMessage(const std::u16string& message,
                          bool is_warning) override {
     ADD_FAILURE() << "Should not be reached.";
   }
 
   void ShowUserPodCustomIcon(
       const AccountId& account_id,
-      const proximity_auth::ScreenlockBridge::UserPodCustomIconOptions& icon)
+      const proximity_auth::ScreenlockBridge::UserPodCustomIconInfo& icon_info)
       override {
     ADD_FAILURE() << "Should not be reached.";
   }
@@ -106,7 +108,7 @@ class TestLockHandler : public proximity_auth::ScreenlockBridge::LockHandler {
 
   void SetAuthType(const AccountId& account_id,
                    proximity_auth::mojom::AuthType auth_type,
-                   const base::string16& auth_value) override {
+                   const std::u16string& auth_value) override {
     ADD_FAILURE() << "Should not be reached.";
   }
 
@@ -160,8 +162,8 @@ class EasyUnlockAuthAttemptUnlockTest : public testing::Test {
   ~EasyUnlockAuthAttemptUnlockTest() override {}
 
   void SetUp() override {
-    auth_attempt_.reset(new EasyUnlockAuthAttempt(
-        test_account_id1_, EasyUnlockAuthAttempt::TYPE_UNLOCK));
+    auth_attempt_ = std::make_unique<EasyUnlockAuthAttempt>(
+        test_account_id1_, EasyUnlockAuthAttempt::TYPE_UNLOCK);
   }
 
   void TearDown() override {
@@ -171,7 +173,7 @@ class EasyUnlockAuthAttemptUnlockTest : public testing::Test {
 
  protected:
   void InitScreenLock() {
-    lock_handler_.reset(new TestLockHandler(test_account_id1_));
+    lock_handler_ = std::make_unique<TestLockHandler>(test_account_id1_);
     lock_handler_->set_state(TestLockHandler::STATE_ATTEMPTING_UNLOCK);
     proximity_auth::ScreenlockBridge::Get()->SetLockHandler(
         lock_handler_.get());
@@ -292,8 +294,8 @@ class EasyUnlockAuthAttemptSigninTest : public testing::Test {
   ~EasyUnlockAuthAttemptSigninTest() override {}
 
   void SetUp() override {
-    auth_attempt_.reset(new EasyUnlockAuthAttempt(
-        test_account_id1_, EasyUnlockAuthAttempt::TYPE_SIGNIN));
+    auth_attempt_ = std::make_unique<EasyUnlockAuthAttempt>(
+        test_account_id1_, EasyUnlockAuthAttempt::TYPE_SIGNIN);
   }
 
   void TearDown() override {
@@ -303,7 +305,7 @@ class EasyUnlockAuthAttemptSigninTest : public testing::Test {
 
  protected:
   void InitScreenLock() {
-    lock_handler_.reset(new TestLockHandler(test_account_id1_));
+    lock_handler_ = std::make_unique<TestLockHandler>(test_account_id1_);
     lock_handler_->set_state(TestLockHandler::STATE_ATTEMPTING_SIGNIN);
     proximity_auth::ScreenlockBridge::Get()->SetLockHandler(
         lock_handler_.get());
@@ -463,4 +465,4 @@ TEST_F(EasyUnlockAuthAttemptSigninTest, FinalizeSigninCalledForWrongUser) {
 }
 
 }  // namespace
-}  // namespace chromeos
+}  // namespace ash

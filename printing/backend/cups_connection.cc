@@ -11,7 +11,6 @@
 #include <utility>
 
 #include "base/logging.h"
-#include "base/strings/stringprintf.h"
 #include "printing/backend/cups_jobs.h"
 
 namespace printing {
@@ -81,10 +80,11 @@ class CupsConnectionImpl : public CupsConnection {
 
   ~CupsConnectionImpl() override {}
 
-  std::vector<std::unique_ptr<CupsPrinter>> GetDests() override {
+  bool GetDests(std::vector<std::unique_ptr<CupsPrinter>>& printers) override {
+    printers.clear();
     if (!Connect()) {
-      LOG(WARNING) << "CUPS connection failed";
-      return std::vector<std::unique_ptr<CupsPrinter>>();
+      LOG(WARNING) << "CUPS connection failed: ";
+      return false;
     }
 
     // On macOS, AirPrint destinations show up even if they're not added to the
@@ -102,17 +102,16 @@ class CupsConnectionImpl : public CupsConnection {
 
     if (!success) {
       LOG(WARNING) << "Enumerating printers failed";
-      return std::vector<std::unique_ptr<CupsPrinter>>();
+      return false;
     }
 
     auto dests = std::move(enumerator.get_dests());
-    std::vector<std::unique_ptr<CupsPrinter>> printers;
     for (auto& dest : dests) {
       printers.push_back(
           CupsPrinter::Create(cups_http_.get(), std::move(dest)));
     }
 
-    return printers;
+    return true;
   }
 
   std::unique_ptr<CupsPrinter> GetPrinter(const std::string& name) override {
@@ -177,6 +176,9 @@ class CupsConnectionImpl : public CupsConnection {
   std::string server_name() const override { return print_server_url_.host(); }
 
   int last_error() const override { return cupsLastError(); }
+  std::string last_error_message() const override {
+    return cupsLastErrorString();
+  }
 
  private:
   // lazily initialize http connection

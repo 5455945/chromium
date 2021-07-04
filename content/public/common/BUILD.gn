@@ -141,6 +141,7 @@ source_set("common_sources") {
     "referrer.h",
     "referrer_type_converters.cc",
     "referrer_type_converters.h",
+    "resource_request_blocked_reason.h",
     "resource_usage_reporter_type_converters.cc",
     "resource_usage_reporter_type_converters.h",
     "result_codes.h",
@@ -165,10 +166,7 @@ source_set("common_sources") {
   ]
 
   if (is_win) {
-    sources += [
-      "font_cache_dispatcher_win.h",
-      "injection_test_win.h",
-    ]
+    sources += [ "font_cache_dispatcher_win.h" ]
   }
 
   if (is_android) {
@@ -176,10 +174,6 @@ source_set("common_sources") {
       "resource_request_body_android.cc",
       "resource_request_body_android.h",
     ]
-  }
-
-  if (is_linux || is_chromeos) {
-    sources += [ "common_sandbox_support_linux.h" ]
   }
 
   configs += [
@@ -244,7 +238,6 @@ source_set("common_sources") {
   }
 
   if (is_android) {
-    sources += [ "cpu_affinity.h" ]
     deps += [ "//content/public/android:jni" ]
   }
 
@@ -316,7 +309,6 @@ mojom("interfaces") {
   sources = [
     "drop_data.mojom",
     "resource_usage_reporter.mojom",
-    "was_activated_option.mojom",
     "webplugininfo.mojom",
     "window_container_type.mojom",
   ]

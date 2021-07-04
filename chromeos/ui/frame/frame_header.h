@@ -5,14 +5,17 @@
 #ifndef CHROMEOS_UI_FRAME_FRAME_HEADER_H_
 #define CHROMEOS_UI_FRAME_FRAME_HEADER_H_
 
+#include <string>
+
 #include "base/callback.h"
 #include "base/component_export.h"
-#include "base/optional.h"
-#include "base/strings/string16.h"
 #include "chromeos/ui/frame/caption_buttons/frame_caption_button_container_view.h"
+#include "chromeos/ui/frame/caption_buttons/frame_center_button.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/compositor/layer_animation_observer.h"
+#include "ui/compositor/layer_observer.h"
 #include "ui/views/window/frame_caption_button.h"
 
 namespace ash {
@@ -62,6 +65,7 @@ class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) FrameHeader {
 
     // views::Views:
     std::unique_ptr<ui::Layer> RecreateLayer() override;
+    void LayerDestroyed(ui::Layer* layer) override;
 
     // ViewObserver:
     void OnChildViewReordered(views::View* observed_view,
@@ -84,7 +88,7 @@ class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) FrameHeader {
 
   virtual ~FrameHeader();
 
-  const base::string16& frame_text_override() const {
+  const std::u16string& frame_text_override() const {
     return frame_text_override_;
   }
 
@@ -118,7 +122,9 @@ class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) FrameHeader {
 
   void SetLeftHeaderView(views::View* view);
   void SetBackButton(views::FrameCaptionButton* view);
+  void SetCenterButton(chromeos::FrameCenterButton* view);
   views::FrameCaptionButton* GetBackButton() const;
+  chromeos::FrameCenterButton* GetCenterButton() const;
   const chromeos::CaptionButtonModel* GetCaptionButtonModel() const;
 
   // Updates the frame header painting to reflect a change in frame colors.
@@ -129,7 +135,7 @@ class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) FrameHeader {
 
   // Sets text to display in place of the window's title. This will be shown
   // regardless of what ShouldShowWindowTitle() returns.
-  void SetFrameTextOverride(const base::string16& frame_text_override);
+  void SetFrameTextOverride(const std::u16string& frame_text_override);
 
   void UpdateFrameHeaderKey();
 
@@ -188,6 +194,7 @@ class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) FrameHeader {
   chromeos::FrameCaptionButtonContainerView* caption_button_container_ =
       nullptr;
   FrameAnimatorView* frame_animator_ = nullptr;  // owned by view tree.
+  chromeos::FrameCenterButton* center_button_ = nullptr;  // May remain nullptr.
 
   // The height of the header to paint.
   int painted_height_ = 0;
@@ -198,7 +205,7 @@ class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) FrameHeader {
   // Whether the header should be painted as active.
   Mode mode_ = MODE_INACTIVE;
 
-  base::string16 frame_text_override_;
+  std::u16string frame_text_override_;
 
   DISALLOW_COPY_AND_ASSIGN(FrameHeader);
 };

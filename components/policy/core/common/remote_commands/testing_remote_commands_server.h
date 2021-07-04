@@ -19,6 +19,7 @@
 #include "base/threading/thread_checker.h"
 #include "components/policy/core/common/remote_commands/remote_command_job.h"
 #include "components/policy/proto/device_management_backend.pb.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 class TickClock;
@@ -104,7 +105,7 @@ class TestingRemoteCommandsServer {
 
   void DoIssueCommand(
       const enterprise_management::RemoteCommand& command,
-      const base::Optional<enterprise_management::SignedData>& signed_data,
+      const absl::optional<enterprise_management::SignedData>& signed_data,
       ResultReportedCallback reported_callback,
       bool skip_next_fetch);
   void ReportJobResult(

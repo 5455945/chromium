@@ -8,7 +8,6 @@
 #include "base/callback_helpers.h"
 #include "base/containers/contains.h"
 #include "base/macros.h"
-#include "base/optional.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -38,12 +37,13 @@
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/event.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/web_applications/system_web_app_manager.h"
+#include "chrome/browser/web_applications/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #endif
 
@@ -111,8 +111,8 @@ class FramebustBlockBrowserTest
   }
 
  protected:
-  base::Optional<GURL> clicked_url_;
-  base::Optional<size_t> clicked_index_;
+  absl::optional<GURL> clicked_url_;
+  absl::optional<size_t> clicked_index_;
 
   base::OnceClosure blocked_url_added_closure_;
   Browser* current_browser_;

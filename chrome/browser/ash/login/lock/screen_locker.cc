@@ -7,7 +7,6 @@
 #include <algorithm>
 
 #include "ash/components/audio/sounds.h"
-#include "ash/public/cpp/ash_switches.h"
 #include "ash/public/cpp/login_screen.h"
 #include "ash/public/cpp/login_screen_model.h"
 #include "ash/public/cpp/login_types.h"
@@ -26,27 +25,27 @@
 #include "base/task/current_thread.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
+#include "chrome/browser/ash/authpolicy/authpolicy_helper.h"
 #include "chrome/browser/ash/certificate_provider/certificate_provider_service.h"
 #include "chrome/browser/ash/certificate_provider/certificate_provider_service_factory.h"
 #include "chrome/browser/ash/certificate_provider/pin_dialog_manager.h"
 #include "chrome/browser/ash/login/easy_unlock/easy_unlock_service.h"
+#include "chrome/browser/ash/login/helper.h"
 #include "chrome/browser/ash/login/lock/views_screen_locker.h"
+#include "chrome/browser/ash/login/login_auth_recorder.h"
 #include "chrome/browser/ash/login/quick_unlock/fingerprint_storage.h"
 #include "chrome/browser/ash/login/quick_unlock/pin_backend.h"
 #include "chrome/browser/ash/login/quick_unlock/pin_storage_prefs.h"
 #include "chrome/browser/ash/login/quick_unlock/quick_unlock_factory.h"
 #include "chrome/browser/ash/login/quick_unlock/quick_unlock_storage.h"
+#include "chrome/browser/ash/login/session/user_session_manager.h"
+#include "chrome/browser/ash/login/ui/user_adding_screen.h"
+#include "chrome/browser/ash/login/users/chrome_user_manager.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/chrome_notification_types.h"
-#include "chrome/browser/chromeos/authpolicy/authpolicy_helper.h"
-#include "chrome/browser/chromeos/login/helper.h"
-#include "chrome/browser/chromeos/login/login_auth_recorder.h"
-#include "chrome/browser/chromeos/login/session/user_session_manager.h"
-#include "chrome/browser/chromeos/login/ui/user_adding_screen.h"
-#include "chrome/browser/chromeos/login/users/chrome_user_manager.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/ash/login_screen_client.h"
+#include "chrome/browser/ui/ash/login_screen_client_impl.h"
 #include "chrome/browser/ui/ash/session_controller_client_impl.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/grit/browser_resources.h"
@@ -211,7 +210,7 @@ void ScreenLocker::Init() {
   delegate_ = views_screen_locker_.get();
 
   // Create and display lock screen.
-  CHECK(LoginScreenClient::HasInstance());
+  CHECK(LoginScreenClientImpl::HasInstance());
   ash::LoginScreen::Get()->ShowLockScreen();
   views_screen_locker_->Init();
 
@@ -792,30 +791,27 @@ void ScreenLocker::OnAuthScanDone(
   if (!quick_unlock_storage ||
       !quick_unlock_storage->IsFingerprintAuthenticationAvailable()) {
     // In theory this should be very rare. The auth session should be ended when
-    // fingerprint becomes unavaliable.
-    LoginScreenClient::Get()->auth_recorder()->RecordFingerprintUnlockResult(
-        LoginAuthRecorder::FingerprintUnlockResult::kFingerprintUnavailable,
-        base::nullopt);
+    // fingerprint becomes unavailable.
+    quick_unlock_storage->fingerprint_storage()->RecordFingerprintUnlockResult(
+        quick_unlock::FingerprintUnlockResult::kFingerprintUnavailable);
     return;
   }
 
   if (IsAuthTemporarilyDisabledForUser(primary_user->GetAccountId())) {
-    LoginScreenClient::Get()->auth_recorder()->RecordFingerprintUnlockResult(
-        LoginAuthRecorder::FingerprintUnlockResult::kAuthTemporarilyDisabled,
-        base::nullopt);
+    quick_unlock_storage->fingerprint_storage()->RecordFingerprintUnlockResult(
+        quick_unlock::FingerprintUnlockResult::kAuthTemporarilyDisabled);
     return;
   }
 
-  LoginScreenClient::Get()->auth_recorder()->RecordAuthMethod(
+  LoginScreenClientImpl::Get()->auth_recorder()->RecordAuthMethod(
       LoginAuthRecorder::AuthMethod::kFingerprint);
 
   if (scan_result != device::mojom::ScanResult::SUCCESS) {
     LOG(ERROR) << "Fingerprint unlock failed because scan_result="
                << scan_result;
     OnFingerprintAuthFailure(*primary_user);
-    LoginScreenClient::Get()->auth_recorder()->RecordFingerprintUnlockResult(
-        LoginAuthRecorder::FingerprintUnlockResult::kMatchFailed,
-        base::nullopt);
+    quick_unlock_storage->fingerprint_storage()->RecordFingerprintUnlockResult(
+        quick_unlock::FingerprintUnlockResult::kMatchFailed);
     return;
   }
 
@@ -824,14 +820,12 @@ void ScreenLocker::OnAuthScanDone(
     LOG(ERROR) << "Fingerprint unlock failed because it does not match primary"
                << " user's record";
     OnFingerprintAuthFailure(*primary_user);
-    LoginScreenClient::Get()->auth_recorder()->RecordFingerprintUnlockResult(
-        LoginAuthRecorder::FingerprintUnlockResult::kMatchNotForPrimaryUser,
-        base::nullopt);
+    quick_unlock_storage->fingerprint_storage()->RecordFingerprintUnlockResult(
+        quick_unlock::FingerprintUnlockResult::kMatchNotForPrimaryUser);
     return;
   }
-  LoginScreenClient::Get()->auth_recorder()->RecordFingerprintUnlockResult(
-      LoginAuthRecorder::FingerprintUnlockResult::kSuccess,
-      quick_unlock_storage->fingerprint_storage()->unlock_attempt_count());
+  quick_unlock_storage->fingerprint_storage()->RecordFingerprintUnlockResult(
+      quick_unlock::FingerprintUnlockResult::kSuccess);
   ash::LoginScreen::Get()->GetModel()->NotifyFingerprintAuthResult(
       primary_user->GetAccountId(), true /*success*/);
   VLOG(1) << "Fingerprint unlock is successful.";

@@ -15,6 +15,7 @@
 #include "base/macros.h"
 #include "base/time/time.h"
 #include "components/autofill/core/browser/autofill_client.h"
+#include "components/autofill/core/browser/autofill_profile_import_process.h"
 #include "components/autofill/core/browser/data_model/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/credit_card.h"
 #include "components/autofill/core/browser/field_types.h"
@@ -174,6 +175,25 @@ class AutofillMetrics {
     NUM_SUBMITTED_CARD_STATE_METRICS,
   };
 
+  // These values are persisted to UMA logs. Entries should not be renumbered
+  // and numeric values should never be reused. This is the subset of field
+  // types that can be changed in a profile change/store dialog or are affected
+  // in a profile merge operation.
+  enum class SettingsVisibleFieldTypeForMetrics {
+    kUndefined = 0,
+    kName = 1,
+    kEmailAddress = 2,
+    kPhoneNumber = 3,
+    kCity = 4,
+    kCountry = 5,
+    kZip = 6,
+    kState = 7,
+    kStreetAddress = 8,
+    kDependentLocality = 9,
+    kHonorificPrefix = 10,
+    kMaxValue = kHonorificPrefix
+  };
+
   // Metric to measure if a submitted card's expiration date matches the same
   // server card's expiration date (unmasked or not).  Cards are considered to
   // be the same if they have the same card number (if unmasked) or if they have
@@ -262,6 +282,36 @@ class AutofillMetrics {
     NUM_SAVE_CARD_PROMPT_RESULT_METRICS,
   };
 
+  // Metrics to track event when the offer notification bubble is closed.
+  enum class OfferNotificationBubbleResultMetric {
+    // These values are persisted to logs. Entries should not be renumbered and
+    // numeric values should never be reused.
+
+    // The user explicitly acknowledged the bubble by clicking the ok button.
+    OFFER_NOTIFICATION_BUBBLE_ACKNOWLEDGED = 0,
+    // The user explicitly closed the prompt with the close button or ESC.
+    OFFER_NOTIFICATION_BUBBLE_CLOSED = 1,
+    // The user did not interact with the prompt.
+    OFFER_NOTIFICATION_BUBBLE_NOT_INTERACTED = 2,
+    // The prompt lost focus and was deactivated.
+    OFFER_NOTIFICATION_BUBBLE_LOST_FOCUS = 3,
+    kMaxValue = OFFER_NOTIFICATION_BUBBLE_LOST_FOCUS,
+  };
+
+  // Metrics to track event when the offer notification infobar is closed.
+  enum class OfferNotificationInfoBarResultMetric {
+    // These values are persisted to logs. Entries should not be renumbered and
+    // numeric values should never be reused.
+
+    // User acknowledged the infobar by clicking the ok button.
+    OFFER_NOTIFICATION_INFOBAR_ACKNOWLEDGED = 0,
+    // User explicitly closed the infobar with the close button.
+    OFFER_NOTIFICATION_INFOBAR_CLOSED = 1,
+    // InfoBar was shown but user did not interact with the it.
+    OFFER_NOTIFICATION_INFOBAR_IGNORED = 2,
+    kMaxValue = OFFER_NOTIFICATION_INFOBAR_IGNORED,
+  };
+
   enum CreditCardUploadFeedbackMetric {
     // The loading indicator animation which indicates uploading is in progress
     // is successfully shown.
@@ -285,6 +335,38 @@ class AutofillMetrics {
     MANAGE_CARDS_MANAGE_CARDS,
 
     NUM_MANAGE_CARDS_PROMPT_METRICS
+  };
+
+  // Metrics to measure user interaction with the virtual card manual fallback
+  // bubble after it has appeared upon unmasking and filling a virtual card.
+  enum class VirtualCardManualFallbackBubbleResultMetric {
+    // These values are persisted to logs. Entries should not be renumbered and
+    // numeric values should never be reused.
+
+    // The reason why the bubble is closed is not clear. Possible reason is the
+    // logging function is invoked before the closed reason is correctly set.
+    VIRTUAL_CARD_MANUAL_FALLBACK_BUBBLE_RESULT_UNKNOWN = 0,
+    // The user explicitly closed the bubble with the close button or ESC.
+    VIRTUAL_CARD_MANUAL_FALLBACK_BUBBLE_CLOSED = 1,
+    // The user did not interact with the bubble.
+    VIRTUAL_CARD_MANUAL_FALLBACK_BUBBLE_NOT_INTERACTED = 2,
+    // The bubble lost focus and was deactivated.
+    VIRTUAL_CARD_MANUAL_FALLBACK_BUBBLE_LOST_FOCUS = 3,
+    kMaxValue = VIRTUAL_CARD_MANUAL_FALLBACK_BUBBLE_LOST_FOCUS,
+  };
+
+  // Metric to measure which field in the virtual card manual fallback bubble
+  // was selected by the user.
+  enum class VirtualCardManualFallbackBubbleFieldClickedMetric {
+    // These values are persisted to logs. Entries should not be renumbered and
+    // numeric values should never be reused.
+
+    VIRTUAL_CARD_MANUAL_FALLBACK_BUBBLE_FIELD_CLICKED_CARD_NUMBER = 0,
+    VIRTUAL_CARD_MANUAL_FALLBACK_BUBBLE_FIELD_CLICKED_EXPIRATION_MONTH = 1,
+    VIRTUAL_CARD_MANUAL_FALLBACK_BUBBLE_FIELD_CLICKED_EXPIRATION_YEAR = 2,
+    VIRTUAL_CARD_MANUAL_FALLBACK_BUBBLE_FIELD_CLICKED_CARDHOLDER_NAME = 3,
+    VIRTUAL_CARD_MANUAL_FALLBACK_BUBBLE_FIELD_CLICKED_CVC = 4,
+    kMaxValue = VIRTUAL_CARD_MANUAL_FALLBACK_BUBBLE_FIELD_CLICKED_CVC,
   };
 
   // Metrics measuring how well we predict field types.  These metric values are
@@ -623,38 +705,41 @@ class AutofillMetrics {
   };
 
   // Events related to the Unmask Credit Card Prompt.
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
   enum UnmaskPromptEvent {
     // The prompt was shown.
     UNMASK_PROMPT_SHOWN = 0,
     // The prompt was closed without attempting to unmask the card.
-    UNMASK_PROMPT_CLOSED_NO_ATTEMPTS,
+    UNMASK_PROMPT_CLOSED_NO_ATTEMPTS = 1,
     // The prompt was closed without unmasking the card, but with at least
     // one attempt. The last failure was retriable.
-    UNMASK_PROMPT_CLOSED_FAILED_TO_UNMASK_RETRIABLE_FAILURE,
+    UNMASK_PROMPT_CLOSED_FAILED_TO_UNMASK_RETRIABLE_FAILURE = 2,
     // The prompt was closed without unmasking the card, but with at least
     // one attempt. The last failure was non retriable.
-    UNMASK_PROMPT_CLOSED_FAILED_TO_UNMASK_NON_RETRIABLE_FAILURE,
+    UNMASK_PROMPT_CLOSED_FAILED_TO_UNMASK_NON_RETRIABLE_FAILURE = 3,
     // Successfully unmasked the card in the first attempt.
-    UNMASK_PROMPT_UNMASKED_CARD_FIRST_ATTEMPT,
+    UNMASK_PROMPT_UNMASKED_CARD_FIRST_ATTEMPT = 4,
     // Successfully unmasked the card after retriable failures.
-    UNMASK_PROMPT_UNMASKED_CARD_AFTER_FAILED_ATTEMPTS,
+    UNMASK_PROMPT_UNMASKED_CARD_AFTER_FAILED_ATTEMPTS = 5,
     // Saved the card locally (masked card was upgraded to a full card).
-    UNMASK_PROMPT_SAVED_CARD_LOCALLY,
+    // Deprecated.
+    // UNMASK_PROMPT_SAVED_CARD_LOCALLY = 6,
     // User chose to opt in (checked the checkbox when it was empty).
     // Only logged if there was an attempt to unmask.
-    UNMASK_PROMPT_LOCAL_SAVE_DID_OPT_IN,
+    UNMASK_PROMPT_LOCAL_SAVE_DID_OPT_IN = 7,
     // User did not opt in when they had the chance (left the checkbox
     // unchecked).  Only logged if there was an attempt to unmask.
-    UNMASK_PROMPT_LOCAL_SAVE_DID_NOT_OPT_IN,
+    UNMASK_PROMPT_LOCAL_SAVE_DID_NOT_OPT_IN = 8,
     // User chose to opt out (unchecked the checkbox when it was check).
     // Only logged if there was an attempt to unmask.
-    UNMASK_PROMPT_LOCAL_SAVE_DID_OPT_OUT,
+    UNMASK_PROMPT_LOCAL_SAVE_DID_OPT_OUT = 9,
     // User did not opt out when they had a chance (left the checkbox checked).
     // Only logged if there was an attempt to unmask.
-    UNMASK_PROMPT_LOCAL_SAVE_DID_NOT_OPT_OUT,
+    UNMASK_PROMPT_LOCAL_SAVE_DID_NOT_OPT_OUT = 10,
     // The prompt was closed while chrome was unmasking the card (user pressed
     // verify and we were waiting for the server response).
-    UNMASK_PROMPT_CLOSED_ABANDON_UNMASKING,
+    UNMASK_PROMPT_CLOSED_ABANDON_UNMASKING = 11,
     NUM_UNMASK_PROMPT_EVENTS,
   };
 
@@ -736,12 +821,16 @@ class AutofillMetrics {
     // Request succeeded.
     PAYMENTS_RESULT_SUCCESS = 0,
     // Request failed; try again.
-    PAYMENTS_RESULT_TRY_AGAIN_FAILURE,
+    PAYMENTS_RESULT_TRY_AGAIN_FAILURE = 1,
     // Request failed; don't try again.
-    PAYMENTS_RESULT_PERMANENT_FAILURE,
+    PAYMENTS_RESULT_PERMANENT_FAILURE = 2,
     // Unable to connect to Payments servers.
-    PAYMENTS_RESULT_NETWORK_ERROR,
-    NUM_PAYMENTS_RESULTS,
+    PAYMENTS_RESULT_NETWORK_ERROR = 3,
+    // Request failed in virtual card information retrieval; try again.
+    PAYMENTS_RESULT_VCN_RETRIEVAL_TRY_AGAIN_FAILURE = 4,
+    // Request failed in virtual card information retrieval; don't try again.
+    PAYMENTS_RESULT_VCN_RETRIEVAL_PERMANENT_FAILURE = 5,
+    kMaxValue = PAYMENTS_RESULT_VCN_RETRIEVAL_PERMANENT_FAILURE,
   };
 
   // For measuring the network request time of various Wallet API calls. See
@@ -839,7 +928,7 @@ class AutofillMetrics {
     SYNC_SERVICE_MISSING_AUTOFILL_WALLET_DATA_ACTIVE_TYPE = 2,
     SYNC_SERVICE_MISSING_AUTOFILL_PROFILE_ACTIVE_TYPE = 3,
     // Deprecated: ACCOUNT_WALLET_STORAGE_UPLOAD_DISABLED = 4,
-    USING_SECONDARY_SYNC_PASSPHRASE = 5,
+    USING_EXPLICIT_SYNC_PASSPHRASE = 5,
     LOCAL_SYNC_ENABLED = 6,
     PAYMENTS_INTEGRATION_DISABLED = 7,
     EMAIL_EMPTY = 8,
@@ -1117,6 +1206,20 @@ class AutofillMetrics {
   static void LogLocalCardMigrationPromptMetric(
       LocalCardMigrationOrigin local_card_migration_origin,
       LocalCardMigrationPromptMetric metric);
+  static void LogOfferNotificationBubbleOfferMetric(bool is_reshow);
+  static void LogOfferNotificationBubbleResultMetric(
+      OfferNotificationBubbleResultMetric metric,
+      bool is_reshow);
+  static void LogOfferNotificationInfoBarDeepLinkClicked();
+  static void LogOfferNotificationInfoBarResultMetric(
+      OfferNotificationInfoBarResultMetric metric);
+  static void LogOfferNotificationInfoBarShown();
+  static void LogVirtualCardManualFallbackBubbleShown(bool is_reshow);
+  static void LogVirtualCardManualFallbackBubbleResultMetric(
+      VirtualCardManualFallbackBubbleResultMetric metric,
+      bool is_reshow);
+  static void LogVirtualCardManualFallbackBubbleFieldClicked(
+      VirtualCardManualFallbackBubbleFieldClickedMetric metric);
 
   // Should be called when credit card scan is finished. |duration| should be
   // the time elapsed between launching the credit card scanner and getting back
@@ -1168,10 +1271,13 @@ class AutofillMetrics {
   static void LogUserHappinessByProfileFormType(UserHappinessMetric metric,
                                                 uint32_t profile_form_bitmask);
 
-  // Logs the card fetch latency after a WebAuthn prompt.
+  // Logs the card fetch latency |duration| after a WebAuthn prompt. |result|
+  // indicates whether the unmasking request was successful or not. |card_type|
+  // indicates the type of the credit card that the request fetched.
   static void LogCardUnmaskDurationAfterWebauthn(
       const base::TimeDelta& duration,
-      AutofillClient::PaymentsRpcResult result);
+      AutofillClient::PaymentsRpcResult result,
+      AutofillClient::PaymentsRpcCardType card_type);
 
   // Logs the count of calls to PaymentsClient::GetUnmaskDetails() (aka
   // GetDetailsForGetRealPan).
@@ -1252,16 +1358,23 @@ class AutofillMetrics {
   static void LogTimeBeforeAbandonUnmasking(const base::TimeDelta& duration,
                                             bool has_valid_nickname);
 
-  // Logs |result| to the get real pan result histogram.
-  static void LogRealPanResult(AutofillClient::PaymentsRpcResult result);
+  // Logs |result| to the get real pan result histogram. |card_type| indicates
+  // the type of the credit card that the request fetched.
+  static void LogRealPanResult(AutofillClient::PaymentsRpcResult result,
+                               AutofillClient::PaymentsRpcCardType card_type);
 
-  // Logs |result| to duration of the GetRealPan RPC.
+  // Logs |result| to duration of the GetRealPan RPC. |card_type| indicates the
+  // type of the credit card that the request fetched.
   static void LogRealPanDuration(const base::TimeDelta& duration,
-                                 AutofillClient::PaymentsRpcResult result);
+                                 AutofillClient::PaymentsRpcResult result,
+                                 AutofillClient::PaymentsRpcCardType card_type);
 
-  // Logs |result| to the get real pan result histogram.
-  static void LogUnmaskingDuration(const base::TimeDelta& duration,
-                                   AutofillClient::PaymentsRpcResult result);
+  // Logs |result| to the get real pan result histogram. |card_type| indicates
+  // the type of the credit card that the request fetched.
+  static void LogUnmaskingDuration(
+      const base::TimeDelta& duration,
+      AutofillClient::PaymentsRpcResult result,
+      AutofillClient::PaymentsRpcCardType card_type);
 
   // This should be called when a form that has been Autofilled is submitted.
   // |duration| should be the time elapsed between form load and submission.
@@ -1541,10 +1654,57 @@ class AutofillMetrics {
       size_t number_of_accepted_fields,
       size_t number_of_corrected_fields);
 
+  // Logs the type of a profile import.
+  static void LogProfileImportType(AutofillProfileImportType import_type);
+
+  // Logs the user decision for importing a new profile
+  static void LogNewProfileImportDecision(
+      AutofillClient::SaveAddressProfileOfferUserDecision decision);
+
+  // Logs that a specific type was edited in a save prompt.
+  static void LogNewProfileEditedType(ServerFieldType edited_type);
+
+  // Logs the number of edited fields for an accepted profile save.
+  static void LogNewProfileNumberOfEditedFields(int number_of_edited_fields);
+
+  // Logs the user decision for updating an exiting profile.
+  static void LogProfileUpdateImportDecision(
+      AutofillClient::SaveAddressProfileOfferUserDecision decision);
+
+  // Logs that a specific type changed in a profile update which was accepted
+  // without manual edits.
+  static void LogProfileUpdateAffectedType(ServerFieldType affected_type);
+
+  // Logs that a specific type was edited in an update prompt.
+  static void LogProfileUpdateEditedType(ServerFieldType edited_type);
+
+  // Logs the number of edited fields for an accepted profile update.
+  static void LogUpdateProfileNumberOfEditedFields(int number_of_edited_fields);
+
+  // Logs the number of changed fields for a profile update that is accepted
+  // without manual edits.
+  static void LogUpdateProfileNumberOfAffectedFields(
+      int number_of_affected_fields);
+
+  // Logs when the virtual card metadata for one card have been updated.
+  static void LogVirtualCardMetadataSynced(bool existing_card);
+
+  // Logs the verification status of non-empty name-related profile tokens when
+  // a profile is used to fill a form.
+  static void LogVerificationStatusOfNameTokensOnProfileUsage(
+      const AutofillProfile& profile);
+
+  // Logs the verification status of non-empty address-related profile tokens
+  // when a profile is used to fill a form.
+  static void LogVerificationStatusOfAddressTokensOnProfileUsage(
+      const AutofillProfile& profile);
+
+  // The total number of values in the |CardUploadDecisionMetric| enum. Must be
+  // updated each time a new value is added.
+  static const int kNumCardUploadDecisionMetrics = 19;
+
  private:
   static void Log(AutocompleteEvent event);
-
-  static const int kNumCardUploadDecisionMetrics = 19;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(AutofillMetrics);
 };

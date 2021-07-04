@@ -8,6 +8,7 @@
 #include "third_party/blink/renderer/platform/back_forward_cache_utils.h"
 #include "third_party/blink/renderer/platform/scheduler/common/throttling/task_queue_throttler.h"
 #include "third_party/blink/renderer/platform/scheduler/common/throttling/wake_up_budget_pool.h"
+#include "third_party/blink/renderer/platform/scheduler/worker/non_main_thread_web_scheduling_task_queue_impl.h"
 #include "third_party/blink/renderer/platform/scheduler/worker/worker_scheduler_proxy.h"
 #include "third_party/blink/renderer/platform/scheduler/worker/worker_thread_scheduler.h"
 
@@ -160,6 +161,7 @@ scoped_refptr<base::SingleThreadTaskRunner> WorkerScheduler::GetTaskRunner(
     case TaskType::kSensor:
     case TaskType::kPerformanceTimeline:
     case TaskType::kWebGL:
+    case TaskType::kWebGPU:
     case TaskType::kIdleTask:
     case TaskType::kMiscPlatformAPI:
     case TaskType::kFontLoading:
@@ -217,6 +219,7 @@ scoped_refptr<base::SingleThreadTaskRunner> WorkerScheduler::GetTaskRunner(
     case TaskType::kInternalFrameLifecycleControl:
     case TaskType::kInternalFindInPage:
     case TaskType::kInternalHighPriorityLocalFrame:
+    case TaskType::kInternalInputBlocking:
     case TaskType::kMainThreadTaskQueueIPCTracking:
     case TaskType::kCount:
       NOTREACHED();
@@ -261,6 +264,15 @@ void WorkerScheduler::OnStartedUsingFeature(SchedulingPolicy::Feature feature,
 
 void WorkerScheduler::OnStoppedUsingFeature(SchedulingPolicy::Feature feature,
                                             const SchedulingPolicy& policy) {}
+
+std::unique_ptr<WebSchedulingTaskQueue>
+WorkerScheduler::CreateWebSchedulingTaskQueue(WebSchedulingPriority priority) {
+  scoped_refptr<NonMainThreadTaskQueue> task_queue =
+      thread_scheduler_->CreateTaskQueue("worker_web_scheduling_tq");
+  task_queue->SetWebSchedulingPriority(priority);
+  return std::make_unique<NonMainThreadWebSchedulingTaskQueueImpl>(
+      std::move(task_queue));
+}
 
 }  // namespace scheduler
 }  // namespace blink

@@ -19,6 +19,7 @@
 #include "chrome/browser/extensions/user_script_listener.h"
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/browser/kiosk/kiosk_delegate.h"
+#include "extensions/common/mojom/view_type.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
@@ -80,9 +81,8 @@ class ChromeExtensionsBrowserClient : public ExtensionsBrowserClient {
       mojo::PendingReceiver<network::mojom::URLLoader> loader,
       const base::FilePath& resource_relative_path,
       int resource_id,
-      const std::string& content_security_policy,
-      mojo::PendingRemote<network::mojom::URLLoaderClient> client,
-      bool send_cors_header) override;
+      scoped_refptr<net::HttpResponseHeaders> headers,
+      mojo::PendingRemote<network::mojom::URLLoaderClient> client) override;
   bool AllowCrossRendererResourceLoad(
       const network::ResourceRequest& request,
       network::mojom::RequestDestination destination,
@@ -130,8 +130,9 @@ class ChromeExtensionsBrowserClient : public ExtensionsBrowserClient {
   void CleanUpWebView(content::BrowserContext* browser_context,
                       int embedder_process_id,
                       int view_instance_id) override;
+  void ClearBackForwardCache() override;
   void AttachExtensionTaskManagerTag(content::WebContents* web_contents,
-                                     ViewType view_type) override;
+                                     mojom::ViewType view_type) override;
   scoped_refptr<update_client::UpdateClient> CreateUpdateClient(
       content::BrowserContext* context) override;
   std::unique_ptr<content::BluetoothChooser> CreateBluetoothChooser(
@@ -149,6 +150,7 @@ class ChromeExtensionsBrowserClient : public ExtensionsBrowserClient {
   bool IsWebUIAllowedToMakeNetworkRequests(const url::Origin& origin) override;
   network::mojom::NetworkContext* GetSystemNetworkContext() override;
   UserScriptListener* GetUserScriptListener() override;
+  void SignalContentScriptsLoaded(content::BrowserContext* context) override;
   std::string GetUserAgent() const override;
   bool ShouldSchemeBypassNavigationChecks(
       const std::string& scheme) const override;

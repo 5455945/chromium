@@ -12,7 +12,7 @@
 #include "base/callback.h"
 #include "base/callback_list.h"
 #include "base/macros.h"
-#include "base/scoped_observer.h"
+#include "base/scoped_observation.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "extensions/browser/extension_registry.h"
@@ -35,10 +35,6 @@ class ExtensionTestNotificationObserver : public content::NotificationObserver,
  public:
   explicit ExtensionTestNotificationObserver(content::BrowserContext* context);
   ~ExtensionTestNotificationObserver() override;
-
-  // Waits for an extension load error. Returns true if the error really
-  // happened.
-  bool WaitForExtensionLoadError();
 
   // Wait for the specified extension to crash. Returns true if it really
   // crashed.
@@ -89,7 +85,7 @@ class ExtensionTestNotificationObserver : public content::NotificationObserver,
 
     // Notified any time an Add()ed notification is received.
     // The details of the notification are dropped.
-    base::CallbackList<void()>& callback_list() { return callback_list_; }
+    base::RepeatingClosureList& closure_list() { return closure_list_; }
 
    private:
     class ForwardingWebContentsObserver;
@@ -107,10 +103,10 @@ class ExtensionTestNotificationObserver : public content::NotificationObserver,
     void WebContentsDestroyed(content::WebContents* web_contents);
 
     content::NotificationRegistrar notification_registrar_;
-    base::CallbackList<void()> callback_list_;
-    ScopedObserver<extensions::ProcessManager,
-                   extensions::ProcessManagerObserver>
-        process_manager_observer_{this};
+    base::RepeatingClosureList closure_list_;
+    base::ScopedObservation<extensions::ProcessManager,
+                            extensions::ProcessManagerObserver>
+        process_manager_observation_{this};
 
     std::map<content::WebContents*,
              std::unique_ptr<ForwardingWebContentsObserver>>
@@ -138,7 +134,6 @@ class ExtensionTestNotificationObserver : public content::NotificationObserver,
   std::unique_ptr<content::WindowedNotificationObserver> observer_;
 
   std::string last_loaded_extension_id_;
-  int extension_load_errors_observed_;
   int crx_installers_done_observed_;
 
   // The condition for which we are waiting. This should be checked in any
@@ -149,8 +144,8 @@ class ExtensionTestNotificationObserver : public content::NotificationObserver,
   base::OnceClosure quit_closure_;
 
   // Listens to extension loaded notifications.
-  ScopedObserver<ExtensionRegistry, ExtensionRegistryObserver>
-      registry_observer_{this};
+  base::ScopedObservation<ExtensionRegistry, ExtensionRegistryObserver>
+      registry_observation_{this};
 
   DISALLOW_COPY_AND_ASSIGN(ExtensionTestNotificationObserver);
 };

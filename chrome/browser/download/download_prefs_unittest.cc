@@ -14,15 +14,15 @@
 #include "components/download/public/common/download_features.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
-#include "components/safe_browsing/core/file_type_policies.h"
+#include "components/safe_browsing/content/common/file_type_policies.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
+#include "chrome/browser/ash/drive/drive_integration_service.h"
+#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/chromeos/drive/drive_integration_service.h"
-#include "chrome/browser/chromeos/login/users/fake_chrome_user_manager.h"
 #include "components/drive/drive_pref_names.h"
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
@@ -323,6 +323,44 @@ TEST(DownloadPrefsTest, AutoOpenSetByPolicyAllowedURLsDynamicUpdates) {
   EXPECT_TRUE(prefs.IsAutoOpenByPolicy(kDisallowedURL, kFilePath));
 }
 
+TEST(DownloadPrefsTest, AutoOpenSetByPolicyBlobURL) {
+  const base::FilePath kFilePath(FILE_PATH_LITERAL("/good/basic-path.txt"));
+  const GURL kAllowedURL("http://basic.com");
+  const GURL kDisallowedURL("http://disallowed.com");
+  const GURL kBlobAllowedURL("blob:" + kAllowedURL.spec());
+  const GURL kBlobDisallowedURL("blob:" + kDisallowedURL.spec());
+
+  ASSERT_TRUE(kBlobAllowedURL.SchemeIsBlob());
+  ASSERT_TRUE(kBlobDisallowedURL.SchemeIsBlob());
+
+  content::BrowserTaskEnvironment task_environment_;
+  TestingProfile profile;
+  ListPrefUpdate update_type(profile.GetPrefs(),
+                             prefs::kDownloadExtensionsToOpenByPolicy);
+  update_type->AppendString("txt");
+  DownloadPrefs prefs(&profile);
+
+  // Ensure both urls work in either form when no URL restrictions are present.
+  EXPECT_TRUE(prefs.IsAutoOpenByPolicy(kAllowedURL, kFilePath));
+  EXPECT_TRUE(prefs.IsAutoOpenByPolicy(kDisallowedURL, kFilePath));
+  EXPECT_TRUE(prefs.IsAutoOpenByPolicy(kBlobAllowedURL, kFilePath));
+  EXPECT_TRUE(prefs.IsAutoOpenByPolicy(kBlobDisallowedURL, kFilePath));
+
+  // Update the policy preference to only allow |kAllowedURL|.
+  {
+    ListPrefUpdate update_url(profile.GetPrefs(),
+                              prefs::kDownloadAllowedURLsForOpenByPolicy);
+    update_url->AppendString("basic.com");
+  }
+
+  // Ensure |kAllowedURL| continutes to work and |kDisallowedURL| is blocked,
+  // even in blob form.
+  EXPECT_TRUE(prefs.IsAutoOpenByPolicy(kAllowedURL, kFilePath));
+  EXPECT_FALSE(prefs.IsAutoOpenByPolicy(kDisallowedURL, kFilePath));
+  EXPECT_TRUE(prefs.IsAutoOpenByPolicy(kBlobAllowedURL, kFilePath));
+  EXPECT_FALSE(prefs.IsAutoOpenByPolicy(kBlobDisallowedURL, kFilePath));
+}
+
 TEST(DownloadPrefsTest, MissingDefaultPathCorrected) {
   content::BrowserTaskEnvironment task_environment_;
   TestingProfile profile;
@@ -432,7 +470,7 @@ TEST(DownloadPrefsTest, DownloadDirSanitization) {
   {
     // Create new profile for enabled feature to work.
     TestingProfile profile2(base::FilePath("/home/chronos/u-0123456789abcdef"));
-    chromeos::FakeChromeUserManager user_manager;
+    ash::FakeChromeUserManager user_manager;
     DownloadPrefs prefs2(&profile2);
     AccountId account_id =
         AccountId::FromUserEmailGaiaId(profile2.GetProfileUserName(), "12345");
@@ -494,6 +532,33 @@ TEST(DownloadPrefsTest, DownloadLaterPrefs) {
       static_cast<int>(DownloadLaterPromptStatus::kDontShow));
   EXPECT_FALSE(prefs.PromptDownloadLater());
   EXPECT_TRUE(prefs.HasDownloadLaterPromptShown());
+}
+
+// Verfies the returned value of PromptForDownload() and PromptDownloadLater()
+// when prefs::kPromptForDownload is managed by enterprise policy,
+TEST(DownloadPrefsTest, ManagedPromptForDownload) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(download::features::kDownloadLater);
+
+  content::BrowserTaskEnvironment task_environment_;
+  TestingProfile profile;
+  profile.GetTestingPrefService()->SetManagedPref(
+      prefs::kPromptForDownload, std::make_unique<base::Value>(true));
+  DownloadPrefs prefs(&profile);
+
+  profile.GetPrefs()->SetInteger(
+      prefs::kDownloadLaterPromptStatus,
+      static_cast<int>(DownloadLaterPromptStatus::kShowPreference));
+  profile.GetPrefs()->SetInteger(
+      prefs::kPromptForDownloadAndroid,
+      static_cast<int>(DownloadPromptStatus::DONT_SHOW));
+  EXPECT_FALSE(prefs.PromptDownloadLater());
+  EXPECT_TRUE(prefs.PromptForDownload());
+
+  profile.GetTestingPrefService()->SetManagedPref(
+      prefs::kPromptForDownload, std::make_unique<base::Value>(false));
+  EXPECT_FALSE(prefs.PromptDownloadLater());
+  EXPECT_FALSE(prefs.PromptForDownload());
 }
 
 #endif  // OS_ANDROID

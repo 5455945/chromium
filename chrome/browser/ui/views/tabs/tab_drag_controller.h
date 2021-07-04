@@ -133,7 +133,7 @@ class TabDragController : public views::WidgetObserver {
   // Returns the tab group being dragged, if any. Will only return a value if
   // the user is dragging a tab group header, not an individual tab or tabs from
   // a group.
-  const base::Optional<tab_groups::TabGroupId>& group() const { return group_; }
+  const absl::optional<tab_groups::TabGroupId>& group() const { return group_; }
 
   // Returns true if currently dragging a tab with |contents|.
   bool IsDraggingTab(content::WebContents* contents);
@@ -259,7 +259,7 @@ class TabDragController : public views::WidgetObserver {
 
     // Stores the information of the group the tab is in, or nullopt if tab is
     // not grouped.
-    base::Optional<TabGroupData> tab_group_data;
+    absl::optional<TabGroupData> tab_group_data;
   };
 
   typedef std::vector<TabDragData> DragData;
@@ -279,6 +279,11 @@ class TabDragController : public views::WidgetObserver {
 
   // A tab was closed in the active tabstrip. Clean up if we were dragging it.
   void OnActiveStripWebContentsRemoved(content::WebContents* contents);
+
+  // The WebContents in a tab was replaced in the active tabstrip. Update our
+  // canonical reference if we were dragging that tab.
+  void OnActiveStripWebContentsReplaced(content::WebContents* previous,
+                                        content::WebContents* next);
 
   // Initialize the offset used to calculate the position to create windows
   // in |GetWindowCreatePoint|. This should only be invoked from |Init|.
@@ -348,12 +353,27 @@ class TabDragController : public views::WidgetObserver {
 
   // Attach the dragged Tab to the specified TabDragContext. If
   // |set_capture| is true, the newly attached context will have capture.
+  // This can only be used to pass ownership of |this| through |controller|.
+  // |controller| must be nullptr if |attached_context| already owns |this|.
   void Attach(TabDragContext* attached_context,
               const gfx::Point& point_in_screen,
+              std::unique_ptr<TabDragController> controller,
               bool set_capture = true);
 
-  // Detach the dragged Tab from the current TabDragContext.
-  void Detach(ReleaseCapture release_capture);
+  // Detach the dragged Tab from the current TabDragContext. Returns
+  // ownership of the owned controller, which must be |this|, if
+  // |attached_context_| currently owns a controller. Otherwise returns
+  // nullptr.
+  std::unique_ptr<TabDragController> Detach(ReleaseCapture release_capture);
+
+  // Detach from |attached_context_| and attach to |target_context| instead.
+  // See Detach/Attach for parameter documentation. Transfers ownership of
+  // |this| from |attached_context_| (which must own |this|) to
+  // |target_context|.
+  void DetachAndAttachToNewContext(ReleaseCapture release_capture,
+                                   TabDragContext* target_context,
+                                   const gfx::Point& point_in_screen,
+                                   bool set_capture = true);
 
   // Detaches the tabs being dragged, creates a new Browser to contain them and
   // runs a nested move loop.
@@ -529,10 +549,10 @@ class TabDragController : public views::WidgetObserver {
   void UpdateGroupForDraggedTabs();
 
   // Helper method for TabDragController::UpdateGroupForDraggedTabs to decide if
-  // a dragged tab should stay in the tab group. Returns base::nullopt if the
+  // a dragged tab should stay in the tab group. Returns absl::nullopt if the
   // tab should not be in a group. Otherwise returns tab_groups::TabGroupId of
   // the group the selected tabs should join.
-  base::Optional<tab_groups::TabGroupId> GetTabGroupForTargetIndex(
+  absl::optional<tab_groups::TabGroupId> GetTabGroupForTargetIndex(
       const std::vector<int>& selected);
 
   EventSource event_source_;
@@ -615,7 +635,7 @@ class TabDragController : public views::WidgetObserver {
 
   // The group that is being dragged. Only set if the drag originated from a
   // group header, indicating that the entire group is being dragged together.
-  base::Optional<tab_groups::TabGroupId> group_;
+  absl::optional<tab_groups::TabGroupId> group_;
 
   // True until MoveAttached() is first invoked.
   bool initial_move_;
@@ -697,6 +717,9 @@ class TabDragController : public views::WidgetObserver {
 
   base::ScopedObservation<views::Widget, views::WidgetObserver>
       widget_observation_{this};
+
+  // True while RunMoveLoop() has been called on a widget.
+  bool in_move_loop_ = false;
 
   base::WeakPtrFactory<TabDragController> weak_factory_{this};
 };

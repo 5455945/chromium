@@ -57,7 +57,7 @@ class LanguageDetectionModel {
   // |is_prediction_reliable|, and |prediction_reliability_score|.
   std::string DeterminePageLanguage(const std::string& code,
                                     const std::string& html_lang,
-                                    const base::string16& contents,
+                                    const std::u16string& contents,
                                     std::string* predicted_language,
                                     bool* is_prediction_reliable,
                                     float& prediction_reliability_score) const;
@@ -65,6 +65,11 @@ class LanguageDetectionModel {
   std::string GetModelVersion() const;
 
  private:
+  // Execute the model on the provided |sampled_str| and return the top language
+  // and the models score/confidence in that prediction.
+  std::pair<std::string, float> DetectTopLanguage(
+      const std::string& sampled_str) const;
+
   // A memory-mapped file that contains the TFLite model used for
   // determining the language of a page. This must be valid in order
   // to evaluate the model owned by |this|.

@@ -23,6 +23,8 @@
 #include "services/network/public/cpp/constants.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "services/network/public/mojom/early_hints.mojom.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "url/gurl.h"
 
 StreamingSearchPrefetchURLLoader::StreamingSearchPrefetchURLLoader(
@@ -33,13 +35,12 @@ StreamingSearchPrefetchURLLoader::StreamingSearchPrefetchURLLoader(
     : resource_request_(std::move(resource_request)),
       streaming_prefetch_request_(streaming_prefetch_request) {
   DCHECK(streaming_prefetch_request_);
-  auto url_loader_factory =
-      content::BrowserContext::GetDefaultStoragePartition(profile)
-          ->GetURLLoaderFactoryForBrowserProcess();
+  auto url_loader_factory = profile->GetDefaultStoragePartition()
+                                ->GetURLLoaderFactoryForBrowserProcess();
 
   // Create a network service URL loader with passed in params.
   url_loader_factory->CreateLoaderAndStart(
-      network_url_loader_.BindNewPipeAndPassReceiver(), 0, 0,
+      network_url_loader_.BindNewPipeAndPassReceiver(), 0,
       network::mojom::kURLLoadOptionNone, *resource_request_,
       url_loader_receiver_.BindNewPipeAndPassRemote(
           base::ThreadTaskRunnerHandle::Get()),
@@ -92,6 +93,11 @@ void StreamingSearchPrefetchURLLoader::SetUpForwardingClient(
 
   forwarding_client_->OnReceiveResponse(std::move(resource_response_));
   RunEventQueue();
+}
+
+void StreamingSearchPrefetchURLLoader::OnReceiveEarlyHints(
+    network::mojom::EarlyHintsPtr early_hints) {
+  // Do nothing.
 }
 
 void StreamingSearchPrefetchURLLoader::OnReceiveResponse(
@@ -305,7 +311,7 @@ void StreamingSearchPrefetchURLLoader::FollowRedirect(
     const std::vector<std::string>& removed_headers,
     const net::HttpRequestHeaders& modified_headers,
     const net::HttpRequestHeaders& modified_cors_exempt_headers,
-    const base::Optional<GURL>& new_url) {
+    const absl::optional<GURL>& new_url) {
   // This should never be called for a non-network service URLLoader.
   NOTREACHED();
 }

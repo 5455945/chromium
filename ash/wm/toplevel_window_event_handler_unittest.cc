@@ -5,9 +5,9 @@
 #include "ash/wm/toplevel_window_event_handler.h"
 
 #include "ash/accelerators/accelerator_controller_impl.h"
+#include "ash/constants/app_types.h"
 #include "ash/display/screen_orientation_controller.h"
 #include "ash/display/screen_orientation_controller_test_api.h"
-#include "ash/public/cpp/app_types.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/root_window_controller.h"
 #include "ash/shell.h"
@@ -112,7 +112,7 @@ class ToplevelWindowEventHandlerTest : public AshTestBase {
   aura::Window* CreateWindow(int hittest_code) {
     TestWindowDelegate* d1 = new TestWindowDelegate(hittest_code);
     aura::Window* w1 = new aura::Window(d1, aura::client::WINDOW_TYPE_NORMAL);
-    w1->set_id(1);
+    w1->SetId(1);
     w1->Init(ui::LAYER_TEXTURED);
     aura::Window* parent = Shell::GetContainer(
         Shell::GetPrimaryRootWindow(), desks_util::GetActiveDeskContainerId());
@@ -524,7 +524,7 @@ TEST_F(ToplevelWindowEventHandlerTest, GestureDrag) {
 
   // Verify that the window has moved after the gesture.
   EXPECT_NE(old_bounds.ToString(), target->bounds().ToString());
-  EXPECT_EQ(WindowStateType::kRightSnapped, window_state->GetStateType());
+  EXPECT_EQ(WindowStateType::kSecondarySnapped, window_state->GetStateType());
 
   old_bounds = target->bounds();
 
@@ -536,7 +536,7 @@ TEST_F(ToplevelWindowEventHandlerTest, GestureDrag) {
   base::RunLoop().RunUntilIdle();
 
   EXPECT_NE(old_bounds.ToString(), target->bounds().ToString());
-  EXPECT_EQ(WindowStateType::kLeftSnapped, window_state->GetStateType());
+  EXPECT_EQ(WindowStateType::kPrimarySnapped, window_state->GetStateType());
 
   window_state->Restore();
   gfx::Rect bounds_before_maximization = target->bounds();
@@ -595,7 +595,7 @@ TEST_F(ToplevelWindowEventHandlerTest, GestureDragMultiDisplays) {
 
   // Verify that the window has moved after the gesture.
   EXPECT_NE(old_bounds.ToString(), target->bounds().ToString());
-  EXPECT_EQ(WindowStateType::kRightSnapped, window_state->GetStateType());
+  EXPECT_EQ(WindowStateType::kSecondarySnapped, window_state->GetStateType());
 }
 
 // Tests that a gesture cannot minimize an unminimizeable window.
@@ -1088,7 +1088,7 @@ TEST_F(ToplevelWindowEventHandlerTest, DragSnappedWindowToExternalDisplay) {
   // Snap the window to the right.
   WindowState* window_state = WindowState::Get(w1.get());
   ASSERT_TRUE(window_state->CanSnap());
-  const WMEvent event(WM_EVENT_CYCLE_SNAP_RIGHT);
+  const WMEvent event(WM_EVENT_CYCLE_SNAP_SECONDARY);
   window_state->OnWMEvent(&event);
   ASSERT_TRUE(window_state->IsSnapped());
 
@@ -1097,6 +1097,8 @@ TEST_F(ToplevelWindowEventHandlerTest, DragSnappedWindowToExternalDisplay) {
   // To determine the state, WindowWorkspaceResizer determines the display by
   // checking the CursorManager for the correct display. EventGenerator does not
   // update the display in the CursorManager, so we manually do it here.
+  // TODO(crbug.com/990589): Unit tests should be able to simulate mouse input
+  // without having to call |CursorManager::SetDisplay|.
   const gfx::Point drag_location = gfx::Point(472, -462);
   Shell::Get()->cursor_manager()->SetDisplay(
       display::Screen::GetScreen()->GetDisplayNearestPoint(drag_location));
@@ -1221,6 +1223,43 @@ TEST_F(ToplevelWindowEventHandlerDragTest,
 
   OverviewController* overview_controller = Shell::Get()->overview_controller();
   EXPECT_FALSE(overview_controller->InOverviewSession());
+}
+
+// Test that if window destroyed during resize/dragging, no crash should happen.
+TEST_F(ToplevelWindowEventHandlerDragTest, WindowDestroyedDuringDragging) {
+  SendGestureEvent(gfx::Point(0, 0), 0, 5, ui::ET_GESTURE_SCROLL_BEGIN);
+  SendGestureEvent(gfx::Point(700, 500), 700, 500,
+                   ui::ET_GESTURE_SCROLL_UPDATE);
+  EXPECT_TRUE(WindowState::Get(dragged_window_.get())->is_dragged());
+  ToplevelWindowEventHandler* event_handler =
+      Shell::Get()->toplevel_window_event_handler();
+  EXPECT_TRUE(event_handler->is_drag_in_progress());
+
+  dragged_window_.reset();
+  EXPECT_FALSE(event_handler->is_drag_in_progress());
+}
+
+// Test that if window destroyed during resize/dragging in tablet mode, no crash
+// should happen.
+TEST_F(ToplevelWindowEventHandlerDragTest,
+       WindowDestroyedDuringDraggingInTabletMode) {
+  TabletModeControllerTestApi().EnterTabletMode();
+
+  SendGestureEvent(gfx::Point(0, 0), 0, 5, ui::ET_GESTURE_SCROLL_BEGIN);
+  SendGestureEvent(gfx::Point(700, 500), 700, 500,
+                   ui::ET_GESTURE_SCROLL_UPDATE);
+  EXPECT_TRUE(WindowState::Get(dragged_window_.get())->is_dragged());
+  ToplevelWindowEventHandler* event_handler =
+      Shell::Get()->toplevel_window_event_handler();
+  EXPECT_TRUE(event_handler->is_drag_in_progress());
+  OverviewController* overview_controller = Shell::Get()->overview_controller();
+  EXPECT_TRUE(overview_controller->InOverviewSession());
+  EXPECT_FALSE(overview_controller->overview_session()->IsWindowInOverview(
+      dragged_window_.get()));
+
+  dragged_window_.reset();
+  EXPECT_FALSE(event_handler->is_drag_in_progress());
+  EXPECT_TRUE(overview_controller->InOverviewSession());
 }
 
 // Showing the resize shadows when the mouse is over the window edges is

@@ -15,14 +15,15 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/run_loop.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_piece.h"
 #include "base/task/single_thread_task_executor.h"
+#include "base/task/thread_pool.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/threading/thread_restrictions.h"
 #include "chrome/updater/app/app.h"
 #include "chrome/updater/test/test_app/constants.h"
 #include "chrome/updater/test/test_app/update_client.h"
+#include "chrome/updater/updater_scope.h"
 #include "chrome/updater/util.h"
 
 namespace updater {
@@ -35,14 +36,14 @@ class TestApp : public App {
   void FirstTaskRun() override;
 
   void DoForegroundUpdate();
-  void ParseCommandLine();
+  void HandleCommandLine();
   void Register();
   void SetUpdateStatus(UpdateStatus status,
                        int progress,
                        bool rollback,
                        const std::string& version,
                        int64_t size,
-                       const base::string16& message);
+                       const std::u16string& message);
 };
 
 void TestApp::SetUpdateStatus(UpdateStatus status,
@@ -50,7 +51,7 @@ void TestApp::SetUpdateStatus(UpdateStatus status,
                               bool rollback,
                               const std::string& version,
                               int64_t size,
-                              const base::string16& message) {
+                              const std::u16string& message) {
   switch (status) {
     case UpdateStatus::INIT:
       VLOG(1) << "Updates starting!";
@@ -89,12 +90,17 @@ void TestApp::DoForegroundUpdate() {
       base::BindRepeating(&TestApp::SetUpdateStatus, this));
 }
 
-void TestApp::ParseCommandLine() {
+void TestApp::HandleCommandLine() {
+  static constexpr base::TaskTraits kTaskTraitsBlockWithSyncPrimitives = {
+      base::MayBlock(), base::WithBaseSyncPrimitives(),
+      base::TaskPriority::BEST_EFFORT,
+      base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN};
   const base::CommandLine* command_line =
       base::CommandLine::ForCurrentProcess();
   if (command_line->HasSwitch(kInstallUpdaterSwitch)) {
     base::ThreadPool::PostTaskAndReplyWithResult(
-        FROM_HERE, {base::MayBlock()}, base::BindOnce(&InstallUpdater),
+        FROM_HERE, kTaskTraitsBlockWithSyncPrimitives,
+        base::BindOnce(&InstallUpdater),
         base::BindOnce(&TestApp::Shutdown, this));
   } else if (command_line->HasSwitch(kRegisterToUpdaterSwitch)) {
     Register();
@@ -102,7 +108,8 @@ void TestApp::ParseCommandLine() {
     DoForegroundUpdate();
   } else if (command_line->HasSwitch(kRegisterUpdaterSwitch)) {
     base::ThreadPool::PostTaskAndReplyWithResult(
-        FROM_HERE, {base::MayBlock()}, base::BindOnce(&InstallUpdater),
+        FROM_HERE, kTaskTraitsBlockWithSyncPrimitives,
+        base::BindOnce(&InstallUpdater),
         base::BindOnce(
             [](base::OnceClosure register_func,
                base::OnceCallback<void(int)> shutdown_func, int error) {
@@ -120,7 +127,7 @@ void TestApp::ParseCommandLine() {
 }
 
 void TestApp::FirstTaskRun() {
-  ParseCommandLine();
+  HandleCommandLine();
 }
 
 scoped_refptr<App> MakeTestApp() {
@@ -133,7 +140,7 @@ int TestAppMain(int argc, const char** argv) {
   base::AtExitManager exit_manager;
 
   base::CommandLine::Init(argc, argv);
-  updater::InitLogging(FILE_PATH_LITERAL("test_app.log"));
+  updater::InitLogging(GetUpdaterScope(), FILE_PATH_LITERAL("test_app.log"));
 
   base::SingleThreadTaskExecutor main_task_executor(base::MessagePumpType::UI);
   return MakeTestApp()->Run();

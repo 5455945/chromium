@@ -6,9 +6,10 @@
 
 #include <memory>
 
+#include "ash/constants/ash_features.h"
+#include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "chromeos/network/network_event_log.h"
 #include "chromeos/network/shill_property_util.h"
@@ -36,7 +37,12 @@ bool DeviceState::PropertyChanged(const std::string& key,
     return GetBooleanValue(key, value, &scanning_);
   } else if (key == shill::kSupportNetworkScanProperty) {
     return GetBooleanValue(key, value, &support_network_scan_);
-  } else if (key == shill::kCellularAllowRoamingProperty) {
+  } else if ((base::FeatureList::IsEnabled(
+                  ash::features::kCellularAllowPerNetworkRoaming) &&
+              key == shill::kCellularPolicyAllowRoamingProperty) ||
+             (!base::FeatureList::IsEnabled(
+                  ash::features::kCellularAllowPerNetworkRoaming) &&
+              key == shill::kCellularAllowRoamingProperty)) {
     return GetBooleanValue(key, value, &allow_roaming_);
   } else if (key == shill::kProviderRequiresRoamingProperty) {
     return GetBooleanValue(key, value, &provider_requires_roaming_);
@@ -87,17 +93,17 @@ bool DeviceState::PropertyChanged(const std::string& key,
     sim_lock_enabled_ = false;
 
     const base::Value* out_value = nullptr;
-    if (dict->GetWithoutPathExpansion(shill::kSIMLockTypeProperty,
-                                      &out_value)) {
+    out_value = dict->FindKey(shill::kSIMLockTypeProperty);
+    if (out_value) {
       GetStringValue(shill::kSIMLockTypeProperty, *out_value, &sim_lock_type_);
     }
-    if (dict->GetWithoutPathExpansion(shill::kSIMLockRetriesLeftProperty,
-                                      &out_value)) {
+    out_value = dict->FindKey(shill::kSIMLockRetriesLeftProperty);
+    if (out_value) {
       GetIntegerValue(shill::kSIMLockRetriesLeftProperty, *out_value,
                       &sim_retries_left_);
     }
-    if (dict->GetWithoutPathExpansion(shill::kSIMLockEnabledProperty,
-                                      &out_value)) {
+    out_value = dict->FindKey(shill::kSIMLockEnabledProperty);
+    if (out_value) {
       GetBooleanValue(shill::kSIMLockEnabledProperty, *out_value,
                       &sim_lock_enabled_);
     }
@@ -152,6 +158,30 @@ std::string DeviceState::GetName() const {
   if (!operator_name_.empty())
     return operator_name_;
   return name();
+}
+
+DeviceState::CellularSIMSlotInfos DeviceState::GetSimSlotInfos() const {
+  // If information was provided from Shill, return it directly.
+  if (!sim_slot_infos_.empty())
+    return sim_slot_infos_;
+
+  // Non-cellular types do not have any SIM slots.
+  if (type() != shill::kTypeCellular) {
+    NET_LOG(ERROR) << "Attempted to fetch SIM slots for device of type "
+                   << type() << ". Returning empty list.";
+    return {};
+  }
+
+  // Some devices do not return SIMSlotInfo properties (see b/189874098). If the
+  // list is currently empty, we assume that this is a single-pSIM device and
+  // return one CellularSIMSlotInfo object representing the single pSIM.
+  CellularSIMSlotInfo info;
+  info.slot_id = 1;          // Slot numbers start at 1, not 0.
+  info.eid = std::string();  // Empty EID implies a physical SIM slot.
+  info.iccid = iccid();      // Copy ICCID property.
+  info.primary = true;       // Only one slot, so it must be the primary one.
+
+  return CellularSIMSlotInfos{info};
 }
 
 std::string DeviceState::GetIpAddressByType(const std::string& type) const {

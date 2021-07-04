@@ -6,10 +6,12 @@
 #include "base/ios/ios_util.h"
 #include "base/strings/sys_string_conversions.h"
 #import "base/test/ios/wait_util.h"
+#import "components/signin/ios/browser/features.h"
+#include "components/signin/public/base/account_consistency_method.h"
 #include "components/signin/public/base/signin_pref_names.h"
 #import "ios/chrome/browser/ui/authentication/signin_earl_grey.h"
 #import "ios/chrome/browser/ui/authentication/signin_earl_grey_ui.h"
-#import "ios/chrome/browser/ui/authentication/unified_consent/unified_consent_constants.h"
+#import "ios/chrome/browser/ui/authentication/views/views_constants.h"
 #import "ios/chrome/browser/ui/content_suggestions/content_suggestions_feature.h"
 #import "ios/chrome/browser/ui/recent_tabs/recent_tabs_constants.h"
 #include "ios/chrome/grit/ios_strings.h"
@@ -54,7 +56,7 @@ namespace {
 // Returns a matcher for |userEmail| in IdentityChooserViewController.
 id<GREYMatcher> identityChooserButtonMatcherWithEmail(NSString* userEmail) {
   return grey_allOf(grey_accessibilityID(userEmail),
-                    grey_kindOfClassName(@"IdentityChooserCell"),
+                    grey_kindOfClassName(@"TableViewIdentityCell"),
                     grey_sufficientlyVisible(), nil);
 }
 
@@ -67,7 +69,8 @@ void ChooseImportOrKeepDataSepareteDialog(id<GREYMatcher> choiceButtonMatcher) {
 
   // Sign in to |fakeIdentity1|.
   [SigninEarlGreyUI signinWithFakeIdentity:fakeIdentity1];
-  [SigninEarlGreyUI signOut];
+  [SigninEarlGreyUI
+      signOutWithConfirmationChoice:SignOutConfirmationChoiceKeepData];
 
   // Sign in with |fakeIdentity2|.
   [ChromeEarlGreyUI openSettingsMenu];
@@ -103,6 +106,8 @@ void ChooseImportOrKeepDataSepareteDialog(id<GREYMatcher> choiceButtonMatcher) {
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config;
   config.features_disabled.push_back(kDiscoverFeedInNtp);
+  config.features_disabled.push_back(signin::kMobileIdentityConsistency);
+  config.features_enabled.push_back(signin::kSimplifySignOutIOS);
   return config;
 }
 
@@ -142,7 +147,8 @@ void ChooseImportOrKeepDataSepareteDialog(id<GREYMatcher> choiceButtonMatcher) {
   [SigninEarlGreyUI signinWithFakeIdentity:fakeIdentity];
 
   // Sign out.
-  [SigninEarlGreyUI signOut];
+  [SigninEarlGreyUI
+      signOutWithConfirmationChoice:SignOutConfirmationChoiceKeepData];
 }
 
 // Tests that signing out of a managed account from the Settings works
@@ -153,7 +159,8 @@ void ChooseImportOrKeepDataSepareteDialog(id<GREYMatcher> choiceButtonMatcher) {
   [SigninEarlGreyUI signinWithFakeIdentity:fakeIdentity];
 
   // Sign out.
-  [SigninEarlGreyUI signOutAndClearDataFromDevice];
+  [SigninEarlGreyUI
+      signOutWithConfirmationChoice:SignOutConfirmationChoiceClearData];
 }
 
 // Opens the sign in screen and then cancel it by opening a new tab. Ensures
@@ -210,7 +217,8 @@ void ChooseImportOrKeepDataSepareteDialog(id<GREYMatcher> choiceButtonMatcher) {
   [SigninEarlGreyUI signinWithFakeIdentity:fakeIdentity2];
 
   // Sign out.
-  [SigninEarlGreyUI signOut];
+  [SigninEarlGreyUI
+      signOutWithConfirmationChoice:SignOutConfirmationChoiceKeepData];
   // Sign in with |fakeIdentity1|.
   [ChromeEarlGreyUI openSettingsMenu];
   [[EarlGrey selectElementWithMatcher:SecondarySignInButton()]
@@ -367,7 +375,7 @@ void ChooseImportOrKeepDataSepareteDialog(id<GREYMatcher> choiceButtonMatcher) {
   [SigninEarlGrey addFakeIdentity:fakeIdentity];
   [self openSigninFromView:OpenSigninMethodFromTabSwitcher tapSettingsLink:NO];
   [[EarlGrey selectElementWithMatcher:grey_accessibilityID(
-                                          kIdentityPickerViewIdentifier)]
+                                          kIdentityButtonControlIdentifier)]
       performAction:grey_tap()];
 
   // Open the URL as if it was opened from another app.
@@ -460,6 +468,7 @@ void ChooseImportOrKeepDataSepareteDialog(id<GREYMatcher> choiceButtonMatcher) {
     // Should be not signed in.
     [SigninEarlGrey verifySignedOut];
   }
+
   // Check that the web page is visible.
   [[EarlGrey selectElementWithMatcher:chrome_test_util::Omnibox()]
       assertWithMatcher:chrome_test_util::OmniboxContainingText(
@@ -594,16 +603,13 @@ void ChooseImportOrKeepDataSepareteDialog(id<GREYMatcher> choiceButtonMatcher) {
       assertWithMatcher:grey_notVisible()];
 }
 
-// Tests that the sign-in coordinator isn't started when sign-in is disabled.
-- (void)testSigninDisabled {
+// Tests that the sign-in coordinator isn't started when sign-in is disabled by
+// policy.
+- (void)testSigninDisabledByPolicy {
   // Disable browser sign-in only after the "Sign in to Chrome" button is
   // visible.
   [ChromeEarlGreyUI openSettingsMenu];
-  [ChromeEarlGrey setBoolValue:NO forUserPref:prefs::kSigninAllowed];
-
-  // Attempt to sign in.
-  [ChromeEarlGreyUI tapSettingsMenuButton:PrimarySignInButton()];
-  [ChromeEarlGreyUI waitForAppToIdle];
+  [ChromeEarlGrey setBoolValue:NO forUserPref:prefs::kSigninAllowedByPolicy];
 
   // Verify the sign-in view isn't showing.
   id<GREYMatcher> signin_matcher = StaticTextWithAccessibilityLabelId(
@@ -612,7 +618,7 @@ void ChooseImportOrKeepDataSepareteDialog(id<GREYMatcher> choiceButtonMatcher) {
       assertWithMatcher:grey_notVisible()];
 
   // Prefs clean-up.
-  [ChromeEarlGrey setBoolValue:YES forUserPref:prefs::kSigninAllowed];
+  [ChromeEarlGrey setBoolValue:YES forUserPref:prefs::kSigninAllowedByPolicy];
 }
 
 @end

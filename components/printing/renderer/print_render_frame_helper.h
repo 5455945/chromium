@@ -222,7 +222,7 @@ class PrintRenderFrameHelper
   void OnDestruct() override;
   void DidStartNavigation(
       const GURL& url,
-      base::Optional<blink::WebNavigationType> navigation_type) override;
+      absl::optional<blink::WebNavigationType> navigation_type) override;
   void DidFailProvisionalLoad() override;
   void DidFinishLoad() override;
   void ScriptedPrint(bool user_initiated) override;
@@ -232,8 +232,8 @@ class PrintRenderFrameHelper
 
   // printing::mojom::PrintRenderFrame:
   void PrintRequestedPages() override;
-  void PrintForSystemDialog() override;
 #if BUILDFLAG(ENABLE_PRINT_PREVIEW)
+  void PrintForSystemDialog() override;
   void SetPrintPreviewUI(
       mojo::PendingAssociatedRemote<mojom::PrintPreviewUI> preview) override;
   void InitiatePrintPreview(
@@ -434,6 +434,15 @@ class PrintRenderFrameHelper
 
   void SetPrintPagesParams(const mojom::PrintPagesParams& settings);
 
+  // Quits all runloops waiting for Mojo replies. It's called when
+  // |print_manager_host_| is disconnected before the replies.
+  void QuitActiveRunLoops();
+
+  // Quits a runloop waiting for a Mojo reply. These are called when a Mojo
+  // message gets a reply.
+  void QuitScriptedPrintPreviewRunLoop();
+  void QuitGetPrintSettingsFromUserRunLoop();
+
   // WebView used only to print the selection.
   std::unique_ptr<PrepareFrameAndViewForPrint> prep_frame_view_;
   bool reset_prep_frame_view_ = false;
@@ -524,7 +533,6 @@ class PrintRenderFrameHelper
     bool IsForArc() const;
     bool IsPlugin() const;
     bool IsModifiable() const;
-    bool IsPdf() const;
     bool HasSelection();
     bool IsLastPageOfPrintReadyMetafile() const;
     bool IsFinalPageRendered() const;
@@ -593,10 +601,6 @@ class PrintRenderFrameHelper
     // True, if the document source is modifiable. e.g. HTML and not PDF.
     bool is_modifiable_ = true;
 
-    // True, if the document source is a PDF. Used to distinguish from
-    // other plugins such as Flash.
-    bool is_pdf_ = false;
-
     // True, if the document source is from ARC.
     bool is_for_arc_ = false;
 
@@ -635,6 +639,7 @@ class PrintRenderFrameHelper
   PrintPreviewContext print_preview_context_;
   bool is_loading_ = false;
   bool is_scripted_preview_delayed_ = false;
+  bool in_scripted_print_ = false;
   int ipc_nesting_level_ = 0;
   bool render_frame_gone_ = false;
   bool delete_pending_ = false;
@@ -651,6 +656,12 @@ class PrintRenderFrameHelper
   // called. This is a store for the RequestPrintPreview() call and its
   // parameters so that it can be invoked after DidStopLoading.
   base::OnceClosure on_stop_loading_closure_;
+
+  // Stores quit closures for the runloops that are waiting for Mojo replies.
+  base::OnceClosure scripted_print_preview_quit_closure_;
+  base::OnceClosure get_print_settings_from_user_quit_closure_;
+
+  bool do_deferred_print_for_system_dialog_ = false;
 
   mojo::AssociatedRemote<mojom::PrintManagerHost> print_manager_host_;
 

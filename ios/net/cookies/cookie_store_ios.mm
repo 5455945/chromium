@@ -7,6 +7,8 @@
 #import <Foundation/Foundation.h>
 #include <stddef.h>
 
+#include <utility>
+
 #include "base/bind.h"
 #include "base/check_op.h"
 #include "base/files/file_path.h"
@@ -286,7 +288,7 @@ void CookieStoreIOS::GetCookieListWithOptionsAsync(
   system_store_->GetCookiesForURLAsync(
       url,
       base::BindOnce(&CookieStoreIOS::RunGetCookieListCallbackOnSystemCookies,
-                     weak_factory_.GetWeakPtr(), base::Passed(&callback)));
+                     weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void CookieStoreIOS::GetAllCookiesAsync(GetAllCookiesCallback callback) {
@@ -300,7 +302,7 @@ void CookieStoreIOS::GetAllCookiesAsync(GetAllCookiesCallback callback) {
   // to pass options in here as well.
   system_store_->GetAllCookiesAsync(
       base::BindOnce(&CookieStoreIOS::RunGetAllCookiesCallbackOnSystemCookies,
-                     weak_factory_.GetWeakPtr(), base::Passed(&callback)));
+                     weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void CookieStoreIOS::DeleteCanonicalCookieAsync(const CanonicalCookie& cookie,
@@ -330,9 +332,6 @@ void CookieStoreIOS::DeleteAllCreatedInTimeRangeAsync(
   // instead.
   DCHECK(SystemCookiesAllowed());
 
-  if (metrics_enabled())
-    ResetCookieCountMetrics();
-
   CookieDeletionInfo delete_info(creation_range.start(), creation_range.end());
   DeleteCookiesMatchingInfoAsync(std::move(delete_info), std::move(callback));
 }
@@ -345,9 +344,6 @@ void CookieStoreIOS::DeleteAllMatchingInfoAsync(CookieDeletionInfo delete_info,
   // instead.
   DCHECK(SystemCookiesAllowed());
 
-  if (metrics_enabled())
-    ResetCookieCountMetrics();
-
   DeleteCookiesMatchingInfoAsync(std::move(delete_info), std::move(callback));
 }
 
@@ -358,13 +354,22 @@ void CookieStoreIOS::DeleteSessionCookiesAsync(DeleteCallback callback) {
   // instead.
   DCHECK(SystemCookiesAllowed());
 
-  if (metrics_enabled())
-    ResetCookieCountMetrics();
-
   CookieDeletionInfo delete_info;
   delete_info.session_control =
       CookieDeletionInfo::SessionControl::SESSION_COOKIES;
   DeleteCookiesMatchingInfoAsync(std::move(delete_info), std::move(callback));
+}
+
+void CookieStoreIOS::DeleteMatchingCookiesAsync(DeletePredicate predicate,
+                                                DeleteCallback callback) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+
+  // If cookies are not allowed, a CookieStoreIOS subclass should be used
+  // instead.
+  DCHECK(SystemCookiesAllowed());
+
+  DeleteCookiesMatchingPredicateAsync(std::move(predicate),
+                                      std::move(callback));
 }
 
 void CookieStoreIOS::FlushStore(base::OnceClosure closure) {

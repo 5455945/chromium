@@ -5,6 +5,7 @@
 <link rel="import" href="chrome://resources/cr_elements/icons.html">
 <link rel="import" href="chrome://resources/cr_elements/shared_vars_css.html">
 <link rel="import" href="chrome://resources/html/web_ui_listener_behavior.html">
+<link rel="import" href="chrome://resources/html/i18n_behavior.html">
 <link rel="import" href="chrome://resources/html/load_time_data.html">
 <link rel="import" href="../../controls/settings_slider.html">
 <link rel="import" href="../../controls/settings_toggle_button.html">
@@ -39,6 +40,16 @@
         padding-inline-end: 0;
         padding-inline-start: 0;
       }
+
+      .settings-box.indented,
+      settings-toggle-button.indented {
+        margin-inline-start: calc(var(--cr-section-indent-padding) +
+                                  var(--cr-section-indent-width));
+      }
+
+      #screenMagnifierZoomHintLabel {
+        white-space: pre-line;
+      }
     </style>
     <template is="dom-if" if="[[!isKioskModeActive_]]">
       <div class="settings-box row first">
@@ -55,9 +66,18 @@
         deep-link-focus-id$="[[Setting.kChromeVox]]">
     </settings-toggle-button>
     <iron-collapse opened="[[prefs.settings.accessibility.value]]">
-      <cr-link-row id="chromeVoxSubpageButton"
+      <div class="sub-item">
+        <cr-link-row id="chromeVoxSubpageButton"
           class="settings-box" on-click="onChromeVoxSettingsTap_"
-          label="$i18n{chromeVoxOptionsLabel}" external></cr-link-row>
+          label="$i18n{chromeVoxOptionsLabel}" external>
+        </cr-link-row>
+      </div>
+      <div class="sub-item">
+        <cr-link-row id="chromeVoxTutorialButton"
+          class="settings-box" on-click="onChromeVoxTutorialTap_"
+          label="$i18n{chromeVoxTutorialLabel}" external>
+        </cr-link-row>
+      </div>
     </iron-collapse>
     <settings-toggle-button
         pref="{{prefs.settings.a11y.select_to_speak}}"
@@ -71,9 +91,12 @@
         deep-link-focus-id$="[[Setting.kSelectToSpeak]]">
     </settings-toggle-button>
     <iron-collapse opened="[[prefs.settings.a11y.select_to_speak.value]]">
-      <cr-link-row id="selectToSpeakSubpageButton"
-          class="settings-box" on-click="onSelectToSpeakSettingsTap_"
-          label="$i18n{selectToSpeakOptionsLabel}" external></cr-link-row>
+      <div class="sub-item">
+        <cr-link-row id="selectToSpeakSubpageButton"
+            class="settings-box" on-click="onSelectToSpeakSettingsTap_"
+            label="$i18n{selectToSpeakOptionsLabel}" external>
+          </cr-link-row>
+      </div>
     </iron-collapse>
 
     <cr-link-row id="ttsSubpageButton" class="hr"
@@ -92,6 +115,7 @@
         class="hr"
         pref="{{prefs.settings.a11y.screen_magnifier}}"
         label="$i18n{screenMagnifierLabel}"
+        sub-label="[[screenMagnifierHintLabel_]]"
         disabled="[[prefs.ash.docked_magnifier.enabled.value]]"
         deep-link-focus-id$="[[Setting.kFullscreenMagnifier]]">
     </settings-toggle-button>
@@ -125,19 +149,18 @@
             </controlled-radio-button>
           </settings-radio-group>
         </div>
-        <div class="sub-item">
-          <settings-toggle-button
-              class="sub-item"
-              pref="{{prefs.settings.a11y.screen_magnifier_focus_following}}"
-              label="$i18n{screenMagnifierFocusFollowingLabel}"
-              deep-link-focus-id$=
-                  "[[Setting.kFullscreenMagnifierFocusFollowing]]">
-          </settings-toggle-button>
-        </div>
+        <settings-toggle-button
+            class="indented hr"
+            pref="{{prefs.settings.a11y.screen_magnifier_focus_following}}"
+            label="$i18n{screenMagnifierFocusFollowingLabel}"
+            deep-link-focus-id$=
+                "[[Setting.kFullscreenMagnifierFocusFollowing]]">
+        </settings-toggle-button>
       </template>
-      <div class="settings-box continuation">
-        <div class="start sub-item settings-box-text" aria-hidden="true">
-          $i18n{screenMagnifierZoomLabel}
+      <div class="settings-box indented">
+        <div class="flex start settings-box-text" id="labelWrapper">
+          <div class="label" aria-hidden="true">$i18n{screenMagnifierZoomLabel}</div>
+          <div class="secondary label" id="screenMagnifierZoomHintLabel">$i18n{screenMagnifierZoomHintLabel}</div>
         </div>
         <settings-dropdown-menu label="$i18n{screenMagnifierZoomLabel}"
             pref="{{prefs.settings.a11y.screen_magnifier_scale}}"
@@ -190,10 +213,11 @@
         deep-link-focus-id$="[[Setting.kOnScreenKeyboard]]">
     </settings-toggle-button>
     <settings-toggle-button
+        id="enableDictation"
         class="hr"
         pref="{{prefs.settings.a11y.dictation}}"
         label="$i18n{dictationLabel}"
-        sub-label="$i18n{dictationDescription}"
+        sub-label="[[dictationSubtitle_]]"
         deep-link-focus-id$="[[Setting.kDictation]]">
     </settings-toggle-button>
     <settings-toggle-button
@@ -225,11 +249,13 @@
       </settings-toggle-button>
       <iron-collapse
           opened="[[prefs.settings.a11y.switch_access.enabled.value]]">
-        <cr-link-row id="switchAccessSubpageButton"
-            label="$i18n{switchAccessOptionsLabel}"
-            on-click="onSwitchAccessSettingsTap_"
-            role-description="$i18n{subpageArrowRoleDescription}" embedded>
-        </cr-link-row>
+        <div class="sub-item">
+          <cr-link-row id="switchAccessSubpageButton"
+              label="$i18n{switchAccessOptionsLabel}"
+              on-click="onSwitchAccessSettingsTap_"
+              role-description="$i18n{subpageArrowRoleDescription}" embedded>
+          </cr-link-row>
+        </div>
       </iron-collapse>
       <cr-link-row id="keyboardSubpageButton" class="hr"
           label="$i18n{keyboardSettingsTitle}" on-click="onKeyboardTap_"
@@ -371,7 +397,7 @@
         if="[[shouldShowAdditionalFeaturesLink_(isGuest_, isKioskModeActive_)]]">
       <a class="settings-box inherit-color no-outline" tabindex="-1"
           id="additionalFeaturesLink" target="_blank"
-          href="https://chrome.google.com/webstore/category/collection/accessibility">
+          href="https://chrome.google.com/webstore/category/collection/3p_accessibility_extensions">
         <div class="start settings-box-text">
           $i18n{additionalFeaturesTitle}
           <div class="secondary" id="moreFeaturesSecondary">

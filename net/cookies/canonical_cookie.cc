@@ -44,9 +44,11 @@
 
 #include "net/cookies/canonical_cookie.h"
 
+#include <limits>
 #include <sstream>
 #include <utility>
 
+#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/format_macros.h"
 #include "base/logging.h"
@@ -54,6 +56,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "net/base/features.h"
@@ -271,13 +274,20 @@ CanonicalCookie::CanonicalCookie() = default;
 
 CanonicalCookie::CanonicalCookie(const CanonicalCookie& other) = default;
 
-CanonicalCookie::CanonicalCookie(const std::string& name,
-                                 const std::string& value,
-                                 const std::string& domain,
-                                 const std::string& path,
-                                 const base::Time& creation,
-                                 const base::Time& expiration,
-                                 const base::Time& last_access,
+CanonicalCookie::CanonicalCookie(CanonicalCookie&& other) = default;
+
+CanonicalCookie& CanonicalCookie::operator=(const CanonicalCookie& other) =
+    default;
+
+CanonicalCookie& CanonicalCookie::operator=(CanonicalCookie&& other) = default;
+
+CanonicalCookie::CanonicalCookie(std::string name,
+                                 std::string value,
+                                 std::string domain,
+                                 std::string path,
+                                 base::Time creation,
+                                 base::Time expiration,
+                                 base::Time last_access,
                                  bool secure,
                                  bool httponly,
                                  CookieSameSite same_site,
@@ -285,10 +295,10 @@ CanonicalCookie::CanonicalCookie(const std::string& name,
                                  bool same_party,
                                  CookieSourceScheme source_scheme,
                                  int source_port)
-    : name_(name),
-      value_(value),
-      domain_(domain),
-      path_(path),
+    : name_(std::move(name)),
+      value_(std::move(value)),
+      domain_(std::move(domain)),
+      path_(std::move(path)),
       creation_date_(creation),
       expiry_date_(expiration),
       last_access_date_(last_access),
@@ -334,15 +344,30 @@ Time CanonicalCookie::CanonExpiration(const ParsedCookie& pc,
                                       const Time& current,
                                       const Time& server_time) {
   // First, try the Max-Age attribute.
-  uint64_t max_age = 0;
-  if (pc.HasMaxAge() &&
-#ifdef COMPILER_MSVC
-      sscanf_s(
-#else
-      sscanf(
-#endif
-             pc.MaxAge().c_str(), " %" PRIu64, &max_age) == 1) {
-    return current + TimeDelta::FromSeconds(max_age);
+  if (pc.HasMaxAge()) {
+    int64_t max_age = 0;
+    // Use the output if StringToInt64 returns true ("perfect" conversion). This
+    // case excludes overflow/underflow, leading/trailing whitespace, non-number
+    // strings, and empty string. (ParsedCookie trims whitespace.)
+    if (base::StringToInt64(pc.MaxAge(), &max_age)) {
+      // RFC 6265bis algorithm for parsing Max-Age:
+      // "If delta-seconds is less than or equal to zero (0), let expiry-
+      // time be the earliest representable date and time. ... "
+      if (max_age <= 0)
+        return Time::Min();
+      // "... Otherwise, let the expiry-time be the current date and time plus
+      // delta-seconds seconds."
+      return current + TimeDelta::FromSeconds(max_age);
+    } else {
+      // If the conversion wasn't perfect, but the best-effort conversion
+      // resulted in an overflow/underflow, use the min/max representable time.
+      // (This is alluded to in the spec, which says the user agent MAY clip an
+      // Expires attribute to a saturated time. We'll do the same for Max-Age.)
+      if (max_age == std::numeric_limits<int64_t>::min())
+        return Time::Min();
+      if (max_age == std::numeric_limits<int64_t>::max())
+        return Time::Max();
+    }
   }
 
   // Try the Expires attribute.
@@ -363,7 +388,7 @@ std::unique_ptr<CanonicalCookie> CanonicalCookie::Create(
     const GURL& url,
     const std::string& cookie_line,
     const base::Time& creation_time,
-    base::Optional<base::Time> server_time,
+    absl::optional<base::Time> server_time,
     CookieInclusionStatus* status) {
   // Put a pointer on the stack so the rest of the function can assign to it if
   // the default nullptr is passed in.
@@ -450,11 +475,13 @@ std::unique_ptr<CanonicalCookie> CanonicalCookie::Create(
   RecordCookieSameSiteAttributeValueHistogram(samesite_string,
                                               parsed_cookie.IsSameParty());
 
+  UMA_HISTOGRAM_BOOLEAN("Cookie.ControlCharacterTruncation",
+                        parsed_cookie.HasTruncatedNameOrValue());
+
   return cc;
 }
 
 // static
-// TODO(crbug.com/957184): This should ideally return a CookieInclusionStatus.
 std::unique_ptr<CanonicalCookie> CanonicalCookie::CreateSanitizedCookie(
     const GURL& url,
     const std::string& name,
@@ -468,49 +495,88 @@ std::unique_ptr<CanonicalCookie> CanonicalCookie::CreateSanitizedCookie(
     bool http_only,
     CookieSameSite same_site,
     CookiePriority priority,
-    bool same_party) {
+    bool same_party,
+    CookieInclusionStatus* status) {
+  // Put a pointer on the stack so the rest of the function can assign to it if
+  // the default nullptr is passed in.
+  CookieInclusionStatus blank_status;
+  if (status == nullptr) {
+    status = &blank_status;
+  }
+  *status = CookieInclusionStatus();
+
   // Validate consistency of passed arguments.
   if (ParsedCookie::ParseTokenString(name) != name ||
-      ParsedCookie::ParseValueString(value) != value ||
-      !ParsedCookie::IsValidCookieAttributeValue(name) ||
-      !ParsedCookie::IsValidCookieAttributeValue(value) ||
-      ParsedCookie::ParseValueString(domain) != domain ||
-      ParsedCookie::ParseValueString(path) != path) {
-    return nullptr;
+      !ParsedCookie::IsValidCookieAttributeValue(name)) {
+    status->AddExclusionReason(
+        net::CookieInclusionStatus::EXCLUDE_FAILURE_TO_STORE);
+  } else if (ParsedCookie::ParseValueString(value) != value ||
+             !ParsedCookie::IsValidCookieAttributeValue(value)) {
+    status->AddExclusionReason(
+        net::CookieInclusionStatus::EXCLUDE_FAILURE_TO_STORE);
+  } else if (ParsedCookie::ParseValueString(path) != path) {
+    status->AddExclusionReason(
+        net::CookieInclusionStatus::EXCLUDE_FAILURE_TO_STORE);
+  } else if (name.empty() && value.empty()) {
+    status->AddExclusionReason(
+        net::CookieInclusionStatus::EXCLUDE_FAILURE_TO_STORE);
   }
 
-  if (name.empty() && value.empty())
-    return nullptr;
-
-  // This validation step must happen before GetCookieDomainWithString, so it
-  // doesn't fail DCHECKs.
-  if (!cookie_util::DomainIsHostOnly(url.host()))
-    return nullptr;
+  if (ParsedCookie::ParseValueString(domain) != domain) {
+    status->AddExclusionReason(
+        net::CookieInclusionStatus::EXCLUDE_INVALID_DOMAIN);
+  }
 
   std::string cookie_domain;
-  if (!cookie_util::GetCookieDomainWithString(url, domain, &cookie_domain))
-    return nullptr;
+  // This validation step must happen before GetCookieDomainWithString, so it
+  // doesn't fail DCHECKs.
+  if (!cookie_util::DomainIsHostOnly(url.host())) {
+    status->AddExclusionReason(
+        net::CookieInclusionStatus::EXCLUDE_INVALID_DOMAIN);
+  } else if (!cookie_util::GetCookieDomainWithString(url, domain,
+                                                     &cookie_domain)) {
+    status->AddExclusionReason(
+        net::CookieInclusionStatus::EXCLUDE_INVALID_DOMAIN);
+  }
 
-  CookieSourceScheme source_scheme = url.SchemeIsCryptographic()
-                                         ? CookieSourceScheme::kSecure
-                                         : CookieSourceScheme::kNonSecure;
+  CookieSourceScheme source_scheme = CookieSourceScheme::kNonSecure;
+  // This validation step must happen before SchemeIsCryptographic, so it
+  // doesn't fail DCHECKs.
+  if (!url.is_valid()) {
+    status->AddExclusionReason(
+        net::CookieInclusionStatus::EXCLUDE_INVALID_DOMAIN);
+  } else {
+    source_scheme = url.SchemeIsCryptographic()
+                        ? CookieSourceScheme::kSecure
+                        : CookieSourceScheme::kNonSecure;
+  }
 
   // Get the port, this will get a default value if a port isn't provided.
   int source_port = url.EffectiveIntPort();
 
   std::string cookie_path = CanonicalCookie::CanonPathWithString(url, path);
-  if (!path.empty() && cookie_path != path)
-    return nullptr;
+  if (!path.empty() && cookie_path != path) {
+    status->AddExclusionReason(
+        net::CookieInclusionStatus::EXCLUDE_FAILURE_TO_STORE);
+  }
 
   if (!IsCookiePrefixValid(GetCookiePrefix(name), url, secure, domain,
                            cookie_path)) {
-    return nullptr;
+    status->AddExclusionReason(
+        net::CookieInclusionStatus::EXCLUDE_INVALID_PREFIX);
   }
 
-  if (!IsCookieSamePartyValid(same_party, secure, same_site))
-    return nullptr;
+  if (!IsCookieSamePartyValid(same_party, secure, same_site)) {
+    status->AddExclusionReason(
+        net::CookieInclusionStatus::EXCLUDE_INVALID_SAMEPARTY);
+  }
 
-  if (!last_access_time.is_null() && creation_time.is_null())
+  if (!last_access_time.is_null() && creation_time.is_null()) {
+    status->AddExclusionReason(
+        net::CookieInclusionStatus::EXCLUDE_FAILURE_TO_STORE);
+  }
+
+  if (!status->IsInclude())
     return nullptr;
 
   // Canonicalize path again to make sure it escapes characters as needed.
@@ -533,13 +599,13 @@ std::unique_ptr<CanonicalCookie> CanonicalCookie::CreateSanitizedCookie(
 
 // static
 std::unique_ptr<CanonicalCookie> CanonicalCookie::FromStorage(
-    const std::string& name,
-    const std::string& value,
-    const std::string& domain,
-    const std::string& path,
-    const base::Time& creation,
-    const base::Time& expiration,
-    const base::Time& last_access,
+    std::string name,
+    std::string value,
+    std::string domain,
+    std::string path,
+    base::Time creation,
+    base::Time expiration,
+    base::Time last_access,
     bool secure,
     bool httponly,
     CookieSameSite same_site,
@@ -548,8 +614,9 @@ std::unique_ptr<CanonicalCookie> CanonicalCookie::FromStorage(
     CookieSourceScheme source_scheme,
     int source_port) {
   std::unique_ptr<CanonicalCookie> cc = base::WrapUnique(new CanonicalCookie(
-      name, value, domain, path, creation, expiration, last_access, secure,
-      httponly, same_site, priority, same_party, source_scheme, source_port));
+      std::move(name), std::move(value), std::move(domain), std::move(path),
+      creation, expiration, last_access, secure, httponly, same_site, priority,
+      same_party, source_scheme, source_port));
   if (!cc->IsCanonical())
     return nullptr;
   return cc;
@@ -1215,7 +1282,7 @@ bool CanonicalCookie::IsCookieSamePartyValid(bool is_same_party,
 CookieAndLineWithAccessResult::CookieAndLineWithAccessResult() = default;
 
 CookieAndLineWithAccessResult::CookieAndLineWithAccessResult(
-    base::Optional<CanonicalCookie> cookie,
+    absl::optional<CanonicalCookie> cookie,
     std::string cookie_string,
     CookieAccessResult access_result)
     : cookie(std::move(cookie)),

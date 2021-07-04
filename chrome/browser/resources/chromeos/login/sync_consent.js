@@ -44,12 +44,20 @@ Polymer({
     },
 
     /**
-     * The device type (e.g. "Chromebook" or "Chromebox").
-     * TODO(jamescook): Delete this after M85 once we're sure UX doesn't want
-     * the device type in the dialog.
-     * @private
+     * Indicates whether user is minor mode user (e.g. under age of 18).
      */
-    deviceType_: String,
+    isMinorMode_: {
+      type: Boolean,
+      value: false,
+    },
+
+    /**
+     * The text key for the opt-in button (it could vary based on whether
+     * the user is in minor mode).
+     */
+    optInButtonTextKey_: {
+      type: String,
+    }
   },
 
   EXTERNAL_API: ['setThrobberVisible'],
@@ -65,8 +73,11 @@ Polymer({
    */
   onBeforeShow(data) {
     this.setIsChildAccount(data['isChildAccount']);
-    this.setDeviceType(data['deviceType']);
     this.splitSettingsSyncEnabled_ = data['splitSettingsSyncEnabled'];
+    this.isMinorMode_ = data['isMinorMode'];
+    this.optInButtonTextKey_ = this.isMinorMode_ ?
+        'syncConsentTurnOnSync' :
+        'syncConsentAcceptAndContinue';
     this.setUIStep(this.defaultUIStep());
   },
 
@@ -89,13 +100,6 @@ Polymer({
    */
   setIsChildAccount(is_child_account) {
     this.isChildAccount_ = is_child_account;
-  },
-
-  /**
-   * @param deviceType {string} The device type (e.g. "Chromebook").
-   */
-  setDeviceType(deviceType) {
-    this.deviceType_ = deviceType;
   },
 
   /** @override */
@@ -138,18 +142,21 @@ Polymer({
    * Continue button click handler for pre-SplitSettingsSync.
    * @private
    */
-  onSettingsSaveAndContinue_(e) {
+  onSettingsSaveAndContinue_(e, opted_in) {
     assert(e.path);
     assert(!this.splitSettingsSyncEnabled_);
-    if (this.$.reviewSettingsBox.checked) {
-      chrome.send('login.SyncConsentScreen.continueAndReview', [
-        this.getConsentDescription_(), this.getConsentConfirmation_(e.path)
-      ]);
-    } else {
-      chrome.send('login.SyncConsentScreen.continueWithDefaults', [
-        this.getConsentDescription_(), this.getConsentConfirmation_(e.path)
-      ]);
-    }
+    chrome.send('login.SyncConsentScreen.nonSplitSettingsContinue', [
+      opted_in, this.$.reviewSettingsBox.checked, this.getConsentDescription_(),
+      this.getConsentConfirmation_(e.path)
+    ]);
+  },
+
+  onNonSplitSettingsAccepted_(e) {
+    this.onSettingsSaveAndContinue_(e, true /* opted_in */);
+  },
+
+  onNonSplitSettingsDeclined_(e) {
+    this.onSettingsSaveAndContinue_(e, false /* opted_in */);
   },
 
   /**

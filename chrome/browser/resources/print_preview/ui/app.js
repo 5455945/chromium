@@ -11,7 +11,6 @@ import {assert} from 'chrome://resources/js/assert.m.js';
 import {isMac, isWindows} from 'chrome://resources/js/cr.m.js';
 import {FocusOutlineManager} from 'chrome://resources/js/cr/ui/focus_outline_manager.m.js';
 import {EventTracker} from 'chrome://resources/js/event_tracker.m.js';
-import {loadTimeData} from 'chrome://resources/js/load_time_data.m.js';
 import {hasKeyModifiers} from 'chrome://resources/js/util.m.js';
 import {WebUIListenerBehavior} from 'chrome://resources/js/web_ui_listener_behavior.m.js';
 import {html, Polymer} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
@@ -27,8 +26,9 @@ import {DuplexMode, whenReady} from '../data/model.js';
 import {PrintableArea} from '../data/printable_area.js';
 import {Size} from '../data/size.js';
 import {Error, State} from '../data/state.js';
+import {Metrics, MetricsContext} from '../metrics.js';
 import {NativeInitialSettings, NativeLayer, NativeLayerImpl} from '../native_layer.js';
-// <if expr="chromeos">
+// <if expr="chromeos or lacros">
 import {NativeLayerCros, NativeLayerCrosImpl} from '../native_layer_cros.js';
 // </if>
 
@@ -116,17 +116,6 @@ Polymer({
 
     /** @private {number} */
     maxSheets_: Number,
-
-    // <if expr="chromeos">
-    /** @private */
-    saveToDriveFlagEnabled_: {
-      type: Boolean,
-      value() {
-        return loadTimeData.getBoolean('printSaveToDrive');
-      },
-      readOnly: true,
-    },
-    // </if>
   },
 
   listeners: {
@@ -137,7 +126,7 @@ Polymer({
   /** @private {?NativeLayer} */
   nativeLayer_: null,
 
-  // <if expr="chromeos">
+  // <if expr="chromeos or lacros">
   /** @private {?NativeLayerCros} */
   nativeLayerCros_: null,
   // </if>
@@ -189,7 +178,7 @@ Polymer({
   attached() {
     document.documentElement.classList.remove('loading');
     this.nativeLayer_ = NativeLayerImpl.getInstance();
-    // <if expr="chromeos">
+    // <if expr="chromeos or lacros">
     this.nativeLayerCros_ = NativeLayerCrosImpl.getInstance();
     // </if>
     this.addWebUIListener('print-failed', this.onPrintFailed_.bind(this));
@@ -200,6 +189,8 @@ Polymer({
     this.whenReady_ = whenReady();
     this.nativeLayer_.getInitialSettings().then(
         this.onInitialSettingsSet_.bind(this));
+    MetricsContext.getInitialSettings().record(
+        Metrics.PrintPreviewInitializationEvents.FUNCTION_INITIATED);
   },
 
   /** @override */
@@ -241,7 +232,7 @@ Polymer({
         e.preventDefault();
       }
 
-      // <if expr="chromeos">
+      // <if expr="chromeos or lacros">
       if (this.destination_ &&
           this.destination_.origin === DestinationOrigin.CROS) {
         this.nativeLayerCros_.recordPrinterStatusHistogram(
@@ -324,6 +315,8 @@ Polymer({
    * @private
    */
   onInitialSettingsSet_(settings) {
+    MetricsContext.getInitialSettings().record(
+        Metrics.PrintPreviewInitializationEvents.FUNCTION_SUCCESSFUL);
     if (!this.whenReady_) {
       // This element and its corresponding model were detached while waiting
       // for the callback. This can happen in tests; return early.
@@ -339,8 +332,7 @@ Polymer({
       }
       this.$.documentInfo.init(
           settings.previewModifiable, settings.previewIsFromArc,
-          settings.previewIsPdf, settings.documentTitle,
-          settings.documentHasSelection);
+          settings.documentTitle, settings.documentHasSelection);
       this.$.model.setStickySettings(settings.serializedAppStateStr);
       this.$.model.setPolicySettings(settings.policies);
       this.measurementSystem_ = new MeasurementSystem(
@@ -350,7 +342,6 @@ Polymer({
       this.$.sidebar.init(
           settings.isInAppKioskMode, settings.printerName,
           settings.serializedDefaultDestinationSelectionRulesStr,
-          settings.userAccounts || null, settings.syncAvailable,
           settings.pdfPrinterDisabled, settings.isDriveMounted || false);
       this.destinationsManaged_ = settings.destinationsManaged;
       this.isInKioskAutoPrintMode_ = settings.isInKioskAutoPrintMode;
@@ -418,7 +409,7 @@ Polymer({
         break;
       case DestinationState.ERROR:
         let newState = State.ERROR;
-        // <if expr="chromeos">
+        // <if expr="chromeos or lacros">
         if (this.error_ === Error.NO_DESTINATIONS) {
           newState = State.FATAL_ERROR;
         }
@@ -498,7 +489,7 @@ Polymer({
       this.printRequested_ = true;
       return;
     }
-    // <if expr="chromeos">
+    // <if expr="chromeos or lacros">
     if (this.destination_ &&
         this.destination_.origin === DestinationOrigin.CROS) {
       this.nativeLayerCros_.recordPrinterStatusHistogram(
@@ -511,7 +502,7 @@ Polymer({
 
   /** @private */
   onCancelRequested_() {
-    // <if expr="chromeos">
+    // <if expr="chromeos or lacros">
     if (this.destination_ &&
         this.destination_.origin === DestinationOrigin.CROS) {
       this.nativeLayerCros_.recordPrinterStatusHistogram(
@@ -556,7 +547,7 @@ Polymer({
         this.documentSettings_.title, data);
   },
 
-  // <if expr="not chromeos">
+  // <if expr="not chromeos and not lacros">
   /** @private */
   onPrintWithSystemDialog_() {
     // <if expr="is_win">
@@ -586,7 +577,7 @@ Polymer({
    * @private
    */
   onPrintFailed_(httpError) {
-    console.error('Printing failed with error code ' + httpError);
+    console.warn('Printing failed with error code ' + httpError);
     this.error_ = Error.PRINT_FAILED;
     this.$.state.transitTo(State.FATAL_ERROR);
   },
@@ -629,11 +620,11 @@ Polymer({
     this.error_ = Error.CLOUD_PRINT_ERROR;
     this.$.state.transitTo(State.FATAL_ERROR);
     if (event.detail.status === 200) {
-      console.error(
+      console.warn(
           'Google Cloud Print Error: ' +
           `(${event.detail.errorCode}) ${event.detail.message}`);
     } else {
-      console.error(
+      console.warn(
           'Google Cloud Print Error: ' +
           `HTTP status ${event.detail.status}`);
     }

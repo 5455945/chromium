@@ -75,6 +75,8 @@ const gfx::VectorIcon& GetIconIdDesktop(RequestType type) {
       return vector_icons::kContentPasteIcon;
     case RequestType::kDiskQuota:
       return vector_icons::kFolderIcon;
+    case RequestType::kFileHandling:
+      return vector_icons::kDescriptionIcon;
     case RequestType::kFontAccess:
       return vector_icons::kFontDownloadIcon;
     case RequestType::kGeolocation:
@@ -89,7 +91,7 @@ const gfx::VectorIcon& GetIconIdDesktop(RequestType type) {
       return vector_icons::kFileDownloadIcon;
     case RequestType::kNotifications:
       return vector_icons::kNotificationsIcon;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if defined(OS_CHROMEOS) || defined(OS_WIN)
     case RequestType::kProtectedMediaIdentifier:
       // This icon is provided by ChromePermissionsClient::GetOverrideIconId.
       NOTREACHED();
@@ -127,6 +129,8 @@ RequestType ContentSettingsTypeToRequestType(
     case ContentSettingsType::CLIPBOARD_READ_WRITE:
       return RequestType::kClipboard;
 #if !defined(OS_ANDROID)
+    case ContentSettingsType::FILE_HANDLING:
+      return RequestType::kFileHandling;
     case ContentSettingsType::FONT_ACCESS:
       return RequestType::kFontAccess;
 #endif
@@ -140,7 +144,7 @@ RequestType ContentSettingsTypeToRequestType(
       return RequestType::kMidiSysex;
     case ContentSettingsType::NOTIFICATIONS:
       return RequestType::kNotifications;
-#if defined(OS_ANDROID) || BUILDFLAG(IS_CHROMEOS_ASH)
+#if defined(OS_ANDROID) || defined(OS_CHROMEOS) || defined(OS_WIN)
     case ContentSettingsType::PROTECTED_MEDIA_IDENTIFIER:
       return RequestType::kProtectedMediaIdentifier;
 #endif
@@ -192,6 +196,8 @@ const char* PermissionKeyForRequestType(permissions::RequestType request_type) {
     case permissions::RequestType::kDiskQuota:
       return "disk_quota";
 #if !defined(OS_ANDROID)
+    case permissions::RequestType::kFileHandling:
+      return "file_handling";
     case permissions::RequestType::kFontAccess:
       return "font_access";
 #endif
@@ -211,7 +217,7 @@ const char* PermissionKeyForRequestType(permissions::RequestType request_type) {
 #endif
     case permissions::RequestType::kNotifications:
       return "notifications";
-#if defined(OS_ANDROID) || BUILDFLAG(IS_CHROMEOS_ASH)
+#if defined(OS_ANDROID) || defined(OS_CHROMEOS) || defined(OS_WIN)
     case permissions::RequestType::kProtectedMediaIdentifier:
       return "protected_media_identifier";
 #endif

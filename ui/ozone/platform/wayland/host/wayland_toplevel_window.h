@@ -15,6 +15,7 @@
 
 namespace ui {
 
+class GtkSurface1;
 class ShellToplevelWrapper;
 
 class WaylandToplevelWindow : public WaylandWindow,
@@ -43,7 +44,7 @@ class WaylandToplevelWindow : public WaylandWindow,
   void Show(bool inactive) override;
   void Hide() override;
   bool IsVisible() const override;
-  void SetTitle(const base::string16& title) override;
+  void SetTitle(const std::u16string& title) override;
   void ToggleFullscreen() override;
   void Maximize() override;
   void Minimize() override;
@@ -56,12 +57,19 @@ class WaylandToplevelWindow : public WaylandWindow,
   // xdg-decoration mode for a window.
   void SetUseNativeFrame(bool use_native_frame) override;
   bool ShouldUseNativeFrame() const override;
+  bool ShouldUpdateWindowShape() const override;
+  bool CanSetDecorationInsets() const override;
+  void SetDecorationInsets(gfx::Insets insets_px) override;
+  void SetOpaqueRegion(std::vector<gfx::Rect> region_px) override;
+  void SetInputRegion(gfx::Rect region_px) override;
+  void SetAspectRatio(const gfx::SizeF& aspect_ratio) override;
 
   // WaylandWindow overrides:
-  base::Optional<std::vector<gfx::Rect>> GetWindowShape() const override;
+  absl::optional<std::vector<gfx::Rect>> GetWindowShape() const override;
 
  private:
   // WaylandWindow overrides:
+  void UpdateWindowScale(bool update_bounds) override;
   void HandleToplevelConfigure(int32_t width,
                                int32_t height,
                                bool is_maximized,
@@ -71,6 +79,12 @@ class WaylandToplevelWindow : public WaylandWindow,
   void UpdateVisualSize(const gfx::Size& size_px) override;
   bool OnInitialize(PlatformWindowInitProperties properties) override;
   bool IsActive() const override;
+  bool IsSurfaceConfigured() override;
+
+  // zaura_surface listeners
+  static void LockFrame(void* data, zaura_surface* surface);
+  static void UnlockFrame(void* data, zaura_surface* surface);
+
   // Calls UpdateWindowShape, set_input_region and set_opaque_region
   // for this toplevel window.
   void UpdateWindowMask() override;
@@ -86,6 +100,8 @@ class WaylandToplevelWindow : public WaylandWindow,
   void SetImmersiveFullscreenStatus(bool status) override;
   void ShowSnapPreview(WaylandWindowSnapDirection snap) override;
   void CommitSnap(WaylandWindowSnapDirection snap) override;
+  void SetCanGoBack(bool value) override;
+  void SetPip() override;
 
   void TriggerStateChanges();
   void SetWindowState(PlatformWindowState state);
@@ -100,12 +116,16 @@ class WaylandToplevelWindow : public WaylandWindow,
 
   void SetOrResetRestoredBounds();
 
-  // Initializes the aura-shell surface, in the case aura-shell EXO extension
-  // is available.
-  void InitializeAuraShellSurface();
+  // Initializes additional shell integration, if the appropriate interfaces are
+  // available.
+  void SetUpShellIntegration();
 
   // Sets decoration mode for a window.
   void OnDecorationModeChanged();
+
+  // Called when frame is locked to normal state or unlocked from
+  // previously locked state.
+  void OnFrameLockingChanged(bool lock);
 
   // Wrappers around shell surface.
   std::unique_ptr<ShellToplevelWrapper> shell_toplevel_;
@@ -142,13 +162,16 @@ class WaylandToplevelWindow : public WaylandWindow,
 #endif
 
   // Title of the ShellToplevel.
-  base::string16 window_title_;
+  std::u16string window_title_;
 
   // Max and min sizes of the WaylandToplevelWindow window.
-  base::Optional<gfx::Size> min_size_;
-  base::Optional<gfx::Size> max_size_;
+  absl::optional<gfx::Size> min_size_;
+  absl::optional<gfx::Size> max_size_;
 
   wl::Object<zaura_surface> aura_surface_;
+  // |gtk_surface1_| is the optional GTK surface that provides better
+  // integration with the desktop shell.
+  std::unique_ptr<GtkSurface1> gtk_surface1_;
 
   // When use_native_frame is false, client-side decoration is set,
   // e.g. lacros-browser.
@@ -156,12 +179,12 @@ class WaylandToplevelWindow : public WaylandWindow,
   // e.g. lacros-taskmanager.
   bool use_native_frame_ = false;
 
-  base::Optional<std::vector<gfx::Rect>> window_shape_in_dips_;
+  absl::optional<std::vector<gfx::Rect>> window_shape_in_dips_;
 
-  // Pending xdg-shell configures, once this window is drawn to |size_dip|,
+  // Pending xdg-shell configures, once this window is drawn to |bounds_dip|,
   // ack_configure with |serial| will be sent to the Wayland compositor.
   struct PendingConfigure {
-    gfx::Size size_dip;
+    gfx::Rect bounds_dip;
     uint32_t serial;
   };
   base::circular_deque<PendingConfigure> pending_configures_;

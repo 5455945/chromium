@@ -110,13 +110,13 @@ bool GetInt(const base::Value& dict, const char* key, int* result) {
 void ExpandField(const std::string& fieldname,
                  const VariableExpander& variable_expander,
                  base::DictionaryValue* onc_object) {
-  std::string field_value;
-  if (!onc_object->GetStringWithoutPathExpansion(fieldname, &field_value))
+  std::string* field_value = onc_object->FindStringKey(fieldname);
+  if (!field_value)
     return;
 
-  variable_expander.ExpandString(&field_value);
+  variable_expander.ExpandString(field_value);
 
-  onc_object->SetKey(fieldname, base::Value(field_value));
+  onc_object->SetKey(fieldname, base::Value(*field_value));
 }
 
 // A |Mapper| for masking sensitive fields (e.g. credentials such as
@@ -151,7 +151,7 @@ class OncMaskValues : public Mapper {
         return Mapper::MapField(field_name, object_signature, onc_value,
                                 found_unknown_field, error);
       }
-      return std::unique_ptr<base::Value>(new base::Value(mask_));
+      return std::make_unique<base::Value>(mask_);
     } else {
       return Mapper::MapField(field_name, object_signature, onc_value,
                               found_unknown_field, error);
@@ -167,21 +167,18 @@ class OncMaskValues : public Mapper {
 CertPEMsByGUIDMap GetServerAndCACertsByGUID(
     const base::ListValue& certificates) {
   CertPEMsByGUIDMap certs_by_guid;
-  for (const auto& entry : certificates) {
+  for (const auto& entry : certificates.GetList()) {
     const base::DictionaryValue* cert = nullptr;
     bool entry_is_dictionary = entry.GetAsDictionary(&cert);
     DCHECK(entry_is_dictionary);
 
-    std::string guid;
-    cert->GetStringWithoutPathExpansion(::onc::certificate::kGUID, &guid);
-    std::string cert_type;
-    cert->GetStringWithoutPathExpansion(::onc::certificate::kType, &cert_type);
+    std::string guid = GetString(*cert, ::onc::certificate::kGUID);
+    std::string cert_type = GetString(*cert, ::onc::certificate::kType);
     if (cert_type != ::onc::certificate::kServer &&
         cert_type != ::onc::certificate::kAuthority) {
       continue;
     }
-    std::string x509_data;
-    cert->GetStringWithoutPathExpansion(::onc::certificate::kX509, &x509_data);
+    std::string x509_data = GetString(*cert, ::onc::certificate::kX509);
 
     std::string der = DecodePEM(x509_data);
     std::string pem;
@@ -238,12 +235,12 @@ bool ResolveSingleCertRef(const CertPEMsByGUIDMap& certs_by_guid,
                           const std::string& key_guid_ref,
                           const std::string& key_pem,
                           base::DictionaryValue* onc_object) {
-  std::string guid_ref;
-  if (!onc_object->GetStringWithoutPathExpansion(key_guid_ref, &guid_ref))
+  std::string* guid_ref = onc_object->FindStringKey(key_guid_ref);
+  if (!guid_ref)
     return true;
 
   std::string pem_encoded;
-  if (!GUIDRefToPEMEncoding(certs_by_guid, guid_ref, &pem_encoded))
+  if (!GUIDRefToPEMEncoding(certs_by_guid, *guid_ref, &pem_encoded))
     return false;
 
   onc_object->RemoveKey(key_guid_ref);
@@ -272,7 +269,7 @@ bool ResolveCertRefList(const CertPEMsByGUIDMap& certs_by_guid,
   }
 
   std::unique_ptr<base::ListValue> pem_list(new base::ListValue);
-  for (const auto& entry : *guid_ref_list) {
+  for (const auto& entry : guid_ref_list->GetList()) {
     std::string guid_ref;
     bool entry_is_string = entry.GetAsString(&guid_ref);
     DCHECK(entry_is_string);
@@ -285,7 +282,8 @@ bool ResolveCertRefList(const CertPEMsByGUIDMap& certs_by_guid,
   }
 
   onc_object->RemoveKey(key_guid_ref_list);
-  onc_object->SetWithoutPathExpansion(key_pem_list, std::move(pem_list));
+  onc_object->SetKey(key_pem_list,
+                     base::Value::FromUniquePtrValue(std::move(pem_list)));
   return true;
 }
 
@@ -295,18 +293,19 @@ bool ResolveSingleCertRefToList(const CertPEMsByGUIDMap& certs_by_guid,
                                 const std::string& key_guid_ref,
                                 const std::string& key_pem_list,
                                 base::DictionaryValue* onc_object) {
-  std::string guid_ref;
-  if (!onc_object->GetStringWithoutPathExpansion(key_guid_ref, &guid_ref))
+  std::string* guid_ref = onc_object->FindStringKey(key_guid_ref);
+  if (!guid_ref)
     return true;
 
   std::string pem_encoded;
-  if (!GUIDRefToPEMEncoding(certs_by_guid, guid_ref, &pem_encoded))
+  if (!GUIDRefToPEMEncoding(certs_by_guid, *guid_ref, &pem_encoded))
     return false;
 
   std::unique_ptr<base::ListValue> pem_list(new base::ListValue);
   pem_list->AppendString(pem_encoded);
   onc_object->RemoveKey(key_guid_ref);
-  onc_object->SetWithoutPathExpansion(key_pem_list, std::move(pem_list));
+  onc_object->SetKey(key_pem_list,
+                     base::Value::FromUniquePtrValue(std::move(pem_list)));
   return true;
 }
 
@@ -494,7 +493,8 @@ void SetProxyForScheme(const net::ProxyConfig::ProxyRules& proxy_rules,
   url_dict->SetKey(::onc::proxy::kHost, base::Value(host));
   url_dict->SetKey(::onc::proxy::kPort,
                    base::Value(server.host_port_pair().port()));
-  dict->SetWithoutPathExpansion(onc_scheme, std::move(url_dict));
+  dict->SetKey(onc_scheme,
+               base::Value::FromUniquePtrValue(std::move(url_dict)));
 }
 
 // Returns the NetworkConfiugration with |guid| from |network_configs|, or
@@ -502,19 +502,17 @@ void SetProxyForScheme(const net::ProxyConfig::ProxyRules& proxy_rules,
 const base::DictionaryValue* GetNetworkConfigByGUID(
     const base::ListValue& network_configs,
     const std::string& guid) {
-  for (base::ListValue::const_iterator it = network_configs.begin();
-       it != network_configs.end(); ++it) {
-    const base::DictionaryValue* network = NULL;
-    it->GetAsDictionary(&network);
+  for (const auto& entry : network_configs.GetList()) {
+    const base::DictionaryValue* network = nullptr;
+    entry.GetAsDictionary(&network);
     DCHECK(network);
 
-    std::string current_guid;
-    network->GetStringWithoutPathExpansion(::onc::network_config::kGUID,
-                                           &current_guid);
+    std::string current_guid =
+        GetString(*network, ::onc::network_config::kGUID);
     if (current_guid == guid)
       return network;
   }
-  return NULL;
+  return nullptr;
 }
 
 // Returns the first Ethernet NetworkConfiguration from |network_configs| with
@@ -522,28 +520,24 @@ const base::DictionaryValue* GetNetworkConfigByGUID(
 const base::DictionaryValue* GetNetworkConfigForEthernetWithoutEAP(
     const base::ListValue& network_configs) {
   VLOG(2) << "Search for ethernet policy without EAP.";
-  for (base::ListValue::const_iterator it = network_configs.begin();
-       it != network_configs.end(); ++it) {
-    const base::DictionaryValue* network = NULL;
-    it->GetAsDictionary(&network);
+  for (const auto& entry : network_configs.GetList()) {
+    const base::DictionaryValue* network = nullptr;
+    entry.GetAsDictionary(&network);
     DCHECK(network);
 
-    std::string type;
-    network->GetStringWithoutPathExpansion(::onc::network_config::kType, &type);
+    std::string type = GetString(*network, ::onc::network_config::kType);
     if (type != ::onc::network_type::kEthernet)
       continue;
 
-    const base::DictionaryValue* ethernet = NULL;
+    const base::DictionaryValue* ethernet = nullptr;
     network->GetDictionaryWithoutPathExpansion(::onc::network_config::kEthernet,
                                                &ethernet);
 
-    std::string auth;
-    ethernet->GetStringWithoutPathExpansion(::onc::ethernet::kAuthentication,
-                                            &auth);
+    std::string auth = GetString(*ethernet, ::onc::ethernet::kAuthentication);
     if (auth == ::onc::ethernet::kAuthenticationNone)
       return network;
   }
-  return NULL;
+  return nullptr;
 }
 
 // Returns the NetworkConfiguration object for |network| from
@@ -810,7 +804,7 @@ void ExpandStringsInOncObject(const OncValueSignature& signature,
 
 void ExpandStringsInNetworks(const VariableExpander& variable_expander,
                              base::ListValue* network_configs) {
-  for (auto& entry : *network_configs) {
+  for (auto& entry : network_configs->GetList()) {
     base::DictionaryValue* network = nullptr;
     entry.GetAsDictionary(&network);
     DCHECK(network);
@@ -989,7 +983,7 @@ bool ParseAndValidateOncForImport(const std::string& onc_blob,
     base::Value* validated_certs = validated_toplevel_onc->FindKeyOfType(
         ::onc::toplevel_config::kCertificates, base::Value::Type::LIST);
     if (validated_certs)
-      *certificates = base::ListValue(validated_certs->TakeList());
+      *certificates = base::ListValue(std::move(*validated_certs).TakeList());
   }
 
   // Note that this processing is performed even if |network_configs| is
@@ -1051,24 +1045,23 @@ net::ScopedCERTCertificate DecodePEMCertificate(
 bool ResolveServerCertRefsInNetworks(const CertPEMsByGUIDMap& certs_by_guid,
                                      base::ListValue* network_configs) {
   bool success = true;
-  for (base::ListValue::iterator it = network_configs->begin();
-       it != network_configs->end();) {
+  base::Value::ListStorage filtered_configs;
+  for (base::Value& config : network_configs->GetList()) {
     base::DictionaryValue* network = nullptr;
-    it->GetAsDictionary(&network);
+    config.GetAsDictionary(&network);
     if (!ResolveServerCertRefsInNetwork(certs_by_guid, network)) {
-      std::string guid;
-      network->GetStringWithoutPathExpansion(::onc::network_config::kGUID,
-                                             &guid);
+      std::string* guid = network->FindStringKey(::onc::network_config::kGUID);
       // This might happen even with correct validation, if the referenced
       // certificate couldn't be imported.
       LOG(ERROR) << "Couldn't resolve some certificate reference of network "
-                 << guid;
-      it = network_configs->Erase(it, nullptr);
+                 << (guid ? *guid : "(unable to find GUID)");
       success = false;
       continue;
     }
-    ++it;
+
+    filtered_configs.push_back(std::move(config));
   }
+  *network_configs = base::ListValue(std::move(filtered_configs));
   return success;
 }
 
@@ -1251,10 +1244,9 @@ int ImportNetworksForUser(const user_manager::User* user,
 
   bool ethernet_not_found = false;
   int networks_created = 0;
-  for (base::ListValue::const_iterator it = expanded_networks->begin();
-       it != expanded_networks->end(); ++it) {
-    const base::DictionaryValue* network = NULL;
-    it->GetAsDictionary(&network);
+  for (const auto& entry : expanded_networks->GetList()) {
+    const base::DictionaryValue* network = nullptr;
+    entry.GetAsDictionary(&network);
     DCHECK(network);
 
     // Remove irrelevant fields.
@@ -1275,8 +1267,7 @@ int ImportNetworksForUser(const user_manager::User* user,
                        base::Value(ui_data->GetAsJson()));
     shill_dict->SetKey(shill::kProfileProperty, base::Value(profile->path));
 
-    std::string type;
-    shill_dict->GetStringWithoutPathExpansion(shill::kTypeProperty, &type);
+    std::string type = GetString(*shill_dict, shill::kTypeProperty);
     NetworkConfigurationHandler* config_handler =
         NetworkHandler::Get()->network_configuration_handler();
     if (NetworkTypePattern::Ethernet().MatchesType(type)) {
@@ -1322,11 +1313,10 @@ bool PolicyAllowsOnlyPolicyNetworksToAutoconnect(bool for_active_user) {
   if (!global_config)
     return false;  // By default, all networks are allowed to autoconnect.
 
-  bool only_policy_autoconnect = false;
-  global_config->GetBooleanWithoutPathExpansion(
-      ::onc::global_network_config::kAllowOnlyPolicyNetworksToAutoconnect,
-      &only_policy_autoconnect);
-  return only_policy_autoconnect;
+  return global_config
+      ->FindBoolKey(
+          ::onc::global_network_config::kAllowOnlyPolicyNetworksToAutoconnect)
+      .value_or(false);
 }
 
 const base::DictionaryValue* GetPolicyForNetwork(
@@ -1368,13 +1358,13 @@ bool HasPolicyForNetwork(const PrefService* profile_prefs,
 bool HasUserPasswordSubsitutionVariable(const OncValueSignature& signature,
                                         base::DictionaryValue* onc_object) {
   if (&signature == &kEAPSignature) {
-    std::string password_field;
-    if (!onc_object->GetStringWithoutPathExpansion(::onc::eap::kPassword,
-                                                   &password_field)) {
+    std::string* password_field =
+        onc_object->FindStringKey(::onc::eap::kPassword);
+    if (!password_field) {
       return false;
     }
 
-    if (password_field == ::onc::substitutes::kPasswordPlaceholderVerbatim) {
+    if (*password_field == ::onc::substitutes::kPasswordPlaceholderVerbatim) {
       return true;
     }
   }
@@ -1402,7 +1392,7 @@ bool HasUserPasswordSubsitutionVariable(const OncValueSignature& signature,
 }
 
 bool HasUserPasswordSubsitutionVariable(base::ListValue* network_configs) {
-  for (auto& entry : *network_configs) {
+  for (auto& entry : network_configs->GetList()) {
     base::DictionaryValue* network = nullptr;
     entry.GetAsDictionary(&network);
     DCHECK(network);

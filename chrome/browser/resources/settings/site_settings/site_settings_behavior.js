@@ -28,7 +28,7 @@ export const kControlledByLookup = {
 
 
 /** @polymerBehavior */
-const SiteSettingsBehaviorImpl = {
+export const SiteSettingsBehavior = {
   properties: {
     /**
      * The string ID of the category this element is displaying data for.
@@ -172,67 +172,39 @@ const SiteSettingsBehaviorImpl = {
       origin: origin,
       displayName: exception.displayName,
       setting: exception.setting,
+      settingDetail: exception.settingDetail,
       enforcement: enforcement,
       controlledBy: controlledBy,
     };
   },
 
-  /**
-   * Returns list of categories for each setting.ContentSettingsTypes that are
-   * currently enabled.
-   * @return {!Array<!ContentSettingsTypes>}
-   */
-  getCategoryList() {
-    if (this.contentTypes_.length === 0) {
-      for (const typeName in ContentSettingsTypes) {
-        const contentType = ContentSettingsTypes[typeName];
-        // <if expr="not chromeos">
-        if (contentType === ContentSettingsTypes.PROTECTED_CONTENT) {
-          continue;
-        }
-        // </if>
-        // Some categories store their data in a custom way.
-        if (contentType === ContentSettingsTypes.COOKIES ||
-            contentType === ContentSettingsTypes.PROTOCOL_HANDLERS ||
-            contentType === ContentSettingsTypes.ZOOM_LEVELS) {
-          continue;
-        }
-        this.contentTypes_.push(contentType);
-      }
-    }
-
-    const addOrRemoveSettingWithFlag = (type, flag) => {
-      if (loadTimeData.getBoolean(flag)) {
-        if (!this.contentTypes_.includes(type)) {
-          this.contentTypes_.push(type);
-        }
-      } else {
-        if (this.contentTypes_.includes(type)) {
-          this.contentTypes_.splice(this.contentTypes_.indexOf(type), 1);
-        }
-      }
-    };
-    // These categories are gated behind flags.
-    addOrRemoveSettingWithFlag(
-        ContentSettingsTypes.BLUETOOTH_SCANNING,
-        'enableExperimentalWebPlatformFeatures');
-    addOrRemoveSettingWithFlag(
-        ContentSettingsTypes.ADS, 'enableSafeBrowsingSubresourceFilter');
-    addOrRemoveSettingWithFlag(
-        ContentSettingsTypes.PAYMENT_HANDLER,
-        'enablePaymentHandlerContentSetting');
-    addOrRemoveSettingWithFlag(
-        ContentSettingsTypes.BLUETOOTH_DEVICES,
-        'enableWebBluetoothNewPermissionsBackend');
-    addOrRemoveSettingWithFlag(
-        ContentSettingsTypes.WINDOW_PLACEMENT,
-        'enableExperimentalWebPlatformFeatures');
-    addOrRemoveSettingWithFlag(
-        ContentSettingsTypes.FONT_ACCESS, 'enableFontAccessContentSetting');
-    return this.contentTypes_.slice(0);
-  },
-
 };
 
-/** @polymerBehavior */
-export const SiteSettingsBehavior = [SiteSettingsBehaviorImpl];
+/** @interface */
+export class SiteSettingsBehaviorInterface {
+  constructor() {
+    /** @type {SiteSettingsPrefsBrowserProxy} */
+    this.browserProxy;
+
+    /** @type {!ContentSettingsTypes} */
+    this.category;
+  }
+
+  /**
+   * @param {string} setting
+   * @return {boolean}
+   */
+  computeIsSettingEnabled(setting) {}
+
+  /**
+   * @param {string} origin
+   * @return {string}
+   */
+  originRepresentation(origin) {}
+
+  /**
+   * @param {string} originOrPattern
+   * @return {URL}
+   */
+  toUrl(originOrPattern) {}
+}

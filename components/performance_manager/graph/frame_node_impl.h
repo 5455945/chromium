@@ -26,9 +26,6 @@
 namespace performance_manager {
 
 class FrameNodeImplDescriber;
-class PageNodeImpl;
-class ProcessNodeImpl;
-class WorkerNodeImpl;
 
 namespace execution_context {
 class ExecutionContextAccess;
@@ -76,6 +73,7 @@ class FrameNodeImpl
                 const blink::LocalFrameToken& frame_token,
                 int32_t browsing_instance_id,
                 int32_t site_instance_id);
+
   ~FrameNodeImpl() override;
 
   void Bind(mojo::PendingReceiver<mojom::DocumentCoordinationUnit> receiver);
@@ -84,8 +82,7 @@ class FrameNodeImpl
   void SetNetworkAlmostIdle() override;
   void SetLifecycleState(LifecycleState state) override;
   void SetHasNonEmptyBeforeUnload(bool has_nonempty_beforeunload) override;
-  void SetViewportIntersection(const gfx::Rect& viewport_intersection) override;
-  void SetIsAdFrame() override;
+  void SetIsAdFrame(bool is_ad_frame) override;
   void SetHadFormInteraction() override;
   void OnNonPersistentNotificationCreated() override;
   void OnFirstContentfulPaint(
@@ -112,6 +109,7 @@ class FrameNodeImpl
   // Getters for non-const properties. These are not thread safe.
   const base::flat_set<FrameNodeImpl*>& child_frame_nodes() const;
   const base::flat_set<PageNodeImpl*>& opened_page_nodes() const;
+  const base::flat_set<PageNodeImpl*>& embedded_page_nodes() const;
   LifecycleState lifecycle_state() const;
   bool has_nonempty_beforeunload() const;
   const GURL& url() const;
@@ -124,7 +122,7 @@ class FrameNodeImpl
   const PriorityAndReason& priority_and_reason() const;
   bool had_form_interaction() const;
   bool is_audible() const;
-  const base::Optional<gfx::Rect>& viewport_intersection() const;
+  const absl::optional<gfx::Rect>& viewport_intersection() const;
   Visibility visibility() const;
 
   // Setters are not thread safe.
@@ -132,6 +130,7 @@ class FrameNodeImpl
   void SetIsHoldingWebLock(bool is_holding_weblock);
   void SetIsHoldingIndexedDBLock(bool is_holding_indexeddb_lock);
   void SetIsAudible(bool is_audible);
+  void SetViewportIntersection(const gfx::Rect& viewport_intersection);
   void SetVisibility(Visibility visibility);
 
   // Invoked when a navigation is committed in the frame.
@@ -147,17 +146,24 @@ class FrameNodeImpl
   base::WeakPtr<FrameNodeImpl> GetWeakPtrOnUIThread();
   base::WeakPtr<FrameNodeImpl> GetWeakPtr();
 
-  void SeverOpenedPagesAndMaybeReparentForTesting() {
-    SeverOpenedPagesAndMaybeReparent();
+  void SeverPageRelationshipsAndMaybeReparentForTesting() {
+    SeverPageRelationshipsAndMaybeReparent();
   }
 
   // Implementation details below this point.
 
   // Invoked by opened pages when this frame is set/cleared as their opener.
-  // See PageNodeImpl::(Set|Clear)OpenerFrameNodeAndOpenedType.
+  // See PageNodeImpl::(Set|Clear)OpenerFrameNode.
   void AddOpenedPage(base::PassKey<PageNodeImpl> key, PageNodeImpl* page_node);
   void RemoveOpenedPage(base::PassKey<PageNodeImpl> key,
                         PageNodeImpl* page_node);
+
+  // Invoked by embedded pages when this frame is set/cleared as their embedder.
+  // See PageNodeImpl::(Set|Clear)EmbedderFrameNodeAndEmbeddingType.
+  void AddEmbeddedPage(base::PassKey<PageNodeImpl> key,
+                       PageNodeImpl* page_node);
+  void RemoveEmbeddedPage(base::PassKey<PageNodeImpl> key,
+                          PageNodeImpl* page_node);
 
   // Used by the ExecutionContextRegistry mechanism.
   std::unique_ptr<NodeAttachedData>* GetExecutionContextStorage(
@@ -183,6 +189,8 @@ class FrameNodeImpl
   const base::flat_set<const FrameNode*> GetChildFrameNodes() const override;
   bool VisitOpenedPageNodes(const PageNodeVisitor& visitor) const override;
   const base::flat_set<const PageNode*> GetOpenedPageNodes() const override;
+  bool VisitEmbeddedPageNodes(const PageNodeVisitor& visitor) const override;
+  const base::flat_set<const PageNode*> GetEmbeddedPageNodes() const override;
   LifecycleState GetLifecycleState() const override;
   bool HasNonemptyBeforeUnload() const override;
   const GURL& GetURL() const override;
@@ -197,7 +205,7 @@ class FrameNodeImpl
   const PriorityAndReason& GetPriorityAndReason() const override;
   bool HadFormInteraction() const override;
   bool IsAudible() const override;
-  const base::Optional<gfx::Rect>& GetViewportIntersection() const override;
+  const absl::optional<gfx::Rect>& GetViewportIntersection() const override;
   Visibility GetVisibility() const override;
 
   // Properties associated with a Document, which are reset when a
@@ -236,12 +244,13 @@ class FrameNodeImpl
   // NodeBase:
   void OnJoiningGraph() override;
   void OnBeforeLeavingGraph() override;
+  void RemoveNodeAttachedData() override;
 
-  // Helper function to sever all opened page relationships. This is called
-  // before destroying the frame node in "OnBeforeLeavingGraph". Note that this
-  // will reparent opened pages to this frame's parent so that tracking is
-  // maintained.
-  void SeverOpenedPagesAndMaybeReparent();
+  // Helper function to sever all opened/embedded page relationships. This is
+  // called before destroying the frame node in "OnBeforeLeavingGraph". Note
+  // that this will reparent embedded pages to this frame's parent so that
+  // tracking is maintained.
+  void SeverPageRelationshipsAndMaybeReparent();
 
   // This is not quite the same as GetMainFrame, because there can be multiple
   // main frames while the main frame is navigating. This explicitly walks up
@@ -290,13 +299,15 @@ class FrameNodeImpl
   // The set of pages that have been opened by this frame.
   base::flat_set<PageNodeImpl*> opened_page_nodes_;
 
+  // The set of pages that have been embedded by this frame.
+  base::flat_set<PageNodeImpl*> embedded_page_nodes_;
+
   // Does *not* change when a navigation is committed.
   ObservedProperty::NotifiesOnlyOnChanges<
       LifecycleState,
       &FrameNodeObserver::OnFrameLifecycleStateChanged>
       lifecycle_state_{LifecycleState::kRunning};
 
-  // This is a one way switch. Once marked an ad-frame, always an ad-frame.
   ObservedProperty::
       NotifiesOnlyOnChanges<bool, &FrameNodeObserver::OnIsAdFrameChanged>
           is_ad_frame_{false};
@@ -349,7 +360,7 @@ class FrameNodeImpl
   // so there is no point in tracking it. To avoid programming mistakes, it is
   // forbidden to query this property for the main frame.
   ObservedProperty::NotifiesOnlyOnChanges<
-      base::Optional<gfx::Rect>,
+      absl::optional<gfx::Rect>,
       &FrameNodeObserver::OnViewportIntersectionChanged>
       viewport_intersection_;
 

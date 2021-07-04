@@ -4,7 +4,7 @@
 
 #include "chrome/browser/web_applications/components/app_registrar.h"
 
-#include "base/stl_util.h"
+#include "base/containers/cxx20_erase.h"
 #include "base/strings/string_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/components/app_registrar_observer.h"
@@ -88,6 +88,11 @@ void AppRegistrar::NotifyWebAppDisabledStateChanged(const AppId& app_id,
     observer.OnWebAppDisabledStateChanged(app_id, is_disabled);
 }
 
+void AppRegistrar::NotifyWebAppsDisabledModeChanged() {
+  for (AppRegistrarObserver& observer : observers_)
+    observer.OnWebAppsDisabledModeChanged();
+}
+
 void AppRegistrar::NotifyWebAppLastLaunchTimeChanged(const AppId& app_id,
                                                      const base::Time& time) {
   for (AppRegistrarObserver& observer : observers_)
@@ -110,6 +115,20 @@ void AppRegistrar::NotifyWebAppInstalledWithOsHooks(const AppId& app_id) {
     observer.OnWebAppInstalledWithOsHooks(app_id);
 }
 
+void AppRegistrar::NotifyWebAppUserDisplayModeChanged(
+    const AppId& app_id,
+    DisplayMode user_display_mode) {
+  for (AppRegistrarObserver& observer : observers_)
+    observer.OnWebAppUserDisplayModeChanged(app_id, user_display_mode);
+}
+
+void AppRegistrar::NotifyWebAppExperimentalTabbedWindowModeChanged(
+    const AppId& app_id,
+    bool enabled) {
+  for (AppRegistrarObserver& observer : observers_)
+    observer.OnWebAppExperimentalTabbedWindowModeChanged(app_id, enabled);
+}
+
 void AppRegistrar::NotifyAppRegistrarShutdown() {
   for (AppRegistrarObserver& observer : observers_)
     observer.OnAppRegistrarShutdown();
@@ -127,7 +146,7 @@ std::map<AppId, GURL> AppRegistrar::GetExternallyInstalledApps(
   return installed_apps;
 }
 
-base::Optional<AppId> AppRegistrar::LookupExternalAppId(
+absl::optional<AppId> AppRegistrar::LookupExternalAppId(
     const GURL& install_url) const {
   return ExternallyInstalledWebAppPrefs(profile()->GetPrefs())
       .LookupAppId(install_url);
@@ -167,27 +186,23 @@ GURL AppRegistrar::GetAppLaunchUrl(const AppId& app_id) const {
   return start_url.ReplaceComponents(replacements);
 }
 
-extensions::BookmarkAppRegistrar* AppRegistrar::AsBookmarkAppRegistrar() {
-  return nullptr;
-}
-
 GURL AppRegistrar::GetAppScope(const AppId& app_id) const {
-  base::Optional<GURL> scope = GetAppScopeInternal(app_id);
+  absl::optional<GURL> scope = GetAppScopeInternal(app_id);
   if (scope)
     return *scope;
   if (base::FeatureList::IsEnabled(
           features::kDesktopPWAsTabStripLinkCapturing) &&
-      IsInExperimentalTabbedWindowMode(app_id)) {
+      IsTabbedWindowModeEnabled(app_id)) {
     return GetAppStartUrl(app_id).GetOrigin();
   }
   return GetAppStartUrl(app_id).GetWithoutFilename();
 }
 
-base::Optional<AppId> AppRegistrar::FindAppWithUrlInScope(
+absl::optional<AppId> AppRegistrar::FindAppWithUrlInScope(
     const GURL& url) const {
   const std::string url_path = url.spec();
 
-  base::Optional<AppId> best_app_id;
+  absl::optional<AppId> best_app_id;
   size_t best_app_path_length = 0U;
   bool best_app_is_shortcut = true;
 
@@ -248,12 +263,12 @@ std::vector<AppId> AppRegistrar::FindAppsInScope(const GURL& scope) const {
   return in_scope;
 }
 
-base::Optional<AppId> AppRegistrar::FindInstalledAppWithUrlInScope(
+absl::optional<AppId> AppRegistrar::FindInstalledAppWithUrlInScope(
     const GURL& url,
     bool window_only) const {
   const std::string url_path = url.spec();
 
-  base::Optional<AppId> best_app_id;
+  absl::optional<AppId> best_app_id;
   size_t best_app_path_length = 0U;
   bool best_app_is_shortcut = true;
 
@@ -303,31 +318,38 @@ DisplayMode AppRegistrar::GetAppEffectiveDisplayMode(
     return DisplayMode::kUndefined;
   }
 
-  std::vector<DisplayMode> display_mode_overrides;
-  if (base::FeatureList::IsEnabled(features::kWebAppManifestDisplayOverride))
-    display_mode_overrides = GetAppDisplayModeOverride(app_id);
-
+  std::vector<DisplayMode> display_mode_overrides =
+      GetAppDisplayModeOverride(app_id);
   return ResolveEffectiveDisplayMode(app_display_mode, display_mode_overrides,
                                      user_display_mode);
 }
 
 DisplayMode AppRegistrar::GetEffectiveDisplayModeFromManifest(
     const AppId& app_id) const {
-  if (base::FeatureList::IsEnabled(features::kWebAppManifestDisplayOverride)) {
-    std::vector<DisplayMode> display_mode_overrides =
-        GetAppDisplayModeOverride(app_id);
+  std::vector<DisplayMode> display_mode_overrides =
+      GetAppDisplayModeOverride(app_id);
 
-    if (!display_mode_overrides.empty())
-      return display_mode_overrides[0];
-  }
+  if (!display_mode_overrides.empty())
+    return display_mode_overrides[0];
 
   return GetAppDisplayMode(app_id);
 }
 
 bool AppRegistrar::IsInExperimentalTabbedWindowMode(const AppId& app_id) const {
   return base::FeatureList::IsEnabled(features::kDesktopPWAsTabStrip) &&
+         base::FeatureList::IsEnabled(features::kDesktopPWAsTabStripSettings) &&
          GetBoolWebAppPref(profile()->GetPrefs(), app_id,
                            kExperimentalTabbedWindowMode);
+}
+
+bool AppRegistrar::IsTabbedWindowModeEnabled(const AppId& app_id) const {
+  if (!base::FeatureList::IsEnabled(features::kDesktopPWAsTabStrip))
+    return false;
+
+  DisplayMode display = GetAppEffectiveDisplayMode(app_id);
+
+  return IsInExperimentalTabbedWindowMode(app_id) ||
+         display == DisplayMode::kTabbed;
 }
 
 }  // namespace web_app

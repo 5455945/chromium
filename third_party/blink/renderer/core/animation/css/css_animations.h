@@ -31,7 +31,6 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_CSS_CSS_ANIMATIONS_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_CSS_CSS_ANIMATIONS_H_
 
-#include "base/macros.h"
 #include "third_party/blink/renderer/core/animation/css/css_animation_data.h"
 #include "third_party/blink/renderer/core/animation/css/css_animation_update.h"
 #include "third_party/blink/renderer/core/animation/css/css_transition_data.h"
@@ -57,6 +56,8 @@ class CORE_EXPORT CSSAnimations final {
 
  public:
   CSSAnimations();
+  CSSAnimations(const CSSAnimations&) = delete;
+  CSSAnimations& operator=(const CSSAnimations&) = delete;
 
   static const StylePropertyShorthand& PropertiesForTransitionAll();
   static bool IsAnimationAffectingProperty(const CSSProperty&);
@@ -68,14 +69,14 @@ class CORE_EXPORT CSSAnimations final {
   static bool IsAnimatingFontAffectingProperties(const ElementAnimations*);
   static bool IsAnimatingRevert(const ElementAnimations*);
   static void CalculateAnimationUpdate(CSSAnimationUpdate&,
-                                       const Element* animating_element,
+                                       const Element& animating_element,
                                        Element&,
                                        const ComputedStyle&,
                                        const ComputedStyle* parent_style,
                                        StyleResolver*);
   static void CalculateCompositorAnimationUpdate(
       CSSAnimationUpdate&,
-      const Element* animating_element,
+      const Element& animating_element,
       Element&,
       const ComputedStyle&,
       const ComputedStyle* parent_style,
@@ -95,7 +96,7 @@ class CORE_EXPORT CSSAnimations final {
   enum class PropertyPass { kCustom, kStandard };
   static void CalculateTransitionUpdate(CSSAnimationUpdate&,
                                         PropertyPass,
-                                        Element* animating_element,
+                                        Element& animating_element,
                                         const ComputedStyle&);
 
   static void SnapshotCompositorKeyframes(Element&,
@@ -182,7 +183,7 @@ class CORE_EXPORT CSSAnimations final {
 
    public:
     CSSAnimationUpdate& update;
-    Element* animating_element = nullptr;
+    Element& animating_element;
     const ComputedStyle& old_style;
     const ComputedStyle& style;
     scoped_refptr<const ComputedStyle> before_change_style;
@@ -209,18 +210,18 @@ class CORE_EXPORT CSSAnimations final {
 
   static void CalculateAnimationActiveInterpolations(
       CSSAnimationUpdate&,
-      const Element* animating_element);
+      const Element& animating_element);
   static void CalculateTransitionActiveInterpolations(
       CSSAnimationUpdate&,
       PropertyPass,
-      const Element* animating_element);
+      const Element& animating_element);
 
   // The before-change style is defined as the computed values of all properties
   // on the element as of the previous style change event, except with any
   // styles derived from declarative animations updated to the current time.
   // https://drafts.csswg.org/css-transitions-1/#before-change-style
   static scoped_refptr<const ComputedStyle> CalculateBeforeChangeStyle(
-      Element* animating_element,
+      Element& animating_element,
       const ComputedStyle& base_style);
 
   class AnimationEventDelegate final : public AnimationEffect::EventDelegate {
@@ -229,7 +230,7 @@ class CORE_EXPORT CSSAnimations final {
         Element* animation_target,
         const AtomicString& name,
         Timing::Phase previous_phase = Timing::kPhaseNone,
-        base::Optional<double> previous_iteration = base::nullopt)
+        absl::optional<double> previous_iteration = absl::nullopt)
         : animation_target_(animation_target),
           name_(name),
           previous_phase_(previous_phase),
@@ -239,7 +240,7 @@ class CORE_EXPORT CSSAnimations final {
 
     bool IsAnimationEventDelegate() const override { return true; }
     Timing::Phase getPreviousPhase() const { return previous_phase_; }
-    base::Optional<double> getPreviousIteration() const {
+    absl::optional<double> getPreviousIteration() const {
       return previous_iteration_;
     }
 
@@ -256,7 +257,7 @@ class CORE_EXPORT CSSAnimations final {
     Member<Element> animation_target_;
     const AtomicString name_;
     Timing::Phase previous_phase_;
-    base::Optional<double> previous_iteration_;
+    absl::optional<double> previous_iteration_;
   };
 
   class TransitionEventDelegate final : public AnimationEffect::EventDelegate {
@@ -289,8 +290,6 @@ class CORE_EXPORT CSSAnimations final {
     PropertyHandle property_;
     Timing::Phase previous_phase_;
   };
-
-  DISALLOW_COPY_AND_ASSIGN(CSSAnimations);
 };
 
 template <>
@@ -309,4 +308,4 @@ struct DowncastTraits<CSSAnimations::TransitionEventDelegate> {
 
 }  // namespace blink
 
-#endif
+#endif  // THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_CSS_CSS_ANIMATIONS_H_

@@ -83,24 +83,34 @@ void DeletePlatformShortcutsAndPostCallback(
 void DeleteMultiProfileShortcutsForAppAndPostCallback(
     const std::string& app_id,
     CreateShortcutsCallback callback) {
-  web_app::internals::DeleteMultiProfileShortcutsForApp(app_id);
+  internals::DeleteMultiProfileShortcutsForApp(app_id);
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), true));
 }
 
 }  // namespace
 
+ShortcutOverrideForTesting::ShortcutOverrideForTesting() = default;
+ShortcutOverrideForTesting::ShortcutOverrideForTesting(
+    const ShortcutOverrideForTesting& other) = default;
+ShortcutOverrideForTesting::~ShortcutOverrideForTesting() = default;
+
+absl::optional<ShortcutOverrideForTesting>& GetShortcutOverrideForTesting() {
+  static base::NoDestructor<absl::optional<ShortcutOverrideForTesting>>
+      g_shortcut_override;
+  return *g_shortcut_override;
+}
+
+void SetShortcutOverrideForTesting(
+    absl::optional<ShortcutOverrideForTesting> shortcut_override_for_testing) {
+  GetShortcutOverrideForTesting() = shortcut_override_for_testing;
+}
+
 ShortcutInfo::ShortcutInfo() = default;
 
 ShortcutInfo::~ShortcutInfo() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
-
-ShortcutLocations::ShortcutLocations()
-    : on_desktop(false),
-      applications_menu_location(APP_MENU_LOCATION_NONE),
-      in_quick_launch_bar(false),
-      in_startup(false) {}
 
 std::string GenerateApplicationNameFromInfo(const ShortcutInfo& shortcut_info) {
   // TODO(loyso): Remove this empty()/non-empty difference.

@@ -14,6 +14,7 @@
 
 #include "base/android/jni_android.h"
 #include "base/callback.h"
+#include "base/callback_list.h"
 #include "base/compiler_specific.h"
 #include "base/containers/queue.h"
 #include "base/i18n/rtl.h"
@@ -95,6 +96,17 @@ class CONTENT_EXPORT RenderWidgetHostViewAndroid
     return touch_selection_controller_.get();
   }
 
+  using SurfaceIdChangedCallbackType = void(const viz::SurfaceId& new_id);
+  using SurfaceIdChangedCallback =
+      base::RepeatingCallback<SurfaceIdChangedCallbackType>;
+  using SurfaceIdChangedCallbackList =
+      base::RepeatingCallbackList<SurfaceIdChangedCallbackType>;
+  base::CallbackListSubscription SubscribeToSurfaceIdChanges(
+      const SurfaceIdChangedCallback& callback) WARN_UNUSED_RESULT;
+
+  // Called by DelegatedFrameHostClientAndroid
+  void OnSurfaceIdChanged();
+
   // RenderWidgetHostView implementation.
   void InitAsChild(gfx::NativeView parent_view) override;
   void InitAsPopup(RenderWidgetHostView* parent_host_view,
@@ -126,7 +138,9 @@ class CONTENT_EXPORT RenderWidgetHostViewAndroid
                           const gfx::Rect& node_bounds_in_screen) override;
   void RenderProcessGone() override;
   void Destroy() override;
-  void SetTooltipText(const base::string16& tooltip_text) override;
+  void UpdateTooltipUnderCursor(const std::u16string& tooltip_text) override;
+  void UpdateTooltipFromKeyboard(const std::u16string& tooltip_text,
+                                 const gfx::Rect& bounds) override;
   void TransformPointToRootSurface(gfx::PointF* point) override;
   gfx::Rect GetBoundsInRootWindow() override;
   void ProcessAckedTouchEvent(
@@ -152,6 +166,7 @@ class CONTENT_EXPORT RenderWidgetHostViewAndroid
   void DidStopFlinging() override;
   void OnInterstitialPageAttached() override;
   void OnInterstitialPageGoingAway() override;
+  bool CanSynchronizeVisualProperties() override;
   std::unique_ptr<SyntheticGestureTarget> CreateSyntheticGestureTarget()
       override;
   void OnDidNavigateMainFrameToNewPage() override;
@@ -168,16 +183,17 @@ class CONTENT_EXPORT RenderWidgetHostViewAndroid
   void OnRendererWidgetCreated() override;
   void TakeFallbackContentFrom(RenderWidgetHostView* view) override;
   void OnSynchronizedDisplayPropertiesChanged(bool rotation) override;
-  base::Optional<SkColor> GetBackgroundColor() override;
+  absl::optional<SkColor> GetBackgroundColor() override;
   void DidNavigate() override;
   WebContentsAccessibility* GetWebContentsAccessibility() override;
   viz::ScopedSurfaceIdAllocator DidUpdateVisualProperties(
       const cc::RenderFrameMetadata& metadata) override;
-  void GetScreenInfo(blink::ScreenInfo* screen_info) override;
+  void GetScreenInfo(display::ScreenInfo* screen_info) override;
   std::vector<std::unique_ptr<ui::TouchEvent>> ExtractAndCancelActiveTouches()
       override;
   void TransferTouches(
       const std::vector<std::unique_ptr<ui::TouchEvent>>& touches) override;
+  bool ShouldVirtualKeyboardOverlayContent() override;
 
   // ui::EventHandlerAndroid implementation.
   bool OnTouchEvent(const ui::MotionEventAndroid& m) override;
@@ -185,7 +201,7 @@ class CONTENT_EXPORT RenderWidgetHostViewAndroid
   bool OnMouseWheelEvent(const ui::MotionEventAndroid& event) override;
   bool OnGestureEvent(const ui::GestureEventAndroid& event) override;
   void OnPhysicalBackingSizeChanged(
-      base::Optional<base::TimeDelta> deadline_override) override;
+      absl::optional<base::TimeDelta> deadline_override) override;
   void NotifyVirtualKeyboardOverlayRect(
       const gfx::Rect& keyboard_rect) override;
 
@@ -228,15 +244,10 @@ class CONTENT_EXPORT RenderWidgetHostViewAndroid
 
   // Non-virtual methods
   void UpdateNativeViewTree(gfx::NativeView parent_native_view);
-  // Returns true if the overlaycontent flag is set in the JS, else false.
-  // This determines whether to fire geometrychange event to JS and also not
-  // resize the visual/layout viewports in response to keyboard visibility
-  // changes.
-  bool ShouldVirtualKeyboardOverlayContent();
 
   // Returns the temporary background color of the underlaying document, for
   // example, returns black during screen rotation.
-  base::Optional<SkColor> GetCachedBackgroundColor();
+  absl::optional<SkColor> GetCachedBackgroundColor();
   void SendKeyEvent(const NativeWebKeyboardEvent& event);
   void SendMouseEvent(const ui::MotionEventAndroid&, int action_button);
   void SendMouseWheelEvent(const blink::WebMouseWheelEvent& event);
@@ -269,7 +280,7 @@ class CONTENT_EXPORT RenderWidgetHostViewAndroid
 
   bool SynchronizeVisualProperties(
       const cc::DeadlinePolicy& deadline_policy,
-      const base::Optional<viz::LocalSurfaceId>& child_local_surface_id);
+      const absl::optional<viz::LocalSurfaceId>& child_local_surface_id);
 
   bool HasValidFrame() const;
 
@@ -377,7 +388,7 @@ class CONTENT_EXPORT RenderWidgetHostViewAndroid
   // RenderWidgetHostViewBase:
   void UpdateBackgroundColor() override;
   bool HasFallbackSurface() const override;
-  base::Optional<DisplayFeature> GetDisplayFeature() override;
+  absl::optional<DisplayFeature> GetDisplayFeature() override;
   void SetDisplayFeatureForTesting(
       const DisplayFeature* display_feature) override;
 
@@ -517,7 +528,6 @@ class CONTENT_EXPORT RenderWidgetHostViewAndroid
   gfx::Rect default_bounds_;
 
   const bool using_browser_compositor_;
-  const bool using_viz_for_webview_;
   std::unique_ptr<SynchronousCompositorHost> sync_compositor_;
   uint32_t sync_compositor_last_frame_token_ = 0u;
 
@@ -579,11 +589,15 @@ class CONTENT_EXPORT RenderWidgetHostViewAndroid
   bool swipe_to_move_cursor_activated_ = false;
 
   // A cached copy of the most up to date RenderFrameMetadata.
-  base::Optional<cc::RenderFrameMetadata> last_render_frame_metadata_;
+  absl::optional<cc::RenderFrameMetadata> last_render_frame_metadata_;
 
   WebContentsAccessibilityAndroid* web_contents_accessibility_ = nullptr;
 
+  SurfaceIdChangedCallbackList surface_id_changed_callbacks_;
+
   base::android::ScopedJavaGlobalRef<jobject> obj_;
+
+  bool is_surface_sync_throttling_ = false;
 
   base::WeakPtrFactory<RenderWidgetHostViewAndroid> weak_ptr_factory_{this};
 

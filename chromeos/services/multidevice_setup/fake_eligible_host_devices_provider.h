@@ -5,11 +5,9 @@
 #ifndef CHROMEOS_SERVICES_MULTIDEVICE_SETUP_FAKE_ELIGIBLE_HOST_DEVICES_PROVIDER_H_
 #define CHROMEOS_SERVICES_MULTIDEVICE_SETUP_FAKE_ELIGIBLE_HOST_DEVICES_PROVIDER_H_
 
-#include "base/containers/flat_set.h"
 #include "base/macros.h"
 #include "chromeos/components/multidevice/remote_device_ref.h"
 #include "chromeos/services/multidevice_setup/eligible_host_devices_provider.h"
-#include "chromeos/services/multidevice_setup/public/mojom/multidevice_setup.mojom.h"
 
 namespace chromeos {
 

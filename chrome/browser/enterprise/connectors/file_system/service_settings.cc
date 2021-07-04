@@ -7,8 +7,6 @@
 #include "chrome/browser/enterprise/connectors/service_provider_config.h"
 #include "components/policy/core/browser/url_util.h"
 
-constexpr char kWildcardMimeType[] = "*";
-
 namespace enterprise_connectors {
 
 FileSystemServiceSettings::FileSystemServiceSettings(
@@ -37,6 +35,11 @@ FileSystemServiceSettings::FileSystemServiceSettings(
   } else {
     return;
   }
+
+  // The domain will not be present if the admin has not set it.
+  const std::string* domain = settings_value.FindStringKey(kKeyDomain);
+  if (domain)
+    email_domain_ = *domain;
 
   // Add the patterns to the settings, which configures settings.matcher and
   // settings.*_pattern_settings. No enable patterns implies the settings are
@@ -76,19 +79,19 @@ FileSystemServiceSettings::FileSystemServiceSettings(
     FileSystemServiceSettings&&) = default;
 FileSystemServiceSettings::~FileSystemServiceSettings() = default;
 
-base::Optional<FileSystemSettings> FileSystemServiceSettings::GetSettings(
+absl::optional<FileSystemSettings> FileSystemServiceSettings::GetSettings(
     const GURL& url) const {
   if (!IsValid())
-    return base::nullopt;
+    return absl::nullopt;
 
   DCHECK(matcher_);
   auto matches = matcher_->MatchURL(url);
   if (matches.empty())
-    return base::nullopt;
+    return absl::nullopt;
 
   auto mime_types = GetMimeTypes(matches);
   if (mime_types.empty())
-    return base::nullopt;
+    return absl::nullopt;
 
   FileSystemSettings settings;
   settings.service_provider = service_provider_name_;
@@ -96,6 +99,8 @@ base::Optional<FileSystemSettings> FileSystemServiceSettings::GetSettings(
   settings.authorization_endpoint =
       GURL(service_provider_->fs_authorization_endpoint());
   settings.token_endpoint = GURL(service_provider_->fs_token_endpoint());
+  settings.enterprise_id = this->enterprise_id_;
+  settings.email_domain = this->email_domain_;
   settings.client_id = service_provider_->fs_client_id();
   settings.client_secret = service_provider_->fs_client_secret();
   settings.scopes = service_provider_->fs_scopes();
@@ -106,7 +111,7 @@ base::Optional<FileSystemSettings> FileSystemServiceSettings::GetSettings(
 }
 
 // static
-base::Optional<FileSystemServiceSettings::URLPatternSettings>
+absl::optional<FileSystemServiceSettings::URLPatternSettings>
 FileSystemServiceSettings::GetPatternSettings(
     const PatternSettings& patterns,
     url_matcher::URLMatcherConditionSet::ID match) {
@@ -123,7 +128,7 @@ FileSystemServiceSettings::GetPatternSettings(
   if (next != patterns.end())
     return next->second;
 
-  return base::nullopt;
+  return absl::nullopt;
 }
 
 bool FileSystemServiceSettings::IsValid() const {

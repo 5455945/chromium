@@ -27,6 +27,7 @@
 #include "components/webapps/browser/android/webapps_utils.h"
 #include "components/webapps/browser/installable/installable_manager.h"
 #include "components/webapps/common/constants.h"
+#include "components/webapps/common/web_page_metadata.mojom.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
@@ -136,7 +137,7 @@ AddToHomescreenDataFetcher::AddToHomescreenDataFetcher(
   auto* web_page_metadata_proxy = metadata_agent.get();
   web_page_metadata_proxy->GetWebPageMetadata(base::BindOnce(
       &AddToHomescreenDataFetcher::OnDidGetWebPageMetadata,
-      weak_ptr_factory_.GetWeakPtr(), base::Passed(&metadata_agent)));
+      weak_ptr_factory_.GetWeakPtr(), std::move(metadata_agent)));
 }
 
 AddToHomescreenDataFetcher::~AddToHomescreenDataFetcher() = default;

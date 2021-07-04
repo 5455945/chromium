@@ -3,13 +3,12 @@
 // found in the LICENSE file.
 
 // clang-format off
-import {isChromeOS, isWindows} from 'chrome://resources/js/cr.m.js';
 import {flush} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import {LanguagesBrowserProxyImpl} from 'chrome://settings/lazy_load.js';
 import {CrSettingsPrefs} from 'chrome://settings/settings.js';
-import {FakeLanguageSettingsPrivate} from 'chrome://test/settings/fake_language_settings_private.m.js';
-import {FakeSettingsPrivate} from 'chrome://test/settings/fake_settings_private.m.js';
-import {TestLanguagesBrowserProxy} from 'chrome://test/settings/test_languages_browser_proxy.m.js';
+import {FakeLanguageSettingsPrivate} from 'chrome://test/settings/fake_language_settings_private.js';
+import {FakeSettingsPrivate} from 'chrome://test/settings/fake_settings_private.js';
+import {TestLanguagesBrowserProxy} from 'chrome://test/settings/test_languages_browser_proxy.js';
 
 // clang-format on
 
@@ -37,24 +36,6 @@ suite('settings-edit-dictionary-page', function() {
         value: ['en-US'],
       }
     ];
-    if (isChromeOS) {
-      fakePrefs.push({
-        key: 'settings.language.preferred_languages',
-        type: chrome.settingsPrivate.PrefType.STRING,
-        value: 'en-US,sw',
-      });
-      fakePrefs.push({
-        key: 'settings.language.preload_engines',
-        type: chrome.settingsPrivate.PrefType.STRING,
-        value: '_comp_ime_fgoepimhcoialccpbmpnnblemnepkkaoxkb:us::eng,' +
-            '_comp_ime_fgoepimhcoialccpbmpnnblemnepkkaoxkb:us:dvorak:eng',
-      });
-      fakePrefs.push({
-        key: 'settings.language.enabled_extension_imes',
-        type: chrome.settingsPrivate.PrefType.STRING,
-        value: '',
-      });
-    }
     return fakePrefs;
   }
 

@@ -200,9 +200,6 @@ IN_PROC_BROWSER_TEST_F(AccessibilityTreeFormatterMacBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(AccessibilityTreeFormatterMacBrowserTest,
                        ParameterizedAttributes_IntArray) {
-  // This line is needed until we turn extra mac nodes back on by default.
-  BrowserAccessibilityManager::AllowExtraMacNodesForTesting();
-
   TestAndCheck(R"~~(data:text/html,
                     <table role="grid"><tr><td>CELL</td></tr></table>)~~",
                {"AXCellForColumnAndRow([0, 0])=*"}, R"~~(AXWebArea
@@ -219,9 +216,6 @@ IN_PROC_BROWSER_TEST_F(AccessibilityTreeFormatterMacBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(AccessibilityTreeFormatterMacBrowserTest,
                        ParameterizedAttributes_IntArray_NilValue) {
-  // This line is needed until we turn extra mac nodes back on by default.
-  BrowserAccessibilityManager::AllowExtraMacNodesForTesting();
-
   TestAndCheck(R"~~(data:text/html,
                     <table role="grid"></table>)~~",
                {"AXCellForColumnAndRow([0, 0])=*"}, R"~~(AXWebArea
@@ -232,9 +226,6 @@ IN_PROC_BROWSER_TEST_F(AccessibilityTreeFormatterMacBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(AccessibilityTreeFormatterMacBrowserTest,
                        ParameterizedAttributes_IntArray_WrongParameters) {
-  // This line is needed until we turn extra mac nodes back on by default.
-  BrowserAccessibilityManager::AllowExtraMacNodesForTesting();
-
   TestWrongParameters(R"~~(data:text/html,
                            <table role="grid"><tr><td>CELL</td></tr></table>)~~",
                       {"0, 0", "{1, 2}", "[1, NaN]", "[NaN, 1]"},
@@ -379,6 +370,81 @@ IN_PROC_BROWSER_TEST_F(AccessibilityTreeFormatterMacBrowserTest,
                {{"textbo.AXRole", SCRIPT}}, {{"*", "*"}},
                R"~~(textbo.AXRole=ERROR:FAILED_TO_PARSE
 )~~");
+}
+
+IN_PROC_BROWSER_TEST_F(AccessibilityTreeFormatterMacBrowserTest, Script_Chain) {
+  TestAndCheck(R"~~(data:text/html,
+                    <input id='input' aria-label='input'>)~~",
+               {{"input.AXFocusableAncestor.AXRole", SCRIPT}}, {{"*", "*"}},
+               R"~~(input.AXFocusableAncestor.AXRole='AXTextField'
+)~~");
+}
+
+IN_PROC_BROWSER_TEST_F(AccessibilityTreeFormatterMacBrowserTest,
+                       Script_Chain_Array) {
+  TestAndCheck(R"~~(data:text/html,
+                    <p id='p'>Paragraph</p>)~~",
+               {{"p.AXChildren[0].AXRole", SCRIPT}}, {{"*", "*"}},
+               R"~~(p.AXChildren[0].AXRole='AXStaticText'
+)~~");
+}
+
+IN_PROC_BROWSER_TEST_F(AccessibilityTreeFormatterMacBrowserTest,
+                       Script_Chain_Array_OutOfRange) {
+  TestAndCheck(R"~~(data:text/html,
+                    <p id='p'>Paragraph</p>)~~",
+               {{"p.AXChildren[9999].AXRole", SCRIPT}}, {{"*", "*"}},
+               R"~~(p.AXChildren[9999].AXRole=ERROR:FAILED_TO_PARSE
+)~~");
+}
+
+IN_PROC_BROWSER_TEST_F(AccessibilityTreeFormatterMacBrowserTest,
+                       Script_Chain_TextRange_Anchor) {
+  TestAndCheck(R"~~(data:text/html,
+                    <p id='p'>Paragraph</p>)~~",
+               {{"p.AXTextMarkerRangeForUIElement(p).anchor", SCRIPT}},
+               {{"*", "*"}},
+               R"~~(p.AXTextMarkerRangeForUIElement(p).anchor={:2, 0, down}
+)~~");
+}
+
+IN_PROC_BROWSER_TEST_F(AccessibilityTreeFormatterMacBrowserTest,
+                       Script_Chain_TextRange_Focus) {
+  TestAndCheck(R"~~(data:text/html,
+                    <p id='p'>Paragraph</p>)~~",
+               {{"p.AXTextMarkerRangeForUIElement(p).focus", SCRIPT}},
+               {{"*", "*"}},
+               R"~~(p.AXTextMarkerRangeForUIElement(p).focus={:2, 9, down}
+)~~");
+}
+
+IN_PROC_BROWSER_TEST_F(AccessibilityTreeFormatterMacBrowserTest,
+                       Script_Variables_AXElement) {
+  TestAndCheck(R"~~(data:text/html,
+                    <p id='p'>Paragraph</p>)~~",
+               {{"text:= p.AXChildren[0]", SCRIPT}, {"text.AXRole", SCRIPT}},
+               {{"*", "*"}},
+               R"~~(text=:3
+ text.AXRole='AXStaticText'
+)~~");
+}
+
+IN_PROC_BROWSER_TEST_F(AccessibilityTreeFormatterMacBrowserTest,
+                       Script_ActionNames) {
+  TestAndCheck(
+      R"~~(data:text/html,
+                    <button id='button'>Press me</button>)~~",
+      {{"button.AXActionNames", SCRIPT}}, {{"*", "*"}},
+      R"~~(button.AXActionNames=['AXPress', 'AXShowMenu', 'AXScrollToVisible']
+)~~");
+}
+
+IN_PROC_BROWSER_TEST_F(AccessibilityTreeFormatterMacBrowserTest,
+                       Script_PerformAction) {
+  TestAndCheck(R"~~(data:text/html,
+                    <button id='button'>Press me</button>)~~",
+               {{"button.AXPerformAction(AXPress)", SCRIPT}}, {{"*", "*"}},
+               R"~~()~~");
 }
 
 }  // namespace content

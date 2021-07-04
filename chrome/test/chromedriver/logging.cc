@@ -12,9 +12,10 @@
 #include <utility>
 
 #include "base/command_line.h"
+#include "base/containers/contains.h"
+#include "base/cxx17_backports.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
-#include "base/stl_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
@@ -201,7 +202,7 @@ WebDriverLog::~WebDriverLog() {
 std::unique_ptr<base::ListValue> WebDriverLog::GetAndClearEntries() {
   std::unique_ptr<base::ListValue> ret;
   if (batches_of_entries_.empty()) {
-    ret.reset(new base::ListValue());
+    ret = std::make_unique<base::ListValue>();
     emptied_ = true;
   } else {
     ret = std::move(batches_of_entries_.front());
@@ -213,10 +214,9 @@ std::unique_ptr<base::ListValue> WebDriverLog::GetAndClearEntries() {
 
 bool GetFirstErrorMessageFromList(const base::ListValue* list,
                                   std::string* message) {
-  for (auto it = list->begin(); it != list->end(); ++it) {
-    const base::DictionaryValue* log_entry = NULL;
-    it->GetAsDictionary(&log_entry);
-    if (log_entry != NULL) {
+  for (const auto& entry : list->GetList()) {
+    const base::DictionaryValue* log_entry = nullptr;
+    if (entry.GetAsDictionary(&log_entry)) {
       std::string level;
       if (log_entry->GetString("level", &level))
         if (level == kLevelToName[Log::kError])
@@ -388,10 +388,8 @@ Status CreateLogs(
       }
     } else if (type == WebDriverLog::kDevToolsType) {
       logs.push_back(std::make_unique<WebDriverLog>(type, Log::kAll));
-      devtools_listeners.push_back(
-          std::make_unique<DevToolsEventsLogger>(
-            logs.back().get(),
-            capabilities.devtools_events_logging_prefs.get()));
+      devtools_listeners.push_back(std::make_unique<DevToolsEventsLogger>(
+          logs.back().get(), capabilities.devtools_events_logging_prefs));
     } else if (type == WebDriverLog::kBrowserType) {
       browser_log_level = level;
     } else if (type != WebDriverLog::kDriverType) {

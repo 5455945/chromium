@@ -15,7 +15,8 @@ import {
 } from '../type.js';
 import {WaitableEvent} from '../waitable_event.js';
 
-import {closeWhenUnload} from './util.js';
+import {MockDocumentScanner} from './mock_document_scanner.js';
+import {wrapEndpoint} from './util.js';
 
 /**
  * Parse the entry data according to its type.
@@ -40,7 +41,9 @@ export function parseMetadata(entry) {
       return Array.from(new BigInt64Array(buffer), (bigIntVal) => {
         const numVal = Number(bigIntVal);
         if (!Number.isSafeInteger(numVal)) {
-          console.warn('The int64 value is not a safe integer');
+          reportError(
+              ErrorType.UNSAFE_INTEGER, ErrorLevel.WARNING,
+              new Error('The int64 value is not a safe integer'));
         }
         return numVal;
       });
@@ -110,7 +113,8 @@ export class DeviceOperator {
      * @type {!cros.mojom.CameraAppDeviceProviderRemote}
      * @private
      */
-    this.deviceProvider_ = cros.mojom.CameraAppDeviceProvider.getRemote();
+    this.deviceProvider_ =
+        wrapEndpoint(cros.mojom.CameraAppDeviceProvider.getRemote());
 
     /**
      * Flag that indicates if the direct communication between camera app and
@@ -118,10 +122,10 @@ export class DeviceOperator {
      * @type {!Promise<boolean>}
      * @private
      */
-    this.isSupported_ =
-        this.deviceProvider_.isSupported().then(({isSupported}) => {
-          return isSupported;
-        });
+    this.isSupported_ = (async () => {
+      const {isSupported} = await this.deviceProvider_.isSupported();
+      return isSupported;
+    })();
 
     /**
      * Map which maps from device id to the remote of devices. We want to have
@@ -131,16 +135,6 @@ export class DeviceOperator {
      * @private
      */
     this.devices_ = new Map();
-
-    /**
-     * Map which maps from device id to the events which will be triggered when
-     * the corresponding device is stopped.
-     * @type {!Map<string, !WaitableEvent>}
-     * @private
-     */
-    this.onDeviceStoppedEvents_ = new Map();
-
-    closeWhenUnload(this.deviceProvider_);
   }
 
   /**
@@ -165,16 +159,11 @@ export class DeviceOperator {
       throw new Error('Unknown error');
     }
     device.onConnectionError.addListener(() => {
-      this.devices_.delete(deviceId);
-      const event = this.onDeviceStoppedEvents_.get(deviceId);
-      assert(event !== undefined);
-      if (!event.isSignaled()) {
-        event.signal();
-      }
+      this.dropConnection(deviceId);
     });
-    this.devices_.set(deviceId, device);
-    this.onDeviceStoppedEvents_.set(deviceId, new WaitableEvent());
-    return device;
+    const deviceProxy = wrapEndpoint(device);
+    this.devices_.set(deviceId, deviceProxy);
+    return deviceProxy;
   }
 
   /**
@@ -186,10 +175,39 @@ export class DeviceOperator {
    * @throws {!Error} Thrown when given device id is invalid.
    */
   async getStaticMetadata(deviceId, tag) {
+    // All the unsigned vendor tag number defined in HAL will be forced fit into
+    // signed int32 when passing through mojo. So all number > 0x7FFFFFFF
+    // require another conversion.
+    if (tag > 0x7FFFFFFF) {
+      tag = /** @type {cros.mojom.CameraMetadataTag} */ (-(~tag + 1));
+    }
     const device = await this.getDevice_(deviceId);
     const {cameraInfo} = await device.getCameraInfo();
     const staticMetadata = cameraInfo.staticCameraCharacteristics;
     return getMetadataData(staticMetadata, tag);
+  }
+
+  /**
+   * Gets vid:pid identifier of USB camera.
+   * @param {string} deviceId
+   * @return {!Promise<?string>} Identifier formatted as "vid:pid" or null for
+   *     non-USB camera.
+   */
+  async getVidPid(deviceId) {
+    const getTag = async (tag) => {
+      const data = await this.getStaticMetadata(deviceId, tag);
+      if (data.length === 0) {
+        return null;
+      }
+      // Check and pop the \u0000 c style string terminal symbol.
+      if (data[data.length - 1] === 0) {
+        data.pop();
+      }
+      return String.fromCharCode(...data);
+    };
+    const vid = await getTag(0x80010000);
+    const pid = await getTag(0x80010001);
+    return vid && pid && `${vid}:${pid}`;
   }
 
   /**
@@ -284,6 +302,12 @@ export class DeviceOperator {
         return Facing.USER;
       case cros.mojom.CameraFacing.CAMERA_FACING_EXTERNAL:
         return Facing.EXTERNAL;
+      case cros.mojom.CameraFacing.CAMERA_FACING_VIRTUAL_BACK:
+        return Facing.VIRTUAL_ENV;
+      case cros.mojom.CameraFacing.CAMERA_FACING_VIRTUAL_FRONT:
+        return Facing.VIRTUAL_USER;
+      case cros.mojom.CameraFacing.CAMERA_FACING_VIRTUAL_EXTERNAL:
+        return Facing.VIRTUAL_EXT;
       default:
         assertNotReached(`Unexpected facing value: ${facing}`);
     }
@@ -355,6 +379,39 @@ export class DeviceOperator {
   }
 
   /**
+   * @param {string} deviceId
+   * @return {!Promise<number|undefined>} Resolves to undefined when called with
+   *     |deviceId| which don't support pan control.
+   */
+  async getPanDefault(deviceId) {
+    const tag = /** @type{!cros.mojom.CameraMetadataTag} */ (0x8001000d);
+    const data = await this.getStaticMetadata(deviceId, tag);
+    return data[0];
+  }
+
+  /**
+   * @param {string} deviceId
+   * @return {!Promise<number|undefined>} Resolves to undefined when called with
+   *     |deviceId| which don't support tilt control.
+   */
+  async getTiltDefault(deviceId) {
+    const tag = /** @type{!cros.mojom.CameraMetadataTag} */ (0x80010016);
+    const data = await this.getStaticMetadata(deviceId, tag);
+    return data[0];
+  }
+
+  /**
+   * @param {string} deviceId
+   * @return {!Promise<number|undefined>} Resolves to undefined when called with
+   *     |deviceId| which don't support zoom control.
+   */
+  async getZoomDefault(deviceId) {
+    const tag = /** @type{!cros.mojom.CameraMetadataTag} */ (0x80010019);
+    const data = await this.getStaticMetadata(deviceId, tag);
+    return data[0];
+  }
+
+  /**
    * Sets the frame rate range in VCD. If the range is invalid (e.g. 0 fps), VCD
    * will fallback to use the default one.
    * @param {string} deviceId
@@ -405,10 +462,8 @@ export class DeviceOperator {
    */
   async isPortraitModeSupported(deviceId) {
     // TODO(wtlee): Change to portrait mode tag.
-    // This should be 0x80000000 but mojo interface will convert the tag to
-    // int32.
     const portraitModeTag =
-        /** @type{!cros.mojom.CameraMetadataTag} */ (-0x80000000);
+        /** @type{!cros.mojom.CameraMetadataTag} */ (0x80000000);
 
     const portraitMode =
         await this.getStaticMetadata(deviceId, portraitModeTag);
@@ -422,14 +477,13 @@ export class DeviceOperator {
    *     handles the metadata.
    * @param {!cros.mojom.StreamType} streamType Stream type which the observer
    *     gets the metadata from.
-   * @return {!Promise<number>} id for the added observer. Can be used later
-   *     to identify and remove the inserted observer.
+   * @return {!Promise<number>} id for the added observer. Can be used later to
+   *     identify and remove the inserted observer.
    * @throws {!Error} if fails to construct device connection.
    */
   async addMetadataObserver(deviceId, callback, streamType) {
     const observerCallbackRouter =
-        new cros.mojom.ResultMetadataObserverCallbackRouter();
-    closeWhenUnload(observerCallbackRouter);
+        wrapEndpoint(new cros.mojom.ResultMetadataObserverCallbackRouter());
     observerCallbackRouter.onMetadataAvailable.addListener(callback);
 
     const device = await this.getDevice_(deviceId);
@@ -467,8 +521,7 @@ export class DeviceOperator {
    */
   async addShutterObserver(deviceId, callback) {
     const observerCallbackRouter =
-        new cros.mojom.CameraEventObserverCallbackRouter();
-    closeWhenUnload(observerCallbackRouter);
+        wrapEndpoint(new cros.mojom.CameraEventObserverCallbackRouter());
     observerCallbackRouter.onShutterDone.addListener(callback);
 
     const device = await this.getDevice_(deviceId);
@@ -497,8 +550,8 @@ export class DeviceOperator {
    *     which could be retrieved from MediaDeviceInfo.deviceId.
    * @param {!cros.mojom.Effect} effect The target reprocess option (effect)
    *     that would be applied on the result.
-   * @return {!Promise<!media.mojom.Blob>} The captured
-   *     result with given effect.
+   * @return {!Promise<!media.mojom.Blob>} The captured result with given
+   *     effect.
    * @throws {!Error} Thrown when the reprocess is failed or the device
    *     operation is not supported.
    */
@@ -512,14 +565,92 @@ export class DeviceOperator {
   }
 
   /**
-   * Waits until the connection to the device is dropped.
-   * @param {string} deviceId Id of the target device.
-   * @return {!Promise}
+   * Changes whether the camera frame rotation is enabled inside the Chrome OS
+   * video capture device.
+   * @param {string} deviceId The id of target camera device.
+   * @param {boolean} isEnabled Whether to enable the camera frame rotation at
+   *     source.
+   * @return {!Promise<boolean>} Whether the operation was successful.
    */
-  async waitForDeviceClose(deviceId) {
-    const event = this.onDeviceStoppedEvents_.get(deviceId);
-    assert(event !== undefined);
-    return event.wait();
+  async setCameraFrameRotationEnabledAtSource(deviceId, isEnabled) {
+    const device = await this.getDevice_(deviceId);
+    const {isSuccess} =
+        await device.setCameraFrameRotationEnabledAtSource(isEnabled);
+    return isSuccess;
+  }
+
+  /**
+   * Gets the clock-wise rotation applied on the raw camera frame in order to
+   * display the camera preview upright in the UI.
+   * @param {string} deviceId The id of target camera device.
+   * @return {!Promise<number>} The camera frame rotation.
+   */
+  async getCameraFrameRotation(deviceId) {
+    const device = await this.getDevice_(deviceId);
+    const {rotation} = await device.getCameraFrameRotation();
+    return rotation;
+  }
+
+  /**
+   * Drops the connection to the video capture device in Chrome.
+   * @param {string} deviceId Id of the target device.
+   */
+  dropConnection(deviceId) {
+    this.devices_.delete(deviceId);
+  }
+
+  /**
+   * Enables/Disables multiple streams on target camera device. The extra
+   * stream will be reported as virtual video device from
+   * navigator.mediaDevices.enumerateDevices().
+   * @param {string} deviceId The id of target camera device.
+   * @param {boolean} enabled True for enabling multiple streams.
+   */
+  async setMultipleStreamsEnabled(deviceId, enabled) {
+    if (deviceId) {
+      await this.deviceProvider_.setMultipleStreamsEnabled(deviceId, enabled);
+    }
+  }
+
+  /**
+   * Returns true if the document mode is supported on the device.
+   * @param {string} deviceId The id of target camera device.
+   * @return {!Promise<boolean>}
+   */
+  async isDocumentModeSupported(deviceId) {
+    // TODO(b/180564352): Switch to the actual implementation once it is ready.
+    const {isSupported} =
+        await MockDocumentScanner.getInstance().isDocumentModeSupported();
+    return isSupported;
+  }
+
+  /**
+   * Registers a document corners detector and triggers |callback| if the
+   * detected corners are updated.
+   * @param {string} deviceId The id of target camera device.
+   * @param {function(!Array<gfx.mojom.PointF>): void} callback Callback to
+   *     trigger when the detected corners are updated.
+   * @return {!Promise<number>} Id for the added detector.
+   */
+  async registerDocumentCornersDetector(deviceId, callback) {
+    // TODO(b/180564352): Switch to the actual implementation once it is ready.
+    const {id} =
+        await MockDocumentScanner.getInstance().registerDocumentCornersDetector(
+            callback);
+    return id;
+  }
+
+  /**
+   * Unregisters the document corners detector given by its id.
+   * @param {string} deviceId The id of target camera device.
+   * @param {number} detectorId The id of the detector.
+   * @return {!Promise<boolean>} True if it succeed.
+   */
+  async unregisterDocumentCornersDetector(deviceId, detectorId) {
+    // TODO(b/180564352): Switch to the actual implementation once it is ready.
+    const {isSuccess} = await MockDocumentScanner.getInstance()
+                            .unregisterDocumentCornersDetector(detectorId);
+    return isSuccess;
   }
 
   /**

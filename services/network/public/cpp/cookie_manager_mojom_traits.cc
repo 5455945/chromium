@@ -299,6 +299,15 @@ bool EnumTraits<network::mojom::CookieChangeCause, net::CookieChangeCause>::
   return false;
 }
 
+bool StructTraits<network::mojom::CookieSameSiteContextMetadataDataView,
+                  net::CookieOptions::SameSiteCookieContext::ContextMetadata>::
+    Read(network::mojom::CookieSameSiteContextMetadataDataView data,
+         net::CookieOptions::SameSiteCookieContext::ContextMetadata* out) {
+  out->affected_by_bugfix_1166211 = data.affected_by_bugfix_1166211();
+
+  return true;
+}
+
 bool StructTraits<network::mojom::CookieSameSiteContextDataView,
                   net::CookieOptions::SameSiteCookieContext>::
     Read(network::mojom::CookieSameSiteContextDataView mojo_context,
@@ -315,8 +324,16 @@ bool StructTraits<network::mojom::CookieSameSiteContextDataView,
   if (schemeful_context > context_type)
     return false;
 
-  *context = net::CookieOptions::SameSiteCookieContext(context_type,
-                                                       schemeful_context);
+  net::CookieOptions::SameSiteCookieContext::ContextMetadata metadata;
+  if (!mojo_context.ReadMetadata(&metadata))
+    return false;
+
+  net::CookieOptions::SameSiteCookieContext::ContextMetadata schemeful_metadata;
+  if (!mojo_context.ReadSchemefulMetadata(&schemeful_metadata))
+    return false;
+
+  *context = net::CookieOptions::SameSiteCookieContext(
+      context_type, schemeful_context, metadata, schemeful_metadata);
   return true;
 }
 
@@ -433,9 +450,11 @@ bool StructTraits<
     return false;
 
   auto cc = net::CanonicalCookie::FromStorage(
-      name, value, domain, path, creation_time, expiry_time, last_access_time,
-      cookie.secure(), cookie.httponly(), site_restrictions, priority,
-      cookie.same_party(), source_scheme, cookie.source_port());
+      std::move(name), std::move(value), std::move(domain), std::move(path),
+      std::move(creation_time), std::move(expiry_time),
+      std::move(last_access_time), cookie.secure(), cookie.httponly(),
+      site_restrictions, priority, cookie.same_party(), source_scheme,
+      cookie.source_port());
   if (!cc)
     return false;
   *out = *cc;
@@ -457,7 +476,7 @@ bool StructTraits<network::mojom::CookieAndLineWithAccessResultDataView,
                   net::CookieAndLineWithAccessResult>::
     Read(network::mojom::CookieAndLineWithAccessResultDataView c,
          net::CookieAndLineWithAccessResult* out) {
-  base::Optional<net::CanonicalCookie> cookie;
+  absl::optional<net::CanonicalCookie> cookie;
   std::string cookie_string;
   net::CookieAccessResult access_result;
   if (!c.ReadCookie(&cookie))

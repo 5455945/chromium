@@ -2,6 +2,8 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import print_function
+
 import logging
 import os
 import sys
@@ -141,6 +143,8 @@ class ContextLostIntegrationTest(gpu_integration_test.GpuIntegrationTest):
     ])
     return default_args
 
+  # Could not figure out how to prevent yapf from breaking the formatting below.
+  # yapf: disable
   @classmethod
   def GenerateGpuTests(cls, options):
     cls._is_asan = options.is_asan
@@ -168,11 +172,11 @@ class ContextLostIntegrationTest(gpu_integration_test.GpuIntegrationTest):
               'webgl-domain-not-blocked.html'),
              ('ContextLost_WorkerRAFAfterGPUCrash',
               'worker-raf-after-gpu-crash.html'),
-             ('ContextLost_WorkerRAFAfterGPUCrash_OOPD',
-              'worker-raf-after-gpu-crash.html'),
              ('ContextLost_WebGL2Blocked', 'webgl2-context-blocked.html'),
              ('ContextLost_MacWebGLMultisamplingHighPowerSwitchLosesContext',
               'webgl2-multisampling-high-power-switch-loses-context.html'),
+             ('ContextLost_MacWebGLMultisamplingHighPowerSwitchDoesNotCrash',
+              'webgl2-multisampling-high-power-switch-does-not-crash.html'),
              ('ContextLost_MacWebGLPreserveDBHighPowerSwitchLosesContext',
               'webgl2-preserve-db-high-power-switch-loses-context.html'),
              ('GpuCrash_InfoForHardwareGpu', 'simple.html'),
@@ -180,6 +184,7 @@ class ContextLostIntegrationTest(gpu_integration_test.GpuIntegrationTest):
 
     for t in tests:
       yield (t[0], t[1], ('_' + t[0]))
+  # yapf: enable
 
   def RunActualGpuTest(self, test_path, *args):
     test_name = args[0]
@@ -458,15 +463,6 @@ class ContextLostIntegrationTest(gpu_integration_test.GpuIntegrationTest):
     self._WaitForTabAndCheckCompletion()
     self._RestartBrowser('must restart after tests that kill the GPU process')
 
-  def _ContextLost_WorkerRAFAfterGPUCrash_OOPD(self, test_path):
-    self.RestartBrowserIfNecessaryWithArgs([
-        '--enable-viz-display-compositor',
-    ])
-    self._NavigateAndWaitForLoad(test_path)
-    self._KillGPUProcess(1, False)
-    self._WaitForTabAndCheckCompletion()
-    self._RestartBrowser('must restart after tests that kill the GPU process')
-
   def _ContextLost_WebGL2Blocked(self, test_path):
     self.RestartBrowserIfNecessaryWithArgs(
         ['--gpu-driver-bug-list-test-group=3'])
@@ -484,6 +480,27 @@ class ContextLostIntegrationTest(gpu_integration_test.GpuIntegrationTest):
     # on a dual-GPU Mac, while the user has allocated multisampled
     # renderbuffers via the WebGL 2.0 API, causes the context to be
     # lost.
+    if not self._IsDualGPUMacLaptop():
+      logging.info('Skipping test because not running on dual-GPU Mac laptop')
+      return
+    # Start with a browser with clean GPU process state.
+    self.RestartBrowserWithArgs([])
+    # Wait a few seconds for the system to dispatch any GPU switched
+    # notifications.
+    time.sleep(3)
+    self._NavigateAndWaitForLoad(test_path)
+    if not self._IsIntel(self.browser.GetSystemInfo().gpu.devices[0].vendor_id):
+      self.fail('Test did not start up on low-power GPU')
+    tab = self.tab
+    tab.EvaluateJavaScript('runTest()')
+    self._WaitForTabAndCheckCompletion()
+    self._CheckCrashCount(tab, 0)
+
+  def _ContextLost_MacWebGLMultisamplingHighPowerSwitchDoesNotCrash(
+      self, test_path):
+    # Verifies that switching from the low-power to the high-power GPU
+    # on a dual-GPU Mac, while the user has allocated multisampled
+    # renderbuffers via the WebGL 2.0 API, does not crash.
     if not self._IsDualGPUMacLaptop():
       logging.info('Skipping test because not running on dual-GPU Mac laptop')
       return

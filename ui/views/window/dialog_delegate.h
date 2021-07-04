@@ -6,15 +6,15 @@
 #define UI_VIEWS_WINDOW_DIALOG_DELEGATE_H_
 
 #include <memory>
+#include <string>
 #include <utility>
 
 #include "base/compiler_specific.h"
 #include "base/macros.h"
-#include "base/strings/string16.h"
 #include "base/time/time.h"
 #include "ui/accessibility/ax_enums.mojom-forward.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/ui_base_types.h"
-#include "ui/views/metadata/metadata_header_macros.h"
 #include "ui/views/metadata/view_factory.h"
 #include "ui/views/view.h"
 #include "ui/views/views_export.h"
@@ -43,8 +43,10 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
   struct Params {
     Params();
     ~Params();
-    base::Optional<int> default_button = base::nullopt;
+    absl::optional<int> default_button = absl::nullopt;
     bool round_corners = true;
+    absl::optional<int> corner_radius = absl::nullopt;
+
     bool draggable = false;
 
     // Whether to use the Views-styled frame (if true) or a platform-native
@@ -61,7 +63,7 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
     // here will get the default text for its type from GetDialogButtonLabel.
     // Prefer to use this field (via SetButtonLabel) rather than override
     // GetDialogButtonLabel - see https://crbug.com/1011446
-    base::string16 button_labels[ui::DIALOG_BUTTON_LAST + 1];
+    std::u16string button_labels[ui::DIALOG_BUTTON_LAST + 1];
 
     // A bitmask of buttons (from ui::DialogButton) that are enabled in this
     // dialog. It's legal for a button to be marked enabled that isn't present
@@ -127,7 +129,7 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
   int GetDefaultDialogButton() const;
 
   // Returns the label of the specified dialog button.
-  base::string16 GetDialogButtonLabel(ui::DialogButton button) const;
+  std::u16string GetDialogButtonLabel(ui::DialogButton button) const;
 
   // Returns whether the specified dialog button is enabled.
   virtual bool IsDialogButtonEnabled(ui::DialogButton button) const;
@@ -203,6 +205,12 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
   void DialogModelChanged();
 
   void set_use_round_corners(bool round) { params_.round_corners = round; }
+  void set_corner_radius(int corner_radius) {
+    params_.corner_radius = corner_radius;
+  }
+  const absl::optional<int> corner_radius() const {
+    return params_.corner_radius;
+  }
   void set_draggable(bool draggable) { params_.draggable = draggable; }
   bool draggable() const { return params_.draggable; }
   void set_use_custom_frame(bool use) { params_.custom_frame = use; }
@@ -212,7 +220,7 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
   // necessary to call DialogModelChanged() yourself after calling them.
   void SetDefaultButton(int button);
   void SetButtons(int buttons);
-  void SetButtonLabel(ui::DialogButton button, base::string16 label);
+  void SetButtonLabel(ui::DialogButton button, std::u16string label);
   void SetButtonEnabled(ui::DialogButton button, bool enabled);
 
   // Called when the user presses the dialog's "OK" button or presses the dialog
@@ -271,7 +279,9 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
   // 2) Depending on their return value, close the dialog's widget.
   // Neither of these methods can be called before the dialog has been
   // initialized.
-  void AcceptDialog();
+  // NOT_TAIL_CALLED forces the calling function to appear on the stack in
+  // crash dumps. https://crbug.com/1215247
+  void NOT_TAIL_CALLED AcceptDialog();
   void CancelDialog();
 
   // This method invokes the behavior that *would* happen if this dialog's
@@ -336,10 +346,10 @@ class VIEWS_EXPORT DialogDelegate : public WidgetDelegate {
   Params params_;
 
   // The extra view for this dialog, if there is one.
-  std::unique_ptr<View> extra_view_ = nullptr;
+  std::unique_ptr<View> extra_view_;
 
   // The footnote view for this dialog, if there is one.
-  std::unique_ptr<View> footnote_view_ = nullptr;
+  std::unique_ptr<View> footnote_view_;
 
   // Observers for DialogModel changes.
   base::ObserverList<DialogObserver>::Unchecked observer_list_;

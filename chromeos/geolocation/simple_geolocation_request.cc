@@ -231,32 +231,40 @@ bool ParseServerResponse(const GURL& server_url,
     }
 
     // Ignore result (code defaults to zero).
-    error_object->GetIntegerWithoutPathExpansion(kCodeString,
-                                                 &(position->error_code));
+    position->error_code =
+        error_object->FindIntKey(kCodeString).value_or(position->error_code);
   } else {
     position->error_message.erase();
   }
 
   if (location_object) {
-    if (!location_object->GetDoubleWithoutPathExpansion(
-            kLatString, &(position->latitude))) {
+    absl::optional<double> latitude =
+        location_object->FindDoubleKey(kLatString);
+    if (!latitude) {
       PrintGeolocationError(server_url, "Missing 'lat' attribute.", position);
       RecordUmaEvent(SIMPLE_GEOLOCATION_REQUEST_EVENT_RESPONSE_MALFORMED);
       return false;
     }
-    if (!location_object->GetDoubleWithoutPathExpansion(
-            kLngString, &(position->longitude))) {
+    position->latitude = latitude.value();
+
+    absl::optional<double> longitude =
+        location_object->FindDoubleKey(kLngString);
+    if (!longitude) {
       PrintGeolocationError(server_url, "Missing 'lon' attribute.", position);
       RecordUmaEvent(SIMPLE_GEOLOCATION_REQUEST_EVENT_RESPONSE_MALFORMED);
       return false;
     }
-    if (!response_object->GetDoubleWithoutPathExpansion(
-            kAccuracyString, &(position->accuracy))) {
+    position->longitude = longitude.value();
+
+    absl::optional<double> accuracy =
+        response_object->FindDoubleKey(kAccuracyString);
+    if (!accuracy) {
       PrintGeolocationError(
           server_url, "Missing 'accuracy' attribute.", position);
       RecordUmaEvent(SIMPLE_GEOLOCATION_REQUEST_EVENT_RESPONSE_MALFORMED);
       return false;
     }
+    position->accuracy = accuracy.value();
   }
 
   if (error_object) {
@@ -396,8 +404,8 @@ std::string SimpleGeolocationRequest::FormatRequestBody() const {
     for (const WifiAccessPoint& access_point : *wifi_data_) {
       wifi_access_points->Append(CreateAccessPointDictionary(access_point));
     }
-    request->SetWithoutPathExpansion(kWifiAccessPoints,
-                                     std::move(wifi_access_points));
+    request->SetKey(kWifiAccessPoints, base::Value::FromUniquePtrValue(
+                                           std::move(wifi_access_points)));
   }
 
   if (cell_tower_data_) {
@@ -405,7 +413,8 @@ std::string SimpleGeolocationRequest::FormatRequestBody() const {
     for (const CellTower& cell_tower : *cell_tower_data_) {
       cell_towers->Append(CreateCellTowerDictionary(cell_tower));
     }
-    request->SetWithoutPathExpansion(kCellTowers, std::move(cell_towers));
+    request->SetKey(kCellTowers,
+                    base::Value::FromUniquePtrValue(std::move(cell_towers)));
   }
 
   std::string result;

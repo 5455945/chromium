@@ -69,19 +69,25 @@ std::vector<IntentPickerAppInfo> FindPwaForUrl(
   Profile* const profile =
       Profile::FromBrowserContext(web_contents->GetBrowserContext());
 
-  base::Optional<web_app::AppId> app_id =
+  absl::optional<web_app::AppId> app_id =
       web_app::FindInstalledAppWithUrlInScope(profile, url,
                                               /*window_only=*/true);
   if (!app_id)
     return apps;
 
   auto* const provider = web_app::WebAppProviderBase::GetProviderBase(profile);
-  gfx::Image icon = gfx::Image::CreateFrom1xBitmap(
-      provider->icon_manager().GetFavicon(*app_id));
+  if (provider->registrar().GetAppUserDisplayMode(*app_id) ==
+      web_app::DisplayMode::kBrowser) {
+    return apps;
+  }
+
+  ui::ImageModel icon_model =
+      ui::ImageModel::FromImage(gfx::Image::CreateFrom1xBitmap(
+          provider->icon_manager().GetFavicon(*app_id)));
 
   // Prefer the web and place apps of type PWA before apps of type ARC.
   // TODO(crbug.com/824598): deterministically sort this list.
-  apps.emplace(apps.begin(), PickerEntryType::kWeb, icon, *app_id,
+  apps.emplace(apps.begin(), PickerEntryType::kWeb, icon_model, *app_id,
                provider->registrar().GetAppShortName(*app_id));
 
   return apps;
@@ -105,7 +111,7 @@ void ShowIntentPickerBubbleForApps(content::WebContents* web_contents,
   IntentPickerTabHelper::SetShouldShowIcon(web_contents, true);
   browser->window()->ShowIntentPickerBubble(
       std::move(apps), show_stay_in_chrome, show_remember_selection,
-      PageActionIconType::kIntentPicker, base::nullopt, std::move(callback));
+      PageActionIconType::kIntentPicker, absl::nullopt, std::move(callback));
 }
 
 bool InAppBrowser(content::WebContents* web_contents) {

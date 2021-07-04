@@ -7,7 +7,6 @@
 
 #include <string>
 
-#include "base/optional.h"
 #include "base/time/time.h"
 #include "chrome/browser/chromeos/input_method/input_method_engine_base.h"
 #include "chrome/browser/chromeos/input_method/suggester.h"
@@ -15,6 +14,8 @@
 #include "chrome/browser/chromeos/input_method/suggestion_handler_interface.h"
 #include "chrome/browser/chromeos/input_method/tts_handler.h"
 #include "chrome/browser/extensions/api/input_ime/input_ime_api.h"
+#include "chromeos/services/ime/public/cpp/suggestions.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace autofill {
 class PersonalDataManager;
@@ -31,7 +32,7 @@ const char kPersonalInfoSuggesterShowSettingCount[] =
     "personal_info_suggester_show_setting_count";
 const int kMaxShowSettingCount = 10;
 
-AssistiveType ProposePersonalInfoAssistiveAction(const base::string16& text);
+AssistiveType ProposePersonalInfoAssistiveAction(const std::u16string& text);
 
 // An agent to suggest personal information when the user types, and adopt or
 // dismiss the suggestion according to the user action.
@@ -51,18 +52,24 @@ class PersonalInfoSuggester : public Suggester {
   // Suggester overrides:
   void OnFocus(int context_id) override;
   void OnBlur() override;
+  void OnExternalSuggestionsUpdated(
+      const std::vector<ime::TextSuggestion>& suggestions) override;
   SuggestionStatus HandleKeyEvent(const ui::KeyEvent& event) override;
-  bool Suggest(const base::string16& text) override;
+  bool Suggest(const std::u16string& text,
+               size_t cursor_pos,
+               size_t anchor_pos) override;
   // index defaults to 0 as not required for this suggester.
   bool AcceptSuggestion(size_t index = 0) override;
   void DismissSuggestion() override;
   AssistiveType GetProposeActionType() override;
+  bool HasSuggestions() override;
+  std::vector<ime::TextSuggestion> GetSuggestions() override;
 
  private:
   // Get the suggestion according to |text|.
-  base::string16 GetSuggestion(const base::string16& text);
+  std::u16string GetSuggestion(const std::u16string& text);
 
-  void ShowSuggestion(const base::string16& text,
+  void ShowSuggestion(const std::u16string& text,
                       const size_t confirmed_length);
 
   int GetPrefValue(const std::string& pref_name);
@@ -99,7 +106,7 @@ class PersonalInfoSuggester : public Suggester {
   bool first_shown_ = false;
 
   // The current suggestion text shown.
-  base::string16 suggestion_;
+  std::u16string suggestion_;
 
   std::vector<ui::ime::AssistiveWindowButton> buttons_;
   int highlighted_index_;

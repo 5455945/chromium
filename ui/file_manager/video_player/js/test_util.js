@@ -2,8 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// #import {openVideoPlayerWindow} from './background.m.js';
-// #import {test} from '../../file_manager/background/js/test_util_base.m.js';
+import {test} from '../../file_manager/background/js/test_util_base.js';
+
+import {openVideoPlayerWindow} from './background.js';
 
 /**
  * Returns if a video element playing the specified file meet the condition
@@ -84,4 +85,4 @@ test.util.async.openVideoPlayer = function(urls, callback) {
 };
 
 // Register the test utils.
-test.util.registerRemoteTestUtils();
+test.util.registerRemoteTestUtils('/js/runtime_loaded_test_util.js');

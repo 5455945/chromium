@@ -10,6 +10,7 @@
 #include "base/macros.h"
 #include "chrome/browser/shell_integration.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/base/page_transition_types.h"
 
 namespace content {
@@ -56,7 +57,7 @@ class ExternalProtocolHandler {
         content::WebContents* web_contents,
         ui::PageTransition page_transition,
         bool has_user_gesture,
-        const base::Optional<url::Origin>& initiating_origin) = 0;
+        const absl::optional<url::Origin>& initiating_origin) = 0;
     virtual void LaunchUrlWithoutSecurityCheck(
         const GURL& url,
         content::WebContents* web_contents) = 0;
@@ -104,11 +105,10 @@ class ExternalProtocolHandler {
   // application is launched.
   // Must run on the UI thread.
   static void LaunchUrl(const GURL& url,
-                        int render_process_host_id,
-                        int render_view_routing_id,
+                        content::WebContents::Getter web_contents_getter,
                         ui::PageTransition page_transition,
                         bool has_user_gesture,
-                        const base::Optional<url::Origin>& initiating_origin);
+                        const absl::optional<url::Origin>& initiating_origin);
 
   // Starts a url using the external protocol handler with the help
   // of shellexecute. Should only be called if the protocol is allowlisted
@@ -159,7 +159,7 @@ class ExternalProtocolHandler {
       content::WebContents* web_contents,
       ui::PageTransition page_transition,
       bool has_user_gesture,
-      const base::Optional<url::Origin>& initiating_origin);
+      const absl::optional<url::Origin>& initiating_origin);
 
   // Clears the external protocol handling data.
   static void ClearData(Profile* profile);

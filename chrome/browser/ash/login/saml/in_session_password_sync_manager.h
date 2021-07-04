@@ -8,9 +8,7 @@
 #include <memory>
 #include <string>
 
-#include "base/observer_list.h"
 #include "base/time/clock.h"
-#include "base/time/time.h"
 #include "chrome/browser/ash/login/saml/password_sync_token_fetcher.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/chromeos/in_session_password_change/lock_screen_reauth_dialogs.h"
@@ -61,8 +59,9 @@ class InSessionPasswordSyncManager
   InSessionPasswordSyncManager& operator=(const InSessionPasswordSyncManager&) =
       delete;
 
-  // Checks if the LockScreenReauthenticationEnabled policy is set to true.
-  // Note that it can be changed in session.
+  // Checks if lockscreen re-authentication is enabled for the given profile.
+  // Note that it can be changed in session. Driven by the policy
+  // SamlLockScreenReauthenticationEnabled.
   bool IsLockReauthEnabled();
 
   // Sets online re-auth on lock flag and changes the UI to online
@@ -107,11 +106,19 @@ class InSessionPasswordSyncManager
   // Create and show lockscreen re-authentication dialog.
   void CreateAndShowDialog();
 
-  // Dismiss lockscreen re-authentication dialog
+  // Dismiss lockscreen re-authentication dialog.
   void DismissDialog();
+
+  // Reset lockscreen re-authentication dialog.
+  void ResetDialog();
+
+  LockScreenStartReauthDialog* get_reauth_dialog_for_testing() {
+    return lock_screen_start_reauth_dialog_.get();
+  }
 
  private:
   void UpdateOnlineAuth();
+  void OnCookiesTransfered();
   // Password sync token API calls.
   void CreateTokenAsync();
   void FetchTokenAsync();

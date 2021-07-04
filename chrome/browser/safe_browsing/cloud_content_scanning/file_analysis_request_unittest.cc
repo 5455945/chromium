@@ -34,6 +34,28 @@ BinaryUploadService::ContentAnalysisCallback DoNothingConnector() {
   return base::DoNothing();
 }
 
+// The mime type detected for each file can vary based on the platform/builder,
+// so helper functions are used to validate that at least the returned type is
+// one of multiple values.
+bool IsDocMimeType(const std::string& mime_type) {
+  static std::set<std::string> set = {
+      "application/msword", "text/plain",
+      // Large files can result in no mimetype being found.
+      ""};
+  return set.count(mime_type);
+}
+
+bool IsZipMimeType(const std::string& mime_type) {
+  static std::set<std::string> set = {"application/zip",
+                                      "application/x-zip-compressed"};
+  return set.count(mime_type);
+}
+
+// const std::set<std::string>* TextMimeTypes() {
+//  static std::set<std::string> set = {"text/plain"};
+//  return &set;
+//}
+
 }  // namespace
 
 class FileAnalysisRequestTest : public testing::Test {
@@ -45,7 +67,7 @@ class FileAnalysisRequestTest : public testing::Test {
                                                    base::FilePath file_name) {
     return std::make_unique<FileAnalysisRequest>(
         settings(block_unsupported_types), path, file_name,
-        DoNothingConnector());
+        /*mime_type*/ "", DoNothingConnector());
   }
 
   void GetResultsForFileContents(const std::string& file_contents,
@@ -73,6 +95,8 @@ class FileAnalysisRequestTest : public testing::Test {
     run_loop.Run();
 
     EXPECT_TRUE(called);
+    EXPECT_EQ(file_path, out_data->path);
+    EXPECT_TRUE(out_data->contents.empty());
   }
 
  private:
@@ -101,6 +125,7 @@ TEST_F(FileAnalysisRequestTest, InvalidFiles) {
           EXPECT_EQ(data.size, 0u);
           EXPECT_TRUE(data.contents.empty());
           EXPECT_TRUE(data.hash.empty());
+          EXPECT_TRUE(data.mime_type.empty());
         }));
     run_loop.Run();
 
@@ -126,6 +151,33 @@ TEST_F(FileAnalysisRequestTest, InvalidFiles) {
           EXPECT_EQ(data.size, 0u);
           EXPECT_TRUE(data.contents.empty());
           EXPECT_TRUE(data.hash.empty());
+          EXPECT_TRUE(data.mime_type.empty());
+        }));
+    run_loop.Run();
+
+    EXPECT_TRUE(called);
+  }
+
+  {
+    // Empty files should return SUCCESS as they have no content to scan.
+    base::FilePath path = temp_dir.GetPath().AppendASCII("empty.doc");
+    base::File file(path, base::File::FLAG_CREATE | base::File::FLAG_WRITE);
+    auto request =
+        MakeRequest(/*block_unsupported_types=*/false, path, path.BaseName());
+
+    bool called = false;
+    base::RunLoop run_loop;
+    request->GetRequestData(base::BindLambdaForTesting(
+        [&run_loop, &called](BinaryUploadService::Result result,
+                             const BinaryUploadService::Request::Data& data) {
+          called = true;
+          run_loop.Quit();
+
+          EXPECT_EQ(result, BinaryUploadService::Result::SUCCESS);
+          EXPECT_EQ(data.size, 0u);
+          EXPECT_TRUE(data.contents.empty());
+          EXPECT_TRUE(data.hash.empty());
+          EXPECT_TRUE(data.mime_type.empty());
         }));
     run_loop.Run();
 
@@ -143,20 +195,24 @@ TEST_F(FileAnalysisRequestTest, NormalFiles) {
   GetResultsForFileContents(normal_contents, &result, &data);
   EXPECT_EQ(result, BinaryUploadService::Result::SUCCESS);
   EXPECT_EQ(data.size, normal_contents.size());
-  EXPECT_EQ(data.contents, normal_contents);
+  EXPECT_TRUE(data.contents.empty());
   // printf "Normal file contents" | sha256sum |  tr '[:lower:]' '[:upper:]'
   EXPECT_EQ(data.hash,
             "29644C10BD036866FCFD2BDACFF340DB5DE47A90002D6AB0C42DE6A22C26158B");
+  EXPECT_TRUE(IsDocMimeType(data.mime_type))
+      << data.mime_type << " is not an expected mimetype";
 
   std::string long_contents =
       std::string(BinaryUploadService::kMaxUploadSizeBytes, 'a');
   GetResultsForFileContents(long_contents, &result, &data);
   EXPECT_EQ(result, BinaryUploadService::Result::SUCCESS);
   EXPECT_EQ(data.size, long_contents.size());
-  EXPECT_EQ(data.contents, long_contents);
+  EXPECT_TRUE(data.contents.empty());
   // printf "Normal file contents" | sha256sum |  tr '[:lower:]' '[:upper:]'
   EXPECT_EQ(data.hash,
             "4F0E9C6A1A9A90F35B884D0F0E7343459C21060EEFEC6C0F2FA9DC1118DBE5BE");
+  EXPECT_TRUE(IsDocMimeType(data.mime_type))
+      << data.mime_type << " is not an expected mimetype";
 }
 
 TEST_F(FileAnalysisRequestTest, LargeFiles) {
@@ -175,6 +231,8 @@ TEST_F(FileAnalysisRequestTest, LargeFiles) {
   // '[:lower:]' '[:upper:]'
   EXPECT_EQ(data.hash,
             "9EB56DB30C49E131459FE735BA6B9D38327376224EC8D5A1233F43A5B4A25942");
+  EXPECT_TRUE(IsDocMimeType(data.mime_type))
+      << data.mime_type << " is not an expected mimetype";
 
   std::string very_large_file_contents(
       2 * BinaryUploadService::kMaxUploadSizeBytes, 'a');
@@ -186,6 +244,8 @@ TEST_F(FileAnalysisRequestTest, LargeFiles) {
   // '[:lower:]' '[:upper:]'
   EXPECT_EQ(data.hash,
             "CEE41E98D0A6AD65CC0EC77A2BA50BF26D64DC9007F7F1C7D7DF68B8B71291A6");
+  EXPECT_TRUE(IsDocMimeType(data.mime_type))
+      << data.mime_type << " is not an expected mimetype";
 }
 
 TEST_F(FileAnalysisRequestTest, PopulatesDigest) {
@@ -286,9 +346,24 @@ TEST_F(FileAnalysisRequestTest, CachesResults) {
   EXPECT_EQ(sync_data.contents, async_data.contents);
   EXPECT_EQ(sync_data.size, async_data.size);
   EXPECT_EQ(sync_data.hash, async_data.hash);
+  EXPECT_EQ(sync_data.mime_type, async_data.mime_type);
 }
 
-TEST_F(FileAnalysisRequestTest, Encrypted) {
+// Class used to validate that an archive file is correctly detected and checked
+// for encryption, even without a .zip/.rar extension.
+class FileAnalysisRequestZipTest
+    : public FileAnalysisRequestTest,
+      public testing::WithParamInterface<const char*> {
+ public:
+  const char* file_name() const { return GetParam(); }
+};
+
+INSTANTIATE_TEST_SUITE_P(,
+                         FileAnalysisRequestZipTest,
+                         testing::Values("encrypted.zip",
+                                         "encrypted_zip_no_extension"));
+
+TEST_P(FileAnalysisRequestZipTest, Encrypted) {
   content::BrowserTaskEnvironment browser_task_environment;
   content::InProcessUtilityThreadHelper in_process_utility_thread_helper;
   base::ScopedTempDir temp_dir;
@@ -298,7 +373,7 @@ TEST_F(FileAnalysisRequestTest, Encrypted) {
   EXPECT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &test_zip));
   test_zip = test_zip.AppendASCII("safe_browsing")
                  .AppendASCII("download_protection")
-                 .AppendASCII("encrypted.zip");
+                 .AppendASCII(file_name());
 
   auto request = MakeRequest(/*block_unsupported_types=*/false, test_zip,
                              test_zip.BaseName());
@@ -319,14 +394,20 @@ TEST_F(FileAnalysisRequestTest, Encrypted) {
   run_loop.Run();
 
   ASSERT_TRUE(called);
+
+  // encrypted_zip_no_extension is a copy of encrypted.zip, so the same
+  // assertions hold and the same commands can be used to get its size/hash.
   EXPECT_EQ(result, BinaryUploadService::Result::FILE_ENCRYPTED);
-  // du chrome/test/data/safe_browsing/download_protection -b
+  // du chrome/test/data/safe_browsing/download_protection/<file> -b
   EXPECT_EQ(data.size, 20015u);
-  // sha256sum < chrome/test/data/safe_browsing/download_protection/\
-  // encrypted.zip |  tr '[:lower:]' '[:upper:]'
+  // sha256sum < chrome/test/data/safe_browsing/download_protection/<file> \
+  // |  tr '[:lower:]' '[:upper:]'
   EXPECT_EQ(data.hash,
             "701FCEA8B2112FFAB257A8A8DFD3382ABCF047689AB028D42903E3B3AA488D9A");
   EXPECT_EQ(request->digest(), data.hash);
+  EXPECT_TRUE(data.contents.empty());
+  EXPECT_EQ(test_zip, data.path);
+  EXPECT_TRUE(IsZipMimeType(data.mime_type));
 }
 
 TEST_F(FileAnalysisRequestTest, UnsupportedFileTypeBlock) {
@@ -362,12 +443,15 @@ TEST_F(FileAnalysisRequestTest, UnsupportedFileTypeBlock) {
 
   EXPECT_EQ(result,
             BinaryUploadService::Result::DLP_SCAN_UNSUPPORTED_FILE_TYPE);
-  EXPECT_EQ(data.contents, normal_contents);
+  EXPECT_TRUE(data.contents.empty());
+  EXPECT_EQ(file_path, data.path);
   EXPECT_EQ(data.size, normal_contents.size());
   // printf "Normal file contents" | sha256sum |  tr '[:lower:]' '[:upper:]'
   EXPECT_EQ(data.hash,
             "29644C10BD036866FCFD2BDACFF340DB5DE47A90002D6AB0C42DE6A22C26158B");
   EXPECT_EQ(request->digest(), data.hash);
+  EXPECT_EQ("text/plain", data.mime_type)
+      << data.mime_type << " is not an expected mimetype";
 }
 
 TEST_F(FileAnalysisRequestTest, UnsupportedFileTypeNoBlock) {
@@ -405,12 +489,15 @@ TEST_F(FileAnalysisRequestTest, UnsupportedFileTypeNoBlock) {
   for (const std::string& tag : request->content_analysis_request().tags())
     EXPECT_NE("dlp", tag);
   EXPECT_EQ(result, BinaryUploadService::Result::SUCCESS);
-  EXPECT_EQ(data.contents, normal_contents);
+  EXPECT_TRUE(data.contents.empty());
+  EXPECT_EQ(file_path, data.path);
   EXPECT_EQ(data.size, normal_contents.size());
   // printf "Normal file contents" | sha256sum |  tr '[:lower:]' '[:upper:]'
   EXPECT_EQ(data.hash,
             "29644C10BD036866FCFD2BDACFF340DB5DE47A90002D6AB0C42DE6A22C26158B");
   EXPECT_EQ(request->digest(), data.hash);
+  EXPECT_EQ("text/plain", data.mime_type)
+      << data.mime_type << " is not an expected mimetype";
 }
 
 }  // namespace safe_browsing

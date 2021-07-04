@@ -4,6 +4,7 @@
 
 #include <stddef.h>
 
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
@@ -12,7 +13,6 @@
 #include "base/command_line.h"
 #include "base/files/file_util.h"
 #include "base/path_service.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_restrictions.h"
@@ -30,8 +30,12 @@
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/test_utils.h"
 #include "content/shell/browser/shell.h"
+#include "net/base/escape.h"
 #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
 #include "ui/accessibility/platform/inspect/ax_tree_formatter.h"
+#if defined(OS_WIN)
+#include "content/browser/accessibility/browser_accessibility_manager_win.h"
+#endif
 
 namespace content {
 
@@ -101,24 +105,6 @@ class DumpAccessibilityEventsTest : public DumpAccessibilityTestBase {
   std::string final_tree_;
 };
 
-bool IsRecordingComplete(ui::AXEventRecorder& event_recorder,
-                         std::vector<std::string>& run_until) {
-  // If no @*-RUN-UNTIL-EVENT directives, then having any events is enough.
-  LOG(ERROR) << "=== IsRecordingComplete#1 run_until size=" << run_until.size();
-  if (run_until.empty())
-    return true;
-
-  std::vector<std::string> event_logs = event_recorder.EventLogs();
-  LOG(ERROR) << "=== IsRecordingComplete#2 Logs size=" << event_logs.size();
-
-  for (size_t i = 0; i < event_logs.size(); ++i)
-    for (size_t j = 0; j < run_until.size(); ++j)
-      if (event_logs[i].find(run_until[j]) != std::string::npos)
-        return true;
-
-  return false;
-}
-
 std::vector<std::string> DumpAccessibilityEventsTest::Dump(
     std::vector<std::string>& run_until) {
   WebContentsImpl* web_contents =
@@ -146,8 +132,8 @@ std::vector<std::string> DumpAccessibilityEventsTest::Dump(
             {});
     event_recorder->SetOnlyWebEvents(true);
 
-    waiter.reset(new AccessibilityNotificationWaiter(
-        shell()->web_contents(), ui::kAXModeComplete, ax::mojom::Event::kNone));
+    waiter = std::make_unique<AccessibilityNotificationWaiter>(
+        shell()->web_contents(), ui::kAXModeComplete, ax::mojom::Event::kNone);
 
     // It's possible for platform events to be received after all blink or
     // generated events have been fired. Unblock the |waiter| when this happens.
@@ -164,7 +150,7 @@ std::vector<std::string> DumpAccessibilityEventsTest::Dump(
       // observes either an ax::mojom::Event or ui::AXEventGenerator::Event, or
       // when |event_recorder| records a platform event.
       waiter->WaitForNotification();
-      if (IsRecordingComplete(*event_recorder, run_until))
+      if (event_recorder->IsRunUntilEventSatisfied(run_until))
         break;
     }
 
@@ -174,13 +160,14 @@ std::vector<std::string> DumpAccessibilityEventsTest::Dump(
     // To make sure we've received all accessibility events, add a
     // sentinel by calling SignalEndOfTest and waiting for a kEndOfTest
     // event in response.
-    waiter.reset(new AccessibilityNotificationWaiter(
+    waiter = std::make_unique<AccessibilityNotificationWaiter>(
         shell()->web_contents(), ui::kAXModeComplete,
-        ax::mojom::Event::kEndOfTest));
+        ax::mojom::Event::kEndOfTest);
     BrowserAccessibilityManager* manager =
         web_contents->GetRootBrowserAccessibilityManager();
     manager->SignalEndOfTest();
     waiter->WaitForNotification();
+    event_recorder->WaitForDoneRecording();
 
     // Save a copy of the final accessibility tree (as a text dump); we'll
     // log this for the user later if the test fails.
@@ -188,8 +175,7 @@ std::vector<std::string> DumpAccessibilityEventsTest::Dump(
 
     // Dump the event logs, running them through any filters specified
     // in the HTML file.
-    event_recorder->FlushAsyncEvents();
-    std::vector<std::string> event_logs = event_recorder->EventLogs();
+    std::vector<std::string> event_logs = event_recorder->GetEventLogs();
 
     // Sort the logs so that results are predictable. There are too many
     // nondeterministic things that affect the exact order of events fired,
@@ -199,7 +185,7 @@ std::vector<std::string> DumpAccessibilityEventsTest::Dump(
     for (auto& event_log : event_logs) {
       if (AXTreeFormatter::MatchesPropertyFilters(scenario_.property_filters,
                                                   event_log, true)) {
-        result.push_back(event_log);
+        result.push_back(net::EscapeNonASCII(event_log));
       }
     }
 
@@ -255,6 +241,11 @@ GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(DumpAccessibilityEventsTest);
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
                        AccessibilityEventsAriaAtomicChanged) {
   RunEventTest(FILE_PATH_LITERAL("aria-atomic-changed.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       AccessibilityEventsAriaAtomicChanged2) {
+  RunEventTest(FILE_PATH_LITERAL("aria-atomic-changed2.html"));
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
@@ -382,6 +373,11 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       AccessibilityEventsAriaRelevantChanged2) {
+  RunEventTest(FILE_PATH_LITERAL("aria-relevant-changed2.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
                        AccessibilityEventsAriaSetSizeChanged) {
   RunEventTest(FILE_PATH_LITERAL("aria-setsize-changed.html"));
 }
@@ -389,6 +385,21 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
                        AccessibilityEventsAriaSortChanged) {
   RunEventTest(FILE_PATH_LITERAL("aria-sort-changed.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       AccessibilityEventsAriaTextboxChildrenChange) {
+  RunEventTest(FILE_PATH_LITERAL("aria-textbox-children-change.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       AccessibilityEventsAriaTextboxEditabilityChanges) {
+  RunEventTest(FILE_PATH_LITERAL("aria-textbox-editability-changes.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       AccessibilityEventsAriaTextboxWithFocusableChildren) {
+  RunEventTest(FILE_PATH_LITERAL("aria-textbox-with-focusable-children.html"));
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
@@ -407,9 +418,8 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
   RunEventTest(FILE_PATH_LITERAL("aria-treeitem-focus.html"));
 }
 
-// crbug.com/1141579: disabled due to missing invalidation causing flakiness.
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
-                       DISABLED_AccessibilityEventsAriaComboBoxFocus) {
+                       AccessibilityEventsAriaComboBoxFocus) {
   RunEventTest(FILE_PATH_LITERAL("aria-combo-box-focus.html"));
 }
 
@@ -476,6 +486,11 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       AccessibilityEventsAddAlertWithRoleChange) {
+  RunEventTest(FILE_PATH_LITERAL("add-alert-with-role-change.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
                        AccessibilityEventsAddChild) {
   RunEventTest(FILE_PATH_LITERAL("add-child.html"));
 }
@@ -483,6 +498,21 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
                        AccessibilityEventsAddChildOfBody) {
   RunEventTest(FILE_PATH_LITERAL("add-child-of-body.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       AccessibilityEventsAddDialog) {
+  RunEventTest(FILE_PATH_LITERAL("add-dialog.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       AccessibilityEventsAddDialogDescribedBy) {
+  RunEventTest(FILE_PATH_LITERAL("add-dialog-described-by.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       AccessibilityEventsAddDialogNoInfo) {
+  RunEventTest(FILE_PATH_LITERAL("add-dialog-no-info.html"));
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
@@ -527,8 +557,16 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
   RunEventTest(FILE_PATH_LITERAL("caret-move.html"));
 }
 
+// Flaky on Windows: https://crbug.com/1186887
+#if defined(OS_WIN)
+#define MAYBE_AccessibilityEventsCaretMoveHiddenInput \
+  DISABLED_AccessibilityEventsCaretMoveHiddenInput
+#else
+#define MAYBE_AccessibilityEventsCaretMoveHiddenInput \
+  AccessibilityEventsCaretMoveHiddenInput
+#endif
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
-                       AccessibilityEventsCaretMoveHiddenInput) {
+                       MAYBE_AccessibilityEventsCaretMoveHiddenInput) {
   RunEventTest(FILE_PATH_LITERAL("caret-move-hidden-input.html"));
 }
 
@@ -581,9 +619,10 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
   RunEventTest(FILE_PATH_LITERAL("aria-hidden-single-descendant.html"));
 }
 
+// crbug.com/1181414.
 IN_PROC_BROWSER_TEST_P(
     DumpAccessibilityEventsTest,
-    AccessibilityEventsAriaHiddenSingleDescendantDisplayNone) {
+    DISABLED_AccessibilityEventsAriaHiddenSingleDescendantDisplayNone) {
   RunEventTest(
       FILE_PATH_LITERAL("aria-hidden-single-descendant-display-none.html"));
 }
@@ -850,6 +889,16 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       AccessibilityEventsSamePageLinkNavigation) {
+#if defined(OS_WIN)
+  if (!BrowserAccessibilityManagerWin::
+          IsUiaActiveTextPositionChangedEventSupported())
+    return;
+#endif
+  RunEventTest(FILE_PATH_LITERAL("same-page-link-navigation.html"));
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
                        AccessibilityEventsScrollHorizontalScrollPercentChange) {
   RunEventTest(
       FILE_PATH_LITERAL("scroll-horizontal-scroll-percent-change.html"));
@@ -870,8 +919,10 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
   RunEventTest(FILE_PATH_LITERAL("subtree-reparented-ignored-changed.html"));
 }
 
-IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
-                       AccessibilityEventsSubtreeReparentedViaAppendChild) {
+// TODO(crbug.com/1201313): Fix flakiness.
+IN_PROC_BROWSER_TEST_P(
+    DumpAccessibilityEventsTest,
+    DISABLED_AccessibilityEventsSubtreeReparentedViaAppendChild) {
   RunEventTest(FILE_PATH_LITERAL("subtree-reparented-via-append-child.html"));
 }
 
@@ -1036,6 +1087,19 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest, ValueValueChanged) {
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
                        AccessibilityEventsMenuOpenedClosed) {
   RunEventTest(FILE_PATH_LITERAL("menu-opened-closed.html"));
+}
+
+#if defined(OS_WIN) && defined(ADDRESS_SANITIZER)
+// TODO(crbug.com/1198056#c16): Test is flaky on Windows ASAN.
+#define MAYBE_AccessibilityEventsMenubarShowHideMenus \
+  DISABLED_AccessibilityEventsMenubarShowHideMenus
+#else
+#define MAYBE_AccessibilityEventsMenubarShowHideMenus \
+  AccessibilityEventsMenubarShowHideMenus
+#endif
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityEventsTest,
+                       MAYBE_AccessibilityEventsMenubarShowHideMenus) {
+  RunEventTest(FILE_PATH_LITERAL("menubar-show-hide-menus.html"));
 }
 
 // crbug.com/1047282: disabled due to flakiness.

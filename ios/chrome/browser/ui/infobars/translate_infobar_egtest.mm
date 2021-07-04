@@ -300,8 +300,8 @@ void TestResponseProvider::GetLanguageResponse(
                                   translate::kUnknownLanguageCode)];
 }
 
-// Tests that language detection is not performed when the page specifies that
-// it should not be translated.
+// Tests that language detection is still performed when the page specifies the
+// notranslate meta tag.
 - (void)testLanguageDetectionNoTranslate {
   // Start the HTTP server.
   std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
@@ -315,16 +315,16 @@ void TestResponseProvider::GetLanguageResponse(
   // Load some french page with |content="notranslate"| meta tag.
   [ChromeEarlGrey loadURL:noTranslateContentURL];
 
-  // Check that no language has been detected.
-  GREYAssertFalse([self waitForLanguageDetection],
-                  @"A language has been detected");
+  // Check that the language has been detected.
+  GREYAssertTrue([self waitForLanguageDetection],
+                 @"A language has been detected");
 
   // Load some french page with |value="notranslate"| meta tag.
   [ChromeEarlGrey loadURL:noTranslateValueURL];
 
-  // Check that no language has been detected.
-  GREYAssertFalse([self waitForLanguageDetection],
-                  @"A language has been detected");
+  // Check that the language has been detected.
+  GREYAssertTrue([self waitForLanguageDetection],
+                 @"A language has been detected");
 }
 
 // Tests that history.pushState triggers a new detection.
@@ -718,7 +718,7 @@ void TestResponseProvider::GetLanguageResponse(
 }
 
 // Tests that the target language can be changed. TODO(crbug.com/1046629):
-// implement test for changing source langauge.
+// implement test for changing source language.
 - (void)testInfobarChangeTargetLanguage {
   // TODO(crbug.com/1116012): This test is failing flaky on iOS14.
   if (@available(iOS 14, *)) {
@@ -959,6 +959,12 @@ void TestResponseProvider::GetLanguageResponse(
 // translate is available and it brings up the Translate infobar and translates
 // the page when tapped.
 - (void)testTranslateManualTrigger {
+// TODO(crbug.com/1209349): test failing on ipad device
+#if !TARGET_IPHONE_SIMULATOR
+  if ([ChromeEarlGrey isIPadIdiom]) {
+    EARL_GREY_TEST_SKIPPED(@"This test doesn't pass on iPad device.");
+  }
+#endif
   // Start the HTTP server.
   std::unique_ptr<web::DataResponseProvider> provider(new TestResponseProvider);
   web::test::SetUpHttpServer(std::move(provider));

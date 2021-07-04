@@ -3,8 +3,8 @@
 <translationbundle lang="sr-Latn">
 <translation id="1006017844123154345">Otvori onlajn</translation>
 <translation id="1044891598689252897">Sajtovi će normalno raditi</translation>
+<translation id="1100504063505580045">Aktuelna ikona</translation>
 <translation id="1124090076051167250">Ovim brišete <ph name="DATASIZE" /> podataka i kolačića koje čuvaju sajtovi ili aplikacije na početnom ekranu.</translation>
-<translation id="1124772482545689468">Korisnik</translation>
 <translation id="1178581264944972037">Pauziraj</translation>
 <translation id="1181037720776840403">Ukloni</translation>
 <translation id="1195941046451948919">Želite li stvarno da resetujete sve dozvole za ovaj veb-sajt?</translation>
@@ -13,6 +13,7 @@
 <translation id="1272079795634619415">Zaustavi</translation>
 <translation id="1289742167380433257">Da bi se smanjilo korišćenje podataka, Google je optimizovao slike na ovoj stranici.</translation>
 <translation id="129382876167171263">Datoteke koje su sačuvali veb-sajtovi prikazuju se ovde</translation>
+<translation id="1317194122196776028">Zaboravi ovaj sajt</translation>
 <translation id="1364532808393826295"><ph name="APP_NAME" /> – <ph name="NOTIFICATION_MESSAGE" /></translation>
 <translation id="1369915414381695676">Sajt <ph name="SITE_NAME" /> je dodat</translation>
 <translation id="1383876407941801731">Pretraži</translation>
@@ -22,6 +23,7 @@
 <translation id="1509960214886564027">Funkcije na mnogim sajtovima mogu da prestanu sa radom</translation>
 <translation id="1620510694547887537">Kamera</translation>
 <translation id="1644574205037202324">Istorija</translation>
+<translation id="1647582022260550163">Želite stvarno da resetujete dozvole i obrišete kolačiće i podatke o sajtovima?</translation>
 <translation id="1660204651932907780">Dozvoli sajtovima da puštaju zvuk (preporučeno)</translation>
 <translation id="1677097821151855053">Kolačići i drugi podaci o sajtovima se koriste da biste bili zapamćeni, na primer, radi prijavljivanja ili personalizovanja oglasa. Da biste upravljali kolačićima za sve sajtove, pogledajte <ph name="BEGIN_LINK" />Podešavanja<ph name="END_LINK" />.</translation>
 <translation id="1688867105868176567">Želite li da obrišete podatke sajta?</translation>
@@ -55,6 +57,7 @@
 <translation id="2404630663942400771">{PERMISSIONS_SUMMARY_ALLOWED,plural, =1{Odobrene su dozvole <ph name="PERMISSION_1" />, <ph name="PERMISSION_2" /> i još <ph name="NUM_MORE" />}one{Odobrene su dozvole <ph name="PERMISSION_1" />, <ph name="PERMISSION_2" /> i još <ph name="NUM_MORE" />}few{Odobrene su dozvole <ph name="PERMISSION_1" />, <ph name="PERMISSION_2" /> i još <ph name="NUM_MORE" />}other{Odobrene su dozvole <ph name="PERMISSION_1" />, <ph name="PERMISSION_2" /> i još <ph name="NUM_MORE" />}}</translation>
 <translation id="2434158240863470628">Preuzimanje je završeno <ph name="SEPARATOR" /> <ph name="BYTES_DOWNLOADED" /></translation>
 <translation id="2482878487686419369">Obaveštenja</translation>
+<translation id="2485422356828889247">Deinstaliraj</translation>
 <translation id="2490684707762498678">Upravlja <ph name="APP_NAME" /></translation>
 <translation id="2498359688066513246">Pomoć i povratne informacije</translation>
 <translation id="2501278716633472235">Nazad</translation>
@@ -74,6 +77,7 @@
 <translation id="2903493209154104877">Adrese</translation>
 <translation id="2910701580606108292">Pitaj pre nego što dozvoliš sajtovima da puštaju zaštićeni sadržaj</translation>
 <translation id="2913331724188855103">Dozvoli sajtovima da čuvaju i čitaju podatke kolačića (preporučuje se)</translation>
+<translation id="2932883381142163287">Prijavi zloupotrebu</translation>
 <translation id="2968755619301702150">Prikazivač sertifikata</translation>
 <translation id="300526633675317032">Ovim ćete obrisati ceo memorijski prostor veb-sajta od <ph name="SIZE_IN_KB" />.</translation>
 <translation id="3008272652534848354">Resetuj dozvole</translation>
@@ -90,12 +94,13 @@
 <translation id="3333961966071413176">Svi kontakti</translation>
 <translation id="3386292677130313581">Pitaj pre nego što dozvoliš sajtovima da znaju lokaciju (preporučeno)</translation>
 <translation id="3538390592868664640">Sprečite sajtove da prave 3D mapu okruženja ili da prate položaj kamere</translation>
+<translation id="3551268116566418498">Izlazite iz rež. bez arhiviranja?</translation>
 <translation id="3586500876634962664">Korišćenje kamere i mikrofona</translation>
-<translation id="3587482841069643663">Sve</translation>
 <translation id="358794129225322306">Dozvolite sajtu da automatski preuzima više datoteka.</translation>
 <translation id="3594780231884063836">Isključite zvuk videa</translation>
 <translation id="3596414637720633074">Blokira kolačiće trećih strana u režimu bez arhiviranja</translation>
 <translation id="3600792891314830896">Isključi zvuk sajtova koji puštaju zvuk</translation>
+<translation id="365089839707261811">Pregledajte ažuriranja imena</translation>
 <translation id="3744111561329211289">Sinhronizacija u pozadini</translation>
 <translation id="3763247130972274048">Dvaput dodirnite video levo ili desno da biste preskočili 10 sek</translation>
 <translation id="381841723434055211">Brojevi telefona</translation>
@@ -103,6 +108,7 @@
 <translation id="385051799172605136">Nazad</translation>
 <translation id="3859306556332390985">Premotaj unapred</translation>
 <translation id="3955193568934677022">Dozvoli sajtovima da puštaju zaštićeni sadržaj (preporučeno)</translation>
+<translation id="3967822245660637423">Preuzimanje je dovršeno</translation>
 <translation id="3987993985790029246">Kopiraj link</translation>
 <translation id="3991845972263764475"><ph name="BYTES_DOWNLOADED_WITH_UNITS" />/?</translation>
 <translation id="4002066346123236978">Naslov</translation>
@@ -116,8 +122,8 @@
 <translation id="429312253194641664">Sajt pušta medijski sadržaj</translation>
 <translation id="42981349822642051">Proširite</translation>
 <translation id="4336434711095810371">Obriši sve podatke</translation>
+<translation id="4339203724549370495">Deinstaliraj aplikaciju</translation>
 <translation id="4402755511846832236">Ne dozvolite sajtovima da znaju kada aktivno koristite ovaj uređaj</translation>
-<translation id="4433925000917964731">Pojednostavljenu stranicu pruža Google</translation>
 <translation id="4434045419905280838">Iskačući prozori i preusmeravanja</translation>
 <translation id="445467742685312942">Dozvolite sajtovima da puštaju zaštićeni sadržaj</translation>
 <translation id="4468959413250150279">Isključi zvuk za određeni sajt</translation>
@@ -129,6 +135,7 @@
 <translation id="4670064810192446073">Virtuelna realnost</translation>
 <translation id="4708011789095599544">Želite li stvarno da obrišete kolačiće i druge podatke o sajtu za ovaj veb-sajt?</translation>
 <translation id="4751476147751820511">Senzori za pokret ili svetlo</translation>
+<translation id="4800839971935185386">Pregledajte ažuriranja imena i ikona</translation>
 <translation id="4836046166855586901">Pitaj kada sajt želi da zna kada aktivno koristim ovaj uređaj</translation>
 <translation id="4883854917563148705">Podešavanja kojima se upravlja ne mogu da se resetuju</translation>
 <translation id="4887024562049524730">Pre nego što dozvolite sajtovima da koriste uređaj i podatke virtuelne realnosti prikazuje se upit (preporučeno)</translation>
@@ -138,6 +145,7 @@
 <translation id="4996978546172906250">Deljenje preko</translation>
 <translation id="5039804452771397117">Dozvoli</translation>
 <translation id="5048398596102334565">Dozvoli sajtovima da pristupaju senzorima za pokret (preporučeno)</translation>
+<translation id="5050380848339752099">Ovaj sajt će deliti informacije sa aplikacijom izvan režima bez arhiviranja.</translation>
 <translation id="5063480226653192405">Korišćenje</translation>
 <translation id="5100237604440890931">Skupljeno je – Kliknite da biste proširili.</translation>
 <translation id="5123685120097942451">Kartica bez arhiviranja</translation>
@@ -151,12 +159,12 @@
 <translation id="5335288049665977812">Dozvoli sajtovima da pokreću JavaScript (preporučeno)</translation>
 <translation id="534295439873310000">NFC uređaji</translation>
 <translation id="5354152178998424783">Ovim brišete <ph name="DATASIZE" /> podataka i kolačića koje čuvaju sajtovi.</translation>
-<translation id="5384883051496921101">Ovaj sajt će deliti informacije sa aplikacijom izvan režima bez arhiviranja.</translation>
 <translation id="5391532827096253100">Veza sa ovim sajtom nije bezbedna. Informacije o sajtu</translation>
 <translation id="5394307150471348411">{DETAIL_COUNT,plural, =1{(i još 1)}one{(i još #)}few{(i još #)}other{(i još #)}}</translation>
 <translation id="5403592356182871684">Imena</translation>
 <translation id="5489227211564503167">Proteklo vreme: <ph name="ELAPSED_TIME" /> od <ph name="TOTAL_TIME" />.</translation>
 <translation id="5494752089476963479">Blokiraj oglase na sajtovima koji prikazuju oglase koji ometaju aktivnosti ili obmanjujuće oglase</translation>
+<translation id="549957179819296104">Nova ikona</translation>
 <translation id="5502860503640766021"><ph name="PERMISSION_1" />: dozvoljeno. <ph name="PERMISSION_2" />: blokirano</translation>
 <translation id="5505264765875738116">Sajtovi ne mogu da traže da šalju obaveštenja</translation>
 <translation id="5516455585884385570">Otvorite podešavanja obaveštenja</translation>
@@ -176,6 +184,7 @@
 <translation id="5916664084637901428">Uključeno</translation>
 <translation id="5922853908706496913">Deli se ekran</translation>
 <translation id="5939518447894949180">Resetuj</translation>
+<translation id="5975083100439434680">Umanjivanje</translation>
 <translation id="5976059395673079613"><ph name="PERMISSION" /> – <ph name="WARNING_MESSAGE" /></translation>
 <translation id="6015775454662021376">Kontrolišite pristup ovog sajta uređaju</translation>
 <translation id="6040143037577758943">Zatvori</translation>
@@ -188,6 +197,7 @@
 <translation id="6196640612572343990">Blokiraj kolačiće treće strane</translation>
 <translation id="6206551242102657620">Veza je bezbedna. Informacije o sajtu</translation>
 <translation id="6216432067784365534">Opcije stavke <ph name="NAME_OF_LIST_ITEM" /></translation>
+<translation id="6231752747840485235">Želite da deinstalatirate „<ph name="APP_NAME" />“?</translation>
 <translation id="6262279340360821358">Dozvole <ph name="PERMISSION_1" /> i <ph name="PERMISSION_2" /> su blokirane</translation>
 <translation id="6270391203985052864">Sajtovi mogu da traže da šalju obaveštenja</translation>
 <translation id="6295158916970320988">Svi sajtovi</translation>
@@ -241,6 +251,7 @@
 <translation id="7589445247086920869">Blokiraj za aktuelni pretraživač</translation>
 <translation id="7649070708921625228">Pomoć</translation>
 <translation id="7658239707568436148">Otkaži</translation>
+<translation id="7734541938181328224">Pregledajte ažuriranja ikone</translation>
 <translation id="7781829728241885113">Juče</translation>
 <translation id="7791543448312431591">Dodaj</translation>
 <translation id="780301667611848630">Ne, hvala</translation>
@@ -279,10 +290,10 @@
 <translation id="8444433999583714703">Da biste dozvolili da <ph name="APP_NAME" /> pristupa lokaciji, uključite lokaciju i u <ph name="BEGIN_LINK" />Android podešavanjima<ph name="END_LINK" />.</translation>
 <translation id="8447861592752582886">Opozovi dozvolu za uređaj</translation>
 <translation id="8451050538944905715">{NUM_SELECTED,plural, =1{Koristi se 1 kolačić}one{Koristi se # kolačić}few{Koriste se # kolačića}other{Koristi se # kolačića}}</translation>
-<translation id="8463851957836045671">Sajt je brz</translation>
 <translation id="8487700953926739672">Dostupno van mreže</translation>
 <translation id="851751545965956758">Onemogući sajtovima da se povezuju sa uređajima</translation>
 <translation id="8525306231823319788">Ceo ekran</translation>
+<translation id="857074314439694500">Ako ova veb-aplikacija pokušava da vas prevari da je neka druga aplikacija, deinstalirajte je.</translation>
 <translation id="857943718398505171">Dozvoljeno (preporučeno)</translation>
 <translation id="8609465669617005112">Premesti nagore</translation>
 <translation id="8676374126336081632">Obriši unos</translation>
@@ -296,17 +307,18 @@
 <translation id="8801436777607969138">Blokirajte JavaScript za određeni sajt.</translation>
 <translation id="8816026460808729765">Ne dozvoljavaj sajtovima da pristupaju senzorima</translation>
 <translation id="8847988622838149491">USB</translation>
+<translation id="8903921497873541725">Uvećavanje</translation>
 <translation id="8921772741368021346"><ph name="POSITION" />/<ph name="DURATION" /></translation>
 <translation id="8926666909099850184">NFC je isključen za ovaj uređaj. Uključite ga u <ph name="BEGIN_LINK" />Android podešavanjima<ph name="END_LINK" />.</translation>
-<translation id="8929372349074745002">Ovaj sajt se brzo otvara i brzo reaguje za većinu ljudi</translation>
 <translation id="8941729603749328384">www.example.com</translation>
-<translation id="894871326938397531">Izlazite iz režima bez arhiviranja?</translation>
 <translation id="8958424370300090006">Blokirajte kolačiće za određeni sajt.</translation>
 <translation id="8959122750345127698">Navigacija je nedostupna: <ph name="URL" /></translation>
+<translation id="8986362086234534611">Zaboravi</translation>
 <translation id="9019902583201351841">Ovim upravljaju tvoji roditelji</translation>
 <translation id="9074739597929991885">Bluetooth</translation>
 <translation id="9109747640384633967">{PERMISSIONS_SUMMARY_MIXED,plural, =1{<ph name="PERMISSION_1" />, <ph name="PERMISSION_2" /> i još <ph name="NUM_MORE" />}one{<ph name="PERMISSION_1" />, <ph name="PERMISSION_2" /> i još <ph name="NUM_MORE" />}few{<ph name="PERMISSION_1" />, <ph name="PERMISSION_2" /> i još <ph name="NUM_MORE" />}other{<ph name="PERMISSION_1" />, <ph name="PERMISSION_2" /> i još <ph name="NUM_MORE" />}}</translation>
 <translation id="913657688200966289">Uključite dozvole za aplikaciju <ph name="APP_NAME" /> u <ph name="BEGIN_LINK" />Android podešavanjima<ph name="END_LINK" />.</translation>
+<translation id="930525582205581608">Želite da zaboravite ovaj sajt?</translation>
 <translation id="965817943346481315">Blokiraj ako sajt prikazuje oglase koji ometaju aktivnosti ili obmanjujuće oglase (preporučeno)</translation>
 <translation id="967624055006145463">Sačuvani podaci</translation>
 </translationbundle>

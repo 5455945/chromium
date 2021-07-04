@@ -54,7 +54,7 @@ std::unique_ptr<prefs::DictionaryValueUpdate> UpdateWebAppDictionary(
 }
 
 // Returns whether the time occurred within X days.
-bool TimeOccurredWithinDays(base::Optional<base::Time> time, int days) {
+bool TimeOccurredWithinDays(absl::optional<base::Time> time, int days) {
   return time && (base::Time::Now() - time.value()).InDays() < days;
 }
 
@@ -86,6 +86,12 @@ bool TimeOccurredWithinDays(base::Optional<base::Time> time, int days) {
 //     A string-flavored base::Value representing int64_t number of microseconds
 //     since the Windows epoch, using util::TimeToValue().
 //     "IPH_last_ignore_time": "13249617864945500",
+//   },
+//   isolation_state is managed by isolation_prefs_utils
+//   "isolation_state": {
+//     "<origin>": {
+//       "storage_isolation_key": "abc123",
+//     },
 //   },
 // }
 //
@@ -134,14 +140,14 @@ void UpdateBoolWebAppPref(PrefService* pref_service,
   web_app_prefs->SetBoolean(path, value);
 }
 
-base::Optional<int> GetIntWebAppPref(const PrefService* pref_service,
+absl::optional<int> GetIntWebAppPref(const PrefService* pref_service,
                                      const AppId& app_id,
                                      base::StringPiece path) {
   const base::DictionaryValue* web_app_prefs =
       GetWebAppDictionary(pref_service, app_id);
   if (web_app_prefs)
     return web_app_prefs->FindIntPath(path);
-  return base::nullopt;
+  return absl::nullopt;
 }
 
 void UpdateIntWebAppPref(PrefService* pref_service,
@@ -156,14 +162,14 @@ void UpdateIntWebAppPref(PrefService* pref_service,
   web_app_prefs->SetInteger(path, value);
 }
 
-base::Optional<double> GetDoubleWebAppPref(const PrefService* pref_service,
+absl::optional<double> GetDoubleWebAppPref(const PrefService* pref_service,
                                            const AppId& app_id,
                                            base::StringPiece path) {
   const base::DictionaryValue* web_app_prefs =
       GetWebAppDictionary(pref_service, app_id);
   if (web_app_prefs)
     return web_app_prefs->FindDoublePath(path);
-  return base::nullopt;
+  return absl::nullopt;
 }
 
 void UpdateDoubleWebAppPref(PrefService* pref_service,
@@ -178,7 +184,7 @@ void UpdateDoubleWebAppPref(PrefService* pref_service,
   web_app_prefs->SetDouble(path, value);
 }
 
-base::Optional<base::Time> GetTimeWebAppPref(const PrefService* pref_service,
+absl::optional<base::Time> GetTimeWebAppPref(const PrefService* pref_service,
                                              const AppId& app_id,
                                              base::StringPiece path) {
   if (const auto* web_app_prefs = GetWebAppDictionary(pref_service, app_id)) {
@@ -186,7 +192,7 @@ base::Optional<base::Time> GetTimeWebAppPref(const PrefService* pref_service,
       return util::ValueToTime(value);
   }
 
-  return base::nullopt;
+  return absl::nullopt;
 }
 
 void UpdateTimeWebAppPref(PrefService* pref_service,
@@ -215,7 +221,7 @@ void RemoveWebAppPref(PrefService* pref_service,
 void RecordInstallIphIgnored(PrefService* pref_service,
                              const AppId& app_id,
                              base::Time time) {
-  base::Optional<int> ignored_count =
+  absl::optional<int> ignored_count =
       GetIntWebAppPref(pref_service, app_id, kIphIgnoreCount);
   int new_count = base::saturated_cast<int>(1 + ignored_count.value_or(0));
 

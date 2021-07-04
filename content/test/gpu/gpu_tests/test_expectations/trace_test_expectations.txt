@@ -22,9 +22,9 @@
 #         release release-x64 ]
 # GPU
 # tags: [ amd amd-0x6613 amd-0x679e amd-0x6821 amd-0x7340
-#         apple apple-apple-a12z
+#         apple apple-apple-m1 apple-angle-metal-renderer:-apple-m1
 #         arm
-#         google google-0xffff google-angle-(metal-renderer:-apple-a12z)
+#         google google-0xffff
 #         intel intel-0xa2e intel-0xd26 intel-0xa011 intel-0x3e92 intel-0x3e9b
 #               intel-0x5912
 #         nvidia nvidia-0xfe9 nvidia-0x1cb3 nvidia-0x2184
@@ -53,6 +53,8 @@
 #         mesa_lt_19.1 mesa_ge_20.1 ]
 # ASan
 # tags: [ asan no-asan ]
+# Display Server
+# tags: [ display-server-wayland display-server-x ]
 # results: [ Failure RetryOnFailure Skip ]
 # END TAG HEADER
 
@@ -86,7 +88,7 @@ crbug.com/1009860 [ chromeos ] SwapChainTraceTest_* [ Skip ]
 crbug.com/1009860 [ win7 ] SwapChainTraceTest_* [ Skip ]
 crbug.com/1009860 [ fuchsia ] SwapChainTraceTest_* [ Skip ]
 
-# Playing videos not yet supported in Fuchsia.
+# Playing videos not supported in Fuchsia emulators.
 crbug.com/1096431 [ fuchsia fuchsia-board-qemu-x64 ] TraceTest_Video_BackdropFilter [ Skip ]
 crbug.com/1096431 [ fuchsia fuchsia-board-qemu-x64 ] TraceTest_Video_MP4 [ Skip ]
 crbug.com/1096431 [ fuchsia fuchsia-board-qemu-x64 ] TraceTest_Video_MP4_DXVA [ Skip ]
@@ -103,11 +105,6 @@ crbug.com/1009860 [ win10 ] SwapChainTraceTest_CanvasUnacceleratedLowLatency2D [
 
 # VP9 videos fail to trigger zero copy video presentation path.
 crbug.com/930343 [ win intel ] VideoPathTraceTest_DirectComposition_Video_VP9_Fullsize [ Failure ]
-
-# TODO(crbug.com/1079393): Compress down to just "intel" instead of specific
-# GPUs once UHD 630 failures are fixed.
-crbug.com/969117 [ win10 intel-0x5912 ] OverlayModeTraceTest_DirectComposition_Video_MP4_FourColors_Aspect_4x3 [ RetryOnFailure ]
-crbug.com/978181 [ win10 nvidia ] OverlayModeTraceTest_DirectComposition_Underlay [ RetryOnFailure ]
 
 # Incorrectly reporting SCALING instead of DIRECT on Windows 10 UHD 630 GPUs.
 crbug.com/1079393 [ win10 intel-0x3e92 ] OverlayModeTraceTest_DirectComposition_Underlay [ Failure ]
@@ -137,11 +134,6 @@ crbug.com/1079393 [ win10 intel-0x3e92 ] VideoPathTraceTest_DirectComposition_Vi
 # showing up as SOFTWARE which causes zero copy to fail.
 crbug.com/1079393 [ win10 intel-0x5912 ] OverlayModeTraceTest_DirectComposition_Video_MP4_NV12 [ Failure ]
 crbug.com/1079393 [ win10 intel-0x5912 ] OverlayModeTraceTest_DirectComposition_Video_VP9_NV12 [ Failure ]
-crbug.com/1079393 [ win10 intel-0x5912 ] VideoPathTraceTest_DirectComposition_Underlay_Fullsize [ Failure ]
-crbug.com/1079393 [ win10 intel-0x5912 ] VideoPathTraceTest_DirectComposition_Video_MP4_Fullsize [ Failure ]
-
-# Fuchsia Flakes.
-crbug.com/1058255 [ fuchsia ] TraceTest_WebGLGreenTriangle_AA_Alpha [ Skip ]
 
 # Software compositing is not supported on Android/ChromeOS/Fuchsia: we skip the
 # tests that disable GPU compositing (--disable-gpu-compositing).
@@ -168,3 +160,18 @@ crbug.com/1119491 [ win intel ] OverlayModeTraceTest_DirectComposition_Video_VP9
 # Failed to create YUY2 swap chain on Win10 AMD RX 5500 XT
 crbug.com/1151767 [ win10 amd-0x7340 ] VideoPathTraceTest_DirectComposition_Video_MP4_YUY2 [ Failure ]
 crbug.com/1151767 [ win10 amd-0x7340 ] VideoPathTraceTest_DirectComposition_Video_VP9_YUY2 [ Failure ]
+
+# WebGPU pixel tests hang on mac bots which mostly run older versions of mac os.
+crbug.com/1213170 [ mac ] TraceTest_WebGPU* [ Skip ]
+
+# WebGPU pixel tests fail on Linux+SkiaRenderer+Vulkan
+crbug.com/1213657 [ linux skia-renderer-vulkan ] TraceTest_WebGPU* [ Skip ]
+
+# WebGPU is only supported on Win10, Mac, and Linux+SkiaRenderer+Vulkan.
+crbug.com/976495 [ linux skia-renderer-gl ] TraceTest_WebGPU* [ Skip ]
+crbug.com/976495 [ linux skia-renderer-dawn ] TraceTest_WebGPU* [ Skip ]
+crbug.com/976495 [ linux skia-renderer-disabled ] TraceTest_WebGPU* [ Skip ]
+crbug.com/976497 [ android ] TraceTest_WebGPU* [ Skip ]
+crbug.com/852089 [ chromeos ] TraceTest_WebGPU* [ Skip ]
+crbug.com/852089 [ fuchsia ] TraceTest_WebGPU* [ Skip ]
+crbug.com/852089 [ win7 ] TraceTest_WebGPU* [ Skip ]

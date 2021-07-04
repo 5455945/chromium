@@ -774,9 +774,8 @@ void MergeWithNextTextNode(Text* text_node, ExceptionState& exception_state) {
 
 static Document* CreateStagingDocumentForMarkupSanitization(
     scheduler::WebAgentGroupScheduler& agent_group_scheduler) {
-  Page::PageClients page_clients;
-  FillWithEmptyClients(page_clients);
-  Page* page = Page::CreateNonOrdinary(page_clients, agent_group_scheduler);
+  Page* page = Page::CreateNonOrdinary(GetStaticEmptyChromeClientInstance(),
+                                       agent_group_scheduler);
 
   page->GetSettings().SetScriptEnabled(false);
   page->GetSettings().SetPluginsEnabled(false);
@@ -791,14 +790,13 @@ static Document* CreateStagingDocumentForMarkupSanitization(
       nullptr,  // Frame* previous_sibling
       FrameInsertType::kInsertInConstructor, blink::LocalFrameToken(),
       nullptr,  // WindowAgentFactory*
-      nullptr,  // InterfaceRegistry*
-      nullptr   // policy_container
+      nullptr   // InterfaceRegistry*
   );
   // Don't leak the actual viewport size to unsanitized markup
   LocalFrameView* frame_view =
       MakeGarbageCollected<LocalFrameView>(*frame, IntSize(800, 600));
   frame->SetView(frame_view);
-  frame->Init(nullptr);
+  frame->Init(/*opener=*/nullptr, /*policy_container=*/nullptr);
 
   Document* document = frame->GetDocument();
   DCHECK(document);

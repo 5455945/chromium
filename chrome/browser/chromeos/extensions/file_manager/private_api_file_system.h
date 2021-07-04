@@ -18,14 +18,13 @@
 #include "base/callback_forward.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/chromeos/extensions/file_manager/file_stream_string_converter.h"
-#include "chrome/browser/chromeos/extensions/file_manager/files_extension_function.h"
 #include "chrome/browser/chromeos/extensions/file_manager/private_api_base.h"
-#include "chrome/browser/extensions/chrome_extension_function_details.h"
 #include "components/drive/file_errors.h"
 #include "extensions/browser/extension_function.h"
 #include "services/device/public/mojom/mtp_storage_info.mojom-forward.h"
 #include "storage/browser/file_system/file_system_url.h"
+
+class Profile;
 
 namespace storage {
 class FileSystemContext;
@@ -73,7 +72,7 @@ class FileManagerPrivateEnableExternalFileSchemeFunction
 
 // Grants R/W permissions to profile-specific directories (Drive, Downloads)
 // from other profiles.
-class FileManagerPrivateGrantAccessFunction : public FilesExtensionFunction {
+class FileManagerPrivateGrantAccessFunction : public ExtensionFunction {
  public:
   FileManagerPrivateGrantAccessFunction();
 
@@ -85,7 +84,6 @@ class FileManagerPrivateGrantAccessFunction : public FilesExtensionFunction {
 
  private:
   ExtensionFunction::ResponseAction Run() override;
-  const ChromeExtensionFunctionDetails chrome_details_;
   DISALLOW_COPY_AND_ASSIGN(FileManagerPrivateGrantAccessFunction);
 };
 
@@ -259,34 +257,6 @@ class FileManagerPrivateRenameVolumeFunction : public LoggedExtensionFunction {
   ResponseAction Run() override;
 };
 
-// Implements the chrome.fileManagerPrivateInternal.copyImageToClipboard method.
-class FileManagerPrivateInternalCopyImageToClipboardFunction
-    : public LoggedExtensionFunction {
- public:
-  FileManagerPrivateInternalCopyImageToClipboardFunction();
-
-  DECLARE_EXTENSION_FUNCTION("fileManagerPrivateInternal.copyImageToClipboard",
-                             FILEMANAGERPRIVATEINTERNAL_COPYIMAGETOCLIPBOARD)
-
- protected:
-  ~FileManagerPrivateInternalCopyImageToClipboardFunction() override;
-
-  // ExtensionFunction overrides.
-  ResponseAction Run() override;
-
- private:
-  // `is_on_clipboard` specifies whether or not the image was copied to the
-  // clipboard.
-  void RespondWith(bool is_on_clipboard);
-  void MoveBytesToClipboard(scoped_refptr<base::RefCountedString> bytes);
-
-  const ChromeExtensionFunctionDetails chrome_details_;
-  std::unique_ptr<storage::FileStreamStringConverter> converter_;
-  // Stores the clipboard copy sequence number to validate the clipboard did not
-  // change during an async operation.
-  uint64_t clipboard_sequence_ = 0;
-};
-
 // Implements the chrome.fileManagerPrivate.startCopy method.
 class FileManagerPrivateInternalStartCopyFunction
     : public LoggedExtensionFunction {
@@ -313,14 +283,15 @@ class FileManagerPrivateInternalStartCopyFunction
 
   // Part of RunAsync(). Called after FreeDiskSpaceIfNeededFor() is completed on
   // IO thread.
-  void RunAfterFreeDiskSpace(bool available);
+  void RunAfterFreeDiskSpace(bool available, int64_t space_needed);
 
   // Part of RunAsync(). Called after Copy() is started on IO thread.
   void RunAfterStartCopy(int operation_id);
 
+  Profile* profile_ = nullptr;
+
   storage::FileSystemURL source_url_;
   storage::FileSystemURL destination_url_;
-  const ChromeExtensionFunctionDetails chrome_details_;
 };
 
 // Implements the chrome.fileManagerPrivate.cancelCopy method.
@@ -406,8 +377,6 @@ class FileManagerPrivateSearchFilesByHashesFunction
   void OnSearchByHashes(const std::set<std::string>& hashes,
                         drive::FileError error,
                         const std::vector<drive::HashAndFilePath>& results);
-
-  const ChromeExtensionFunctionDetails chrome_details_;
 };
 
 class FileManagerPrivateSearchFilesFunction : public LoggedExtensionFunction {
@@ -426,8 +395,6 @@ class FileManagerPrivateSearchFilesFunction : public LoggedExtensionFunction {
 
   void OnSearchByPattern(
       const std::vector<std::pair<base::FilePath, bool>>& results);
-
-  const ChromeExtensionFunctionDetails chrome_details_;
 };
 
 // Implements the chrome.fileManagerPrivate.getDirectorySize method.

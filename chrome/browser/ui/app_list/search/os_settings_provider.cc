@@ -19,6 +19,7 @@
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/app_list/search/search_tags_util.h"
 #include "chrome/browser/ui/settings_window_manager_chromeos.h"
 #include "chrome/browser/ui/webui/settings/chromeos/hierarchy.h"
 #include "chrome/browser/ui/webui/settings/chromeos/os_settings_manager.h"
@@ -114,11 +115,13 @@ OsSettingsResult::OsSettingsResult(
     Profile* profile,
     const chromeos::settings::mojom::SearchResultPtr& result,
     const float relevance_score,
-    const gfx::ImageSkia& icon)
+    const gfx::ImageSkia& icon,
+    const std::u16string& query)
     : profile_(profile), url_path_(result->url_path_with_parameters) {
   set_id(kOsSettingsResultPrefix + url_path_);
   set_relevance(relevance_score);
   SetTitle(result->canonical_result_text);
+  SetTitleTags(CalculateTags(query, result->canonical_result_text));
   SetResultType(ResultType::kOsSettings);
   SetDisplayType(DisplayType::kList);
   SetMetricsType(ash::OS_SETTINGS);
@@ -134,17 +137,18 @@ OsSettingsResult::OsSettingsResult(
     LogError(Error::kHierarchyEmpty);
   } else if (result->type != SettingsResultType::kSection) {
     SetDetails(hierarchy.back());
+    SetDetailsTags(CalculateTags(query, hierarchy.back()));
   }
 
   // Manually build the accessible name for the search result, in a way that
   // parallels the regular accessible names set by
   // SearchResultBaseView::ComputeAccessibleName.
-  base::string16 accessible_name = title();
+  std::u16string accessible_name = title();
   if (!details().empty()) {
-    accessible_name += base::ASCIIToUTF16(", ");
+    accessible_name += u", ";
     accessible_name += details();
   }
-  accessible_name += base::ASCIIToUTF16(", ");
+  accessible_name += u", ";
   // The first element in the settings hierarchy is always the top-level
   // localized name of the Settings app.
   accessible_name += hierarchy[0];
@@ -195,7 +199,7 @@ OsSettingsProvider::OsSettingsProvider(Profile* profile)
           : apps::mojom::IconType::kUncompressed;
   app_service_proxy_->LoadIcon(
       apps::mojom::AppType::kWeb, web_app::kOsSettingsAppId, icon_type,
-      ash::AppListConfig::instance().search_list_icon_dimension(),
+      ash::SharedAppListConfig::instance().search_list_icon_dimension(),
       /*allow_placeholder_icon=*/false,
       base::BindOnce(&OsSettingsProvider::OnLoadIcon,
                      weak_factory_.GetWeakPtr()));
@@ -223,7 +227,7 @@ ash::AppListSearchResultType OsSettingsProvider::ResultType() {
   return ash::AppListSearchResultType::kOsSettings;
 }
 
-void OsSettingsProvider::Start(const base::string16& query) {
+void OsSettingsProvider::Start(const std::u16string& query) {
   const base::TimeTicks start_time = base::TimeTicks::Now();
   last_query_ = query;
   // Disable the provider if:
@@ -260,7 +264,7 @@ void OsSettingsProvider::ViewClosing() {
 }
 
 void OsSettingsProvider::OnSearchReturned(
-    const base::string16& query,
+    const std::u16string& query,
     const base::TimeTicks& start_time,
     std::vector<chromeos::settings::mojom::SearchResultPtr> sorted_results) {
   // TODO(crbug.com/1068851): We are currently not ranking settings results.
@@ -272,8 +276,8 @@ void OsSettingsProvider::OnSearchReturned(
   int i = 0;
   for (const auto& result : FilterResults(query, sorted_results, hierarchy_)) {
     const float score = 1.0f - i * kScoreEps;
-    search_results.emplace_back(
-        std::make_unique<OsSettingsResult>(profile_, result, score, icon_));
+    search_results.emplace_back(std::make_unique<OsSettingsResult>(
+        profile_, result, score, icon_, last_query_));
     ++i;
   }
 
@@ -300,7 +304,7 @@ void OsSettingsProvider::OnAppUpdate(const apps::AppUpdate& update) {
             : apps::mojom::IconType::kUncompressed;
     app_service_proxy_->LoadIcon(
         apps::mojom::AppType::kWeb, web_app::kOsSettingsAppId, icon_type,
-        ash::AppListConfig::instance().search_list_icon_dimension(),
+        ash::SharedAppListConfig::instance().search_list_icon_dimension(),
         /*allow_placeholder_icon=*/false,
         base::BindOnce(&OsSettingsProvider::OnLoadIcon,
                        weak_factory_.GetWeakPtr()));
@@ -321,7 +325,7 @@ void OsSettingsProvider::OnSearchResultAvailabilityChanged() {
 
 std::vector<chromeos::settings::mojom::SearchResultPtr>
 OsSettingsProvider::FilterResults(
-    const base::string16& query,
+    const std::u16string& query,
     const std::vector<chromeos::settings::mojom::SearchResultPtr>& results,
     const chromeos::settings::Hierarchy* hierarchy) {
   base::flat_set<std::string> seen_urls;

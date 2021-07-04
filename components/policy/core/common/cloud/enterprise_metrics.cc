@@ -185,10 +185,15 @@ const char kMetricCBCMUnsignedRemoteCommandExecutedTemplate[] =
 
 const char kUMAPsmHashDanceComparison[] =
     "Enterprise.AutoEnrollmentPrivateSetMembershipHashDanceComparison";
+const char kUMAPsmHashDanceDifferentResultsComparison[] =
+    "Enterprise.AutoEnrollmentPsmHashDanceDifferentResultsComparison";
 const char kUMAPsmSuccessTime[] =
     "Enterprise.AutoEnrollmentPrivateSetMembershipSuccessTime";
-const char kUMAPsmRequestStatus[] =
-    "Enterprise.AutoEnrollmentPrivateSetMembershipRequestStatus";
+const char kUMAPsmResult[] = "Enterprise.AutoEnrollmentPsmResult";
+const char kUMAPsmNetworkErrorCode[] =
+    "Enterprise.AutoEnrollmentPsmRequestNetworkErrorCode";
+const char kUMAPsmDmServerRequestStatus[] =
+    "Enterprise.AutoEnrollmentPsmDmServerRequestStatus";
 
 const char kUMAHashDanceSuccessTime[] =
     "Enterprise.AutoEnrollmentHashDanceSuccessTime";
@@ -201,7 +206,8 @@ const char kUMAHashDanceRequestStatus[] =
     "Enterprise.AutoEnrollmentRequestStatus";
 const char kUMAHashDanceNetworkErrorCode[] =
     "Enterprise.AutoEnrollmentRequestNetworkErrorCode";
-const char kUMAHashDanceSuffixInitialEnrollment[] = ".InitialEnrollment";
-const char kUMAHashDanceSuffixFRE[] = ".ForcedReenrollment";
+
+const char kUMASuffixInitialEnrollment[] = ".InitialEnrollment";
+const char kUMASuffixFRE[] = ".ForcedReenrollment";
 
 }  // namespace policy

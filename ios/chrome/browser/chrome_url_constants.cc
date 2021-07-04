@@ -20,6 +20,7 @@ const char kChromeUIManagementURL[] = "chrome://management";
 const char kChromeUINewTabURL[] = "chrome://newtab/";
 const char kChromeUINTPTilesInternalsURL[] = "chrome://ntp-tiles-internals/";
 const char kChromeUIOfflineURL[] = "chrome://offline/";
+const char kChromeUIPolicyURL[] = "chrome://policy/";
 const char kChromeUISettingsURL[] = "chrome://settings/";
 const char kChromeUISuggestionsURL[] = "chrome://suggestions/";
 const char kChromeUITermsURL[] = "chrome://terms/";
@@ -105,6 +106,9 @@ const char kClearBrowsingDataLearnMoreURL[] =
 
 const char kClearBrowsingDataMyActivityUrlInFooterURL[] =
     "https://history.google.com/history/?utm_source=chrome_cbd";
+
+const char kClearBrowsingDataSearchMyActivityUrlInFooterURL[] =
+    "https://myactivity.google.com/myactivity?product=19";
 
 const char kClearBrowsingDataMyActivityUrlInDialogURL[] =
     "https://history.google.com/history/?utm_source=chrome_n";

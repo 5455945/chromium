@@ -35,7 +35,7 @@ MockCastAppDiscoveryService::StartObservingMediaSinks(
 }
 scoped_refptr<base::SequencedTaskRunner>
 MockCastAppDiscoveryService::task_runner() {
-  return base::CreateSingleThreadTaskRunner({content::BrowserThread::IO});
+  return content::GetIOThreadTaskRunner({});
 }
 
 MockDialAppDiscoveryService::MockDialAppDiscoveryService() = default;
@@ -65,7 +65,7 @@ TestDialURLFetcher::~TestDialURLFetcher() = default;
 
 void TestDialURLFetcher::Start(const GURL& url,
                                const std::string& method,
-                               const base::Optional<std::string>& post_data,
+                               const absl::optional<std::string>& post_data,
                                int max_retries,
                                bool set_origin_header) {
   DoStart(url, method, post_data, max_retries);
@@ -99,7 +99,7 @@ std::unique_ptr<DialURLFetcher> TestDialActivityManager::CreateFetcher(
 void TestDialActivityManager::SetExpectedRequest(
     const GURL& url,
     const std::string& method,
-    const base::Optional<std::string>& post_data) {
+    const absl::optional<std::string>& post_data) {
   EXPECT_CALL(*this, OnFetcherCreated());
   expected_url_ = url;
   expected_method_ = method;
@@ -120,7 +120,7 @@ MediaSinkInternal CreateDialSink(int num) {
 
   media_router::MediaSink sink(unique_id, friendly_name,
                                media_router::SinkIconType::GENERIC,
-                               MediaRouteProviderId::EXTENSION);
+                               MediaRouteProviderId::DIAL);
   media_router::DialSinkExtraData extra_data;
   extra_data.ip_address = ip_endpoint.address();
   extra_data.model_name = base::StringPrintf("model name %d", num);

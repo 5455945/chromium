@@ -212,10 +212,7 @@ mojom_component("mojom") {
         "//ipc/message_view.cc",
         "//ipc/message_view.h",
       ]
-      traits_public_deps = [
-        "//ipc:message_support",
-        "//mojo/public/cpp/base:shared_typemap_traits",
-      ]
+      traits_public_deps = [ "//ipc:message_support" ]
     },
   ]
 

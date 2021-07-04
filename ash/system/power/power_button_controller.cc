@@ -10,7 +10,7 @@
 #include <utility>
 
 #include "ash/accelerators/accelerator_controller_impl.h"
-#include "ash/public/cpp/ash_switches.h"
+#include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
@@ -30,6 +30,7 @@
 #include "base/json/json_reader.h"
 #include "base/time/default_tick_clock.h"
 #include "chromeos/dbus/power_manager/backlight.pb.h"
+#include "ui/compositor/layer.h"
 #include "ui/display/types/display_snapshot.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_observer.h"
@@ -381,7 +382,7 @@ void PowerButtonController::OnLoginStatusChanged(LoginStatus status) {
 }
 
 void PowerButtonController::OnGetSwitchStates(
-    base::Optional<chromeos::PowerManagerClient::SwitchStates> result) {
+    absl::optional<chromeos::PowerManagerClient::SwitchStates> result) {
   if (!result.has_value())
     return;
 
@@ -407,8 +408,9 @@ void PowerButtonController::OnBacklightsForcedOffChanged(bool forced_off) {
   DismissMenu();
 }
 
-void PowerButtonController::OnScreenStateChanged(ScreenState screen_state) {
-  if (screen_state != ScreenState::ON)
+void PowerButtonController::OnScreenBacklightStateChanged(
+    ScreenBacklightState screen_backlight_state) {
+  if (screen_backlight_state != ScreenBacklightState::ON)
     DismissMenu();
 }
 

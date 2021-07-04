@@ -95,11 +95,13 @@ class MockMutatorHost : public MutatorHost {
   MOCK_CONST_METHOD0(MainThreadAnimationsCount, size_t());
   MOCK_CONST_METHOD0(HasCustomPropertyAnimations, bool());
   MOCK_CONST_METHOD0(CurrentFrameHadRAF, bool());
+  MOCK_CONST_METHOD0(HasSmilAnimation, bool());
   MOCK_CONST_METHOD0(NextFrameHasPendingRAF, bool());
   MOCK_METHOD0(TakePendingThroughputTrackerInfos,
                PendingThroughputTrackerInfos());
   MOCK_CONST_METHOD0(HasCanvasInvalidation, bool());
   MOCK_CONST_METHOD0(HasJSAnimation, bool());
+  MOCK_CONST_METHOD0(MinimumTickInterval, base::TimeDelta());
 };
 
 }  // namespace cc

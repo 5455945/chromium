@@ -4,12 +4,15 @@
 
 #include "chrome/browser/ui/views/bookmarks/bookmark_menu_delegate.h"
 
+#include <memory>
+
 #include "base/macros.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/bookmarks/managed_bookmark_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/bookmarks/bookmark_stats.h"
+#include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/bookmarks/browser/bookmark_model.h"
@@ -68,17 +71,17 @@ class BookmarkMenuDelegateTest : public BrowserWithTestWindowTest {
   void NewDelegate() {
     DestroyDelegate();
 
-    bookmark_menu_delegate_.reset(new BookmarkMenuDelegate(
+    bookmark_menu_delegate_ = std::make_unique<BookmarkMenuDelegate>(
         browser(), base::BindRepeating([]() {
           return static_cast<content::PageNavigator*>(nullptr);
         }),
-        nullptr));
+        nullptr);
   }
 
   void NewAndInitDelegateForPermanent() {
     const BookmarkNode* node = model_->bookmark_bar_node();
     NewDelegate();
-    bookmark_menu_delegate_->Init(&test_delegate_, NULL, node, 0,
+    bookmark_menu_delegate_->Init(&test_delegate_, nullptr, node, 0,
                                   BookmarkMenuDelegate::SHOW_PERMANENT_FOLDERS,
                                   BOOKMARK_LAUNCH_LOCATION_NONE);
   }
@@ -128,19 +131,18 @@ class BookmarkMenuDelegateTest : public BrowserWithTestWindowTest {
   void AddTestData() {
     const BookmarkNode* bb_node = model_->bookmark_bar_node();
     std::string test_base = base_path();
-    model_->AddURL(bb_node, 0, ASCIIToUTF16("a"), GURL(test_base + "a"));
-    const BookmarkNode* f1 = model_->AddFolder(bb_node, 1, ASCIIToUTF16("F1"));
-    model_->AddURL(f1, 0, ASCIIToUTF16("f1a"), GURL(test_base + "f1a"));
-    const BookmarkNode* f11 = model_->AddFolder(f1, 1, ASCIIToUTF16("F11"));
-    model_->AddURL(f11, 0, ASCIIToUTF16("f11a"), GURL(test_base + "f11a"));
-    model_->AddFolder(bb_node, 2, ASCIIToUTF16("F2"));
+    model_->AddURL(bb_node, 0, u"a", GURL(test_base + "a"));
+    const BookmarkNode* f1 = model_->AddFolder(bb_node, 1, u"F1");
+    model_->AddURL(f1, 0, u"f1a", GURL(test_base + "f1a"));
+    const BookmarkNode* f11 = model_->AddFolder(f1, 1, u"F11");
+    model_->AddURL(f11, 0, u"f11a", GURL(test_base + "f11a"));
+    model_->AddFolder(bb_node, 2, u"F2");
 
     // Children of the other node.
-    model_->AddURL(model_->other_node(), 0, ASCIIToUTF16("oa"),
-                   GURL(test_base + "oa"));
+    model_->AddURL(model_->other_node(), 0, u"oa", GURL(test_base + "oa"));
     const BookmarkNode* of1 =
-        model_->AddFolder(model_->other_node(), 1, ASCIIToUTF16("OF1"));
-    model_->AddURL(of1, 0, ASCIIToUTF16("of1a"), GURL(test_base + "of1a"));
+        model_->AddFolder(model_->other_node(), 1, u"OF1");
+    model_->AddURL(of1, 0, u"of1a", GURL(test_base + "of1a"));
   }
 
   views::MenuDelegate test_delegate_;
@@ -162,7 +164,8 @@ TEST_F(BookmarkMenuDelegateTest, VerifyLazyLoad) {
   int next_id_before_load = next_menu_id();
   bookmark_menu_delegate_->WillShowMenu(f1_item);
   // f1 should have loaded its children.
-  EXPECT_EQ(next_id_before_load + 2, next_menu_id());
+  EXPECT_EQ(next_id_before_load + 2 * AppMenuModel::kNumUnboundedMenuTypes,
+            next_menu_id());
   ASSERT_EQ(2u, f1_item->GetSubmenu()->GetMenuItems().size());
   const BookmarkNode* f1_node =
       model_->bookmark_bar_node()->children()[1].get();
@@ -182,7 +185,8 @@ TEST_F(BookmarkMenuDelegateTest, VerifyLazyLoad) {
   // problems.
   bookmark_menu_delegate_->WillShowMenu(f11_item);
   // F11 should have loaded its single child (f11a).
-  EXPECT_EQ(next_id_before_load + 1, next_menu_id());
+  EXPECT_EQ(next_id_before_load + AppMenuModel::kNumUnboundedMenuTypes,
+            next_menu_id());
 
   ASSERT_EQ(1u, f11_item->GetSubmenu()->GetMenuItems().size());
   const BookmarkNode* f11_node = f1_node->children()[1].get();
@@ -196,7 +200,7 @@ TEST_F(BookmarkMenuDelegateTest, RemoveBookmarks) {
   views::MenuDelegate test_delegate;
   const BookmarkNode* node = model_->bookmark_bar_node()->children()[1].get();
   NewDelegate();
-  bookmark_menu_delegate_->Init(&test_delegate, NULL, node, 0,
+  bookmark_menu_delegate_->Init(&test_delegate, nullptr, node, 0,
                                 BookmarkMenuDelegate::HIDE_PERMANENT_FOLDERS,
                                 BOOKMARK_LAUNCH_LOCATION_NONE);
   LoadAllMenus();

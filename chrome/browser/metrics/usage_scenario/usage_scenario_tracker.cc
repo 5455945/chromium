@@ -4,7 +4,13 @@
 
 #include "chrome/browser/metrics/usage_scenario/usage_scenario_tracker.h"
 
+#include "chrome/browser/metrics/tab_stats/tab_stats_tracker.h"
+
 UsageScenarioTracker::UsageScenarioTracker()
-    : video_capture_event_provider_(&data_store_) {}
+    : tab_usage_scenario_tracker_(&data_store_),
+      video_capture_event_provider_(&data_store_) {
+  metrics::TabStatsTracker::GetInstance()->AddObserverAndSetInitialState(
+      &tab_usage_scenario_tracker_);
+}
 
 UsageScenarioTracker::~UsageScenarioTracker() = default;

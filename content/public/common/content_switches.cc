@@ -67,6 +67,9 @@ const char kDisable3DAPIs[]                 = "disable-3d-apis";
 // Disable gpu-accelerated 2d canvas.
 const char kDisableAccelerated2dCanvas[]    = "disable-accelerated-2d-canvas";
 
+// Enable in-progress canvas 2d API methods BeginLayer and EndLayer.
+const char kEnableCanvas2DLayers[] = "canvas-2d-layers";
+
 // Enable in-progress canvas 2d API features.
 const char kEnableNewCanvas2DAPI[] = "new-canvas-2d-api";
 
@@ -271,7 +274,9 @@ const char kDisableV8IdleTasks[]            = "disable-v8-idle-tasks";
 // Disables WebGL rendering into a scanout buffer for overlay support.
 const char kDisableWebGLImageChromium[]     = "disable-webgl-image-chromium";
 
-// Don't enforce the same-origin policy. (Used by people testing their sites.)
+// Don't enforce the same-origin policy; meant for website testing only.
+// This switch has no effect unless --user-data-dir (as defined by the content
+// embedder) is also present.
 const char kDisableWebSecurity[]            = "disable-web-security";
 
 // Disable the video decoder from drawing directly to a texture.
@@ -333,6 +338,16 @@ const char kEnableExperimentalWebAssemblyFeatures[] =
 // Enables Web Platform features that are in development.
 const char kEnableExperimentalWebPlatformFeatures[] =
     "enable-experimental-web-platform-features";
+
+// Forces the V8/blink bindings to call all API entry points that use the
+// [NoAllocDirectCall] extended IDL attribute as if V8 were using the fast call
+// code path.  Using this flag will not make API calls use the true fast path,
+// it will probably even make things a bit slower.  Its purpose is to guarantee
+// test coverage for the blink side of V8 Fast API calls, independently of
+// whether or not V8 actually activates the fast path, which depends on
+// heuristics.  This flag is effective only when DCHECKs are enabled.
+const char kEnableFakeNoAllocDirectCallForTesting[] =
+    "enable-fake-no-alloc-direct-call-for-testing";
 
 // Enables blink runtime enabled features with status:"test" or
 // status:"experimental", which are enabled when running web tests.
@@ -401,6 +416,16 @@ const char kEnableStrictPowerfulFeatureRestrictions[] =
 
 // Enabled threaded compositing for web tests.
 const char kEnableThreadedCompositing[]     = "enable-threaded-compositing";
+
+// When specified along with a value in the range (0,1] will --enable-tracing
+// for (roughly) that percentage of tests being run. This is done in a stable
+// manner such that the same tests are chosen each run, and under the assumption
+// that tests hash equally across the range of possible values.
+// The flag will enable all tracing categories for those tests, and none for the
+// rest. This flag could be used with other tracing switches like
+// --enable-tracing-format, but any other switches that will enable tracing will
+// turn tracing on for all tests.
+const char kEnableTracingFraction[] = "enable-tracing-fraction";
 
 // Enable screen capturing support for MediaStream API.
 const char kEnableUserMediaScreenCapturing[] =
@@ -482,10 +507,6 @@ const char kGpuSandboxStartEarly[] = "gpu-sandbox-start-early";
 // Causes the GPU process to display a dialog on launch.
 const char kGpuStartupDialog[]              = "gpu-startup-dialog";
 
-// Start the renderer with an initial virtual time override specified in
-// seconds since the epoch.
-const char kInitialVirtualTime[] = "initial-virtual-time";
-
 // Run the GPU process as a thread in the browser process.
 const char kInProcessGPU[]                  = "in-process-gpu";
 
@@ -542,6 +563,9 @@ const char kMaxActiveWebGLContexts[] = "max-active-webgl-contexts";
 
 // Sets the maximium decoded image size limitation.
 const char kMaxDecodedImageSizeMb[] = "max-decoded-image-size-mb";
+
+// Sets the maximum number of WebMediaPlayers allowed per frame.
+const char kMaxWebMediaPlayerCount[] = "max-web-media-player-count";
 
 // Indicates the utility process should run with a message loop type of UI.
 const char kMessageLoopTypeUi[] = "message-loop-type-ui";
@@ -673,6 +697,13 @@ const char kRunManualTestsFlag[] = "run-manual";
 // Causes the process to run as a sandbox IPC subprocess.
 const char kSandboxIPCProcess[]             = "sandbox-ipc";
 
+// Enables shared array buffer on desktop, gated by an Enterprise Policy.
+// TODO(crbug.com/1144104) Remove when migration to COOP+COEP is complete.
+#if !defined(OS_ANDROID)
+const char kSharedArrayBufferUnrestrictedAccessAllowed[] =
+    "shared-array-buffer-unrestricted-access-allowed";
+#endif
+
 // Describes the file descriptors passed to a child process in the following
 // list format:
 //
@@ -739,6 +770,9 @@ const char kSkiaResourceCacheLimitMb[] = "skia-resource-cache-limit-mb";
 
 // Type of the current test harness ("browser" or "ui").
 const char kTestType[]                      = "test-type";
+
+// The time zone to use for testing. Passed to renderers and plugins on startup.
+const char kTimeZoneForTesting[] = "time-zone-for-testing";
 
 // Enable support for touch event feature detection.
 const char kTouchEventFeatureDetection[] = "touch-events";
@@ -847,9 +881,6 @@ const char kEnableWebRtcSrtpAesGcm[] = "enable-webrtc-srtp-aes-gcm";
 const char kEnableWebRtcSrtpEncryptedHeaders[] =
     "enable-webrtc-srtp-encrypted-headers";
 
-// Enables Origin header in Stun messages for WebRTC.
-const char kEnableWebRtcStunOrigin[]        = "enable-webrtc-stun-origin";
-
 // Enforce IP Permission check. TODO(guoweis): Remove this once the feature is
 // not under finch and becomes the default.
 const char kEnforceWebRtcIPPermissionCheck[] =
@@ -868,11 +899,6 @@ const char kWebRtcMaxCaptureFramerate[] = "max-gum-fps";
 // throttling of the capture.
 const char kWebRtcMaxCpuConsumptionPercentage[] =
     "webrtc-max-cpu-consumption-percentage";
-
-// Renderer process parameter for WebRTC Stun probe trial to determine the
-// interval. Please see SetupStunProbeTrial in
-// chrome_browser_field_trials_desktop.cc for more detail.
-const char kWebRtcStunProbeTrialParameter[] = "webrtc-stun-probe-trial";
 
 // Enable capture and local storage of WebRTC event logs without visiting
 // chrome://webrtc-internals. This is useful for automated testing. It accepts
@@ -945,10 +971,6 @@ const char kRendererWaitForJavaDebugger[] = "renderer-wait-for-java-debugger";
 // Disables debug crash dumps for OOPR.
 const char kDisableOoprDebugCrashDump[] = "disable-oopr-debug-crash-dump";
 #endif
-
-// Enable the experimental Accessibility Object Model APIs in development.
-const char kEnableAccessibilityObjectModel[] =
-    "enable-accessibility-object-model";
 
 // Enable the aggressive flushing of DOM Storage to minimize data loss.
 const char kEnableAggressiveDOMStorageFlushing[] =
@@ -1023,6 +1045,9 @@ const char kRaiseTimerFrequency[] = "raise-timer-frequency";
 // Causes the second GPU process used for gpu info collection to display a
 // dialog on launch.
 const char kGpu2StartupDialog[] = "gpu2-startup-dialog";
+
+// Use high priority for the audio process.
+const char kAudioProcessHighPriority[] = "audio-process-high-priority";
 #endif
 
 #if defined(ENABLE_IPC_FUZZER)

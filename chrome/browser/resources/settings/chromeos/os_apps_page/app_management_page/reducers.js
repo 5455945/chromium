@@ -2,9 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// clang-format off
-// #import {assert} from 'chrome://resources/js/assert.m.js';
-// clang-format on
+import {assertNotReached} from 'chrome://resources/js/assert.m.js';
 
 /**
  * @fileoverview Module of functions which produce a new page state in response
@@ -22,7 +20,16 @@ cr.define('app_management', function() {
    * @return {AppMap}
    */
   AppState.addApp = function(apps, action) {
-    assert(!apps[action.app.id]);
+    if (apps[action.app.id]) {
+      const stringifyApp = (app) => {
+        return `id: ${app.id}, type: ${app.type}, install source: ${
+            app.installSource} title: ${app.title}`;
+      };
+      const errorMessage = `Attempted to add an app that already exists.
+                            New app: ${stringifyApp(action.app)}.
+                            Old app: ${stringifyApp(apps[action.app.id])}.`;
+      assertNotReached(errorMessage);
+    }
 
     const newAppEntry = {};
     newAppEntry[action.app.id] = action.app;
@@ -78,22 +85,6 @@ cr.define('app_management', function() {
     }
   };
 
-  const ArcSupported = {};
-
-  /**
-   * @param {boolean} arcSupported
-   * @param {Object} action
-   * @return {boolean}
-   */
-  ArcSupported.updateArcSupported = function(arcSupported, action) {
-    switch (action.name) {
-      case 'update-arc-supported':
-        return action.value;
-      default:
-        return arcSupported;
-    }
-  };
-
   const SelectedAppId = {};
 
   /**
@@ -125,7 +116,6 @@ cr.define('app_management', function() {
   /* #export */ function reduceAction(state, action) {
     return {
       apps: AppState.updateApps(state.apps, action),
-      arcSupported: ArcSupported.updateArcSupported(state.arcSupported, action),
       selectedAppId:
           SelectedAppId.updateSelectedAppId(state.selectedAppId, action),
     };
@@ -135,7 +125,6 @@ cr.define('app_management', function() {
   return {
     reduceAction: reduceAction,
     AppState: AppState,
-    ArcSupported: ArcSupported,
     SelectedAppId: SelectedAppId,
   };
 });

@@ -18,8 +18,9 @@
 #import "ios/chrome/browser/prefs/browser_prefs.h"
 #import "ios/chrome/browser/signin/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/authentication_service_fake.h"
+#import "ios/chrome/browser/signin/chrome_account_manager_service_factory.h"
 #include "ios/chrome/browser/signin/chrome_identity_service_observer_bridge.h"
-#import "ios/chrome/browser/sync/profile_sync_service_factory.h"
+#import "ios/chrome/browser/sync/sync_service_factory.h"
 #import "ios/chrome/browser/sync/sync_setup_service_factory.h"
 #import "ios/chrome/browser/sync/sync_setup_service_mock.h"
 #import "ios/chrome/browser/ui/authentication/cells/signin_promo_view.h"
@@ -62,7 +63,7 @@ class SigninPromoViewMediatorTest : public PlatformTest {
     close_button_hidden_ = YES;
 
     TestChromeBrowserState::Builder builder;
-    builder.AddTestingFactory(ProfileSyncServiceFactory::GetInstance(),
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
                               base::BindRepeating(&BuildMockSyncService));
     builder.AddTestingFactory(
         SyncSetupServiceFactory::GetInstance(),
@@ -93,9 +94,15 @@ class SigninPromoViewMediatorTest : public PlatformTest {
   void CreateMediator(signin_metrics::AccessPoint accessPoint) {
     consumer_ = OCMStrictProtocolMock(@protocol(SigninPromoViewConsumer));
     mediator_ = [[SigninPromoViewMediator alloc]
-        initWithBrowserState:chrome_browser_state_.get()
-                 accessPoint:accessPoint
-                   presenter:nil];
+        initWithAccountManagerService:ChromeAccountManagerServiceFactory::
+                                          GetForBrowserState(
+                                              chrome_browser_state_.get())
+                          authService:AuthenticationServiceFactory::
+                                          GetForBrowserState(
+                                              chrome_browser_state_.get())
+                          prefService:chrome_browser_state_.get()->GetPrefs()
+                          accessPoint:accessPoint
+                            presenter:nil];
     mediator_.consumer = consumer_;
 
     signin_promo_view_ = OCMStrictClassMock([SigninPromoView class]);
@@ -129,7 +136,7 @@ class SigninPromoViewMediatorTest : public PlatformTest {
   // Tests the mediator with a new created configurator when no accounts are on
   // the device.
   void TestSigninPromoWithNoAccounts() {
-    EXPECT_EQ(nil, mediator_.defaultIdentity);
+    EXPECT_EQ(nil, mediator_.identity);
     CheckNoAccountsConfigurator([mediator_ createConfigurator]);
   }
 
@@ -182,7 +189,7 @@ class SigninPromoViewMediatorTest : public PlatformTest {
   // Expects the signin promo view to be configured when accounts are on the
   // device.
   void ExpectSigninWithAccountConfiguration() {
-    EXPECT_EQ(expected_default_identity_, mediator_.defaultIdentity);
+    EXPECT_EQ(expected_default_identity_, mediator_.identity);
     OCMExpect(
         [signin_promo_view_ setMode:SigninPromoViewModeSigninWithAccount]);
     OCMExpect([signin_promo_view_
@@ -193,7 +200,7 @@ class SigninPromoViewMediatorTest : public PlatformTest {
     NSString* name = expected_default_identity_.userGivenName.length
                          ? expected_default_identity_.userGivenName
                          : expected_default_identity_.userEmail;
-    base::string16 name16 = SysNSStringToUTF16(name);
+    std::u16string name16 = SysNSStringToUTF16(name);
     NSString* accessibilityLabel =
         GetNSStringF(IDS_IOS_SIGNIN_PROMO_ACCESSIBILITY_LABEL, name16);
     OCMExpect([signin_promo_view_ setAccessibilityLabel:accessibilityLabel]);
@@ -422,11 +429,11 @@ TEST_F(SigninPromoViewMediatorTest,
   TestChromeBrowserState::Builder builder;
   builder.SetPrefService(CreatePrefService());
   std::unique_ptr<TestChromeBrowserState> browser_state = builder.Build();
-  browser_state->GetPrefs()->SetBoolean(prefs::kSigninAllowed, false);
+  browser_state->GetPrefs()->SetBoolean(prefs::kSigninAllowedByPolicy, false);
   EXPECT_FALSE([SigninPromoViewMediator
       shouldDisplaySigninPromoViewWithAccessPoint:signin_metrics::AccessPoint::
                                                       ACCESS_POINT_RECENT_TABS
-                                     browserState:browser_state.get()]);
+                                      prefService:browser_state->GetPrefs()]);
 }
 
 }  // namespace

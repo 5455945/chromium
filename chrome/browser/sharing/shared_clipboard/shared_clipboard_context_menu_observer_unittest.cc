@@ -40,7 +40,7 @@ using SharingMessage = chrome_browser_sharing::SharingMessage;
 
 namespace {
 
-const char kText[] = "Some random text to be copied.";
+const char16_t kText[] = u"Some random text to be copied.";
 
 class SharedClipboardContextMenuObserverTest : public testing::Test {
  public:
@@ -62,7 +62,7 @@ class SharedClipboardContextMenuObserverTest : public testing::Test {
     menu_.SetObserver(observer_.get());
   }
 
-  void InitMenu(const base::string16 text) {
+  void InitMenu(const std::u16string text) {
     content::ContextMenuParams params;
     params.selection_text = text;
     observer_->InitMenu(params);
@@ -111,7 +111,7 @@ TEST_F(SharedClipboardContextMenuObserverTest, NoDevices_DoNotShowMenu) {
   EXPECT_CALL(*service(), GetDeviceCandidates(_))
       .WillOnce(Return(ByMove(std::move(devices))));
 
-  InitMenu(base::ASCIIToUTF16(kText));
+  InitMenu(kText);
 
   EXPECT_EQ(0U, menu_.GetMenuSize());
 }
@@ -123,7 +123,7 @@ TEST_F(SharedClipboardContextMenuObserverTest, SingleDevice_ShowMenu) {
   EXPECT_CALL(*service(), GetDeviceCandidates(_))
       .WillOnce(Return(ByMove(std::move(devices))));
 
-  InitMenu(base::ASCIIToUTF16(kText));
+  InitMenu(kText);
   ASSERT_EQ(1U, menu_.GetMenuSize());
 
   MockRenderViewContextMenu::MockMenuItem item;
@@ -132,12 +132,10 @@ TEST_F(SharedClipboardContextMenuObserverTest, SingleDevice_ShowMenu) {
             item.command_id);
 
   // Emulate click on the device.
-  EXPECT_CALL(
-      *service(),
-      SendMessageToDevice(
-          Property(&syncer::DeviceInfo::guid, guid),
-          Eq(base::TimeDelta::FromSeconds(kSharingMessageTTLSeconds.Get())),
-          ProtoEquals(sharing_message), _))
+  EXPECT_CALL(*service(),
+              SendMessageToDevice(Property(&syncer::DeviceInfo::guid, guid),
+                                  Eq(kSharingMessageTTL),
+                                  ProtoEquals(sharing_message), _))
       .Times(1);
   menu_.ExecuteCommand(
       IDC_CONTENT_CONTEXT_SHARING_SHARED_CLIPBOARD_SINGLE_DEVICE, 0);
@@ -153,7 +151,7 @@ TEST_F(SharedClipboardContextMenuObserverTest, MultipleDevices_ShowMenu) {
   EXPECT_CALL(*service(), GetDeviceCandidates(_))
       .WillOnce(Return(ByMove(std::move(devices))));
 
-  InitMenu(base::ASCIIToUTF16(kText));
+  InitMenu(kText);
   ASSERT_EQ(device_count + 1U, menu_.GetMenuSize());
 
   // Assert item ordering.
@@ -171,12 +169,10 @@ TEST_F(SharedClipboardContextMenuObserverTest, MultipleDevices_ShowMenu) {
   // assigned.
   for (int i = 0; i < kMaxDevicesShown; i++) {
     if (i < device_count) {
-      EXPECT_CALL(
-          *service(),
-          SendMessageToDevice(
-              Property(&syncer::DeviceInfo::guid, guids[i]),
-              Eq(base::TimeDelta::FromSeconds(kSharingMessageTTLSeconds.Get())),
-              ProtoEquals(sharing_message), _))
+      EXPECT_CALL(*service(),
+                  SendMessageToDevice(
+                      Property(&syncer::DeviceInfo::guid, guids[i]),
+                      Eq(kSharingMessageTTL), ProtoEquals(sharing_message), _))
           .Times(1);
     } else {
       EXPECT_CALL(*service(), SendMessageToDevice(_, _, _, _)).Times(0);
@@ -197,7 +193,7 @@ TEST_F(SharedClipboardContextMenuObserverTest,
   EXPECT_CALL(*service(), GetDeviceCandidates(_))
       .WillOnce(Return(ByMove(std::move(devices))));
 
-  InitMenu(base::ASCIIToUTF16(kText));
+  InitMenu(kText);
   ASSERT_EQ(kMaxDevicesShown + 1U, menu_.GetMenuSize());
 
   // Assert item ordering.
@@ -215,12 +211,10 @@ TEST_F(SharedClipboardContextMenuObserverTest,
   // range too.
   for (int i = 0; i < device_count; i++) {
     if (i < kMaxDevicesShown) {
-      EXPECT_CALL(
-          *service(),
-          SendMessageToDevice(
-              Property(&syncer::DeviceInfo::guid, guids[i]),
-              Eq(base::TimeDelta::FromSeconds(kSharingMessageTTLSeconds.Get())),
-              ProtoEquals(sharing_message), _))
+      EXPECT_CALL(*service(),
+                  SendMessageToDevice(
+                      Property(&syncer::DeviceInfo::guid, guids[i]),
+                      Eq(kSharingMessageTTL), ProtoEquals(sharing_message), _))
           .Times(1);
     } else {
       EXPECT_CALL(*service(), SendMessageToDevice(_, _, _, _)).Times(0);

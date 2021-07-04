@@ -6,10 +6,10 @@
 #define CONTENT_BROWSER_ACCESSIBILITY_BROWSER_ACCESSIBILITY_COCOA_H_
 
 #import <Cocoa/Cocoa.h>
+#include <string>
 #include <vector>
 
 #import "base/mac/scoped_nsobject.h"
-#include "base/strings/string16.h"
 #include "content/browser/accessibility/browser_accessibility.h"
 #include "content/browser/accessibility/browser_accessibility_manager.h"
 #include "content/common/content_export.h"
@@ -22,16 +22,16 @@ namespace content {
 // support character echo and other announcements during editing.
 struct CONTENT_EXPORT AXTextEdit {
   AXTextEdit();
-  AXTextEdit(base::string16 inserted_text,
-             base::string16 deleted_text,
+  AXTextEdit(std::u16string inserted_text,
+             std::u16string deleted_text,
              id edit_text_marker);
   AXTextEdit(const AXTextEdit& other);
   ~AXTextEdit();
 
   bool IsEmpty() const { return inserted_text.empty() && deleted_text.empty(); }
 
-  base::string16 inserted_text;
-  base::string16 deleted_text;
+  std::u16string inserted_text;
+  std::u16string deleted_text;
   base::scoped_nsprotocol<id> edit_text_marker;
 };
 
@@ -66,9 +66,14 @@ id AXTextMarkerRangeFrom(id anchor_text_marker, id focus_text_marker);
 @interface BrowserAccessibilityCocoa : NSAccessibilityElement {
  @private
   content::BrowserAccessibility* _owner;
+  // An array of children of this object. Cached to avoid re-computing.
   base::scoped_nsobject<NSMutableArray> _children;
+  // Whether the children have changed and need to be updated.
+  bool _needsToUpdateChildren;
+  // Whether _children is currently being computed.
+  bool _gettingChildren;
   // Stores the previous value of an edit field.
-  base::string16 _oldValue;
+  std::u16string _oldValue;
 }
 
 // This creates a cocoa browser accessibility object around

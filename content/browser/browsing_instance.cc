@@ -24,34 +24,18 @@ int BrowsingInstance::next_browsing_instance_id_ = 1;
 
 BrowsingInstance::BrowsingInstance(
     BrowserContext* browser_context,
-    const CoopCoepCrossOriginIsolatedInfo& cross_origin_isolated_info)
+    const WebExposedIsolationInfo& web_exposed_isolation_info)
     : isolation_context_(
           BrowsingInstanceId::FromUnsafeValue(next_browsing_instance_id_++),
           BrowserOrResourceContext(browser_context)),
       active_contents_count_(0u),
-      default_process_(nullptr),
       default_site_instance_(nullptr),
-      cross_origin_isolated_info_(cross_origin_isolated_info) {
+      web_exposed_isolation_info_(web_exposed_isolation_info) {
   DCHECK(browser_context);
-}
-
-void BrowsingInstance::RenderProcessHostDestroyed(RenderProcessHost* host) {
-  DCHECK_EQ(default_process_, host);
-  // Only clear the default process if the RenderProcessHost object goes away,
-  // not if the renderer process goes away while the RenderProcessHost remains.
-  default_process_->RemoveObserver(this);
-  default_process_ = nullptr;
 }
 
 BrowserContext* BrowsingInstance::GetBrowserContext() const {
   return isolation_context_.browser_or_resource_context().ToBrowserContext();
-}
-
-void BrowsingInstance::SetDefaultProcess(RenderProcessHost* default_process) {
-  DCHECK(!default_process_);
-  DCHECK(!default_site_instance_);
-  default_process_ = default_process;
-  default_process_->AddObserver(this);
 }
 
 bool BrowsingInstance::HasSiteInstance(const SiteInfo& site_info) {
@@ -101,7 +85,6 @@ scoped_refptr<SiteInstanceImpl> BrowsingInstance::GetSiteInstanceForURLHelper(
   if (allow_default_instance &&
       SiteInstanceImpl::CanBePlacedInDefaultSiteInstance(
           isolation_context_, url_info.url, site_info)) {
-    DCHECK(!default_process_);
     scoped_refptr<SiteInstanceImpl> site_instance = default_site_instance_;
     if (!site_instance) {
       site_instance = new SiteInstanceImpl(this);
@@ -177,8 +160,6 @@ BrowsingInstance::~BrowsingInstance() {
   DCHECK(site_instance_map_.empty());
   DCHECK_EQ(0u, active_contents_count_);
   DCHECK(!default_site_instance_);
-  if (default_process_)
-    default_process_->RemoveObserver(this);
 
   // Remove any origin isolation opt-ins related to this instance.
   ChildProcessSecurityPolicyImpl* policy =
@@ -190,7 +171,7 @@ BrowsingInstance::~BrowsingInstance() {
 SiteInfo BrowsingInstance::ComputeSiteInfoForURL(
     const UrlInfo& url_info) const {
   return SiteInfo::Create(isolation_context_, url_info,
-                          cross_origin_isolated_info_);
+                          web_exposed_isolation_info_);
 }
 
 }  // namespace content

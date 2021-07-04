@@ -4,6 +4,7 @@
 
 #include "chrome/browser/web_applications/test/test_os_integration_manager.h"
 
+#include "base/containers/contains.h"
 #include "base/threading/sequenced_task_runner_handle.h"
 #include "chrome/browser/web_applications/components/app_shortcut_manager.h"
 #include "chrome/browser/web_applications/components/file_handler_manager.h"
@@ -113,7 +114,11 @@ void TestOsIntegrationManager::UninstallAllOsHooks(
 void TestOsIntegrationManager::UpdateOsHooks(
     const AppId& app_id,
     base::StringPiece old_name,
+    std::unique_ptr<ShortcutInfo> old_shortcut,
+    FileHandlerUpdateAction file_handlers_need_os_update,
     const WebApplicationInfo& web_app_info) {
+  if (file_handlers_need_os_update != FileHandlerUpdateAction::kNoUpdate)
+    ++num_update_file_handlers_calls_;
 }
 
 void TestOsIntegrationManager::SetFileHandlerManager(
@@ -146,10 +151,32 @@ std::unique_ptr<ShortcutInfo> TestShortcutManager::BuildShortcutInfo(
   return nullptr;
 }
 
+void TestShortcutManager::SetShortcutInfoForApp(
+    const AppId& app_id,
+    std::unique_ptr<ShortcutInfo> shortcut_info) {
+  shortcut_info_map_[app_id] = std::move(shortcut_info);
+}
+
 void TestShortcutManager::GetShortcutInfoForApp(
     const AppId& app_id,
     GetShortcutInfoCallback callback) {
-  std::move(callback).Run(nullptr);
+  if (shortcut_info_map_.find(app_id) != shortcut_info_map_.end()) {
+    std::move(callback).Run(std::move(shortcut_info_map_[app_id]));
+    shortcut_info_map_.erase(app_id);
+  } else {
+    std::move(callback).Run(nullptr);
+  }
+}
+
+void TestShortcutManager::GetAppExistingShortCutLocation(
+    ShortcutLocationCallback callback,
+    std::unique_ptr<ShortcutInfo> shortcut_info) {
+  ShortcutLocations locations;
+  if (existing_shortcut_locations_.find(shortcut_info->url) !=
+      existing_shortcut_locations_.end()) {
+    locations = existing_shortcut_locations_[shortcut_info->url];
+  }
+  std::move(callback).Run(locations);
 }
 
 }  // namespace web_app

@@ -26,7 +26,7 @@ class ChromeBrowserCloudManagementControllerIOS
   // ChromeBrowserCloudManagementController::Delegate implementation.
   void SetDMTokenStorageDelegate() override;
   int GetUserDataDirKey() override;
-  base::FilePath GetExternalPolicyPath() override;
+  base::FilePath GetExternalPolicyDir() override;
   NetworkConnectionTrackerGetter CreateNetworkConnectionTrackerGetter()
       override;
   void InitializeOAuthTokenFactory(
@@ -50,6 +50,8 @@ class ChromeBrowserCloudManagementControllerIOS
       override;
   void SetGaiaURLLoaderFactory(scoped_refptr<network::SharedURLLoaderFactory>
                                    url_loader_factory) override;
+  bool ReadyToCreatePolicyManager() override;
+  bool ReadyToInit() override;
 
  private:
   enterprise_reporting::ReportingDelegateFactoryIOS reporting_delegate_factory_;

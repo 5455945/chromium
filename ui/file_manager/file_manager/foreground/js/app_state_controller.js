@@ -2,15 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// #import {FileManagerUI} from './ui/file_manager_ui.m.js';
-// #import {DirectoryModel} from './directory_model.m.js';
-// #import {DialogType} from './dialog_type.m.js';
-// #import {util} from '../../common/js/util.m.js';
-// #import {appUtil} from '../../../base/js/app_util.m.js';
-// #import {ListContainer} from './ui/list_container.m.js';
-// #import {assert} from 'chrome://resources/js/assert.m.js';
+import {assert} from 'chrome://resources/js/assert.m.js';
 
-/* #export */ class AppStateController {
+import {appUtil} from '../../common/js/app_util.js';
+import {util} from '../../common/js/util.js';
+import {xfm} from '../../common/js/xfm.js';
+
+import {DialogType} from './dialog_type.js';
+import {DirectoryModel} from './directory_model.js';
+import {FileManagerUI} from './ui/file_manager_ui.js';
+import {ListContainer} from './ui/list_container.js';
+
+export class AppStateController {
   /**
    * @param {DialogType} dialogType
    */
@@ -48,7 +51,7 @@
   loadInitialViewOptions() {
     // Load initial view option.
     return new Promise((fulfill, reject) => {
-             chrome.storage.local.get(this.viewOptionStorageKey_, values => {
+             xfm.storage.local.get(this.viewOptionStorageKey_, values => {
                if (chrome.runtime.lastError) {
                  reject(
                      'Failed to load view options: ' +
@@ -143,7 +146,7 @@
     // Save the global default.
     const items = {};
     items[this.viewOptionStorageKey_] = JSON.stringify(prefs);
-    chrome.storage.local.set(items, () => {
+    xfm.storage.local.set(items, () => {
       if (chrome.runtime.lastError) {
         console.error(
             'Failed to save view options: ' + chrome.runtime.lastError.message);

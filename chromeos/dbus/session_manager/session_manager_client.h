@@ -15,6 +15,7 @@
 #include "base/observer_list.h"
 #include "base/time/time.h"
 #include "chromeos/dbus/dbus_method_call_status.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/cros_system_api/dbus/login_manager/dbus-constants.h"
 
 namespace cryptohome {
@@ -75,6 +76,13 @@ class COMPONENT_EXPORT(SESSION_MANAGER) SessionManagerClient {
     NEED_POWERWASH = 3,
   };
 
+  enum class RestartJobReason : uint32_t {
+    // Restart browser for Guest session.
+    kGuest = 0,
+    // Restart browser without user session for headless Chromium.
+    kUserless = 1,
+  };
+
   // Interface for observing changes from the session manager.
   class Observer {
    public:
@@ -90,7 +98,11 @@ class COMPONENT_EXPORT(SESSION_MANAGER) SessionManagerClient {
     virtual void EmitLoginPromptVisibleCalled() {}
 
     // Called when the ARC instance is stopped after it had already started.
-    virtual void ArcInstanceStopped() {}
+    virtual void ArcInstanceStopped(
+        login_manager::ArcContainerStopReason reason) {}
+
+    // Called when screen lock state is updated.
+    virtual void ScreenLockedStateUpdated() {}
   };
 
   // Interface for performing actions on behalf of the stub implementation.
@@ -151,8 +163,11 @@ class COMPONENT_EXPORT(SESSION_MANAGER) SessionManagerClient {
   // request originates from belongs to the browser itself.
   // This method duplicates |socket_fd| so it's OK to close the FD without
   // waiting for the result.
+  // |reason| - restart job without user session (for headless chromium)
+  // or with user session (for guest sessions only).
   virtual void RestartJob(int socket_fd,
                           const std::vector<std::string>& argv,
+                          RestartJobReason reason,
                           VoidDBusMethodCallback callback) = 0;
 
   // Sends the user's password to the session manager.
@@ -177,8 +192,8 @@ class COMPONENT_EXPORT(SESSION_MANAGER) SessionManagerClient {
   // returned by the session manager. |error| contains an error message if an
   // error occurred, otherwise empty.
   using LoginScreenStorageRetrieveCallback =
-      base::OnceCallback<void(base::Optional<std::string> /* data */,
-                              base::Optional<std::string> /* error */)>;
+      base::OnceCallback<void(absl::optional<std::string> /* data */,
+                              absl::optional<std::string> /* error */)>;
 
   // Retrieve data stored earlier with the |LoginScreenStorageStore()| method.
   virtual void LoginScreenStorageRetrieve(
@@ -190,7 +205,7 @@ class COMPONENT_EXPORT(SESSION_MANAGER) SessionManagerClient {
   // |keys| is empty and |error| contains the error message.
   using LoginScreenStorageListKeysCallback =
       base::OnceCallback<void(std::vector<std::string> /* keys */,
-                              base::Optional<std::string> /* error */)>;
+                              absl::optional<std::string> /* error */)>;
 
   // List all keys currently stored in the login screen storage.
   virtual void LoginScreenStorageListKeys(
@@ -207,6 +222,10 @@ class COMPONENT_EXPORT(SESSION_MANAGER) SessionManagerClient {
   // Stops the current session. Don't call directly unless there's no user on
   // the device. Use SessionTerminationManager::StopSession instead.
   virtual void StopSession(login_manager::SessionStopReason reason) = 0;
+
+  // Triggers loading the shill profile for |cryptohome_id|.
+  virtual void LoadShillProfile(
+      const cryptohome::AccountIdentifier& cryptohome_id) = 0;
 
   // Starts the factory reset.
   virtual void StartDeviceWipe() = 0;
@@ -464,5 +483,10 @@ class COMPONENT_EXPORT(SESSION_MANAGER) SessionManagerClient {
 };
 
 }  // namespace chromeos
+
+// TODO(https://crbug.com/1164001): remove when moved to ash.
+namespace ash {
+using ::chromeos::SessionManagerClient;
+}
 
 #endif  // CHROMEOS_DBUS_SESSION_MANAGER_SESSION_MANAGER_CLIENT_H_

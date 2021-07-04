@@ -37,7 +37,6 @@ typedef id<CRWWebViewProxy> CRWWebViewProxyType;
 typedef UIView<CRWScrollableContent> CRWContentView;
 
 namespace base {
-class DictionaryValue;
 class Value;
 }
 
@@ -53,7 +52,6 @@ class NavigationManager;
 class SessionCertificatePolicyCache;
 class WebFrame;
 class WebFramesManager;
-class WebInterstitial;
 class WebStateDelegate;
 class WebStateObserver;
 class WebStatePolicyDecider;
@@ -250,8 +248,8 @@ class WebState : public base::SupportsUserData {
   // NOTE: Integer values will be returned as Type::DOUBLE because of underlying
   // library limitation.
   typedef base::OnceCallback<void(const base::Value*)> JavaScriptResultCallback;
-  virtual void ExecuteJavaScript(const base::string16& javascript) = 0;
-  virtual void ExecuteJavaScript(const base::string16& javascript,
+  virtual void ExecuteJavaScript(const std::u16string& javascript) = 0;
+  virtual void ExecuteJavaScript(const std::u16string& javascript,
                                  JavaScriptResultCallback callback) = 0;
 
   // Asynchronously executes |javaScript| in the main frame's context,
@@ -266,7 +264,7 @@ class WebState : public base::SupportsUserData {
 
   // Returns the current navigation title. This could be the title of the page
   // if it is available or the URL.
-  virtual const base::string16& GetTitle() const = 0;
+  virtual const std::u16string& GetTitle() const = 0;
 
   // Returns true if the current page is loading.
   virtual bool IsLoading() const = 0;
@@ -311,22 +309,15 @@ class WebState : public base::SupportsUserData {
   // TODO(crbug.com/457679): Figure out a clean API for this.
   virtual GURL GetCurrentURL(URLVerificationTrustLevel* trust_level) const = 0;
 
-  // Returns true if a WebInterstitial is currently displayed.
-  virtual bool IsShowingWebInterstitial() const = 0;
-
-  // Returns the currently visible WebInterstitial if one is shown.
-  virtual WebInterstitial* GetWebInterstitial() const = 0;
-
   // Callback used to handle script commands. |message| is the JS message sent
   // from the |sender_frame| in the page, |page_url| is the URL of page's main
   // frame, |user_is_interacting| indicates if the user is interacting with the
   // page.
   // TODO(crbug.com/881813): remove |page_url|.
-  using ScriptCommandCallbackSignature =
-      void(const base::DictionaryValue& message,
-           const GURL& page_url,
-           bool user_is_interacting,
-           web::WebFrame* sender_frame);
+  using ScriptCommandCallbackSignature = void(const base::Value& message,
+                                              const GURL& page_url,
+                                              bool user_is_interacting,
+                                              web::WebFrame* sender_frame);
   using ScriptCommandCallback =
       base::RepeatingCallback<ScriptCommandCallbackSignature>;
   // Registers |callback| for JS message whose 'command' matches
@@ -387,6 +378,11 @@ class WebState : public base::SupportsUserData {
   // Instructs the delegate to close this web state. Called when the page calls
   // wants to close self by calling window.close() JavaScript API.
   virtual void CloseWebState() = 0;
+
+  // Injects an opaque NSData block into a WKWebView to restore or serialize.
+  // Returns true if this operation succeeds, and false otherwise.
+  virtual bool SetSessionStateData(NSData* data) = 0;
+  virtual NSData* SessionStateData() = 0;
 
  protected:
   friend class WebStatePolicyDecider;

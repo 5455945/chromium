@@ -8,7 +8,7 @@
 #include <string>
 
 #include "base/memory/ptr_util.h"
-#include "base/optional.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "components/page_load_metrics/browser/observers/core/largest_contentful_paint_handler.h"
@@ -20,6 +20,7 @@
 #include "services/metrics/public/cpp/metrics_utils.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 namespace {
@@ -161,13 +162,13 @@ void AMPPageLoadMetricsObserver::OnDidFinishSubFrameNavigation(
   subframe_info.navigation_start = navigation_handle->NavigationStart();
 }
 
-void AMPPageLoadMetricsObserver::OnFrameDeleted(content::RenderFrameHost* rfh) {
+void AMPPageLoadMetricsObserver::OnRenderFrameDeleted(
+    content::RenderFrameHost* rfh) {
   if (current_main_frame_nav_info_ &&
       current_main_frame_nav_info_->subframe_rfh == rfh) {
     MaybeRecordAmpDocumentMetrics();
     current_main_frame_nav_info_->subframe_rfh = nullptr;
   }
-
   amp_subframe_info_.erase(rfh);
 }
 
@@ -184,6 +185,26 @@ void AMPPageLoadMetricsObserver::OnTimingUpdate(
   it->second.timing = timing.Clone();
 }
 
+void AMPPageLoadMetricsObserver::OnMobileFriendlinessUpdate(
+    const blink::MobileFriendliness& mf) {
+  if (mf == blink::MobileFriendliness() ||
+      current_main_frame_nav_info_ == nullptr ||
+      current_main_frame_nav_info_->subframe_rfh == nullptr)
+    return;
+
+  auto it = amp_subframe_info_.find(current_main_frame_nav_info_->subframe_rfh);
+  if (it == amp_subframe_info_.end())
+    return;
+
+  SubFrameInfo& subframe_info = it->second;
+  if (subframe_info.viewer_url != current_main_frame_nav_info_->url ||
+      !subframe_info.amp_document_loaded) {
+    return;
+  }
+
+  subframe_info.mobile_friendliness = mf;
+}
+
 void AMPPageLoadMetricsObserver::OnSubFrameRenderDataUpdate(
     content::RenderFrameHost* subframe_rfh,
     const page_load_metrics::mojom::FrameRenderDataUpdate& render_data) {
@@ -197,6 +218,10 @@ void AMPPageLoadMetricsObserver::OnSubFrameRenderDataUpdate(
   it->second.render_data.layout_shift_score += render_data.layout_shift_delta;
   it->second.render_data.layout_shift_score_before_input_or_scroll +=
       render_data.layout_shift_delta_before_input_or_scroll;
+
+  it->second.layout_shift_normalization.AddNewLayoutShifts(
+      render_data.new_layout_shifts, base::TimeTicks::Now(),
+      it->second.render_data.layout_shift_score);
 }
 
 void AMPPageLoadMetricsObserver::OnComplete(
@@ -371,7 +396,7 @@ void AMPPageLoadMetricsObserver::MaybeRecordAmpDocumentMetrics() {
       }
     }
 
-    base::Optional<base::TimeDelta> largest_content_paint_time;
+    absl::optional<base::TimeDelta> largest_content_paint_time;
     uint64_t largest_content_paint_size;
     page_load_metrics::ContentfulPaintTimingInfo::LargestContentType
         largest_content_type;
@@ -452,6 +477,16 @@ void AMPPageLoadMetricsObserver::MaybeRecordAmpDocumentMetrics() {
           static_cast<int>(
               roundf(clamped_shift_score_before_input_or_scroll * 100.0f)));
 
+  const page_load_metrics::NormalizedCLSData& normalized_cls_data =
+      subframe_info.layout_shift_normalization.normalized_cls_data();
+  if (!normalized_cls_data.data_tainted) {
+    builder
+        .SetSubFrame_LayoutInstability_MaxCumulativeShiftScore_SessionWindow_Gap1000ms_Max5000ms(
+            page_load_metrics::LayoutShiftUkmValue(
+                normalized_cls_data
+                    .session_windows_gap1000ms_max5000ms_max_cls));
+  }
+
   // For UMA, report (shift_score * 10) an an int in the range [0,100].
   int32_t uma_value = static_cast<int>(roundf(clamped_shift_score * 10.0f));
   if (current_main_frame_nav_info_->is_same_document_navigation) {
@@ -459,13 +494,74 @@ void AMPPageLoadMetricsObserver::MaybeRecordAmpDocumentMetrics() {
         std::string(kHistogramPrefix)
             .append(kHistogramAMPSubframeLayoutInstabilityShiftScore),
         uma_value);
+    if (!normalized_cls_data.data_tainted) {
+      base::UmaHistogramCounts100(
+          "PageLoad.Clients.AMP.LayoutInstability.MaxCumulativeShiftScore."
+          "Subframe.SessionWindow.Gap1000ms.Max5000ms",
+          page_load_metrics::LayoutShiftUmaValue(
+              normalized_cls_data.session_windows_gap1000ms_max5000ms_max_cls));
+    }
+    RecordMobileFriendliness(builder);
   } else {
     UMA_HISTOGRAM_COUNTS_100(
         std::string(kHistogramPrefix)
             .append(
                 kHistogramAMPSubframeLayoutInstabilityShiftScoreFullNavigation),
         uma_value);
+    if (!normalized_cls_data.data_tainted) {
+      base::UmaHistogramCounts100(
+          "PageLoad.Clients.AMP.LayoutInstability.MaxCumulativeShiftScore."
+          "Subframe.FullNavigation.SessionWindow.Gap1000ms.Max5000ms",
+          page_load_metrics::LayoutShiftUmaValue(
+              normalized_cls_data.session_windows_gap1000ms_max5000ms_max_cls));
+    }
   }
 
   builder.Record(ukm::UkmRecorder::Get());
+}
+
+void AMPPageLoadMetricsObserver::RecordMobileFriendliness(
+    ukm::builders::AmpPageLoad& builder) {
+  auto it = amp_subframe_info_.find(current_main_frame_nav_info_->subframe_rfh);
+  if (it == amp_subframe_info_.end())
+    return;
+
+  const SubFrameInfo& subframe_info = it->second;
+  if (subframe_info.viewer_url != current_main_frame_nav_info_->url)
+    return;
+
+  if (!subframe_info.amp_document_loaded)
+    return;
+
+  const blink::MobileFriendliness& mf = subframe_info.mobile_friendliness;
+
+  if (mf.viewport_device_width == blink::mojom::ViewportStatus::kYes)
+    builder.SetSubFrame_MobileFriendliness_ViewportDeviceWidth(true);
+  else if (mf.viewport_device_width == blink::mojom::ViewportStatus::kNo)
+    builder.SetSubFrame_MobileFriendliness_ViewportDeviceWidth(false);
+
+  if (mf.allow_user_zoom == blink::mojom::ViewportStatus::kYes)
+    builder.SetSubFrame_MobileFriendliness_AllowUserZoom(true);
+  else if (mf.allow_user_zoom == blink::mojom::ViewportStatus::kNo)
+    builder.SetSubFrame_MobileFriendliness_AllowUserZoom(false);
+
+  if (mf.small_text_ratio != -1)
+    builder.SetSubFrame_MobileFriendliness_SmallTextRatio(mf.small_text_ratio);
+
+  if (mf.viewport_initial_scale_x10 != -1) {
+    builder.SetSubFrame_MobileFriendliness_ViewportInitialScaleX10(
+        page_load_metrics::GetBucketedViewportInitialScale(mf));
+  }
+
+  if (mf.viewport_hardcoded_width != -1) {
+    builder.SetSubFrame_MobileFriendliness_ViewportHardcodedWidth(
+        page_load_metrics::GetBucketedViewportHardcodedWidth(mf));
+  }
+  if (mf.text_content_outside_viewport_percentage != -1) {
+    builder.SetSubFrame_MobileFriendliness_TextContentOutsideViewportPercentage(
+        mf.text_content_outside_viewport_percentage);
+  }
+  if (mf.bad_tap_targets_ratio != -1)
+    builder.SetSubFrame_MobileFriendliness_BadTapTargetsRatio(
+        mf.bad_tap_targets_ratio);
 }

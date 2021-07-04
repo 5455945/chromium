@@ -9,12 +9,11 @@
 #include <utility>
 
 #include "ash/app_list/app_list_controller_impl.h"
+#include "ash/constants/ash_features.h"
 #include "ash/drag_drop/drag_image_view.h"
 #include "ash/keyboard/keyboard_util.h"
 #include "ash/keyboard/ui/keyboard_ui_controller.h"
 #include "ash/metrics/user_metrics_recorder.h"
-#include "ash/public/cpp/ash_constants.h"
-#include "ash/public/cpp/ash_features.h"
 #include "ash/public/cpp/metrics_util.h"
 #include "ash/public/cpp/shelf_model.h"
 #include "ash/public/cpp/shelf_types.h"
@@ -66,6 +65,7 @@
 #include "ui/compositor/layer_animation_observer.h"
 #include "ui/compositor/layer_animator.h"
 #include "ui/compositor/scoped_animation_duration_scale_mode.h"
+#include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/display/scoped_display_for_new_windows.h"
 #include "ui/events/event_utils.h"
 #include "ui/gfx/canvas.h"
@@ -219,6 +219,7 @@ bool ShelfButtonIsInDrag(const ShelfItemType item_type,
     case TYPE_PINNED_APP:
     case TYPE_BROWSER_SHORTCUT:
     case TYPE_APP:
+    case TYPE_UNPINNED_BROWSER_SHORTCUT:
       return static_cast<const ShelfAppButton*>(item_view)->state() &
              ShelfAppButton::STATE_DRAGGING;
     case TYPE_DIALOG:
@@ -244,6 +245,13 @@ bool IsRemoteApp(const std::string& app_id) {
   apps::AppRegistryCache* cache =
       apps::AppRegistryCacheWrapper::Get().GetAppRegistryCache(account_id);
   return cache && cache->GetAppType(app_id) == apps::mojom::AppType::kRemote;
+}
+
+// Records the user metric action for whenever a shelf item is pinned or
+// unpinned.
+void RecordPinUnpinUserAction(bool pinned) {
+  Shell::Get()->metrics()->RecordUserMetricsAction(
+      pinned ? UMA_SHELF_ITEM_PINNED : UMA_SHELF_ITEM_UNPINNED);
 }
 
 }  // namespace
@@ -532,11 +540,11 @@ const std::vector<aura::Window*> ShelfView::GetOpenWindowsForView(
   return open_windows;
 }
 
-base::string16 ShelfView::GetTitleForView(const views::View* view) const {
+std::u16string ShelfView::GetTitleForView(const views::View* view) const {
   if (view->parent() == this)
     return GetTitleForChildView(view);
 
-  return base::string16();
+  return std::u16string();
 }
 
 views::View* ShelfView::GetViewForEvent(const ui::Event& event) {
@@ -724,8 +732,8 @@ void ShelfView::ButtonPressed(views::Button* sender,
   // Slow down activation animations if Control key is pressed.
   std::unique_ptr<ui::ScopedAnimationDurationScaleMode> slowing_animations;
   if (event.IsControlDown()) {
-    slowing_animations.reset(new ui::ScopedAnimationDurationScaleMode(
-        ui::ScopedAnimationDurationScaleMode::SLOW_DURATION));
+    slowing_animations = std::make_unique<ui::ScopedAnimationDurationScaleMode>(
+        ui::ScopedAnimationDurationScaleMode::SLOW_DURATION);
   }
 
   // Collect usage statistics before we decide what to do with the click.
@@ -733,6 +741,7 @@ void ShelfView::ButtonPressed(views::Button* sender,
     case TYPE_PINNED_APP:
     case TYPE_BROWSER_SHORTCUT:
     case TYPE_APP:
+    case TYPE_UNPINNED_BROWSER_SHORTCUT:
       Shell::Get()->metrics()->RecordUserMetricsAction(
           UMA_LAUNCHER_CLICK_ON_APP);
       break;
@@ -789,7 +798,7 @@ void ShelfView::ShowContextMenuForViewImpl(views::View* source,
   const ShelfItem* item = ShelfItemForView(source);
   if (!item_awaiting_response_.IsNull()) {
     if (item && item->id != item_awaiting_response_) {
-      static_cast<views::Button*>(source)->AnimateInkDrop(
+      views::InkDrop::Get(source)->AnimateToState(
           views::InkDropState::DEACTIVATED, nullptr);
     }
     return;
@@ -1028,6 +1037,7 @@ views::View* ShelfView::CreateViewForItem(const ShelfItem& item) {
     case TYPE_PINNED_APP:
     case TYPE_BROWSER_SHORTCUT:
     case TYPE_APP:
+    case TYPE_UNPINNED_BROWSER_SHORTCUT:
     case TYPE_DIALOG: {
       ShelfAppButton* button = new ShelfAppButton(
           this, shelf_button_delegate_ ? shelf_button_delegate_ : this);
@@ -1784,7 +1794,8 @@ bool ShelfView::CanDragAcrossSeparator(views::View* drag_view) const {
 
   DCHECK(drag_view);
   // The dragged item is not allowed to be unpinned if |drag_view| is pinned by
-  // policy, dragged from app list, or its item type is TYPE_BROWSER_SHORTCUT.
+  // policy, dragged from app list, or its item type is TYPE_BROWSER_SHORTCUT
+  // or TYPE_UNPINNED_BROWSER_SHORTCUT.
   // Therefore, the |drag_view| can not be dragged across the separator.
   bool can_change_pin_state =
       ShelfItemForView(drag_view)->type == TYPE_PINNED_APP ||
@@ -1839,7 +1850,7 @@ gfx::Rect ShelfView::GetMenuAnchorRect(const views::View& source,
 }
 
 void ShelfView::AnnounceShelfAlignment() {
-  base::string16 announcement;
+  std::u16string announcement;
   switch (shelf_->alignment()) {
     case ShelfAlignment::kBottom:
     case ShelfAlignment::kBottomLocked:
@@ -1857,8 +1868,12 @@ void ShelfView::AnnounceShelfAlignment() {
                                                /*send_native_event=*/true);
 }
 
+bool ShelfView::IsAnimating() const {
+  return bounds_animator_->IsAnimating();
+}
+
 void ShelfView::AnnounceShelfAutohideBehavior() {
-  base::string16 announcement;
+  std::u16string announcement;
   switch (shelf_->auto_hide_behavior()) {
     case ShelfAutoHideBehavior::kAlways:
       announcement = l10n_util::GetStringUTF16(IDS_SHELF_STATE_AUTO_HIDE);
@@ -1876,11 +1891,11 @@ void ShelfView::AnnounceShelfAutohideBehavior() {
 }
 
 void ShelfView::AnnouncePinUnpinEvent(const ShelfItem& item, bool pinned) {
-  base::string16 item_title =
+  std::u16string item_title =
       item.title.empty()
           ? l10n_util::GetStringUTF16(IDS_SHELF_ITEM_GENERIC_NAME)
           : item.title;
-  base::string16 announcement = l10n_util::GetStringFUTF16(
+  std::u16string announcement = l10n_util::GetStringFUTF16(
       pinned ? IDS_SHELF_ITEM_WAS_PINNED : IDS_SHELF_ITEM_WAS_UNPINNED,
       item_title);
   announcement_view_->GetViewAccessibility().OverrideName(announcement);
@@ -1890,15 +1905,15 @@ void ShelfView::AnnouncePinUnpinEvent(const ShelfItem& item, bool pinned) {
 
 void ShelfView::AnnounceSwapEvent(const ShelfItem& first_item,
                                   const ShelfItem& second_item) {
-  base::string16 first_item_title =
+  std::u16string first_item_title =
       first_item.title.empty()
           ? l10n_util::GetStringUTF16(IDS_SHELF_ITEM_GENERIC_NAME)
           : first_item.title;
-  base::string16 second_item_title =
+  std::u16string second_item_title =
       second_item.title.empty()
           ? l10n_util::GetStringUTF16(IDS_SHELF_ITEM_GENERIC_NAME)
           : second_item.title;
-  base::string16 announcement = l10n_util::GetStringFUTF16(
+  std::u16string announcement = l10n_util::GetStringFUTF16(
       IDS_SHELF_ITEMS_WERE_SWAPPED, first_item_title, second_item_title);
   announcement_view_->GetViewAccessibility().OverrideName(announcement);
   announcement_view_->NotifyAccessibilityEvent(ax::mojom::Event::kAlert,
@@ -1998,6 +2013,7 @@ void ShelfView::ShelfItemAdded(int model_index) {
   if (model_->is_current_mutation_user_triggered() &&
       item.type == TYPE_PINNED_APP) {
     AnnouncePinUnpinEvent(item, /*pinned=*/true);
+    RecordPinUnpinUserAction(/*pinned=*/true);
   }
 }
 
@@ -2057,12 +2073,13 @@ void ShelfView::ShelfItemRemoved(int model_index, const ShelfItem& old_item) {
   if (model_->is_current_mutation_user_triggered() &&
       old_item.type == TYPE_PINNED_APP) {
     AnnouncePinUnpinEvent(old_item, /*pinned=*/false);
+    RecordPinUnpinUserAction(/*pinned=*/false);
   }
 }
 
 void ShelfView::ShelfItemChanged(int model_index, const ShelfItem& old_item) {
   // Bail if the view and shelf sizes do not match. ShelfItemChanged may be
-  // called here before ShelfItemAdded, due to ChromeLauncherController's
+  // called here before ShelfItemAdded, due to ChromeShelfController's
   // item initialization, which calls SetItem during ShelfItemAdded.
   if (static_cast<int>(model_->items().size()) != view_model_->view_size())
     return;
@@ -2104,8 +2121,10 @@ void ShelfView::ShelfItemChanged(int model_index, const ShelfItem& old_item) {
     // If an item is being pinned or unpinned, show the new status of the
     // shelf immediately so that the separator gets drawn as needed.
     if (old_item.type == TYPE_PINNED_APP || item.type == TYPE_PINNED_APP) {
-      if (model_->is_current_mutation_user_triggered())
+      if (model_->is_current_mutation_user_triggered()) {
         AnnouncePinUnpinEvent(old_item, item.type == TYPE_PINNED_APP);
+        RecordPinUnpinUserAction(item.type == TYPE_PINNED_APP);
+      }
       AnimateToIdealBounds();
     }
     return;
@@ -2116,6 +2135,7 @@ void ShelfView::ShelfItemChanged(int model_index, const ShelfItem& old_item) {
     case TYPE_PINNED_APP:
     case TYPE_BROWSER_SHORTCUT:
     case TYPE_APP:
+    case TYPE_UNPINNED_BROWSER_SHORTCUT:
     case TYPE_DIALOG: {
       CHECK_EQ(ShelfAppButton::kViewClassName, view->GetClassName());
       ShelfAppButton* button = static_cast<ShelfAppButton*>(view);
@@ -2240,12 +2260,10 @@ void ShelfView::AfterItemSelected(const ShelfItem& item,
       // Show the app menu with 2 or more items, if no window was created. The
       // menu is not shown in case item drag started while the selection request
       // was in progress.
-      ink_drop->AnimateToState(views::InkDropState::ACTIVATED);
-      context_menu_id_ = item.id;
       ShowMenu(std::make_unique<ShelfApplicationMenuModel>(
                    item.title, std::move(menu_items),
                    model_->GetShelfItemDelegate(item.id)),
-               sender, gfx::Point(), /*context_menu=*/false,
+               sender, item.id, gfx::Point(), /*context_menu=*/false,
                ui::GetMenuSourceTypeForEvent(*event));
       shelf_->UpdateVisibilityState();
     } else {
@@ -2261,16 +2279,17 @@ void ShelfView::ShowShelfContextMenu(
     views::View* source,
     ui::MenuSourceType source_type,
     std::unique_ptr<ui::SimpleMenuModel> model) {
-  context_menu_id_ = shelf_id;
   if (!model) {
     const int64_t display_id = GetDisplayIdForView(this);
     model = std::make_unique<ShelfContextMenuModel>(nullptr, display_id);
   }
-  ShowMenu(std::move(model), source, point, /*context_menu=*/true, source_type);
+  ShowMenu(std::move(model), source, shelf_id, point, /*context_menu=*/true,
+           source_type);
 }
 
 void ShelfView::ShowMenu(std::unique_ptr<ui::SimpleMenuModel> menu_model,
                          views::View* source,
+                         const ShelfID& shelf_id,
                          const gfx::Point& click_point,
                          bool context_menu,
                          ui::MenuSourceType source_type) {
@@ -2282,6 +2301,9 @@ void ShelfView::ShowMenu(std::unique_ptr<ui::SimpleMenuModel> menu_model,
   item_awaiting_response_ = ShelfID();
   if (menu_model->GetItemCount() == 0)
     return;
+
+  context_menu_id_ = shelf_id;
+
   menu_owner_ = source;
 
   closing_event_time_ = base::TimeTicks();
@@ -2294,6 +2316,14 @@ void ShelfView::ShowMenu(std::unique_ptr<ui::SimpleMenuModel> menu_model,
   }
 
   const ShelfItem* item = ShelfItemForView(source);
+
+  if ((source_type == ui::MenuSourceType::MENU_SOURCE_MOUSE ||
+       source_type == ui::MenuSourceType::MENU_SOURCE_KEYBOARD) &&
+      item) {
+    views::InkDrop::Get(source)->GetInkDrop()->AnimateToState(
+        views::InkDropState::ACTIVATED);
+  }
+
   // Only selected shelf items with context menu opened can be dragged.
   if (context_menu && item && ShelfButtonIsInDrag(item->type, source) &&
       source_type == ui::MenuSourceType::MENU_SOURCE_TOUCH) {
@@ -2308,8 +2338,9 @@ void ShelfView::ShowMenu(std::unique_ptr<ui::SimpleMenuModel> menu_model,
       /*for_application_menu_items*/ !context_menu);
   shelf_menu_model_adapter_->Run(
       GetMenuAnchorRect(*source, click_point, context_menu),
-      shelf_->IsHorizontalAlignment() ? views::MenuAnchorPosition::kBubbleAbove
-                                      : views::MenuAnchorPosition::kBubbleLeft,
+      shelf_->IsHorizontalAlignment()
+          ? views::MenuAnchorPosition::kBubbleTopRight
+          : views::MenuAnchorPosition::kBubbleLeft,
       run_types);
 
   if (!context_menu_shown_callback_.is_null())
@@ -2411,7 +2442,7 @@ void ShelfView::SetDragImageBlur(const gfx::Size& size, int blur_radius) {
   DragImageView* drag_image = GetDragImage();
   drag_image->SetPaintToLayer();
   drag_image->layer()->SetFillsBoundsOpaquely(false);
-  const uint32_t radius = std::round(size.width() / 2.f);
+  const float radius = size.width() / 2.0f;
   drag_image->layer()->SetRoundedCornerRadius({radius, radius, radius, radius});
   drag_image->layer()->SetBackgroundBlur(blur_radius);
 }
@@ -2429,9 +2460,9 @@ bool ShelfView::ShouldHandleGestures(const ui::GestureEvent& event) const {
   return true;
 }
 
-base::string16 ShelfView::GetTitleForChildView(const views::View* view) const {
+std::u16string ShelfView::GetTitleForChildView(const views::View* view) const {
   const ShelfItem* item = ShelfItemForView(view);
-  return item ? item->title : base::string16();
+  return item ? item->title : std::u16string();
 }
 
 void ShelfView::UpdateShelfItemViewsVisibility() {
@@ -2460,6 +2491,11 @@ int ShelfView::CalculateAppIconsLayoutOffset() const {
       shelf_->hotseat_widget()->scrollable_shelf_view();
   const gfx::Insets& edge_padding_insets =
       scrollable_shelf_view->edge_padding_insets();
+
+  // Note that `edge_padding_insets` fetched from `scrollable_shelf_view` is
+  // mirrored under RTL.
+  if (scrollable_shelf_view->ShouldAdaptToRTL())
+    return edge_padding_insets.right();
 
   return shelf_->IsHorizontalAlignment() ? edge_padding_insets.left()
                                          : edge_padding_insets.top();

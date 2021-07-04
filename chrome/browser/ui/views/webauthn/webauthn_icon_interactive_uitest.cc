@@ -14,11 +14,11 @@
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/browser/ui/views/webauthn/webauthn_icon_view.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/network_session_configurator/common/network_switches.h"
 #include "content/public/browser/authenticator_environment.h"
 #include "content/public/common/content_features.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "device/fido/virtual_ctap2_device.h"
@@ -80,8 +80,8 @@ IN_PROC_BROWSER_TEST_F(WebAuthUITest, ConditionalUI) {
   virtual_device_factory->SetCtap2Config(std::move(config));
   virtual_device_factory->mutable_state()->InjectResidentKey(
       std::vector<uint8_t>{1, 2, 3, 4}, "www.example.com",
-      std::vector<uint8_t>{6, 7, 8, 9}, /*user_name=*/base::nullopt,
-      /*user_display_name=*/base::nullopt);
+      std::vector<uint8_t>{6, 7, 8, 9}, /*user_name=*/absl::nullopt,
+      /*user_display_name=*/absl::nullopt);
   virtual_device_factory->mutable_state()->fingerprints_enrolled = true;
   PageActionIconView* webauthn_icon =
       BrowserView::GetBrowserViewForBrowser(browser())
@@ -108,10 +108,13 @@ IN_PROC_BROWSER_TEST_F(WebAuthUITest, ConditionalUI) {
       });
 
   constexpr char kGetAssertion[] =
-      "navigator.credentials.get({conditionalPublicKey: {"
-      "  challenge: new Uint8Array([1,2,3,4]),"
-      "  timeout: 1000,"
-      "}}).then(c => window.domAutomationController.send(c ? 'OK' : 'c null'),"
+      "navigator.credentials.get({"
+      "  publicKey: {"
+      "    challenge: new Uint8Array([1,2,3,4]),"
+      "    timeout: 1000,"
+      "  },"
+      "  mediation: 'conditional'"
+      "}).then(c => window.domAutomationController.send(c ? 'OK' : 'c null'),"
       "         e => window.domAutomationController.send(e.toString()));";
   content::WebContents* const web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();

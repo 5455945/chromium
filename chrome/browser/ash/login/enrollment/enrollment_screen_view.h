@@ -7,9 +7,8 @@
 
 #include <string>
 
-#include "base/values.h"
 #include "chrome/browser/ash/login/enrollment/enterprise_enrollment_helper.h"
-#include "chrome/browser/chromeos/login/oobe_screen.h"
+#include "chrome/browser/ash/login/oobe_screen.h"
 #include "chromeos/dbus/authpolicy/active_directory_info.pb.h"
 
 class GoogleServiceAuthError;
@@ -19,7 +18,7 @@ struct EnrollmentConfig;
 class EnrollmentStatus;
 }  // namespace policy
 
-namespace chromeos {
+namespace ash {
 
 // Interface class for the enterprise enrollment screen view.
 class EnrollmentScreenView {
@@ -56,7 +55,7 @@ class EnrollmentScreenView {
 
   // Sets the enterprise manager and the device type to be shown for the user.
   virtual void SetEnterpriseDomainInfo(const std::string& manager,
-                                       const base::string16& device_type) = 0;
+                                       const std::u16string& device_type) = 0;
 
   // Shows the contents of the screen.
   virtual void Show() = 0;
@@ -95,6 +94,12 @@ class EnrollmentScreenView {
   virtual void Shutdown() = 0;
 };
 
-}  // namespace chromeos
+}  // namespace ash
+
+// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
+// source migration is finished.
+namespace chromeos {
+using ::ash::EnrollmentScreenView;
+}
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_ENROLLMENT_ENROLLMENT_SCREEN_VIEW_H_

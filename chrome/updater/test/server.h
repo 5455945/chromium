@@ -9,7 +9,11 @@
 #include <memory>
 #include <string>
 
+#include "base/memory/scoped_refptr.h"
+#include "chrome/updater/test/integration_test_commands.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+
+class GURL;
 
 namespace net {
 namespace test_server {
@@ -27,7 +31,8 @@ class ScopedServer {
  public:
   // Creates and starts a scoped server. Sets up the updater to communicate
   // with it. Multiple scoped servers are not allowed.
-  ScopedServer();
+  explicit ScopedServer(
+      scoped_refptr<IntegrationTestCommands> integration_test_commands);
 
   // Shuts down the server and verifies that all expectations were met and that
   // no extra communications were received.
@@ -46,6 +51,8 @@ class ScopedServer {
   void ExpectOnce(const std::string& request_body_regex,
                   const std::string& response_body);
 
+  const GURL& base_url() const { return test_server_->base_url(); }
+
  private:
   std::unique_ptr<net::test_server::HttpResponse> HandleRequest(
       const net::test_server::HttpRequest& request);
@@ -54,6 +61,7 @@ class ScopedServer {
   net::test_server::EmbeddedTestServerHandle test_server_handle_;
   std::list<std::string> request_body_regexes_;
   std::list<std::string> response_bodies_;
+  scoped_refptr<IntegrationTestCommands> integration_test_commands_;
 };
 
 }  // namespace test

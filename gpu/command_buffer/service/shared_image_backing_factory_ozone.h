@@ -52,6 +52,7 @@ class GPU_GLES2_EXPORT SharedImageBackingFactoryOzone
       int client_id,
       gfx::GpuMemoryBufferHandle handle,
       gfx::BufferFormat format,
+      gfx::BufferPlane plane,
       SurfaceHandle surface_handle,
       const gfx::Size& size,
       const gfx::ColorSpace& color_space,
@@ -59,12 +60,16 @@ class GPU_GLES2_EXPORT SharedImageBackingFactoryOzone
       SkAlphaType alpha_type,
       uint32_t usage) override;
 
-  bool CanImportGpuMemoryBuffer(
-      gfx::GpuMemoryBufferType memory_buffer_type) override;
+  bool IsSupported(uint32_t usage,
+                   viz::ResourceFormat format,
+                   bool thread_safe,
+                   gfx::GpuMemoryBufferType gmb_type,
+                   GrContextType gr_context_type,
+                   bool* allow_legacy_mailbox) override;
 
  private:
   SharedContextState* const shared_context_state_;
-  scoped_refptr<base::RefCountedData<DawnProcTable>> dawn_procs_ = nullptr;
+  scoped_refptr<base::RefCountedData<DawnProcTable>> dawn_procs_;
 };
 
 }  // namespace gpu

@@ -10,7 +10,7 @@
 
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
-#include "base/optional.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/display/display_list.h"
 #include "ui/display/display_observer.h"
 #include "ui/display/tablet_state.h"
@@ -25,6 +25,10 @@ class Rect;
 namespace ui {
 
 class WaylandConnection;
+
+#if defined(USE_DBUS)
+class OrgGnomeMutterIdleMonitor;
+#endif
 
 // A PlatformScreen implementation for Wayland.
 class WaylandScreen : public PlatformScreen {
@@ -58,8 +62,12 @@ class WaylandScreen : public PlatformScreen {
       const gfx::Point& point) const override;
   display::Display GetDisplayMatching(
       const gfx::Rect& match_rect) const override;
+  base::TimeDelta CalculateIdleTime() const override;
   void AddObserver(display::DisplayObserver* observer) override;
   void RemoveObserver(display::DisplayObserver* observer) override;
+  base::Value GetGpuExtraInfoAsListValue(
+      const gfx::GpuExtraInfo& gpu_extra_info) override;
+  void SetDeviceScaleFactor(float scale) override;
 
  private:
   void AddOrUpdateDisplay(uint32_t output_id,
@@ -72,8 +80,22 @@ class WaylandScreen : public PlatformScreen {
 
   base::ObserverList<display::DisplayObserver> observers_;
 
-  base::Optional<gfx::BufferFormat> image_format_alpha_;
-  base::Optional<gfx::BufferFormat> image_format_no_alpha_;
+  absl::optional<gfx::BufferFormat> image_format_alpha_;
+  absl::optional<gfx::BufferFormat> image_format_no_alpha_;
+
+#if defined(USE_DBUS)
+  mutable std::unique_ptr<OrgGnomeMutterIdleMonitor>
+      org_gnome_mutter_idle_monitor_;
+#endif
+
+  // Fractional part of additional scale. By default, GNOME also provides scale
+  // factor for Wayland, but it uses the biggest scale factor if multiple
+  // displays are available. In contrast, wl_output.scale sends scale factor for
+  // each of the displays and we adapt accordingly. However, wl_output.scale
+  // doesn't send fractional parts, while GNOME does send that when "Large text"
+  // feature is enabled. Thus, store only this decimal part and updates displays
+  // accordingly.
+  float additional_scale_ = 0.f;
 
   base::WeakPtrFactory<WaylandScreen> weak_factory_;
 };

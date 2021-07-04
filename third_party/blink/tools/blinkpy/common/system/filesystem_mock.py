@@ -30,10 +30,11 @@ import errno
 import hashlib
 import os
 import re
-import StringIO
 import unittest
 
 from blinkpy.common.system.filesystem import _remove_contents, _sanitize_filename
+
+from six import StringIO
 
 
 class MockFileSystem(object):
@@ -356,6 +357,9 @@ class MockFileSystem(object):
     def open_text_file_for_writing(self, path):
         return WritableTextFileObject(self, path)
 
+    def open_text_file_for_appending(self, path):
+        return WritableTextFileObject(self, path, append=True)
+
     def read_text_file(self, path):
         return self.read_binary_file(path).decode('utf-8')
 
@@ -457,11 +461,12 @@ class MockFileSystem(object):
 
 
 class WritableBinaryFileObject(object):
-    def __init__(self, fs, path):
+    def __init__(self, fs, path, append=False):
         self.fs = fs
         self.path = path
         self.closed = False
-        self.fs.files[path] = ''
+        if path not in self.fs.files or not append:
+            self.fs.files[path] = ''
 
     def __enter__(self):
         return self
@@ -523,8 +528,8 @@ class ReadableBinaryFileObject(object):
 
 class ReadableTextFileObject(ReadableBinaryFileObject):
     def __init__(self, fs, path, data):
-        super(ReadableTextFileObject, self).__init__(
-            fs, path, StringIO.StringIO(data.decode('utf-8')))
+        super(ReadableTextFileObject,
+              self).__init__(fs, path, StringIO(data.decode('utf-8')))
 
     def close(self):
         self.data.close()

@@ -12,11 +12,12 @@
 
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "base/time/time.h"
 #include "content/browser/service_worker/service_worker_register_job_base.h"
 #include "content/browser/service_worker/service_worker_registration.h"
 #include "content/browser/service_worker/service_worker_update_checker.h"
+#include "content/public/browser/global_routing_id.h"
 #include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_event_status.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom.h"
 #include "third_party/blink/public/mojom/worker/worker_main_script_load_params.mojom.h"
@@ -52,8 +53,10 @@ class ServiceWorkerRegisterJob : public ServiceWorkerRegisterJobBase {
       ServiceWorkerContextCore* context,
       const GURL& script_url,
       const blink::mojom::ServiceWorkerRegistrationOptions& options,
+      const blink::StorageKey& key,
       blink::mojom::FetchClientSettingsObjectPtr
-          outside_fetch_client_settings_object);
+          outside_fetch_client_settings_object,
+      const GlobalRenderFrameHostId& requesting_frame_id);
 
   // For update jobs.
   CONTENT_EXPORT ServiceWorkerRegisterJob(
@@ -131,7 +134,7 @@ class ServiceWorkerRegisterJob : public ServiceWorkerRegisterJobBase {
   void ContinueWithUninstallingRegistration(
       scoped_refptr<ServiceWorkerRegistration> existing_registration,
       blink::ServiceWorkerStatusCode status);
-  void ContinueWithRegistrationForSameScriptUrl(
+  void ContinueWithRegistrationWithSameRegistrationOptions(
       scoped_refptr<ServiceWorkerRegistration> existing_registration,
       blink::ServiceWorkerStatusCode status);
   void UpdateAndContinue();
@@ -141,7 +144,6 @@ class ServiceWorkerRegisterJob : public ServiceWorkerRegisterJobBase {
   // the job type is REGISTRATION_JOB and the worker doesn't need an
   // byte-for-byte check.
   void StartScriptFetchForNewWorker(
-      scoped_refptr<network::SharedURLLoaderFactory> loader_factory,
       scoped_refptr<ServiceWorkerVersion> version);
   void OnScriptFetchCompleted(
       scoped_refptr<ServiceWorkerVersion> version,
@@ -186,6 +188,7 @@ class ServiceWorkerRegisterJob : public ServiceWorkerRegisterJobBase {
   RegistrationJobType job_type_;
   const GURL scope_;
   GURL script_url_;
+  const blink::StorageKey key_;
   // "A job has a worker type ("classic" or "module")."
   // https://w3c.github.io/ServiceWorker/#dfn-job-worker-type
   blink::mojom::ScriptType worker_script_type_ =
@@ -206,6 +209,7 @@ class ServiceWorkerRegisterJob : public ServiceWorkerRegisterJobBase {
   blink::ServiceWorkerStatusCode promise_resolved_status_;
   std::string promise_resolved_status_message_;
   scoped_refptr<ServiceWorkerRegistration> promise_resolved_registration_;
+  const GlobalRenderFrameHostId requesting_frame_id_;
 
   base::WeakPtrFactory<ServiceWorkerRegisterJob> weak_factory_{this};
 

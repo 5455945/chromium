@@ -5,8 +5,10 @@
 #include "chrome/browser/upgrade_detector/upgrade_detector_chromeos.h"
 
 #include <memory>
+#include <string>
 #include <utility>
 
+#include "base/environment.h"
 #include "base/macros.h"
 #include "base/test/task_environment.h"
 #include "base/time/clock.h"
@@ -20,11 +22,10 @@
 #include "chrome/test/base/testing_browser_process.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/fake_update_engine_client.h"
-#include "chromeos/settings/timezone_settings.h"
 #include "components/prefs/testing_pref_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/icu/source/i18n/unicode/timezone.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace {
 
@@ -36,7 +37,8 @@ class TestUpgradeDetectorChromeos : public UpgradeDetectorChromeos {
   ~TestUpgradeDetectorChromeos() override = default;
 
   // Exposed for testing.
-  using UpgradeDetectorChromeos::AdjustDeadline;
+  using UpgradeDetector::AdjustDeadline;
+  using UpgradeDetector::GetDefaultRelaunchWindow;
   using UpgradeDetectorChromeos::UPGRADE_AVAILABLE_REGULAR;
 
   DISALLOW_COPY_AND_ASSIGN(TestUpgradeDetectorChromeos);
@@ -55,7 +57,7 @@ class MockUpgradeObserver : public UpgradeObserver {
   MOCK_METHOD0(OnCriticalUpgradeInstalled, void());
   MOCK_METHOD0(OnOutdatedInstall, void());
   MOCK_METHOD0(OnOutdatedInstallNoAutoUpdate, void());
-  MOCK_METHOD1(OnRelaunchOverriddenToRequired, void(bool override));
+  MOCK_METHOD1(OnRelaunchOverriddenToRequired, void(bool overridden));
 
  private:
   UpgradeDetector* const upgrade_detector_;
@@ -67,9 +69,9 @@ class MockUpgradeObserver : public UpgradeObserver {
 class UpgradeDetectorChromeosTest : public ::testing::Test {
  protected:
   UpgradeDetectorChromeosTest()
-      : utc_(icu::TimeZone::createTimeZone("Etc/GMT")),
-        task_environment_(base::test::TaskEnvironment::TimeSource::MOCK_TIME),
-        scoped_local_state_(TestingBrowserProcess::GetGlobal()) {
+      : task_environment_(base::test::TaskEnvironment::TimeSource::MOCK_TIME),
+        scoped_local_state_(TestingBrowserProcess::GetGlobal()),
+        env_(base::Environment::Create()) {
     // By default, test with the relaunch policy enabled.
     SetIsRelaunchNotificationPolicyEnabled(true /* enabled */);
 
@@ -80,15 +82,32 @@ class UpgradeDetectorChromeosTest : public ::testing::Test {
                                            std::make_unique<base::Value>(true));
 
     fake_update_engine_client_ = new chromeos::FakeUpdateEngineClient();
-    std::unique_ptr<chromeos::DBusThreadManagerSetter> dbus_setter =
-        chromeos::DBusThreadManager::GetSetterForTesting();
-    dbus_setter->SetUpdateEngineClient(
+    chromeos::DBusThreadManager::Initialize();
+    chromeos::DBusThreadManager::GetSetterForTesting()->SetUpdateEngineClient(
         std::unique_ptr<chromeos::UpdateEngineClient>(
             fake_update_engine_client_));
-    // Set UTC timezone
-    chromeos::system::TimezoneSettings::GetInstance()->SetTimezone(*utc_);
-    // Fast forward to align deadline be at 2am
+
+    // Fast forward to set current time to local 2am . This is done to align the
+    // relaunch deadline within the default relaunch window of 2am to 4am so
+    // that it is not adjusted in tests.
+    std::string env_tz;
+    if (env_->GetVar("TZ", &env_tz))
+      original_tz_ = env_tz;
+    env_->SetVar("TZ", "UTC");
+    tzset();
     FastForwardBy(base::TimeDelta::FromHours(2));
+  }
+
+  ~UpgradeDetectorChromeosTest() override {
+    // Revert back to the original timezone.
+    if (original_tz_) {
+      env_->SetVar("TZ", original_tz_.value());
+    } else {
+      env_->UnSetVar("TZ");
+    }
+    tzset();
+
+    chromeos::DBusThreadManager::Shutdown();
   }
 
   const base::Clock* GetMockClock() { return task_environment_.GetMockClock(); }
@@ -99,9 +118,18 @@ class UpgradeDetectorChromeosTest : public ::testing::Test {
 
   void RunUntilIdle() { task_environment_.RunUntilIdle(); }
 
-  void NotifyUpdateReadyToInstall() {
+  void NotifyUpdateReadyToInstall(const std::string& version) {
     update_engine::StatusResult status;
+    if (!version.empty())
+      status.set_new_version(version);
     status.set_current_operation(update_engine::Operation::UPDATED_NEED_REBOOT);
+    fake_update_engine_client_->set_default_status(status);
+    fake_update_engine_client_->NotifyObserversThatStatusChanged(status);
+  }
+
+  void NotifyUpdateDownloading() {
+    update_engine::StatusResult status;
+    status.set_current_operation(update_engine::Operation::DOWNLOADING);
     fake_update_engine_client_->set_default_status(status);
     fake_update_engine_client_->NotifyObserversThatStatusChanged(status);
   }
@@ -152,9 +180,10 @@ class UpgradeDetectorChromeosTest : public ::testing::Test {
   }
 
  private:
-  std::unique_ptr<icu::TimeZone> utc_;
   base::test::TaskEnvironment task_environment_;
   ScopedTestingLocalState scoped_local_state_;
+  std::unique_ptr<base::Environment> env_;
+  absl::optional<std::string> original_tz_;
 
   chromeos::FakeUpdateEngineClient* fake_update_engine_client_;  // Not owned.
 
@@ -173,7 +202,7 @@ TEST_F(UpgradeDetectorChromeosTest, PolicyNotEnabled) {
   ::testing::StrictMock<MockUpgradeObserver> mock_observer(&upgrade_detector);
   EXPECT_CALL(mock_observer, OnUpgradeRecommended());
 
-  NotifyUpdateReadyToInstall();
+  NotifyUpdateReadyToInstall("1.0.0.0");
 
   upgrade_detector.Shutdown();
 }
@@ -186,7 +215,7 @@ TEST_F(UpgradeDetectorChromeosTest, TestHighAnnoyanceDeadline) {
 
   // Observer should get some notifications about new version.
   EXPECT_CALL(mock_observer, OnUpgradeRecommended()).Times(testing::AtLeast(1));
-  NotifyUpdateReadyToInstall();
+  NotifyUpdateReadyToInstall("1.0.0.0");
 
   const auto deadline = upgrade_detector.GetHighAnnoyanceDeadline();
 
@@ -197,7 +226,7 @@ TEST_F(UpgradeDetectorChromeosTest, TestHighAnnoyanceDeadline) {
   // New notification could be sent or not.
   EXPECT_CALL(mock_observer, OnUpgradeRecommended())
       .Times(testing::AnyNumber());
-  NotifyUpdateReadyToInstall();
+  NotifyUpdateReadyToInstall("1.0.0.0");
 
   // Deadline wasn't changed because of new upgrade detected.
   EXPECT_EQ(upgrade_detector.GetHighAnnoyanceDeadline(), deadline);
@@ -213,16 +242,18 @@ TEST_F(UpgradeDetectorChromeosTest, TestHeadsUpPeriod) {
 
   const auto notification_period = base::TimeDelta::FromDays(7);
   const auto heads_up_period = base::TimeDelta::FromDays(1);
+  const auto grace_period = base::TimeDelta::FromHours(1);
   SetNotificationPeriodPref(notification_period);
   SetHeadsUpPeriodPref(heads_up_period);
 
   const auto no_notification_till =
       notification_period - heads_up_period - base::TimeDelta::FromMinutes(1);
   const auto first_notification_at = notification_period - heads_up_period;
-  const auto second_notification_at = notification_period;
+  const auto second_notification_at = notification_period - grace_period;
+  const auto third_notification_at = notification_period;
 
   // Observer should not get notifications about new version till 6-th day.
-  NotifyUpdateReadyToInstall();
+  NotifyUpdateReadyToInstall("1.0.0.0");
   FastForwardBy(no_notification_till);
   ::testing::Mock::VerifyAndClear(&mock_observer);
   EXPECT_EQ(upgrade_detector.upgrade_notification_stage(),
@@ -234,10 +265,97 @@ TEST_F(UpgradeDetectorChromeosTest, TestHeadsUpPeriod) {
   EXPECT_EQ(upgrade_detector.upgrade_notification_stage(),
             UpgradeDetector::UPGRADE_ANNOYANCE_ELEVATED);
 
-  // UPGRADE_ANNOYANCE_HIGH at the end of the period.
+  // Notifications should arrive every 20 minutes after the first one with one
+  // final notification at grace annoyance.
   EXPECT_CALL(mock_observer, OnUpgradeRecommended())
       .Times(testing::AnyNumber());
   FastForwardBy(second_notification_at - first_notification_at);
+  ::testing::Mock::VerifyAndClear(&mock_observer);
+  EXPECT_EQ(upgrade_detector.upgrade_notification_stage(),
+            UpgradeDetector::UPGRADE_ANNOYANCE_GRACE);
+
+  // UPGRADE_ANNOYANCE_HIGH at the end of the period.
+  // Notifications should arrive every 20 minutes after the first one with one
+  // final notification at high annoyance.
+  EXPECT_CALL(mock_observer, OnUpgradeRecommended())
+      .Times(testing::AnyNumber());
+  FastForwardBy(third_notification_at - second_notification_at);
+  ::testing::Mock::VerifyAndClear(&mock_observer);
+  EXPECT_EQ(upgrade_detector.upgrade_notification_stage(),
+            UpgradeDetector::UPGRADE_ANNOYANCE_HIGH);
+  upgrade_detector.Shutdown();
+  RunUntilIdle();
+}
+
+TEST_F(UpgradeDetectorChromeosTest, TestGracePeriodChange) {
+  TestUpgradeDetectorChromeos upgrade_detector(GetMockClock(),
+                                               GetMockTickClock());
+  upgrade_detector.Init();
+  ::testing::StrictMock<MockUpgradeObserver> mock_observer(&upgrade_detector);
+
+  SetNotificationPeriodPref(base::TimeDelta::FromDays(4));
+  SetHeadsUpPeriodPref(base::TimeDelta::FromMinutes(90));
+
+  // Observer should not get notifications about new version first 3 days.
+  NotifyUpdateReadyToInstall("1.0.0.0");
+  FastForwardBy(base::TimeDelta::FromDays(3));
+  RunUntilIdle();
+  ::testing::Mock::VerifyAndClear(&mock_observer);
+  EXPECT_EQ(upgrade_detector.upgrade_notification_stage(),
+            UpgradeDetector::UPGRADE_ANNOYANCE_NONE);
+
+  // Observer should get notifications because of elevated annoyance reached.
+  EXPECT_CALL(mock_observer, OnUpgradeRecommended());
+  FastForwardBy(base::TimeDelta::FromDays(1) -
+                base::TimeDelta::FromMinutes(90));
+  RunUntilIdle();
+  ::testing::Mock::VerifyAndClear(&mock_observer);
+  EXPECT_EQ(upgrade_detector.upgrade_notification_stage(),
+            UpgradeDetector::UPGRADE_ANNOYANCE_ELEVATED);
+
+  // Observer should get notifications because of grace annoyance reached which
+  // is midway of elevated and high deadline.
+  EXPECT_CALL(mock_observer, OnUpgradeRecommended())
+      .Times(testing::AnyNumber());
+  FastForwardBy(base::TimeDelta::FromMinutes(45));
+  RunUntilIdle();
+  ::testing::Mock::VerifyAndClear(&mock_observer);
+  EXPECT_EQ(upgrade_detector.upgrade_notification_stage(),
+            UpgradeDetector::UPGRADE_ANNOYANCE_GRACE);
+
+  // Observer should get notifications as annoyance level is back to elevated
+  // because of HeadsUpPeriod change.
+  EXPECT_CALL(mock_observer, OnUpgradeRecommended());
+  SetHeadsUpPeriodPref(base::TimeDelta::FromMinutes(60));
+  RunUntilIdle();
+  ::testing::Mock::VerifyAndClear(&mock_observer);
+  EXPECT_EQ(upgrade_detector.upgrade_notification_stage(),
+            UpgradeDetector::UPGRADE_ANNOYANCE_ELEVATED);
+
+  // Observer should get notifications as annoyance level moves to grace because
+  // of HeadsUpPeriod change.
+  EXPECT_CALL(mock_observer, OnUpgradeRecommended());
+  SetHeadsUpPeriodPref(base::TimeDelta::FromMinutes(120));
+  RunUntilIdle();
+  ::testing::Mock::VerifyAndClear(&mock_observer);
+  EXPECT_EQ(upgrade_detector.upgrade_notification_stage(),
+            UpgradeDetector::UPGRADE_ANNOYANCE_GRACE);
+
+  // Observer should get notifications as annoyance level moves to none because
+  // of NotificationPeriod change.
+  EXPECT_CALL(mock_observer, OnUpgradeRecommended());
+  SetNotificationPeriodPref(base::TimeDelta::FromDays(7));
+  RunUntilIdle();
+  ::testing::Mock::VerifyAndClear(&mock_observer);
+  EXPECT_EQ(upgrade_detector.upgrade_notification_stage(),
+            UpgradeDetector::UPGRADE_ANNOYANCE_NONE);
+
+  // UPGRADE_ANNOYANCE_HIGH at the end of the period.
+  EXPECT_CALL(mock_observer, OnUpgradeRecommended())
+      .Times(testing::AnyNumber());
+  FastForwardBy(base::TimeDelta::FromDays(3) +
+                base::TimeDelta::FromMinutes(45));
+  RunUntilIdle();
   ::testing::Mock::VerifyAndClear(&mock_observer);
   EXPECT_EQ(upgrade_detector.upgrade_notification_stage(),
             UpgradeDetector::UPGRADE_ANNOYANCE_HIGH);
@@ -255,7 +373,7 @@ TEST_F(UpgradeDetectorChromeosTest, TestHeadsUpPeriodChange) {
   SetHeadsUpPeriodPref(base::TimeDelta::FromDays(1));
 
   // Observer should not get notifications about new version first 4 days.
-  NotifyUpdateReadyToInstall();
+  NotifyUpdateReadyToInstall("1.0.0.0");
   FastForwardBy(base::TimeDelta::FromDays(4));
   RunUntilIdle();
   ::testing::Mock::VerifyAndClear(&mock_observer);
@@ -292,7 +410,7 @@ TEST_F(UpgradeDetectorChromeosTest, TestHeadsUpPeriodNotificationPeriodChange) {
   SetHeadsUpPeriodPref(base::TimeDelta::FromDays(1));
 
   // Observer should not get notifications about new version first 4 days.
-  NotifyUpdateReadyToInstall();
+  NotifyUpdateReadyToInstall("1.0.0.0");
   FastForwardBy(base::TimeDelta::FromDays(4));
   RunUntilIdle();
   ::testing::Mock::VerifyAndClear(&mock_observer);
@@ -332,7 +450,7 @@ TEST_F(UpgradeDetectorChromeosTest,
   // Observer should get notification because HeadsUpPeriod bigger than
   // NotificationPeriod.
   EXPECT_CALL(mock_observer, OnUpgradeRecommended());
-  NotifyUpdateReadyToInstall();
+  NotifyUpdateReadyToInstall("1.0.0.0");
   RunUntilIdle();
   ::testing::Mock::VerifyAndClear(&mock_observer);
   EXPECT_EQ(upgrade_detector.upgrade_notification_stage(),
@@ -383,7 +501,7 @@ TEST_F(UpgradeDetectorChromeosTest, OnUpgradeRecommendedCalledOnce) {
   // Observer should get notification because HeadsUpPeriod is the same as
   // NotificationPeriod.
   EXPECT_CALL(mock_observer, OnUpgradeRecommended());
-  NotifyUpdateReadyToInstall();
+  NotifyUpdateReadyToInstall("1.0.0.0");
   RunUntilIdle();
   ::testing::Mock::VerifyAndClear(&mock_observer);
 
@@ -398,55 +516,22 @@ TEST_F(UpgradeDetectorChromeosTest, OnUpgradeRecommendedCalledOnce) {
   RunUntilIdle();
 }
 
-TEST_F(UpgradeDetectorChromeosTest, TimezoneAdjustment) {
+TEST_F(UpgradeDetectorChromeosTest, DeadlineAdjustmentDefaultWindow) {
   TestUpgradeDetectorChromeos upgrade_detector(GetMockClock(),
                                                GetMockTickClock());
   upgrade_detector.Init();
   const auto delta = base::TimeDelta::FromDays(7);
 
-  // Europe/Moscow timezone
-  std::unique_ptr<icu::TimeZone> msk_timezone(
-      icu::TimeZone::createTimeZone("Europe/Moscow"));
-  chromeos::system::TimezoneSettings::GetInstance()->SetTimezone(*msk_timezone);
   base::Time detect_time;
-  ASSERT_TRUE(
-      base::Time::FromString("1 Jan 2018 06:00 UTC+0300", &detect_time));
+  ASSERT_TRUE(base::Time::FromString("1 Jan 2018 06:00", &detect_time));
   base::Time deadline, deadline_lower_border, deadline_upper_border;
-  ASSERT_TRUE(base::Time::FromString("9 Jan 2018 02:00 UTC+0300",
-                                     &deadline_lower_border));
-  ASSERT_TRUE(base::Time::FromString("9 Jan 2018 04:00 UTC+0300",
-                                     &deadline_upper_border));
-  deadline = upgrade_detector.AdjustDeadline(detect_time + delta);
-  EXPECT_GE(deadline, deadline_lower_border);
-  EXPECT_LE(deadline, deadline_upper_border);
-
-  // Pacific/Midway timezone
-  std::unique_ptr<icu::TimeZone> midway_timezone(
-      icu::TimeZone::createTimeZone("Pacific/Midway"));
-  chromeos::system::TimezoneSettings::GetInstance()->SetTimezone(
-      *midway_timezone);
   ASSERT_TRUE(
-      base::Time::FromString("1 Jan 2018 23:00 UTC-1100", &detect_time));
-  ASSERT_TRUE(base::Time::FromString("9 Jan 2018 02:00 UTC-1100",
-                                     &deadline_lower_border));
-  ASSERT_TRUE(base::Time::FromString("9 Jan 2018 04:00 UTC-1100",
-                                     &deadline_upper_border));
-  deadline = upgrade_detector.AdjustDeadline(detect_time + delta);
-  EXPECT_GE(deadline, deadline_lower_border);
-  EXPECT_LE(deadline, deadline_upper_border);
-
-  // Pacific/Kiritimati timezone
-  std::unique_ptr<icu::TimeZone> kiritimati_timezone(
-      icu::TimeZone::createTimeZone("Pacific/Kiritimati"));
-  chromeos::system::TimezoneSettings::GetInstance()->SetTimezone(
-      *kiritimati_timezone);
+      base::Time::FromString("9 Jan 2018 02:00", &deadline_lower_border));
   ASSERT_TRUE(
-      base::Time::FromString("1 Jan 2018 16:30 UTC+1400", &detect_time));
-  ASSERT_TRUE(base::Time::FromString("9 Jan 2018 02:00 UTC+1400",
-                                     &deadline_lower_border));
-  ASSERT_TRUE(base::Time::FromString("9 Jan 2018 04:00 UTC+1400",
-                                     &deadline_upper_border));
-  deadline = upgrade_detector.AdjustDeadline(detect_time + delta);
+      base::Time::FromString("9 Jan 2018 04:00", &deadline_upper_border));
+  const auto relaunch_window = upgrade_detector.GetDefaultRelaunchWindow();
+  deadline =
+      upgrade_detector.AdjustDeadline(detect_time + delta, relaunch_window);
   EXPECT_GE(deadline, deadline_lower_border);
   EXPECT_LE(deadline, deadline_upper_border);
 
@@ -465,7 +550,7 @@ TEST_F(UpgradeDetectorChromeosTest, TestOverrideThresholds) {
   SetNotificationPeriodPref(notification_period);
   SetHeadsUpPeriodPref(heads_up_period);
   // Simulate update installed.
-  NotifyUpdateReadyToInstall();
+  NotifyUpdateReadyToInstall("1.0.0.0");
   EXPECT_EQ(upgrade_detector.upgrade_notification_stage(),
             UpgradeDetector::UPGRADE_ANNOYANCE_NONE);
 
@@ -496,7 +581,7 @@ TEST_F(UpgradeDetectorChromeosTest, TestOverrideNotificationType) {
   upgrade_detector.Init();
   ::testing::StrictMock<MockUpgradeObserver> mock_observer(&upgrade_detector);
 
-  NotifyUpdateReadyToInstall();
+  NotifyUpdateReadyToInstall("1.0.0.0");
   EXPECT_EQ(upgrade_detector.upgrade_notification_stage(),
             UpgradeDetector::UPGRADE_ANNOYANCE_NONE);
 
@@ -511,6 +596,47 @@ TEST_F(UpgradeDetectorChromeosTest, TestOverrideNotificationType) {
   EXPECT_CALL(mock_observer, OnRelaunchOverriddenToRequired(false));
   upgrade_detector.OverrideRelaunchNotificationToRequired(false);
   ::testing::Mock::VerifyAndClear(&mock_observer);
+
+  upgrade_detector.Shutdown();
+  RunUntilIdle();
+}
+
+TEST_F(UpgradeDetectorChromeosTest, TestUpdateInProgress) {
+  TestUpgradeDetectorChromeos upgrade_detector(GetMockClock(),
+                                               GetMockTickClock());
+  upgrade_detector.Init();
+  ::testing::StrictMock<MockUpgradeObserver> mock_observer(&upgrade_detector);
+
+  // Finish the first update and set annoyance level to ELEVATED.
+  EXPECT_CALL(mock_observer, OnUpgradeRecommended()).Times(testing::AtLeast(1));
+  NotifyUpdateReadyToInstall("1.0.0.0");
+  FastForwardBy(upgrade_detector.GetDefaultElevatedAnnoyanceThreshold());
+  ::testing::Mock::VerifyAndClear(&mock_observer);
+  EXPECT_EQ(upgrade_detector.upgrade_notification_stage(),
+            UpgradeDetector::UPGRADE_ANNOYANCE_ELEVATED);
+
+  // Start a second update with a new version and make sure observers are
+  // notified when annoyance level changes to NONE during download.
+  EXPECT_CALL(mock_observer, OnUpgradeRecommended());
+  NotifyUpdateDownloading();
+  ::testing::Mock::VerifyAndClear(&mock_observer);
+  EXPECT_EQ(upgrade_detector.upgrade_notification_stage(),
+            UpgradeDetector::UPGRADE_ANNOYANCE_NONE);
+
+  // Complete update and make sure observers are notified when the annoyance
+  // level goes back to the previous state.
+  EXPECT_CALL(mock_observer, OnUpgradeRecommended());
+  NotifyUpdateReadyToInstall("2.0.0.0");
+  ::testing::Mock::VerifyAndClear(&mock_observer);
+  EXPECT_EQ(upgrade_detector.upgrade_notification_stage(),
+            UpgradeDetector::UPGRADE_ANNOYANCE_ELEVATED);
+
+  // Change level to HIGH and make sure observers are notified.
+  EXPECT_CALL(mock_observer, OnUpgradeRecommended()).Times(testing::AtLeast(1));
+  FastForwardBy(upgrade_detector.GetHighAnnoyanceLevelDelta());
+  ::testing::Mock::VerifyAndClear(&mock_observer);
+  EXPECT_EQ(upgrade_detector.upgrade_notification_stage(),
+            UpgradeDetector::UPGRADE_ANNOYANCE_HIGH);
 
   upgrade_detector.Shutdown();
   RunUntilIdle();

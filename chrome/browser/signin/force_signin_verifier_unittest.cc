@@ -7,6 +7,7 @@
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "base/threading/thread_task_runner_handle.h"
+#include "chrome/browser/profiles/profile.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "content/public/browser/network_service_instance.h"
 #include "services/network/test/test_network_connection_tracker.h"
@@ -20,7 +21,7 @@ class ForceSigninVerifierWithAccessToInternalsForTesting
  public:
   explicit ForceSigninVerifierWithAccessToInternalsForTesting(
       signin::IdentityManager* identity_manager)
-      : ForceSigninVerifier(identity_manager) {}
+      : ForceSigninVerifier(nullptr, identity_manager) {}
 
   bool IsDelayTaskPosted() { return GetOneShotTimerForTesting()->IsRunning(); }
 
@@ -148,7 +149,8 @@ TEST(ForceSigninVerifierTest, OnGetTokenSuccess) {
   base::test::TaskEnvironment scoped_task_env;
   signin::IdentityTestEnvironment identity_test_env;
   const AccountInfo account_info =
-      identity_test_env.MakePrimaryAccountAvailable("email@test.com");
+      identity_test_env.MakePrimaryAccountAvailable(
+          "email@test.com", signin::ConsentLevel::kSync);
 
   ForceSigninVerifierWithAccessToInternalsForTesting verifier(
       identity_test_env.identity_manager());
@@ -171,7 +173,8 @@ TEST(ForceSigninVerifierTest, OnGetTokenPersistentFailure) {
   base::test::TaskEnvironment scoped_task_env;
   signin::IdentityTestEnvironment identity_test_env;
   const AccountInfo account_info =
-      identity_test_env.MakePrimaryAccountAvailable("email@test.com");
+      identity_test_env.MakePrimaryAccountAvailable(
+          "email@test.com", signin::ConsentLevel::kSync);
 
   ForceSigninVerifierWithAccessToInternalsForTesting verifier(
       identity_test_env.identity_manager());
@@ -195,7 +198,8 @@ TEST(ForceSigninVerifierTest, OnGetTokenTransientFailure) {
   base::test::TaskEnvironment scoped_task_env;
   signin::IdentityTestEnvironment identity_test_env;
   const AccountInfo account_info =
-      identity_test_env.MakePrimaryAccountAvailable("email@test.com");
+      identity_test_env.MakePrimaryAccountAvailable(
+          "email@test.com", signin::ConsentLevel::kSync);
 
   ForceSigninVerifierWithAccessToInternalsForTesting verifier(
       identity_test_env.identity_manager());
@@ -218,7 +222,8 @@ TEST(ForceSigninVerifierTest, OnLostConnection) {
   base::test::TaskEnvironment scoped_task_env;
   signin::IdentityTestEnvironment identity_test_env;
   const AccountInfo account_info =
-      identity_test_env.MakePrimaryAccountAvailable("email@test.com");
+      identity_test_env.MakePrimaryAccountAvailable(
+          "email@test.com", signin::ConsentLevel::kSync);
 
   ForceSigninVerifierWithAccessToInternalsForTesting verifier(
       identity_test_env.identity_manager());
@@ -242,7 +247,8 @@ TEST(ForceSigninVerifierTest, OnReconnected) {
   base::test::TaskEnvironment scoped_task_env;
   signin::IdentityTestEnvironment identity_test_env;
   const AccountInfo account_info =
-      identity_test_env.MakePrimaryAccountAvailable("email@test.com");
+      identity_test_env.MakePrimaryAccountAvailable(
+          "email@test.com", signin::ConsentLevel::kSync);
 
   ForceSigninVerifierWithAccessToInternalsForTesting verifier(
       identity_test_env.identity_manager());
@@ -266,7 +272,8 @@ TEST(ForceSigninVerifierTest, GetNetworkStatusAsync) {
   base::test::TaskEnvironment scoped_task_env;
   signin::IdentityTestEnvironment identity_test_env;
   const AccountInfo account_info =
-      identity_test_env.MakePrimaryAccountAvailable("email@test.com");
+      identity_test_env.MakePrimaryAccountAvailable(
+          "email@test.com", signin::ConsentLevel::kSync);
 
   ConfigureNetworkConnectionTracker(NetworkConnectionType::Undecided,
                                     NetworkResponseType::Asynchronous);
@@ -288,7 +295,8 @@ TEST(ForceSigninVerifierTest, LaunchVerifierWithoutNetwork) {
   base::test::TaskEnvironment scoped_task_env;
   signin::IdentityTestEnvironment identity_test_env;
   const AccountInfo account_info =
-      identity_test_env.MakePrimaryAccountAvailable("email@test.com");
+      identity_test_env.MakePrimaryAccountAvailable(
+          "email@test.com", signin::ConsentLevel::kSync);
 
   ConfigureNetworkConnectionTracker(NetworkConnectionType::ConnectionNone,
                                     NetworkResponseType::Asynchronous);
@@ -317,7 +325,8 @@ TEST(ForceSigninVerifierTest, ChangeNetworkFromWIFITo4GWithOnGoingRequest) {
   base::test::TaskEnvironment scoped_task_env;
   signin::IdentityTestEnvironment identity_test_env;
   const AccountInfo account_info =
-      identity_test_env.MakePrimaryAccountAvailable("email@test.com");
+      identity_test_env.MakePrimaryAccountAvailable(
+          "email@test.com", signin::ConsentLevel::kSync);
 
   ConfigureNetworkConnectionTracker(NetworkConnectionType::ConnectionWifi,
                                     NetworkResponseType::Asynchronous);
@@ -348,7 +357,8 @@ TEST(ForceSigninVerifierTest, ChangeNetworkFromWIFITo4GWithFinishedRequest) {
   base::test::TaskEnvironment scoped_task_env;
   signin::IdentityTestEnvironment identity_test_env;
   const AccountInfo account_info =
-      identity_test_env.MakePrimaryAccountAvailable("email@test.com");
+      identity_test_env.MakePrimaryAccountAvailable(
+          "email@test.com", signin::ConsentLevel::kSync);
 
   ConfigureNetworkConnectionTracker(NetworkConnectionType::ConnectionWifi,
                                     NetworkResponseType::Asynchronous);

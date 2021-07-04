@@ -7,6 +7,7 @@
 #include "base/bind.h"
 #include "base/mac/mac_util.h"
 #include "base/mac/scoped_nsobject.h"
+#include "base/process/process_handle.h"
 #include "base/run_loop.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -61,9 +62,8 @@ class UNNotificationPlatformBridgeMacTest : public testing::Test {
     GURL url("https://gmail.com");
 
     Notification notification(
-        message_center::NOTIFICATION_TYPE_SIMPLE, notificationId,
-        base::UTF8ToUTF16("Title"), base::UTF8ToUTF16("Context"), gfx::Image(),
-        base::UTF8ToUTF16("Notifier's Name"), url,
+        message_center::NOTIFICATION_TYPE_SIMPLE, notificationId, u"Title",
+        u"Context", gfx::Image(), u"Notifier's Name", url,
         message_center::NotifierId(url), message_center::RichNotificationData(),
         base::MakeRefCounted<message_center::NotificationDelegate>());
 
@@ -112,6 +112,7 @@ class UNNotificationPlatformBridgeMacBannerStyleTest
 
 TEST_F(UNNotificationPlatformBridgeMacTest, TestDisplay) {
   if (@available(macOS 10.14, *)) {
+    base::HistogramTester histogram_tester;
     Notification notification = CreateNotification();
 
     bridge_->Display(NotificationHandler::Type::WEB_PERSISTENT, profile_,
@@ -120,7 +121,7 @@ TEST_F(UNNotificationPlatformBridgeMacTest, TestDisplay) {
     [center_ getDeliveredNotificationsWithCompletionHandler:^(
                  NSArray<UNNotification*>* _Nonnull notifications) {
       ASSERT_EQ(1u, [notifications count]);
-      UNNotification* delivered_notification = [notifications objectAtIndex:0];
+      UNNotification* delivered_notification = notifications[0];
       UNNotificationContent* delivered_content =
           [[delivered_notification request] content];
       EXPECT_NSEQ(@"Title", [delivered_content title]);
@@ -132,11 +133,15 @@ TEST_F(UNNotificationPlatformBridgeMacTest, TestDisplay) {
                  NSSet<UNNotificationCategory*>* categories) {
       EXPECT_EQ(1u, [categories count]);
     }];
+
+    histogram_tester.ExpectUniqueSample("Notifications.macOS.Delivered.Banner",
+                                        /*sample=*/true, /*expected_count=*/1);
   }
 }
 
 TEST_F(UNNotificationPlatformBridgeMacTest, TestDisplayAlert) {
   if (@available(macOS 10.14, *)) {
+    base::HistogramTester histogram_tester;
     Notification alert = CreateAlert();
     // Some OS versions don't support alerts.
     if (!IsAlertNotificationMac(alert))
@@ -154,19 +159,22 @@ TEST_F(UNNotificationPlatformBridgeMacTest, TestDisplayAlert) {
     ASSERT_EQ(1u, [displayed_alerts count]);
 
     // Verify alert content.
-    NSDictionary* delivered_alert = [displayed_alerts objectAtIndex:0];
-    NSString* title = [delivered_alert
-        objectForKey:notification_constants::kNotificationTitle];
-    NSString* informative_text = [delivered_alert
-        objectForKey:notification_constants::kNotificationInformativeText];
-    NSString* subtitle = [delivered_alert
-        objectForKey:notification_constants::kNotificationSubTitle];
-    NSString* identifier = [delivered_alert
-        objectForKey:notification_constants::kNotificationIdentifier];
+    NSDictionary* delivered_alert = displayed_alerts[0];
+    NSString* title =
+        delivered_alert[notification_constants::kNotificationTitle];
+    NSString* informative_text =
+        delivered_alert[notification_constants::kNotificationInformativeText];
+    NSString* subtitle =
+        delivered_alert[notification_constants::kNotificationSubTitle];
+    NSString* identifier =
+        delivered_alert[notification_constants::kNotificationIdentifier];
     EXPECT_NSEQ(@"Title", title);
     EXPECT_NSEQ(@"Context", informative_text);
     EXPECT_NSEQ(@"gmail.com", subtitle);
     EXPECT_NSEQ(@"r|Moe|id1", identifier);
+
+    histogram_tester.ExpectUniqueSample("Notifications.macOS.Delivered.Alert",
+                                        /*sample=*/true, /*expected_count=*/1);
   }
 }
 
@@ -217,13 +225,13 @@ TEST_F(UNNotificationPlatformBridgeMacTest, TestIncognitoProfile) {
     [center_ getDeliveredNotificationsWithCompletionHandler:^(
                  NSArray<UNNotification*>* _Nonnull notifications) {
       ASSERT_EQ(1u, [notifications count]);
-      remaining = [notifications objectAtIndex:0];
+      remaining = notifications[0];
     }];
 
     // Expect that the remaining notification is for the regular profile.
     EXPECT_EQ(false,
-              [[[[[remaining request] content] userInfo]
-                  objectForKey:notification_constants::kNotificationIncognito]
+              [[[[remaining request] content]
+                  userInfo][notification_constants::kNotificationIncognito]
                   boolValue]);
 
     // Close the one for the regular profile.
@@ -253,12 +261,11 @@ TEST_F(UNNotificationPlatformBridgeMacTest, TestNotificationHasIcon) {
     [center_ getDeliveredNotificationsWithCompletionHandler:^(
                  NSArray<UNNotification*>* _Nonnull notifications) {
       ASSERT_EQ(1u, [notifications count]);
-      UNNotification* delivered_notification = [notifications objectAtIndex:0];
+      UNNotification* delivered_notification = notifications[0];
       UNNotificationContent* delivered_content =
           [[delivered_notification request] content];
       ASSERT_EQ(1u, [[delivered_content attachments] count]);
-      EXPECT_NSEQ(@"id1", [[[delivered_content attachments] objectAtIndex:0]
-                              identifier]);
+      EXPECT_NSEQ(@"id1", [[delivered_content attachments][0] identifier]);
     }];
   }
 }
@@ -273,7 +280,7 @@ TEST_F(UNNotificationPlatformBridgeMacTest, TestNotificationNoIcon) {
     [center_ getDeliveredNotificationsWithCompletionHandler:^(
                  NSArray<UNNotification*>* _Nonnull notifications) {
       ASSERT_EQ(1u, [notifications count]);
-      UNNotification* delivered_notification = [notifications objectAtIndex:0];
+      UNNotification* delivered_notification = notifications[0];
       UNNotificationContent* delivered_content =
           [[delivered_notification request] content];
       EXPECT_EQ(0u, [[delivered_content attachments] count]);
@@ -410,6 +417,47 @@ TEST_F(UNNotificationPlatformBridgeMacTest, TestQuitRemovesNotifications) {
   }
 }
 
+TEST_F(UNNotificationPlatformBridgeMacTest,
+       TestProfileShutdownRemovesNotifications) {
+  if (@available(macOS 10.14, *)) {
+    Notification notification = CreateAlert();
+
+    TestingProfile::Builder profile_builder;
+    profile_builder.SetPath(profile_->GetPath());
+    profile_builder.SetProfileName(profile_->GetProfileUserName());
+    Profile* incognito_profile = profile_builder.BuildIncognito(profile_);
+
+    // Show two notifications with the same id from different profiles.
+    bridge_->Display(NotificationHandler::Type::WEB_PERSISTENT, profile_,
+                     notification, /*metadata=*/nullptr);
+    bridge_->Display(NotificationHandler::Type::WEB_PERSISTENT,
+                     incognito_profile, notification,
+                     /*metadata=*/nullptr);
+    ASSERT_EQ(2u, [[alert_dispatcher_ alerts] count]);
+
+    // Start shutdown of the incognito profile.
+    bridge_->DisplayServiceShutDown(incognito_profile);
+    // This runs async code that we can't observe, make sure all tasks run.
+    base::RunLoop().RunUntilIdle();
+
+    NSArray* displayed_alerts = [alert_dispatcher_ alerts];
+    ASSERT_EQ(1u, [displayed_alerts count]);
+    NSDictionary* remaining = displayed_alerts[0];
+
+    // Expect that the remaining notification is for the regular profile.
+    EXPECT_FALSE(
+        [remaining[notification_constants::kNotificationIncognito] boolValue]);
+  }
+}
+
+// Regression test for crbug.com/1182795
+TEST_F(UNNotificationPlatformBridgeMacTest, TestNullProfileShutdown) {
+  if (@available(macOS 10.14, *)) {
+    // Emulate shutdown of the null profile.
+    bridge_->DisplayServiceShutDown(/*profile=*/nullptr);
+  }
+}
+
 TEST_F(UNNotificationPlatformBridgeMacTest, TestNotificationNoButtons) {
   if (@available(macOS 10.14, *)) {
     Notification notification = CreateNotification();
@@ -473,8 +521,8 @@ TEST_F(UNNotificationPlatformBridgeMacTest, TestNotificationWithButtons) {
     notification.set_settings_button_handler(
         message_center::SettingsButtonHandler::DELEGATE);
     std::vector<message_center::ButtonInfo> buttons = {
-        message_center::ButtonInfo(base::UTF8ToUTF16("Button 1")),
-        message_center::ButtonInfo(base::UTF8ToUTF16("Button 2"))};
+        message_center::ButtonInfo(u"Button 1"),
+        message_center::ButtonInfo(u"Button 2")};
     notification.set_buttons(buttons);
 
     bridge_->Display(NotificationHandler::Type::WEB_PERSISTENT, profile_,
@@ -545,6 +593,7 @@ TEST_F(UNNotificationPlatformBridgeMacTest, TestCloseRemovesCategory) {
 
 TEST_F(UNNotificationPlatformBridgeMacTest, TestSynchronizeNotifications) {
   if (@available(macOS 10.14, *)) {
+    base::HistogramTester histogram_tester;
     Notification banner1 = CreateNotification("banner1");
     Notification banner2 = CreateNotification("banner2");
     Notification alert1 = CreateAlert("alert1");
@@ -583,6 +632,13 @@ TEST_F(UNNotificationPlatformBridgeMacTest, TestSynchronizeNotifications) {
     display_service_tester_->SetProcessNotificationOperationDelegate(
         operation_callback.Get());
     task_environment_.FastForwardBy(base::TimeDelta::FromMinutes(5));
+
+    histogram_tester.ExpectUniqueSample(
+        "Notifications.macOS.ActionReceived.Alert", /*sample=*/true,
+        /*expected_count=*/1);
+    histogram_tester.ExpectUniqueSample(
+        "Notifications.macOS.ActionReceived.Banner", /*sample=*/true,
+        /*expected_count=*/1);
   }
 }
 
@@ -666,3 +722,35 @@ INSTANTIATE_TEST_SUITE_P(UNNotificationPlatformBridgeMacBannerStyleTest,
                          testing::Values(UNNotificationStyle::kNone,
                                          UNNotificationStyle::kBanners,
                                          UNNotificationStyle::kAlerts));
+
+TEST_F(UNNotificationPlatformBridgeMacTest, NotificationResponse) {
+  if (@available(macOS 10.14, *)) {
+    base::HistogramTester histogram_tester;
+
+    base::scoped_nsobject<FakeUNNotificationResponse> fakeResponse =
+        CreateFakeUNNotificationResponse(@{
+          notification_constants::kNotificationOrigin : @"https://google.com",
+          notification_constants::kNotificationId : @"notificationId",
+          notification_constants::kNotificationProfileId : @"profileId",
+          notification_constants::kNotificationIncognito : @YES,
+          notification_constants::kNotificationType : @0,
+          notification_constants::
+          kNotificationCreatorPid : @(base::GetCurrentProcId()),
+        });
+
+    [[center_ delegate]
+                userNotificationCenter:static_cast<UNUserNotificationCenter*>(
+                                           center_.get())
+        didReceiveNotificationResponse:static_cast<UNNotificationResponse*>(
+                                           fakeResponse.get())
+                 withCompletionHandler:^{
+                 }];
+
+    // Handling responses is async, make sure we wait for all tasks to complete.
+    task_environment_.RunUntilIdle();
+
+    histogram_tester.ExpectUniqueSample(
+        "Notifications.macOS.ActionReceived.Banner", /*sample=*/true,
+        /*expected_count=*/1);
+  }
+}

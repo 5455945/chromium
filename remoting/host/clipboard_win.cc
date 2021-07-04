@@ -6,11 +6,13 @@
 
 #include <windows.h>
 
+#include <memory>
+#include <string>
+
 #include "base/bind.h"
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
-#include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/platform_thread.h"
 #include "base/win/message_window.h"
@@ -140,7 +142,7 @@ void ClipboardWin::Start(
 
   client_clipboard_.swap(client_clipboard);
 
-  window_.reset(new base::win::MessageWindow());
+  window_ = std::make_unique<base::win::MessageWindow>();
   if (!window_->Create(base::BindRepeating(&ClipboardWin::HandleMessage,
                                            base::Unretained(this)))) {
     LOG(ERROR) << "Couldn't create clipboard window.";
@@ -166,7 +168,7 @@ void ClipboardWin::InjectClipboardEvent(
     return;
   }
 
-  base::string16 text = base::UTF8ToUTF16(ReplaceLfByCrLf(event.data()));
+  std::u16string text = base::UTF8ToUTF16(ReplaceLfByCrLf(event.data()));
 
   ScopedClipboard clipboard;
   if (!clipboard.Init(window_->hwnd())) {

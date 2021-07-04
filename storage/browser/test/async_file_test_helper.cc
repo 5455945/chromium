@@ -18,6 +18,7 @@
 #include "storage/browser/quota/quota_manager.h"
 #include "storage/common/file_system/file_system_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 
 namespace storage {
 
@@ -100,14 +101,14 @@ const int64_t AsyncFileTestHelper::kDontCheckSize = -1;
 base::File::Error AsyncFileTestHelper::Copy(FileSystemContext* context,
                                             const FileSystemURL& src,
                                             const FileSystemURL& dest) {
-  return CopyWithProgress(context, src, dest, CopyProgressCallback());
+  return CopyWithProgress(context, src, dest, CopyOrMoveProgressCallback());
 }
 
 base::File::Error AsyncFileTestHelper::CopyWithProgress(
     FileSystemContext* context,
     const FileSystemURL& src,
     const FileSystemURL& dest,
-    const CopyProgressCallback& progress_callback) {
+    const CopyOrMoveProgressCallback& progress_callback) {
   base::File::Error result = base::File::FILE_ERROR_FAILED;
   base::RunLoop run_loop;
   context->operation_runner()->Copy(src, dest, FileSystemOperation::OPTION_NONE,
@@ -137,7 +138,25 @@ base::File::Error AsyncFileTestHelper::Move(FileSystemContext* context,
                                             const FileSystemURL& dest) {
   base::File::Error result = base::File::FILE_ERROR_FAILED;
   base::RunLoop run_loop;
+  context->operation_runner()->Move(
+      src, dest, FileSystemOperation::OPTION_NONE,
+      storage::FileSystemOperation::ERROR_BEHAVIOR_ABORT,
+      storage::FileSystemOperation::CopyOrMoveProgressCallback(),
+      AssignAndQuitCallback(&run_loop, &result));
+  run_loop.Run();
+  return result;
+}
+
+base::File::Error AsyncFileTestHelper::MoveWithProgress(
+    FileSystemContext* context,
+    const FileSystemURL& src,
+    const FileSystemURL& dest,
+    const CopyOrMoveProgressCallback& progress_callback) {
+  base::File::Error result = base::File::FILE_ERROR_FAILED;
+  base::RunLoop run_loop;
   context->operation_runner()->Move(src, dest, FileSystemOperation::OPTION_NONE,
+                                    FileSystemOperation::ERROR_BEHAVIOR_ABORT,
+                                    progress_callback,
                                     AssignAndQuitCallback(&run_loop, &result));
   run_loop.Run();
   return result;
@@ -289,7 +308,7 @@ blink::mojom::QuotaStatusCode AsyncFileTestHelper::GetUsageAndQuota(
       blink::mojom::QuotaStatusCode::kUnknown;
   base::RunLoop run_loop;
   quota_manager->GetUsageAndQuota(
-      origin, FileSystemTypeToQuotaStorageType(type),
+      blink::StorageKey(origin), FileSystemTypeToQuotaStorageType(type),
       base::BindOnce(&DidGetUsageAndQuota, &status, usage, quota,
                      run_loop.QuitWhenIdleClosure()));
   run_loop.Run();

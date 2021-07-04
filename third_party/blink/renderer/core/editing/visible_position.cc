@@ -112,6 +112,7 @@ VisiblePositionTemplate<Strategy> VisiblePositionTemplate<Strategy>::Create(
   DCHECK(position_with_affinity.IsConnected()) << position_with_affinity;
 
   Document& document = *position_with_affinity.GetDocument();
+  DCHECK(position_with_affinity.IsValidFor(document)) << position_with_affinity;
   DCHECK(!document.NeedsLayoutTreeUpdate());
   DocumentLifecycle::DisallowTransitionScope disallow_transition(
       document.Lifecycle());
@@ -139,9 +140,8 @@ VisiblePositionTemplate<Strategy> VisiblePositionTemplate<Strategy>::Create(
                                                       downstream_position)) {
       const PositionWithAffinityTemplate<Strategy>& start_of_line =
           StartOfLine(position_with_affinity);
-      if (start_of_line.IsNull())
-        return VisiblePositionTemplate<Strategy>();
-      return VisiblePositionTemplate<Strategy>(start_of_line);
+      if (start_of_line.IsNotNull())
+        return VisiblePositionTemplate<Strategy>(start_of_line);
     }
 
     // Otherwise use the canonical position.

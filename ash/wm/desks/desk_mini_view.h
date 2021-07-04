@@ -40,9 +40,8 @@ class ASH_EXPORT DeskMiniView
                              int preview_height);
 
   // The desk preview bounds are proportional to the bounds of the display on
-  // which it resides, and whether the |compact| layout is used.
-  static gfx::Rect GetDeskPreviewBounds(aura::Window* root_window,
-                                        bool compact);
+  // which it resides.
+  static gfx::Rect GetDeskPreviewBounds(aura::Window* root_window);
 
   DeskMiniView(DesksBarView* owner_bar, aura::Window* root_window, Desk* desk);
   ~DeskMiniView() override;
@@ -96,19 +95,21 @@ class ASH_EXPORT DeskMiniView
   // Desk::Observer:
   void OnContentChanged() override;
   void OnDeskDestroyed(const Desk* desk) override;
-  void OnDeskNameChanged(const base::string16& new_name) override;
+  void OnDeskNameChanged(const std::u16string& new_name) override;
 
   // OverviewHighlightController::OverviewHighlightableView:
   views::View* GetView() override;
   void MaybeActivateHighlightedView() override;
   void MaybeCloseHighlightedView() override;
   void MaybeSwapHighlightedView(bool right) override;
+  bool MaybeActivateHighlightedViewOnOverviewExit(
+      OverviewSession* overview_session) override;
   void OnViewHighlighted() override;
   void OnViewUnhighlighted() override;
 
   // views::TextfieldController:
   void ContentsChanged(views::Textfield* sender,
-                       const base::string16& new_contents) override;
+                       const std::u16string& new_contents) override;
   bool HandleKeyEvent(views::Textfield* sender,
                       const ui::KeyEvent& key_event) override;
   bool HandleMouseEvent(views::Textfield* sender,
@@ -119,14 +120,6 @@ class ASH_EXPORT DeskMiniView
   void OnViewBlurred(views::View* observed_view) override;
 
   bool IsPointOnMiniView(const gfx::Point& screen_location) const;
-
-  // Gets the minimum width of this view to properly lay out all its contents in
-  // default layout.
-  // The view containing this object can use the width returned from this
-  // function to decide its own proper size or layout.
-  int GetMinWidthForDefaultLayout() const;
-
-  bool IsDeskNameViewVisibleForTesting() const;
 
  private:
   void OnCloseButtonPressed();

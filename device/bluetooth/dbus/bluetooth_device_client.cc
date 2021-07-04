@@ -11,7 +11,7 @@
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
-#include "base/stl_util.h"
+#include "base/observer_list.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
 #include "dbus/object_manager.h"
@@ -38,7 +38,7 @@ std::unique_ptr<BluetoothServiceAttributeValueBlueZ> ReadAttributeValue(
   if (!struct_reader->PopUint32(&size))
     return nullptr;
 
-  std::unique_ptr<base::Value> value = nullptr;
+  std::unique_ptr<base::Value> value;
   switch (type) {
     case bluez::BluetoothServiceAttributeValueBlueZ::NULLTYPE: {
       break;
@@ -212,6 +212,8 @@ BluetoothDeviceClient::Properties::Properties(
                    &advertising_data_flags);
   RegisterProperty(bluetooth_device::kMTUProperty, &mtu);
   RegisterProperty(bluetooth_device::kEIRProperty, &eir);
+  RegisterProperty(bluetooth_device::kIsBlockedByPolicyProperty,
+                   &is_blocked_by_policy);
 }
 
 BluetoothDeviceClient::Properties::~Properties() = default;

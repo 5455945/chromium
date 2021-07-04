@@ -25,6 +25,7 @@
 #include "ui/aura/window.h"
 #include "ui/aura/window_delegate.h"
 #include "ui/compositor/animation_throughput_reporter.h"
+#include "ui/compositor/layer.h"
 #include "ui/display/display.h"
 #include "ui/display/display_observer.h"
 #include "ui/display/screen.h"
@@ -76,7 +77,7 @@ void MoveToDisplayForRestore(WindowState* window_state) {
         window_state->window()->GetRootWindow()) {
       aura::Window* new_container =
           new_root_controller->GetRootWindow()->GetChildById(
-              window_state->window()->parent()->id());
+              window_state->window()->parent()->GetId());
       new_container->AddChild(window_state->window());
     }
   }
@@ -247,7 +248,6 @@ void DefaultState::HandleCompoundEvents(WindowState* window_state,
     case WM_EVENT_TOGGLE_VERTICAL_MAXIMIZE: {
       gfx::Rect work_area =
           screen_util::GetDisplayWorkAreaBoundsInParent(window);
-
       // Maximize vertically if:
       // - The window does not have a max height defined.
       // - The window has the normal state type. Snapped windows are excluded
@@ -257,15 +257,14 @@ void DefaultState::HandleCompoundEvents(WindowState* window_state,
           !window_state->IsNormalStateType()) {
         return;
       }
-      if (window_state->HasRestoreBounds() &&
-          (window->bounds().height() == work_area.height() &&
-           window->bounds().y() == work_area.y())) {
-        window_state->SetAndClearRestoreBounds();
-      } else {
-        window_state->SaveCurrentBoundsForRestore();
-        window->SetBounds(gfx::Rect(window->bounds().x(), work_area.y(),
-                                    window->bounds().width(),
-                                    work_area.height()));
+      if (!window_state->VerticallyShrinkWindow(work_area)) {
+        gfx::Rect restore_bounds = window->GetTargetBounds();
+        const gfx::Rect new_bounds =
+            gfx::Rect(window->bounds().x(), work_area.y(),
+                      window->bounds().width(), work_area.height());
+        window_state->SetBoundsDirectCrossFade(new_bounds);
+        if (!window_state->HasRestoreBounds())
+          window_state->SetRestoreBoundsInParent(restore_bounds);
       }
       return;
     }
@@ -279,35 +278,29 @@ void DefaultState::HandleCompoundEvents(WindowState* window_state,
         return;
       gfx::Rect work_area =
           screen_util::GetDisplayWorkAreaBoundsInParent(window);
-      if (window_state->IsNormalStateType() &&
-          window_state->HasRestoreBounds() &&
-          (window->bounds().width() == work_area.width() &&
-           window->bounds().x() == work_area.x())) {
-        window_state->SetAndClearRestoreBounds();
-      } else {
+      if (!window_state->HorizontallyShrinkWindow(work_area)) {
         gfx::Rect new_bounds(work_area.x(), window->bounds().y(),
                              work_area.width(), window->bounds().height());
-
         gfx::Rect restore_bounds = window->GetTargetBounds();
         if (window_state->IsSnapped()) {
-          window_state->SetRestoreBoundsInParent(new_bounds);
+          window_state->SetRestoreBoundsInParent(window->bounds());
           window_state->Restore();
 
           // The restore logic prevents a window from being restored to bounds
           // which match the workspace bounds exactly so it is necessary to set
           // the bounds again below.
         }
-
-        window_state->SetRestoreBoundsInParent(restore_bounds);
-        window->SetBounds(new_bounds);
+        if (!window_state->HasRestoreBounds())
+          window_state->SetRestoreBoundsInParent(restore_bounds);
+        window_state->SetBoundsDirectCrossFade(new_bounds);
       }
       return;
     }
     case WM_EVENT_TOGGLE_FULLSCREEN:
       ToggleFullScreen(window_state, window_state->delegate());
       return;
-    case WM_EVENT_CYCLE_SNAP_LEFT:
-    case WM_EVENT_CYCLE_SNAP_RIGHT:
+    case WM_EVENT_CYCLE_SNAP_PRIMARY:
+    case WM_EVENT_CYCLE_SNAP_SECONDARY:
       CycleSnap(window_state, event->type());
       return;
     default:
@@ -350,14 +343,14 @@ void DefaultState::HandleTransitionEvents(WindowState* window_state,
   }
 
   const WMEventType type = event->type();
-  if (type == WM_EVENT_SNAP_LEFT || type == WM_EVENT_SNAP_RIGHT)
+  if (type == WM_EVENT_SNAP_PRIMARY || type == WM_EVENT_SNAP_SECONDARY)
     HandleWindowSnapping(window_state, type);
 
   if (next_state_type == current_state_type && window_state->IsSnapped()) {
     gfx::Rect snapped_bounds = GetSnappedWindowBoundsInParent(
-        window_state->window(), event->type() == WM_EVENT_SNAP_LEFT
-                                    ? WindowStateType::kLeftSnapped
-                                    : WindowStateType::kRightSnapped);
+        window_state->window(), event->type() == WM_EVENT_SNAP_PRIMARY
+                                    ? WindowStateType::kPrimarySnapped
+                                    : WindowStateType::kSecondarySnapped);
     window_state->SetBoundsDirectAnimated(snapped_bounds);
     return;
   }
@@ -513,8 +506,8 @@ void DefaultState::UpdateBoundsFromState(WindowState* window_state,
   aura::Window* window = window_state->window();
   gfx::Rect bounds_in_parent;
   switch (state_type_) {
-    case WindowStateType::kLeftSnapped:
-    case WindowStateType::kRightSnapped:
+    case WindowStateType::kPrimarySnapped:
+    case WindowStateType::kSecondarySnapped:
       bounds_in_parent =
           GetSnappedWindowBoundsInParent(window_state->window(), state_type_);
       break;
@@ -585,7 +578,7 @@ void DefaultState::UpdateBoundsFromState(WindowState* window_state,
   } else {
     // Record smoothness of the snapping animation if the size of the window
     // changes.
-    base::Optional<ui::AnimationThroughputReporter> reporter;
+    absl::optional<ui::AnimationThroughputReporter> reporter;
     if (window_state->IsSnapped() &&
         bounds_in_parent.size() != window->bounds().size()) {
       reporter.emplace(

@@ -13,7 +13,8 @@ import {
 } from './device/constraints_preferrer.js';
 import {DeviceInfoUpdater} from './device/device_info_updater.js';
 import * as dom from './dom.js';
-import * as error from './error.js';
+import {reportError} from './error.js';
+import * as focusRing from './focus_ring.js';
 import {GalleryButton} from './gallerybutton.js';
 import {Intent} from './intent.js';
 import * as metrics from './metrics.js';
@@ -28,10 +29,12 @@ import {preloadImagesList} from './preload_images.js';
 import * as state from './state.js';
 import * as tooltip from './tooltip.js';
 import {ErrorLevel, ErrorType, Mode, PerfEvent, ViewName} from './type.js';
+import {addUnloadCallback} from './unload.js';
 import * as util from './util.js';
 import {Camera} from './views/camera.js';
 import {CameraIntent} from './views/camera_intent.js';
 import {Dialog} from './views/dialog.js';
+import {PTZPanel} from './views/ptz_panel.js';
 import {
   BaseSettings,
   PrimarySettings,
@@ -43,8 +46,7 @@ import {WaitableEvent} from './waitable_event.js';
 
 /**
  * The app window instance which is used for communication with Tast tests. For
- * non-test sessions or test sessions but using the legacy communication
- * solution (chrome.runtime), it should be null.
+ * non-test sessions, it should be null.
  * @type {?AppWindow}
  */
 const appWindow = window['appWindow'];
@@ -128,10 +130,10 @@ export class App {
       }
     }, {passive: false, capture: true});
 
-    document.title = loadTimeData.getI18nMessage('name');
     util.setupI18nElements(document.body);
     this.setupToggles_();
-    this.setupSettingEffect_();
+    this.setupEffect_();
+    focusRing.initialize();
 
     const resolutionSettings = new ResolutionSettings(
         this.infoUpdater_, this.photoPreferrer_, this.videoPreferrer_);
@@ -140,6 +142,7 @@ export class App {
     nav.setup([
       this.cameraView_,
       new PrimarySettings(),
+      new PTZPanel(),
       new BaseSettings(ViewName.GRID_SETTINGS),
       new BaseSettings(ViewName.TIMER_SETTINGS),
       resolutionSettings,
@@ -159,8 +162,6 @@ export class App {
    * @private
    */
   setupToggles_() {
-    localStorage.get({expert: false})
-        .then((values) => state.set(state.State.EXPERT, values['expert']));
     dom.getAll('input', HTMLInputElement).forEach((element) => {
       element.addEventListener('keypress', (event) => {
         const e = assertInstanceof(event, KeyboardEvent);
@@ -169,11 +170,9 @@ export class App {
         }
       });
 
-      const payload = (element) =>
-          ({[element.dataset['key']]: element.checked});
       const save = (element) => {
         if (element.dataset['key'] !== undefined) {
-          localStorage.set(payload(element));
+          localStorage.set(element.dataset['key'], element.checked);
         }
       };
       element.addEventListener('change', (event) => {
@@ -187,30 +186,58 @@ export class App {
             // Handle unchecked grouped sibling radios.
             const grouped =
                 `input[type=radio][name=${element.name}]:not(:checked)`;
-            dom.getAll(grouped, HTMLInputElement)
-                .forEach(
-                    (radio) => radio.dispatchEvent(new Event('change')) &&
-                        save(radio));
+            for (const radio of dom.getAll(grouped, HTMLInputElement)) {
+              radio.dispatchEvent(new Event('change'));
+              save(radio);
+            }
           }
         }
       });
+      if (element.dataset['state'] !== undefined) {
+        state.addObserver(
+            state.assertState(element.dataset['state']), (value) => {
+              if (value !== element.checked) {
+                util.toggleChecked(element, value);
+              }
+            });
+      }
       if (element.dataset['key'] !== undefined) {
         // Restore the previously saved state on startup.
-        localStorage.get(payload(element))
-            .then(
-                (values) => util.toggleChecked(
-                    element, values[element.dataset['key']]));
+        const value =
+            localStorage.getBool(element.dataset['key'], element.checked);
+        util.toggleChecked(element, value);
       }
     });
   }
 
   /**
-   * Sets up inkdrop effect for settings view.
+   * Sets up visual effect for all applicable elements.
    * @private
    */
-  setupSettingEffect_() {
-    dom.getAll('button.menu-item, label.menu-item', HTMLElement)
+  setupEffect_() {
+    dom.getAll('.inkdrop', HTMLElement)
         .forEach((el) => util.setInkdropEffect(el));
+
+    const observer = new MutationObserver((mutationList) => {
+      mutationList.forEach((mutation) => {
+        assert(mutation.type === 'childList');
+        // Only the newly added nodes with inkdrop class are considered here. So
+        // simply adding class attribute on existing element will not work.
+        for (const node of mutation.addedNodes) {
+          if (!(node instanceof HTMLElement)) {
+            continue;
+          }
+          const el = assertInstanceof(node, HTMLElement);
+          if (el.classList.contains('inkdrop')) {
+            util.setInkdropEffect(el);
+          }
+        }
+      });
+    });
+    observer.observe(document.body, {
+      subtree: true,
+      childList: true,
+    });
   }
 
   /**
@@ -223,9 +250,20 @@ export class App {
       await filesystem.initialize();
       const cameraDir = filesystem.getCameraDirectory();
       assert(cameraDir !== null);
-      this.galleryButton_.initialize(cameraDir);
+
+      // There are three possible cases:
+      // 1. Regular instance
+      //      (intent === null)
+      // 2. STILL_CAPTURE_CAMREA and VIDEO_CAMERA intents
+      //      (intent !== null && shouldHandleResult === false)
+      // 3. Other intents
+      //      (intent !== null && shouldHandleResult === true)
+      // Only (1) and (2) will show gallery button on the UI.
+      if (this.intent_ === null || !this.intent_.shouldHandleResult) {
+        this.galleryButton_.initialize(cameraDir);
+      }
     } catch (error) {
-      console.error(error);
+      reportError(ErrorType.FILE_SYSTEM_FAILURE, ErrorLevel.ERROR, error);
       nav.open(ViewName.WARNING, WarningType.FILESYSTEM_FAILURE);
     }
 
@@ -294,7 +332,7 @@ export class App {
           preloadImagesList.map((name) => loadImage(`/images/${name}`)));
       const failure = results.find(({status}) => status === 'rejected');
       if (failure !== undefined) {
-        error.reportError(
+        reportError(
             ErrorType.PRELOAD_IMAGE_FAILURE, ErrorLevel.ERROR,
             assertInstanceof(failure.reason, Error));
       }
@@ -354,7 +392,7 @@ let instance = null;
 
   state.set(state.State.INTENT, intent !== null);
 
-  window.addEventListener('unload', () => {
+  addUnloadCallback(() => {
     // For SWA, we don't cancel the unhandled intent here since there is no
     // guarantee that asynchronous calls in unload listener can be executed
     // properly. Therefore, we moved the logic for canceling unhandled intent to

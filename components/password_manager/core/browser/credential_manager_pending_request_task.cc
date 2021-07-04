@@ -13,9 +13,9 @@
 
 #include "base/bind.h"
 #include "base/callback_helpers.h"
+#include "base/containers/cxx20_erase.h"
 #include "base/containers/flat_set.h"
 #include "base/metrics/user_metrics.h"
-#include "base/stl_util.h"
 #include "components/password_manager/core/browser/android_affiliation/affiliated_match_helper.h"
 #include "components/password_manager/core/browser/credential_manager_utils.h"
 #include "components/password_manager/core/browser/password_bubble_experiment.h"
@@ -184,7 +184,7 @@ void CredentialManagerPendingRequestTask::OnGetPasswordStoreResults(
 }
 
 void CredentialManagerPendingRequestTask::OnGetPasswordStoreResultsFrom(
-    PasswordStore* store,
+    PasswordStoreInterface* store,
     std::vector<std::unique_ptr<PasswordForm>> results) {
   // localhost is a secure origin but not https.
   if (results.empty() && origin_.scheme() == url::kHttpsScheme) {
@@ -327,20 +327,20 @@ void CredentialManagerPendingRequestTask::ProcessForms(
     return;
   }
 
-  auto repeating_send_callback =
-      base::AdaptCallbackForRepeating(std::move(send_callback_));
+  auto split_send_callback = base::SplitOnceCallback(std::move(send_callback_));
   if (!delegate_->client()->PromptUserToChooseCredentials(
           std::move(local_results), origin_,
           base::BindOnce(
               &CredentialManagerPendingRequestTaskDelegate::SendPasswordForm,
-              base::Unretained(delegate_), repeating_send_callback,
+              base::Unretained(delegate_), std::move(split_send_callback.first),
               mediation_))) {
     // Since PromptUserToChooseCredentials() does not invoke the callback when
     // returning false, `repeating_send_callback` has not been run in this
     // branch yet.
     LogCredentialManagerGetResult(
         metrics_util::CredentialManagerGetResult::kNone, mediation_);
-    delegate_->SendCredential(repeating_send_callback, CredentialInfo());
+    delegate_->SendCredential(std::move(split_send_callback.second),
+                              CredentialInfo());
   }
 }
 

@@ -14,14 +14,22 @@
 #if !defined(OFFICIAL_BUILD)
 #include "chrome/browser/ui/webui/new_tab_page/foo/foo.mojom.h"  // nogncheck crbug.com/1125897
 #endif
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/webui/new_tab_page/new_tab_page.mojom.h"
 #include "chrome/browser/ui/webui/realbox/realbox.mojom-forward.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
+#include "ui/base/resource/scale_factor.h"
 #include "ui/webui/mojo_web_ui_controller.h"
 #include "ui/webui/resources/cr_components/customize_themes/customize_themes.mojom.h"
+#include "ui/webui/resources/cr_components/most_visited/most_visited.mojom.h"
+
+namespace base {
+class RefCountedMemory;
+}
 
 namespace content {
 class NavigationHandle;
@@ -35,7 +43,10 @@ class FooHandler;
 #endif
 class GURL;
 class InstantService;
+class MostVisitedHandler;
 class NewTabPageHandler;
+class PrefRegistrySimple;
+class PrefService;
 class Profile;
 class PromoBrowserCommandHandler;
 class RealboxHandler;
@@ -47,6 +58,7 @@ class NewTabPageUI
     : public ui::MojoWebUIController,
       public new_tab_page::mojom::PageHandlerFactory,
       public customize_themes::mojom::CustomizeThemesHandlerFactory,
+      public most_visited::mojom::MostVisitedPageHandlerFactory,
       public InstantServiceObserver,
       content::WebContentsObserver {
  public:
@@ -54,6 +66,9 @@ class NewTabPageUI
   ~NewTabPageUI() override;
 
   static bool IsNewTabPageOrigin(const GURL& url);
+  static void RegisterProfilePrefs(PrefRegistrySimple* registry);
+  static void ResetProfilePrefs(PrefService* prefs);
+  static bool IsDriveModuleEnabled(Profile* profile);
 
   // Instantiates the implementor of the mojom::PageHandlerFactory mojo
   // interface passing the pending receiver that will be internally bound.
@@ -81,6 +96,13 @@ class NewTabPageUI
                          pending_receiver);
 
   // Instantiates the implementor of the
+  // most_visited::mojom::MostVisitedPageHandlerFactory mojo interface passing
+  // the pending receiver that will be internally bound.
+  void BindInterface(
+      mojo::PendingReceiver<most_visited::mojom::MostVisitedPageHandlerFactory>
+          pending_receiver);
+
+  // Instantiates the implementor of the
   // shopping_tasks::mojom::ShoppingTasksHandler mojo interface passing the
   // pending receiver that will be internally bound.
   void BindInterface(
@@ -104,6 +126,9 @@ class NewTabPageUI
   void BindInterface(
       mojo::PendingReceiver<chrome_cart::mojom::CartHandler> pending_receiver);
 
+  static base::RefCountedMemory* GetFaviconResourceBytes(
+      ui::ResourceScaleFactor scale_factor);
+
  private:
   // new_tab_page::mojom::PageHandlerFactory:
   void CreatePageHandler(
@@ -118,6 +143,12 @@ class NewTabPageUI
       mojo::PendingReceiver<customize_themes::mojom::CustomizeThemesHandler>
           pending_handler) override;
 
+  // most_visited::mojom::MostVisitedPageHandlerFactory:
+  void CreatePageHandler(
+      mojo::PendingRemote<most_visited::mojom::MostVisitedPage> pending_page,
+      mojo::PendingReceiver<most_visited::mojom::MostVisitedPageHandler>
+          pending_page_handler) override;
+
   // InstantServiceObserver:
   void NtpThemeChanged(const NtpTheme& theme) override;
   void MostVisitedInfoChanged(const InstantMostVisitedInfo& info) override;
@@ -131,12 +162,24 @@ class NewTabPageUI
   // prevent a potential white flicker.
   void UpdateBackgroundColor(const NtpTheme& theme);
 
+  bool IsCustomLinksEnabled() const;
+  bool IsShortcutsVisible() const;
+
+  // Callback for when the value of the pref for showing custom links vs. most
+  // visited sites in the NTP tiles changes.
+  void OnCustomLinksEnabledPrefChanged();
+  // Callback for when the value of the pref for showing the NTP tiles changes.
+  void OnTilesVisibilityPrefChanged();
+
   std::unique_ptr<NewTabPageHandler> page_handler_;
   mojo::Receiver<new_tab_page::mojom::PageHandlerFactory>
       page_factory_receiver_;
   std::unique_ptr<ChromeCustomizeThemesHandler> customize_themes_handler_;
   mojo::Receiver<customize_themes::mojom::CustomizeThemesHandlerFactory>
       customize_themes_factory_receiver_;
+  std::unique_ptr<MostVisitedHandler> most_visited_page_handler_;
+  mojo::Receiver<most_visited::mojom::MostVisitedPageHandlerFactory>
+      most_visited_page_factory_receiver_;
   std::unique_ptr<PromoBrowserCommandHandler> promo_browser_command_handler_;
   std::unique_ptr<RealboxHandler> realbox_handler_;
 #if !defined(OFFICIAL_BUILD)
@@ -153,6 +196,10 @@ class NewTabPageUI
   // Mojo implementations for modules:
   std::unique_ptr<TaskModuleHandler> task_module_handler_;
   std::unique_ptr<DriveHandler> drive_handler_;
+
+  PrefChangeRegistrar pref_change_registrar_;
+
+  base::WeakPtrFactory<NewTabPageUI> weak_ptr_factory_{this};
 
   WEB_UI_CONTROLLER_TYPE_DECL();
 

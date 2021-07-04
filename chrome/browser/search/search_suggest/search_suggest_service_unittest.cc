@@ -8,7 +8,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/optional.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
@@ -27,6 +26,7 @@
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 using testing::InSequence;
 using testing::StrictMock;
@@ -42,7 +42,7 @@ class FakeSearchSuggestLoader : public SearchSuggestLoader {
   size_t GetCallbackCount() const { return callbacks_.size(); }
 
   void RespondToAllCallbacks(Status status,
-                             const base::Optional<SearchSuggestData>& data) {
+                             const absl::optional<SearchSuggestData>& data) {
     for (SearchSuggestionsCallback& callback : callbacks_) {
       std::move(callback).Run(status, data);
     }
@@ -74,7 +74,8 @@ class SearchSuggestServiceTest : public BrowserWithTestWindowTest {
     service_ = std::make_unique<SearchSuggestService>(
         profile(), identity_env_->identity_manager(), std::move(loader));
 
-    identity_env_->MakePrimaryAccountAvailable("example@gmail.com");
+    identity_env_->MakePrimaryAccountAvailable("example@gmail.com",
+                                               signin::ConsentLevel::kSync);
     identity_env_->SetAutomaticIssueOfAccessTokens(true);
   }
 
@@ -175,16 +176,16 @@ TEST_F(SearchSuggestServiceTest, IsEnabled) {
 }
 
 TEST_F(SearchSuggestServiceTest, NoRefreshOnSignedOutRequest) {
-  ASSERT_EQ(base::nullopt, service()->search_suggest_data());
+  ASSERT_EQ(absl::nullopt, service()->search_suggest_data());
 
   // Request a refresh. That should do nothing as no user is signed-in.
   service()->Refresh();
   EXPECT_EQ(0u, loader()->GetCallbackCount());
-  EXPECT_EQ(base::nullopt, service()->search_suggest_data());
+  EXPECT_EQ(absl::nullopt, service()->search_suggest_data());
 }
 
 TEST_F(SearchSuggestServiceTest, RefreshesOnSignedInRequest) {
-  ASSERT_EQ(base::nullopt, service()->search_suggest_data());
+  ASSERT_EQ(absl::nullopt, service()->search_suggest_data());
   SignIn();
 
   // Request a refresh. That should arrive at the loader.
@@ -212,7 +213,7 @@ TEST_F(SearchSuggestServiceTest, RefreshesOnSignedInRequest) {
 }
 
 TEST_F(SearchSuggestServiceTest, KeepsCacheOnTransientError) {
-  ASSERT_EQ(base::nullopt, service()->search_suggest_data());
+  ASSERT_EQ(absl::nullopt, service()->search_suggest_data());
   SignIn();
 
   // Load some data.
@@ -225,13 +226,13 @@ TEST_F(SearchSuggestServiceTest, KeepsCacheOnTransientError) {
   // Request a refresh and respond with a transient error.
   service()->Refresh();
   loader()->RespondToAllCallbacks(SearchSuggestLoader::Status::TRANSIENT_ERROR,
-                                  base::nullopt);
+                                  absl::nullopt);
   // Cached data should still be there.
   EXPECT_EQ(data, service()->search_suggest_data());
 }
 
 TEST_F(SearchSuggestServiceTest, ClearsCacheOnFatalError) {
-  ASSERT_EQ(base::nullopt, service()->search_suggest_data());
+  ASSERT_EQ(absl::nullopt, service()->search_suggest_data());
   SignIn();
 
   // Load some data.
@@ -244,13 +245,13 @@ TEST_F(SearchSuggestServiceTest, ClearsCacheOnFatalError) {
   // Request a refresh and respond with a fatal error.
   service()->Refresh();
   loader()->RespondToAllCallbacks(SearchSuggestLoader::Status::FATAL_ERROR,
-                                  base::nullopt);
+                                  absl::nullopt);
   // Cached data should be gone now.
-  EXPECT_EQ(base::nullopt, service()->search_suggest_data());
+  EXPECT_EQ(absl::nullopt, service()->search_suggest_data());
 }
 
 TEST_F(SearchSuggestServiceTest, ResetsOnSignOut) {
-  ASSERT_EQ(base::nullopt, service()->search_suggest_data());
+  ASSERT_EQ(absl::nullopt, service()->search_suggest_data());
   SignIn();
 
   // Load some data.
@@ -262,7 +263,7 @@ TEST_F(SearchSuggestServiceTest, ResetsOnSignOut) {
 
   // Sign out. This should clear the cached data and notify the observer.
   SignOut();
-  EXPECT_EQ(base::nullopt, service()->search_suggest_data());
+  EXPECT_EQ(absl::nullopt, service()->search_suggest_data());
 }
 
 TEST_F(SearchSuggestServiceTest, BlocklistSuggestionUpdatesBlocklistString) {
@@ -341,7 +342,7 @@ TEST_F(SearchSuggestServiceTest,
 
 TEST_F(SearchSuggestServiceTest, BlocklistClearsCachedDataAndIssuesRequest) {
   SetUserSelectedDefaultSearchProvider("{google:baseURL}");
-  ASSERT_EQ(base::nullopt, service()->search_suggest_data());
+  ASSERT_EQ(absl::nullopt, service()->search_suggest_data());
   SignIn();
 
   // Request a refresh. That should arrive at the loader.
@@ -371,7 +372,7 @@ TEST_F(SearchSuggestServiceTest, BlocklistClearsCachedDataAndIssuesRequest) {
 TEST_F(SearchSuggestServiceTest,
        SuggestionSelectedClearsCachedDataAndIssuesRequest) {
   SetUserSelectedDefaultSearchProvider("{google:baseURL}");
-  ASSERT_EQ(base::nullopt, service()->search_suggest_data());
+  ASSERT_EQ(absl::nullopt, service()->search_suggest_data());
   SignIn();
 
   // Request a refresh. That should arrive at the loader.
@@ -402,7 +403,7 @@ TEST_F(SearchSuggestServiceTest,
 
 TEST_F(SearchSuggestServiceTest, OptOutPreventsRequests) {
   SetUserSelectedDefaultSearchProvider("{google:baseURL}");
-  ASSERT_EQ(base::nullopt, service()->search_suggest_data());
+  ASSERT_EQ(absl::nullopt, service()->search_suggest_data());
   SignIn();
 
   service()->OptOutOfSearchSuggestions();
@@ -410,7 +411,7 @@ TEST_F(SearchSuggestServiceTest, OptOutPreventsRequests) {
   // Request a refresh. That should do nothing as the user opted-out.
   service()->Refresh();
   EXPECT_EQ(0u, loader()->GetCallbackCount());
-  EXPECT_EQ(base::nullopt, service()->search_suggest_data());
+  EXPECT_EQ(absl::nullopt, service()->search_suggest_data());
 }
 
 TEST_F(SearchSuggestServiceTest, SuggestionAPIsDoNothingWithNonGoogleDSP) {
@@ -433,7 +434,7 @@ TEST_F(SearchSuggestServiceTest, SuggestionAPIsDoNothingWithNonGoogleDSP) {
 }
 
 TEST_F(SearchSuggestServiceTest, UpdateImpressionCapParameters) {
-  ASSERT_EQ(base::nullopt, service()->search_suggest_data());
+  ASSERT_EQ(absl::nullopt, service()->search_suggest_data());
   SignIn();
 
   // Request a refresh. That should arrive at the loader.
@@ -481,7 +482,7 @@ TEST_F(SearchSuggestServiceTest, UpdateImpressionCapParameters) {
 }
 
 TEST_F(SearchSuggestServiceTest, DontRequestWhenImpressionCapped) {
-  ASSERT_EQ(base::nullopt, service()->search_suggest_data());
+  ASSERT_EQ(absl::nullopt, service()->search_suggest_data());
   SignIn();
 
   const base::DictionaryValue* dict =
@@ -525,7 +526,7 @@ TEST_F(SearchSuggestServiceTest, DontRequestWhenImpressionCapped) {
 }
 
 TEST_F(SearchSuggestServiceTest, ImpressionCountResetsAfterTimeout) {
-  ASSERT_EQ(base::nullopt, service()->search_suggest_data());
+  ASSERT_EQ(absl::nullopt, service()->search_suggest_data());
   SignIn();
 
   const base::DictionaryValue* dict =
@@ -553,7 +554,7 @@ TEST_F(SearchSuggestServiceTest, ImpressionCountResetsAfterTimeout) {
 
   // The impression cap has been reached.
   service()->Refresh();
-  EXPECT_EQ(base::nullopt, service()->search_suggest_data());
+  EXPECT_EQ(absl::nullopt, service()->search_suggest_data());
 
   RunFor(base::TimeDelta::FromMilliseconds(1000));
 
@@ -566,7 +567,7 @@ TEST_F(SearchSuggestServiceTest, ImpressionCountResetsAfterTimeout) {
 }
 
 TEST_F(SearchSuggestServiceTest, RequestsFreezeOnEmptyResponse) {
-  ASSERT_EQ(base::nullopt, service()->search_suggest_data());
+  ASSERT_EQ(absl::nullopt, service()->search_suggest_data());
   SignIn();
 
   // Request a refresh. That should arrive at the loader.
@@ -595,7 +596,7 @@ TEST_F(SearchSuggestServiceTest, RequestsFreezeOnEmptyResponse) {
 
   // No request should be made since they are frozen.
   service()->Refresh();
-  EXPECT_EQ(base::nullopt, service()->search_suggest_data());
+  EXPECT_EQ(absl::nullopt, service()->search_suggest_data());
 
   RunFor(base::TimeDelta::FromMilliseconds(1000));
 

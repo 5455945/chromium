@@ -27,6 +27,7 @@ import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.locale.LocaleManager;
 import org.chromium.chrome.browser.net.spdyproxy.DataReductionProxySettings;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.search_engines.SearchEnginePromoType;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.browser.signin.services.SigninManager;
 import org.chromium.chrome.browser.vr.VrModuleProvider;
@@ -69,19 +70,14 @@ public abstract class FirstRunFlowSequencer  {
      * Once finished, calls onFlowIsKnown().
      */
     public void start() {
-        if (CommandLine.getInstance().hasSwitch(ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE)
-                || ApiCompatibilityUtils.isDemoUser()
-                || ApiCompatibilityUtils.isRunningInUserTestHarness()) {
-            onFlowIsKnown(null);
-            return;
-        }
-
         long childAccountStatusStart = SystemClock.elapsedRealtime();
-        ChildAccountService.checkChildAccountStatus(status -> {
-            RecordHistogram.recordTimesHistogram("MobileFre.ChildAccountStatusDuration",
-                    SystemClock.elapsedRealtime() - childAccountStatusStart);
-            initializeSharedState(status);
-            processFreEnvironmentPreNative();
+        AccountManagerFacadeProvider.getInstance().getAccounts().then(accounts -> {
+            ChildAccountService.checkChildAccountStatus(accounts, status -> {
+                RecordHistogram.recordTimesHistogram("MobileFre.ChildAccountStatusDuration",
+                        SystemClock.elapsedRealtime() - childAccountStatusStart);
+                initializeSharedState(status, accounts);
+                processFreEnvironmentPreNative();
+            });
         });
     }
 
@@ -106,11 +102,6 @@ public abstract class FirstRunFlowSequencer  {
     }
 
     @VisibleForTesting
-    protected List<Account> getGoogleAccounts() {
-        return AccountManagerFacadeProvider.getInstance().tryGetGoogleAccounts();
-    }
-
-    @VisibleForTesting
     protected boolean shouldSkipFirstUseHints() {
         return Settings.Secure.getInt(
                        mActivity.getContentResolver(), Settings.Secure.SKIP_FIRST_USE_HINTS, 0)
@@ -129,10 +120,10 @@ public abstract class FirstRunFlowSequencer  {
 
     @VisibleForTesting
     protected boolean shouldShowSearchEnginePage() {
-        @LocaleManager.SearchEnginePromoType
+        @SearchEnginePromoType
         int searchPromoType = LocaleManager.getInstance().getSearchEnginePromoShowType();
-        return searchPromoType == LocaleManager.SearchEnginePromoType.SHOW_NEW
-                || searchPromoType == LocaleManager.SearchEnginePromoType.SHOW_EXISTING;
+        return searchPromoType == SearchEnginePromoType.SHOW_NEW
+                || searchPromoType == SearchEnginePromoType.SHOW_EXISTING;
     }
 
     @VisibleForTesting
@@ -140,24 +131,16 @@ public abstract class FirstRunFlowSequencer  {
         FirstRunSignInProcessor.setFirstRunFlowSignInComplete(true);
     }
 
-    void initializeSharedState(@ChildAccountStatus.Status int childAccountStatus) {
+    @VisibleForTesting
+    void initializeSharedState(
+            @ChildAccountStatus.Status int childAccountStatus, List<Account> accounts) {
         mChildAccountStatus = childAccountStatus;
-        // Note that fetching accounts isn't instrumented because it's typically very fast. It seems
-        // fetching child account status causes accounts to be cached. Revisit this if the ordering
-        // of these calls is changed.
-        mGoogleAccounts = getGoogleAccounts();
+        mGoogleAccounts = accounts;
     }
 
     void processFreEnvironmentPreNative() {
-        if (isFirstRunFlowComplete()) {
-            assert isFirstRunEulaAccepted();
-            // We do not need any interactive FRE.
-            onFlowIsKnown(null);
-            return;
-        }
-
         Bundle freProperties = new Bundle();
-        freProperties.putInt(SigninFirstRunFragment.CHILD_ACCOUNT_STATUS, mChildAccountStatus);
+        freProperties.putInt(SyncConsentFirstRunFragment.CHILD_ACCOUNT_STATUS, mChildAccountStatus);
 
         onFlowIsKnown(freProperties);
         if (ChildAccountStatus.isChild(mChildAccountStatus)) {
@@ -276,7 +259,13 @@ public abstract class FirstRunFlowSequencer  {
             Intent freIntent = intentCreator.create(
                     caller, fromIntent, requiresBroadcast, preferLightweightFre);
 
-            if (!(caller instanceof Activity)) freIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            // Although the FRE tries to run in the same task now, this is still needed for
+            // non-activity entry points like the search widget to launch at all. This flag does not
+            // seem to preclude an old task from being reused.
+            if (!(caller instanceof Activity)) {
+                freIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            }
+
             boolean isVrIntent = VrModuleProvider.getIntentDelegate().isVrIntent(fromIntent);
             if (isVrIntent) {
                 freIntent =

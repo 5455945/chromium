@@ -35,9 +35,9 @@ import org.chromium.components.browser_ui.widget.RoundedIconGenerator;
 import org.chromium.components.content_settings.ContentSettingsType;
 import org.chromium.components.embedder_support.browser_context.BrowserContextHandle;
 import org.chromium.components.embedder_support.util.Origin;
-import org.chromium.components.page_info.PageInfoFeatureList;
 import org.chromium.content_public.browser.ContentFeatureList;
 import org.chromium.content_public.common.ContentSwitches;
+import org.chromium.url.GURL;
 
 import java.util.Set;
 
@@ -92,7 +92,7 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
     }
 
     @Override
-    public void getFaviconImageForURL(String faviconUrl, Callback<Bitmap> callback) {
+    public void getFaviconImageForURL(GURL faviconUrl, Callback<Bitmap> callback) {
         new FaviconLoader(faviconUrl, callback);
     }
 
@@ -104,13 +104,13 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
      * has been called.
      */
     private class FaviconLoader implements FaviconImageCallback {
-        private final String mFaviconUrl;
+        private final GURL mFaviconUrl;
         private final Callback<Bitmap> mCallback;
         private final int mFaviconSizePx;
         // Loads the favicons asynchronously.
         private final FaviconHelper mFaviconHelper;
 
-        private FaviconLoader(String faviconUrl, Callback<Bitmap> callback) {
+        private FaviconLoader(GURL faviconUrl, Callback<Bitmap> callback) {
             mFaviconUrl = faviconUrl;
             mCallback = callback;
             mFaviconSizePx =
@@ -122,12 +122,12 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
             // but it is not safe.
             if (!mFaviconHelper.getLocalFaviconImageForURL(
                         Profile.getLastUsedRegularProfile(), mFaviconUrl, mFaviconSizePx, this)) {
-                onFaviconAvailable(/*image=*/null, mFaviconUrl);
+                onFaviconAvailable(/*image=*/null, null);
             }
         }
 
         @Override
-        public void onFaviconAvailable(Bitmap image, String iconUrl) {
+        public void onFaviconAvailable(Bitmap image, GURL unusedIconUrl) {
             mFaviconHelper.destroy();
 
             if (image == null) {
@@ -199,11 +199,6 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
         }
 
         return null;
-    }
-
-    @Override
-    public boolean isPageInfoV2Enabled() {
-        return PageInfoFeatureList.isEnabled(PageInfoFeatureList.PAGE_INFO_V2);
     }
 
     @Override

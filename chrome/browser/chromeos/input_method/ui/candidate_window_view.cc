@@ -11,8 +11,9 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/chromeos/input_method/ui/candidate_view.h"
 #include "chrome/browser/chromeos/input_method/ui/candidate_window_constants.h"
-#include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/display/types/display_constants.h"
@@ -27,8 +28,6 @@
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
-#include "ui/views/metadata/metadata_header_macros.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/wm/core/window_animations.h"
 
 namespace ui {
@@ -107,15 +106,21 @@ class InformationTextArea : public views::View {
 
     SetLayoutManager(std::make_unique<views::FillLayout>());
     AddChildView(label_);
+  }
+
+  InformationTextArea(const InformationTextArea&) = delete;
+  InformationTextArea& operator=(const InformationTextArea&) = delete;
+
+  // views::View:
+  void OnThemeChanged() override {
+    View::OnThemeChanged();
     SetBackground(views::CreateSolidBackground(
         color_utils::AlphaBlend(SK_ColorBLACK,
                                 GetNativeTheme()->GetSystemColor(
                                     ui::NativeTheme::kColorId_WindowBackground),
                                 0.0625f)));
+    UpdateBorder();
   }
-
-  InformationTextArea(const InformationTextArea&) = delete;
-  InformationTextArea& operator=(const InformationTextArea&) = delete;
 
   // Sets the text alignment.
   void SetAlignment(gfx::HorizontalAlignment alignment) {
@@ -123,12 +128,19 @@ class InformationTextArea : public views::View {
   }
 
   // Sets the displayed text.
-  void SetText(const base::string16& text) { label_->SetText(text); }
+  void SetText(const std::u16string& text) { label_->SetText(text); }
 
   // Sets the border thickness for top/bottom.
   void SetBorderFromPosition(BorderPosition position) {
+    position_ = position;
+    UpdateBorder();
+  }
+
+  void UpdateBorder() {
+    if (!position_ || !GetWidget())
+      return;
     SetBorder(views::CreateSolidSidedBorder(
-        (position == TOP) ? 1 : 0, 0, (position == BOTTOM) ? 1 : 0, 0,
+        (position_ == TOP) ? 1 : 0, 0, (position_ == BOTTOM) ? 1 : 0, 0,
         GetNativeTheme()->GetSystemColor(
             ui::NativeTheme::kColorId_MenuBorderColor)));
   }
@@ -143,6 +155,7 @@ class InformationTextArea : public views::View {
  private:
   views::Label* label_;
   int min_width_;
+  absl::optional<BorderPosition> position_;
 };
 
 BEGIN_METADATA(InformationTextArea, views::View)
@@ -158,6 +171,8 @@ CandidateWindowView::CandidateWindowView(gfx::NativeView parent)
   DCHECK(parent);
   set_parent_window(parent);
   set_margins(gfx::Insets());
+  // Ignore this role for accessibility purposes.
+  SetAccessibleRole(ax::mojom::Role::kNone);
 
   // When BubbleDialogDelegateView creates its frame view it will create a
   // bubble border with a non-zero corner radius by default.
@@ -167,10 +182,6 @@ CandidateWindowView::CandidateWindowView(gfx::NativeView parent)
   // of the frame view created by the BubbleDialogDelegateView is consistent
   // with what CandidateWindowView expects.
   set_use_round_corners(false);
-
-  SetBorder(views::CreateSolidBorder(
-      1, GetNativeTheme()->GetSystemColor(
-             ui::NativeTheme::kColorId_MenuBorderColor)));
 
   SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical));
@@ -213,6 +224,13 @@ views::Widget* CandidateWindowView::InitWidget() {
   return widget;
 }
 
+void CandidateWindowView::OnThemeChanged() {
+  BubbleDialogDelegateView::OnThemeChanged();
+  SetBorder(views::CreateSolidBorder(
+      1, GetNativeTheme()->GetSystemColor(
+             ui::NativeTheme::kColorId_MenuBorderColor)));
+}
+
 void CandidateWindowView::UpdateVisibility() {
   if (candidate_area_->GetVisible() || auxiliary_text_->GetVisible() ||
       preedit_->GetVisible()) {
@@ -238,7 +256,7 @@ void CandidateWindowView::ShowPreeditText() {
   UpdateVisibility();
 }
 
-void CandidateWindowView::UpdatePreeditText(const base::string16& text) {
+void CandidateWindowView::UpdatePreeditText(const std::u16string& text) {
   preedit_->SetText(text);
 }
 
@@ -383,7 +401,7 @@ void CandidateWindowView::MaybeInitializeCandidateViews(
     candidate_views_.push_back(
         candidate_area_->AddChildView(std::make_unique<CandidateView>(
             base::BindRepeating(&CandidateWindowView::CandidateViewPressed,
-                                base::Unretained(this), int{i}),
+                                base::Unretained(this), static_cast<int>(i)),
             orientation)));
   }
 }

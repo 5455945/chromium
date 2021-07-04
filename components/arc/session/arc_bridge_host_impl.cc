@@ -26,11 +26,14 @@
 #include "components/arc/mojom/cast_receiver.mojom.h"
 #include "components/arc/mojom/cert_store.mojom.h"
 #include "components/arc/mojom/clipboard.mojom.h"
+#include "components/arc/mojom/compatibility_mode.mojom.h"
 #include "components/arc/mojom/crash_collector.mojom.h"
+#include "components/arc/mojom/dark_theme.mojom.h"
 #include "components/arc/mojom/digital_goods.mojom.h"
 #include "components/arc/mojom/disk_quota.mojom.h"
 #include "components/arc/mojom/enterprise_reporting.mojom.h"
 #include "components/arc/mojom/file_system.mojom.h"
+#include "components/arc/mojom/iio_sensor.mojom.h"
 #include "components/arc/mojom/ime.mojom.h"
 #include "components/arc/mojom/input_method_manager.mojom.h"
 #include "components/arc/mojom/intent_helper.mojom.h"
@@ -38,8 +41,10 @@
 #include "components/arc/mojom/kiosk.mojom.h"
 #include "components/arc/mojom/lock_screen.mojom.h"
 #include "components/arc/mojom/media_session.mojom.h"
+#include "components/arc/mojom/memory.mojom.h"
 #include "components/arc/mojom/metrics.mojom.h"
 #include "components/arc/mojom/midis.mojom.h"
+#include "components/arc/mojom/nearby_share.mojom.h"
 #include "components/arc/mojom/net.mojom.h"
 #include "components/arc/mojom/notifications.mojom.h"
 #include "components/arc/mojom/obb_mounter.mojom.h"
@@ -66,6 +71,7 @@
 #include "components/arc/mojom/volume_mounter.mojom.h"
 #include "components/arc/mojom/wake_lock.mojom.h"
 #include "components/arc/mojom/wallpaper.mojom.h"
+#include "components/arc/mojom/webapk.mojom.h"
 #include "components/arc/session/arc_bridge_service.h"
 #include "components/arc/session/mojo_channel.h"
 
@@ -166,10 +172,23 @@ void ArcBridgeHostImpl::OnClipboardInstanceReady(
                   std::move(clipboard_remote));
 }
 
+void ArcBridgeHostImpl::OnCompatibilityModeInstanceReady(
+    mojo::PendingRemote<mojom::CompatibilityModeInstance>
+        compatibility_mode_remote) {
+  OnInstanceReady(arc_bridge_service_->compatibility_mode(),
+                  std::move(compatibility_mode_remote));
+}
+
 void ArcBridgeHostImpl::OnCrashCollectorInstanceReady(
     mojo::PendingRemote<mojom::CrashCollectorInstance> crash_collector_remote) {
   OnInstanceReady(arc_bridge_service_->crash_collector(),
                   std::move(crash_collector_remote));
+}
+
+void ArcBridgeHostImpl::OnDarkThemeInstanceReady(
+    mojo::PendingRemote<mojom::DarkThemeInstance> dark_theme_remote) {
+  OnInstanceReady(arc_bridge_service_->dark_theme(),
+                  std::move(dark_theme_remote));
 }
 
 void ArcBridgeHostImpl::OnDigitalGoodsInstanceReady(
@@ -244,6 +263,11 @@ void ArcBridgeHostImpl::OnMediaSessionInstanceReady(
                   std::move(media_session_remote));
 }
 
+void ArcBridgeHostImpl::OnMemoryInstanceReady(
+    mojo::PendingRemote<mojom::MemoryInstance> memory_remote) {
+  OnInstanceReady(arc_bridge_service_->memory(), std::move(memory_remote));
+}
+
 void ArcBridgeHostImpl::OnMetricsInstanceReady(
     mojo::PendingRemote<mojom::MetricsInstance> metrics_remote) {
   OnInstanceReady(arc_bridge_service_->metrics(), std::move(metrics_remote));
@@ -252,6 +276,12 @@ void ArcBridgeHostImpl::OnMetricsInstanceReady(
 void ArcBridgeHostImpl::OnMidisInstanceReady(
     mojo::PendingRemote<mojom::MidisInstance> midis_remote) {
   OnInstanceReady(arc_bridge_service_->midis(), std::move(midis_remote));
+}
+
+void ArcBridgeHostImpl::OnNearbyShareInstanceReady(
+    mojo::PendingRemote<mojom::NearbyShareInstance> nearby_share_remote) {
+  OnInstanceReady(arc_bridge_service_->nearby_share(),
+                  std::move(nearby_share_remote));
 }
 
 void ArcBridgeHostImpl::OnNetInstanceReady(
@@ -411,6 +441,15 @@ void ArcBridgeHostImpl::OnWallpaperInstanceReady(
     mojo::PendingRemote<mojom::WallpaperInstance> wallpaper_remote) {
   OnInstanceReady(arc_bridge_service_->wallpaper(),
                   std::move(wallpaper_remote));
+}
+
+void ArcBridgeHostImpl::OnWebApkInstanceReady(
+    mojo::PendingRemote<mojom::WebApkInstance> webapk_remote) {
+  OnInstanceReady(arc_bridge_service_->webapk(), std::move(webapk_remote));
+}
+
+size_t ArcBridgeHostImpl::GetNumMojoChannelsForTesting() const {
+  return mojo_channels_.size();
 }
 
 void ArcBridgeHostImpl::OnClosed() {

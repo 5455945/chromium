@@ -13,7 +13,7 @@
 #include "chrome/common/chrome_switches.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 
 BEGIN_METADATA(DesktopMediaListController, ListView, views::View)
 END_METADATA
@@ -23,13 +23,16 @@ DesktopMediaListController::DesktopMediaListController(
     std::unique_ptr<DesktopMediaList> media_list)
     : dialog_(parent),
       media_list_(std::move(media_list)),
+      auto_select_tab_(
+          base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+              switches::kAutoSelectTabCaptureSourceByTitle)),
       auto_select_source_(
           base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
               switches::kAutoSelectDesktopCaptureSource)),
-      auto_accept_tab_capture_(
+      auto_accept_this_tab_capture_(
           base::CommandLine::ForCurrentProcess()->HasSwitch(
               switches::kThisTabCaptureAutoAccept)),
-      auto_reject_tab_capture_(
+      auto_reject_this_tab_capture_(
           base::CommandLine::ForCurrentProcess()->HasSwitch(
               switches::kThisTabCaptureAutoReject)) {}
 
@@ -38,7 +41,7 @@ DesktopMediaListController::~DesktopMediaListController() = default;
 std::unique_ptr<views::View> DesktopMediaListController::CreateView(
     DesktopMediaSourceViewStyle generic_style,
     DesktopMediaSourceViewStyle single_style,
-    const base::string16& accessible_name) {
+    const std::u16string& accessible_name) {
   DCHECK(!view_);
 
   auto view = std::make_unique<DesktopMediaListView>(
@@ -49,7 +52,7 @@ std::unique_ptr<views::View> DesktopMediaListController::CreateView(
 }
 
 std::unique_ptr<views::View> DesktopMediaListController::CreateTabListView(
-    const base::string16& accessible_name) {
+    const std::u16string& accessible_name) {
   DCHECK(!view_);
 
   auto view = std::make_unique<DesktopMediaTabList>(this, accessible_name);
@@ -69,9 +72,9 @@ void DesktopMediaListController::FocusView() {
     view_->RequestFocus();
 }
 
-base::Optional<content::DesktopMediaID>
+absl::optional<content::DesktopMediaID>
 DesktopMediaListController::GetSelection() const {
-  return view_ ? view_->GetSelection() : base::nullopt;
+  return view_ ? view_->GetSelection() : absl::nullopt;
 }
 
 void DesktopMediaListController::OnSourceListLayoutChanged() {
@@ -171,18 +174,24 @@ void DesktopMediaListController::OnViewIsDeleting(views::View* view) {
 bool DesktopMediaListController::ShouldAutoAccept(
     const DesktopMediaList::Source& source) const {
   if (media_list_->GetMediaListType() == DesktopMediaList::Type::kCurrentTab) {
-    return auto_accept_tab_capture_;
+    return auto_accept_this_tab_capture_;
+  } else if (media_list_->GetMediaListType() ==
+                 DesktopMediaList::Type::kWebContents &&
+             !auto_select_tab_.empty() &&
+             source.name.find(base::ASCIIToUTF16(auto_select_tab_)) !=
+                 std::u16string::npos) {
+    return true;
   }
 
   return (!auto_select_source_.empty() &&
           source.name.find(base::ASCIIToUTF16(auto_select_source_)) !=
-              base::string16::npos);
+              std::u16string::npos);
 }
 
 bool DesktopMediaListController::ShouldAutoReject(
     const DesktopMediaList::Source& source) const {
   if (media_list_->GetMediaListType() == DesktopMediaList::Type::kCurrentTab) {
-    return auto_reject_tab_capture_;
+    return auto_reject_this_tab_capture_;
   }
   return false;
 }

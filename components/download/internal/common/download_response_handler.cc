@@ -11,6 +11,7 @@
 #include "components/download/public/common/download_url_parameters.h"
 #include "components/download/public/common/download_utils.h"
 #include "net/http/http_status_code.h"
+#include "services/network/public/mojom/early_hints.mojom.h"
 
 namespace download {
 
@@ -87,6 +88,9 @@ DownloadResponseHandler::DownloadResponseHandler(
 }
 
 DownloadResponseHandler::~DownloadResponseHandler() = default;
+
+void DownloadResponseHandler::OnReceiveEarlyHints(
+    network::mojom::EarlyHintsPtr early_hints) {}
 
 void DownloadResponseHandler::OnReceiveResponse(
     network::mojom::URLResponseHeadPtr head) {

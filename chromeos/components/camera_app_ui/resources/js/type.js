@@ -78,6 +78,15 @@ export class Resolution {
 }
 
 /**
+ * Types of common mime types.
+ * @enum {string}
+ */
+export const MimeType = {
+  JPEG: 'image/jpeg',
+  PDF: 'application/pdf',
+};
+
+/**
  * Capture modes.
  * @enum {string}
  */
@@ -96,6 +105,11 @@ export const Facing = {
   USER: 'user',
   ENVIRONMENT: 'environment',
   EXTERNAL: 'external',
+  // VIRTUAL_{facing} is for labeling video device for configuring extra stream
+  // from corresponding {facing} video device.
+  VIRTUAL_USER: 'virtual_user',
+  VIRTUAL_ENV: 'virtual_environment',
+  VIRTUAL_EXT: 'virtual_external',
   NOT_SET: '(not set)',
   UNKNOWN: 'unknown',
 };
@@ -109,6 +123,7 @@ export const ViewName = {
   GRID_SETTINGS: 'view-grid-settings',
   MESSAGE_DIALOG: 'view-message-dialog',
   PHOTO_RESOLUTION_SETTINGS: 'view-photo-resolution-settings',
+  PTZ_PANEL: 'view-ptz-panel',
   RESOLUTION_SETTINGS: 'view-resolution-settings',
   SETTINGS: 'view-settings',
   SPLASH: 'view-splash',
@@ -202,6 +217,7 @@ export let PerfEntry;
  *   level: !ErrorLevel,
  *   stack: string,
  *   time: number,
+ *   name: string,
  * }}
  */
 export let ErrorInfo;
@@ -212,9 +228,29 @@ export let ErrorInfo;
  */
 export const ErrorType = {
   BROKEN_THUMBNAIL: 'broken-thumbnail',
+  DEVICE_INFO_UPDATE_FAILURE: 'device-info-update-failure',
+  DEVICE_NOT_EXIST: 'device-not-exist',
+  EMPTY_FILE: 'empty-file',
+  FILE_SYSTEM_FAILURE: 'file-system-failure',
+  FRAME_ROTATION_NOT_DISABLED: 'frame-rotation-not-disabled',
+  HANDLE_CAMERA_RESULT_FAILURE: 'handle-camera-result-failure',
+  IDLE_DETECTOR_FAILURE: 'idle-detector-failure',
+  INVALID_REVIEW_UI_STATE: 'invalid-review-ui-state',
+  METADATA_MAPPING_FAILURE: 'metadata-mapping-failure',
+  NO_AVAILABLE_LEVEL: 'no-available-level',
+  PERF_METRICS_FAILURE: 'perf-metrics-failure',
   PRELOAD_IMAGE_FAILURE: 'preload-image-failure',
+  REMOVE_METADATA_OBSERVER_FAILURE: 'remove-metadata-observer-failure',
+  REMOVE_SHUTTER_OBSERVER_FAILURE: 'remove-shutter-observer-failure',
   SET_FPS_RANGE_FAILURE: 'set-fps-range-failure',
+  START_CAMERA_FAILURE: 'start-camera-failure',
+  START_CAPTURE_FAILURE: 'start-capture-failure',
+  STOP_CAPTURE_FAILURE: 'stop-capture-failure',
   UNCAUGHT_PROMISE: 'uncaught-promise',
+  UNKNOWN_FACING: 'unknown-facing',
+  UNSAFE_INTEGER: 'unsafe-integer',
+  UNSUPPORTED_PROTOCOL: 'unsupported-protocol',
+  MULTIPLE_STREAMS_FAILURE: 'multiple-streams-failure',
 };
 
 /**
@@ -249,6 +285,76 @@ export class CanceledError extends Error {
    * @public
    */
   constructor(message = 'The action is canceled') {
+    super(message);
+    this.name = this.constructor.name;
+  }
+}
+
+/**
+ * Throws when an element fails to load a source.
+ */
+export class LoadError extends Error {
+  /**
+   * @param {string=} message
+   * @public
+   */
+  constructor(message = 'Source failed to load') {
+    super(message);
+    this.name = this.constructor.name;
+  }
+}
+
+/**
+ * Throws when an media element fails to play.
+ */
+export class PlayError extends Error {
+  /**
+   * @param {string=} message
+   * @public
+   */
+  constructor(message = 'Media element failed to play') {
+    super(message);
+    this.name = this.constructor.name;
+  }
+}
+
+/**
+ * Throws when an media element play a malformed file.
+ */
+export class PlayMalformedError extends Error {
+  /**
+   * @param {string=} message
+   * @public
+   */
+  constructor(message = 'Media element failed to play a malformed file') {
+    super(message);
+    this.name = this.constructor.name;
+  }
+}
+
+/**
+ * Throws when the data to generate thumbnail is totally empty.
+ */
+export class EmptyThumbnailError extends Error {
+  /**
+   * @param {string=} message
+   * @public
+   */
+  constructor(message = 'The thumbnail is empty') {
+    super(message);
+    this.name = this.constructor.name;
+  }
+}
+
+/**
+ * Throws when the recording is ended with no chunk returned.
+ */
+export class NoChunkError extends Error {
+  /**
+   * @param {string=} message
+   * @public
+   */
+  constructor(message = 'No chunk is received during recording session') {
     super(message);
     this.name = this.constructor.name;
   }

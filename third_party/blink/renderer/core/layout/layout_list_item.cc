@@ -27,6 +27,7 @@
 #include "third_party/blink/renderer/core/html/html_li_element.h"
 #include "third_party/blink/renderer/core/html/html_olist_element.h"
 #include "third_party/blink/renderer/core/layout/layout_list_marker.h"
+#include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
 #include "third_party/blink/renderer/core/layout/layout_outside_list_marker.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/layout/list_marker.h"
@@ -343,7 +344,9 @@ bool LayoutListItem::UpdateMarkerLocation() {
     // If the marker is currently contained inside an anonymous box, then we
     // are the only item in that anonymous box (since no line box parent was
     // found). It's ok to just leave the marker where it is in this case.
-    if (marker_parent && marker_parent->IsAnonymousBlock()) {
+    // Also ok to leave it in a flow thread.
+    if (marker_parent && (marker_parent->IsAnonymousBlock() ||
+                          marker_parent->IsLayoutFlowThread())) {
       line_box_parent = marker_parent;
       // We could use marker_parent as line_box_parent only if marker is the
       // first leaf child of list item.

@@ -7,7 +7,6 @@
 #include <set>
 
 #include "base/bind.h"
-#include "base/stl_util.h"
 #include "chrome/browser/video_tutorials/internal/config.h"
 #include "chrome/browser/video_tutorials/prefs.h"
 #include "components/prefs/pref_service.h"
@@ -52,7 +51,7 @@ void TutorialManagerImpl::GetTutorials(MultipleItemCallback callback) {
   // Find the data from cache. If the preferred locale is not set, use a default
   // locale value to show the tutorial promos. Users will be asked again to
   // confirm their language before the video starts.
-  base::Optional<std::string> preferred_locale = GetPreferredLocale();
+  absl::optional<std::string> preferred_locale = GetPreferredLocale();
   std::string locale = preferred_locale.has_value()
                            ? preferred_locale.value()
                            : Config::GetDefaultPreferredLocale();
@@ -82,7 +81,7 @@ void TutorialManagerImpl::RunSingleItemCallback(
     FeatureType feature_type,
     std::vector<Tutorial> tutorials_excluding_summary) {
   if (!tutorial_group_.has_value()) {
-    std::move(callback).Run(base::nullopt);
+    std::move(callback).Run(absl::nullopt);
     return;
   }
 
@@ -93,7 +92,7 @@ void TutorialManagerImpl::RunSingleItemCallback(
     }
   }
 
-  std::move(callback).Run(base::nullopt);
+  std::move(callback).Run(absl::nullopt);
 }
 
 const std::vector<std::string>& TutorialManagerImpl::GetSupportedLanguages() {
@@ -106,10 +105,10 @@ TutorialManagerImpl::GetAvailableLanguagesForTutorial(
   return languages_for_tutorials_[feature_type];
 }
 
-base::Optional<std::string> TutorialManagerImpl::GetPreferredLocale() {
+absl::optional<std::string> TutorialManagerImpl::GetPreferredLocale() {
   if (prefs_->HasPrefPath(kPreferredLocaleKey))
     return prefs_->GetString(kPreferredLocaleKey);
-  return base::nullopt;
+  return absl::nullopt;
 }
 
 void TutorialManagerImpl::SetPreferredLocale(const std::string& locale) {

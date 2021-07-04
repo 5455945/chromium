@@ -20,7 +20,9 @@
 #include "remoting/codec/webrtc_video_encoder.h"
 #include "remoting/codec/webrtc_video_encoder_selector.h"
 #include "remoting/protocol/host_video_stats_dispatcher.h"
+#include "remoting/protocol/video_channel_state_observer.h"
 #include "remoting/protocol/video_stream.h"
+#include "remoting/protocol/webrtc_video_track_source.h"
 #include "third_party/webrtc/api/scoped_refptr.h"
 #include "third_party/webrtc/api/video_codecs/sdp_video_format.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_capturer.h"
@@ -33,18 +35,21 @@ namespace remoting {
 namespace protocol {
 
 class HostVideoStatsDispatcher;
+class WebrtcDummyVideoEncoderFactory;
 class WebrtcFrameScheduler;
 class WebrtcTransport;
 
 class WebrtcVideoStream : public VideoStream,
                           public webrtc::DesktopCapturer::Callback,
-                          public HostVideoStatsDispatcher::EventHandler {
+                          public HostVideoStatsDispatcher::EventHandler,
+                          public VideoChannelStateObserver {
  public:
   explicit WebrtcVideoStream(const SessionOptions& options);
   ~WebrtcVideoStream() override;
 
   void Start(std::unique_ptr<webrtc::DesktopCapturer> desktop_capturer,
              WebrtcTransport* webrtc_transport,
+             WebrtcDummyVideoEncoderFactory* video_encoder_factory,
              scoped_refptr<base::SequencedTaskRunner> encode_task_runner);
 
   // VideoStream interface.
@@ -55,6 +60,18 @@ class WebrtcVideoStream : public VideoStream,
   void SetLosslessColor(bool want_lossless) override;
   void SetObserver(Observer* observer) override;
   void SelectSource(int id) override;
+
+  // VideoChannelStateObserver interface.
+  void OnEncoderReady() override;
+  void OnKeyFrameRequested() override;
+  void OnTargetBitrateChanged(int bitrate_kbps) override;
+  void OnRttUpdate(base::TimeDelta rtt) override;
+  void OnTopOffActive(bool active) override;
+  void OnFrameEncoded(WebrtcVideoEncoder::EncodeResult encode_result,
+                      WebrtcVideoEncoder::EncodedFrame* frame) override;
+  void OnEncodedFrameSent(
+      webrtc::EncodedImageCallback::Result result,
+      const WebrtcVideoEncoder::EncodedFrame& frame) override;
 
  private:
   struct FrameStats;
@@ -70,7 +87,12 @@ class WebrtcVideoStream : public VideoStream,
   // Called by the |scheduler_|.
   void CaptureNextFrame();
 
-  void OnFrameEncoded(WebrtcVideoEncoder::EncodeResult encode_result,
+  // Callback passed to encoder_->Encode(). This just passes the parameters to
+  // OnFrameEncoded().
+  // TODO(crbug.com/1192865): Remove this (and OnEncoderCreated() below) when
+  // standard encoding pipeline is implemented - this object will no longer
+  // drive the encoder.
+  void EncodeCallback(WebrtcVideoEncoder::EncodeResult encode_result,
                       std::unique_ptr<WebrtcVideoEncoder::EncodedFrame> frame);
 
   void OnEncoderCreated(webrtc::VideoCodecType codec_type,
@@ -83,11 +105,14 @@ class WebrtcVideoStream : public VideoStream,
   // Capturer used to capture the screen.
   std::unique_ptr<webrtc::DesktopCapturer> capturer_;
   // Used to send across encoded frames.
-  WebrtcTransport* webrtc_transport_ = nullptr;
+  WebrtcDummyVideoEncoderFactory* video_encoder_factory_;
+
   // Task runner used by software encoders.
   scoped_refptr<base::SequencedTaskRunner> encode_task_runner_;
   // Used to encode captured frames.
   std::unique_ptr<WebrtcVideoEncoder> encoder_;
+  // Used to send captured frames to the encoder.
+  rtc::scoped_refptr<WebrtcVideoTrackSource> video_track_source_;
 
   scoped_refptr<InputEventTimestampsSource> event_timestamps_source_;
 

@@ -60,7 +60,7 @@ namespace blink {
 //
 // Each seek event will result in a new watch time metric being started and the
 // old metric finalized as accurately as possible.
-class BLINK_COMMON_EXPORT WatchTimeReporter : base::PowerObserver {
+class BLINK_COMMON_EXPORT WatchTimeReporter : base::PowerStateObserver {
  public:
   using GetMediaTimeCB = base::RepeatingCallback<base::TimeDelta(void)>;
   using GetPipelineStatsCB =
@@ -92,6 +92,8 @@ class BLINK_COMMON_EXPORT WatchTimeReporter : base::PowerObserver {
                     media::mojom::MediaMetricsProvider* provider,
                     scoped_refptr<base::SequencedTaskRunner> task_runner,
                     const base::TickClock* tick_clock = nullptr);
+  WatchTimeReporter(const WatchTimeReporter&) = delete;
+  WatchTimeReporter& operator=(const WatchTimeReporter&) = delete;
   ~WatchTimeReporter() override;
 
   // These methods are used to ensure that watch time is only reported for media
@@ -172,12 +174,13 @@ class BLINK_COMMON_EXPORT WatchTimeReporter : base::PowerObserver {
                     scoped_refptr<base::SequencedTaskRunner> task_runner,
                     const base::TickClock* tick_clock);
 
-  // base::PowerObserver implementation.
+  // base::PowerStateObserver implementation.
   //
   // We only observe power source changes. We don't need to observe suspend and
   // resume events because we report watch time in terms of elapsed media time
   // and not in terms of elapsed real time.
   void OnPowerStateChange(bool on_battery_power) override;
+
   void OnNativeControlsChanged(bool has_native_controls);
   void OnDisplayTypeChanged(DisplayType display_type);
 
@@ -264,8 +267,6 @@ class BLINK_COMMON_EXPORT WatchTimeReporter : base::PowerObserver {
   // Similar to the above, but for muted audio+video watch time. Configured as
   // an audio+video WatchTimeReporter with |is_muted_| set to true.
   std::unique_ptr<WatchTimeReporter> muted_reporter_;
-
-  DISALLOW_COPY_AND_ASSIGN(WatchTimeReporter);
 };
 
 }  // namespace blink

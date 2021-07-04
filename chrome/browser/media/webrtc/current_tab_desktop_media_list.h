@@ -23,14 +23,14 @@ class CurrentTabDesktopMediaList : public DesktopMediaListBase {
                              base::TimeDelta period,
                              DesktopMediaListObserver* observer);
 
-  void Refresh(bool update_thumnails) override;
+  void Refresh(bool update_thumbnails) override;
 
   // Called on the UI thread after the captured image is handled. If the
   // image was new, it's rescaled to the desired size and sent back in |image|.
   // Otherwise, an empty Optional is sent back. In either case, |hash| is the
   // hash value of the frame that was handled.
   void OnCaptureHandled(uint32_t hash,
-                        const base::Optional<gfx::ImageSkia>& image);
+                        const absl::optional<gfx::ImageSkia>& image);
 
   // It's hard for tests to control what kind of image is given by the mock.
   // Normally it just returns the same thing again and again. To simulate a
@@ -38,7 +38,6 @@ class CurrentTabDesktopMediaList : public DesktopMediaListBase {
   void ResetLastHashForTesting();
 
   // This "list" tracks a single view - the one represented by these variables.
-  content::RenderWidgetHostView* const view_;
   const content::DesktopMediaID media_id_;
 
   // Avoid two concurrent refreshes.
@@ -46,7 +45,7 @@ class CurrentTabDesktopMediaList : public DesktopMediaListBase {
 
   // The hash of the last captured frame. Used to detect identical frames
   // and prevent needless rescaling.
-  base::Optional<uint32_t> last_hash_;
+  absl::optional<uint32_t> last_hash_;
 
   // The heavy lifting involved with rescaling images into thumbnails is
   // moved off of the UI thread and onto this task runner.

@@ -4,11 +4,12 @@
 
 #include "chrome/browser/continuous_search/internal/search_url_helper.h"
 
-#include "base/optional.h"
+#include <string>
+
 #include "base/strings/strcat.h"
-#include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 namespace continuous_search {
@@ -51,15 +52,13 @@ TEST(SearchUrlHelper, NoExtractOtherUrl) {
                    .has_value());
 }
 
-TEST(SearchUrlHelper, ResultCategory) {
-  EXPECT_EQ(SearchResultCategory::kOrganic,
-            GetResultCategoryForUrl(GURL(base::StrCat({kSrpUrl, "?q=test"}))));
-  EXPECT_EQ(SearchResultCategory::kNews,
-            GetResultCategoryForUrl(
-                GURL(base::StrCat({kSrpUrl, "?q=test&tbm=nws"}))));
-  EXPECT_EQ(SearchResultCategory::kNone,
-            GetResultCategoryForUrl(
-                GURL(base::StrCat({kSrpUrl, "?q=test&tbm=invalid"}))));
+TEST(SearchUrlHelper, SrpPageCategory) {
+  EXPECT_EQ(PageCategory::kOrganicSrp,
+            GetSrpPageCategoryForUrl(GURL(base::StrCat({kSrpUrl, "?q=test"}))));
+  EXPECT_EQ(PageCategory::kNewsSrp, GetSrpPageCategoryForUrl(GURL(base::StrCat(
+                                        {kSrpUrl, "?q=test&tbm=nws"}))));
+  EXPECT_EQ(PageCategory::kNone, GetSrpPageCategoryForUrl(GURL(base::StrCat(
+                                     {kSrpUrl, "?q=test&tbm=invalid"}))));
 }
 
 }  // namespace continuous_search

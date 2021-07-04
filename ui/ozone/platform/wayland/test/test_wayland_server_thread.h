@@ -7,6 +7,7 @@
 
 #include <wayland-server-core.h>
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -23,6 +24,7 @@
 #include "ui/ozone/platform/wayland/test/test_seat.h"
 #include "ui/ozone/platform/wayland/test/test_subcompositor.h"
 #include "ui/ozone/platform/wayland/test/test_viewporter.h"
+#include "ui/ozone/platform/wayland/test/test_zwp_linux_explicit_synchronization.h"
 #include "ui/ozone/platform/wayland/test/test_zwp_text_input_manager.h"
 
 struct wl_client;
@@ -34,6 +36,16 @@ namespace wl {
 
 struct DisplayDeleter {
   void operator()(wl_display* display);
+};
+
+// Server configuration related enums and structs.
+enum class ShellVersion { kV6, kStable };
+enum class PrimarySelectionProtocol { kNone, kGtk, kZwp };
+
+struct ServerConfig {
+  ShellVersion shell_version = ShellVersion::kStable;
+  PrimarySelectionProtocol primary_selection_protocol =
+      PrimarySelectionProtocol::kNone;
 };
 
 class TestWaylandServerThread : public base::Thread,
@@ -51,7 +63,7 @@ class TestWaylandServerThread : public base::Thread,
   // wl_display_connect).
   // Instantiates an xdg_shell of version |shell_version|; versions 6 and 7
   // (stable) are supported.
-  bool Start(uint32_t shell_version);
+  bool Start(const ServerConfig& config);
 
   // Pauses the server thread when it becomes idle.
   void Pause();
@@ -83,6 +95,10 @@ class TestWaylandServerThread : public base::Thread,
   TestOutput* output() { return &output_; }
   TestZwpTextInputManagerV1* text_input_manager_v1() {
     return &zwp_text_input_manager_v1_;
+  }
+  TestZwpLinuxExplicitSynchronizationV1*
+  zwp_linux_explicit_synchronization_v1() {
+    return &zwp_linux_explicit_synchronization_v1_;
   }
   MockZwpLinuxDmabufV1* zwp_linux_dmabuf_v1() { return &zwp_linux_dmabuf_v1_; }
 
@@ -119,6 +135,7 @@ class TestWaylandServerThread : public base::Thread,
   MockXdgShell xdg_shell_;
   MockZxdgShellV6 zxdg_shell_v6_;
   TestZwpTextInputManagerV1 zwp_text_input_manager_v1_;
+  TestZwpLinuxExplicitSynchronizationV1 zwp_linux_explicit_synchronization_v1_;
   MockZwpLinuxDmabufV1 zwp_linux_dmabuf_v1_;
   MockWpPresentation wp_presentation_;
 

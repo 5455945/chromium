@@ -11,7 +11,6 @@
 #include "base/location.h"
 #include "base/run_loop.h"
 #include "base/threading/thread_task_runner_handle.h"
-#include "base/time/time.h"
 
 namespace payments {
 
@@ -26,6 +25,7 @@ enum class TestEvent : int32_t {
   // Received when the list of available apps is created and .show() is called.
   // Note that this does not wait for the payment sheet UI to be actually shown.
   kAppListReady,
+  kErrorDisplayed,
   kPaymentCompleted,
   kMinimalUIReady,
   kUIDisplayed,

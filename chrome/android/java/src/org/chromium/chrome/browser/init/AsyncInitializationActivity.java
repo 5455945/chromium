@@ -32,8 +32,6 @@ import org.chromium.base.TraceEvent;
 import org.chromium.base.library_loader.LibraryLoader;
 import org.chromium.base.library_loader.LoaderErrors;
 import org.chromium.base.library_loader.ProcessInitException;
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeBaseAppCompatActivity;
 import org.chromium.chrome.browser.IntentHandler;
@@ -47,8 +45,10 @@ import org.chromium.chrome.browser.multiwindow.MultiWindowModeStateDispatcherImp
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tasks.tab_management.TabUiFeatureUtilities;
 import org.chromium.chrome.features.start_surface.StartSurfaceConfiguration;
+import org.chromium.ui.base.ActivityIntentRequestTrackerDelegate;
 import org.chromium.ui.base.ActivityWindowAndroid;
 import org.chromium.ui.base.DeviceFormFactor;
+import org.chromium.ui.base.IntentRequestTracker;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.display.DisplayAndroid;
 import org.chromium.ui.display.DisplayUtil;
@@ -74,13 +74,12 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
             new ActivityLifecycleDispatcherImpl(this);
     private final MultiWindowModeStateDispatcherImpl mMultiWindowModeStateDispatcher =
             new MultiWindowModeStateDispatcherImpl(this);
+    private final IntentRequestTracker mIntentRequestTracker;
 
     /** Time at which onCreate is called. This is realtime, counted in ms since device boot. */
     private long mOnCreateTimestampMs;
 
     private ActivityWindowAndroid mWindowAndroid;
-    private final ObservableSupplierImpl<ModalDialogManager> mModalDialogManagerSupplier =
-            new ObservableSupplierImpl<>();
     private Bundle mSavedInstanceState;
     private int mCurrentOrientation;
     private boolean mDestroyed;
@@ -99,8 +98,23 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
     private Runnable mOnInflationCompleteCallback;
     private boolean mInitialLayoutInflationComplete;
 
+    private static boolean sInterceptMoveTaskToBackForTesting;
+    private static boolean sBackInterceptedForTesting;
+
     public AsyncInitializationActivity() {
         mHandler = new Handler();
+        mIntentRequestTracker = IntentRequestTracker.createFromDelegate(
+                new ActivityIntentRequestTrackerDelegate(this) {
+                    @Override
+                    public boolean onCallbackNotFoundError(String error) {
+                        return onIntentCallbackNotFoundError(error);
+                    }
+                });
+    }
+
+    /** Get the tracker of this activity's intents. */
+    public IntentRequestTracker getIntentRequestTracker() {
+        return mIntentRequestTracker;
     }
 
     @CallSuper
@@ -112,11 +126,6 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
         if (mWindowAndroid != null) {
             mWindowAndroid.destroy();
             mWindowAndroid = null;
-        }
-
-        if (mModalDialogManagerSupplier.get() != null) {
-            mModalDialogManagerSupplier.get().destroy();
-            mModalDialogManagerSupplier.set(null);
         }
 
         super.onDestroy();
@@ -245,7 +254,7 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
             String url = IntentHandler.getUrlFromIntent(intent);
             if (url == null) return;
             // Blocking pre-connect for all off-the-record profiles.
-            if (!IncognitoUtils.hasAnyIncognitoExtra(intent)) {
+            if (!IncognitoUtils.hasAnyIncognitoExtra(intent.getExtras())) {
                 WarmupManager.getInstance().maybePreconnectUrlAndSubResources(
                         Profile.getLastUsedRegularProfile(), url);
             }
@@ -311,7 +320,7 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
 
     private final void onCreateInternal(Bundle savedInstanceState) {
         initializeStartupMetrics();
-        setIntent(validateIntent(getIntent()));
+        setIntent(IntentHandler.rewriteFromHistoryIntent(getIntent()));
 
         @LaunchIntentDispatcher.Action
         int dispatchAction = maybeDispatchLaunchIntent(getIntent(), savedInstanceState);
@@ -329,7 +338,7 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
         if (requiresFirstRunToBeCompleted(intent)
                 && FirstRunFlowSequencer.launch(this, intent, false /* requiresBroadcast */,
                         shouldPreferLightweightFre(intent))) {
-            abortLaunch(LaunchIntentDispatcher.Action.FINISH_ACTIVITY_REMOVE_TASK);
+            abortLaunch(LaunchIntentDispatcher.Action.FINISH_ACTIVITY);
             return;
         }
 
@@ -341,13 +350,19 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
         mSavedInstanceState = savedInstanceState;
 
         mWindowAndroid = createWindowAndroid();
-        if (mWindowAndroid != null) {
-            getWindowAndroid().restoreInstanceState(getSavedInstanceState());
-        }
-        mModalDialogManagerSupplier.set(createModalDialogManager());
+        mIntentRequestTracker.restoreInstanceState(getSavedInstanceState());
 
         mStartupDelayed = shouldDelayBrowserStartup();
-        ChromeBrowserInitializer.getInstance().handlePreNativeStartup(this);
+        ChromeBrowserInitializer.getInstance().handlePreNativeStartupAndLoadLibraries(this);
+    }
+
+    /**
+     * A custom error handler for {@link IntentRequestTracker}. When false, the tracker will use
+     * the default error handler. Derived classes can override this method to customize the error
+     * handling.
+     */
+    protected boolean onIntentCallbackNotFoundError(String error) {
+        return false;
     }
 
     /**
@@ -447,14 +462,6 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
     }
 
     /**
-     * Validates the intent that started this activity.
-     * @return The validated intent.
-     */
-    protected Intent validateIntent(final Intent intent) {
-        return intent;
-    }
-
-    /**
      * @return The uptime for the activity creation in ms.
      */
     protected long getOnCreateTimestampMs() {
@@ -480,6 +487,15 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
     public void onStart() {
         super.onStart();
         mNativeInitializationController.onStart();
+
+        // Since this activity is being started, the FRE should have been handled somehow already.
+        Intent intent = getIntent();
+        if (FirstRunFlowSequencer.checkIfFirstRunIsNecessary(
+                    shouldPreferLightweightFre(intent), intent)
+                && requiresFirstRunToBeCompleted(intent)) {
+            throw new IllegalStateException("The app has not completed the FRE yet "
+                    + getClass().getName() + " is trying to start.");
+        }
     }
 
     @CallSuper
@@ -627,28 +643,13 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
     }
 
     /**
-     * @return The {@link ModalDialogManager} created for this class.
-     */
-    @Nullable
-    protected ModalDialogManager createModalDialogManager() {
-        return null;
-    }
-
-    /**
      * @return The {@link ModalDialogManager} that manages the display of modal dialogs (e.g.
      *         JavaScript dialogs).
      */
     @Override
     public ModalDialogManager getModalDialogManager() {
-        // TODO(jinsukkim): Remove this method in favor of getModalDialogManagerSupplier below.
-        return mModalDialogManagerSupplier.get();
-    }
-
-    /**
-     * @return The supplier of {@link ModalDialogManager} that manages the display of modal dialogs.
-     */
-    public ObservableSupplier<ModalDialogManager> getModalDialogManagerSupplier() {
-        return mModalDialogManagerSupplier;
+        // TODO(jinsukkim): Remove this method in favor of super.getModalDialogManagerSupplier().
+        return getModalDialogManagerSupplier().get();
     }
 
     /**
@@ -658,8 +659,8 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
     @CallSuper
     @Override
     public boolean onActivityResultWithNative(int requestCode, int resultCode, Intent intent) {
-        if (mWindowAndroid != null
-                && mWindowAndroid.onActivityResult(requestCode, resultCode, intent)) {
+        if (mIntentRequestTracker.onActivityResult(
+                    requestCode, resultCode, intent, mWindowAndroid)) {
             return true;
         }
         mLifecycleDispatcher.dispatchOnActivityResultWithNative(requestCode, resultCode, intent);
@@ -683,7 +684,7 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
     @Override
     protected void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
-        if (mWindowAndroid != null) mWindowAndroid.saveInstanceState(outState);
+        mIntentRequestTracker.saveInstanceState(outState);
 
         mLifecycleDispatcher.dispatchOnSaveInstanceState(outState);
     }
@@ -888,5 +889,27 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
                 return true;
             }
         };
+    }
+
+    @Override
+    public boolean moveTaskToBack(boolean nonRoot) {
+        // On Android L moving the task to the background flakily stops the
+        // Activity from being finished, breaking tests. Trying to bring the
+        // task back to the foreground after also happens to be flaky, so just
+        // allow tests to prevent actually moving to the background.
+        if (sInterceptMoveTaskToBackForTesting) {
+            sBackInterceptedForTesting = true;
+            return false;
+        }
+        return super.moveTaskToBack(nonRoot);
+    }
+
+    public static void interceptMoveTaskToBackForTesting() {
+        sInterceptMoveTaskToBackForTesting = true;
+        sBackInterceptedForTesting = false;
+    }
+
+    public static boolean wasMoveTaskToBackInterceptedForTesting() {
+        return sBackInterceptedForTesting;
     }
 }

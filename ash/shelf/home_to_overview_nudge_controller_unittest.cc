@@ -4,8 +4,7 @@
 
 #include "ash/shelf/home_to_overview_nudge_controller.h"
 
-#include "ash/home_screen/swipe_home_to_overview_controller.h"
-#include "ash/public/cpp/ash_features.h"
+#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/ash_pref_names.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shelf/contextual_nudge.h"
@@ -13,11 +12,13 @@
 #include "ash/shelf/hotseat_widget.h"
 #include "ash/shelf/shelf.h"
 #include "ash/shelf/shelf_layout_manager.h"
+#include "ash/shelf/swipe_home_to_overview_controller.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/wm/overview/overview_controller.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller_test_api.h"
 #include "ash/wm/window_state.h"
+#include "base/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_clock.h"
@@ -255,13 +256,13 @@ TEST_F(HomeToOverviewNudgeControllerTest, ShownOnHomeScreen) {
   EXPECT_FALSE(GetNudgeController()->HasHideTimerForTesting());
 
   // Transitioning to overview should hide the nudge.
-  Shell::Get()->overview_controller()->StartOverview();
+  EnterOverview();
 
   EXPECT_FALSE(GetNudgeController()->nudge_for_testing());
 
   // Ending overview, and transitioning to the home screen again should not show
   // the nudge.
-  Shell::Get()->overview_controller()->EndOverview();
+  ExitOverview();
   EXPECT_FALSE(GetNudgeController()->nudge_for_testing());
   EXPECT_EQ(gfx::Transform(),
             GetHotseatWidget()->GetLayerForNudgeAnimation()->transform());

@@ -15,10 +15,13 @@
 #include <string>
 #include <vector>
 
-#include "base/optional.h"
 #include "base/time/time.h"
+#include "base/win/windows_types.h"
 #include "chrome/installer/util/lzma_util.h"
 #include "chrome/installer/util/util_constants.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
+
+class WorkItemList;
 
 namespace base {
 class CommandLine;
@@ -139,7 +142,7 @@ base::Time GetConsoleSessionStartTime();
 // Returns a DM token decoded from the base-64 |encoded_token|, or null in case
 // of a decoding error.  The returned DM token is an opaque binary blob and
 // should not be treated as an ASCII or UTF-8 string.
-base::Optional<std::string> DecodeDMTokenSwitchValue(
+absl::optional<std::string> DecodeDMTokenSwitchValue(
     const std::wstring& encoded_token);
 
 // Saves a DM token to a global location on the machine accessible to all
@@ -153,6 +156,12 @@ base::FilePath GetNotificationHelperPath(const base::FilePath& target_path,
 // Returns the file path to elevation_service.exe (in |version| directory).
 base::FilePath GetElevationServicePath(const base::FilePath& target_path,
                                        const base::Version& version);
+
+// Adds or removes downgrade version registry value.
+void AddUpdateDowngradeVersionItem(HKEY root,
+                                   const base::Version& current_version,
+                                   const base::Version& new_version,
+                                   WorkItemList* list);
 
 }  // namespace installer
 

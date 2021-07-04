@@ -4,6 +4,8 @@
 
 #include "ash/wm/workspace/multi_window_resize_controller.h"
 
+#include <memory>
+
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/root_window_controller.h"
 #include "ash/shell.h"
@@ -300,6 +302,14 @@ void MultiWindowResizeController::OnOverviewModeStarting() {
   ResetResizer();
 }
 
+void MultiWindowResizeController::OnOverviewModeEndingAnimationComplete(
+    bool canceled) {
+  if (canceled)
+    return;
+  // Show resize-lock shadow UI after exiting overview.
+  Shell::Get()->resize_shadow_controller()->TryShowAllShadows();
+}
+
 MultiWindowResizeController::ResizeWindows
 MultiWindowResizeController::DetermineWindowsFromScreenPoint(
     aura::Window* window) const {
@@ -467,7 +477,7 @@ void MultiWindowResizeController::ShowNow() {
   DCHECK(!resize_widget_.get());
   DCHECK(windows_.is_valid());
   show_timer_.Stop();
-  resize_widget_.reset(new views::Widget);
+  resize_widget_ = std::make_unique<views::Widget>();
   views::Widget::InitParams params(views::Widget::InitParams::TYPE_POPUP);
   params.name = "MultiWindowResizeController";
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;

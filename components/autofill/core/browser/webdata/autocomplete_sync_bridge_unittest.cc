@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <map>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -154,14 +155,13 @@ class AutocompleteSyncBridgeTest : public testing::Test {
   void ResetProcessor() {
     real_processor_ =
         std::make_unique<syncer::ClientTagBasedModelTypeProcessor>(
-            syncer::AUTOFILL, /*dump_stack=*/base::DoNothing(),
-            /*commit_only=*/false);
+            syncer::AUTOFILL, /*dump_stack=*/base::DoNothing());
     mock_processor_.DelegateCallsByDefaultTo(real_processor_.get());
   }
 
   void ResetBridge() {
-    bridge_.reset(new AutocompleteSyncBridge(
-        &backend_, mock_processor_.CreateForwardingProcessor()));
+    bridge_ = std::make_unique<AutocompleteSyncBridge>(
+        &backend_, mock_processor_.CreateForwardingProcessor());
   }
 
   void StartSyncing(const std::vector<AutofillSpecifics>& remote_data = {}) {

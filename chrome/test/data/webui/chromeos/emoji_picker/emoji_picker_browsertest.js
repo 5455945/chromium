@@ -35,6 +35,7 @@ var EmojiPickerMainTest = class extends EmojiPickerBrowserTest {
   }
 };
 
+
 TEST_F('EmojiPickerMainTest', 'All', function() {
   mocha.run();
 });

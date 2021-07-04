@@ -206,7 +206,9 @@ suite('os-settings-ui', () => {
 
   test('userActionPrefChange', function() {
     assertEquals(userActionRecorder.settingChangeCount, 0);
-    ui.$$('#prefs').fire('user-action-setting-change');
+    ui.$$('#prefs').dispatchEvent(new CustomEvent(
+        'user-action-setting-change',
+        {bubbles: true, composed: true, detail: {}}));
     assertEquals(userActionRecorder.settingChangeCount, 1);
   });
 
@@ -215,7 +217,9 @@ suite('os-settings-ui', () => {
       isKioskModeActive: true,
     });
 
+    ui.remove();
     settings.Router.getInstance().resetRouteForTesting();
+    PolymerTest.clearBody();
     ui = document.createElement('os-settings-ui');
     document.body.appendChild(ui);
     Polymer.dom.flush();

@@ -13,6 +13,7 @@
 #include "base/memory/ref_counted.h"
 #include "extensions/browser/value_store/lazy_leveldb.h"
 #include "extensions/browser/value_store/value_store.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 // This database is used to persist values with their keys scoped within a
 // specified namespace - AKA |scope|. Values will be written as follows:
@@ -48,7 +49,7 @@ class LeveldbScopedDatabase
   // Reads a single |value| from the database for the specified |key|.
   ValueStore::Status Read(const std::string& scope,
                           const std::string& key,
-                          base::Optional<base::Value>* value);
+                          absl::optional<base::Value>* value);
 
   // Reads all |values| from the database stored within the specified |scope|.
   ValueStore::Status Read(const std::string& scope,

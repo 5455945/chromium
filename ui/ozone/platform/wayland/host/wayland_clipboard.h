@@ -47,14 +47,13 @@ class WaylandClipboard : public PlatformClipboard {
   void RequestClipboardData(
       ClipboardBuffer buffer,
       const std::string& mime_type,
-      PlatformClipboard::DataMap* data_map,
       PlatformClipboard::RequestDataClosure callback) override;
   void GetAvailableMimeTypes(
       ClipboardBuffer buffer,
       PlatformClipboard::GetMimeTypesClosure callback) override;
   bool IsSelectionOwner(ClipboardBuffer buffer) override;
-  void SetSequenceNumberUpdateCb(
-      PlatformClipboard::SequenceNumberUpdateCb cb) override;
+  void SetClipboardDataChangedCallback(
+      ClipboardDataChangedCallback data_changed_callback) override;
   bool IsSelectionBufferAvailable() const override;
 
  private:

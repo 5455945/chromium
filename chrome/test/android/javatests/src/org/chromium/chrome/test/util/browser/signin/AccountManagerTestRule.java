@@ -17,12 +17,14 @@ import org.junit.runner.Description;
 import org.junit.runners.model.Statement;
 
 import org.chromium.base.ContextUtils;
-import org.chromium.chrome.browser.sync.ProfileSyncService;
+import org.chromium.chrome.browser.sync.SyncService;
 import org.chromium.components.signin.AccountManagerFacadeProvider;
 import org.chromium.components.signin.AccountUtils;
 import org.chromium.components.signin.ProfileDataSource;
-import org.chromium.components.signin.base.CoreAccountId;
+import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.base.CoreAccountInfo;
+import org.chromium.components.signin.identitymanager.AccountInfoServiceProvider;
+import org.chromium.components.signin.test.util.FakeAccountInfoService;
 import org.chromium.components.signin.test.util.FakeAccountManagerFacade;
 import org.chromium.components.signin.test.util.FakeProfileDataSource;
 import org.chromium.components.signin.test.util.R;
@@ -39,6 +41,7 @@ public class AccountManagerTestRule implements TestRule {
     public static final String TEST_ACCOUNT_EMAIL = "test@gmail.com";
 
     private final FakeAccountManagerFacade mFakeAccountManagerFacade;
+    private final @Nullable FakeAccountInfoService mFakeAccountInfoService;
     private boolean mIsSignedIn;
 
     public AccountManagerTestRule() {
@@ -51,6 +54,12 @@ public class AccountManagerTestRule implements TestRule {
 
     public AccountManagerTestRule(FakeAccountManagerFacade fakeAccountManagerFacade) {
         mFakeAccountManagerFacade = fakeAccountManagerFacade;
+        mFakeAccountInfoService = null;
+    }
+
+    public AccountManagerTestRule(FakeAccountInfoService fakeAccountInfoService) {
+        mFakeAccountManagerFacade = new FakeAccountManagerFacade(null);
+        mFakeAccountInfoService = fakeAccountInfoService;
     }
 
     @Override
@@ -72,6 +81,9 @@ public class AccountManagerTestRule implements TestRule {
      * Sets up the AccountManagerFacade mock.
      */
     public void setUpRule() {
+        if (mFakeAccountInfoService != null) {
+            AccountInfoServiceProvider.setInstanceForTests(mFakeAccountInfoService);
+        }
         AccountManagerFacadeProvider.setInstanceForTests(mFakeAccountManagerFacade);
     }
 
@@ -88,6 +100,9 @@ public class AccountManagerTestRule implements TestRule {
             signOut();
         }
         AccountManagerFacadeProvider.resetInstanceForTests();
+        if (mFakeAccountInfoService != null) {
+            AccountInfoServiceProvider.resetForTests();
+        }
     }
 
     /**
@@ -116,6 +131,17 @@ public class AccountManagerTestRule implements TestRule {
         CoreAccountInfo coreAccountInfo = addAccount(profileData.getAccountEmail());
         mFakeAccountManagerFacade.addProfileData(profileData);
         return coreAccountInfo;
+    }
+
+    /**
+     * Add an account to the fake AccountManagerFacade and {@link AccountInfo} to
+     * {@link FakeAccountInfoService}.
+     */
+    public CoreAccountInfo addAccount(
+            String email, String fullName, String givenName, @Nullable Bitmap avatar) {
+        assert mFakeAccountManagerFacade != null;
+        mFakeAccountInfoService.addAccountInfo(email, fullName, givenName, avatar);
+        return addAccount(email);
     }
 
     /**
@@ -157,7 +183,7 @@ public class AccountManagerTestRule implements TestRule {
     }
 
     /**
-     * Add and sign in an account with the default name.
+     * Adds and signs in an account with the default name without sync consent.
      *
      * This method does not enable sync.
      */
@@ -170,28 +196,28 @@ public class AccountManagerTestRule implements TestRule {
     }
 
     /**
-     * Add and sign in an account with the default name.
+     * Adds and signs in an account with the default name and enables sync.
      *
      * This method invokes native code. It shouldn't be called in a Robolectric test.
      */
     public CoreAccountInfo addTestAccountThenSigninAndEnableSync() {
         return addTestAccountThenSigninAndEnableSync(
-                TestThreadUtils.runOnUiThreadBlockingNoException(ProfileSyncService::get));
+                TestThreadUtils.runOnUiThreadBlockingNoException(SyncService::get));
     }
 
     /**
-     * Add and sign in an account with the default name.
+     * Adds and signs in an account with the default name and enables sync.
      *
      * This method invokes native code. It shouldn't be called in a Robolectric test.
      *
-     * @param profileSyncService ProfileSyncService object to set up sync, if null, sync won't
+     * @param syncService SyncService object to set up sync, if null, sync won't
      *         start.
      */
     public CoreAccountInfo addTestAccountThenSigninAndEnableSync(
-            @Nullable ProfileSyncService profileSyncService) {
+            @Nullable SyncService syncService) {
         assert !mIsSignedIn : "An account is already signed in!";
         CoreAccountInfo coreAccountInfo = addAccountAndWaitForSeeding(TEST_ACCOUNT_EMAIL);
-        SigninTestUtil.signinAndEnableSync(coreAccountInfo, profileSyncService);
+        SigninTestUtil.signinAndEnableSync(coreAccountInfo, syncService);
         mIsSignedIn = true;
         return coreAccountInfo;
     }
@@ -221,7 +247,7 @@ public class AccountManagerTestRule implements TestRule {
      */
     public CoreAccountInfo toCoreAccountInfo(String accountEmail) {
         String accountGaiaId = mFakeAccountManagerFacade.getAccountGaiaId(accountEmail);
-        return new CoreAccountInfo(new CoreAccountId(accountGaiaId), accountEmail, accountGaiaId);
+        return CoreAccountInfo.createFromEmailAndGaiaId(accountEmail, accountGaiaId);
     }
 
     /**

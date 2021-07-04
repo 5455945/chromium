@@ -150,8 +150,8 @@ WindowsEventRouter::WindowsEventRouter(Profile* profile)
       focused_window_id_(extension_misc::kUnknownWindowId) {
   DCHECK(!profile->IsOffTheRecord());
 
-  observed_app_registry_.Add(AppWindowRegistry::Get(profile_));
-  observed_controller_list_.Add(WindowControllerList::GetInstance());
+  observed_app_registry_.Observe(AppWindowRegistry::Get(profile_));
+  observed_controller_list_.Observe(WindowControllerList::GetInstance());
   // Needed for when no suitable window can be passed to an extension as the
   // currently focused window. On Mac (even in a toolkit-views build) always
   // rely on the notification sent by AppControllerMac after AppKit sends
@@ -304,7 +304,7 @@ void WindowsEventRouter::OnActiveWindowChanged(
 
   std::unique_ptr<Event> event = std::make_unique<Event>(
       events::WINDOWS_ON_FOCUS_CHANGED, windows::OnFocusChanged::kEventName,
-      std::make_unique<base::ListValue>());
+      std::vector<base::Value>());
   event->will_dispatch_callback =
       base::BindRepeating(&WillDispatchWindowFocusedEvent, window_controller);
   EventRouter::Get(profile_)->BroadcastEvent(std::move(event));
@@ -314,9 +314,9 @@ void WindowsEventRouter::DispatchEvent(events::HistogramValue histogram_value,
                                        const std::string& event_name,
                                        WindowController* window_controller,
                                        std::unique_ptr<base::ListValue> args) {
-  auto event =
-      std::make_unique<Event>(histogram_value, event_name, std::move(args),
-                              window_controller->profile());
+  auto event = std::make_unique<Event>(histogram_value, event_name,
+                                       std::move(*args).TakeList(),
+                                       window_controller->profile());
   event->will_dispatch_callback =
       base::BindRepeating(&WillDispatchWindowEvent, window_controller);
   EventRouter::Get(profile_)->BroadcastEvent(std::move(event));

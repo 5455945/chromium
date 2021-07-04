@@ -36,6 +36,7 @@ import org.chromium.chrome.browser.theme.ThemeUtils;
 import org.chromium.chrome.browser.theme.TopUiThemeColorProvider;
 import org.chromium.chrome.browser.ui.native_page.NativePage;
 import org.chromium.components.embedder_support.util.UrlConstants;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.resources.ResourceManager;
 import org.chromium.url.GURL;
@@ -126,6 +127,8 @@ public class StaticLayout extends Layout {
             Supplier<TopUiThemeColorProvider> topUiThemeColorProvider) {
         super(context, updateHost, renderHost);
         mContext = context;
+        // Only handle tab lifecycle on tablets.
+        mHandlesTabLifecycles = DeviceFormFactor.isNonMultiDisplayContextOnTablet(mContext);
         mViewHost = viewHost;
         mRequestSupplier = requestSupplier;
         assert tabContentManager != null;
@@ -229,14 +232,6 @@ public class StaticLayout extends Layout {
             }
         };
         mBrowserControlsStateProvider.addObserver(mBrowserControlsStateProviderObserver);
-    }
-
-    /**
-     * @param handlesTabLifecycles Whether or not this {@link Layout} should handle tab closing and
-     *                             creating events.
-     */
-    public void setLayoutHandlesTabLifecycles(boolean handlesTabLifecycles) {
-        mHandlesTabLifecycles = handlesTabLifecycles;
     }
 
     @Override
@@ -361,9 +356,9 @@ public class StaticLayout extends Layout {
         mModel.set(LayoutTab.SHOULD_STALL, shouldStall(tab));
         mModel.set(LayoutTab.TEXT_BOX_BACKGROUND_COLOR, getToolbarTextBoxBackgroundColor(tab));
 
-        String url = tab.getUrlString();
-        boolean isNativePage = tab.isNativePage()
-                || (url != null && url.startsWith(UrlConstants.CHROME_NATIVE_URL_PREFIX));
+        GURL url = tab.getUrl();
+        boolean isNativePage =
+                tab.isNativePage() || url.getScheme().equals(UrlConstants.CHROME_NATIVE_SCHEME);
         boolean canUseLiveTexture =
                 tab.getWebContents() != null && !SadTab.isShowing(tab) && !isNativePage;
         mModel.set(LayoutTab.CAN_USE_LIVE_TEXTURE, canUseLiveTexture);
@@ -396,7 +391,7 @@ public class StaticLayout extends Layout {
     // Whether the tab is ready to display or it should be faded in as it loads.
     private boolean shouldStall(Tab tab) {
         return (tab.isFrozen() || tab.needsReload())
-                && !NativePage.isNativePageUrl(tab.getUrlString(), tab.isIncognito());
+                && !NativePage.isNativePageUrl(tab.getUrl(), tab.isIncognito());
     }
 
     @Override

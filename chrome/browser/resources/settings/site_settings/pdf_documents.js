@@ -8,20 +8,30 @@
  * settings for viewing PDF documents under Site Settings.
  */
 
-import '../controls/settings_toggle_button.m.js';
-import '../settings_shared_css.m.js';
+import '../controls/settings_toggle_button.js';
+import '../settings_shared_css.js';
 
-import {html, Polymer} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {html, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
-Polymer({
-  is: 'settings-pdf-documents',
+/** @polymer */
+class SettingsPdfDocumentsElement extends PolymerElement {
+  static get is() {
+    return 'settings-pdf-documents';
+  }
 
-  _template: html`{__html_template__}`,
+  static get template() {
+    return html`{__html_template__}`;
+  }
 
-  properties: {
-    prefs: {
-      type: Object,
-      notify: true,
-    },
-  },
-});
+  static get properties() {
+    return {
+      prefs: {
+        type: Object,
+        notify: true,
+      },
+    };
+  }
+}
+
+customElements.define(
+    SettingsPdfDocumentsElement.is, SettingsPdfDocumentsElement);

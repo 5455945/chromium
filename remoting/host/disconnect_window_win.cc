@@ -10,10 +10,10 @@
 
 #include "base/bind.h"
 #include "base/compiler_specific.h"
+#include "base/cxx17_backports.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
-#include "base/stl_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
@@ -482,8 +482,8 @@ bool DisconnectWindowWin::SetStrings() {
   }
 
   // Format and truncate "Your desktop is shared with ..." message.
-  message_text = base::ReplaceStringPlaceholders(
-      message_text, base::UTF8ToWide(username_), nullptr);
+  message_text = base::AsWString(base::ReplaceStringPlaceholders(
+      base::AsString16(message_text), base::UTF8ToUTF16(username_), nullptr));
   if (message_text.length() > kMaxSharingWithTextLength)
     message_text.erase(kMaxSharingWithTextLength);
 

@@ -16,8 +16,8 @@
 #include "components/web_modal/web_contents_modal_dialog_host.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "google_apis/gaia/oauth2_access_token_fetcher_impl.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/controls/webview/webview.h"
-#include "ui/views/metadata/metadata_header_macros.h"
 #include "ui/views/window/dialog_delegate.h"
 
 namespace enterprise_connectors {
@@ -62,22 +62,27 @@ class FileSystemSigninDialogDelegate
   // views::DialogDelegate:
   gfx::Size CalculatePreferredSize() const override;
   ui::ModalType GetModalType() const override;
-  void DeleteDelegate() override;
   views::View* GetInitiallyFocusedView() override;
+
+  void OnCancellation();
 
   // content::WebContentsObserver:
   void DidFinishNavigation(
       content::NavigationHandle* navigation_handle) override;
 
-  void OnGotOAuthTokens(bool success,
+  void OnGotOAuthTokens(const GoogleServiceAuthError& status,
                         const std::string& access_token,
                         const std::string& refresh_token);
+
+  // Return extra URL parameters that are specific to a given service provider.
+  // May return the empty string if there are none.
+  std::string GetProviderSpecificUrlParameters();
 
   const FileSystemSettings settings_;
   std::unique_ptr<views::WebView> web_view_;
   std::unique_ptr<OAuth2AccessTokenFetcherImpl> token_fetcher_;
   AuthorizationCompletedCallback callback_;
-  base::WeakPtrFactory<FileSystemSigninDialogDelegate> factory_{this};
+  base::WeakPtrFactory<FileSystemSigninDialogDelegate> weak_factory_{this};
 };
 
 }  // namespace enterprise_connectors

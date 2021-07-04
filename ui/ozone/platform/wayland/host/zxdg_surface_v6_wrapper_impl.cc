@@ -6,6 +6,8 @@
 
 #include <xdg-shell-unstable-v6-client-protocol.h>
 
+#include "base/logging.h"
+#include "base/notreached.h"
 #include "ui/ozone/platform/wayland/host/wayland_connection.h"
 #include "ui/ozone/platform/wayland/host/wayland_window.h"
 
@@ -46,6 +48,11 @@ void ZXDGSurfaceV6WrapperImpl::AckConfigure(uint32_t serial) {
   zxdg_surface_v6_ack_configure(zxdg_surface_v6_.get(), serial);
   connection_->wayland_window_manager()->NotifyWindowConfigured(
       wayland_window_);
+  is_configured_ = true;
+}
+
+bool ZXDGSurfaceV6WrapperImpl::IsConfigured() {
+  return is_configured_;
 }
 
 void ZXDGSurfaceV6WrapperImpl::SetWindowGeometry(const gfx::Rect& bounds) {

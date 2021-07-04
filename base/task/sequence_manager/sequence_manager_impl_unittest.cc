@@ -20,7 +20,6 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/message_loop/message_pump_default.h"
 #include "base/message_loop/message_pump_type.h"
-#include "base/optional.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/strcat.h"
@@ -59,6 +58,7 @@
 
 #if BUILDFLAG(ENABLE_BASE_TRACING)
 #include "base/test/trace_event_analyzer.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #endif  // BUILDFLAG(ENABLE_BASE_TRACING)
 
 using base::sequence_manager::EnqueueOrder;
@@ -340,7 +340,7 @@ class SequenceManagerTest : public testing::TestWithParam<TestType>,
       // Advance time if we've run out of immediate work to do.
       if (!sequence_manager()->HasImmediateWork()) {
         LazyNow lazy_now(mock_tick_clock());
-        Optional<TimeDelta> delay =
+        absl::optional<TimeDelta> delay =
             sequence_manager()->GetRealTimeDomain()->DelayTillNextTask(
                 &lazy_now);
         if (delay) {
@@ -2610,6 +2610,54 @@ TEST_P(SequenceManagerTest, CancelledTaskPostAnother) {
   EXPECT_TRUE(did_post);
 }
 
+TEST_P(SequenceManagerTest, CancelledImmediateTaskShutsDownQueue) {
+  // This check ensures that an immediate task whose destruction causes the
+  // owning task queue to be shut down doesn't cause us to access freed memory.
+  auto queue = CreateTaskQueue();
+  bool did_shutdown = false;
+  auto on_destroy = BindLambdaForTesting([&] {
+    queue->ShutdownTaskQueue();
+    did_shutdown = true;
+  });
+
+  DestructionCallback destruction_observer(std::move(on_destroy));
+  CancelableTask task(mock_tick_clock());
+  queue->task_runner()->PostTask(
+      FROM_HERE, BindOnce(&CancelableTask::FailTask<DestructionCallback>,
+                          task.weak_factory_.GetWeakPtr(),
+                          std::move(destruction_observer)));
+
+  task.weak_factory_.InvalidateWeakPtrs();
+  EXPECT_FALSE(did_shutdown);
+  RunLoop().RunUntilIdle();
+  EXPECT_TRUE(did_shutdown);
+}
+
+TEST_P(SequenceManagerTest, CancelledDelayedTaskShutsDownQueue) {
+  // This check ensures that a delayed task whose destruction causes the owning
+  // task queue to be shut down doesn't cause us to access freed memory.
+  auto queue = CreateTaskQueue();
+  bool did_shutdown = false;
+  auto on_destroy = BindLambdaForTesting([&] {
+    queue->ShutdownTaskQueue();
+    did_shutdown = true;
+  });
+
+  DestructionCallback destruction_observer(std::move(on_destroy));
+  CancelableTask task(mock_tick_clock());
+  queue->task_runner()->PostDelayedTask(
+      FROM_HERE,
+      BindOnce(&CancelableTask::FailTask<DestructionCallback>,
+               task.weak_factory_.GetWeakPtr(),
+               std::move(destruction_observer)),
+      base::TimeDelta::FromSeconds(1));
+
+  task.weak_factory_.InvalidateWeakPtrs();
+  EXPECT_FALSE(did_shutdown);
+  sequence_manager()->ReclaimMemory();
+  EXPECT_TRUE(did_shutdown);
+}
+
 namespace {
 
 void ChromiumRunloopInspectionTask(
@@ -2909,7 +2957,7 @@ TEST_P(SequenceManagerTest, BlameContextAttribution) {
 
   trace_analyzer::Start("*");
   {
-    trace_event::BlameContext blame_context("cat", "name", "type", "scope", 0,
+    trace_event::BlameContext blame_context("base", "name", "type", "scope", 0,
                                             nullptr);
     blame_context.Initialize();
     queue->SetBlameContext(&blame_context);
@@ -3587,7 +3635,7 @@ TEST_P(SequenceManagerTest, DisablingQueuesChangesDelayTillNextDoWork) {
 TEST_P(SequenceManagerTest, GetNextScheduledWakeUp) {
   auto queue = CreateTaskQueue();
 
-  EXPECT_EQ(nullopt, queue->GetNextScheduledWakeUp());
+  EXPECT_EQ(absl::nullopt, queue->GetNextScheduledWakeUp());
 
   TimeTicks start_time = sequence_manager()->NowTicks();
   TimeDelta delay1 = TimeDelta::FromMilliseconds(10);
@@ -3603,7 +3651,7 @@ TEST_P(SequenceManagerTest, GetNextScheduledWakeUp) {
   std::unique_ptr<TaskQueue::QueueEnabledVoter> voter =
       queue->CreateQueueEnabledVoter();
   voter->SetVoteToEnable(false);
-  EXPECT_EQ(nullopt, queue->GetNextScheduledWakeUp());
+  EXPECT_EQ(absl::nullopt, queue->GetNextScheduledWakeUp());
 
   voter->SetVoteToEnable(true);
   EXPECT_EQ(start_time + delay2, queue->GetNextScheduledWakeUp());
@@ -4329,114 +4377,6 @@ void CallbackWithDestructor(std::unique_ptr<PostTaskWhenDeleted> object) {}
 
 }  // namespace
 
-TEST_P(SequenceManagerTest, DeletePendingTasks_Simple) {
-  auto queue = CreateTaskQueue();
-
-  std::set<std::string> tasks_alive;
-  std::vector<std::string> tasks_deleted;
-
-  queue->task_runner()->PostTask(
-      FROM_HERE,
-      BindOnce(&CallbackWithDestructor, std::make_unique<PostTaskWhenDeleted>(
-                                            "task", queue->task_runner(), 0,
-                                            &tasks_alive, &tasks_deleted)));
-
-  EXPECT_THAT(tasks_alive, ElementsAre("task 0"));
-  EXPECT_TRUE(sequence_manager()->HasTasks());
-
-  sequence_manager()->DeletePendingTasks();
-
-  EXPECT_THAT(tasks_alive, ElementsAre());
-  EXPECT_THAT(tasks_deleted, ElementsAre("task 0"));
-  EXPECT_FALSE(sequence_manager()->HasTasks());
-
-  // Ensure that |tasks_alive| and |tasks_deleted| outlive |manager_|
-  // and we get a test failure instead of a test crash.
-  DestroySequenceManager();
-}
-
-TEST_P(SequenceManagerTest, DeletePendingTasks_Complex) {
-  auto queues = CreateTaskQueues(4u);
-
-  std::set<std::string> tasks_alive;
-  std::vector<std::string> tasks_deleted;
-
-  // Post immediate and delayed to the same task queue.
-  queues[0]->task_runner()->PostTask(
-      FROM_HERE,
-      BindOnce(&CallbackWithDestructor, std::make_unique<PostTaskWhenDeleted>(
-                                            "Q1 I1", queues[0]->task_runner(),
-                                            1, &tasks_alive, &tasks_deleted)));
-  queues[0]->task_runner()->PostDelayedTask(
-      FROM_HERE,
-      BindOnce(&CallbackWithDestructor, std::make_unique<PostTaskWhenDeleted>(
-                                            "Q1 D1", queues[0]->task_runner(),
-                                            0, &tasks_alive, &tasks_deleted)),
-      base::TimeDelta::FromSeconds(1));
-
-  // Post one delayed task to the second queue.
-  queues[1]->task_runner()->PostDelayedTask(
-      FROM_HERE,
-      BindOnce(&CallbackWithDestructor, std::make_unique<PostTaskWhenDeleted>(
-                                            "Q2 D1", queues[1]->task_runner(),
-                                            1, &tasks_alive, &tasks_deleted)),
-      base::TimeDelta::FromSeconds(1));
-
-  // Post two immediate tasks and force a queue reload between them.
-  queues[2]->task_runner()->PostTask(
-      FROM_HERE,
-      BindOnce(&CallbackWithDestructor, std::make_unique<PostTaskWhenDeleted>(
-                                            "Q3 I1", queues[2]->task_runner(),
-                                            0, &tasks_alive, &tasks_deleted)));
-  queues[2]->GetTaskQueueImpl()->ReloadEmptyImmediateWorkQueue();
-  queues[2]->task_runner()->PostTask(
-      FROM_HERE,
-      BindOnce(&CallbackWithDestructor, std::make_unique<PostTaskWhenDeleted>(
-                                            "Q3 I2", queues[2]->task_runner(),
-                                            1, &tasks_alive, &tasks_deleted)));
-
-  // Post a delayed task and force a delay to expire.
-  queues[3]->task_runner()->PostDelayedTask(
-      FROM_HERE,
-      BindOnce(&CallbackWithDestructor, std::make_unique<PostTaskWhenDeleted>(
-                                            "Q4 D1", queues[1]->task_runner(),
-                                            0, &tasks_alive, &tasks_deleted)),
-      TimeDelta::FromMilliseconds(10));
-  AdvanceMockTickClock(TimeDelta::FromMilliseconds(100));
-  LazyNow lazy_now(mock_tick_clock());
-  sequence_manager()->MoveReadyDelayedTasksToWorkQueues(&lazy_now);
-
-  EXPECT_THAT(tasks_alive,
-              UnorderedElementsAre("Q1 I1 1", "Q1 D1 0", "Q2 D1 1", "Q3 I1 0",
-                                   "Q3 I2 1", "Q4 D1 0"));
-  EXPECT_TRUE(sequence_manager()->HasTasks());
-
-  sequence_manager()->DeletePendingTasks();
-
-  // Note that the tasks reposting themselves are still alive.
-  EXPECT_THAT(tasks_alive,
-              UnorderedElementsAre("Q1 I1 0", "Q2 D1 0", "Q3 I2 0"));
-  EXPECT_THAT(tasks_deleted,
-              UnorderedElementsAre("Q1 I1 1", "Q1 D1 0", "Q2 D1 1", "Q3 I1 0",
-                                   "Q3 I2 1", "Q4 D1 0"));
-  EXPECT_TRUE(sequence_manager()->HasTasks());
-  tasks_deleted.clear();
-
-  // Second call should remove the rest.
-  sequence_manager()->DeletePendingTasks();
-  EXPECT_THAT(tasks_alive, UnorderedElementsAre());
-  EXPECT_THAT(tasks_deleted,
-              UnorderedElementsAre("Q1 I1 0", "Q2 D1 0", "Q3 I2 0"));
-  EXPECT_FALSE(sequence_manager()->HasTasks());
-
-  // Ensure that |tasks_alive| and |tasks_deleted| outlive |manager_|
-  // and we get a test failure instead of a test crash.
-  DestroySequenceManager();
-}
-
-// TODO(altimin): Add a test that posts an infinite number of other tasks
-// from its destructor.
-
 TEST_P(SequenceManagerTest, DoesNotRecordQueueTimeIfSettingFalse) {
   auto queue = CreateTaskQueue();
 
@@ -4571,8 +4511,8 @@ class MockTimeDomain : public TimeDomain {
   LazyNow CreateLazyNow() const override { return LazyNow(now_); }
   TimeTicks Now() const override { return now_; }
 
-  Optional<TimeDelta> DelayTillNextTask(LazyNow* lazy_now) override {
-    return Optional<TimeDelta>();
+  absl::optional<TimeDelta> DelayTillNextTask(LazyNow* lazy_now) override {
+    return absl::optional<TimeDelta>();
   }
 
   MOCK_METHOD1(MaybeFastForwardToNextTask, bool(bool quit_when_idle_requested));
@@ -4931,9 +4871,9 @@ TEST_P(SequenceManagerTest, ReclaimMemoryRemovesCorrectQueueFromSet) {
 
   std::vector<int> order;
 
-  CancelableClosure cancelable_closure1(
+  CancelableRepeatingClosure cancelable_closure1(
       BindLambdaForTesting([&]() { order.push_back(10); }));
-  CancelableClosure cancelable_closure2(
+  CancelableRepeatingClosure cancelable_closure2(
       BindLambdaForTesting([&]() { order.push_back(11); }));
   queue1->task_runner()->PostTask(FROM_HERE, BindLambdaForTesting([&]() {
                                     order.push_back(1);

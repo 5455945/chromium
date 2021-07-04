@@ -5,11 +5,10 @@
 #ifndef CHROME_BROWSER_WEB_APPLICATIONS_COMPONENTS_URL_HANDLER_PREFS_H_
 #define CHROME_BROWSER_WEB_APPLICATIONS_COMPONENTS_URL_HANDLER_PREFS_H_
 
-#include <string>
 #include <vector>
 
-#include "base/files/file_path.h"
-#include "base/optional.h"
+#include "base/time/time.h"
+#include "chrome/browser/web_applications/components/url_handler_launch_params.h"
 #include "chrome/browser/web_applications/components/web_app_id.h"
 #include "components/prefs/pref_service.h"
 #include "components/services/app_service/public/cpp/url_handler_info.h"
@@ -23,7 +22,7 @@ class FilePath;
 
 namespace web_app {
 
-// This class manages web app URL handler information in local state prefs.
+// Manage web app URL handler information in local state prefs.
 // These prefs aggregate information from web apps installed to all user
 // profiles.
 //
@@ -38,9 +37,9 @@ namespace web_app {
 // contained a "url_handlers" field with an "*.contoso.com" origin, an entry
 // will be added here under the "https://contoso.com" key. The mapped value
 // contains a list of handlers, each of which identifies the app_id and profile
-// of the app that could be launched. It also contains "paths" and
-// "exclude_paths" patterns for more specific matches. it also contains
-// information about user permissions and saved defaults.
+// of the app that could be launched. It also contains "include_paths" and
+// "exclude_paths" patterns for more specific matches. It also contains saved
+// user preferences.
 //
 // An example of the information stored using this model:
 // {
@@ -49,66 +48,81 @@ namespace web_app {
 //         {
 //             "app_id": "dslkfjweiourasdalfjkdslkfjowiesdfwee",
 //             "profile_path": "C:\\Users\\alias\\Profile\\Default",
-//             "origin": "https://contoso.com",
 //             "has_origin_wildcard": false,
-//             "paths": ["/*"],
+//             "include_paths": [
+//                 {
+//                   "path": "/*",
+//                   "choice": 2,  // kInApp
+//                   // "2000-01-01 00:00:00.000 UTC"
+//                   "timestamp": "12591158400000000"
+//                 }
+//             ],
 //             "exclude_paths": ["/abc"],
-//             "user_permission": true
 //         },
 //         {
 //             "app_id": "qruhrugqrgjdsdfhjghjrghjhdfgaaamenww",
 //             "profile_path": "C:\\Users\\alias\\Profile\\Default",
-//             "origin": "https://contoso.com",
 //             "has_origin_wildcard": true,
-//             "paths": [],
+//             "include_paths": [],
 //             "exclude_paths": [],
-//             "user_permission": false
 //         }
 //     ],
 //     "https://www.en.osotnoc.org": [...]
 // }
-class UrlHandlerPrefs {
- public:
-  struct Match {
-    Match() = default;
-    Match(const AppId& app_id, const base::FilePath& profile_path);
+namespace url_handler_prefs {
 
-    AppId app_id;
-    base::FilePath profile_path;
-  };
+void RegisterLocalStatePrefs(PrefRegistrySimple* registry);
 
-  explicit UrlHandlerPrefs(PrefService* pref_service);
-  UrlHandlerPrefs() = delete;
-  UrlHandlerPrefs(const UrlHandlerPrefs&) = delete;
-  UrlHandlerPrefs& operator=(const UrlHandlerPrefs&) = delete;
+void AddWebApp(PrefService* local_state,
+               const AppId& app_id,
+               const base::FilePath& profile_path,
+               const apps::UrlHandlers& url_handlers,
+               const base::Time& time = base::Time::Now());
 
-  static void RegisterLocalStatePrefs(PrefRegistrySimple* registry);
+void UpdateWebApp(PrefService* local_state,
+                  const AppId& app_id,
+                  const base::FilePath& profile_path,
+                  apps::UrlHandlers new_url_handlers,
+                  const base::Time& time = base::Time::Now());
 
-  void AddWebApp(const AppId& app_id,
-                 const base::FilePath& profile_path,
-                 const apps::UrlHandlers& url_handlers);
+void RemoveWebApp(PrefService* local_state,
+                  const AppId& app_id,
+                  const base::FilePath& profile_path);
 
-  void UpdateWebApp(const AppId& app_id,
-                    const base::FilePath& profile_path,
-                    const apps::UrlHandlers& url_handlers);
+void RemoveProfile(PrefService* local_state,
+                   const base::FilePath& profile_path);
 
-  void RemoveWebApp(const AppId& app_id, const base::FilePath& profile_path);
+void Clear(PrefService* local_state);
 
-  void RemoveProfile(const base::FilePath& profile_path);
+// Search for all (app, profile) combinations that have active URL handlers
+// which matches `url`.
+// `url` is a fully specified URL, eg. "https://contoso.com/abc/def".
+// If the most recent match is saved as kInApp, only it will be returned;
+// If saved as kNone, all the matches regardless of saved_choice value are
+// returned; If saved as kInBrowser, the return value is empty as the preferred
+// choice is the browser.
+std::vector<UrlHandlerLaunchParams> FindMatchingUrlHandlers(
+    PrefService* local_state,
+    const GURL& url);
 
-  void Clear();
+// Users can save their app choice from the intent picker dialog so that they
+// are not prompted again the next time a similar URL matches to the same app.
+void SaveOpenInApp(PrefService* local_state,
+                   const AppId& app_id,
+                   const base::FilePath& profile_path,
+                   const GURL& url,
+                   const base::Time& time = base::Time::Now());
 
-  // Search for all (app, profile) combinations that have active URL handlers
-  // that matches |url|.
-  // |url| is a fully specified URL, eg. "https://contoso.com/abc/def".
-  // TODO(crbug/1072058): Filter out inactive handlers when user permission is
-  // implemented.
-  base::Optional<std::vector<Match>> FindMatchingUrlHandlers(
-      const GURL& url) const;
+// Users can save their choice to not launch a web app when a similar URL is
+// matched in the future.
+void SaveOpenInBrowser(PrefService* local_state,
+                       const GURL& url,
+                       const base::Time& time = base::Time::Now());
 
- private:
-  PrefService* pref_service_;
-};
+// TODO(crbug/1072058): Implement methods to list and reset saved choices. These
+// will be used to expose saved URL handling app choices to chrome://settings.
+
+}  // namespace url_handler_prefs
 
 }  // namespace web_app
 

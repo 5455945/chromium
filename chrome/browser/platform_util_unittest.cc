@@ -8,10 +8,10 @@
 
 #include "base/bind.h"
 #include "base/callback.h"
+#include "base/cxx17_backports.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/run_loop.h"
-#include "base/stl_util.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/platform_util_internal.h"
@@ -54,7 +54,7 @@ class PlatformUtilTestContentBrowserClient : public ChromeContentBrowserClient {
       std::vector<std::unique_ptr<storage::FileSystemBackend>>*
           additional_backends) override {
     storage::ExternalMountPoints* external_mount_points =
-        content::BrowserContext::GetMountPoints(browser_context);
+        browser_context->GetMountPoints();
 
     // New FileSystemBackend that uses our MockSpecialStoragePolicy.
     additional_backends->push_back(
@@ -75,14 +75,15 @@ class PlatformUtilTestContentBrowserClient : public ChromeContentBrowserClient {
 class PlatformUtilTestBase : public BrowserWithTestWindowTest {
  protected:
   void SetUpPlatformFixture(const base::FilePath& test_directory) {
-    content_browser_client_.reset(new PlatformUtilTestContentBrowserClient());
+    content_browser_client_ =
+        std::make_unique<PlatformUtilTestContentBrowserClient>();
     old_content_browser_client_ =
         content::SetBrowserClientForTesting(content_browser_client_.get());
 
     // The test_directory needs to be mounted for it to be accessible.
-    content::BrowserContext::GetMountPoints(GetProfile())
-        ->RegisterFileSystem("test", storage::kFileSystemTypeLocal,
-                             storage::FileSystemMountOption(), test_directory);
+    GetProfile()->GetMountPoints()->RegisterFileSystem(
+        "test", storage::kFileSystemTypeLocal, storage::FileSystemMountOption(),
+        test_directory);
 
     // To test opening a file, we are going to register a mock extension that
     // handles .txt files. The extension doesn't actually need to exist due to
@@ -115,8 +116,8 @@ class PlatformUtilTestBase : public BrowserWithTestWindowTest {
     scoped_refptr<extensions::Extension> extension =
         extensions::Extension::Create(
             test_directory.AppendASCII("invalid-extension"),
-            extensions::Manifest::INVALID_LOCATION, *manifest_dictionary,
-            extensions::Extension::NO_FLAGS, &error);
+            extensions::mojom::ManifestLocation::kInvalidLocation,
+            *manifest_dictionary, extensions::Extension::NO_FLAGS, &error);
     ASSERT_TRUE(error.empty()) << error;
     extensions::ExtensionRegistry::Get(GetProfile())->AddEnabled(extension);
   }

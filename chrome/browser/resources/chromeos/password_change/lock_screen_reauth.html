@@ -3,7 +3,7 @@
 
 <head>
   <include src="../login/components/oobe_icons.html">
-  <include src="../login/components/oobe_buttons.html">
+
   <link rel="stylesheet" href="chrome://resources/css/text_defaults.css">
 
   <script src="chrome://resources/js/cr.js"></script>
@@ -105,6 +105,9 @@
           font-weight: 400;
           padding-top: 15px;
           margin: 0;
+          /* This is a temporary workaround and should not be migrated
+          to new UI design. */
+          max-width: 600px;
         }
 
         .illustration-container {
@@ -153,7 +156,7 @@
         }
       </style>
       <div class="content-wrapper" hidden="[[!isVerifyUser_]]" role="dialog"
-          aria-modal="true"
+          aria-modal="true" id="verifyAccountScreen"
           aria-label="$i18n{loginWelcomeMessage}">
         <div class="header">
           <iron-icon class="title-icon" icon="oobe-32:avatar"></iron-icon>
@@ -173,7 +176,7 @@
           <cr-button id="cancelButton" class="cancel-button" on-click="onCloseTap_">
             $i18n{lockScreenCancelButton}
           </cr-button>
-          <cr-button id="nextButton" class="action-button" on-click="onVerify_">
+          <cr-button id="nextButtonVerifyScreen" class="action-button" on-click="onVerify_">
             $i18n{lockScreenVerifyButton}
           </cr-button>
         </div>
@@ -183,7 +186,7 @@
           aria-modal="true"
           aria-label="$i18n{loginWelcomeMessageWithError}">
         <div class="header">
-          <iron-icon class="title-icon" icon="oobe-64:warning"></iron-icon>
+          <iron-icon class="title-icon" icon="oobe-32:warning"></iron-icon>
           <div class="title">
             $i18n{loginWelcomeMessageWithError}
           </div>
@@ -220,7 +223,7 @@
 
       <div class="content-wrapper" hidden="[[!isConfirmPassword_]]">
         <div class="header">
-          <iron-icon class="title-icon" icon="oobe-64:lock"></iron-icon>
+          <iron-icon class="title-icon" icon="oobe-32:lock"></iron-icon>
           <div class="title">
             [[email_]]
           </div>
@@ -248,14 +251,15 @@
           </cr-button>
           <cr-button id="nextButton" class="action-button" on-click="onConfirm_">
             $i18n{lockScreenNextButton}
-            <iron-icon id="arrowForward" icon="oobe-buttons-40:arrow-forward"></iron-icon>
+            <iron-icon id="arrowForward" icon="oobe-20:button-arrow-forward">
+            </iron-icon>
           </cr-button>
         </div>
       </div>
 
       <div class="content-wrapper" hidden="[[!isPasswordChanged_]]">
         <div class="header">
-          <iron-icon class="title-icon" icon="oobe-64:lock"></iron-icon>
+          <iron-icon class="title-icon" icon="oobe-32:lock"></iron-icon>
           <div class="title">
             $i18n{passwordChangedTitle}
           </div>
@@ -274,7 +278,7 @@
           </cr-button>
           <cr-button id="nextButton" class="action-button" on-click="onNext_">
             $i18n{lockScreenNextButton}
-            <iron-icon icon="oobe-buttons-40:arrow-forward"></iron-icon>
+            <iron-icon icon="oobe-20:button-arrow-forward"></iron-icon>
           </cr-button>
         </div>
       </div>

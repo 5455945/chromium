@@ -26,14 +26,15 @@ class RegisterProtocolHandlerPermissionRequest
       ProtocolHandlerRegistry* registry,
       const ProtocolHandler& handler,
       GURL url,
-      bool user_gesture,
       base::ScopedClosureRunner fullscreen_block);
   ~RegisterProtocolHandlerPermissionRequest() override;
 
  private:
   // permissions::PermissionRequest:
   permissions::RequestType GetRequestType() const override;
-  base::string16 GetMessageTextFragment() const override;
+  bool IsDuplicateOf(
+      permissions::PermissionRequest* other_request) const override;
+  std::u16string GetMessageTextFragment() const override;
   GURL GetOrigin() const override;
   void PermissionGranted(bool is_one_time) override;
   void PermissionDenied() override;

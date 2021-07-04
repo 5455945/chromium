@@ -9,12 +9,12 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
+#include "base/containers/contains.h"
 #include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/web_data_service_factory.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/network_session_configurator/common/network_switches.h"
@@ -22,6 +22,7 @@
 #include "components/payments/core/features.h"
 #include "components/payments/core/test_payment_manifest_downloader.h"
 #include "components/permissions/permission_request_manager.h"
+#include "components/webdata_services/web_data_service_wrapper_factory.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
@@ -135,7 +136,7 @@ class ServiceWorkerPaymentAppFinderBrowserTest : public InProcessBrowserTest {
         browser()->tab_strip_model()->GetActiveWebContents();
     content::BrowserContext* context = web_contents->GetBrowserContext();
     auto downloader = std::make_unique<TestDownloader>(
-        content::BrowserContext::GetDefaultStoragePartition(context)
+        context->GetDefaultStoragePartition()
             ->GetURLLoaderFactoryForBrowserProcess());
     downloader->AddTestServerURL("https://alicepay.com/",
                                  alicepay_.GetURL("alicepay.com", "/"));
@@ -191,9 +192,9 @@ class ServiceWorkerPaymentAppFinderBrowserTest : public InProcessBrowserTest {
     base::RunLoop run_loop;
     finder->GetAllPaymentApps(
         url::Origin::Create(GURL("https://chromium.org")),
-        WebDataServiceFactory::GetPaymentManifestWebDataForProfile(
-            Profile::FromBrowserContext(context),
-            ServiceAccessType::EXPLICIT_ACCESS),
+        webdata_services::WebDataServiceWrapperFactory::
+            GetPaymentManifestWebDataServiceForBrowserContext(
+                context, ServiceAccessType::EXPLICIT_ACCESS),
         std::move(method_data),
         /*may_crawl_for_installable_payment_apps=*/true,
         base::BindOnce(
@@ -406,32 +407,6 @@ IN_PROC_BROWSER_TEST_F(ServiceWorkerPaymentAppFinderBrowserTest,
 
     EXPECT_TRUE(installable_apps().empty());
     EXPECT_TRUE(apps().empty());
-    EXPECT_TRUE(error_message().empty()) << error_message();
-  }
-}
-
-// A payment app can use "basic-card" payment method.
-IN_PROC_BROWSER_TEST_F(ServiceWorkerPaymentAppFinderBrowserTest, BasicCard) {
-  InstallPaymentAppForMethod("basic-card");
-
-  {
-    GetAllPaymentAppsForMethods({"basic-card", "https://alicepay.com/webpay",
-                                 "https://bobpay.com/webpay"});
-
-    EXPECT_TRUE(installable_apps().empty());
-    ASSERT_EQ(1U, apps().size());
-    ExpectPaymentAppWithMethod("basic-card");
-    EXPECT_TRUE(error_message().empty()) << error_message();
-  }
-
-  // Repeat lookups should have identical results.
-  {
-    GetAllPaymentAppsForMethods({"basic-card", "https://alicepay.com/webpay",
-                                 "https://bobpay.com/webpay"});
-
-    EXPECT_TRUE(installable_apps().empty());
-    ASSERT_EQ(1U, apps().size());
-    ExpectPaymentAppWithMethod("basic-card");
     EXPECT_TRUE(error_message().empty()) << error_message();
   }
 }

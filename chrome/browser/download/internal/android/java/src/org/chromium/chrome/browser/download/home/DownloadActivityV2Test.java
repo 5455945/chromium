@@ -143,7 +143,6 @@ public class DownloadActivityV2Test extends DummyUiActivityTestCase {
         doNothing().when(mPrefService).setInteger(anyString(), anyInt());
 
         Map<String, Boolean> features = new HashMap<>();
-        features.put(ChromeFeatureList.DOWNLOADS_LOCATION_CHANGE, true);
         features.put(ChromeFeatureList.OFFLINE_PAGES_PREFETCHING, true);
         features.put(ChromeFeatureList.DOWNLOAD_OFFLINE_CONTENT_PROVIDER, false);
         ChromeFeatureList.setTestFeatures(features);
@@ -175,7 +174,7 @@ public class DownloadActivityV2Test extends DummyUiActivityTestCase {
 
     private void setUpUi() {
         DownloadManagerUiConfig config = DownloadManagerUiConfigHelper.fromFlags()
-                                                 .setIsOffTheRecord(false)
+                                                 .setOTRProfileID(null)
                                                  .setIsSeparateActivity(true)
                                                  .setUseNewDownloadPath(true)
                                                  .setUseNewDownloadPathThumbnails(true)

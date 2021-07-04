@@ -10,27 +10,14 @@
 #include <vector>
 
 #include "base/callback_forward.h"
-#include "base/optional.h"
 #include "chrome/browser/web_applications/components/web_app_id.h"
 #include "chrome/browser/web_applications/components/web_application_info.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
 namespace web_app {
 
-// Icon bitmaps for each IconPurpose.
-struct IconBitmaps {
-  IconBitmaps();
-  ~IconBitmaps();
-  IconBitmaps(const IconBitmaps&);
-  IconBitmaps(IconBitmaps&&) noexcept;
-  void SetBitmapsForPurpose(IconPurpose purpose,
-                            std::map<SquareSizePx, SkBitmap> bitmaps);
-  bool empty();
-
-  std::map<SquareSizePx, SkBitmap> any;
-  std::map<SquareSizePx, SkBitmap> maskable;
-  // TODO (crbug.com/1114638): Monochrome support.
-};
+class WebAppIconManager;
 
 // Exclusively used from the UI thread.
 class AppIconManager {
@@ -43,6 +30,8 @@ class AppIconManager {
   virtual void Start() = 0;
   virtual void Shutdown() = 0;
 
+  virtual WebAppIconManager* AsWebAppIconManager();
+
   // Returns false if any icon in |icon_sizes_in_px| is missing from downloaded
   // icons for a given app and |purpose|.
   virtual bool HasIcons(const AppId& app_id,
@@ -54,7 +43,7 @@ class AppIconManager {
   };
   // For each of |purposes|, in the given order, looks for an icon with size at
   // least |min_icon_size|. Returns information on the first icon found.
-  virtual base::Optional<IconSizeAndPurpose> FindIconMatchBigger(
+  virtual absl::optional<IconSizeAndPurpose> FindIconMatchBigger(
       const AppId& app_id,
       const std::vector<IconPurpose>& purposes,
       SquareSizePx min_size) const = 0;
@@ -74,7 +63,7 @@ class AppIconManager {
                          ReadIconsCallback callback) const = 0;
 
   using ReadShortcutsMenuIconsCallback = base::OnceCallback<void(
-      ShortcutsMenuIconsBitmaps shortcuts_menu_icons_bitmaps)>;
+      ShortcutsMenuIconBitmaps shortcuts_menu_icon_bitmaps)>;
 
   // Reads bitmaps for all shortcuts menu icons for an app. Returns a vector of
   // map<SquareSizePx, SkBitmap>. The index of a map in the vector is the same
@@ -93,7 +82,7 @@ class AppIconManager {
                             ReadIconBitmapsCallback callback) const = 0;
 
   using ReadIconWithPurposeCallback =
-      base::OnceCallback<void(IconPurpose, const SkBitmap&)>;
+      base::OnceCallback<void(IconPurpose, SkBitmap)>;
   // For each of |purposes|, in the given order, looks for an icon with size at
   // least |min_icon_size|. Returns the first icon found, as a bitmap. Returns
   // an empty SkBitmap in |callback| if IO error.
@@ -102,7 +91,7 @@ class AppIconManager {
                                 SquareSizePx min_icon_size,
                                 ReadIconWithPurposeCallback callback) const = 0;
 
-  using ReadIconCallback = base::OnceCallback<void(const SkBitmap&)>;
+  using ReadIconCallback = base::OnceCallback<void(SkBitmap)>;
   // Convenience method for |ReadSmallestIcon| with IconPurpose::ANY only.
   void ReadSmallestIconAny(const AppId& app_id,
                            SquareSizePx min_icon_size,
@@ -135,8 +124,7 @@ class AppIconManager {
   static void WrapReadIconWithPurposeCallback(
       ReadIconWithPurposeCallback callback,
       IconPurpose purpose,
-      const SkBitmap& bitmap);
-
+      SkBitmap bitmap);
 };
 
 }  // namespace web_app

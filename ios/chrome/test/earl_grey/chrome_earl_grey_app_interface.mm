@@ -3,12 +3,12 @@
 // found in the LICENSE file.
 
 #import "ios/chrome/test/earl_grey/chrome_earl_grey_app_interface.h"
-#import "base/test/ios/wait_util.h"
 
 #include "base/command_line.h"
 #import "base/ios/ios_util.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/strings/sys_string_conversions.h"
+#import "base/test/ios/wait_util.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "components/autofill/core/browser/personal_data_manager.h"
@@ -17,6 +17,7 @@
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/metrics/demographics/demographic_metrics_provider.h"
 #include "components/prefs/pref_service.h"
+#include "components/sync/base/pref_names.h"
 #import "components/ukm/ios/features.h"
 #include "components/unified_consent/unified_consent_service.h"
 #include "components/variations/variations_associated_data.h"
@@ -28,12 +29,14 @@
 #include "ios/chrome/browser/content_settings/host_content_settings_map_factory.h"
 #import "ios/chrome/browser/ntp/features.h"
 #import "ios/chrome/browser/ui/commands/application_commands.h"
+#import "ios/chrome/browser/ui/default_promo/default_browser_utils.h"
 #import "ios/chrome/browser/ui/main/scene_state.h"
 #import "ios/chrome/browser/ui/tab_switcher/tab_grid/features.h"
 #import "ios/chrome/browser/ui/table_view/feature_flags.h"
 #import "ios/chrome/browser/ui/ui_feature_flags.h"
 #import "ios/chrome/browser/ui/util/menu_util.h"
 #import "ios/chrome/browser/ui/util/named_guide.h"
+#import "ios/chrome/browser/ui/util/rtl_geometry.h"
 #import "ios/chrome/browser/unified_consent/unified_consent_service_factory.h"
 #import "ios/chrome/browser/web/tab_id_tab_helper.h"
 #import "ios/chrome/browser/web/web_navigation_browser_agent.h"
@@ -50,6 +53,7 @@
 #import "ios/chrome/test/earl_grey/accessibility_util.h"
 #import "ios/testing/hardware_keyboard_util.h"
 #import "ios/testing/nserror_util.h"
+#import "ios/testing/open_url_context.h"
 #include "ios/testing/verify_custom_webkit.h"
 #import "ios/web/common/features.h"
 #import "ios/web/public/deprecated/crw_js_injection_receiver.h"
@@ -60,6 +64,7 @@
 #import "ios/web/public/test/web_view_content_test_util.h"
 #import "ios/web/public/test/web_view_interaction_test_util.h"
 #import "ios/web/public/ui/crw_web_view_proxy.h"
+#import "ios/web/public/ui/crw_web_view_scroll_view_proxy.h"
 #import "ios/web/public/web_client.h"
 #import "ios/web/public/web_state.h"
 #include "net/base/mac/url_conversions.h"
@@ -97,6 +102,10 @@ base::test::ScopedFeatureList closeAllTabsScopedFeatureList;
 }
 
 @implementation ChromeEarlGreyAppInterface
+
++ (BOOL)isRTL {
+  return UseRTLLayout();
+}
 
 + (NSError*)clearBrowsingHistory {
   if (chrome_test_util::ClearBrowsingHistory()) {
@@ -139,11 +148,15 @@ base::test::ScopedFeatureList closeAllTabsScopedFeatureList;
       @"Clearing web state browsing data for main tabs timed out");
 }
 
-+ (void)applicationOpenURL:(NSString*)spec {
++ (void)sceneOpenURL:(NSString*)spec {
+  NSURL* url = [NSURL URLWithString:spec];
+  TestOpenURLContext* context = [[TestOpenURLContext alloc] init];
+  context.URL = url;
+
   UIApplication* application = UIApplication.sharedApplication;
-  [application.delegate application:application
-                            openURL:[NSURL URLWithString:spec]
-                            options:[NSDictionary dictionary]];
+  UIScene* scene = application.connectedScenes.anyObject;
+
+  [scene.delegate scene:scene openURLContexts:[NSSet setWithObject:context]];
 }
 
 + (void)startLoadingURL:(NSString*)spec {
@@ -385,6 +398,10 @@ base::test::ScopedFeatureList closeAllTabsScopedFeatureList;
   }
 
   if (@available(iOS 13, *)) {
+    // Always disable default browser promo in new window, to avoid
+    // messages to be closed too early.
+    [self disableDefaultBrowserPromo];
+
     NSUserActivity* activity =
         [[NSUserActivity alloc] initWithActivityType:@"EG2NewWindow"];
     UISceneActivationRequestOptions* options =
@@ -625,6 +642,25 @@ base::test::ScopedFeatureList closeAllTabsScopedFeatureList;
   return nil;
 }
 
++ (NSError*)waitForWebStateZoomScale:(CGFloat)scale {
+  bool success = WaitUntilConditionOrTimeout(kWaitForPageLoadTimeout, ^bool {
+    web::WebState* web_state = chrome_test_util::GetCurrentWebState();
+    if (!web_state) {
+      return false;
+    }
+
+    CGFloat current_scale =
+        [[web_state->GetWebViewProxy() scrollViewProxy] zoomScale];
+    return (current_scale > (scale - 0.05)) && (current_scale < (scale + 0.05));
+  });
+  if (!success) {
+    NSString* NSErrorDescription = [NSString
+        stringWithFormat:@"Failed waiting for web state zoom scale %f", scale];
+    return testing::NSErrorWithLocalizedDescription(NSErrorDescription);
+  }
+  return nil;
+}
+
 + (void)setContentSettings:(ContentSetting)setting {
   chrome_test_util::SetContentSettingsBlockPopups(setting);
 }
@@ -785,6 +821,15 @@ base::test::ScopedFeatureList closeAllTabsScopedFeatureList;
 + (void)deleteAutofillProfileFromFakeSyncServerWithGUID:(NSString*)GUID {
   chrome_test_util::DeleteAutofillProfileFromFakeSyncServer(
       base::SysNSStringToUTF8(GUID));
+}
+
++ (void)revokeSyncConsent {
+  chrome_test_util::RevokeSyncConsent();
+}
+
++ (void)clearSyncFirstSetupComplete {
+  PrefService* prefs = chrome_test_util::GetOriginalBrowserState()->GetPrefs();
+  prefs->ClearPref(syncer::prefs::kSyncFirstSetupComplete);
 }
 
 + (void)clearSyncServerData {
@@ -996,10 +1041,6 @@ base::test::ScopedFeatureList closeAllTabsScopedFeatureList;
   return webClientUserAgent == web::UserAgentType::MOBILE;
 }
 
-+ (BOOL)isIllustratedEmptyStatesEnabled {
-  return base::FeatureList::IsEnabled(kIllustratedEmptyStates);
-}
-
 + (BOOL)isNativeContextMenusEnabled {
   return IsNativeContextMenuEnabled();
 }
@@ -1183,6 +1224,33 @@ int watchRunNumber = 0;
     [watchedButtons addObject:view.accessibilityLabel];
     [watchingButtons removeObject:view.accessibilityLabel];
   }
+}
+
+#pragma mark - Default Browser Promo Utilities
+
++ (void)clearDefaultBrowserPromoData {
+  NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
+  NSArray<NSString*>* keys = @[
+    @"lastTimeUserInteractedWithFullscreenPromo",
+    @"userHasInteractedWithFullscreenPromo",
+    @"userHasInteractedWithTailoredFullscreenPromo",
+    @"userInteractedWithNonModalPromoCount",
+    @"remindMeLaterPromoActionInteraction",
+  ];
+  for (NSString* key in keys) {
+    [defaults removeObjectForKey:key];
+  }
+}
+
++ (void)copyURLToPasteBoard {
+  UIPasteboard* pasteboard = UIPasteboard.generalPasteboard;
+  pasteboard.URL = [NSURL URLWithString:@"chrome://version"];
+}
+
++ (void)disableDefaultBrowserPromo {
+  chrome_test_util::GetMainController().appState.shouldShowDefaultBrowserPromo =
+      NO;
+  LogUserInteractionWithFullscreenPromo();
 }
 
 @end

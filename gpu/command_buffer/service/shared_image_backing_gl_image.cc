@@ -278,7 +278,8 @@ bool SharedImageRepresentationOverlayImpl::BeginReadAccess(
 
 void SharedImageRepresentationOverlayImpl::EndReadAccess(
     gfx::GpuFenceHandle release_fence) {
-  DCHECK(release_fence.is_null());
+  auto* gl_backing = static_cast<SharedImageBackingGLImage*>(backing());
+  gl_backing->SetReleaseFence(std::move(release_fence));
 }
 
 gl::GLImage* SharedImageRepresentationOverlayImpl::GetGLImage() {
@@ -403,6 +404,11 @@ SharedImageBackingGLImage::GetLastWriteGpuFence() {
   return last_write_gl_fence_ ? last_write_gl_fence_->GetGpuFence() : nullptr;
 }
 
+void SharedImageBackingGLImage::SetReleaseFence(
+    gfx::GpuFenceHandle release_fence) {
+  release_fence_ = std::move(release_fence);
+}
+
 scoped_refptr<gfx::NativePixmap> SharedImageBackingGLImage::GetNativePixmap() {
   return image_->GetNativePixmap();
 }
@@ -477,18 +483,19 @@ SharedImageBackingGLImage::ProduceGLTexturePassthrough(
 std::unique_ptr<SharedImageRepresentationOverlay>
 SharedImageBackingGLImage::ProduceOverlay(SharedImageManager* manager,
                                           MemoryTypeTracker* tracker) {
-#if defined(OS_MAC) || defined(USE_OZONE)
+#if defined(OS_MAC) || defined(USE_OZONE) || defined(OS_WIN)
   return std::make_unique<SharedImageRepresentationOverlayImpl>(
       manager, this, tracker, image_);
-#else   // !(defined(OS_MAC) || defined(USE_OZONE))
+#else   // !(defined(OS_MAC) || defined(USE_OZONE) || defined(OS_WIN))
   return SharedImageBacking::ProduceOverlay(manager, tracker);
-#endif  // defined(OS_MAC) || defined(USE_OZONE)
+#endif  // defined(OS_MAC) || defined(USE_OZONE) || defined(OS_WIN)
 }
 
 std::unique_ptr<SharedImageRepresentationDawn>
 SharedImageBackingGLImage::ProduceDawn(SharedImageManager* manager,
                                        MemoryTypeTracker* tracker,
-                                       WGPUDevice device) {
+                                       WGPUDevice device,
+                                       WGPUBackendType backend_type) {
 #if defined(OS_MAC)
   auto result = SharedImageBackingFactoryIOSurface::ProduceDawn(
       manager, this, tracker, device, image_);
@@ -501,7 +508,7 @@ SharedImageBackingGLImage::ProduceDawn(SharedImageManager* manager,
   }
 
   return SharedImageBackingGLCommon::ProduceDawnCommon(
-      factory(), manager, tracker, device, this, IsPassthrough());
+      factory(), manager, tracker, device, backend_type, this, IsPassthrough());
 }
 
 std::unique_ptr<SharedImageRepresentationSkia>
@@ -635,6 +642,9 @@ void SharedImageBackingGLImage::Update(
 
 bool SharedImageBackingGLImage::
     SharedImageRepresentationGLTextureBeginAccess() {
+  if (!release_fence_.is_null())
+    gl::GLFence::CreateFromGpuFence(gfx::GpuFence(std::move(release_fence_)))
+        ->ServerWait();
   return BindOrCopyImageIfNeeded();
 }
 

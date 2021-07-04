@@ -10,11 +10,13 @@
 #include <vector>
 
 #include "base/observer_list.h"
-#include "base/optional.h"
 #include "chrome/browser/web_applications/components/web_app_constants.h"
 #include "chrome/browser/web_applications/components/web_app_id.h"
 #include "chrome/browser/web_applications/components/web_application_info.h"
+#include "components/services/app_service/public/cpp/file_handler.h"
+#include "components/services/app_service/public/cpp/protocol_handler_info.h"
 #include "components/services/app_service/public/cpp/url_handler_info.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/skia/include/core/SkColor.h"
 
 class GURL;
@@ -24,10 +26,6 @@ struct ShareTarget;
 }
 namespace base {
 class Time;
-}
-// Forward declared to support safe downcast;
-namespace extensions {
-class BookmarkAppRegistrar;
 }
 
 namespace web_app {
@@ -52,6 +50,13 @@ class AppRegistrar {
   // used in other registrar methods.
   virtual bool IsInstalled(const AppId& app_id) const = 0;
 
+  // Returns whether the app is currently being uninstalled. This will be true
+  // after uninstall has begun but before the OS integration hooks for uninstall
+  // have completed. It will return false after uninstallation has completed.
+  // Note that the underlying field this checks is not yet persisted to the
+  // database; see https://crbug.com/1162477
+  virtual bool IsUninstalling(const AppId& app_id) const = 0;
+
   // Returns whether the app with |app_id| is currently fully locally installed.
   // ie. app is not grey in chrome://apps UI surface and may have OS integration
   // like shortcuts. |IsLocallyInstalled| apps is a subset of |IsInstalled|
@@ -60,6 +65,10 @@ class AppRegistrar {
 
   // Returns true if the app was installed by user, false if default installed.
   virtual bool WasInstalledByUser(const AppId& app_id) const = 0;
+
+  // Returns true if the app was installed by the device OEM. Always false on
+  // on non-Chrome OS.
+  virtual bool WasInstalledByOem(const AppId& app_id) const = 0;
 
   // Returns the AppIds and URLs of apps externally installed from
   // |install_source|.
@@ -70,7 +79,7 @@ class AppRegistrar {
   // externally installed app for it. Note that the |install_url| is the URL
   // that the app was installed from, which may not necessarily match the app's
   // current start URL.
-  virtual base::Optional<AppId> LookupExternalAppId(
+  virtual absl::optional<AppId> LookupExternalAppId(
       const GURL& install_url) const;
 
   // Returns whether the AppRegistrar has an externally installed app with
@@ -83,6 +92,11 @@ class AppRegistrar {
       const AppId& app_id,
       ExternalInstallSource install_source) const;
 
+  // Returns true if the web app with the |app_id| contains |protocol_scheme|
+  // as one of its approved launch protocols.
+  virtual bool IsApprovedLaunchProtocol(const AppId& app_id,
+                                        std::string protocol_scheme) const = 0;
+
   // Count a number of all apps which are installed by user (non-default).
   // Requires app registry to be in a ready state.
   virtual int CountUserInstalledApps() const = 0;
@@ -90,23 +104,30 @@ class AppRegistrar {
   // All names are UTF8 encoded.
   virtual std::string GetAppShortName(const AppId& app_id) const = 0;
   virtual std::string GetAppDescription(const AppId& app_id) const = 0;
-  virtual base::Optional<SkColor> GetAppThemeColor(
+  virtual absl::optional<SkColor> GetAppThemeColor(
       const AppId& app_id) const = 0;
-  virtual base::Optional<SkColor> GetAppBackgroundColor(
+  virtual absl::optional<SkColor> GetAppBackgroundColor(
       const AppId& app_id) const = 0;
   virtual const GURL& GetAppStartUrl(const AppId& app_id) const = 0;
+  virtual absl::optional<std::string> GetAppManifestId(
+      const AppId& app_id) const = 0;
   virtual const std::string* GetAppLaunchQueryParams(
       const AppId& app_id) const = 0;
   virtual const apps::ShareTarget* GetAppShareTarget(
       const AppId& app_id) const = 0;
   virtual blink::mojom::CaptureLinks GetAppCaptureLinks(
       const AppId& app_id) const = 0;
+  virtual const apps::FileHandlers* GetAppFileHandlers(
+      const AppId& app_id) const = 0;
+  virtual const apps::ProtocolHandlers* GetAppProtocolHandlers(
+      const AppId& app_id) const = 0;
+  virtual bool IsAppFileHandlerPermissionBlocked(const AppId& app_id) const = 0;
 
   // Returns the start_url with launch_query_params appended to the end if any.
   GURL GetAppLaunchUrl(const AppId& app_id) const;
 
   // TODO(crbug.com/910016): Replace uses of this with GetAppScope().
-  virtual base::Optional<GURL> GetAppScopeInternal(
+  virtual absl::optional<GURL> GetAppScopeInternal(
       const AppId& app_id) const = 0;
 
   virtual DisplayMode GetAppDisplayMode(const AppId& app_id) const = 0;
@@ -117,6 +138,9 @@ class AppRegistrar {
   // Returns the "url_handlers" field from the app manifest.
   virtual apps::UrlHandlers GetAppUrlHandlers(const AppId& app_id) const = 0;
 
+  virtual GURL GetAppManifestUrl(const AppId& app_id) const = 0;
+
+  virtual base::Time GetAppLastBadgingTime(const AppId& app_id) const = 0;
   virtual base::Time GetAppLastLaunchTime(const AppId& app_id) const = 0;
   virtual base::Time GetAppInstallTime(const AppId& app_id) const = 0;
 
@@ -140,14 +164,16 @@ class AppRegistrar {
 
   // Represents which icon sizes we successfully downloaded from the
   // ShortcutsMenuItemInfos.
-  virtual std::vector<std::vector<SquareSizePx>>
-  GetAppDownloadedShortcutsMenuIconsSizes(const AppId& app_id) const = 0;
+  virtual std::vector<IconSizes> GetAppDownloadedShortcutsMenuIconsSizes(
+      const AppId& app_id) const = 0;
+
+  virtual bool GetWindowControlsOverlayEnabled(const AppId& app_id) const = 0;
 
   virtual std::vector<AppId> GetAppIds() const = 0;
 
   // Safe downcast.
   virtual WebAppRegistrar* AsWebAppRegistrar() = 0;
-  virtual extensions::BookmarkAppRegistrar* AsBookmarkAppRegistrar();
+  virtual const WebAppRegistrar* AsWebAppRegistrar() const = 0;
 
   void SetSubsystems(OsIntegrationManager* os_integration_manager);
 
@@ -158,7 +184,7 @@ class AppRegistrar {
 
   // Returns the app id of an app in the registry with the longest scope that is
   // a prefix of |url|, if any.
-  base::Optional<AppId> FindAppWithUrlInScope(const GURL& url) const;
+  absl::optional<AppId> FindAppWithUrlInScope(const GURL& url) const;
 
   // Returns true if there exists at least one app installed under |scope|.
   bool DoesScopeContainAnyApp(const GURL& scope) const;
@@ -169,7 +195,7 @@ class AppRegistrar {
   // Returns the app id of an installed app in the registry with the longest
   // scope that is a prefix of |url|, if any. If |window_only| is specified,
   // only apps that open in app windows will be considered.
-  base::Optional<AppId> FindInstalledAppWithUrlInScope(
+  absl::optional<AppId> FindInstalledAppWithUrlInScope(
       const GURL& url,
       bool window_only = false) const;
 
@@ -183,7 +209,7 @@ class AppRegistrar {
   bool IsLocallyInstalled(const GURL& start_url) const;
 
   // Returns whether the app is pending successful navigation in order to
-  // complete installation via the PendingAppManager.
+  // complete installation via the ExternallyManagedAppManager.
   bool IsPlaceholderApp(const AppId& app_id) const;
 
   // Computes and returns the DisplayMode, accounting for user preference
@@ -194,8 +220,10 @@ class AppRegistrar {
   // entries in the web app manifest.
   DisplayMode GetEffectiveDisplayModeFromManifest(const AppId& app_id) const;
 
-  // TODO(crbug.com/897314): Finish experiment by legitimising it as a
-  // DisplayMode or removing entirely.
+  // Returns whether the app should be opened in tabbed window mode.
+  bool IsTabbedWindowModeEnabled(const AppId& app_id) const;
+
+  // TODO(crbug.com/897314): This can be removed once feature has launched.
   bool IsInExperimentalTabbedWindowMode(const AppId& app_id) const;
 
   void AddObserver(AppRegistrarObserver* observer);
@@ -211,6 +239,7 @@ class AppRegistrar {
   void NotifyWebAppLocallyInstalledStateChanged(const AppId& app_id,
                                                 bool is_locally_installed);
   void NotifyWebAppDisabledStateChanged(const AppId& app_id, bool is_disabled);
+  void NotifyWebAppsDisabledModeChanged();
   void NotifyWebAppLastLaunchTimeChanged(const AppId& app_id,
                                          const base::Time& time);
   void NotifyWebAppInstallTimeChanged(const AppId& app_id,
@@ -218,6 +247,10 @@ class AppRegistrar {
 
   // Notify when OS hooks installation is finished during Web App installation.
   void NotifyWebAppInstalledWithOsHooks(const AppId& app_id);
+  void NotifyWebAppUserDisplayModeChanged(const AppId& app_id,
+                                          DisplayMode user_display_mode);
+  void NotifyWebAppExperimentalTabbedWindowModeChanged(const AppId& app_id,
+                                                       bool enabled);
 
  protected:
   Profile* profile() const { return profile_; }

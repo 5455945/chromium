@@ -10,7 +10,6 @@
 
 #include "base/macros.h"
 #include "base/observer_list_types.h"
-#include "base/strings/string16.h"
 #include "base/time/time.h"
 #include "chromecast/browser/cast_content_window.h"
 #include "chromecast/browser/cast_web_contents.h"
@@ -30,17 +29,6 @@ class CastWebView {
  public:
   class Delegate : public CastWebContents::Delegate,
                    public CastContentWindow::Delegate {};
-
-  // Observer interface for tracking CastWebView lifetime.
-  class Observer : public base::CheckedObserver {
-   public:
-    // Notifies that |web_view| is being destroyed. |web_view| should be assumed
-    // invalid after this method returns.
-    virtual void OnPageDestroyed(CastWebView* web_view) {}
-
-   protected:
-    ~Observer() override {}
-  };
 
   // When the unique_ptr is reset, the CastWebView may not necessarily be
   // destroyed. In some cases ownership will be passed to the CastWebService,
@@ -120,27 +108,6 @@ class CastWebView {
   virtual CastWebContents* cast_web_contents() = 0;
 
   virtual base::TimeDelta shutdown_delay() const = 0;
-
-  // Closes the page immediately, ignoring |CreateParams::shutdown_delay|.
-  virtual void ForceClose() = 0;
-
-  // Adds the page to the window manager and makes it visible to the user if
-  // |is_visible| is true. |z_order| determines how this window is layered in
-  // relationt other windows (higher value == more foreground).
-  virtual void InitializeWindow(mojom::ZOrder z_order,
-                                VisibilityPriority initial_priority) = 0;
-
-  // Allows the page to be shown on the screen. The page cannot be shown on the
-  // screen until this is called.
-  virtual void GrantScreenAccess() = 0;
-
-  // Prevents the page from being shown on the screen until GrantScreenAccess()
-  // is called.
-  virtual void RevokeScreenAccess() = 0;
-
-  // Observer interface:
-  virtual void AddObserver(Observer* observer) = 0;
-  virtual void RemoveObserver(Observer* observer) = 0;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(CastWebView);

@@ -7,8 +7,8 @@
 #include <stddef.h>
 
 #include "base/command_line.h"
+#include "base/cxx17_backports.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/stl_util.h"
 #include "base/strings/pattern.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
@@ -46,7 +46,7 @@ typedef bool (*CodecIDValidatorFunction)(const std::string& codecs_id,
 struct CodecInfo {
   enum Type { UNKNOWN, AUDIO, VIDEO };
 
-  // Update tools/metrics/histograms/histograms.xml if new values are added.
+  // Update tools/metrics/histograms/enums.xml if new values are added.
   enum HistogramTag {
     HISTOGRAM_UNKNOWN,
     HISTOGRAM_VP8,
@@ -488,6 +488,18 @@ static SupportsType CheckTypeAndCodecs(
         bool found_codec = false;
         std::string codec_id = codecs[j];
         for (int k = 0; type_info.codecs[k]; ++k) {
+          // Only check a codec pattern if there is one to check. Some types,
+          // like audio/mpeg and audio/aac require there be no codecs parameter,
+          // and instead have implicit codec. If a codec is provided for such a
+          // type then it is not supported by MSE. We don't check any other
+          // potential matches because none should be configured.
+          if (!type_info.codecs[k]->pattern) {
+            DCHECK(k == 0 && !type_info.codecs[1])
+                << "For a type with implicit codec, then only one codec must "
+                   "be configured";
+            break;
+          }
+
           if (base::MatchPattern(codec_id, type_info.codecs[k]->pattern) &&
               (!type_info.codecs[k]->validator ||
                type_info.codecs[k]->validator(codec_id, media_log))) {

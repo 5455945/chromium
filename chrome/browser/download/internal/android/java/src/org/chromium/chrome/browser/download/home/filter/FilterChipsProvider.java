@@ -9,10 +9,10 @@ import android.os.Handler;
 
 import org.chromium.base.ObserverList;
 import org.chromium.chrome.browser.download.home.filter.Filters.FilterType;
-import org.chromium.chrome.browser.download.home.filter.chips.Chip;
-import org.chromium.chrome.browser.download.home.filter.chips.ChipsProvider;
 import org.chromium.chrome.browser.download.home.list.UiUtils;
 import org.chromium.chrome.browser.download.internal.R;
+import org.chromium.components.browser_ui.widget.chips.Chip;
+import org.chromium.components.browser_ui.widget.chips.ChipsProvider;
 import org.chromium.components.offline_items_collection.OfflineItem;
 
 import java.util.ArrayList;
@@ -131,6 +131,16 @@ public class FilterChipsProvider implements ChipsProvider, OfflineItemFilterObse
         }
 
         return visibleChips;
+    }
+
+    @Override
+    public int getChipSpacingPx() {
+        return mContext.getResources().getDimensionPixelSize(R.dimen.chip_list_chip_spacing);
+    }
+
+    @Override
+    public int getSidePaddingPx() {
+        return mContext.getResources().getDimensionPixelSize(R.dimen.chip_list_side_padding);
     }
 
     // OfflineItemFilterObserver implementation.

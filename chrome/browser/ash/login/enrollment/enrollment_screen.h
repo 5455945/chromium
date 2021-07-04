@@ -14,13 +14,15 @@
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
+#include "chrome/browser/ash/authpolicy/authpolicy_helper.h"
 #include "chrome/browser/ash/login/enrollment/enrollment_screen_view.h"
 #include "chrome/browser/ash/login/enrollment/enterprise_enrollment_helper.h"
-#include "chrome/browser/chromeos/authpolicy/authpolicy_helper.h"
-#include "chrome/browser/chromeos/login/screens/base_screen.h"
-#include "chrome/browser/chromeos/login/wizard_context.h"
-#include "chrome/browser/chromeos/policy/active_directory_join_delegate.h"
-#include "chrome/browser/chromeos/policy/enrollment_config.h"
+// TODO(https://crbug.com/1164001): move to forward declaration
+#include "chrome/browser/ash/login/screen_manager.h"
+#include "chrome/browser/ash/login/screens/base_screen.h"
+#include "chrome/browser/ash/login/wizard_context.h"
+#include "chrome/browser/ash/policy/active_directory/active_directory_join_delegate.h"
+#include "chrome/browser/chromeos/policy/enrollment/enrollment_config.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/enterprise_metrics.h"
 #include "net/base/backoff_entry.h"
@@ -30,12 +32,12 @@ class ElapsedTimer;
 }
 
 namespace chromeos {
-
-class ScreenManager;
-
 namespace test {
 class EnrollmentHelperMixin;
 }
+}  // namespace chromeos
+
+namespace ash {
 
 // The screen implementation that links the enterprise enrollment UI into the
 // OOBE wizard.
@@ -43,7 +45,7 @@ class EnrollmentScreen
     : public BaseScreen,
       public EnterpriseEnrollmentHelper::EnrollmentStatusConsumer,
       public EnrollmentScreenView::Controller,
-      public ActiveDirectoryJoinDelegate {
+      public policy::ActiveDirectoryJoinDelegate {
  public:
   enum class Result { COMPLETED, BACK, SKIPPED_FOR_TESTS };
 
@@ -80,12 +82,11 @@ class EnrollmentScreen
   void OnDeviceEnrolled() override;
   void OnDeviceAttributeUploadCompleted(bool success) override;
   void OnDeviceAttributeUpdatePermission(bool granted) override;
-  void OnRestoreAfterRollbackCompleted() override;
 
-  // ActiveDirectoryJoinDelegate implementation:
+  // policy::ActiveDirectoryJoinDelegate implementation:
   void JoinDomain(const std::string& dm_token,
                   const std::string& domain_join_config,
-                  OnDomainJoinedCallback on_joined_callback) override;
+                  policy::OnDomainJoinedCallback on_joined_callback) override;
 
   // Notification that the browser is being restarted.
   void OnBrowserRestart();
@@ -109,7 +110,7 @@ class EnrollmentScreen
  private:
   friend class ZeroTouchEnrollmentScreenUnitTest;
   friend class AutomaticReenrollmentScreenUnitTest;
-  friend class test::EnrollmentHelperMixin;
+  friend class chromeos::test::EnrollmentHelperMixin;
 
   FRIEND_TEST_ALL_PREFIXES(AttestationAuthEnrollmentScreenTest, TestCancel);
   FRIEND_TEST_ALL_PREFIXES(ForcedAttestationAuthEnrollmentScreenTest,
@@ -152,10 +153,6 @@ class EnrollmentScreen
 
   // Do attestation based enrollment.
   void AuthenticateUsingAttestation();
-
-  // Starts flow that would handle necessary steps to restore after version
-  // rollback.
-  void RestoreAfterRollback();
 
   // Shows the interactive screen. Resets auth then shows the signin screen.
   void ShowInteractiveScreen();
@@ -205,7 +202,7 @@ class EnrollmentScreen
   base::CancelableOnceClosure retry_task_;
   int num_retries_ = 0;
   std::unique_ptr<EnterpriseEnrollmentHelper> enrollment_helper_;
-  OnDomainJoinedCallback on_joined_callback_;
+  policy::OnDomainJoinedCallback on_joined_callback_;
 
   // Helper to call AuthPolicyClient and cancel calls if needed. Used to join
   // Active Directory domain.
@@ -215,6 +212,18 @@ class EnrollmentScreen
   DISALLOW_COPY_AND_ASSIGN(EnrollmentScreen);
 };
 
-}  // namespace chromeos
+}  // namespace ash
+
+// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
+// source migration is finished.
+namespace chromeos {
+using ::ash::EnrollmentScreen;
+}
+
+// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
+// source migration is finished.
+namespace ash {
+using ::chromeos::EnrollmentScreen;
+}
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_ENROLLMENT_ENROLLMENT_SCREEN_H_

@@ -24,6 +24,7 @@
 #include "base/files/file_path.h"
 #include "base/i18n/icu_util.h"
 #include "base/lazy_instance.h"
+#include "base/location.h"
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/metrics/field_trial.h"
@@ -38,20 +39,21 @@
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
-#include "base/strings/stringprintf.h"
 #include "base/task/post_task.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/threading/hang_watcher.h"
+#include "base/threading/platform_thread.h"
+#include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "components/discardable_memory/service/discardable_shared_memory_manager.h"
 #include "components/download/public/common/download_task_runner.h"
 #include "components/power_scheduler/power_mode_arbiter.h"
+#include "components/variations/variations_ids_provider.h"
 #include "content/app/mojo/mojo_init.h"
 #include "content/app/mojo_ipc_support.h"
-#include "content/app/partition_alloc_support.h"
 #include "content/browser/browser_main.h"
-#include "content/browser/browser_process_sub_thread.h"
+#include "content/browser/browser_process_io_thread.h"
 #include "content/browser/browser_thread_impl.h"
 #include "content/browser/gpu/gpu_main_thread_factory.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
@@ -64,10 +66,12 @@
 #include "content/common/android/cpu_time_metrics.h"
 #include "content/common/content_constants_internal.h"
 #include "content/common/mojo_core_library_support.h"
+#include "content/common/partition_alloc_support.h"
 #include "content/common/url_schemes.h"
 #include "content/gpu/in_process_gpu_thread.h"
 #include "content/public/app/content_main_delegate.h"
 #include "content/public/browser/content_browser_client.h"
+#include "content/public/browser/tracing_delegate.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_constants.h"
 #include "content/public/common/content_descriptor_keys.h"
@@ -96,7 +100,9 @@
 #include "sandbox/policy/sandbox_type.h"
 #include "sandbox/policy/switches.h"
 #include "services/network/public/cpp/features.h"
+#include "services/tracing/public/cpp/perfetto/perfetto_traced_process.h"
 #include "services/tracing/public/cpp/trace_startup.h"
+#include "services/tracing/public/cpp/tracing_features.h"
 #include "third_party/blink/public/common/origin_trials/trial_token_validator.h"
 #include "ui/base/ui_base_paths.h"
 #include "ui/base/ui_base_switches.h"
@@ -166,8 +172,9 @@
 
 #if defined(OS_ANDROID)
 #include "base/system/sys_info.h"
+#include "components/power_scheduler/power_scheduler.h"
+#include "content/browser/android/battery_metrics.h"
 #include "content/browser/android/browser_startup_controller.h"
-#include "content/common/android/cpu_affinity.h"
 #endif
 
 namespace content {
@@ -318,10 +325,8 @@ void PreloadPepperPlugins() {
       base::NativeLibraryLoadError error;
       base::NativeLibrary library =
           base::LoadNativeLibrary(plugin.path, &error);
-      VLOG_IF(1, !library) << "Unable to load plugin " << plugin.path.value()
-                           << " " << error.ToString();
-
-      ignore_result(library);  // Prevent release-mode warning.
+      LOG_IF(ERROR, !library) << "Unable to load plugin " << plugin.path.value()
+                              << " " << error.ToString();
     }
   }
 }
@@ -336,9 +341,8 @@ void PreloadLibraryCdms() {
   for (const auto& cdm : cdms) {
     base::NativeLibraryLoadError error;
     base::NativeLibrary library = base::LoadNativeLibrary(cdm.path, &error);
-    VLOG_IF(1, !library) << "Unable to load CDM " << cdm.path.value()
-                         << " (error: " << error.ToString() << ")";
-    ignore_result(library);  // Prevent release-mode warning.
+    LOG_IF(ERROR, !library) << "Unable to load CDM " << cdm.path.value()
+                            << " (error: " << error.ToString() << ")";
   }
 }
 #endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
@@ -406,6 +410,63 @@ mojo::ScopedMessagePipeHandle MaybeAcceptMojoInvitation() {
       mojo::PlatformChannel::RecoverPassedEndpointFromCommandLine(command_line);
   auto invitation = mojo::IncomingInvitation::Accept(std::move(endpoint));
   return invitation.ExtractMessagePipe(0);
+}
+
+#if defined(OS_WIN)
+void HandleConsoleControlEventOnBrowserUiThread(DWORD control_type) {
+  GetContentClient()->browser()->SessionEnding();
+}
+
+// A console control event handler for browser processes that initiates end
+// session handling on the main thread and hangs the control thread.
+BOOL WINAPI BrowserConsoleControlHandler(DWORD control_type) {
+  BrowserTaskExecutor::GetUIThreadTaskRunner(
+      {base::TaskPriority::USER_BLOCKING})
+      ->PostTask(FROM_HERE,
+                 base::BindOnce(&HandleConsoleControlEventOnBrowserUiThread,
+                                control_type));
+
+  // Block the control thread while waiting for SessionEnding to be handled.
+  base::PlatformThread::Sleep(base::TimeDelta::FromHours(1));
+
+  // This should never be hit. The process will be terminated either by
+  // ContentBrowserClient::SessionEnding or by Windows, if the former takes too
+  // long.
+  return TRUE;  // Handled.
+}
+
+// A console control event handler for non-browser processes that hangs the
+// control thread. The event will be handled by the browser process.
+BOOL WINAPI OtherConsoleControlHandler(DWORD control_type) {
+  // Block the control thread while waiting for the browser process.
+  base::PlatformThread::Sleep(base::TimeDelta::FromHours(1));
+
+  // This should never be hit. The process will be terminated by the browser
+  // process or by Windows, if the former takes too long.
+  return TRUE;  // Handled.
+}
+
+void InstallConsoleControlHandler(bool is_browser_process) {
+  if (!::SetConsoleCtrlHandler(is_browser_process
+                                   ? &BrowserConsoleControlHandler
+                                   : &OtherConsoleControlHandler,
+                               /*Add=*/TRUE)) {
+    DPLOG(ERROR) << "Failed to set console hook function";
+  }
+}
+#endif  // defined(OS_WIN)
+
+bool ShouldAllowSystemTracingConsumer() {
+// System tracing consumer support is currently only supported on ChromeOS.
+// TODO(crbug.com/1173395): Also enable for Lacros-Chrome.
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+  // The consumer should only be enabled when the delegate allows it.
+  TracingDelegate* delegate =
+      GetContentClient()->browser()->GetTracingDelegate();
+  return delegate && delegate->IsSystemWideTracingEnabled();
+#else   // BUILDFLAG(IS_CHROMEOS_ASH)
+  return false;
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 }
 
 }  // namespace
@@ -524,6 +585,10 @@ static void RegisterMainThreadFactories() {
 // Returns the exit code for this process.
 int RunBrowserProcessMain(const MainFunctionParams& main_function_params,
                           ContentMainDelegate* delegate) {
+#if defined(OS_WIN)
+  if (delegate->ShouldHandleConsoleControlEvents())
+    InstallConsoleControlHandler(/*is_browser_process=*/true);
+#endif
   int exit_code = delegate->RunProcess("", main_function_params);
   if (exit_code >= 0)
     return exit_code;
@@ -535,6 +600,10 @@ int RunBrowserProcessMain(const MainFunctionParams& main_function_params,
 int RunOtherNamedProcessTypeMain(const std::string& process_type,
                                  const MainFunctionParams& main_function_params,
                                  ContentMainDelegate* delegate) {
+#if defined(OS_WIN)
+  if (delegate->ShouldHandleConsoleControlEvents())
+    InstallConsoleControlHandler(/*is_browser_process=*/false);
+#endif
   static const MainFunction kMainFunctions[] = {
 #if BUILDFLAG(ENABLE_PLUGINS)
     {switches::kPpapiPluginProcess, PpapiPluginMain},
@@ -638,7 +707,7 @@ int ContentMainRunnerImpl::Initialize(const ContentMainParams& params) {
     // When running browser tests, don't create a second AtExitManager as that
     // interfers with shutdown when objects created before ContentMain is
     // called are destructed when it returns.
-    exit_manager_.reset(new base::AtExitManager);
+    exit_manager_ = std::make_unique<base::AtExitManager>();
   }
 #endif  // !OS_ANDROID
 
@@ -804,15 +873,10 @@ int ContentMainRunnerImpl::Initialize(const ContentMainParams& params) {
           params.sandbox_info))
     return TerminateForFatalInitializationError();
 #elif defined(OS_MAC)
-  // Only the GPU process still runs the V1 sandbox.
-  bool v2_enabled = base::CommandLine::ForCurrentProcess()->HasSwitch(
-      sandbox::switches::kSeatbeltClientName);
-
-  if (!v2_enabled && process_type == switches::kGpuProcess) {
-    if (!InitializeSandbox()) {
-      return TerminateForFatalInitializationError();
-    }
-  } else if (v2_enabled) {
+  if (!sandbox::policy::IsUnsandboxedSandboxType(
+          sandbox::policy::SandboxTypeFromCommandLine(command_line))) {
+    // Verify that the sandbox was initialized prior to ContentMain using the
+    // SeatbeltExecServer.
     CHECK(sandbox::Seatbelt::IsSandboxed());
   }
 #endif
@@ -916,7 +980,7 @@ int ContentMainRunnerImpl::RunBrowser(MainFunctionParams& main_params,
     const bool has_thread_pool =
         GetContentClient()->browser()->CreateThreadPool("Browser");
 
-    delegate_->PreCreateMainMessageLoop();
+    delegate_->PreBrowserMain();
 #if defined(OS_WIN)
     if (l10n_util::GetLocaleOverrides().empty()) {
       // Override the configured locale with the user's preferred UI language.
@@ -929,8 +993,14 @@ int ContentMainRunnerImpl::RunBrowser(MainFunctionParams& main_params,
     // Register the TaskExecutor for posting task to the BrowserThreads. It is
     // incorrect to post to a BrowserThread before this point. This instantiates
     // and binds the MessageLoopForUI on the main thread (but it's only labeled
-    // as BrowserThread::UI in BrowserMainLoop::MainMessageLoopStart).
+    // as BrowserThread::UI in BrowserMainLoop::CreateMainMessageLoop).
     BrowserTaskExecutor::Create();
+
+    auto* provider = delegate_->CreateVariationsIdsProvider();
+    if (!provider) {
+      variations::VariationsIdsProvider::Create(
+          variations::VariationsIdsProvider::Mode::kUseSignedInState);
+    }
 
     delegate_->PostEarlyInitialization(main_params.ui_task != nullptr);
 
@@ -949,14 +1019,26 @@ int ContentMainRunnerImpl::RunBrowser(MainFunctionParams& main_params,
 
     BrowserTaskExecutor::PostFeatureListSetup();
 
+    tracing::PerfettoTracedProcess::Get()
+        ->SetAllowSystemTracingConsumerCallback(
+            base::BindRepeating(&ShouldAllowSystemTracingConsumer));
     tracing::InitTracingPostThreadPoolStartAndFeatureList();
+
+    // PowerMonitor is needed in reduced mode. BrowserMainLoop will safely skip
+    // initializing it again if it has already been initialized.
+    base::PowerMonitor::Initialize(
+        std::make_unique<base::PowerMonitorDeviceSource>());
 
 #if defined(OS_ANDROID)
     SetupCpuTimeMetrics();
+
+    // Requires base::PowerMonitor to be initialized first.
+    AndroidBatteryMetrics::GetInstance();
+
     // For child processes, this requires allowing of the
     // sched_setaffinity() syscall in the sandbox (baseline_policy_android.cc).
     // When this call is removed, the sandbox allowlist should be updated too.
-    SetupCpuAffinityPollingOnce();
+    power_scheduler::PowerScheduler::GetInstance()->Setup();
 #endif
 
     if (should_start_minimal_browser)
@@ -964,11 +1046,6 @@ int ContentMainRunnerImpl::RunBrowser(MainFunctionParams& main_params,
 
     discardable_shared_memory_manager_ =
         std::make_unique<discardable_memory::DiscardableSharedMemoryManager>();
-
-    // PowerMonitor is needed in reduced mode. BrowserMainLoop will safely skip
-    // initializing it again if it has already been initialized.
-    base::PowerMonitor::Initialize(
-        std::make_unique<base::PowerMonitorDeviceSource>());
 
     // Requires base::PowerMonitor to be initialized first.
     power_scheduler::PowerModeArbiter::GetInstance()->OnThreadPoolAvailable();
@@ -993,7 +1070,7 @@ int ContentMainRunnerImpl::RunBrowser(MainFunctionParams& main_params,
 
   // No specified process type means this is the Browser process.
   internal::PartitionAllocSupport::Get()->ReconfigureAfterFeatureListInit("");
-  internal::PartitionAllocSupport::Get()->ReconfigureAfterThreadPoolInit("");
+  internal::PartitionAllocSupport::Get()->ReconfigureAfterTaskRunnerInit("");
 
   if (should_start_minimal_browser) {
     DVLOG(0) << "Chrome is running in minimal browser mode.";

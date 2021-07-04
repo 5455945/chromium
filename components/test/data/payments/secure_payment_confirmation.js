@@ -98,6 +98,18 @@ async function createCredentialAndReturnItsIdentifier(icon) { // eslint-disable-
 }
 
 /**
+ * Creates a secure payment confirmation credential and returns its
+ * clientDataJSON.type field.
+ * @param {string} icon - The URL of the icon for the credential.
+ * @return {string} - The clientDataJson.type field of the new credential.
+ */
+async function createCredentialAndReturnClientDataType(icon) { // eslint-disable-line no-unused-vars, max-len
+  const credential = await createAndReturnPaymentCredential(icon);
+  return JSON.parse(String.fromCharCode(...new Uint8Array(
+      credential.response.clientDataJSON))).type;
+}
+
+/**
  * Creates and returns a secure payment confirmation credential.
  * @param {string} icon - The URL of the icon for the credential.
  * @return {PaymentCredential} - The new credential.
@@ -109,6 +121,33 @@ async function createAndReturnPaymentCredential(icon) {
   };
   const publicKeyRP = {
       id: 'a.com',
+      name: 'Acme',
+  };
+  const publicKeyParameters = [{
+      type: 'public-key',
+      alg: -7,
+  }];
+  const payment = {
+      rp: publicKeyRP,
+      instrument: paymentInstrument,
+      challenge: new TextEncoder().encode('climb a mountain'),
+      pubKeyCredParams: publicKeyParameters,
+  };
+  return navigator.credentials.create({payment});
+}
+
+/**
+ * Attempts to create a payment credential that is missing the RP ID.
+ * @param {string} icon - The URL of the icon for the credential.
+ * @return {PaymentCredential} - The new credential.
+ */
+async function createCredentialWithNoRpId(icon) { // eslint-disable-line no-unused-vars, max-len
+  const paymentInstrument = {
+    displayName: 'display_name_for_instrument',
+    icon,
+  };
+  const publicKeyRP = {
+      // id omitted
       name: 'Acme',
   };
   const publicKeyParameters = [{

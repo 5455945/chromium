@@ -11,10 +11,12 @@
 #include "base/containers/flat_map.h"
 #include "build/build_config.h"
 #include "components/viz/common/quads/aggregated_render_pass.h"
+#include "components/viz/common/quads/tile_draw_quad.h"
 #include "components/viz/common/resources/resource_id.h"
 #include "components/viz/service/display/aggregated_frame.h"
 #include "components/viz/service/viz_service_export.h"
 #include "gpu/command_buffer/common/mailbox.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/buffer_types.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
@@ -39,10 +41,11 @@ class VIZ_SERVICE_EXPORT OverlayCandidate {
   // the case of a null primary plane.
   static bool FromDrawQuad(DisplayResourceProvider* resource_provider,
                            SurfaceDamageRectList* surface_damage_rect_list,
-                           const SkMatrix44& output_color_matrix,
+                           const skia::Matrix44& output_color_matrix,
                            const DrawQuad* quad,
                            const gfx::RectF& primary_rect,
-                           OverlayCandidate* candidate);
+                           OverlayCandidate* candidate,
+                           bool allow_delegated_quads = false);
   // Returns true if |quad| will not block quads underneath from becoming
   // an overlay.
   static bool IsInvisibleQuad(const DrawQuad* quad);
@@ -95,12 +98,13 @@ class VIZ_SERVICE_EXPORT OverlayCandidate {
   gfx::RectF display_rect;
   // Crop within the buffer to be placed inside |display_rect|.
   gfx::RectF uv_rect = gfx::RectF(0.f, 0.f, 1.f, 1.f);
-  // Clip rect in the target content space after composition.
-  gfx::Rect clip_rect;
-  // If the quad is clipped after composition.
-  bool is_clipped = false;
+  // Clip rect in the target content space after composition, or empty if the
+  // quad is not clipped.
+  absl::optional<gfx::Rect> clip_rect;
   // If the quad doesn't require blending.
   bool is_opaque = false;
+  // If the quad has a mask filter.
+  bool has_mask_filter = false;
   // Texture resource to present in an overlay.
   ResourceId resource_id = kInvalidResourceId;
   // Mailbox from resource_id. It is used by SkiaRenderer.
@@ -135,11 +139,6 @@ class VIZ_SERVICE_EXPORT OverlayCandidate {
   // Is true if an HW overlay is required for the quad content.
   bool requires_overlay = false;
 
-  // Is true when quad is part of a |shared_quad_state| that has damage.
-  // This is a fallback case for when |overlay_damage_index| is unavailable and
-  // will be absent from the |SurfaceDamageRectList|.
-  bool assume_damaged = false;
-
   // Identifier passed through by the video decoder that allows us to validate
   // if a protected surface can still be displayed. Non-zero when valid.
   uint32_t hw_protected_validation_id = 0;
@@ -157,6 +156,12 @@ class VIZ_SERVICE_EXPORT OverlayCandidate {
                               const TextureDrawQuad* quad,
                               const gfx::RectF& primary_rect,
                               OverlayCandidate* candidate);
+
+  static bool FromTileQuad(DisplayResourceProvider* resource_provider,
+                           SurfaceDamageRectList* surface_damage_rect_list,
+                           const TileDrawQuad* quad,
+                           const gfx::RectF& primary_rect,
+                           OverlayCandidate* candidate);
   static bool FromStreamVideoQuad(
       DisplayResourceProvider* resource_provider,
       SurfaceDamageRectList* surface_damage_rect_list,

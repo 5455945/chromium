@@ -4,19 +4,24 @@
 
 #include "content/test/web_contents_observer_consistency_checker.h"
 
+#include "base/containers/contains.h"
+#include "base/containers/cxx20_erase.h"
 #include "base/memory/ptr_util.h"
-#include "base/stl_util.h"
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
+#include "content/browser/renderer_host/frame_tree_node.h"
+#include "content/browser/renderer_host/navigation_entry_impl.h"
+#include "content/browser/renderer_host/page_impl.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/common/content_navigation_policy.h"
-#include "content/common/frame_messages.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "content/public/test/test_utils.h"
 #include "net/base/net_errors.h"
 
 namespace content {
@@ -25,6 +30,8 @@ namespace {
 
 const char kWebContentsObserverConsistencyCheckerKey[] =
     "WebContentsObserverConsistencyChecker";
+
+using LifecycleStateImpl = RenderFrameHostImpl::LifecycleStateImpl;
 
 GlobalRoutingID GetRoutingPair(RenderFrameHost* host) {
   if (!host)
@@ -79,6 +86,7 @@ void WebContentsObserverConsistencyChecker::RenderFrameCreated(
         << "not a current RenderFrameHost. Only the current frame should be "
         << "spawning children.";
   }
+  AddInputEventObserver(render_frame_host);
 }
 
 void WebContentsObserverConsistencyChecker::RenderFrameDeleted(
@@ -111,7 +119,8 @@ void WebContentsObserverConsistencyChecker::RenderFrameDeleted(
 
   // All players should have been paused by this point.
   for (const auto& id : active_media_players_)
-    CHECK_NE(id.render_frame_host, render_frame_host);
+    CHECK_NE(RenderFrameHost::FromID(id.frame_routing_id), render_frame_host);
+  RemoveInputEventObserver(render_frame_host);
 }
 
 void WebContentsObserverConsistencyChecker::RenderFrameHostChanged(
@@ -122,21 +131,26 @@ void WebContentsObserverConsistencyChecker::RenderFrameHostChanged(
   CHECK(GetRoutingPair(old_host) != GetRoutingPair(new_host));
 
   if (old_host) {
+    CHECK(base::Contains(frame_tree_node_ids_, new_host->GetFrameTreeNodeId()));
     EnsureStableParentValue(old_host);
     CHECK_EQ(old_host->GetParent(), new_host->GetParent());
     GlobalRoutingID routing_pair = GetRoutingPair(old_host);
-    // If the navigation requires a new RFH, IsCurrent on old host should be
+    // If the navigation requires a new RFH, IsActive on old host should be
     // false.
-    CHECK(!old_host->IsCurrent());
+    CHECK(!old_host->IsActive());
     bool old_did_exist = !!current_hosts_.erase(routing_pair);
     if (!old_did_exist) {
       CHECK(false)
           << "RenderFrameHostChanged called with old host that did not exist:"
           << Format(old_host);
     }
+  } else {
+    CHECK(frame_tree_node_ids_.insert(new_host->GetFrameTreeNodeId()).second);
   }
 
-  CHECK(new_host->IsCurrent());
+  auto* new_host_impl = static_cast<RenderFrameHostImpl*>(new_host);
+  CHECK(new_host_impl->lifecycle_state() == LifecycleStateImpl::kActive ||
+        new_host_impl->lifecycle_state() == LifecycleStateImpl::kPrerendering);
   EnsureStableParentValue(new_host);
   if (new_host->GetParent()) {
     AssertRenderFrameExists(new_host->GetParent());
@@ -153,7 +167,9 @@ void WebContentsObserverConsistencyChecker::RenderFrameHostChanged(
 
   GlobalRoutingID routing_pair = GetRoutingPair(new_host);
   bool host_exists = !current_hosts_.insert(routing_pair).second;
-  if (host_exists) {
+  // TODO(https://crbug.com/1179683): Figure out a better way to deal with
+  // MPArch.
+  if (host_exists && !blink::features::IsPrerender2Enabled()) {
     CHECK(false)
         << "RenderFrameHostChanged called more than once for routing pair:"
         << Format(new_host);
@@ -162,17 +178,36 @@ void WebContentsObserverConsistencyChecker::RenderFrameHostChanged(
   // If |new_host| is restored from the BackForwardCache, it can contain
   // iframes, otherwise it has just been created and can't contain iframes for
   // the moment.
-  if (!IsBackForwardCacheEnabled()) {
+  //
+  // TODO(https://crbug.com/1179683): Figure out a better way to deal with
+  // handling the new RenderFrameHost coming from a prerendered activation
+  // rather than an ordinary activation.
+  if (!IsBackForwardCacheEnabled() && !blink::features::IsPrerender2Enabled()) {
     CHECK(!HasAnyChildren(new_host))
         << "A frame should not have children before it is committed.";
   }
 }
 
 void WebContentsObserverConsistencyChecker::FrameDeleted(
-    RenderFrameHost* render_frame_host) {
+    int frame_tree_node_id) {
   // A frame can be deleted before RenderFrame in the renderer process is
   // created, so there is not much that can be enforced here.
   CHECK(!web_contents_destroyed_);
+
+  CHECK(frame_tree_node_ids_.erase(frame_tree_node_id));
+
+  RenderFrameHostImpl* render_frame_host =
+      FrameTreeNode::GloballyFindByID(frame_tree_node_id)->current_frame_host();
+
+  // Will be nullptr if this is main frame of a non primary FrameTree whose page
+  // was moved out (e.g. due Prerender activation).
+  if (!render_frame_host) {
+    DCHECK_NE(FrameTreeNode::GloballyFindByID(frame_tree_node_id)
+                  ->frame_tree()
+                  ->type(),
+              FrameTree::Type::kPrimary);
+    return;
+  }
 
   EnsureStableParentValue(render_frame_host);
 
@@ -233,8 +268,14 @@ void WebContentsObserverConsistencyChecker::DidFinishNavigation(
 
   CHECK(!navigation_handle->HasCommitted() ||
         navigation_handle->GetRenderFrameHost());
-  CHECK(!navigation_handle->HasCommitted() ||
-        navigation_handle->GetRenderFrameHost()->IsCurrent());
+
+  if (navigation_handle->HasCommitted()) {
+    RenderFrameHostImpl* new_rfh = static_cast<RenderFrameHostImpl*>(
+        navigation_handle->GetRenderFrameHost());
+    CHECK(new_rfh->lifecycle_state() == LifecycleStateImpl::kActive ||
+          new_rfh->lifecycle_state() == LifecycleStateImpl::kPrerendering);
+  }
+
   CHECK(!navigation_handle->HasCommitted() ||
         navigation_handle->GetRenderFrameHost()->IsRenderFrameLive());
 
@@ -251,13 +292,15 @@ void WebContentsObserverConsistencyChecker::DidFinishNavigation(
   ongoing_navigations_.erase(navigation_handle);
 }
 
-void WebContentsObserverConsistencyChecker::DocumentAvailableInMainFrame() {
+void WebContentsObserverConsistencyChecker::DocumentAvailableInMainFrame(
+    RenderFrameHost* render_frame_host) {
   AssertMainFrameExists();
 }
 
-void WebContentsObserverConsistencyChecker::
-    DocumentOnLoadCompletedInMainFrame() {
-  CHECK(web_contents()->IsDocumentOnLoadCompletedInMainFrame());
+void WebContentsObserverConsistencyChecker::DocumentOnLoadCompletedInMainFrame(
+    RenderFrameHost* render_frame_host) {
+  CHECK(static_cast<PageImpl&>(render_frame_host->GetPage())
+            .is_on_load_completed_in_main_document());
   AssertMainFrameExists();
 }
 
@@ -323,12 +366,14 @@ void WebContentsObserverConsistencyChecker::WebContentsDestroyed() {
   CHECK(ongoing_navigations_.empty());
   CHECK(active_media_players_.empty());
   CHECK(live_routes_.empty());
+  CHECK(frame_tree_node_ids_.empty());
 }
 
 void WebContentsObserverConsistencyChecker::DidStartLoading() {
   // TODO(clamy): add checks for the loading state in the rest of observer
   // methods.
-  CHECK(!is_loading_);
+  // TODO(crbug.com/1145572): Add back CHECK(!is_loading_). The CHECK was
+  // removed because of flaky failures during some browser_tests.
   CHECK(web_contents()->IsLoading());
   is_loading_ = true;
 }
@@ -416,6 +461,65 @@ bool WebContentsObserverConsistencyChecker::HasAnyChildren(
     }
   }
   return false;
+}
+
+class WebContentsObserverConsistencyChecker::TestInputEventObserver
+    : public RenderWidgetHost::InputEventObserver {
+ public:
+  explicit TestInputEventObserver(RenderFrameHost& render_frame_host)
+      : render_frame_host_wrapper_(&render_frame_host),
+        render_widget_host_(static_cast<RenderWidgetHostImpl*>(
+                                render_frame_host.GetRenderWidgetHost())
+                                ->GetWeakPtr()) {
+    render_widget_host_->AddInputEventObserver(this);
+  }
+  ~TestInputEventObserver() override {
+    if (render_widget_host_)
+      render_widget_host_->RemoveInputEventObserver(this);
+  }
+
+  void OnInputEvent(const blink::WebInputEvent&) override {
+    EnsureRenderFrameHostNotPrerendered();
+  }
+  void OnInputEventAck(blink::mojom::InputEventResultSource source,
+                       blink::mojom::InputEventResultState state,
+                       const blink::WebInputEvent&) override {
+    EnsureRenderFrameHostNotPrerendered();
+  }
+
+ private:
+  void EnsureRenderFrameHostNotPrerendered() {
+    if (render_frame_host_wrapper_.IsDestroyed())
+      return;
+
+    // TODO(crbug.com/1183639): Use RenderFrameHost::GetLifecycleState() if it
+    // is possible.
+    int frame_tree_node_id =
+        content::RenderFrameHost::GetFrameTreeNodeIdForRoutingId(
+            render_frame_host_wrapper_->GetProcess()->GetID(),
+            render_frame_host_wrapper_->GetRoutingID());
+    CHECK(!FrameTreeNode::GloballyFindByID(frame_tree_node_id)
+               ->frame_tree()
+               ->is_prerendering());
+  }
+
+  RenderFrameHostWrapper render_frame_host_wrapper_;
+  base::WeakPtr<RenderWidgetHostImpl> render_widget_host_;
+};
+
+void WebContentsObserverConsistencyChecker::AddInputEventObserver(
+    RenderFrameHost* render_frame_host) {
+  auto result = input_observer_map_.insert(std::make_pair(
+      render_frame_host,
+      std::make_unique<TestInputEventObserver>(*render_frame_host)));
+  CHECK(result.second);
+}
+
+void WebContentsObserverConsistencyChecker::RemoveInputEventObserver(
+    RenderFrameHost* render_frame_host) {
+  auto it = input_observer_map_.find(render_frame_host);
+  CHECK(it != input_observer_map_.end());
+  input_observer_map_.erase(it);
 }
 
 }  // namespace content

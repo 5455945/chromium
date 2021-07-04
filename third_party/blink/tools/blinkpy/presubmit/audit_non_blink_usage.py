@@ -14,6 +14,8 @@ $ git ls-files third_party/blink \
     | python third_party/blink/tools/blinkpy/presubmit/audit_non_blink_usage.py
 """
 
+from __future__ import print_function
+
 import os
 import re
 import sys
@@ -27,6 +29,10 @@ _CONFIG = [
             'gfx::CubicBezier',
             'gfx::ICCProfile',
             'gfx::RadToDeg',
+
+            # absl optional constructs.
+            'absl::optional',
+            'absl::in_place',
 
             # //base constructs that are allowed everywhere
             'base::AdoptRef',
@@ -47,7 +53,6 @@ _CONFIG = [
             "base::i18n::ToUCharPtr",
             'base::Location',
             'base::MakeRefCounted',
-            'base::Optional',
             'base::OptionalFromPtr',
             'base::OptionalOrNullptr',
             'base::PlatformThread',
@@ -80,14 +85,15 @@ _CONFIG = [
             'base::WritableSharedMemoryMapping',
             'base::as_bytes',
             'base::in_place',
-            'base::make_optional',
+            'absl::make_optional',
             'base::make_span',
-            'base::nullopt',
+            'absl::nullopt',
             'base::ranges::.+',
             'base::sequence_manager::TaskTimeObserver',
             'base::size',
             'base::span',
             'logging::GetVlogLevel',
+            'logging::SetLogItems',
             'base::PassKey',
 
             # //base/allocator/partition_allocator/partition_alloc_constants.h
@@ -105,6 +111,7 @@ _CONFIG = [
 
             # //base/callback_helpers.h.
             'base::DoNothing',
+            'base::SplitOnceCallback',
 
             # //base/callback.h is allowed, but you need to use WTF::Bind or
             # WTF::BindRepeating to create callbacks in Blink.
@@ -192,6 +199,8 @@ _CONFIG = [
 
             # //base/numerics/clamped_math.h.
             'base::ClampAdd',
+            'base::ClampedNumeric',
+            'base::ClampMax',
             'base::ClampSub',
             'base::MakeClampedNum',
 
@@ -203,6 +212,7 @@ _CONFIG = [
 
             # //base/template_util.h.
             'base::void_t',
+            'base::remove_cvref_t',
 
             # Debugging helpers from //base/debug are allowed everywhere.
             'base::debug::.+',
@@ -265,6 +275,7 @@ _CONFIG = [
             'cc::PaintWorkletInput',
             'cc::NodeId',
             'cc::NodeInfo',
+            'cc::UsePaintCache',
 
             # Chromium geometry types.
             'gfx::Insets',
@@ -277,6 +288,7 @@ _CONFIG = [
             'gfx::RectF',
             'gfx::RRectF',
             'gfx::ScaleToCeiledSize',
+            'gfx::ScaleToEnclosingRectSafe',
             'gfx::ScaleVector2d',
             'gfx::Size',
             'gfx::SizeF',
@@ -378,9 +390,16 @@ _CONFIG = [
             # base/types/strong_alias.h
             'base::StrongAlias',
 
+            # Common display structs across display <-> Blink.
+            'display::ScreenInfo',
+            'display::ScreenInfos',
+
             # Standalone utility libraries that only depend on //base
             'skia::.+',
             'url::.+',
+
+            # Power scheduling instrumentation, which only depends on //base
+            "power_scheduler::.+",
 
             # Nested namespaces under the blink namespace
             'bindings::.+',
@@ -502,20 +521,28 @@ _CONFIG = [
             'ui::AXEventIntent',
             'ui::AXMode',
             'ui::AXNodeData',
+            'ui::AXTreeID',
+            'ui::kAXModeBasic',
+            'ui::kAXModeComplete',
             'ax::mojom::BoolAttribute',
             'ax::mojom::HasPopup',
             'ax::mojom::State',
             'ax::mojom::Restriction',
 
             # Accessibility helper functions - mostly used in Blink for
-            # serialization.
+            # serialization. Please keep alphabetized.
             'ui::CanHaveInlineTextBoxChildren',
+            'ui::IsCellOrTableHeader',
+            'ui::IsContainerWithSelectableChildren',
             'ui::IsDialog',
             'ui::IsHeading',
-            'ui::IsContainerWithSelectableChildren',
+            'ui::IsLandmark',
+            'ui::IsPlatformDocument',
+            'ui::IsPresentational',
+            'ui::IsSelectRequiredOrImplicit',
+            'ui::IsStructure',
             'ui::IsTableLike',
             'ui::IsTableRow',
-            'ui::IsCellOrTableHeader',
             'ui::IsTableHeader',
 
             # Blink uses UKM for logging e.g. always-on leak detection (crbug/757374)
@@ -633,8 +660,18 @@ _CONFIG = [
             'cc::PaintBenchmarkResult',
             'cc::RenderFrameMetadata',
             'cc::TaskGraphRunner',
+            'cc::ContentLayerClient',
+            'cc::DeadlinePolicy',
+            'cc::DisplayItemList',
+            'cc::DrawColorOp',
+            'cc::DrawImageOp',
+            'cc::SaveOp',
+            'cc::ScaleOp',
+            'cc::RestoreOp',
+            'cc::TranslateOp',
             'gfx::DisplayColorSpaces',
             'gfx::FontRenderParams',
+            'gfx::RenderingPipeline',
             'ui::ImeTextSpan',
             'viz::FrameSinkId',
             'viz::LocalSurfaceId',
@@ -664,6 +701,15 @@ _CONFIG = [
         'allowed': [
             'ui::ImeTextSpan',
             'ui::TextInputAction',
+        ],
+    },
+    {
+        'paths': [
+            'third_party/blink/renderer/core/editing/commands/undo_stack.cc',
+            'third_party/blink/renderer/core/editing/commands/undo_stack.h'
+        ],
+        'allowed': [
+            'base::MemoryPressureListener',
         ],
     },
     {
@@ -821,6 +867,28 @@ _CONFIG = [
     },
     {
         'paths': [
+            'third_party/blink/renderer/core/inspector',
+            'third_party/blink/renderer/controller/dev_tools_frontend_impl.h',
+            'third_party/blink/renderer/controller/dev_tools_frontend_impl.cc',
+            'third_party/blink/renderer/modules/filesystem/dev_tools_host_file_system.cc'
+        ],
+        'allowed': [
+            # Commands from the DevTools window are parsed from a JSON string in
+            # the devtools renderer and sent on as base::Value.
+            'base::Value',
+        ],
+    },
+    {
+        'paths':
+        ['third_party/blink/renderer/core/inspector/dev_tools_host.cc'],
+        'allowed': [
+            # Commands from the DevTools window are parsed from a JSON string in
+            # the devtools renderer and sent on as base::Value.
+            'base::JSONReader',
+        ],
+    },
+    {
+        'paths': [
             'third_party/blink/renderer/core/inspector/inspector_performance_agent.cc'
         ],
         'allowed': [
@@ -828,9 +896,34 @@ _CONFIG = [
         ],
     },
     {
+        'paths': [
+            'third_party/blink/renderer/core/inspector/inspector_network_agent.cc'
+        ],
+        'allowed': [
+            'net::SourceStream',
+            'base::flat_set',
+        ],
+    },
+    {
         'paths': ['third_party/blink/renderer/core/workers/worker_thread.cc'],
         'allowed': [
             'base::ScopedAllowBaseSyncPrimitives',
+        ],
+    },
+    {
+        'paths': [
+            'third_party/blink/renderer/core/loader/document_loader.cc',
+            'third_party/blink/renderer/core/loader/document_loader.h',
+            'third_party/blink/renderer/core/workers/worker_global_scope.cc',
+            'third_party/blink/renderer/core/workers/worker_global_scope.h',
+            'third_party/blink/renderer/core/workers/worker_or_worklet_global_scope.h',
+        ],
+        'allowed': [
+            # TODO(mythria): Allow use of non-blink mojo interface for now. Once
+            # we move the CodeCacheHost interface from per-frame to
+            # per-navigation update all uses to
+            # blink::mojom::blink::CodeCacheHost.
+            'blink::mojom::CodeCacheHost',
         ],
     },
     {
@@ -864,16 +957,24 @@ _CONFIG = [
         'allowed': [
             'base::MRUCache',
             'gl::GpuPreference',
+            'gpu::SHARED_IMAGE_USAGE_WEBGPU',
             'gpu::gles2::GLES2Interface',
             'gpu::raster::RasterInterface',
             'gpu::Mailbox',
             'gpu::MailboxHolder',
+            'gpu::SyncToken',
+            'gpu::webgpu::ReservedTexture',
             'display::Display',
             'media::IsOpaque',
+            'media::kNoTransformation',
             'media::PaintCanvasVideoRenderer',
             'media::PIXEL_FORMAT_Y16',
             'media::VideoFrame',
             'viz::RasterContextProvider',
+            'viz::ReleaseCallback',
+            'viz::ResourceFormat',
+            'viz::ResourceFormatToClosestSkColorType',
+            'viz::TransferableResource',
         ],
     },
     {
@@ -884,6 +985,27 @@ _CONFIG = [
         # list.
         'allowed': [
             'media::.+',
+        ]
+    },
+    {
+        'paths': [
+            'third_party/blink/renderer/core/timing/background_tracing_helper.cc',
+            'third_party/blink/renderer/core/timing/background_tracing_helper.h',
+        ],
+        'allowed': [
+            'base::MD5Digest',
+            'base::MD5Sum',
+            'base::StringPiece',
+        ]
+    },
+    {
+        'paths': [
+            'third_party/blink/renderer/modules/breakout_box/',
+        ],
+        'allowed': [
+            'media::.+',
+            # Some media APIs require std::vector.
+            "std::vector",
         ]
     },
     {
@@ -955,6 +1077,7 @@ _CONFIG = [
             'gpu::MailboxHolder',
             'media::.+',
             'libyuv::.+',
+            'viz::SkColorTypeToResourceFormat',
         ]
     },
     {
@@ -1044,6 +1167,9 @@ _CONFIG = [
         'allowed': [
             'base::PlatformThreadRef',
             'base::WrapRefCounted',
+            'cc::kNumYUVPlanes',
+            'cc::YUVIndex',
+            'cc::YUVSubsampling',
             'gpu::kNullSurfaceHandle',
             'gpu::SHARED_IMAGE_.+',
             'gpu::raster::RasterInterface',
@@ -1052,8 +1178,8 @@ _CONFIG = [
             'gpu::SharedImageInterface',
             'gpu::SyncToken',
             'viz::RasterContextProvider',
+            'viz::ReleaseCallback',
             'viz::ResourceFormat',
-            'viz::SingleReleaseCallback',
             'media::.+',
             'libyuv::.+',
         ]
@@ -1141,6 +1267,10 @@ _CONFIG = [
             'third_party/blink/renderer/modules/url_pattern/',
         ],
         'allowed': [
+            # Required to provide a canonicalization functor to liburlpattern.
+            "absl::InvalidArgumentError",
+            "absl::StatusOr",
+
             # Required by liburlpattern API in order to pass string data
             # efficiently.
             "absl::string_view",
@@ -1154,6 +1284,9 @@ _CONFIG = [
 
             # The liburlpattern API requires using std::vector.
             'std::vector',
+
+            # Internal namespace used by url_pattern module.
+            'url_pattern::.+',
         ],
     },
     {
@@ -1217,12 +1350,12 @@ _CONFIG = [
             'base::LazyInstance',
             'base::Lock',
             # TODO(crbug.com/787254): Remove base::BindOnce, base::Unretained,
-            # base::Passed, base::Closure, base::CurrentThread and
-            # base::RetainedRef.
+            # base::Passed, base::OnceClosure, base::RepeatingClosure,
+            # base::CurrentThread and base::RetainedRef.
             'base::Bind.*',
-            'base::Closure',
             'base::MD5.*',
             'base::CurrentThread',
+            'base::.*Closure',
             'base::Passed',
             'base::PowerObserver',
             'base::RetainedRef',
@@ -1272,7 +1405,10 @@ _CONFIG = [
     },
     {
         'paths': ['third_party/blink/renderer/modules/manifest/'],
-        'allowed': ['net::ParseMimeTypeWithoutParameter'],
+        'allowed': [
+            'net::ParseMimeTypeWithoutParameter',
+            'net::registry_controlled_domains::.+',
+        ],
     },
     {
         'paths':
@@ -1304,6 +1440,13 @@ _CONFIG = [
         'allowed': ['base::ThreadPriority'],
     },
     {
+        'paths': [
+            'third_party/blink/renderer/core/frame/local_frame.cc',
+            'third_party/blink/renderer/core/frame/local_frame.h'
+        ],
+        'allowed': ['base::Value'],
+    },
+    {
         'paths': ['third_party/blink/renderer/core/frame/local_dom_window.cc'],
         'allowed': [
             'net::registry_controlled_domains::.+',
@@ -1322,6 +1465,18 @@ _CONFIG = [
             'third_party/blink/renderer/core/html/canvas/html_canvas_element.h',
         ],
         'allowed': ['viz::ResourceId'],
+    },
+    {
+        'paths': [
+            'third_party/blink/renderer/platform/graphics/document_transition_shared_element_id.h'
+        ],
+        'allowed': ['cc::DocumentTransitionSharedElementId'],
+    },
+    {
+        'paths': [
+            'third_party/blink/renderer/modules/storage/',
+        ],
+        'allowed': ['blink::mojom::StorageKeyDataView'],
     },
 ]
 
@@ -1491,11 +1646,11 @@ def main():
                     path,
                     [(i + 1, l) for i, l in enumerate(contents.splitlines())])
                 if disallowed_identifiers:
-                    print '%s uses disallowed identifiers:' % path
+                    print('%s uses disallowed identifiers:' % path)
                     for i in disallowed_identifiers:
                         print(i.line, i.identifier, i.advice)
         except IOError as e:
-            print 'could not open %s: %s' % (path, e)
+            print('could not open %s: %s' % (path, e))
 
 
 if __name__ == '__main__':

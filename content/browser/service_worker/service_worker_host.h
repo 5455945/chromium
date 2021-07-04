@@ -22,21 +22,24 @@
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
+#include "mojo/public/cpp/bindings/unique_receiver_set.h"
 #include "net/base/network_isolation_key.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom.h"
+#include "third_party/blink/public/mojom/loader/code_cache.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_container.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_container_type.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_provider.mojom.h"
 #include "third_party/blink/public/mojom/web_feature/web_feature.mojom.h"
-#include "third_party/blink/public/mojom/webtransport/quic_transport_connector.mojom.h"
+#include "third_party/blink/public/mojom/webtransport/web_transport_connector.mojom.h"
 #include "url/origin.h"
 
 namespace content {
 
 class ServiceWorkerContextCore;
 class ServiceWorkerVersion;
+struct ServiceWorkerVersionBaseInfo;
 
 // ServiceWorkerHost is the host of a service worker execution context in the
 // renderer process. One ServiceWorkerHost instance hosts one service worker
@@ -63,8 +66,8 @@ class CONTENT_EXPORT ServiceWorkerHost {
       mojo::PendingReceiver<blink::mojom::BrowserInterfaceBroker>
           broker_receiver);
 
-  void CreateQuicTransportConnector(
-      mojo::PendingReceiver<blink::mojom::QuicTransportConnector> receiver);
+  void CreateWebTransportConnector(
+      mojo::PendingReceiver<blink::mojom::WebTransportConnector> receiver);
   // Used only when EagerCacheStorageSetupForServiceWorkers is disabled.
   void BindCacheStorage(
       mojo::PendingReceiver<blink::mojom::CacheStorage> receiver);
@@ -74,6 +77,10 @@ class CONTENT_EXPORT ServiceWorkerHost {
   }
 
   net::NetworkIsolationKey GetNetworkIsolationKey() const;
+  const base::UnguessableToken& GetReportingSource() const;
+
+  void CreateCodeCacheHost(
+      mojo::PendingReceiver<blink::mojom::CodeCacheHost> receiver);
 
   base::WeakPtr<ServiceWorkerHost> GetWeakPtr();
 
@@ -86,12 +93,25 @@ class CONTENT_EXPORT ServiceWorkerHost {
   // owns |this|.
   ServiceWorkerVersion* const version_;
 
-  BrowserInterfaceBrokerImpl<ServiceWorkerHost, const ServiceWorkerVersionInfo&>
-      broker_{this};
+  // BrowserInterfaceBroker implementation through which this
+  // ServiceWorkerHost exposes worker-scoped Mojo services to the corresponding
+  // service worker in the renderer.
+  //
+  // The interfaces that can be requested from this broker are defined in the
+  // content/browser/browser_interface_binders.cc file, in the functions which
+  // take a `ServiceWorkerHost*` parameter.
+  BrowserInterfaceBrokerImpl<ServiceWorkerHost,
+                             const ServiceWorkerVersionBaseInfo&>
+      broker_;
   mojo::Receiver<blink::mojom::BrowserInterfaceBroker> broker_receiver_{
       &broker_};
 
   std::unique_ptr<ServiceWorkerContainerHost> container_host_;
+
+  // CodeCacheHost processes requests to fetch / write generated code for
+  // JavaScript / WebAssembly resources.
+  mojo::UniqueReceiverSet<blink::mojom::CodeCacheHost>
+      code_cache_host_receivers_;
 
   mojo::AssociatedReceiver<blink::mojom::ServiceWorkerContainerHost>
       host_receiver_;

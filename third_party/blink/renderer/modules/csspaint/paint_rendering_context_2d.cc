@@ -20,7 +20,7 @@ PaintRenderingContext2D::PaintRenderingContext2D(
   InitializePaintRecorder();
 
   clip_antialiasing_ = kAntiAliased;
-  ModifiableState().SetShouldAntialias(true);
+  GetState().SetShouldAntialias(true);
 
   GetPaintCanvas()->clear(context_settings->alpha() ? SK_ColorTRANSPARENT
                                                     : SK_ColorBLACK);
@@ -41,7 +41,8 @@ void PaintRenderingContext2D::InitializePaintRecorder() {
   did_record_draw_commands_in_paint_recorder_ = false;
 }
 
-void PaintRenderingContext2D::DidDraw(const SkIRect&) {
+void PaintRenderingContext2D::DidDraw2D(const SkIRect&,
+                                        CanvasPerformanceMonitor::DrawType) {
   did_record_draw_commands_in_paint_recorder_ = true;
 }
 

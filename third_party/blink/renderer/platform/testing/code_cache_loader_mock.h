@@ -15,13 +15,11 @@ namespace blink {
 class CodeCacheLoaderMock : public WebCodeCacheLoader {
  public:
   CodeCacheLoaderMock() {}
+  CodeCacheLoaderMock(const CodeCacheLoaderMock&) = delete;
+  CodeCacheLoaderMock& operator=(const CodeCacheLoaderMock&) = delete;
   ~CodeCacheLoaderMock() override = default;
 
   // CodeCacheLoader methods:
-  void FetchFromCodeCacheSynchronously(
-      const WebURL& url,
-      base::Time* response_time_out,
-      mojo_base::BigBuffer* buffer_out) override;
   void FetchFromCodeCache(
       blink::mojom::CodeCacheType cache_type,
       const WebURL& url,
@@ -31,10 +29,8 @@ class CodeCacheLoaderMock : public WebCodeCacheLoader {
 
  private:
   base::WeakPtrFactory<CodeCacheLoaderMock> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(CodeCacheLoaderMock);
 };
 
 }  // namespace blink
 
-#endif  // CodeCacheLoaderMock_h
+#endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_TESTING_CODE_CACHE_LOADER_MOCK_H_

@@ -32,7 +32,7 @@ void PasswordManagerInteractiveTestBase::FillElementWithValue(
       RenderFrameHost(),
       base::StringPrintf("document.getElementById('%s').focus();",
                          element_id.c_str())));
-  for (base::char16 character : value) {
+  for (char16_t character : value) {
     ui::DomKey dom_key = ui::DomKey::FromCharacter(character);
     const ui::PrintableCodeEntry* code_entry = std::find_if(
         std::begin(ui::kPrintableCodeMap), std::end(ui::kPrintableCodeMap),
@@ -89,10 +89,10 @@ void PasswordManagerInteractiveTestBase::WaitForElementValue(
           "}",
           RETURN_CODE_OK, element_id.c_str(), RETURN_CODE_NO_ELEMENT,
           RETURN_CODE_OK);
-  int return_value = RETURN_CODE_INVALID;
-  ASSERT_TRUE(content::ExecuteScriptWithoutUserGestureAndExtractInt(
-      RenderFrameHost(), script, &return_value));
-  EXPECT_EQ(RETURN_CODE_OK, return_value)
+  EXPECT_EQ(RETURN_CODE_OK,
+            content::EvalJs(RenderFrameHost(), script,
+                            content::EXECUTE_SCRIPT_NO_USER_GESTURE |
+                                content::EXECUTE_SCRIPT_USE_MANUAL_REPLY))
       << "element_id = " << element_id
       << ", expected_value = " << expected_value;
 }

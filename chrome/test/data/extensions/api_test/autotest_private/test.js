@@ -1310,6 +1310,7 @@ var scrollableShelfTests = [
         {}, chrome.test.callbackPass(info => {
           chrome.test.assertEq(0, info.mainAxisOffset);
           chrome.test.assertEq(0, info.rightArrowBounds.width);
+          chrome.test.assertFalse(info.iconsUnderAnimation);
           chrome.test.assertFalse(info.hasOwnProperty('targetMainAxisOffset'));
         }));
   },
@@ -1319,6 +1320,7 @@ var scrollableShelfTests = [
         {'scrollDistance': 10}, chrome.test.callbackPass(info => {
           chrome.test.assertEq(0, info.mainAxisOffset);
           chrome.test.assertEq(0, info.rightArrowBounds.width);
+          chrome.test.assertFalse(info.iconsUnderAnimation);
           chrome.test.assertTrue(info.hasOwnProperty('targetMainAxisOffset'));
         }));
   },
@@ -1355,6 +1357,34 @@ var systemWebAppsTests = [
         chrome.test.assertEq('chrome://test-system-app/', apps[0].url);
       })
     );
+  },
+  function isSystemWebAppOpen() {
+    chrome.autotestPrivate.waitForSystemWebAppsInstall(
+        chrome.test.callbackPass(() => {
+          // Test system app should not be open by default.
+          chrome.autotestPrivate.isSystemWebAppOpen(
+              'maphiehpiinjgiaepbljmopkodkadcbh',
+              chrome.test.callbackPass(isOpen => {
+                chrome.test.assertFalse(isOpen);
+              }));
+
+          // Open test app and verify the state should be open.
+          chrome.autotestPrivate.launchSystemWebApp(
+              'OSSettings', 'chrome://test-system-app/',
+              chrome.test.callbackPass(() => {
+                chrome.autotestPrivate.isSystemWebAppOpen(
+                    'maphiehpiinjgiaepbljmopkodkadcbh',
+                    chrome.test.callbackPass(isOpen => {
+                      chrome.test.assertTrue(isOpen);
+                    }));
+              }));
+
+          // Check for invalid app.
+          chrome.autotestPrivate.isSystemWebAppOpen(
+              '',
+              chrome.test.callbackFail(
+                  'No system web app is found by given app id.'));
+        }));
   },
 ]
 

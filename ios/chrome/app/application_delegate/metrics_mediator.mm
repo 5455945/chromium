@@ -30,12 +30,14 @@
 #import "ios/chrome/browser/net/connection_type_observer_bridge.h"
 #include "ios/chrome/browser/pref_names.h"
 #include "ios/chrome/browser/system_flags.h"
+#import "ios/chrome/browser/ui/default_promo/default_browser_utils.h"
 #import "ios/chrome/browser/ui/main/browser_interface_provider.h"
 #import "ios/chrome/browser/ui/main/connection_information.h"
 #import "ios/chrome/browser/ui/main/scene_state.h"
 #import "ios/chrome/browser/ui/ntp/ntp_util.h"
 #import "ios/chrome/browser/web_state_list/web_state_list.h"
-#import "ios/chrome/browser/widget_kit/widget_metrics_util.h"
+#include "ios/chrome/browser/widget_kit/features.h"
+#include "ios/chrome/common/app_group/app_group_metrics.h"
 #include "ios/chrome/common/app_group/app_group_metrics_mainapp.h"
 #include "ios/public/provider/chrome/browser/chrome_browser_provider.h"
 #include "ios/public/provider/chrome/browser/distribution/app_distribution_provider.h"
@@ -43,6 +45,10 @@
 #include "ios/web/public/thread/web_thread.h"
 #import "ios/web/public/web_state.h"
 #include "url/gurl.h"
+
+#if BUILDFLAG(ENABLE_WIDGET_KIT_EXTENSION)
+#import "ios/chrome/browser/widget_kit/widget_metrics_util.h"  // nogncheck
+#endif
 
 #if !defined(__has_feature) || !__has_feature(objc_arc)
 #error "This file requires ARC support."
@@ -66,6 +72,55 @@ base::TimeDelta TimeDeltaSinceAppLaunchFromProcess() {
       time.tv_sec + (time.tv_usec / (double)USEC_PER_SEC);
   NSDate* date = [NSDate dateWithTimeIntervalSince1970:time_since_1970];
   return base::TimeDelta::FromSecondsD(-date.timeIntervalSinceNow);
+}
+
+// Send histograms reporting the usage of notification center metrics.
+void RecordWidgetUsage() {
+  using base::SysNSStringToUTF8;
+
+  // Dictionary containing the respective metric for each NSUserDefault's key.
+  NSDictionary<NSString*, NSString*>* keyMetric = @{
+    app_group::
+    kContentExtensionDisplayCount : @"IOS.ContentExtension.DisplayCount",
+    app_group::
+    kSearchExtensionDisplayCount : @"IOS.SearchExtension.DisplayCount",
+    app_group::
+    kCredentialExtensionDisplayCount : @"IOS.CredentialExtension.DisplayCount",
+    app_group::
+    kCredentialExtensionReauthCount : @"IOS.CredentialExtension.ReauthCount",
+    app_group::
+    kCredentialExtensionCopyURLCount : @"IOS.CredentialExtension.CopyURLCount",
+    app_group::kCredentialExtensionCopyUsernameCount :
+        @"IOS.CredentialExtension.CopyUsernameCount",
+    app_group::kCredentialExtensionCopyPasswordCount :
+        @"IOS.CredentialExtension.CopyPasswordCount",
+    app_group::kCredentialExtensionShowPasswordCount :
+        @"IOS.CredentialExtension.ShowPasswordCount",
+    app_group::
+    kCredentialExtensionSearchCount : @"IOS.CredentialExtension.SearchCount",
+    app_group::kCredentialExtensionPasswordUseCount :
+        @"IOS.CredentialExtension.PasswordUseCount",
+    app_group::kCredentialExtensionQuickPasswordUseCount :
+        @"IOS.CredentialExtension.QuickPasswordUseCount",
+    app_group::kCredentialExtensionFetchPasswordFailureCount :
+        @"IOS.CredentialExtension.FetchPasswordFailure",
+    app_group::kCredentialExtensionFetchPasswordNilArgumentCount :
+        @"IOS.CredentialExtension.FetchPasswordNilArgument",
+  };
+
+  NSUserDefaults* shared_defaults = app_group::GetGroupUserDefaults();
+  for (NSString* key in keyMetric) {
+    int count = [shared_defaults integerForKey:key];
+    if (count != 0) {
+      base::UmaHistogramCounts1000(SysNSStringToUTF8(keyMetric[key]), count);
+      [shared_defaults setInteger:0 forKey:key];
+      if ([key isEqual:app_group::kCredentialExtensionPasswordUseCount] ||
+          [key isEqual:app_group::kCredentialExtensionQuickPasswordUseCount]) {
+        LogLikelyInterestedDefaultBrowserUserActivity(
+            DefaultPromoTypeMadeForIOS);
+      }
+    }
+  }
 }
 }  // namespace
 
@@ -135,7 +190,7 @@ using metrics_mediator::kAppEnteredBackgroundDateKey;
   const base::TimeDelta startDurationFromProcess =
       TimeDeltaSinceAppLaunchFromProcess();
 
-  base::UmaHistogramTimes("Startup.ColdStartFromProcessCreationTime",
+  base::UmaHistogramTimes("Startup.ColdStartFromProcessCreationTimeV2",
                           startDurationFromProcess);
 
   if ([connectionInformation startupParameters]) {
@@ -191,9 +246,11 @@ using metrics_mediator::kAppEnteredBackgroundDateKey;
         base::UserMetricsAction("MobileVoiceOverActiveOnLaunch"));
   }
 
+#if BUILDFLAG(ENABLE_WIDGET_KIT_EXTENSION)
   if (@available(iOS 14, *)) {
     [WidgetMetricsUtil logInstalledWidgets];
   }
+#endif
 
   // Create the first user action recorder and schedule a task to expire it
   // after some timeout. If unable to determine the last time the app entered
@@ -325,7 +382,7 @@ using metrics_mediator::kAppEnteredBackgroundDateKey;
   } else {
     app_group::main_app::DisableMetrics();
   }
-  app_group::main_app::RecordWidgetUsage();
+  RecordWidgetUsage();
 }
 
 - (void)processCrashReportsPresentAtStartup {

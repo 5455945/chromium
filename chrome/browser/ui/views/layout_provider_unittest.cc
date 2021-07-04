@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/stl_util.h"
+#include "base/cxx17_backports.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
@@ -53,6 +53,9 @@ class LayoutProviderTest : public testing::Test {
     base::win::EnableHighDPISupport();
 #endif
     gfx::InitializeFonts();
+    // Some previous test may have left the default font description set to an
+    // unexpected state.
+    gfx::FontList::SetDefaultFontDescription(std::string());
   }
 
  private:
@@ -389,7 +392,7 @@ TEST_F(LayoutProviderTest, ExplicitTypographyLineHeight) {
     EXPECT_EQ(kHarmonyHeights[i].line_height,
               views::style::GetLineHeight(kHarmonyHeights[i].context, kStyle));
 
-    views::Label label(base::ASCIIToUTF16("test"), kHarmonyHeights[i].context);
+    views::Label label(u"test", kHarmonyHeights[i].context);
     label.SizeToPreferredSize();
     EXPECT_EQ(kHarmonyHeights[i].line_height, label.height());
   }
@@ -400,7 +403,7 @@ TEST_F(LayoutProviderTest, ExplicitTypographyLineHeight) {
   EXPECT_EQ(kBodyLineHeight,
             views::style::GetLineHeight(views::style::CONTEXT_LABEL, kStyle));
   views::StyledLabel styled_label;
-  styled_label.SetText(base::ASCIIToUTF16("test"));
+  styled_label.SetText(u"test");
   constexpr int kStyledLabelWidth = 200;  // Enough to avoid wrapping.
   styled_label.SizeToFit(kStyledLabelWidth);
   EXPECT_EQ(kBodyLineHeight, styled_label.height());

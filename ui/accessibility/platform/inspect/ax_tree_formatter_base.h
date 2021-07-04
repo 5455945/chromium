@@ -23,8 +23,14 @@ class AX_EXPORT AXTreeFormatterBase : public AXTreeFormatter {
   AXTreeFormatterBase();
   ~AXTreeFormatterBase() override;
 
+  bool ShouldDumpNode(const AXPlatformNodeDelegate& node) const;
+  bool ShouldDumpChildren(const AXPlatformNodeDelegate& node) const;
+
   // Dumps formatted the given accessibility tree into a string.
   std::string Format(AXPlatformNodeDelegate* root) const override;
+
+  // Dumps the given accessibility node out as a string.
+  std::string FormatNode(AXPlatformNodeDelegate* node) const override;
 
   // Build an accessibility tree for the current Chrome app.
   virtual base::Value BuildTree(AXPlatformNodeDelegate* root) const = 0;
@@ -99,6 +105,8 @@ class AX_EXPORT AXTreeFormatterBase : public AXTreeFormatter {
                          std::string filter,
                          AXPropertyFilter::Type type = AXPropertyFilter::ALLOW);
   bool show_ids() const { return show_ids_; }
+
+  base::Value BuildNode(ui::AXPlatformNodeDelegate* node) const override;
 
  private:
   void RecursiveFormatTree(const base::Value& tree_node,

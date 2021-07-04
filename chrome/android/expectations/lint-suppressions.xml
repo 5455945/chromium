@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <!--
 Please refer to the lint doc for how to use this file and what should go in it:
-https://chromium.googlesource.com/chromium/src/+/master/build/android/docs/lint.md
+https://chromium.googlesource.com/chromium/src/+/main/build/android/docs/lint.md
 -->
 <lint>
   <!-- Ignore all lint errors in clank code. -->
@@ -192,23 +192,14 @@ https://chromium.googlesource.com/chromium/src/+/master/build/android/docs/lint.
     <ignore regexp="The resource `R.string.accessibility_close_tab_group_button_with_group_name` appears to be unused"/>
     <ignore regexp="The resource `R.string.accessibility_expand_tab_group_with_group_name` appears to be unused"/>
 
-    <!-- crbug.com/1127531 remove this line and following 18 lines after the bug is resolved -->
+    <!-- crbug.com/1127531 remove this line and following 9 lines after the bug is resolved -->
     <ignore regexp="The resource `R.string.languages_content_description` appears to be unused"/>
-    <ignore regexp="The resource `R.string.languages_content_title` appears to be unused"/>
-    <ignore regexp="The resource `R.string.languages_infobar_ready` appears to be unused"/>
-    <ignore regexp="The resource `R.string.languages_infobar_restart` appears to be unused"/>
     <ignore regexp="The resource `R.string.languages_select_suggested` appears to be unused"/>
     <ignore regexp="The resource `R.string.languages_select_other` appears to be unused"/>
     <ignore regexp="The resource `R.string.languages_settings_advanced` appears to be unused"/>
-    <ignore regexp="The resource `R.string.languages_settings_automatic` appears to be unused"/>
-    <ignore regexp="The resource `R.string.languages_settings_automatic_title` appears to be unused"/>
-    <ignore regexp="The resource `R.string.languages_settings_dont_offer_langs` appears to be unused"/>
     <ignore regexp="The resource `R.string.languages_settings_dont_offer_sites` appears to be unused"/>
-    <ignore regexp="The resource `R.string.languages_settings_never_langs_title` appears to be unused"/>
     <ignore regexp="The resource `R.string.languages_settings_never_sites_title` appears to be unused"/>
     <ignore regexp="The resource `R.string.languages_settings_target` appears to be unused"/>
-    <ignore regexp="The resource `R.string.languages_split_downloading` appears to be unused"/>
-    <ignore regexp="The resource `R.string.languages_split_ready` appears to be unused"/>
     <ignore regexp="The resource `R.string.translate_dont_offer_site` appears to be unused"/>
     <ignore regexp="The resource `R.string.translate_dont_offer_lang` appears to be unused"/>
 
@@ -243,22 +234,40 @@ https://chromium.googlesource.com/chromium/src/+/master/build/android/docs/lint.
     <ignore regexp="The resource `R.string.accessibility_omnibox_most_visited_tile` appears to be unused"/>
     <!-- 1: Some strings in components_strings_grd are not used in other targets. -->
     <ignore regexp="webview_.*__lint.*components_strings_grd"/>
-    <!-- 5: Temporarily suppressed until impelmentation is ready, see https://crbug.com/1144250 -->
-    <ignore regexp="The resource `R.string.iph_bubble_add_to_home_screen_accessibility` appears to be unused"/>
-    <ignore regexp="The resource `R.string.iph_bubble_add_to_home_screen` appears to be unused"/>
-    <ignore regexp="The resource `R.string.iph_infobar_add_to_home_screen_title` appears to be unused"/>
-    <ignore regexp="The resource `R.string.iph_infobar_add_to_home_screen_description` appears to be unused"/>
-    <ignore regexp="The resource `R.string.iph_infobar_add_to_home_screen_description_tablet` appears to be unused"/>
-    <!-- 1: resource is used in C++ components/ntp_snippets. -->
+    <!-- 2: resource is used in C++ components/ntp_snippets. -->
     <ignore regexp="The resource `R.string.ntp_article_suggestions_section_empty` appears to be unused"/>
+    <ignore regexp="The resource `R.string.ntp_article_suggestions_section_header` appears to be unused"/>
+    <!-- 2: resource is used in C++ components/error_page. -->
+    <ignore regexp="The resource `R.string.show_content` appears to be unused"/>
+    <ignore regexp="The resource `R.string.hide_content` appears to be unused"/>
     <!-- 1: TODO(crbug.com/1137985) resource is used in downstream image editor. -->
     <ignore regexp="The resource `R.string.clear` appears to be unused"/>
     <!-- 1: Temporarily suppressed until impelmentation is ready, see https://crbug.com/1169845. -->
     <ignore regexp="The resource `R.string.notification_category_price_drop` appears to be unused"/>
-    <!-- 3: Temporarily suppressed until impelmentation is ready, see https://crbug.com/1166702 -->
+    <!-- 5: Temporarily suppressed until impelmentation is ready, see https://crbug.com/1166702 -->
     <ignore regexp="The resource `R.string.price_drop_alerts_card_title` appears to be unused"/>
-    <ignore regexp="The resource `R.string.price_drop_alerts_card_content` appears to be unused"/>
+    <ignore regexp="The resource `R.string.price_drop_alerts_card_get_notified_content` appears to be unused"/>
     <ignore regexp="The resource `R.string.price_drop_alerts_card_get_notified` appears to be unused"/>
+    <ignore regexp="The resource `R.string.price_drop_alerts_card_go_to_settings_content` appears to be unused"/>
+    <ignore regexp="The resource `R.string.price_drop_alerts_card_go_to_settings` appears to be unused"/>
+    <!-- 5: Temporarily suppressed until impelmentation is ready, see https://crbug.com/1195477 -->
+    <ignore regexp="The resource `R.string.merchant_viewer_message_description_rating` appears to be unused"/>
+    <ignore regexp="The resource `R.string.merchant_viewer_message_rating_word` appears to be unused"/>
+    <ignore regexp="The resource `R.plurals.accessibility_merchant_viewer_message_description` appears to be unused"/>
+    <ignore regexp="The resource `R.string.accessibility_merchant_viewer_message_announcement` appears to be unused"/>
+    <ignore regexp="The resource `R.string.merchant_viewer_message_rating_numerical` appears to be unused"/>
+
+    <!-- crbug.com/1208536 remove this line and following 4 lines after the bug is resolved -->
+    <ignore regexp="The resource `R.string.adaptive_toolbar_button_new_tab_iph` appears to be unused"/>
+    <ignore regexp="The resource `R.string.adaptive_toolbar_button_share_iph` appears to be unused"/>
+    <ignore regexp="The resource `R.string.adaptive_toolbar_button_voice_search_iph` appears to be unused"/>
+    <ignore regexp="The resource `R.string.adaptive_toolbar_menu_edit_shortcut` appears to be unused"/>
+
+    <!-- 3: TODO(crbug.com/1208528) Backup strings until implementation is ready. -->
+    <ignore regexp="The resource `R.string.adaptive_toolbar_button_new_tab_iph_settings` appears to be unused"/>
+    <ignore regexp="The resource `R.string.adaptive_toolbar_button_share_iph_settings` appears to be unused"/>
+    <ignore regexp="The resource `R.string.adaptive_toolbar_button_voice_search_iph_settings` appears to be unused"/>
+
     <!-- Endnote: Please specify number of suppressions when adding more -->
   </issue>
   <issue id="VectorPath" severity="ignore"/>

@@ -6,10 +6,11 @@ package org.chromium.chrome.browser.signin.services;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.when;
-import static org.mockito.MockitoAnnotations.initMocks;
 
 import android.app.Activity;
 import android.graphics.Bitmap;
@@ -17,6 +18,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.drawable.Drawable;
+import android.text.TextUtils;
 import android.view.ViewGroup.LayoutParams;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -25,26 +27,37 @@ import androidx.annotation.Px;
 import androidx.test.filters.MediumTest;
 
 import org.junit.After;
+import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.AdditionalAnswers;
 import org.mockito.Mock;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
+import org.mockito.quality.Strictness;
 
 import org.chromium.base.test.params.ParameterAnnotations.ClassParameter;
 import org.chromium.base.test.params.ParameterAnnotations.UseRunnerDelegate;
 import org.chromium.base.test.params.ParameterSet;
 import org.chromium.base.test.params.ParameterizedRunner;
 import org.chromium.base.test.util.Batch;
+import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.JniMocker;
-import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
 import org.chromium.chrome.test.util.ChromeRenderTestRule;
+import org.chromium.chrome.test.util.browser.Features;
+import org.chromium.chrome.test.util.browser.Features.DisableFeatures;
+import org.chromium.chrome.test.util.browser.Features.EnableFeatures;
 import org.chromium.chrome.test.util.browser.signin.AccountManagerTestRule;
 import org.chromium.components.signin.ProfileDataSource;
 import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.base.CoreAccountId;
+import org.chromium.components.signin.identitymanager.AccountInfoServiceProvider;
+import org.chromium.components.signin.identitymanager.AccountTrackerService;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.signin.identitymanager.IdentityManagerJni;
 import org.chromium.components.signin.test.util.FakeProfileDataSource;
@@ -57,15 +70,16 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * Tests for ProfileDataCache image scaling. Leverages RenderTest instead of reimplementing
- * bitmap comparison to simplify access to the compared images on buildbots (via result_details).
+ * Tests for {@link ProfileDataCache} image scaling.
  */
 @RunWith(ParameterizedRunner.class)
 @UseRunnerDelegate(ChromeJUnit4RunnerDelegate.class)
+@DisableFeatures({ChromeFeatureList.DEPRECATE_MENAGERIE_API})
 @Batch(ProfileDataCacheRenderTest.PROFILE_DATA_BATCH_NAME)
 public class ProfileDataCacheRenderTest extends DummyUiActivityTestCase {
     public static final String PROFILE_DATA_BATCH_NAME = "profile_data";
     public static final String ACCOUNT_EMAIL = "test@gmail.com";
+    private static final long NATIVE_IDENTITY_MANAGER = 10002L;
 
     @ClassParameter
     private static final List<ParameterSet> sClassParams =
@@ -79,8 +93,11 @@ public class ProfileDataCacheRenderTest extends DummyUiActivityTestCase {
     }
 
     @Rule
-    public ChromeRenderTestRule mRenderTestRule =
+    public final ChromeRenderTestRule mRenderTestRule =
             ChromeRenderTestRule.Builder.withPublicCorpus().build();
+
+    @Rule
+    public final Features.JUnitProcessor mProcessor = new Features.JUnitProcessor();
 
     @Rule
     public final AccountManagerTestRule mAccountManagerTestRule =
@@ -89,17 +106,17 @@ public class ProfileDataCacheRenderTest extends DummyUiActivityTestCase {
     @Rule
     public final JniMocker mocker = new JniMocker();
 
-    @Mock
-    private Profile mProfileMock;
+    @Rule
+    public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
     @Mock
-    private IdentityServicesProvider mIdentityServicesProviderMock;
+    private AccountTrackerService mAccountTrackerServiceMock;
 
     @Mock
     private IdentityManager.Natives mIdentityManagerNativeMock;
 
     private final IdentityManager mIdentityManager =
-            new IdentityManager(0 /* nativeIdentityManager */, null /* OAuth2TokenService */);
+            IdentityManager.create(NATIVE_IDENTITY_MANAGER, null /* OAuth2TokenService */);
 
     private final AccountInfo mAccountInfoWithAvatar =
             new AccountInfo(new CoreAccountId("gaia-id-test"), ACCOUNT_EMAIL, "gaia-id-test",
@@ -112,13 +129,8 @@ public class ProfileDataCacheRenderTest extends DummyUiActivityTestCase {
 
     @Before
     public void setUp() {
-        initMocks(this);
         mocker.mock(IdentityManagerJni.TEST_HOOKS, mIdentityManagerNativeMock);
-        Profile.setLastUsedProfileForTesting(mProfileMock);
-        when(mIdentityServicesProviderMock.getIdentityManager(mProfileMock))
-                .thenReturn(mIdentityManager);
-        IdentityServicesProvider.setInstanceForTests(mIdentityServicesProviderMock);
-
+        AccountInfoServiceProvider.init(mIdentityManager, mAccountTrackerServiceMock);
         TestThreadUtils.runOnUiThreadBlocking(() -> {
             Activity activity = getActivity();
             mContentView = new FrameLayout(activity);
@@ -126,7 +138,7 @@ public class ProfileDataCacheRenderTest extends DummyUiActivityTestCase {
             mContentView.addView(mImageView, LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT);
             activity.setContentView(mContentView);
 
-            mProfileDataCache = new ProfileDataCache(getActivity(), mImageSize,
+            mProfileDataCache = new ProfileDataCache(activity, mImageSize,
                     /*badgeConfig=*/null);
             // ProfileDataCache only populates the cache when an observer is added.
             mProfileDataCache.addObserver(accountId -> {});
@@ -135,17 +147,18 @@ public class ProfileDataCacheRenderTest extends DummyUiActivityTestCase {
 
     @After
     public void tearDown() {
-        IdentityServicesProvider.setInstanceForTests(null);
-        Profile.setLastUsedProfileForTesting(null);
+        AccountInfoServiceProvider.resetForTests();
     }
 
     @Test
     @MediumTest
     @Feature("RenderTest")
     public void testProfileDataWithAvatarFromIdentityManager() throws IOException {
-        when(mIdentityManagerNativeMock
-                        .findExtendedAccountInfoForAccountWithRefreshTokenByEmailAddress(
-                                anyLong(), eq(ACCOUNT_EMAIL)))
+        doAnswer(AdditionalAnswers.answerVoid(Runnable::run))
+                .when(mAccountTrackerServiceMock)
+                .seedAccountsIfNeeded(any(Runnable.class));
+        when(mIdentityManagerNativeMock.findExtendedAccountInfoByEmailAddress(
+                     anyLong(), eq(ACCOUNT_EMAIL)))
                 .thenReturn(mAccountInfoWithAvatar);
         mAccountManagerTestRule.addAccount(
                 new ProfileDataSource.ProfileData(ACCOUNT_EMAIL, null, "Full Name", "Given Name"));
@@ -157,6 +170,9 @@ public class ProfileDataCacheRenderTest extends DummyUiActivityTestCase {
     @MediumTest
     @Feature("RenderTest")
     public void testProfileDataUpdatedFromIdentityManagerObserver() throws IOException {
+        doAnswer(AdditionalAnswers.answerVoid(Runnable::run))
+                .when(mAccountTrackerServiceMock)
+                .seedAccountsIfNeeded(any(Runnable.class));
         mAccountManagerTestRule.addAccount(
                 new ProfileDataSource.ProfileData(ACCOUNT_EMAIL, null, "Full Name", "Given Name"));
         mIdentityManager.onExtendedAccountInfoUpdated(mAccountInfoWithAvatar);
@@ -169,6 +185,38 @@ public class ProfileDataCacheRenderTest extends DummyUiActivityTestCase {
     @Feature("RenderTest")
     public void testProfileDataPopulatedFromIdentityManagerObserver() throws IOException {
         mIdentityManager.onExtendedAccountInfoUpdated(mAccountInfoWithAvatar);
+        TestThreadUtils.runOnUiThreadBlocking(
+                () -> { checkImageIsScaled(mAccountInfoWithAvatar.getEmail()); });
+        mRenderTestRule.render(mImageView, "profile_data_cache_avatar" + mImageSize);
+    }
+
+    @Test
+    @MediumTest
+    @EnableFeatures({ChromeFeatureList.DEPRECATE_MENAGERIE_API})
+    @Feature("RenderTest")
+    public void testProfileDataPopulatedWithoutGmsProfileDataSource() throws IOException {
+        doAnswer(AdditionalAnswers.answerVoid(Runnable::run))
+                .when(mAccountTrackerServiceMock)
+                .seedAccountsIfNeeded(any(Runnable.class));
+        when(mIdentityManagerNativeMock.findExtendedAccountInfoByEmailAddress(
+                     anyLong(), eq(ACCOUNT_EMAIL)))
+                .thenReturn(mAccountInfoWithAvatar);
+        mAccountManagerTestRule.addAccount(ACCOUNT_EMAIL);
+
+        TestThreadUtils.runOnUiThreadBlocking(() -> {
+            mProfileDataCache =
+                    new ProfileDataCache(getActivity(), mImageSize, /*badgeConfig=*/null);
+        });
+
+        CriteriaHelper.pollUiThread(() -> {
+            return !TextUtils.isEmpty(
+                    mProfileDataCache.getProfileDataOrDefault(mAccountInfoWithAvatar.getEmail())
+                            .getFullName());
+        });
+        final DisplayableProfileData profileData =
+                mProfileDataCache.getProfileDataOrDefault(mAccountInfoWithAvatar.getEmail());
+        Assert.assertEquals(mAccountInfoWithAvatar.getFullName(), profileData.getFullName());
+        Assert.assertEquals(mAccountInfoWithAvatar.getGivenName(), profileData.getGivenName());
         TestThreadUtils.runOnUiThreadBlocking(
                 () -> { checkImageIsScaled(mAccountInfoWithAvatar.getEmail()); });
         mRenderTestRule.render(mImageView, "profile_data_cache_avatar" + mImageSize);

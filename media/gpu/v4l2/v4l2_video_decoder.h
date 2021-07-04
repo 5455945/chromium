@@ -9,7 +9,6 @@
 
 #include <map>
 #include <memory>
-#include <string>
 #include <utility>
 #include <vector>
 
@@ -18,19 +17,20 @@
 #include "base/containers/queue.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/optional.h"
 #include "base/sequence_checker.h"
 #include "base/sequenced_task_runner.h"
 #include "base/threading/thread.h"
 #include "base/time/time.h"
 #include "media/base/cdm_context.h"
 #include "media/base/supported_video_decoder_config.h"
+#include "media/base/video_aspect_ratio.h"
 #include "media/base/video_types.h"
 #include "media/gpu/chromeos/gpu_buffer_layout.h"
 #include "media/gpu/chromeos/video_decoder_pipeline.h"
 #include "media/gpu/media_gpu_export.h"
 #include "media/gpu/v4l2/v4l2_device.h"
 #include "media/gpu/v4l2/v4l2_video_decoder_backend.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/geometry/size.h"
 
 namespace media {
@@ -82,9 +82,13 @@ class MEDIA_GPU_EXPORT V4L2VideoDecoder
   ~V4L2VideoDecoder() override;
 
   enum class State {
-    // Initial state. Transitions to |kDecoding| if Initialize() is successful,
+    // Initial state. Transitions to |kInitialized| if Initialize() is
+    // successful,
     // |kError| otherwise.
     kUninitialized,
+    // Transitions to |kDecoding| when an input buffer has arrived that
+    // allows creation of hardware contexts. |kError| on error.
+    kInitialized,
     // Transitions to |kFlushing| when flushing or changing resolution,
     // |kError| if any unexpected error occurs.
     kDecoding,
@@ -136,6 +140,10 @@ class MEDIA_GPU_EXPORT V4L2VideoDecoder
   // Change the state and check the state transition is valid.
   void SetState(State new_state);
 
+  // Continue backend initialization. Decoder will not take a hardware context
+  // until InitializeBackend() is called.
+  StatusCode InitializeBackend();
+
   // Pages with multiple V4L2VideoDecoder instances might run out of memory
   // (e.g. b/170870476) or crash (e.g. crbug.com/1109312). To avoid that and
   // while the investigation goes on, limit the maximum number of simultaneous
@@ -144,7 +152,7 @@ class MEDIA_GPU_EXPORT V4L2VideoDecoder
   // the maximum number of instances at the time this decoder is created.
   static constexpr int kMaxNumOfInstances = 32;
   static base::AtomicRefCount num_instances_;
-  const bool can_use_decoder_;
+  bool can_use_decoder_ = false;
 
   // The V4L2 backend, i.e. the part of the decoder that sends
   // decoding jobs to the kernel.
@@ -163,11 +171,16 @@ class MEDIA_GPU_EXPORT V4L2VideoDecoder
   // The default value is only used at the first time of
   // DmabufVideoFramePool::Initialize() during Initialize().
   size_t num_output_frames_ = 1;
-  // Ratio of natural_size to visible_rect of the output frame.
-  double pixel_aspect_ratio_ = 0.0;
+
+  // Aspect ratio from config to use for output frames.
+  VideoAspectRatio aspect_ratio_;
 
   // Callbacks passed from Initialize().
   OutputCB output_cb_;
+
+  // Hold onto profile passed in from Initialize() so that
+  // it is available for InitializeBackend().
+  VideoCodecProfile profile_ = VIDEO_CODEC_PROFILE_UNKNOWN;
 
   // V4L2 input and output queue.
   scoped_refptr<V4L2Queue> input_queue_;

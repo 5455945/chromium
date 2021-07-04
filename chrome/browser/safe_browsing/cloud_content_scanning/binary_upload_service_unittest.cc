@@ -6,11 +6,13 @@
 
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "base/bind.h"
-#include "base/callback_forward.h"
 #include "base/callback_helpers.h"
 #include "base/command_line.h"
+#include "base/test/scoped_command_line.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "build/branding_buildflags.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
@@ -20,6 +22,8 @@
 #include "chrome/browser/safe_browsing/cloud_content_scanning/multipart_uploader.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/enterprise/common/proto/connectors.pb.h"
+#include "components/safe_browsing/core/common/features.h"
+#include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_utils.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
@@ -60,7 +64,8 @@ class FakeMultipartUploadRequest : public MultipartUploadRequest {
   void Start() override {
     std::string serialized_response;
     response_.SerializeToString(&serialized_response);
-    std::move(callback_).Run(should_succeed_, serialized_response);
+    std::move(callback_).Run(should_succeed_, should_succeed_ ? 200 : 401,
+                             serialized_response);
   }
 
  private:
@@ -76,11 +81,22 @@ class FakeMultipartUploadRequestFactory : public MultipartUploadRequestFactory {
       enterprise_connectors::ContentAnalysisResponse response)
       : should_succeed_(should_succeed), response_(response) {}
 
-  std::unique_ptr<MultipartUploadRequest> Create(
+  std::unique_ptr<MultipartUploadRequest> CreateStringRequest(
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       const GURL& base_url,
       const std::string& metadata,
       const std::string& data,
+      const net::NetworkTrafficAnnotationTag& traffic_annotation,
+      MultipartUploadRequest::Callback callback) override {
+    return std::make_unique<FakeMultipartUploadRequest>(
+        should_succeed_, response_, std::move(callback));
+  }
+
+  std::unique_ptr<MultipartUploadRequest> CreateFileRequest(
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+      const GURL& base_url,
+      const std::string& metadata,
+      const base::FilePath& path,
       const net::NetworkTrafficAnnotationTag& traffic_annotation,
       MultipartUploadRequest::Callback callback) override {
     return std::make_unique<FakeMultipartUploadRequest>(
@@ -128,14 +144,16 @@ class BinaryUploadServiceTest : public testing::Test {
     fake_factory_ = FakeMultipartUploadRequestFactory(should_succeed, response);
   }
 
-  void ExpectInstanceID(std::string id) {
+  void ExpectInstanceID(std::string id, int times = 1) {
     EXPECT_CALL(*fcm_service_, GetInstanceID(_))
-        .WillOnce(
+        .Times(times)
+        .WillRepeatedly(
             Invoke([id](BinaryFCMService::GetInstanceIDCallback callback) {
               std::move(callback).Run(id);
             }));
     EXPECT_CALL(*fcm_service_, UnregisterInstanceID(id, _))
-        .WillOnce(
+        .Times(times)
+        .WillRepeatedly(
             Invoke([](const std::string& token,
                       BinaryFCMService::UnregisterInstanceIDCallback callback) {
               std::move(callback).Run(true);
@@ -158,7 +176,7 @@ class BinaryUploadServiceTest : public testing::Test {
   void ReceiveResponseFromUpload(BinaryUploadService::Request* request,
                                  bool success,
                                  const std::string& response) {
-    service_->OnUploadComplete(request, success, response);
+    service_->OnUploadComplete(request, success, success ? 200 : 401, response);
   }
 
   void ServiceWithNoFCMConnection() {
@@ -584,6 +602,38 @@ TEST_F(BinaryUploadServiceTest, AdvancedProtectionDlpRequestUnauthorized) {
   EXPECT_EQ(scanning_result, BinaryUploadService::Result::UNAUTHORIZED);
 }
 
+TEST_F(BinaryUploadServiceTest,
+       DeepScanESBEnabledEnhancedProtectionMalwareRequestAuthorized) {
+  safe_browsing::SetEnhancedProtectionPrefForTests(profile_.GetPrefs(),
+                                                   /*value*/ true);
+
+  BinaryUploadService::Result scanning_result =
+      BinaryUploadService::Result::UNKNOWN;
+  enterprise_connectors::ContentAnalysisResponse scanning_response;
+  std::unique_ptr<MockRequest> request =
+      MakeRequest(&scanning_result, &scanning_response, /*is_app*/ true);
+  request->add_tag("malware");
+
+  ExpectInstanceID("valid id");
+
+  enterprise_connectors::ContentAnalysisResponse simulated_response;
+
+  auto* malware_result = simulated_response.add_results();
+  malware_result->set_status(
+      enterprise_connectors::ContentAnalysisResponse::Result::SUCCESS);
+  malware_result->set_tag("malware");
+  ExpectNetworkResponse(true, simulated_response);
+
+  EXPECT_EQ(scanning_result, BinaryUploadService::Result::UNKNOWN);
+
+  UploadForDeepScanning(std::move(request),
+                        /*authorized_for_enterprise=*/false);
+
+  content::RunAllTasksUntilIdle();
+
+  EXPECT_EQ(scanning_result, BinaryUploadService::Result::SUCCESS);
+}
+
 TEST_F(BinaryUploadServiceTest, ConnectorUrlParams) {
   {
     MockRequest request(
@@ -674,6 +724,99 @@ TEST_F(BinaryUploadServiceTest, UrlOverride) {
                  "scan?device_token=fake_token&connector=OnFileAttached&tag="
                  "dlp&tag=malware"),
             request.GetUrlWithParams());
+}
+
+TEST_F(BinaryUploadServiceTest, GetUploadUrl) {
+  // testing enterprise scenario
+  ASSERT_EQ(safe_browsing::BinaryUploadService::GetUploadUrl(
+                /*is_consumer_scan_eligible */ false),
+            GURL("https://safebrowsing.google.com/safebrowsing/uploads/scan"));
+
+  // testing APP scenario with Deep Scanning for ESB Feature enabled
+  ASSERT_EQ(
+      safe_browsing::BinaryUploadService::GetUploadUrl(
+          /*is_consumer_scan_eligible */ true),
+      GURL("https://safebrowsing.google.com/safebrowsing/uploads/consumer"));
+}
+
+TEST_F(BinaryUploadServiceTest, RequestQueue) {
+  BinaryUploadService::Result scanning_result =
+      BinaryUploadService::Result::UNKNOWN;
+  enterprise_connectors::ContentAnalysisResponse scanning_response;
+  std::vector<MockRequest*> requests;
+
+  ExpectInstanceID("valid id",
+                   2 * BinaryUploadService::GetParallelActiveRequestsMax());
+  ExpectNetworkResponse(true, enterprise_connectors::ContentAnalysisResponse());
+
+  // Uploading 2*max requests before any response is received ensures that the
+  // queue is populated and processed correctly.
+  for (size_t i = 0;
+       i < 2 * BinaryUploadService::GetParallelActiveRequestsMax(); ++i) {
+    std::unique_ptr<MockRequest> request =
+        MakeRequest(&scanning_result, &scanning_response, /*is_app*/ false);
+    request->add_tag("dlp");
+    request->add_tag("malware");
+    requests.push_back(request.get());
+    UploadForDeepScanning(std::move(request));
+  }
+
+  content::RunAllTasksUntilIdle();
+
+  for (MockRequest* request : requests) {
+    enterprise_connectors::ContentAnalysisResponse simulated_response;
+    auto* dlp_result = simulated_response.add_results();
+    dlp_result->set_status(
+        enterprise_connectors::ContentAnalysisResponse::Result::SUCCESS);
+    dlp_result->set_tag("dlp");
+    auto* malware_result = simulated_response.add_results();
+    malware_result->set_status(
+        enterprise_connectors::ContentAnalysisResponse::Result::SUCCESS);
+    malware_result->set_tag("malware");
+    ReceiveMessageForRequest(request, simulated_response);
+  }
+  content::RunAllTasksUntilIdle();
+
+  EXPECT_EQ(scanning_result, BinaryUploadService::Result::SUCCESS);
+}
+
+TEST_F(BinaryUploadServiceTest, TestMaxParallelRequestsFlag) {
+  EXPECT_EQ(50UL, BinaryUploadService::GetParallelActiveRequestsMax());
+
+  {
+    base::test::ScopedCommandLine scoped_command_line;
+    scoped_command_line.GetProcessCommandLine()->AppendSwitchASCII(
+        "wp-max-parallel-active-requests", "10");
+    EXPECT_EQ(10UL, BinaryUploadService::GetParallelActiveRequestsMax());
+  }
+
+  {
+    base::test::ScopedCommandLine scoped_command_line;
+    scoped_command_line.GetProcessCommandLine()->AppendSwitchASCII(
+        "wp-max-parallel-active-requests", "100");
+    EXPECT_EQ(100UL, BinaryUploadService::GetParallelActiveRequestsMax());
+  }
+
+  {
+    base::test::ScopedCommandLine scoped_command_line;
+    scoped_command_line.GetProcessCommandLine()->AppendSwitchASCII(
+        "wp-max-parallel-active-requests", "0");
+    EXPECT_EQ(50UL, BinaryUploadService::GetParallelActiveRequestsMax());
+  }
+
+  {
+    base::test::ScopedCommandLine scoped_command_line;
+    scoped_command_line.GetProcessCommandLine()->AppendSwitchASCII(
+        "wp-max-parallel-active-requests", "foo");
+    EXPECT_EQ(50UL, BinaryUploadService::GetParallelActiveRequestsMax());
+  }
+
+  {
+    base::test::ScopedCommandLine scoped_command_line;
+    scoped_command_line.GetProcessCommandLine()->AppendSwitchASCII(
+        "wp-max-parallel-active-requests", "-1");
+    EXPECT_EQ(50UL, BinaryUploadService::GetParallelActiveRequestsMax());
+  }
 }
 
 }  // namespace safe_browsing

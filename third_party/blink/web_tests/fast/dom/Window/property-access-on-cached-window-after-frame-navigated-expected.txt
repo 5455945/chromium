@@ -1,8 +1,14 @@
-CONSOLE WARNING: line 148: 'window.webkitStorageInfo' is deprecated. Please use 'navigator.webkitTemporaryStorage' or 'navigator.webkitPersistentStorage' instead.
+CONSOLE WARNING: line 151: 'window.webkitStorageInfo' is deprecated. Please use 'navigator.webkitTemporaryStorage' or 'navigator.webkitPersistentStorage' instead.
 Tests property access on a cached DOMWindow after the associated frame is navigated. Test should not crash and properties read from the cached DOMWindow should be identical to properties through the 'current' DOMWindow.
 
 On success, you will see a series of "PASS" messages, followed by "TEST COMPLETE".
 
+PASS oldChildWindow.appHistory.canGoBack is newChildWindow.appHistory.canGoBack
+PASS oldChildWindow.appHistory.canGoForward is newChildWindow.appHistory.canGoForward
+PASS oldChildWindow.appHistory.current is newChildWindow.appHistory.current
+PASS oldChildWindow.appHistory.onnavigate is newChildWindow.appHistory.onnavigate
+PASS oldChildWindow.appHistory.onnavigateerror is newChildWindow.appHistory.onnavigateerror
+PASS oldChildWindow.appHistory.onnavigatesuccess is newChildWindow.appHistory.onnavigatesuccess
 PASS oldChildWindow.closed is newChildWindow.closed
 PASS oldChildWindow.cookieStore.onchange is newChildWindow.cookieStore.onchange
 PASS oldChildWindow.crossOriginIsolated is newChildWindow.crossOriginIsolated
@@ -34,13 +40,15 @@ PASS oldChildWindow.navigator.connection.onchange is newChildWindow.navigator.co
 PASS oldChildWindow.navigator.connection.ontypechange is newChildWindow.navigator.connection.ontypechange
 PASS oldChildWindow.navigator.connection.saveData is newChildWindow.navigator.connection.saveData
 PASS oldChildWindow.navigator.cookieEnabled is newChildWindow.navigator.cookieEnabled
-PASS oldChildWindow.navigator.device.onmanagedconfigurationchange is newChildWindow.navigator.device.onmanagedconfigurationchange
 PASS oldChildWindow.navigator.deviceMemory is newChildWindow.navigator.deviceMemory
+PASS oldChildWindow.navigator.devicePosture.onchange is newChildWindow.navigator.devicePosture.onchange
+PASS oldChildWindow.navigator.devicePosture.type is newChildWindow.navigator.devicePosture.type
 PASS oldChildWindow.navigator.doNotTrack is newChildWindow.navigator.doNotTrack
 PASS oldChildWindow.navigator.hardwareConcurrency is newChildWindow.navigator.hardwareConcurrency
 PASS oldChildWindow.navigator.hid.onconnect is newChildWindow.navigator.hid.onconnect
 PASS oldChildWindow.navigator.hid.ondisconnect is newChildWindow.navigator.hid.ondisconnect
 PASS oldChildWindow.navigator.language is newChildWindow.navigator.language
+PASS oldChildWindow.navigator.managed.onmanagedconfigurationchange is newChildWindow.navigator.managed.onmanagedconfigurationchange
 PASS oldChildWindow.navigator.maxTouchPoints is newChildWindow.navigator.maxTouchPoints
 PASS oldChildWindow.navigator.mediaDevices.ondevicechange is newChildWindow.navigator.mediaDevices.ondevicechange
 PASS oldChildWindow.navigator.mediaSession.metadata is newChildWindow.navigator.mediaSession.metadata
@@ -66,6 +74,7 @@ PASS oldChildWindow.navigator.userAgent is newChildWindow.navigator.userAgent
 PASS oldChildWindow.navigator.userAgentData.brands[0].brand is newChildWindow.navigator.userAgentData.brands[0].brand
 PASS oldChildWindow.navigator.userAgentData.brands[0].version is newChildWindow.navigator.userAgentData.brands[0].version
 PASS oldChildWindow.navigator.userAgentData.mobile is newChildWindow.navigator.userAgentData.mobile
+PASS oldChildWindow.navigator.userAgentData.platform is newChildWindow.navigator.userAgentData.platform
 PASS oldChildWindow.navigator.vendor is newChildWindow.navigator.vendor
 PASS oldChildWindow.navigator.vendorSub is newChildWindow.navigator.vendorSub
 PASS oldChildWindow.navigator.virtualKeyboard.boundingRect.bottom is newChildWindow.navigator.virtualKeyboard.boundingRect.bottom

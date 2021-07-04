@@ -31,6 +31,7 @@
 #include "chrome/browser/prefs/browser_prefs.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
+#include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
@@ -105,6 +106,10 @@ std::unique_ptr<TestingProfile> BuildTestingProfile(
   profile_builder.AddTestingFactories(
       IdentityTestEnvironmentProfileAdaptor::
           GetIdentityTestEnvironmentFactories());
+  // TODO(crbug.com/1222596): SyncService instantiation can be scoped down to
+  // a few derived fixtures.
+  profile_builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                                    SyncServiceFactory::GetDefaultFactory());
 
   profile_builder.SetPath(params.profile_path);
   return profile_builder.Build();
@@ -248,7 +253,7 @@ size_t ExtensionServiceTestBase::GetPrefKeyCount() {
     ADD_FAILURE();
     return 0;
   }
-  return dict->size();
+  return dict->DictSize();
 }
 
 void ExtensionServiceTestBase::ValidatePrefKeyCount(size_t count) {
@@ -343,8 +348,7 @@ void ExtensionServiceTestBase::SetUp() {
 
 void ExtensionServiceTestBase::TearDown() {
   if (profile_) {
-    auto* partition =
-        content::BrowserContext::GetDefaultStoragePartition(profile_.get());
+    auto* partition = profile_->GetDefaultStoragePartition();
     if (partition)
       partition->WaitForDeletionTasksForTesting();
   }

@@ -5,6 +5,7 @@
 #include "chrome/browser/ui/views/commander_frontend_views.h"
 
 #include "base/bind.h"
+#include "base/callback_helpers.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
@@ -20,10 +21,10 @@
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "content/public/browser/notification_service.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/views/controls/webview/unhandled_keyboard_event_handler.h"
 #include "ui/views/controls/webview/webview.h"
-#include "ui/views/metadata/metadata_header_macros.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 
@@ -92,8 +93,7 @@ CommanderFrontendViews::CommanderFrontendViews(
   profile_manager->CreateProfileAsync(
       ProfileManager::GetSystemProfilePath(),
       base::BindRepeating(&CommanderFrontendViews::OnSystemProfileAvailable,
-                          weak_ptr_factory_.GetWeakPtr()),
-      base::string16(), std::string());
+                          weak_ptr_factory_.GetWeakPtr()));
 #else
   // TODO(lgrey): ChromeOS doesn't have a system profile. Need to find
   // a better way to do this before Commander is hooked up, but doing
@@ -209,7 +209,7 @@ void CommanderFrontendViews::OnWidgetBoundsChanged(
   widget_->SetBounds(bounds);
 }
 
-void CommanderFrontendViews::OnTextChanged(const base::string16& text) {
+void CommanderFrontendViews::OnTextChanged(const std::u16string& text) {
   DCHECK(is_showing());
   backend_->OnTextChanged(text, browser_);
 }

@@ -121,7 +121,9 @@ class APP_LIST_MODEL_EXPORT AppListModel : public AppListItemListObserver {
   // Deletes all items. This is used in profile switches.
   void DeleteAllItems();
 
-  AppListItemList* top_level_item_list() { return top_level_item_list_.get(); }
+  AppListItemList* top_level_item_list() const {
+    return top_level_item_list_.get();
+  }
 
   AppListModelStatus status() const { return status_; }
 
@@ -164,7 +166,7 @@ class APP_LIST_MODEL_EXPORT AppListModel : public AppListItemListObserver {
   AppListState state_ = AppListState::kInvalidState;
   // The AppListView state. Controlled by the AppListView.
   AppListViewState state_fullscreen_ = AppListViewState::kClosed;
-  base::ObserverList<AppListModelObserver, true>::Unchecked observers_;
+  base::ObserverList<AppListModelObserver, true> observers_;
   base::ScopedMultiSourceObservation<AppListItemList, AppListItemListObserver>
       item_list_scoped_observations_{this};
   DISALLOW_COPY_AND_ASSIGN(AppListModel);

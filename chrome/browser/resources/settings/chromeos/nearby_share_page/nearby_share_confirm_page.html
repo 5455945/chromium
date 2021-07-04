@@ -77,7 +77,7 @@
     <nearby-page-template title="$i18n{nearbyShareReceiveConfirmPageTitle}"
         action-button-label="$i18n{nearbyShareActionsAccept}"
         action-button-event-name="accept"
-        cancel-button-label="$i18n{cancel}"
+        cancel-button-label="$i18n{nearbyShareActionsDecline}"
         cancel-button-event-name="reject"
         close-only="[[errorTitle_]]">
       <div id="centerContent" slot="content">
@@ -99,7 +99,7 @@
         </div>
 
         <!-- TODO(crbug.com/1149546) factor error section out -->
-        <template is="dom-if" if="[[errorTitle_]]">
+        <template is="dom-if" if="[[errorTitle_]]" restamp>
           <div id="errorSection">
             <iron-icon id="errorIcon" icon="nearby20:info"></iron-icon>
             <div id="error" role="alert" aria-labelledby="errorTitle"

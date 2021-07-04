@@ -171,9 +171,8 @@ class SavePackageBrowserTest : public ContentBrowserTest {
     ASSERT_TRUE(embedded_test_server()->Start());
     GURL url = embedded_test_server()->GetURL("/page_with_iframe.html");
     EXPECT_TRUE(NavigateToURL(shell(), url));
-    auto* download_manager =
-        static_cast<DownloadManagerImpl*>(BrowserContext::GetDownloadManager(
-            shell()->web_contents()->GetBrowserContext()));
+    auto* download_manager = static_cast<DownloadManagerImpl*>(
+        shell()->web_contents()->GetBrowserContext()->GetDownloadManager());
     auto delegate =
         std::make_unique<TestShellDownloadManagerDelegate>(save_page_type);
     delegate->download_dir_ = save_dir_.GetPath();
@@ -268,9 +267,8 @@ IN_PROC_BROWSER_TEST_F(SavePackageWebBundleBrowserTest, OnePageSimple) {
   GURL url = embedded_test_server()->GetURL(
       "/web_bundle/save_page_as_web_bundle/one_page_simple.html");
   EXPECT_TRUE(NavigateToURL(shell(), url));
-  auto* download_manager =
-      static_cast<DownloadManagerImpl*>(BrowserContext::GetDownloadManager(
-          shell()->web_contents()->GetBrowserContext()));
+  auto* download_manager = static_cast<DownloadManagerImpl*>(
+      shell()->web_contents()->GetBrowserContext()->GetDownloadManager());
   auto delegate = std::make_unique<TestShellDownloadManagerDelegate>(
       SAVE_PAGE_TYPE_AS_WEB_BUNDLE);
   delegate->download_dir_ = save_dir_.GetPath();
@@ -295,7 +293,7 @@ IN_PROC_BROWSER_TEST_F(SavePackageWebBundleBrowserTest, OnePageSimple) {
   download_manager->SetDelegate(old_delegate);
   EXPECT_TRUE(NavigateToURL(shell(), GURL("about:blank")));
 
-  base::string16 expected_title = base::ASCIIToUTF16("Hello");
+  std::u16string expected_title = u"Hello";
   TitleWatcher title_watcher(shell()->web_contents(), expected_title);
   EXPECT_TRUE(NavigateToURL(
       shell(), wbn_file_url,

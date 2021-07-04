@@ -11,7 +11,7 @@
 #include "base/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/system/sys_info.h"
-#include "chrome/browser/chromeos/login/ui/oobe_dialog_size_utils.h"
+#include "chrome/browser/ash/login/ui/oobe_dialog_size_utils.h"
 #include "chrome/browser/chromeos/multidevice_setup/multidevice_setup_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -31,7 +31,6 @@
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
-#include "net/base/url_util.h"
 #include "ui/aura/window.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/native_widget_types.h"
@@ -44,9 +43,6 @@ namespace {
 
 constexpr int kPreferredDialogHeightPx = 640;
 constexpr int kPreferredDialogWidthPx = 768;
-
-constexpr char kOobeDialogHeightParamKey[] = "dialog-height";
-constexpr char kOobeDialogWidthParamKey[] = "dialog-width";
 
 }  // namespace
 
@@ -66,9 +62,10 @@ void MultiDeviceSetupDialog::Show() {
   }
 
   current_instance_ = new MultiDeviceSetupDialog();
-  containing_window_ = chrome::ShowWebDialog(
-      nullptr /* parent */, ProfileManager::GetActiveUserProfile(),
-      current_instance_);
+  current_instance_->ShowSystemDialogForBrowserContext(
+      ProfileManager::GetActiveUserProfile(), nullptr);
+
+  containing_window_ = current_instance_->dialog_window();
 
   // Remove the black backdrop behind the dialog window which appears in tablet
   // and full-screen mode.
@@ -92,22 +89,12 @@ void MultiDeviceSetupDialog::AddOnCloseCallback(base::OnceClosure callback) {
 }
 
 MultiDeviceSetupDialog::MultiDeviceSetupDialog()
-    : SystemWebDialogDelegate(CreateMultiDeviceSetupURL(), base::string16()) {}
+    : SystemWebDialogDelegate(GURL(chrome::kChromeUIMultiDeviceSetupUrl),
+                              std::u16string()) {}
 
 MultiDeviceSetupDialog::~MultiDeviceSetupDialog() {
   for (auto& callback : on_close_callbacks_)
     std::move(callback).Run();
-}
-
-GURL MultiDeviceSetupDialog::CreateMultiDeviceSetupURL() {
-  GURL gurl(chrome::kChromeUIMultiDeviceSetupUrl);
-  gfx::Size size;
-  GetDialogSize(&size);
-  gurl = net::AppendQueryParameter(gurl, kOobeDialogHeightParamKey,
-                                   base::NumberToString(size.height()));
-  gurl = net::AppendQueryParameter(gurl, kOobeDialogWidthParamKey,
-                                   base::NumberToString(size.width()));
-  return gurl;
 }
 
 void MultiDeviceSetupDialog::GetDialogSize(gfx::Size* size) const {

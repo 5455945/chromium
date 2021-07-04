@@ -19,7 +19,7 @@ to set the default value. Can also be accessed through `try_.defaults`.
 
 load("./args.star", "args")
 load("./branches.star", "branches")
-load("./builders.star", "builders")
+load("./builders.star", "builders", "os", "os_category")
 
 DEFAULT_EXCLUDE_REGEXPS = [
     # Contains documentation that doesn't affect the outputs
@@ -46,7 +46,7 @@ def tryjob(
         add_default_excludes = True):
     """Specifies the details of a tryjob verifier.
 
-    See https://chromium.googlesource.com/infra/luci/luci-go/+/refs/heads/master/lucicfg/doc/README.md#luci.cq_tryjob_verifier
+    See https://chromium.googlesource.com/infra/luci/luci-go/+/HEAD/lucicfg/doc/README.md#luci.cq_tryjob_verifier
     for details on the most of the arguments.
 
     Arguments:
@@ -59,11 +59,10 @@ def tryjob(
       A struct that can be passed to the `tryjob` argument of `try_.builder` to
       enable the builder for CQ.
     """
-    if add_default_excludes:
-        location_regexp_exclude = DEFAULT_EXCLUDE_REGEXPS + (location_regexp_exclude or [])
     return struct(
         disable_reuse = disable_reuse,
         experiment_percentage = experiment_percentage,
+        add_default_excludes = add_default_excludes,
         location_regexp = location_regexp,
         location_regexp_exclude = location_regexp_exclude,
         cancel_stale = cancel_stale,
@@ -130,6 +129,14 @@ def try_builder(
                 test_id_regexp = "ninja://(chrome/test:|content/test:fuchsia_)telemetry_gpu_integration_test/.+",
             ),
         ),
+        resultdb.export_test_results(
+            bq_table = "chrome-luci-data.chromium.blink_web_tests_try_test_results",
+            predicate = resultdb.test_result_predicate(
+                # Match the "blink_web_tests" target and all of its
+                # flag-specific versions, e.g. "vulkan_swiftshader_blink_web_tests".
+                test_id_regexp = "ninja://[^/]*blink_web_tests/.+",
+            ),
+        ),
     ]
     merged_resultdb_bigquery_exports.extend(
         defaults.get_value(
@@ -151,6 +158,18 @@ def try_builder(
     if subproject_list_view:
         list_view.append(subproject_list_view)
 
+    # in CQ/try, disable ATS on windows. http://b/183895446
+    goma_enable_ats = defaults.get_value_from_kwargs("goma_enable_ats", kwargs)
+    os = defaults.get_value_from_kwargs("os", kwargs)
+    if os and os.category == os_category.WINDOWS:
+        if goma_enable_ats == args.COMPUTE:
+            kwargs["goma_enable_ats"] = False
+        if kwargs["goma_enable_ats"] != False:
+            fail("Try Windows builder {} must disable ATS".format(name))
+
+    # TODO(crbug.com/1143122): remove this after migration.
+    experiments["use_rbe_cas"] = 5
+
     # Define the builder first so that any validation of luci.builder arguments
     # (e.g. bucket) occurs before we try to use it
     builders.builder(
@@ -167,13 +186,17 @@ def try_builder(
     builder = "{}/{}".format(bucket, name)
     cq_group = defaults.get_value("cq_group", cq_group)
     if tryjob != None:
+        location_regexp_exclude = tryjob.location_regexp_exclude
+        if tryjob.add_default_excludes:
+            location_regexp_exclude = DEFAULT_EXCLUDE_REGEXPS + (location_regexp_exclude or [])
+
         luci.cq_tryjob_verifier(
             builder = builder,
             cq_group = cq_group,
             disable_reuse = tryjob.disable_reuse,
             experiment_percentage = tryjob.experiment_percentage,
             location_regexp = tryjob.location_regexp,
-            location_regexp_exclude = tryjob.location_regexp_exclude,
+            location_regexp_exclude = location_regexp_exclude,
             cancel_stale = tryjob.cancel_stale,
         )
     else:
@@ -185,6 +208,7 @@ def try_builder(
         )
 
 def blink_builder(*, name, goma_backend = None, **kwargs):
+    kwargs.setdefault("os", builders.os.LINUX_BIONIC_REMOVE)
     return try_builder(
         name = name,
         builder_group = "tryserver.blink",
@@ -209,6 +233,7 @@ def blink_mac_builder(
     )
 
 def chromium_builder(*, name, **kwargs):
+    kwargs.setdefault("os", builders.os.LINUX_BIONIC_REMOVE)
     return try_builder(
         name = name,
         builder_group = "tryserver.chromium",
@@ -218,6 +243,7 @@ def chromium_builder(*, name, **kwargs):
     )
 
 def chromium_android_builder(*, name, **kwargs):
+    kwargs.setdefault("os", os.LINUX_BIONIC_REMOVE)
     return try_builder(
         name = name,
         builder_group = "tryserver.chromium.android",
@@ -264,6 +290,7 @@ def chromium_angle_ios_builder(*, name, **kwargs):
     )
 
 def chromium_chromiumos_builder(*, name, **kwargs):
+    kwargs.setdefault("os", builders.os.LINUX_BIONIC_REMOVE)
     return try_builder(
         name = name,
         builder_group = "tryserver.chromium.chromiumos",
@@ -283,6 +310,7 @@ def chromium_dawn_builder(*, name, **kwargs):
     )
 
 def chromium_linux_builder(*, name, goma_backend = builders.goma.backend.RBE_PROD, **kwargs):
+    kwargs.setdefault("os", builders.os.LINUX_BIONIC_REMOVE)
     return try_builder(
         name = name,
         builder_group = "tryserver.chromium.linux",
@@ -314,7 +342,7 @@ def chromium_mac_ios_builder(
         name,
         executable = "recipe:chromium_trybot",
         goma_backend = builders.goma.backend.RBE_PROD,
-        os = builders.os.MAC_10_15,
+        os = builders.os.MAC_11,
         xcode = builders.xcode.x12d4e,
         **kwargs):
     return try_builder(
@@ -344,7 +372,7 @@ def chromium_swangle_linux_builder(*, name, **kwargs):
     return chromium_swangle_builder(
         name = name,
         goma_backend = builders.goma.backend.RBE_PROD,
-        os = builders.os.LINUX_DEFAULT,
+        os = builders.os.LINUX_BIONIC_REMOVE,
         **kwargs
     )
 
@@ -446,6 +474,7 @@ def gpu_chromium_android_builder(*, name, **kwargs):
         name = name,
         builder_group = "tryserver.chromium.android",
         goma_backend = builders.goma.backend.RBE_PROD,
+        os = builders.os.LINUX_BIONIC_REMOVE,
         **kwargs
     )
 
@@ -454,6 +483,7 @@ def gpu_chromium_linux_builder(*, name, **kwargs):
         name = name,
         builder_group = "tryserver.chromium.linux",
         goma_backend = builders.goma.backend.RBE_PROD,
+        os = builders.os.LINUX_BIONIC_REMOVE,
         **kwargs
     )
 
@@ -473,6 +503,47 @@ def gpu_chromium_win_builder(*, name, os = builders.os.WINDOWS_ANY, **kwargs):
         builder_group = "tryserver.chromium.win",
         goma_backend = builders.goma.backend.RBE_PROD,
         os = os,
+        **kwargs
+    )
+
+def infra_builder(
+        *,
+        name,
+        goma_backend = builders.goma.backend.RBE_PROD,
+        os = builders.os.LINUX_BIONIC_REMOVE,
+        **kwargs):
+    return try_builder(
+        name = name,
+        builder_group = "tryserver.infra",
+        goma_backend = goma_backend,
+        os = os,
+        **kwargs
+    )
+
+def presubmit_builder(*, name, tryjob, os = builders.os.LINUX_BIONIC_SWITCH_TO_DEFAULT, **kwargs):
+    """Define a presubmit builder.
+
+    Presubmit builders are builders that run fast checks that don't require
+    building. Their results aren't re-used because they tend to provide guards
+    against generated files being out of date, so they MUST run quickly so that
+    the submit after a CQ dry run doesn't take long.
+    """
+    tryjob_args = {a: getattr(tryjob, a) for a in dir(tryjob)}
+    tryjob_args["disable_reuse"] = True
+    tryjob_args["add_default_excludes"] = False
+    tryjob = try_.job(**tryjob_args)
+
+    return try_builder(
+        name = name,
+        list_view = "presubmit",
+        main_list_view = "try",
+        os = os,
+        # Default priority for buildbucket is 30, see
+        # https://chromium.googlesource.com/infra/infra/+/bb68e62b4380ede486f65cd32d9ff3f1bbe288e4/appengine/cr-buildbucket/creation.py#42
+        # This will improve our turnaround time for landing infra/config changes
+        # when addressing outages
+        priority = 25,
+        tryjob = tryjob,
         **kwargs
     )
 
@@ -509,4 +580,6 @@ try_ = struct(
     gpu_chromium_linux_builder = gpu_chromium_linux_builder,
     gpu_chromium_mac_builder = gpu_chromium_mac_builder,
     gpu_chromium_win_builder = gpu_chromium_win_builder,
+    infra_builder = infra_builder,
+    presubmit_builder = presubmit_builder,
 )

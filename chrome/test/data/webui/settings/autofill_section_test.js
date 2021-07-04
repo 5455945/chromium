@@ -119,18 +119,20 @@ function createRemoveAddressDialog(autofillManager) {
   assertTrue(!!row);
 
   // Simulate clicking the 'Remove' button in the menu.
-  assertTrue(!!section.$$('#addressMenu'));
-  section.$$('#addressMenu').click();
+  assertTrue(!!section.shadowRoot.querySelector('#addressMenu'));
+  section.shadowRoot.querySelector('#addressMenu').click();
   flush();
 
-  assertTrue(!!section.$$('#menuRemoveAddress'));
-  assertFalse(!!section.$$('settings-address-remove-confirmation-dialog'));
-  section.$$('#menuRemoveAddress').click();
+  assertTrue(!!section.shadowRoot.querySelector('#menuRemoveAddress'));
+  assertFalse(!!section.shadowRoot.querySelector(
+      'settings-address-remove-confirmation-dialog'));
+  section.shadowRoot.querySelector('#menuRemoveAddress').click();
   flush();
 
-  assertTrue(!!section.$$('settings-address-remove-confirmation-dialog'));
-  const removeAddressDialog =
-      section.$$('settings-address-remove-confirmation-dialog');
+  assertTrue(!!section.shadowRoot.querySelector(
+      'settings-address-remove-confirmation-dialog'));
+  const removeAddressDialog = section.shadowRoot.querySelector(
+      'settings-address-remove-confirmation-dialog');
   return removeAddressDialog;
 }
 
@@ -141,11 +143,13 @@ suite('AutofillSectionUiTest', function() {
     section.prefs = {autofill: {profile_enabled: {}}};
     document.body.appendChild(section);
 
-    assertFalse(!!section.$$('#autofillExtensionIndicator'));
+    assertFalse(
+        !!section.shadowRoot.querySelector('#autofillExtensionIndicator'));
     section.set('prefs.autofill.profile_enabled.extensionId', 'test-id');
     flush();
 
-    assertTrue(!!section.$$('#autofillExtensionIndicator'));
+    assertTrue(
+        !!section.shadowRoot.querySelector('#autofillExtensionIndicator'));
   });
 });
 
@@ -191,8 +195,9 @@ suite('AutofillSectionAddressTests', function() {
     assertEquals(1, addressList.children.length);
 
     assertFalse(section.$.noAddressesLabel.hidden);
-    assertFalse(section.$$('#addAddress').disabled);
-    assertFalse(section.$$('#autofillProfileToggle').disabled);
+    assertFalse(section.shadowRoot.querySelector('#addAddress').disabled);
+    assertFalse(
+        section.shadowRoot.querySelector('#autofillProfileToggle').disabled);
   });
 
   test('verifyAddressCount', function() {
@@ -213,16 +218,18 @@ suite('AutofillSectionAddressTests', function() {
         addresses.length, addressList.querySelectorAll('.list-item').length);
 
     assertTrue(section.$.noAddressesLabel.hidden);
-    assertFalse(section.$$('#autofillProfileToggle').disabled);
-    assertFalse(section.$$('#addAddress').disabled);
+    assertFalse(
+        section.shadowRoot.querySelector('#autofillProfileToggle').disabled);
+    assertFalse(section.shadowRoot.querySelector('#addAddress').disabled);
   });
 
   test('verifyAddressDisabled', function() {
     const section =
         createAutofillSection([], {profile_enabled: {value: false}});
 
-    assertFalse(section.$$('#autofillProfileToggle').disabled);
-    assertTrue(section.$$('#addAddress').hidden);
+    assertFalse(
+        section.shadowRoot.querySelector('#autofillProfileToggle').disabled);
+    assertTrue(section.shadowRoot.querySelector('#addAddress').hidden);
   });
 
   test('verifyAddressFields', function() {
@@ -257,24 +264,24 @@ suite('AutofillSectionAddressTests', function() {
     menuButton.click();
     flush();
 
-    assertTrue(!!section.$$('#menuEditAddress'));
-    assertTrue(!!section.$$('#menuRemoveAddress'));
+    assertTrue(!!section.shadowRoot.querySelector('#menuEditAddress'));
+    assertTrue(!!section.shadowRoot.querySelector('#menuRemoveAddress'));
   });
 
   test('verifyAddAddressDialog', function() {
-    return createAddressDialog(createEmptyAddressEntry())
-        .then(function(dialog) {
-          const title = dialog.$$('[slot=title]');
-          assertEquals(
-              loadTimeData.getString('addAddressTitle'), title.textContent);
-          // Shouldn't be possible to save until something is typed in.
-          assertTrue(dialog.$.saveButton.disabled);
-        });
+    const address = createEmptyAddressEntry();
+    return createAddressDialog(address).then(function(dialog) {
+      const title = dialog.shadowRoot.querySelector('[slot=title]');
+      assertEquals(
+          loadTimeData.getString('addAddressTitle'), title.textContent);
+      // A country is preselected.
+      assertTrue(!!address.countryCode);
+    });
   });
 
   test('verifyEditAddressDialog', function() {
     return createAddressDialog(createAddressEntry()).then(function(dialog) {
-      const title = dialog.$$('[slot=title]');
+      const title = dialog.shadowRoot.querySelector('[slot=title]');
       assertEquals(
           loadTimeData.getString('editAddressTitle'), title.textContent);
       // Should be possible to save when editing because fields are
@@ -297,10 +304,11 @@ suite('AutofillSectionAddressTests', function() {
     const removeAddressDialog = createRemoveAddressDialog(autofillManager);
 
     // Wait for the dialog to open.
-    await whenAttributeIs(removeAddressDialog.$$('#dialog'), 'open', '');
+    await whenAttributeIs(
+        removeAddressDialog.shadowRoot.querySelector('#dialog'), 'open', '');
 
-    assertTrue(!!removeAddressDialog.$$('#remove'));
-    removeAddressDialog.$$('#remove').click();
+    assertTrue(!!removeAddressDialog.shadowRoot.querySelector('#remove'));
+    removeAddressDialog.shadowRoot.querySelector('#remove').click();
 
     // Wait for the dialog to close.
     await eventToPromise('close', removeAddressDialog);
@@ -318,10 +326,11 @@ suite('AutofillSectionAddressTests', function() {
     const removeAddressDialog = createRemoveAddressDialog(autofillManager);
 
     // Wait for the dialog to open.
-    await whenAttributeIs(removeAddressDialog.$$('#dialog'), 'open', '');
+    await whenAttributeIs(
+        removeAddressDialog.shadowRoot.querySelector('#dialog'), 'open', '');
 
-    assertTrue(!!removeAddressDialog.$$('#cancel'));
-    removeAddressDialog.$$('#cancel').click();
+    assertTrue(!!removeAddressDialog.shadowRoot.querySelector('#cancel'));
+    removeAddressDialog.shadowRoot.querySelector('#cancel').click();
 
     // Wait for the dialog to close.
     await eventToPromise('close', removeAddressDialog);
@@ -336,14 +345,15 @@ suite('AutofillSectionAddressTests', function() {
   test('verifyCountryIsSaved', function() {
     const address = createEmptyAddressEntry();
     return createAddressDialog(address).then(function(dialog) {
-      const countrySelect = dialog.$$('select');
-      assertEquals('', countrySelect.value);
-      assertEquals(undefined, address.countryCode);
-      countrySelect.value = 'US';
-      countrySelect.dispatchEvent(new CustomEvent('change'));
-      flush();
+      const countrySelect = dialog.shadowRoot.querySelector('select');
+      // The country should be pre-selected.
       assertEquals('US', countrySelect.value);
       assertEquals('US', address.countryCode);
+      countrySelect.value = 'GB';
+      countrySelect.dispatchEvent(new CustomEvent('change'));
+      flush();
+      assertEquals('GB', countrySelect.value);
+      assertEquals('GB', address.countryCode);
     });
   });
 
@@ -421,71 +431,61 @@ suite('AutofillSectionAddressTests', function() {
   // Test will set a value of 'foo' in each text field and verify that the
   // save button is enabled, then it will clear the field and verify that the
   // save button is disabled. Test passes after all elements have been tested.
-  test('verifySaveIsNotClickableIfAllInputFieldsAreEmpty', function() {
-    return createAddressDialog(createEmptyAddressEntry())
-        .then(function(dialog) {
-          const saveButton = dialog.$.saveButton;
-          const testElements =
-              dialog.$.dialog.querySelectorAll('settings-textarea, cr-input');
+  test('verifySaveIsNotClickableIfAllInputFieldsAreEmpty', async function() {
+    const dialog = await createAddressDialog(createEmptyAddressEntry());
+    const saveButton = dialog.$.saveButton;
+    const testElements =
+        dialog.$.dialog.querySelectorAll('settings-textarea, cr-input');
 
-          // Default country is 'US' expecting: Honorific, Name, Organization,
-          // Street address, City, State, ZIP code, Phone, and Email.
-          // Unless Company name or honorific is disabled.
-          const company_enabled = loadTimeData.getBoolean('EnableCompanyName');
-          const honorific_enabled = loadTimeData.getBoolean('showHonorific');
-          assertEquals(
-              7 + (company_enabled ? 1 : 0) + (honorific_enabled ? 1 : 0),
-              testElements.length);
+    // The country can be preselected. Clear it to ensure the form is empty.
+    await expectEvent(dialog, 'on-update-can-save', function() {
+      const countrySelect = dialog.shadowRoot.querySelector('select');
+      countrySelect.value = '';
+      countrySelect.dispatchEvent(new CustomEvent('change'));
+    });
 
-          return asyncForEach(testElements, function(element) {
-            return expectEvent(
-                       dialog, 'on-update-can-save',
-                       function() {
-                         assertTrue(saveButton.disabled);
-                         element.value = 'foo';
-                       })
-                .then(function() {
-                  return expectEvent(dialog, 'on-update-can-save', function() {
-                    assertFalse(saveButton.disabled);
-                    element.value = '';
-                  });
-                })
-                .then(function() {
-                  assertTrue(saveButton.disabled);
-                });
-          });
-        });
+    // Default country is 'US' expecting: Honorific, Name, Organization,
+    // Street address, City, State, ZIP code, Phone, and Email.
+    // Unless Company name or honorific is disabled.
+    const company_enabled = loadTimeData.getBoolean('EnableCompanyName');
+    const honorific_enabled = loadTimeData.getBoolean('showHonorific');
+    assertEquals(
+        7 + (company_enabled ? 1 : 0) + (honorific_enabled ? 1 : 0),
+        testElements.length);
+
+    assertTrue(saveButton.disabled);
+    await asyncForEach(testElements, async function(element) {
+      await expectEvent(dialog, 'on-update-can-save', function() {
+        element.value = 'foo';
+      });
+      assertFalse(saveButton.disabled);
+      await expectEvent(dialog, 'on-update-can-save', function() {
+        element.value = '';
+      });
+      assertTrue(saveButton.disabled);
+    });
   });
 
   // Setting the country should allow the address to be saved.
-  test('verifySaveIsNotClickableIfCountryNotSet', function() {
-    let dialog = null;
-
+  test('verifySaveIsNotClickableIfCountryNotSet', async function() {
     const simulateCountryChange = function(countryCode) {
-      const countrySelect = dialog.$$('select');
+      const countrySelect = dialog.shadowRoot.querySelector('select');
       countrySelect.value = countryCode;
       countrySelect.dispatchEvent(new CustomEvent('change'));
     };
 
-    return createAddressDialog(createEmptyAddressEntry())
-        .then(function(d) {
-          dialog = d;
-          assertTrue(dialog.$.saveButton.disabled);
+    const dialog = await createAddressDialog(createEmptyAddressEntry());
+    // A country code is preselected.
+    assertFalse(dialog.$.saveButton.disabled);
+    assertEquals(dialog.address.countryCode, 'US');
 
-          return expectEvent(
-              dialog, 'on-update-can-save',
-              simulateCountryChange.bind(null, 'US'));
-        })
-        .then(function() {
-          assertFalse(dialog.$.saveButton.disabled);
+    await expectEvent(
+        dialog, 'on-update-can-save', simulateCountryChange.bind(null, 'GB'));
+    assertFalse(dialog.$.saveButton.disabled);
 
-          return expectEvent(
-              dialog, 'on-update-can-save',
-              simulateCountryChange.bind(null, ''));
-        })
-        .then(function() {
-          assertTrue(dialog.$.saveButton.disabled);
-        });
+    await expectEvent(
+        dialog, 'on-update-can-save', simulateCountryChange.bind(null, ''));
+    assertTrue(dialog.$.saveButton.disabled);
   });
 
   // Test will timeout if save-address event is not fired.
@@ -777,7 +777,7 @@ suite('AutofillSectionAddressLocaleTests', function() {
       const city = 'Los Angeles';
       const state = 'CA';
       const zip = '90291';
-      const countrySelect = dialog.$$('select');
+      const countrySelect = dialog.shadowRoot.querySelector('select');
 
       return expectEvent(
                  dialog, 'on-update-address-wrapper',

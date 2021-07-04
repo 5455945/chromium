@@ -18,14 +18,14 @@
 #include "base/time/time.h"
 #include "chrome/browser/password_manager/account_password_store_factory.h"
 #include "chrome/browser/password_manager/password_store_factory.h"
-#include "chrome/browser/sync/profile_sync_service_factory.h"
-#include "chrome/browser/sync/test/integration/profile_sync_service_harness.h"
 #include "chrome/browser/sync/test/integration/sync_datatype_helper.h"
 #include "components/password_manager/core/browser/insecure_credentials_consumer.h"
 #include "components/password_manager/core/browser/password_manager_test_utils.h"
 #include "components/password_manager/core/browser/password_store.h"
 #include "components/password_manager/core/browser/password_store_consumer.h"
+#include "components/password_manager/core/browser/password_store_interface.h"
 #include "components/sync/engine/loopback_server/persistent_unique_client_entity.h"
+#include "components/sync/engine/nigori/key_derivation_params.h"
 #include "components/sync/nigori/cryptographer_impl.h"
 #include "content/public/test/test_utils.h"
 #include "net/base/escape.h"
@@ -34,6 +34,7 @@
 using password_manager::InsecureCredential;
 using password_manager::PasswordForm;
 using password_manager::PasswordStore;
+using password_manager::PasswordStoreInterface;
 using sync_datatype_helper::test;
 
 namespace {
@@ -209,16 +210,18 @@ void UpdateLoginWithPrimaryKey(PasswordStore* store,
   wait_event.Wait();
 }
 
-std::vector<std::unique_ptr<PasswordForm>> GetLogins(PasswordStore* store) {
+std::vector<std::unique_ptr<PasswordForm>> GetLogins(
+    PasswordStoreInterface* store) {
   EXPECT_TRUE(store);
-  password_manager::PasswordStore::FormDigest matcher_form = {
+  password_manager::PasswordFormDigest matcher_form = {
       PasswordForm::Scheme::kHtml, kFakeSignonRealm, GURL()};
   PasswordStoreConsumerHelper consumer;
   store->GetLogins(matcher_form, &consumer);
   return consumer.WaitForResult();
 }
 
-std::vector<std::unique_ptr<PasswordForm>> GetAllLogins(PasswordStore* store) {
+std::vector<std::unique_ptr<PasswordForm>> GetAllLogins(
+    PasswordStoreInterface* store) {
   EXPECT_TRUE(store);
   PasswordStoreConsumerHelper consumer;
   store->GetAllLogins(&consumer);
@@ -233,21 +236,11 @@ std::vector<InsecureCredential> GetAllInsecureCredentials(
   return consumer.WaitForResult();
 }
 
-void RemoveLogin(PasswordStore* store, const PasswordForm& form) {
-  ASSERT_TRUE(store);
-  base::WaitableEvent wait_event(
-      base::WaitableEvent::ResetPolicy::MANUAL,
-      base::WaitableEvent::InitialState::NOT_SIGNALED);
-  store->RemoveLogin(form);
-  store->ScheduleTask(base::BindOnce(&PasswordStoreCallback, &wait_event));
-  wait_event.Wait();
-}
-
-void RemoveLogins(PasswordStore* store) {
-  std::vector<std::unique_ptr<PasswordForm>> forms = GetLogins(store);
-  for (const auto& form : forms) {
-    RemoveLogin(store, *form);
-  }
+void RemoveLogins(PasswordStoreInterface* store) {
+  // Null Time values enforce unbounded deletion in both direction
+  store->RemoveLoginsCreatedBetween(/*delete_begin=*/base::Time(),
+                                    /*delete_end=*/base::Time::Max(),
+                                    /*completion=*/base::NullCallback());
 }
 
 void RemoveInsecureCredentials(PasswordStore* store,
@@ -270,7 +263,19 @@ PasswordStore* GetPasswordStore(int index) {
       .get();
 }
 
+PasswordStoreInterface* GetProfilePasswordStoreInterface(int index) {
+  return PasswordStoreFactory::GetForProfile(test()->GetProfile(index),
+                                             ServiceAccessType::IMPLICIT_ACCESS)
+      .get();
+}
+
 PasswordStore* GetVerifierPasswordStore() {
+  return PasswordStoreFactory::GetForProfile(test()->verifier(),
+                                             ServiceAccessType::IMPLICIT_ACCESS)
+      .get();
+}
+
+PasswordStoreInterface* GetVerifierProfilePasswordStoreInterface() {
   return PasswordStoreFactory::GetForProfile(test()->verifier(),
                                              ServiceAccessType::IMPLICIT_ACCESS)
       .get();
@@ -282,11 +287,17 @@ PasswordStore* GetAccountPasswordStore(int index) {
       .get();
 }
 
+PasswordStoreInterface* GetAccountPasswordStoreInterface(int index) {
+  return AccountPasswordStoreFactory::GetForProfile(
+             test()->GetProfile(index), ServiceAccessType::IMPLICIT_ACCESS)
+      .get();
+}
+
 bool ProfileContainsSamePasswordFormsAsVerifier(int index) {
   std::vector<std::unique_ptr<PasswordForm>> verifier_forms =
-      GetLogins(GetVerifierPasswordStore());
+      GetLogins(GetVerifierProfilePasswordStoreInterface());
   std::vector<std::unique_ptr<PasswordForm>> forms =
-      GetLogins(GetPasswordStore(index));
+      GetLogins(GetProfilePasswordStoreInterface(index));
   ClearSyncDateField(&forms);
 
   std::ostringstream mismatch_details_stream;
@@ -302,9 +313,9 @@ bool ProfileContainsSamePasswordFormsAsVerifier(int index) {
 
 bool ProfilesContainSamePasswordForms(int index_a, int index_b) {
   std::vector<std::unique_ptr<PasswordForm>> forms_a =
-      GetLogins(GetPasswordStore(index_a));
+      GetLogins(GetProfilePasswordStoreInterface(index_a));
   std::vector<std::unique_ptr<PasswordForm>> forms_b =
-      GetLogins(GetPasswordStore(index_b));
+      GetLogins(GetProfilePasswordStoreInterface(index_b));
   ClearSyncDateField(&forms_a);
   ClearSyncDateField(&forms_b);
 
@@ -359,11 +370,11 @@ bool AllProfilesContainSameInsecurePasswords() {
 }
 
 int GetPasswordCount(int index) {
-  return GetLogins(GetPasswordStore(index)).size();
+  return GetLogins(GetProfilePasswordStoreInterface(index)).size();
 }
 
 int GetVerifierPasswordCount() {
-  return GetLogins(GetVerifierPasswordStore()).size();
+  return GetLogins(GetVerifierProfilePasswordStoreInterface()).size();
 }
 
 PasswordForm CreateTestPasswordForm(int index) {
@@ -435,7 +446,7 @@ void InjectKeystoreEncryptedServerPassword(
 }  // namespace passwords_helper
 
 PasswordSyncActiveChecker::PasswordSyncActiveChecker(
-    syncer::ProfileSyncService* service)
+    syncer::SyncServiceImpl* service)
     : SingleClientStatusChangeChecker(service) {}
 PasswordSyncActiveChecker::~PasswordSyncActiveChecker() = default;
 
@@ -458,7 +469,7 @@ SamePasswordFormsChecker::~SamePasswordFormsChecker() = default;
 //
 // This function indirectly calls GetLogins(), which starts a RunLoop on the UI
 // thread.  This can be a problem, since the next task to execute could very
-// well contain a ProfileSyncService::OnStateChanged() event, which would
+// well contain a SyncServiceObserver::OnStateChanged() event, which would
 // trigger another call to this here function, and start another layer of
 // nested RunLoops.  That makes the StatusChangeChecker's Quit() method
 // ineffective.
@@ -561,7 +572,8 @@ bool PasswordFormsChecker::IsExitConditionSatisfied(std::ostream* os) {
 
 bool PasswordFormsChecker::IsExitConditionSatisfiedImpl(std::ostream* os) {
   std::vector<std::unique_ptr<PasswordForm>> forms =
-      passwords_helper::GetLogins(passwords_helper::GetPasswordStore(index_));
+      passwords_helper::GetLogins(
+          passwords_helper::GetProfilePasswordStoreInterface(index_));
   ClearSyncDateField(&forms);
 
   std::ostringstream mismatch_details_stream;

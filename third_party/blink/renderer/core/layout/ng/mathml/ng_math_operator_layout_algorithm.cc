@@ -91,7 +91,7 @@ scoped_refptr<const NGLayoutResult> NGMathOperatorLayoutAlgorithm::Layout() {
 }
 
 MinMaxSizesResult NGMathOperatorLayoutAlgorithm::ComputeMinMaxSizes(
-    const MinMaxSizesInput& input) const {
+    const MinMaxSizesFloatInput&) const {
   // TODO(http://crbug.com/1124301) Implement stretchy operators.
 
   MinMaxSizes sizes;
@@ -103,7 +103,7 @@ MinMaxSizesResult NGMathOperatorLayoutAlgorithm::ComputeMinMaxSizes(
   sizes.Encompass(LayoutUnit(metrics.advance));
 
   sizes += BorderScrollbarPadding().InlineSum();
-  return MinMaxSizesResult(sizes, /* depends_on_percentage_block_size */ false);
+  return MinMaxSizesResult(sizes, /* depends_on_block_constraints */ false);
 }
 
 UChar32 NGMathOperatorLayoutAlgorithm::GetBaseCodePoint() const {

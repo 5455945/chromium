@@ -15,6 +15,7 @@
 #include "base/time/clock.h"
 #include "chromeos/components/drivefs/mojom/drivefs.mojom.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace network {
 class NetworkConnectionTracker;
@@ -42,7 +43,7 @@ class COMPONENT_EXPORT(DRIVEFS) DriveFsSearch {
       drivefs::mojom::QueryParametersPtr query,
       mojom::SearchQuery::GetNextPageCallback callback,
       drive::FileError error,
-      base::Optional<std::vector<drivefs::mojom::QueryItemPtr>> items);
+      absl::optional<std::vector<drivefs::mojom::QueryItemPtr>> items);
 
   mojom::DriveFs* const drivefs_;
   network::NetworkConnectionTracker* const network_connection_tracker_;

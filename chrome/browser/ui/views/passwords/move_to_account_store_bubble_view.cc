@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/passwords/move_to_account_store_bubble_view.h"
+
 #include <algorithm>
 
 #include "base/bind.h"
@@ -11,14 +12,16 @@
 #include "chrome/browser/profiles/profile_avatar_icon_util.h"
 #include "chrome/browser/ui/passwords/bubble_controllers/move_to_account_store_bubble_controller.h"
 #include "chrome/browser/ui/passwords/passwords_model_delegate.h"
-#include "chrome/browser/ui/views/accessibility/theme_tracking_non_accessible_image_view.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/theme_resources.h"
 #include "components/password_manager/core/common/password_manager_features.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/canvas.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/favicon_size.h"
 #include "ui/gfx/image/canvas_image_source.h"
@@ -31,8 +34,6 @@
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/layout/layout_provider.h"
-#include "ui/views/metadata/metadata_header_macros.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/view_class_properties.h"
 
@@ -46,7 +47,7 @@ class BackgroundBorderAdderImageSource : public gfx::CanvasImageSource {
  public:
   BackgroundBorderAdderImageSource(const gfx::ImageSkia& image,
                                    bool add_background,
-                                   base::Optional<SkColor> background_color,
+                                   absl::optional<SkColor> background_color,
                                    SkColor border_color,
                                    int radius)
       : gfx::CanvasImageSource(gfx::Size(radius, radius)),
@@ -61,7 +62,7 @@ class BackgroundBorderAdderImageSource : public gfx::CanvasImageSource {
  private:
   const gfx::ImageSkia image_;
   const bool add_background_;
-  const base::Optional<SkColor> background_color_;
+  const absl::optional<SkColor> background_color_;
   const SkColor border_color_;
 };
 
@@ -115,8 +116,8 @@ class ImageWithBadge : public views::ImageView {
   void Render();
 
   const gfx::VectorIcon* main_vector_icon_ = nullptr;
-  base::Optional<gfx::ImageSkia> main_image_skia_;
-  base::Optional<gfx::ImageSkia> badge_image_skia_;
+  absl::optional<gfx::ImageSkia> main_image_skia_;
+  absl::optional<gfx::ImageSkia> badge_image_skia_;
 };
 
 ImageWithBadge::ImageWithBadge(const gfx::ImageSkia& main_image)
@@ -176,7 +177,7 @@ void ImageWithBadge::Render() {
   gfx::ImageSkia main_image_with_border =
       gfx::CanvasImageSource::MakeImageSkia<BackgroundBorderAdderImageSource>(
           GetMainImage(), /*add_background=*/false,
-          /*background_color=*/base::nullopt, kBorderColor, kImageSize);
+          /*background_color=*/absl::nullopt, kBorderColor, kImageSize);
 
   gfx::ImageSkia badged_image = gfx::ImageSkiaOperations::CreateIconWithBadge(
       main_image_with_border, rounded_badge_with_background_and_border);
@@ -311,27 +312,8 @@ void MoveToAccountStoreBubbleView::AddedToWidget() {
   static_cast<views::Label*>(GetBubbleFrameView()->title())
       ->SetAllowCharacterBreak(true);
 
-  // Set the header image.
-  ui::ResourceBundle& bundle = ui::ResourceBundle::GetSharedInstance();
-  auto image_view = std::make_unique<ThemeTrackingNonAccessibleImageView>(
-      *bundle.GetImageSkiaNamed(IDR_SAVE_PASSWORD_MULTI_DEVICE),
-      *bundle.GetImageSkiaNamed(IDR_SAVE_PASSWORD_MULTI_DEVICE_DARK),
-      base::BindRepeating(
-          [](MoveToAccountStoreBubbleView* view) {
-            return view->GetBubbleFrameView()->GetBackgroundColor();
-          },
-          this));
-
-  gfx::Size preferred_size = image_view->GetPreferredSize();
-  if (preferred_size.width()) {
-    float scale =
-        static_cast<float>(ChromeLayoutProvider::Get()->GetDistanceMetric(
-            views::DISTANCE_BUBBLE_PREFERRED_WIDTH)) /
-        preferred_size.width();
-    preferred_size = gfx::ScaleToRoundedSize(preferred_size, scale);
-    image_view->SetImageSize(preferred_size);
-  }
-  GetBubbleFrameView()->SetHeaderView(std::move(image_view));
+  SetBubbleHeader(IDR_SAVE_PASSWORD_MULTI_DEVICE,
+                  IDR_SAVE_PASSWORD_MULTI_DEVICE_DARK);
 }
 
 MoveToAccountStoreBubbleController*

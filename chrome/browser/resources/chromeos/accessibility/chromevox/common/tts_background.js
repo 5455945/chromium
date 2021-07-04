@@ -162,6 +162,33 @@ TtsBackground = class extends ChromeTtsBase {
       properties = {};
     }
 
+    // Chunk to improve responsiveness. Use a replace/split pattern in order to
+    // retain the original punctuation.
+    let splitTextString = textString.replace(/([-\n\r.,!?;])(\s)/g, '$1$2|');
+    splitTextString = splitTextString.split('|');
+    // Since we are substituting the chunk delimiters back into the string, only
+    // recurse when there are more than 2 split items. This should result in
+    // only one recursive call.
+    if (splitTextString.length > 2) {
+      const startCallback = properties['startCallback'];
+      const endCallback = properties['endCallback'];
+      const onEvent = properties['onEvent'];
+      for (let i = 0; i < splitTextString.length; i++) {
+        const propertiesCopy = {};
+        for (const p in properties) {
+          propertiesCopy[p] = properties[p];
+        }
+        propertiesCopy['startCallback'] = i === 0 ? startCallback : null;
+        propertiesCopy['endCallback'] =
+            i === (splitTextString.length - 1) ? endCallback : null;
+        propertiesCopy['onEvent'] =
+            i === (splitTextString.length - 1) ? onEvent : null;
+        this.speak(splitTextString[i], queueMode, propertiesCopy);
+        queueMode = QueueMode.QUEUE;
+      }
+      return this;
+    }
+
     if (textString.length > constants.OBJECT_MAX_CHARCOUNT) {
       // The text is too long. Try to split the text into multiple chunks based
       // on line breaks.
@@ -388,11 +415,11 @@ TtsBackground = class extends ChromeTtsBase {
     const utterance = this.currentUtterance_;
     const utteranceId = utterance.id;
 
-    utterance.properties['onEvent'] = goog.bind(function(event) {
+    utterance.properties['onEvent'] = (event) => {
       this.onTtsEvent_(event, utteranceId);
-    }, this);
+    };
 
-    const validatedProperties = {};
+    const validatedProperties = /** @type {!chrome.tts.TtsOptions} */ ({});
     for (let i = 0; i < TtsBackground.ALLOWED_PROPERTIES_.length; i++) {
       const p = TtsBackground.ALLOWED_PROPERTIES_[i];
       if (utterance.properties[p]) {
@@ -714,7 +741,7 @@ TtsBackground = class extends ChromeTtsBase {
    * @private
    */
   createPunctuationReplace_(clear) {
-    return goog.bind(function(match) {
+    return (match) => {
       const retain =
           this.retainPunctuation_.indexOf(match) !== -1 ? match : ' ';
       return clear ? retain :
@@ -723,7 +750,7 @@ TtsBackground = class extends ChromeTtsBase {
                    Msgs.getMsg(AbstractTts.CHARACTER_DICTIONARY[match])))
                   .format({'COUNT': 1}) +
               retain + ' ';
-    }, this);
+    };
   }
 
   /**
@@ -742,6 +769,9 @@ TtsBackground = class extends ChromeTtsBase {
     if (!properties[AbstractTts.PHONETIC_CHARACTERS]) {
       return;
     }
+
+    // Remove this property so we don't trap ourselves in a loop.
+    delete properties[AbstractTts.PHONETIC_CHARACTERS];
 
     text = text.toLowerCase();
     // If undefined language, use the UI language of the browser as a best
@@ -777,21 +807,21 @@ TtsBackground = class extends ChromeTtsBase {
    * @private
    */
   updateVoice_(voiceName, opt_callback) {
-    chrome.tts.getVoices(goog.bind(function(voices) {
+    chrome.tts.getVoices((voices) => {
       const systemVoice = {voiceName: constants.SYSTEM_VOICE};
       voices.unshift(systemVoice);
       const newVoice = voices.find((v) => {
         return v.voiceName === voiceName;
       }) ||
           systemVoice;
-      if (newVoice) {
+      if (newVoice && newVoice.voiceName) {
         this.currentVoice = newVoice.voiceName;
         this.startSpeakingNextItemInQueue_();
       }
       if (opt_callback) {
         opt_callback(this.currentVoice);
       }
-    }, this));
+    });
   }
 
   /**

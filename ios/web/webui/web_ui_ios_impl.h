@@ -51,13 +51,13 @@ class WebUIIOSImpl : public web::WebUIIOS,
                          const std::vector<const base::Value*>& args) override;
 
  private:
-  void OnJsMessage(const base::DictionaryValue& message,
+  void OnJsMessage(const base::Value& message,
                    const GURL& page_url,
                    bool user_is_interacting,
                    web::WebFrame* sender_frame);
 
   // Executes JavaScript asynchronously on the page.
-  void ExecuteJavascript(const base::string16& javascript);
+  void ExecuteJavascript(const std::u16string& javascript);
 
   // A map of message name -> message handling callback.
   typedef std::map<std::string, MessageCallback> MessageCallbackMap;

@@ -8,19 +8,17 @@
 #include <string>
 #include <vector>
 
-#include "base/compiler_specific.h"
 #include "base/containers/circular_deque.h"
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
+#include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "components/sync/base/model_type.h"
-#include "components/sync/base/weak_handle.h"
 #include "components/sync/engine/cycle/debug_info_getter.h"
 #include "components/sync/engine/cycle/sync_cycle_snapshot.h"
 #include "components/sync/engine/data_type_debug_info_listener.h"
 #include "components/sync/engine/sync_encryption_handler.h"
 #include "components/sync/engine/sync_manager.h"
-#include "components/sync/js/js_backend.h"
 #include "components/sync/protocol/sync.pb.h"
 
 namespace syncer {
@@ -28,7 +26,7 @@ namespace syncer {
 // In order to track datatype association results, we need at least as many
 // entries as datatypes. Reserve additional space for other kinds of events that
 // are likely to happen during first sync or startup.
-const unsigned int kMaxEntries = ModelType::NUM_ENTRIES + 10;
+const unsigned int kMaxEntries = GetNumModelTypes() + 10;
 
 // Listens to events and records them in a queue. And passes the events to
 // syncer when requested.
@@ -41,16 +39,15 @@ class DebugInfoEventListener : public SyncManager::Observer,
   DebugInfoEventListener();
   ~DebugInfoEventListener() override;
 
+  void InitializationComplete();
+
   // SyncManager::Observer implementation.
   void OnSyncCycleCompleted(const SyncCycleSnapshot& snapshot) override;
-  void OnInitializationComplete(
-      const WeakHandle<JsBackend>& js_backend,
-      const WeakHandle<DataTypeDebugInfoListener>& debug_listener,
-      bool success) override;
   void OnConnectionStatusChange(ConnectionStatus connection_status) override;
   void OnActionableError(const SyncProtocolError& sync_error) override;
   void OnMigrationRequested(ModelTypeSet types) override;
   void OnProtocolEvent(const ProtocolEvent& event) override;
+  void OnSyncStatusChanged(const SyncStatus& status) override;
 
   // SyncEncryptionHandler::Observer implementation.
   void OnPassphraseRequired(

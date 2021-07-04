@@ -22,7 +22,7 @@
 #include "base/sequenced_task_runner.h"
 #include "base/synchronization/lock.h"
 #include "base/thread_annotations.h"
-#include "components/services/storage/dom_storage/legacy_dom_storage_database.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/leveldatabase/src/include/leveldb/status.h"
 
 namespace url {
@@ -42,6 +42,9 @@ class ProcessMemoryDump;
 }  // namespace base
 
 namespace storage {
+
+using LegacyDomStorageValuesMap =
+    std::map<std::u16string, absl::optional<std::u16string>>;
 
 // A legacy implementation of Session Storage used only in tests to provide
 // coverage of session storage migration code.
@@ -76,8 +79,8 @@ class TestingLegacySessionStorageDatabase
 
   // Updates the data for |namespace_id| and |origin|. Will remove all keys
   // before updating the database if |clear_all_first| is set. Then all entries
-  // in |changes| will be examined - keys mapped to a null NullableString16 will
-  // be removed and all others will be inserted/updated as appropriate. It is
+  // in |changes| will be examined - keys mapped to a nullopt value will be
+  // removed and all others will be inserted/updated as appropriate. It is
   // allowed to write data into a shallow copy created by CloneNamespace, and in
   // that case the copy will be made deep before writing the values.
   bool CommitAreaChanges(const std::string& namespace_id,

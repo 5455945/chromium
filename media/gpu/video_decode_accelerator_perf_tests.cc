@@ -9,13 +9,13 @@
 #include "base/command_line.h"
 #include "base/files/file_util.h"
 #include "base/json/json_writer.h"
-#include "base/strings/stringprintf.h"
 #include "media/base/test_data_util.h"
 #include "media/gpu/test/video.h"
 #include "media/gpu/test/video_player/frame_renderer_dummy.h"
 #include "media/gpu/test/video_player/video_decoder_client.h"
 #include "media/gpu/test/video_player/video_player.h"
 #include "media/gpu/test/video_player/video_player_test_environment.h"
+#include "sandbox/linux/services/resource_limits.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace media {
@@ -322,10 +322,6 @@ class VideoDecoderTest : public ::testing::Test {
     VideoDecoderClientConfig config;
     config.implementation = g_env->GetDecoderImplementation();
 
-    // Force allocate mode if import mode is not supported.
-    if (!g_env->ImportSupported())
-      config.allocation_mode = AllocationMode::kAllocate;
-
     auto video_player = VideoPlayer::Create(
         config, g_env->GetGpuMemoryBufferFactory(), std::move(frame_renderer),
         std::move(frame_processors));
@@ -376,6 +372,42 @@ TEST_F(VideoDecoderTest, MeasureCappedPerformance) {
   EXPECT_EQ(tvp->GetFrameDecodedCount(), g_env->Video()->NumFrames());
 }
 
+// Play multiple videos simultaneously from start to finish.
+TEST_F(VideoDecoderTest,
+       MeasureUncappedPerformance_MultipleConcurrentDecoders) {
+  // Set RLIMIT_NOFILE soft limit to its hard limit value.
+  if (sandbox::ResourceLimits::AdjustCurrent(
+          RLIMIT_NOFILE, std::numeric_limits<long long int>::max())) {
+    DPLOG(ERROR) << "Unable to increase soft limit of RLIMIT_NOFILE";
+  }
+
+// The minimal number of concurrent decoders we expect to be supported on
+// platforms.
+#if defined(ARCH_CPU_X86_FAMILY)
+  constexpr size_t kMinSupportedConcurrentDecoders = 25;
+#elif defined(ARCH_CPU_ARM_FAMILY)
+  constexpr size_t kMinSupportedConcurrentDecoders = 10;
+#endif
+
+  std::vector<std::unique_ptr<VideoPlayer>> players(
+      kMinSupportedConcurrentDecoders);
+  for (auto&& player : players)
+    player = CreateVideoPlayer(g_env->Video());
+
+  performance_evaluator_->StartMeasuring();
+
+  for (auto&& player : players)
+    player->Play();
+
+  for (auto&& player : players) {
+    EXPECT_TRUE(player->WaitForFlushDone());
+    EXPECT_EQ(player->GetFlushDoneCount(), 1u);
+    EXPECT_EQ(player->GetFrameDecodedCount(), g_env->Video()->NumFrames());
+  }
+  performance_evaluator_->StopMeasuring();
+  performance_evaluator_->WriteMetricsToFile();
+}
+
 }  // namespace test
 }  // namespace media
 
@@ -386,7 +418,7 @@ int main(int argc, char** argv) {
   // Print the help message if requested. This needs to be done before
   // initializing gtest, to overwrite the default gtest help message.
   base::CommandLine::Init(argc, argv);
-  const base::CommandLine* cmd_line = base::CommandLine::ForCurrentProcess();
+  base::CommandLine* cmd_line = base::CommandLine::ForCurrentProcess();
   LOG_ASSERT(cmd_line);
   if (cmd_line->HasSwitch("help")) {
     std::cout << media::test::usage_msg << "\n" << media::test::help_msg;
@@ -436,6 +468,10 @@ int main(int argc, char** argv) {
   }
 
   testing::InitGoogleTest(&argc, argv);
+
+  // Add the command line flag for HEVC testing which will be checked by the
+  // video decoder to allow clear HEVC decoding.
+  cmd_line->AppendSwitch("enable-clear-hevc-for-testing");
 
   // Set up our test environment.
   media::test::VideoPlayerTestEnvironment* test_environment =

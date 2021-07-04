@@ -63,7 +63,7 @@ class ThirdPartyRegistryKeyObserver {
   }
 
  private:
-  base::string16 GetRegistryKeyPath() {
+  std::wstring GetRegistryKeyPath() {
     return install_static::GetRegistryPath().append(
         third_party_dlls::kThirdPartyRegKeyName);
   }
@@ -172,7 +172,7 @@ IN_PROC_BROWSER_TEST_F(ThirdPartyBlockingBrowserTest,
         ModuleDatabase* module_database = ModuleDatabase::GetInstance();
 
         // Speed up the test.
-        module_database->IncreaseInspectionPriority();
+        module_database->ForceStartInspection();
 
         base::FilePath module_list_path;
         ASSERT_NO_FATAL_FAILURE(CreateModuleList(&module_list_path));

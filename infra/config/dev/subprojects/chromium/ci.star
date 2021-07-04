@@ -42,7 +42,7 @@ defaults.builderless.set(None)
 defaults.cpu.set(cpu.X86_64)
 defaults.executable.set(luci.recipe(name = "swarming/staging"))
 defaults.execution_timeout.set(3 * time.hour)
-defaults.os.set(os.LINUX_DEFAULT)
+defaults.os.set(os.LINUX_BIONIC_SWITCH_TO_DEFAULT)
 defaults.service_account.set(
     "chromium-ci-builder-dev@chops-service-accounts.iam.gserviceaccount.com",
 )
@@ -61,6 +61,11 @@ def ci_builder(*, name, resultdb_bigquery_exports = None, **kwargs):
         resultdb_bigquery_exports = resultdb_bigquery_exports,
         isolated_server = "https://isolateserver-dev.appspot.com",
         goma_backend = goma.backend.RBE_PROD,
+        resultdb_index_by_timestamp = True,
+        # TODO(crbug.com/1225524): remove this after migration.
+        experiments = {
+            "chromium.isolate.use_new_lib": 50,
+        },
         **kwargs
     )
 
@@ -83,6 +88,12 @@ ci_builder(
 )
 
 ci_builder(
+    name = "linux-ssd-rel-swarming",
+    description_html = "Ensures builders are using available local SSDs",
+    builderless = False,
+)
+
+ci_builder(
     name = "mac-rel-swarming",
     os = os.MAC_DEFAULT,
 )
@@ -90,6 +101,7 @@ ci_builder(
 ci_builder(
     name = "win-rel-swarming",
     os = os.WINDOWS_DEFAULT,
+    goma_enable_ats = True,
 )
 
 ## builders using swarming staging instance
@@ -107,4 +119,5 @@ ci_builder_staging(
 ci_builder_staging(
     name = "win-rel-swarming-staging",
     os = os.WINDOWS_DEFAULT,
+    goma_enable_ats = True,
 )

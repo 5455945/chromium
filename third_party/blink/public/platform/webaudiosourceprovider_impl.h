@@ -12,11 +12,9 @@
 
 #include "base/callback.h"
 #include "base/callback_forward.h"
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/synchronization/lock.h"
 #include "media/base/audio_renderer_sink.h"
-#include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/web_audio_source_provider.h"
 #include "third_party/blink/public/platform/web_vector.h"
 
@@ -60,6 +58,10 @@ class BLINK_PLATFORM_EXPORT WebAudioSourceProviderImpl
       scoped_refptr<media::SwitchableAudioRendererSink> sink,
       media::MediaLog* media_log,
       base::OnceClosure on_set_client_callback = base::OnceClosure());
+
+  WebAudioSourceProviderImpl(const WebAudioSourceProviderImpl&) = delete;
+  WebAudioSourceProviderImpl& operator=(const WebAudioSourceProviderImpl&) =
+      delete;
 
   // WebAudioSourceProvider implementation.
   void SetClient(WebAudioSourceProviderClient* client) override;
@@ -127,8 +129,6 @@ class BLINK_PLATFORM_EXPORT WebAudioSourceProviderImpl
 
   // NOTE: Weak pointers must be invalidated before all other member variables.
   base::WeakPtrFactory<WebAudioSourceProviderImpl> weak_factory_{this};
-
-  DISALLOW_IMPLICIT_CONSTRUCTORS(WebAudioSourceProviderImpl);
 };
 
 }  // namespace blink

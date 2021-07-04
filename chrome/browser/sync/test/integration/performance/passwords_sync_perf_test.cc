@@ -8,7 +8,6 @@
 #include "build/build_config.h"
 #include "chrome/browser/sync/test/integration/passwords_helper.h"
 #include "chrome/browser/sync/test/integration/performance/sync_timing_helper.h"
-#include "chrome/browser/sync/test/integration/profile_sync_service_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "components/password_manager/core/browser/password_store.h"
 #include "content/public/test/browser_test.h"
@@ -18,6 +17,7 @@ using passwords_helper::AddLogin;
 using passwords_helper::CreateTestPasswordForm;
 using passwords_helper::GetPasswordCount;
 using passwords_helper::GetPasswordStore;
+using passwords_helper::GetProfilePasswordStoreInterface;
 using passwords_helper::UpdateLogin;
 using sync_timing_helper::TimeUntilQuiescence;
 
@@ -72,7 +72,7 @@ void PasswordsSyncPerfTest::AddLogins(int profile, int num_logins) {
 
 void PasswordsSyncPerfTest::UpdateLogins(int profile) {
   std::vector<std::unique_ptr<password_manager::PasswordForm>> logins =
-      passwords_helper::GetLogins(GetPasswordStore(profile));
+      passwords_helper::GetLogins(GetProfilePasswordStoreInterface(profile));
   for (auto& login : logins) {
     login->password_value = base::ASCIIToUTF16(NextPassword());
     UpdateLogin(GetPasswordStore(profile), *login);
@@ -80,7 +80,7 @@ void PasswordsSyncPerfTest::UpdateLogins(int profile) {
 }
 
 void PasswordsSyncPerfTest::RemoveLogins(int profile) {
-  passwords_helper::RemoveLogins(GetPasswordStore(profile));
+  passwords_helper::RemoveLogins(GetProfilePasswordStoreInterface(profile));
 }
 
 password_manager::PasswordForm PasswordsSyncPerfTest::NextLogin() {

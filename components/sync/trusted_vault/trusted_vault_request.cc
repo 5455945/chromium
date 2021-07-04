@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/strings/stringprintf.h"
 #include "components/signin/public/identity_manager/access_token_info.h"
 #include "components/sync/trusted_vault/trusted_vault_access_token_fetcher.h"
 #include "net/base/url_util.h"
@@ -72,7 +73,7 @@ std::string GetHttpMethodString(TrustedVaultRequest::HttpMethod http_method) {
 TrustedVaultRequest::TrustedVaultRequest(
     HttpMethod http_method,
     const GURL& request_url,
-    const base::Optional<std::string>& serialized_request_proto)
+    const absl::optional<std::string>& serialized_request_proto)
     : http_method_(http_method),
       request_url_(request_url),
       serialized_request_proto_(serialized_request_proto) {
@@ -98,7 +99,7 @@ void TrustedVaultRequest::FetchAccessTokenAndSendRequest(
 
 void TrustedVaultRequest::OnAccessTokenFetched(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-    base::Optional<signin::AccessTokenInfo> access_token_info) {
+    absl::optional<signin::AccessTokenInfo> access_token_info) {
   if (!access_token_info.has_value()) {
     RunCompletionCallbackAndMaybeDestroySelf(HttpStatus::kOtherError,
                                              /*response_body=*/std::string());
@@ -120,10 +121,13 @@ void TrustedVaultRequest::OnURLLoadComplete(
   if (url_loader_->ResponseInfo() && url_loader_->ResponseInfo()->headers) {
     http_response_code = url_loader_->ResponseInfo()->headers->response_code();
   }
-  if (http_response_code == net::HTTP_BAD_REQUEST) {
-    // Bad request can indicate client-side data being obsolete, distinguish it
-    // to allow API users to decide how to handle.
-    RunCompletionCallbackAndMaybeDestroySelf(HttpStatus::kBadRequest,
+  if (http_response_code == net::HTTP_NOT_FOUND) {
+    RunCompletionCallbackAndMaybeDestroySelf(HttpStatus::kNotFound,
+                                             std::string());
+    return;
+  }
+  if (http_response_code == net::HTTP_PRECONDITION_FAILED) {
+    RunCompletionCallbackAndMaybeDestroySelf(HttpStatus::kFailedPrecondition,
                                              std::string());
     return;
   }

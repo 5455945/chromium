@@ -873,7 +873,7 @@ class AddExpectationsTest(Base):
                                    'test [ failure ]\n'
                                    '\n'
                                    'test1 [ Pass ]\n'
-                                   '[ Release Mac ] test2 [ Failure Crash ]\n'
+                                   '[ Mac Release ] test2 [ Crash Failure ]\n'
                                    'test3 [ Failure ]\n'))
 
     def test_add_after_remove(self):
@@ -927,6 +927,42 @@ class AddExpectationsTest(Base):
                                    '# add expectations after this line\n'
                                    '[ Win ] test2 [ Crash ]\n'
                                    '\n'))
+
+
+class ExpectationsConflictResolutionTest(Base):
+    def test_remove_expectation(self):
+        port = MockHost().port_factory.get('test-win-win7')
+        raw_expectations_1 = ('# tags: [ Mac Win ]\n'
+                            '# results: [ Failure Pass ]\n'
+                            '\n'
+                            'crbug.com/2432 [ Win ] test1 [ Failure ]\n')
+        raw_expectations_2 = ('# tags: [ Mac Win ]\n'
+                            '# results: [ Failure Pass ]\n'
+                            '\n'
+                            'crbug.com/2432 [ Win ] test1 [ Pass ]\n')
+        raw_expectations_3 = ('# tags: [ Mac Win ]\n'
+                            '# results: [ Failure Pass ]\n'
+                            '# conflict_resolution: Override \n'
+                            '\n'
+                            'crbug.com/2432 [ Win ] test1 [ Pass ]\n')
+        expectations_dict = OrderedDict()
+        expectations_dict['/tmp/TestExpectations'] = raw_expectations_1
+        expectations_dict['/tmp/TestExpectations2'] = raw_expectations_2
+        test_expectations = TestExpectations(port, expectations_dict)
+        self.assertEqual(test_expectations.get_expectations('test1'),
+                         Expectation(
+                             test='test1', results=set([ResultType.Pass, ResultType.Failure]),
+                             is_slow_test=False, reason='crbug.com/2432'
+                         ))
+        expectations_dict = OrderedDict()
+        expectations_dict['/tmp/TestExpectations'] = raw_expectations_1
+        expectations_dict['/tmp/TestExpectations2'] = raw_expectations_3
+        test_expectations = TestExpectations(port, expectations_dict)
+        self.assertEqual(test_expectations.get_expectations('test1'),
+                         Expectation(
+                             test='test1', results=set([ResultType.Pass]),
+                             is_slow_test=False, reason='crbug.com/2432'
+                         ))
 
 
 class CommitChangesTests(Base):

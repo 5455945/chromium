@@ -7,12 +7,16 @@
 #include "ash/projector/projector_metadata_controller.h"
 #include "ash/projector/projector_ui_controller.h"
 #include "ash/public/cpp/projector/projector_client.h"
+#include "ash/public/cpp/projector/projector_session.h"
 #include "ash/shell.h"
+#include "base/strings/utf_string_conversions.h"
+#include "media/mojo/mojom/speech_recognition_service.mojom.h"
 
 namespace ash {
 
 ProjectorControllerImpl::ProjectorControllerImpl()
-    : ui_controller_(std::make_unique<ash::ProjectorUiController>()),
+    : projector_session_(std::make_unique<ash::ProjectorSessionImpl>()),
+      ui_controller_(std::make_unique<ash::ProjectorUiController>(this)),
       metadata_controller_(
           std::make_unique<ash::ProjectorMetadataController>()) {}
 
@@ -22,20 +26,76 @@ void ProjectorControllerImpl::SetClient(ProjectorClient* client) {
   client_ = client;
 }
 
-void ProjectorControllerImpl::ShowToolbar() {
-  ui_controller_->ShowToolbar();
-}
-
-void ProjectorControllerImpl::SetCaptionState(bool is_on) {
-  if (is_on == is_caption_on_)
+void ProjectorControllerImpl::OnSpeechRecognitionAvailable(bool available) {
+  if (available == is_speech_recognition_available_)
     return;
 
+  is_speech_recognition_available_ = available;
+}
+
+void ProjectorControllerImpl::OnTranscription(
+    const media::SpeechRecognitionResult& result) {
+  // Render transcription.
+  if (is_caption_on_) {
+    ui_controller_->OnTranscription(result.transcription, result.is_final);
+  }
+
+  if (result.is_final && result.timing_information.has_value()) {
+    // Records final transcript.
+    metadata_controller_->RecordTranscription(result);
+  }
+}
+
+void ProjectorControllerImpl::OnTranscriptionError() {
+  // TODO(http://1206720): Stop recording if there is an error that occurred
+  // during transcription.
+  OnRecordingEnded();
+}
+
+void ProjectorControllerImpl::SetProjectorToolsVisible(bool is_visible) {
+  // TODO(yilkal): Projector toolbar shouldn't be shown if soda is not
+  // available.
+  if (is_visible) {
+    ui_controller_->ShowToolbar();
+    OnRecordingStarted();
+    return;
+  }
+
+  OnRecordingEnded();
+  if (client_->IsSelfieCamVisible())
+    client_->CloseSelfieCam();
+  ui_controller_->CloseToolbar();
+}
+
+bool ProjectorControllerImpl::IsEligible() const {
+  return is_speech_recognition_available_;
+}
+
+void ProjectorControllerImpl::SetCaptionBubbleState(bool is_on) {
+  ui_controller_->SetCaptionBubbleState(is_on);
+}
+
+void ProjectorControllerImpl::OnCaptionBubbleModelStateChanged(bool is_on) {
   is_caption_on_ = is_on;
+}
+
+void ProjectorControllerImpl::MarkKeyIdea() {
+  metadata_controller_->RecordKeyIdea();
+  ui_controller_->OnKeyIdeaMarked();
 }
 
 void ProjectorControllerImpl::OnRecordingStarted() {
   StartSpeechRecognition();
+  ui_controller_->OnRecordingStateChanged(true /* started */);
   metadata_controller_->OnRecordingStarted();
+}
+
+void ProjectorControllerImpl::OnRecordingEnded() {
+  StopSpeechRecognition();
+  ui_controller_->OnRecordingStateChanged(false /* started */);
+
+  // TODO(crbug.com/1165439): Call on to SaveScreencast when the metadata file
+  // saving format is finalized.
 }
 
 void ProjectorControllerImpl::SaveScreencast(
@@ -43,41 +103,42 @@ void ProjectorControllerImpl::SaveScreencast(
   metadata_controller_->SaveMetadata(saved_video_path);
 }
 
-void ProjectorControllerImpl::OnTranscription(
-    chromeos::machine_learning::mojom::SpeechRecognizerEventPtr
-        speech_recognizer_event) {
-  bool is_final = speech_recognizer_event->is_final_result();
-  std::string transcript;
+void ProjectorControllerImpl::OnLaserPointerPressed() {
+  ui_controller_->OnLaserPointerPressed();
+}
 
-  if (is_final) {
-    auto& final_result = speech_recognizer_event->get_final_result();
+void ProjectorControllerImpl::OnMarkerPressed() {
+  ui_controller_->OnMarkerPressed();
+}
 
-    if (final_result->final_hypotheses.size() > 0) {
-      // Get the first result which is the most likely.
-      transcript = final_result->final_hypotheses.at(0);
-    }
+void ProjectorControllerImpl::OnClearAllMarkersPressed() {
+  ui_controller_->OnClearAllMarkersPressed();
+}
 
-    // Records final transcript.
-    metadata_controller_->RecordTranscription(
-        transcript, final_result->timing_event->audio_start_time,
-        final_result->timing_event->event_end_time,
-        final_result->timing_event->word_alignments);
-  } else if (speech_recognizer_event->is_partial_result()) {
-    auto& partial_text =
-        speech_recognizer_event->get_partial_result()->partial_text;
-    if (partial_text.size() > 0) {
-      // Get the first result which is the most likely.
-      transcript = partial_text.at(0);
-    }
-  } else {
-    LOG(ERROR) << "No valid speech recognition result.";
+void ProjectorControllerImpl::OnUndoPressed() {
+  ui_controller_->OnUndoPressed();
+}
+
+void ProjectorControllerImpl::OnSelfieCamPressed(bool enabled) {
+  ui_controller_->OnSelfieCamPressed(enabled);
+
+  DCHECK_NE(client_, nullptr);
+  if (enabled == client_->IsSelfieCamVisible())
+    return;
+
+  if (enabled) {
+    client_->ShowSelfieCam();
     return;
   }
+  client_->CloseSelfieCam();
+}
 
-  // Render transcription.
-  if (is_caption_on_) {
-    ui_controller_->OnTranscription(transcript, is_final);
-  }
+void ProjectorControllerImpl::OnMagnifierButtonPressed(bool enabled) {
+  ui_controller_->OnMagnifierButtonPressed(enabled);
+}
+
+void ProjectorControllerImpl::OnChangeMarkerColorPressed(SkColor new_color) {
+  ui_controller_->OnChangeMarkerColorPressed(new_color);
 }
 
 void ProjectorControllerImpl::SetProjectorUiControllerForTest(
@@ -90,12 +151,8 @@ void ProjectorControllerImpl::SetProjectorMetadataControllerForTest(
   metadata_controller_ = std::move(metadata_controller);
 }
 
-void ProjectorControllerImpl::MarkKeyIdea() {
-  metadata_controller_->RecordKeyIdea();
-  ui_controller_->OnKeyIdeaMarked();
-}
-
 void ProjectorControllerImpl::StartSpeechRecognition() {
+  DCHECK(is_speech_recognition_available_);
   DCHECK(!is_speech_recognition_on_);
   DCHECK_NE(client_, nullptr);
   client_->StartSpeechRecognition();
@@ -103,6 +160,7 @@ void ProjectorControllerImpl::StartSpeechRecognition() {
 }
 
 void ProjectorControllerImpl::StopSpeechRecognition() {
+  DCHECK(is_speech_recognition_available_);
   DCHECK(is_speech_recognition_on_);
   DCHECK_NE(client_, nullptr);
   client_->StopSpeechRecognition();

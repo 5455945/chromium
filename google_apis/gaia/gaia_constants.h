@@ -54,7 +54,9 @@ extern const char kDriveReadOnlyOAuth2Scope[];
 extern const char kAssistantOAuth2Scope[];
 extern const char kNearbyShareOAuth2Scope[];
 extern const char kGCMGroupServerOAuth2Scope[];
+extern const char kGCMCheckinServerOAuth2Scope[];
 extern const char kChromeWebstoreOAuth2Scope[];
+extern const char kAccountCapabilitiesOAuth2Scope[];
 
 // Used with uber auth tokens when needed.
 extern const char kGaiaSid[];

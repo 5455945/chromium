@@ -3,6 +3,30 @@
         border-top: var(--cr-separator-line);
       }
     </style>
+    <div class="cr-row first" hidden="[[!showKeywordTriggerSetting_]]">
+      <div class="flex cr-padded-text">
+        $i18n{searchEnginesKeyboardShortcutsTitle}
+        <div class="secondary">
+          $i18n{searchEnginesKeyboardShortcutsDescription}
+        </div>
+      </div>
+    </div>
+    <div class="list-frame" hidden="[[!showKeywordTriggerSetting_]]">
+      <settings-radio-group
+          pref="{{prefs.omnibox.keyword_space_triggering_enabled}}">
+        <controlled-radio-button class="list-item" name="true"
+            pref="{{prefs.omnibox.keyword_space_triggering_enabled}}"
+            label="$i18n{searchEnginesKeyboardShortcutsSpaceOrTab}"
+            no-extension-indicator>
+        </controlled-radio-button>
+        <controlled-radio-button class="list-item" name="false"
+            pref="{{prefs.omnibox.keyword_space_triggering_enabled}}"
+            label="$i18n{searchEnginesKeyboardShortcutsTab}"
+            no-extension-indicator>
+        </controlled-radio-button>
+      </settings-radio-group>
+    </div>
+
     <div class="cr-row first">
       <h2>$i18n{searchEnginesDefault}</h2>
     </div>
@@ -20,10 +44,30 @@
       </settings-search-engine-dialog>
     </template>
 
+    <template is="dom-if" if="[[showActiveSearchEngines_]]">
+      <div class="cr-row first">
+        <h2 class="flex">$i18n{searchEnginesActive}</h2>
+        <cr-button class="secondary-button header-aligned-button"
+                   on-click="onAddSearchEngineTap_" id="addActiveSearchEngine">
+          $i18n{add}
+        </cr-button>
+      </div>
+      <div class="no-search-results list-frame"
+           hidden="[[matchingActiveEngines_.length]]">
+           $i18n{searchNoResults}
+      </div>
+      <settings-search-engines-list id="activeEngines"
+          hidden="[[!matchingActiveEngines_.length]]"
+          engines="[[matchingActiveEngines_]]"
+          scroll-target="[[subpageScrollTarget]]">
+      </settings-search-engines-list>
+    </template>
+
     <div class="cr-row first">
       <h2 class="flex">$i18n{searchEnginesOther}</h2>
       <cr-button class="secondary-button header-aligned-button"
-          on-click="onAddSearchEngineTap_" id="addSearchEngine">
+                 hidden="[[showActiveSearchEngines_]]"
+                 on-click="onAddSearchEngineTap_" id="addSearchEngine">
         $i18n{add}
       </cr-button>
     </div>

@@ -16,8 +16,9 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/color_chooser.h"
 #include "components/autofill/content/browser/content_autofill_driver_factory.h"
-#include "components/autofill/core/browser/autofill_manager.h"
+#include "components/autofill/core/browser/browser_autofill_manager.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
+#include "content/public/browser/color_chooser.h"
 #include "content/public/browser/file_select_listener.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
 #include "content/public/browser/notification_source.h"
@@ -58,13 +59,13 @@ class ExtensionViewHost::AssociatedWebContentsObserver
 ExtensionViewHost::ExtensionViewHost(const Extension* extension,
                                      content::SiteInstance* site_instance,
                                      const GURL& url,
-                                     ViewType host_type,
+                                     mojom::ViewType host_type,
                                      Browser* browser)
     : ExtensionHost(extension, site_instance, url, host_type),
       browser_(browser) {
   // Not used for panels, see PanelHost.
-  DCHECK(host_type == VIEW_TYPE_EXTENSION_DIALOG ||
-         host_type == VIEW_TYPE_EXTENSION_POPUP);
+  DCHECK(host_type == mojom::ViewType::kExtensionDialog ||
+         host_type == mojom::ViewType::kExtensionPopup);
 
   // The browser should always be associated with the same original profile as
   // this view host. The profiles may not be identical (i.e., one may be the
@@ -81,12 +82,12 @@ ExtensionViewHost::ExtensionViewHost(const Extension* extension,
       host_contents(),
       autofill::ChromeAutofillClient::FromWebContents(host_contents()),
       g_browser_process->GetApplicationLocale(),
-      autofill::AutofillManager::ENABLE_AUTOFILL_DOWNLOAD_MANAGER);
+      autofill::BrowserAutofillManager::ENABLE_AUTOFILL_DOWNLOAD_MANAGER);
 
   // The popup itself cannot be zoomed, but we must specify a zoom level to use.
   // Otherwise, if a user zooms a page of the same extension, the popup would
   // use the per-origin zoom level.
-  if (host_type == VIEW_TYPE_EXTENSION_POPUP) {
+  if (host_type == mojom::ViewType::kExtensionPopup) {
     content::HostZoomMap* zoom_map =
         content::HostZoomMap::GetForWebContents(host_contents());
     zoom_map->SetTemporaryZoomLevel(
@@ -143,7 +144,7 @@ void ExtensionViewHost::LoadInitialURL() {
   }
 
   // Popups may spawn modal dialogs, which need positioning information.
-  if (extension_host_type() == VIEW_TYPE_EXTENSION_POPUP) {
+  if (extension_host_type() == mojom::ViewType::kExtensionPopup) {
     web_modal::WebContentsModalDialogManager::CreateForWebContents(
         host_contents());
     web_modal::WebContentsModalDialogManager::FromWebContents(host_contents())
@@ -178,7 +179,7 @@ content::WebContents* ExtensionViewHost::OpenURLFromTab(
   }
 }
 
-bool ExtensionViewHost::ShouldTransferNavigation(
+bool ExtensionViewHost::ShouldAllowRendererInitiatedCrossProcessNavigation(
     bool is_main_frame_navigation) {
   // Block navigations that cause main frame of an extension pop-up (or
   // background page) to navigate to non-extension content (i.e. to web
@@ -215,7 +216,7 @@ bool ExtensionViewHost::PreHandleGestureEvent(
   return blink::WebInputEvent::IsPinchGestureEventType(event.GetType());
 }
 
-content::ColorChooser* ExtensionViewHost::OpenColorChooser(
+std::unique_ptr<content::ColorChooser> ExtensionViewHost::OpenColorChooser(
     content::WebContents* web_contents,
     SkColor initial_color,
     const std::vector<blink::mojom::ColorSuggestionPtr>& suggestions) {
@@ -291,8 +292,9 @@ content::WebContents* ExtensionViewHost::GetAssociatedWebContents() const {
 content::WebContents* ExtensionViewHost::GetVisibleWebContents() const {
   if (associated_web_contents_)
     return associated_web_contents_;
-  return (extension_host_type() == VIEW_TYPE_EXTENSION_POPUP) ? host_contents()
-                                                              : nullptr;
+  return (extension_host_type() == mojom::ViewType::kExtensionPopup)
+             ? host_contents()
+             : nullptr;
 }
 
 void ExtensionViewHost::Observe(int type,
@@ -307,7 +309,7 @@ void ExtensionViewHost::Observe(int type,
 
 bool ExtensionViewHost::IsEscapeInPopup(
     const content::NativeWebKeyboardEvent& event) const {
-  return extension_host_type() == VIEW_TYPE_EXTENSION_POPUP &&
+  return extension_host_type() == mojom::ViewType::kExtensionPopup &&
          event.GetType() ==
              content::NativeWebKeyboardEvent::Type::kRawKeyDown &&
          event.windows_key_code == ui::VKEY_ESCAPE;

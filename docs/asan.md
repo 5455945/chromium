@@ -98,7 +98,7 @@ Now, check that the tool works. Run the following:
 ```shell
 out/asan/base_unittests \
     --gtest_filter=ToolsSanityTest.DISABLED_AddressSanitizerLocalOOBCrashTest \
-    --gtest_also_run_disabled_tests 2>&1 | tools/valgrind/asan/asan_symbolize.py
+    --gtest_also_run_disabled_tests
 ```
 
 The test will crash with the following error report:
@@ -124,9 +124,9 @@ Congrats, you have a working ASan build! &#x1F64C;
 ## Run chrome under ASan
 
 And finally, have fun with the `out/Release/chrome` binary. The filter script
-`tools/valgrind/asan/asan_symbolize.py` should be used to symbolize the output.
-(Note that `asan_symbolize.py` is absolutely necessary if you need the symbols -
-there is no built-in symbolizer for ASan in Chrome).
+`tools/valgrind/asan/asan_symbolize.py` can be used to symbolize the output,
+although it shouldn't be necessary on Linux and Windows, where Chrome uses the
+llvm-symbolizer in its source tree by default.
 
 ASan should perfectly work with Chrome's sandbox. You should only need to run
 with `--no-sandbox` on Linux if you're debugging ASan.
@@ -205,13 +205,16 @@ build/android/test_runner.py instrumentation --test-apk ContentShellTest \
     --tool=asan --release
 ```
 
-To run stuff without Chromium testing script (ex. ContentShell.apk, or any third
-party apk or binary), device setup is needed:
+If the above step fails or to run stuff without Chromium testing script (ex.
+ContentShell.apk, or any third party apk or binary), device setup is needed:
 ```shell
 tools/android/asan/third_party/asan_device_setup.sh \
     --lib third_party/llvm-build/Release+Asserts/lib/clang/*/lib/linux/libclang_rt.asan-arm-android.so
 # wait a few seconds for the device to reload
 ```
+**Note:** You need to replace `-arm-` part in `libclang_rt.asan-arm-android.so`
+in the command above with the corresponding architecture of the android device
+(e.g `-i686-` if you are running an `x86` emulator image).
 
 It only needs to be run once per device. It is safe to run it multiple times.
 Examine the output to ensure that setup was successful (you may need to run

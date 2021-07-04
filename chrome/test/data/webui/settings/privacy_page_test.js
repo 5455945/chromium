@@ -6,8 +6,8 @@
 import {webUIListenerCallback} from 'chrome://resources/js/cr.m.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.m.js';
 import {flush} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
-import {ClearBrowsingDataBrowserProxyImpl, ContentSettingsTypes, CookieControlsMode, SafeBrowsingSetting, SiteSettingsPrefsBrowserProxyImpl} from 'chrome://settings/lazy_load.js';
-import {HatsBrowserProxyImpl, MetricsBrowserProxyImpl, PrivacyElementInteractions, PrivacyPageBrowserProxyImpl, Route, Router, routes, SecureDnsMode} from 'chrome://settings/settings.js';
+import {CategorySettingExceptionsElement, ClearBrowsingDataBrowserProxyImpl, ContentSettingsTypes, CookieControlsMode, SafeBrowsingSetting, SiteSettingsPrefsBrowserProxyImpl} from 'chrome://settings/lazy_load.js';
+import {HatsBrowserProxyImpl, MetricsBrowserProxyImpl, PrivacyElementInteractions, PrivacyPageBrowserProxyImpl, Route, Router, routes, SecureDnsMode, SettingsPrivacyPageElement, TrustSafetyInteraction} from 'chrome://settings/settings.js';
 
 import {assertEquals, assertFalse, assertTrue} from '../chai_assert.js';
 import {flushTasks, isChildVisible, isVisible} from '../test_util.m.js';
@@ -28,13 +28,18 @@ const redesignedPages = [
   routes.SITE_SETTINGS_BACKGROUND_SYNC,
   routes.SITE_SETTINGS_CAMERA,
   routes.SITE_SETTINGS_CLIPBOARD,
+  routes.SITE_SETTINGS_HANDLERS,
+  routes.SITE_SETTINGS_HID_DEVICES,
+  routes.SITE_SETTINGS_IDLE_DETECTION,
   routes.SITE_SETTINGS_IMAGES,
   routes.SITE_SETTINGS_JAVASCRIPT,
   routes.SITE_SETTINGS_LOCATION,
   routes.SITE_SETTINGS_MICROPHONE,
   routes.SITE_SETTINGS_MIDI_DEVICES,
   routes.SITE_SETTINGS_NOTIFICATIONS,
+  routes.SITE_SETTINGS_PDF_DOCUMENTS,
   routes.SITE_SETTINGS_POPUPS,
+  routes.SITE_SETTINGS_PROTECTED_CONTENT,
   routes.SITE_SETTINGS_SENSORS,
   routes.SITE_SETTINGS_SERIAL_PORTS,
   routes.SITE_SETTINGS_SOUND,
@@ -52,13 +57,12 @@ const redesignedPages = [
 
 /** @type {!Array<!Route>} */
 const notRedesignedPages = [
-  routes.SITE_SETTINGS_HID_DEVICES,
-
   // Content settings that depend on flags being enabled.
   // routes.SITE_SETTINGS_BLUETOOTH_SCANNING,
   // routes.SITE_SETTINGS_BLUETOOTH_DEVICES,
   // routes.SITE_SETTINGS_WINDOW_PLACEMENT,
   // routes.SITE_SETTINGS_FONT_ACCESS,
+  // routes.SITE_SETTINGS_FILE_HANDLING,
 ];
 
 suite('PrivacyPage', function() {
@@ -78,6 +82,7 @@ suite('PrivacyPage', function() {
     loadTimeData.overrideValues({
       enableContentSettingsRedesign: false,
       privacySandboxSettingsEnabled: false,
+      privacyReviewEnabled: false,
     });
   });
 
@@ -118,21 +123,27 @@ suite('PrivacyPage', function() {
   });
 
   test('showClearBrowsingDataDialog', function() {
-    assertFalse(!!page.$$('settings-clear-browsing-data-dialog'));
-    page.$$('#clearBrowsingData').click();
+    assertFalse(
+        !!page.shadowRoot.querySelector('settings-clear-browsing-data-dialog'));
+    page.shadowRoot.querySelector('#clearBrowsingData').click();
     flush();
 
-    const dialog = page.$$('settings-clear-browsing-data-dialog');
+    const dialog =
+        page.shadowRoot.querySelector('settings-clear-browsing-data-dialog');
     assertTrue(!!dialog);
   });
 
   test('CookiesLinkRowSublabel', async function() {
     await siteSettingsBrowserProxy.whenCalled('getCookieSettingDescription');
     flush();
-    assertEquals(page.$$('#cookiesLinkRow').subLabel, testLabels[0]);
+    assertEquals(
+        page.shadowRoot.querySelector('#cookiesLinkRow').subLabel,
+        testLabels[0]);
 
     webUIListenerCallback('cookieSettingDescriptionChanged', testLabels[1]);
-    assertEquals(page.$$('#cookiesLinkRow').subLabel, testLabels[1]);
+    assertEquals(
+        page.shadowRoot.querySelector('#cookiesLinkRow').subLabel,
+        testLabels[1]);
   });
 
   test('ContentSettingsRedesignVisibility', async function() {
@@ -142,9 +153,19 @@ suite('PrivacyPage', function() {
     await flushTasks();
 
     assertFalse(loadTimeData.getBoolean('enableContentSettingsRedesign'));
+    // protocol handlers, pdf documents and protected content (except chromeos
+    // and win) do not use category-default-setting, resulting in the -3 (or -2)
+    // below.
+    // <if expr="chromeos or is_win">
     assertEquals(
         page.root.querySelectorAll('category-default-setting').length,
-        redesignedPages.length + notRedesignedPages.length);
+        redesignedPages.length + notRedesignedPages.length - 2);
+    // </if>
+    // <if expr="not chromeos and not is_win">
+    assertEquals(
+        page.root.querySelectorAll('category-default-setting').length,
+        redesignedPages.length + notRedesignedPages.length - 3);
+    // </if>
     assertEquals(
         page.root.querySelectorAll('settings-category-default-radio-group')
             .length,
@@ -154,6 +175,15 @@ suite('PrivacyPage', function() {
 
   test('privacySandboxRowNotVisible', function() {
     assertFalse(isChildVisible(page, '#privacySandboxLinkRow'));
+  });
+
+  test('privacyReviewRowNotVisible', function() {
+    assertFalse(isChildVisible(page, '#privacyReviewLinkRow'));
+  });
+
+  test('clearBrowsingDataClass', function() {
+    assertFalse(!!page.shadowRoot.querySelector('#clearBrowsingData')
+                      .classList.contains('hr'));
   });
 });
 
@@ -194,21 +224,49 @@ suite('PrivacySandboxSettingsEnabled', function() {
     await flushTasks();
     assertEquals(
         loadTimeData.getString('privacySandboxTrialsEnabled'),
-        page.$$('#privacySandboxLinkRow').subLabel);
+        page.shadowRoot.querySelector('#privacySandboxLinkRow').subLabel);
 
     page.set('prefs.privacy_sandbox.apis_enabled.value', false);
     await flushTasks();
     assertEquals(
         loadTimeData.getString('privacySandboxTrialsDisabled'),
-        page.$$('#privacySandboxLinkRow').subLabel);
+        page.shadowRoot.querySelector('#privacySandboxLinkRow').subLabel);
   });
 
   test('clickPrivacySandboxRow', async function() {
-    page.$$('#privacySandboxLinkRow').click();
+    page.shadowRoot.querySelector('#privacySandboxLinkRow').click();
     // Ensure UMA is logged.
     assertEquals(
         'Settings.PrivacySandbox.OpenedFromSettingsParent',
         await metricsBrowserProxy.whenCalled('recordAction'));
+  });
+});
+
+suite('PrivacyReviewEnabled', function() {
+  /** @type {!SettingsPrivacyPageElement} */
+  let page;
+
+  suiteSetup(function() {
+    loadTimeData.overrideValues({
+      privacyReviewEnabled: true,
+    });
+  });
+
+  setup(function() {
+    document.body.innerHTML = '';
+    page = /** @type {!SettingsPrivacyPageElement} */
+        (document.createElement('settings-privacy-page'));
+    document.body.appendChild(page);
+    return flushTasks();
+  });
+
+  test('privacyReviewRowVisible', function() {
+    assertTrue(isChildVisible(page, '#privacyReviewLinkRow'));
+  });
+
+  test('clearBrowsingDataClass', function() {
+    assertTrue(!!page.shadowRoot.querySelector('#clearBrowsingData')
+                     .classList.contains('hr'));
   });
 });
 
@@ -245,12 +303,21 @@ suite('ContentSettingsRedesign', function() {
     assertEquals(
         page.root.querySelectorAll('category-default-setting').length,
         notRedesignedPages.length);
-    // All redesigned pages, except notifications, will use a
+    // All redesigned pages, except notifications, protocol handlers, pdf
+    // documents and protected content (except chromeos and win), will use a
     // settings-category-default-radio-group.
+    // <if expr="chromeos or is_win">
     assertEquals(
         page.root.querySelectorAll('settings-category-default-radio-group')
             .length,
-        redesignedPages.length - 1);
+        redesignedPages.length - 3);
+    // </if>
+    // <if expr="not chromeos and not is_win">
+    assertEquals(
+        page.root.querySelectorAll('settings-category-default-radio-group')
+            .length,
+        redesignedPages.length - 4);
+    // </if>
   });
 
   test('NotificationPageRedesign', async function() {
@@ -260,7 +327,7 @@ suite('ContentSettingsRedesign', function() {
     assertTrue(isChildVisible(page, '#notificationRadioGroup'));
     const categorySettingExceptions =
         /** @type {!CategorySettingExceptionsElement} */
-        (page.$$('category-setting-exceptions'));
+        (page.shadowRoot.querySelector('category-setting-exceptions'));
     assertTrue(isVisible(categorySettingExceptions));
     assertEquals(
         ContentSettingsTypes.NOTIFICATIONS, categorySettingExceptions.category);
@@ -275,15 +342,8 @@ suite('PrivacyPageSound', function() {
   /** @type {!SettingsPrivacyPageElement} */
   let page;
 
-  function flushAsync() {
-    flush();
-    return new Promise(resolve => {
-      page.async(resolve);
-    });
-  }
-
   function getToggleElement() {
-    return page.$$('settings-animated-pages')
+    return page.shadowRoot.querySelector('settings-animated-pages')
         .queryEffectiveChildren('settings-subpage')
         .queryEffectiveChildren('#block-autoplay-setting');
   }
@@ -299,7 +359,7 @@ suite('PrivacyPageSound', function() {
     page = /** @type {!SettingsPrivacyPageElement} */
         (document.createElement('settings-privacy-page'));
     document.body.appendChild(page);
-    return flushAsync();
+    return flushTasks();
   });
 
   teardown(() => {
@@ -313,7 +373,7 @@ suite('PrivacyPageSound', function() {
     webUIListenerCallback(
         'onBlockAutoplayStatusChanged', {pref: {value: true}, enabled: true});
 
-    return flushAsync().then(() => {
+    return flushTasks().then(() => {
       // Check that we are on and enabled.
       assertFalse(getToggleElement().hasAttribute('disabled'));
       assertTrue(getToggleElement().hasAttribute('checked'));
@@ -323,7 +383,7 @@ suite('PrivacyPageSound', function() {
           'onBlockAutoplayStatusChanged',
           {pref: {value: false}, enabled: true});
 
-      return flushAsync().then(() => {
+      return flushTasks().then(() => {
         // Check that we are off and enabled.
         assertFalse(getToggleElement().hasAttribute('disabled'));
         assertFalse(getToggleElement().hasAttribute('checked'));
@@ -333,7 +393,7 @@ suite('PrivacyPageSound', function() {
             'onBlockAutoplayStatusChanged',
             {pref: {value: false}, enabled: false});
 
-        return flushAsync().then(() => {
+        return flushTasks().then(() => {
           // Check that we are off and disabled.
           assertTrue(getToggleElement().hasAttribute('disabled'));
           assertFalse(getToggleElement().hasAttribute('checked'));
@@ -353,7 +413,7 @@ suite('PrivacyPageSound', function() {
         (document.createElement('settings-privacy-page'));
     document.body.appendChild(page);
 
-    return flushAsync().then(() => {
+    return flushTasks().then(() => {
       assertFalse(loadTimeData.getBoolean('enableBlockAutoplayContentSetting'));
       assertTrue(getToggleElement().hidden);
     });
@@ -366,7 +426,7 @@ suite('PrivacyPageSound', function() {
     webUIListenerCallback(
         'onBlockAutoplayStatusChanged', {pref: {value: true}, enabled: true});
 
-    return flushAsync().then(() => {
+    return flushTasks().then(() => {
       // Check that we are on and enabled.
       assertFalse(getToggleElement().hasAttribute('disabled'));
       assertTrue(getToggleElement().hasAttribute('checked'));
@@ -421,23 +481,31 @@ suite('HappinessTrackingSurveys', function() {
     Router.getInstance().navigateTo(routes.BASIC);
   });
 
-  test('ClearBrowsingDataTrigger', function() {
-    page.$$('#clearBrowsingData').click();
-    return testHatsBrowserProxy.whenCalled('tryShowSurvey');
+  test('ClearBrowsingDataTrigger', async function() {
+    page.shadowRoot.querySelector('#clearBrowsingData').click();
+    const interaction =
+        await testHatsBrowserProxy.whenCalled('trustSafetyInteractionOccurred');
+    assertEquals(TrustSafetyInteraction.USED_PRIVACY_CARD, interaction);
   });
 
-  test('CookiesTrigger', function() {
-    page.$$('#cookiesLinkRow').click();
-    return testHatsBrowserProxy.whenCalled('tryShowSurvey');
+  test('CookiesTrigger', async function() {
+    page.shadowRoot.querySelector('#cookiesLinkRow').click();
+    const interaction =
+        await testHatsBrowserProxy.whenCalled('trustSafetyInteractionOccurred');
+    assertEquals(TrustSafetyInteraction.USED_PRIVACY_CARD, interaction);
   });
 
-  test('SecurityTrigger', function() {
-    page.$$('#securityLinkRow').click();
-    return testHatsBrowserProxy.whenCalled('tryShowSurvey');
+  test('SecurityTrigger', async function() {
+    page.shadowRoot.querySelector('#securityLinkRow').click();
+    const interaction =
+        await testHatsBrowserProxy.whenCalled('trustSafetyInteractionOccurred');
+    assertEquals(TrustSafetyInteraction.USED_PRIVACY_CARD, interaction);
   });
 
-  test('PermissionsTrigger', function() {
-    page.$$('#permissionsLinkRow').click();
-    return testHatsBrowserProxy.whenCalled('tryShowSurvey');
+  test('PermissionsTrigger', async function() {
+    page.shadowRoot.querySelector('#permissionsLinkRow').click();
+    const interaction =
+        await testHatsBrowserProxy.whenCalled('trustSafetyInteractionOccurred');
+    assertEquals(TrustSafetyInteraction.USED_PRIVACY_CARD, interaction);
   });
 });

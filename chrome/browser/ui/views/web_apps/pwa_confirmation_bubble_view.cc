@@ -4,9 +4,10 @@
 
 #include "chrome/browser/ui/views/web_apps/pwa_confirmation_bubble_view.h"
 
+#include <string>
+
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
@@ -28,6 +29,7 @@
 #include "components/feature_engagement/public/tracker.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/url_formatter/elide_url.h"
+#include "content/public/common/content_features.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/text_elider.h"
@@ -49,7 +51,7 @@ std::unique_ptr<views::ImageView> CreateIconView(
     const WebApplicationInfo& web_app_info) {
   constexpr int kIconSize = 48;
   gfx::ImageSkia image(std::make_unique<WebAppInfoImageSource>(
-                           kIconSize, web_app_info.icon_bitmaps_any),
+                           kIconSize, web_app_info.icon_bitmaps.any),
                        gfx::Size(kIconSize, kIconSize));
 
   auto icon_image_view = std::make_unique<views::ImageView>();
@@ -58,7 +60,7 @@ std::unique_ptr<views::ImageView> CreateIconView(
 }
 
 // Returns a label containing the app name.
-std::unique_ptr<views::Label> CreateNameLabel(const base::string16& name) {
+std::unique_ptr<views::Label> CreateNameLabel(const std::u16string& name) {
   auto name_label = std::make_unique<views::Label>(
       name, views::style::CONTEXT_DIALOG_BODY_TEXT,
       views::style::TextStyle::STYLE_PRIMARY);
@@ -129,7 +131,7 @@ PWAConfirmationBubbleView::PWAConfirmationBubbleView(
   // Use CONTROL insets, because the icon is non-text (see documentation for
   // DialogContentType).
   gfx::Insets margin_insets = layout_provider->GetDialogInsetsForContentType(
-      views::CONTROL, views::CONTROL);
+      views::DialogContentType::kControl, views::DialogContentType::kControl);
   set_margins(margin_insets);
 
   int icon_label_spacing = layout_provider->GetDistanceMetric(
@@ -150,9 +152,10 @@ PWAConfirmationBubbleView::PWAConfirmationBubbleView(
       CreateOriginLabel(url::Origin::Create(web_app_info_->start_url))
           .release());
 
-  if (base::FeatureList::IsEnabled(features::kDesktopPWAsTabStrip)) {
+  if (base::FeatureList::IsEnabled(features::kDesktopPWAsTabStrip) &&
+      base::FeatureList::IsEnabled(features::kDesktopPWAsTabStripSettings)) {
     // This UI is only for prototyping and is not intended for shipping.
-    DCHECK_EQ(features::kDesktopPWAsTabStrip.default_state,
+    DCHECK_EQ(features::kDesktopPWAsTabStripSettings.default_state,
               base::FEATURE_DISABLED_BY_DEFAULT);
     tabbed_window_checkbox_ = labels->AddChildView(
         std::make_unique<views::Checkbox>(l10n_util::GetStringUTF16(

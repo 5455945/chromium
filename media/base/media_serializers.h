@@ -18,6 +18,7 @@
 #include "media/base/status_codes.h"
 #include "media/base/text_track_config.h"
 #include "media/base/video_decoder_config.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/hdr_metadata.h"
 
@@ -61,8 +62,8 @@ struct MediaSerializer<std::vector<VecType>> {
 
 // serialize optional types
 template <typename OptType>
-struct MediaSerializer<base::Optional<OptType>> {
-  static base::Value Serialize(const base::Optional<OptType>& opt) {
+struct MediaSerializer<absl::optional<OptType>> {
+  static base::Value Serialize(const absl::optional<OptType>& opt) {
     return opt ? MediaSerializer<OptType>::Serialize(opt.value())
                : base::Value("unset");  // TODO(tmathmeyer) maybe empty string?
   }

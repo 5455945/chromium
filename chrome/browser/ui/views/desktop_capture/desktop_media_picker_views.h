@@ -8,9 +8,9 @@
 #include "build/build_config.h"
 #include "chrome/browser/media/webrtc/desktop_media_picker.h"
 #include "chrome/browser/ui/views/desktop_capture/desktop_media_list_controller.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/tabbed_pane/tabbed_pane_listener.h"
-#include "ui/views/metadata/metadata_header_macros.h"
 #include "ui/views/window/dialog_delegate.h"
 
 namespace views {
@@ -58,16 +58,28 @@ class DesktopMediaPickerDialogView : public views::DialogDelegateView,
 
   // views::DialogDelegateView:
   gfx::Size CalculatePreferredSize() const override;
-  base::string16 GetWindowTitle() const override;
+  std::u16string GetWindowTitle() const override;
   bool IsDialogButtonEnabled(ui::DialogButton button) const override;
   views::View* GetInitiallyFocusedView() override;
   bool Accept() override;
   bool Cancel() override;
   bool ShouldShowCloseButton() const override;
-  void DeleteDelegate() override;
 
  private:
   friend class DesktopMediaPickerViewsTestApi;
+
+  struct DisplaySurfaceCategory {
+    DisplaySurfaceCategory(
+        DesktopMediaList::Type type,
+        std::unique_ptr<DesktopMediaListController> controller);
+
+    DisplaySurfaceCategory(DisplaySurfaceCategory&& other);
+
+    ~DisplaySurfaceCategory();
+
+    DesktopMediaList::Type type;
+    std::unique_ptr<DesktopMediaListController> controller;
+  };
 
   void OnSourceTypeSwitched(int index);
 
@@ -87,12 +99,11 @@ class DesktopMediaPickerDialogView : public views::DialogDelegateView,
   views::Checkbox* audio_share_checkbox_ = nullptr;
 
   views::TabbedPane* tabbed_pane_ = nullptr;
-  std::vector<std::unique_ptr<DesktopMediaListController>> list_controllers_;
-  std::vector<DesktopMediaList::Type> source_types_;
+  std::vector<DisplaySurfaceCategory> categories_;
 
   DialogSource dialog_source_;
 
-  base::Optional<content::DesktopMediaID> accepted_source_;
+  absl::optional<content::DesktopMediaID> accepted_source_;
 };
 
 // Implementation of DesktopMediaPicker for Views.

@@ -54,12 +54,13 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
   <summary>
     Records if CET (Control-flow Enforcement Technology / Hardware Enforced
     Shadow Stack) is enabled or if it has been disabled by IFEO. Reported only
-    if CetAvailable is true, once per browser session, on startup.
+    if CetAvailable is true, once per browser session, on startup. Note: This
+    was recorded incorrectly in M91.
   </summary>
 </histogram>
 
 <histogram name="Windows.ChromeDllPrefetchResult" enum="FilePrefetchResult"
-    expires_after="2021-07-01">
+    expires_after="2021-12-12">
   <owner>brucedawson@chromium.org</owner>
   <owner>jessemckenna@google.com</owner>
   <summary>
@@ -77,6 +78,27 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
   <owner>fdoray@chromium.org</owner>
   <summary>
     The amount of CPU time a call to ComputeNativeWindowOcclusionStatus() takes.
+  </summary>
+</histogram>
+
+<histogram name="Windows.FileDeleteLastRetryError" enum="WinGetLastError"
+    expires_after="2021-12-31">
+  <owner>grt@chromium.org</owner>
+  <owner>davidbienvenu@chromium.org</owner>
+  <summary>
+    Last File deletion error in DeleteFileWithRetry when no retry succeeded,
+    because we exceeded the retry count.
+  </summary>
+</histogram>
+
+<histogram name="Windows.FileDeleteRetryCount" units="attempts"
+    expires_after="2021-12-31">
+  <owner>grt@chromium.org</owner>
+  <owner>davidbienvenu@chromium.org</owner>
+  <summary>
+    The number of retries needed to successfully delete a file from
+    GetDeleteFileCallback. 0 means it succeeded the first time, 9 means it never
+    succeeded.
   </summary>
 </histogram>
 
@@ -113,7 +135,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Windows.HasHighResolutionTimeTicks" enum="Boolean"
-    expires_after="2021-08-15">
+    expires_after="2021-12-19">
   <owner>brucedawson@chromium.org</owner>
   <owner>gab@chromium.org</owner>
   <summary>
@@ -125,7 +147,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 <histogram name="Windows.HighResolutionTimerUsage" units="%"
     expires_after="2022-02-12">
   <owner>olivierli@chromium.org</owner>
-  <owner>chrome-catan@google.com</owner>
+  <owner>catan-team@chromium.org</owner>
   <summary>
     Percentage of elapsed time the high resolution timer is activated. The usage
     is reported by each of Chrome processes individually (without aggregation)
@@ -134,7 +156,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Windows.HypervPresent" enum="BooleanEnabled"
-    expires_after="2021-08-01">
+    expires_after="2021-12-12">
   <owner>rkc@chromium.org</owner>
   <owner>rockot@chromium.org</owner>
   <summary>
@@ -322,7 +344,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Windows.ProcessorFamily" enum="ProcessorFamily"
-    expires_after="2021-07-27">
+    expires_after="2021-12-12">
   <owner>rkc@chromium.org</owner>
   <owner>rockot@chromium.org</owner>
   <summary>
@@ -334,7 +356,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Windows.ProcessorVirtualizationFirmwareEnabled"
-    enum="BooleanEnabled" expires_after="2021-07-27">
+    enum="BooleanEnabled" expires_after="2021-12-12">
   <owner>rkc@chromium.org</owner>
   <owner>rockot@chromium.org</owner>
   <summary>
@@ -344,7 +366,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Windows.ServiceStatus.SSP" units="WindowsServiceStatus"
-    expires_after="2021-08-01">
+    expires_after="2021-12-12">
   <owner>wfh@chromium.org</owner>
   <owner>ajgo@chromium.org</owner>
   <summary>

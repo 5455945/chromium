@@ -12,7 +12,7 @@ import {BackgroundGraphicsModeRestriction, Policies} from '../native_layer.js';
 import {Cdd, CddCapabilities, VendorCapability} from './cdd.js';
 import {Destination, DestinationOrigin, DestinationType, RecentDestination} from './destination.js';
 import {getPrinterTypeForDestination, PrinterType} from './destination_match.js';
-// <if expr="chromeos">
+// <if expr="chromeos or lacros">
 import {ColorModeRestriction, DuplexModeRestriction, PinModeRestriction} from './destination_policies.js';
 // </if>
 import {DocumentSettings} from './document_info.js';
@@ -175,7 +175,7 @@ const STICKY_SETTING_NAMES = [
   'scalingTypePdf',
   'vendorItems',
 ];
-// <if expr="chromeos">
+// <if expr="chromeos or lacros">
 STICKY_SETTING_NAMES.push('pin', 'pinValue');
 // </if>
 
@@ -443,7 +443,7 @@ Polymer({
             key: 'recentDestinations',
             updatesPreview: false,
           },
-          // <if expr="chromeos">
+          // <if expr="chromeos or lacros">
           pin: {
             value: false,
             unavailableValue: false,
@@ -499,8 +499,7 @@ Polymer({
     'updateSettingsFromDestination_(destination.capabilities)',
     'updateSettingsAvailabilityFromDocumentSettings_(' +
         'documentSettings.isModifiable, documentSettings.isFromArc,' +
-        'documentSettings.isPdf, documentSettings.hasCssMediaStyles, ' +
-        'documentSettings.hasSelection)',
+        'documentSettings.hasCssMediaStyles, documentSettings.hasSelection)',
     'updateHeaderFooterAvailable_(' +
         'margins, settings.margins.value, settings.mediaSize.value)',
   ],
@@ -694,7 +693,7 @@ Polymer({
     this.setSettingPath_(
         'vendorItems.available', !!caps && !!caps.vendor_capability);
 
-    // <if expr="chromeos">
+    // <if expr="chromeos or lacros">
     const pinSupported = !!caps && !!caps.pin && !!caps.pin.supported &&
         loadTimeData.getBoolean('isEnterpriseManaged');
     this.set('settings.pin.available', pinSupported);
@@ -713,16 +712,15 @@ Polymer({
     const knownSizeToSaveAsPdf = isSaveAsPDF &&
         (!this.documentSettings.isModifiable ||
          this.documentSettings.hasCssMediaStyles);
-    const scalingAvailable = !knownSizeToSaveAsPdf &&
-        !this.documentSettings.isFromArc &&
-        (this.documentSettings.isModifiable || this.documentSettings.isPdf);
+    const scalingAvailable =
+        !knownSizeToSaveAsPdf && !this.documentSettings.isFromArc;
     this.setSettingPath_('scaling.available', scalingAvailable);
     this.setSettingPath_(
         'scalingType.available',
-        scalingAvailable && !this.documentSettings.isPdf);
+        scalingAvailable && this.documentSettings.isModifiable);
     this.setSettingPath_(
         'scalingTypePdf.available',
-        scalingAvailable && this.documentSettings.isPdf);
+        scalingAvailable && !this.documentSettings.isModifiable);
     const caps = this.destination && this.destination.capabilities ?
         this.destination.capabilities.printer :
         null;
@@ -743,10 +741,7 @@ Polymer({
     }
 
     this.setSettingPath_(
-        'pagesPerSheet.available',
-        !this.documentSettings.isFromArc &&
-            (this.documentSettings.isModifiable ||
-             this.documentSettings.isPdf));
+        'pagesPerSheet.available', !this.documentSettings.isFromArc);
     this.setSettingPath_(
         'margins.available',
         !this.documentSettings.isFromArc && this.documentSettings.isModifiable);
@@ -993,7 +988,7 @@ Polymer({
       savedSettings =
           /** @type {SerializedSettings} */ (JSON.parse(savedSettingsStr));
     } catch (e) {
-      console.error('Unable to parse state ' + e);
+      console.warn('Unable to parse state ' + e);
       return;  // use default values rather than updating.
     }
     if (savedSettings.version !== 2) {
@@ -1090,7 +1085,7 @@ Polymer({
       const allowedMode = policies[settingName].allowedMode;
       this.configurePolicySetting_(settingName, allowedMode, defaultMode);
     });
-    // <if expr="chromeos">
+    // <if expr="chromeos or lacros">
     if (policies['sheets']) {
       if (!this.policySettings_) {
         this.policySettings_ = {};
@@ -1157,7 +1152,7 @@ Polymer({
     if (this.policySettings_) {
       for (const [settingName, policy] of Object.entries(
                this.policySettings_)) {
-        // <if expr="chromeos">
+        // <if expr="chromeos or lacros">
         if (settingName === 'sheets') {
           this.maxSheets = this.policySettings_['sheets'].value;
           continue;
@@ -1180,7 +1175,7 @@ Polymer({
    * current destination.
    */
   applyDestinationSpecificPolicies() {
-    // <if expr="chromeos">
+    // <if expr="chromeos or lacros">
     const colorPolicy = this.destination.colorPolicy;
     const colorValue =
         colorPolicy ? colorPolicy : this.destination.defaultColorPolicy;
@@ -1246,7 +1241,7 @@ Polymer({
   /** @private */
   updateManaged_() {
     let managedSettings = ['cssBackground', 'headerFooter'];
-    // <if expr="chromeos">
+    // <if expr="chromeos or lacros">
     managedSettings =
         managedSettings.concat(['color', 'duplex', 'duplexShortEdge', 'pin']);
     // </if>
@@ -1357,7 +1352,7 @@ Polymer({
       pageHeight: this.pageSize.height,
       showSystemDialog: showSystemDialog,
     };
-    // <if expr="chromeos">
+    // <if expr="chromeos or lacros">
     ticket.printToGoogleDrive = ticket.printToGoogleDrive ||
         destination.id === Destination.GooglePromotedId.SAVE_TO_DRIVE_CROS;
     // </if>
@@ -1382,7 +1377,7 @@ Polymer({
       ticket.OpenPDFInPreview = true;
     }
 
-    // <if expr="chromeos">
+    // <if expr="chromeos or lacros">
     if (this.getSettingValue('pin')) {
       ticket.pinValue = this.getSettingValue('pinValue');
     }
@@ -1418,7 +1413,7 @@ Polymer({
       const selectedOption = destination.getSelectedColorOption(
           /** @type {boolean} */ (this.settings.color.value));
       if (!selectedOption) {
-        console.error('Could not find correct color option');
+        console.warn('Could not find correct color option');
       } else {
         cjt.print.color = {type: selectedOption.type};
         if (selectedOption.hasOwnProperty('vendor_id')) {

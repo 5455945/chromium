@@ -48,6 +48,10 @@
 #include "extensions/common/extension_urls.h"
 #endif
 
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+#include "base/metrics/histogram_functions.h"
+#endif
+
 using content::BrowserThread;
 using net::registry_controlled_domains::EXCLUDE_PRIVATE_REGISTRIES;
 using net::registry_controlled_domains::EXCLUDE_UNKNOWN_REGISTRIES;
@@ -122,6 +126,18 @@ const char kPlayTermsPath[] = "/about/play-terms";
 
 // accounts.google.com used for login:
 const char kAccountsGoogleUrl[] = "https://accounts.google.com";
+
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+// UMA histogram FamilyUser.WebFilterType
+// Reports WebFilterType which indicates web filter behaviour are used for
+// current Family Link user on Chrome OS.
+constexpr char kWebFilterTypeHistogramName[] = "FamilyUser.WebFilterType";
+
+// UMA histogram FamilyUser.ManualSiteListType
+// Reports ManualSiteListType which indicates approved list and blocked list
+// usage for current Family Link user on Chrome OS.
+constexpr char kManagedSiteListHistogramName[] = "FamilyUser.ManagedSiteList";
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 // This class encapsulates all the state that is required during construction of
 // a new SupervisedUserURLFilter::Contents.
@@ -238,6 +254,19 @@ SupervisedUserURLFilter::SupervisedUserURLFilter()
 SupervisedUserURLFilter::~SupervisedUserURLFilter() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
+
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+// static
+const char* SupervisedUserURLFilter::GetWebFilterTypeHistogramNameForTest() {
+  return kWebFilterTypeHistogramName;
+}
+
+// static
+const char* SupervisedUserURLFilter::GetManagedSiteListHistogramNameForTest() {
+  return kManagedSiteListHistogramName;
+}
+
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 // static
 bool SupervisedUserURLFilter::ShouldSkipParentManualAllowlistFiltering(
@@ -534,9 +563,9 @@ bool SupervisedUserURLFilter::GetFilteringBehaviorForSubFrameURLWithAsyncChecks(
   return RunAsyncChecker(url, std::move(callback));
 }
 
-std::map<std::string, base::string16>
+std::map<std::string, std::u16string>
 SupervisedUserURLFilter::GetMatchingAllowlistTitles(const GURL& url) const {
-  std::map<std::string, base::string16> allowlists;
+  std::map<std::string, std::u16string> allowlists;
 
   std::set<URLMatcherConditionSet::ID> matching_ids =
       contents_->url_matcher.MatchURL(url);
@@ -667,6 +696,77 @@ void SupervisedUserURLFilter::SetBlockingTaskRunnerForTesting(
     const scoped_refptr<base::TaskRunner>& task_runner) {
   blocking_task_runner_ = task_runner;
 }
+
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+SupervisedUserURLFilter::WebFilterType
+SupervisedUserURLFilter::GetWebFilterType() const {
+  // If the default filtering behavior is not block, it means the web filter
+  // was set to either "allow all sites" or "try to block mature sites".
+  if (default_behavior_ == BLOCK)
+    return WebFilterType::kCertainSites;
+
+  bool safe_sites_enabled = HasAsyncURLChecker() || HasDenylist();
+  return safe_sites_enabled ? WebFilterType::kTryToBlockMatureSites
+                            : WebFilterType::kAllowAllSites;
+}
+
+void SupervisedUserURLFilter::ReportWebFilterTypeMetrics() const {
+  if (!is_filter_initialized_)
+    return;
+
+  base::UmaHistogramEnumeration(kWebFilterTypeHistogramName,
+                                GetWebFilterType());
+}
+
+void SupervisedUserURLFilter::ReportManagedSiteListMetrics() const {
+  if (!is_filter_initialized_)
+    return;
+
+  if (url_map_.empty() && host_map_.empty()) {
+    base::UmaHistogramEnumeration(kManagedSiteListHistogramName,
+                                  ManagedSiteList::kEmpty);
+    return;
+  }
+
+  ManagedSiteList managed_site_list = ManagedSiteList::kMaxValue;
+  bool approved_list = false;
+  bool blocked_list = false;
+  for (const auto& it : url_map_) {
+    if (approved_list && blocked_list)
+      break;
+    if (it.second) {
+      approved_list = true;
+    } else {
+      blocked_list = true;
+    }
+  }
+
+  for (const auto& it : host_map_) {
+    if (approved_list && blocked_list)
+      break;
+    if (it.second) {
+      approved_list = true;
+    } else {
+      blocked_list = true;
+    }
+  }
+
+  if (approved_list && blocked_list) {
+    managed_site_list = ManagedSiteList::kBoth;
+  } else if (approved_list) {
+    managed_site_list = ManagedSiteList::kApprovedListOnly;
+  } else {
+    managed_site_list = ManagedSiteList::kBlockedListOnly;
+  }
+
+  base::UmaHistogramEnumeration(kManagedSiteListHistogramName,
+                                managed_site_list);
+}
+
+void SupervisedUserURLFilter::SetFilterInitialized(bool is_filter_initialized) {
+  is_filter_initialized_ = is_filter_initialized;
+}
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 bool SupervisedUserURLFilter::RunAsyncChecker(
     const GURL& url,

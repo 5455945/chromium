@@ -11,7 +11,6 @@
 #include "base/containers/contains.h"
 #include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/stringprintf.h"
 #include "base/time/time.h"
 #include "services/device/public/cpp/generic_sensor/sensor_traits.h"
 
@@ -224,11 +223,18 @@ PlatformSensorConfiguration PlatformSensorChromeOS::GetDefaultConfiguration() {
   return default_configuration_;
 }
 
+void PlatformSensorChromeOS::SensorReplaced() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  VLOG(1) << "SensorReplaced with id: " << iio_device_id_;
+  ResetReadingBuffer();
+  ResetOnError();
+}
+
 void PlatformSensorChromeOS::ResetOnError() {
   LOG(ERROR) << "ResetOnError of sensor with id: " << iio_device_id_;
-  NotifySensorError();
   sensor_device_remote_.reset();
   receiver_.reset();
+  NotifySensorError();
 }
 
 void PlatformSensorChromeOS::StartReadingIfReady() {
@@ -253,7 +259,7 @@ mojo::PendingRemote<chromeos::sensors::mojom::SensorDeviceSamplesObserver>
 PlatformSensorChromeOS::BindNewPipeAndPassRemote() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!receiver_.is_bound());
-  auto pending_remote = receiver_.BindNewPipeAndPassRemote(task_runner_);
+  auto pending_remote = receiver_.BindNewPipeAndPassRemote(main_task_runner());
 
   receiver_.set_disconnect_handler(
       base::BindOnce(&PlatformSensorChromeOS::OnObserverDisconnect,
@@ -275,7 +281,7 @@ void PlatformSensorChromeOS::SetRequiredChannels() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(required_channel_ids_.empty());  // Should only be called once.
 
-  base::Optional<std::string> axes_prefix = base::nullopt;
+  absl::optional<std::string> axes_prefix = absl::nullopt;
   switch (GetType()) {
     case mojom::SensorType::AMBIENT_LIGHT:
       required_channel_ids_.push_back(chromeos::sensors::mojom::kLightChannel);

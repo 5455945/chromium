@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 #include <stddef.h>
+
+#include <memory>
 #include <utility>
 
 #include "base/bind.h"
@@ -15,6 +17,7 @@
 #include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -143,7 +146,7 @@ class TimeZoneReceiver {
   }
 
   void WaitUntilRequestDone() {
-    message_loop_runner_.reset(new base::RunLoop);
+    message_loop_runner_ = std::make_unique<base::RunLoop>();
     message_loop_runner_->Run();
   }
 

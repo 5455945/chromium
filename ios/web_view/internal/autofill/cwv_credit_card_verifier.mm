@@ -30,6 +30,9 @@ CWVCreditCardVerificationError CWVConvertPaymentsRPCResult(
   switch (result) {
     case autofill::AutofillClient::NONE:
     case autofill::AutofillClient::SUCCESS:
+    // The following two errors are not expected on iOS.
+    case autofill::AutofillClient::VCN_RETRIEVAL_TRY_AGAIN_FAILURE:
+    case autofill::AutofillClient::VCN_RETRIEVAL_PERMANENT_FAILURE:
       NOTREACHED();
       return CWVCreditCardVerificationErrorNone;
     case autofill::AutofillClient::TRY_AGAIN_FAILURE:
@@ -67,7 +70,7 @@ class WebViewCardUnmaskPromptView : public autofill::CardUnmaskPromptView {
   void DisableAndWaitForVerification() override {
     // No op.
   }
-  void GotVerificationResult(const base::string16& error_message,
+  void GotVerificationResult(const std::u16string& error_message,
                              bool allow_retry) override {
     NSString* ns_error_message = base::SysUTF16ToNSString(error_message);
     [verifier_ didReceiveVerificationResultWithErrorMessage:ns_error_message
@@ -104,17 +107,27 @@ class WebViewCardUnmaskPromptView : public autofill::CardUnmaskPromptView {
   self = [super init];
   if (self) {
     _creditCard = [[CWVCreditCard alloc] initWithCreditCard:creditCard];
-    _unmaskingView =
-        std::make_unique<ios_web_view::WebViewCardUnmaskPromptView>(self);
     _unmaskingController =
         std::make_unique<autofill::CardUnmaskPromptControllerImpl>(prefs);
+    __weak CWVCreditCardVerifier* weakSelf = self;
     _unmaskingController->ShowPrompt(
         base::BindOnce(^autofill::CardUnmaskPromptView*() {
-          return _unmaskingView.get();
+          return [weakSelf createUnmaskingView];
         }),
         creditCard, reason, delegate);
   }
   return self;
+}
+
+// Factory function to CardUnmaskPromptController::ShowPrompt. This should
+// return std:unique_ptr<autofill::CardUnmaskPromptView>> but there are tests
+// which don't do the ownership correctly, so ownership is retained in the
+// CWVCreditCardVerifier instance.
+- (autofill::CardUnmaskPromptView*)createUnmaskingView {
+  DCHECK(!_unmaskingView);
+  _unmaskingView =
+      std::make_unique<ios_web_view::WebViewCardUnmaskPromptView>(self);
+  return _unmaskingView.get();
 }
 
 - (void)dealloc {
@@ -172,8 +185,7 @@ class WebViewCardUnmaskPromptView : public autofill::CardUnmaskPromptView {
 
   _unmaskingController->OnUnmaskPromptAccepted(
       base::SysNSStringToUTF16(CVC), base::SysNSStringToUTF16(expirationMonth),
-      base::SysNSStringToUTF16(expirationYear), /*should_store_pan=*/false,
-      /*enable_fido_auth=*/false);
+      base::SysNSStringToUTF16(expirationYear), /*enable_fido_auth=*/false);
 }
 
 - (BOOL)isCVCValid:(NSString*)CVC {

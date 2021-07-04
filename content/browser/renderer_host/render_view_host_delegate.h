@@ -7,20 +7,14 @@
 
 #include <stdint.h>
 
-#include <string>
-
 #include "base/callback.h"
 #include "base/process/kill.h"
-#include "base/strings/string16.h"
 #include "content/browser/dom_storage/session_storage_namespace_impl.h"
 #include "content/common/content_export.h"
-#include "content/common/render_message_filter.mojom.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "net/base/load_states.h"
-
-namespace IPC {
-class Message;
-}
+#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/skia/include/core/SkColor.h"
 
 namespace blink {
 namespace web_pref {
@@ -38,8 +32,6 @@ namespace content {
 class RenderViewHost;
 class RenderViewHostImpl;
 class RenderViewHostDelegateView;
-class SessionStorageNamespace;
-class SiteInstance;
 class WebContents;
 
 //
@@ -58,10 +50,6 @@ class CONTENT_EXPORT RenderViewHostDelegate {
   // Returns the current delegate associated with a feature. May return NULL if
   // there is no corresponding delegate.
   virtual RenderViewHostDelegateView* GetDelegateView();
-
-  // This is used to give the delegate a chance to filter IPC messages.
-  virtual bool OnMessageReceived(RenderViewHostImpl* render_view_host,
-                                 const IPC::Message& message);
 
   // Return this object cast to a WebContents, if it is one. If the object is
   // not a WebContents, returns NULL. DEPRECATED: Be sure to include brettw or
@@ -101,11 +89,6 @@ class CONTENT_EXPORT RenderViewHostDelegate {
   // The contents' preferred size changed.
   virtual void UpdatePreferredSize(const gfx::Size& pref_size) {}
 
-  // Returns the SessionStorageNamespace the render view should use. Might
-  // create the SessionStorageNamespace on the fly.
-  virtual SessionStorageNamespace* GetSessionStorageNamespace(
-      SiteInstance* instance);
-
   // Returns a copy of the map of all session storage namespaces related
   // to this view.
   virtual SessionStorageNamespaceMap GetSessionStorageNamespaceMap();
@@ -125,9 +108,6 @@ class CONTENT_EXPORT RenderViewHostDelegate {
   virtual const blink::web_pref::WebPreferences&
   GetOrCreateWebPreferences() = 0;
 
-  // Returns true if the WebPreferences for this RenderViewHost is not null.
-  virtual bool IsWebPreferencesSet() const;
-
   // Sets the WebPreferences for the WebContents associated with this
   // RenderViewHost to |prefs| and send the new value to all renderers in the
   // WebContents.
@@ -142,27 +122,17 @@ class CONTENT_EXPORT RenderViewHostDelegate {
   // recomputed).
   virtual void RecomputeWebPreferencesSlow() {}
 
-  // Whether the user agent is overridden using the Chrome for Android "Request
-  // Desktop Site" feature.
-  virtual bool IsOverridingUserAgent();
-
   virtual bool IsJavaScriptDialogShowing() const;
 
   // If a timer for an unresponsive renderer fires, whether it should be
   // ignored.
   virtual bool ShouldIgnoreUnresponsiveRenderer();
 
-  // Whether download UI should be hidden.
-  virtual bool HideDownloadUI() const;
-
-  // Whether the WebContents as a persistent video.
-  virtual bool HasPersistentVideo() const;
-
-  // Whether spatial navigation is permitted.
-  virtual bool IsSpatialNavigationDisabled() const;
-
   // The RenderView finished the first visually non-empty paint.
   virtual void DidFirstVisuallyNonEmptyPaint(RenderViewHostImpl* source) {}
+
+  // Returns true if the render view is rendering a guest.
+  virtual bool IsGuest();
 
   // Returns true if the render view is rendering a portal.
   virtual bool IsPortal();
@@ -174,6 +144,11 @@ class CONTENT_EXPORT RenderViewHostDelegate {
   // Called when the CSS background color for the underlying document has
   // changed.
   virtual void OnBackgroundColorChanged(RenderViewHostImpl* source) {}
+
+  // Called on RenderView creation to get the initial base background color
+  // for this RenderView. Nullopt means a color is not set, and the blink
+  // default color should be used.
+  virtual absl::optional<SkColor> GetBaseBackgroundColor();
 
  protected:
   virtual ~RenderViewHostDelegate() {}

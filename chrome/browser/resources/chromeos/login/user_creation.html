@@ -2,16 +2,23 @@
 Use of this source code is governed by a BSD-style license that can be
 found in the LICENSE file. -->
 
+<link rel="import" href="chrome://resources/html/polymer.html">
+
 <link rel="import" href="chrome://resources/cr_elements/cr_radio_button/cr_card_radio_button.html">
 <link rel="import" href="chrome://resources/cr_elements/cr_radio_group/cr_radio_group.html">
 <link rel="import" href="chrome://resources/html/action_link.html">
-<link rel="import" href="chrome://resources/html/polymer.html">
+<link rel="import" href="chrome://resources/polymer/v1_0/iron-icon/iron-icon.html">
 
+<link rel="import" href="/components/buttons/oobe_back_button.html">
+<link rel="import" href="/components/buttons/oobe_next_button.html">
 <link rel="import" href="/components/common_styles.html">
-<link rel="import" href="/components/hd_iron_icon.html">
+<link rel="import" href="/components/hd_iron_icon/hd_iron_icon.html">
 <link rel="import" href="/components/oobe_adaptive_dialog.html">
-<link rel="import" href="/components/oobe_i18n_behavior.html">
-<link rel="import" href="/components/oobe_dialog_host_behavior.html">
+<link rel="import" href="/components/behaviors/oobe_i18n_behavior.html">
+<link rel="import" href="/components/behaviors/oobe_dialog_host_behavior.html">
+<link rel="import" href="/components/behaviors/login_screen_behavior.html">
+<link rel="import" href="/components/behaviors/multi_step_behavior.html">
+<link rel="import" href="/components/oobe_icons.html">
 
 <dom-module id="user-creation-element">
   <template>
@@ -20,10 +27,12 @@ found in the LICENSE file. -->
         --radio-button-height: 120px;
       }
 
+      :host-context(html:not([new-layout])) div[slot='content'] {
+        margin: auto 0;
+      }
+
       cr-radio-group {
         display: flex;
-        margin-bottom: auto;
-        margin-top: auto;
       }
 
       :host-context(html:not([new-layout])) cr-radio-group {
@@ -32,6 +41,7 @@ found in the LICENSE file. -->
 
       :host-context(html[new-layout]) cr-radio-group {
         flex-direction: column;
+        margin-top: 8px;
       }
 
       cr-card-radio-button {
@@ -42,6 +52,7 @@ found in the LICENSE file. -->
         --cr-button-edge-spacing: 0;
         --cr-card-radio-button-padding: 0;
         --cr-card-radio-button-margin: 0;
+        --cr-checked-color: var(--google-blue-500);
         --cr-radio-button-ink-size: 0;
       }
 
@@ -143,16 +154,14 @@ found in the LICENSE file. -->
     </style>
     <oobe-adaptive-dialog id="userCreationDialog" role="dialog"
         aria-label$="[[i18nDynamic(locale, titleKey_)]]" for-step="create">
-      <hd-iron-icon icon1x="oobe-32:googleg" icon2x="oobe-64:googleg"
-        slot="icon">
-      </hd-iron-icon>
+      <iron-icon slot="icon" icon="oobe-32:googleg"></iron-icon>
       <h1 slot="title">
         [[i18nDynamic(locale, titleKey_)]]
       </h1>
       <div slot="subtitle">
         [[i18nDynamic(locale, subtitleKey_)]]
       </div>
-      <div slot="content" class="flex layout vertical">
+      <div slot="content" class="layout vertical landscape-vertical-centered">
         <cr-radio-group id="userType" selected="{{selectedUserType}}">
           <cr-card-radio-button id="selfButton" class="flex" name="self">
             <div class="card-container">
@@ -200,9 +209,7 @@ found in the LICENSE file. -->
     </oobe-adaptive-dialog>
     <oobe-adaptive-dialog id="childSignInDialog" role="dialog" for-step="child"
         aria-label$="[[i18nDynamic(locale, 'childSignInTitle')]]">
-      <hd-iron-icon icon1x="oobe-32:family" icon2x="oobe-64:family"
-        slot="icon">
-      </hd-iron-icon>
+      <iron-icon slot="icon" icon="oobe-32:family"></iron-icon>
       <h1 slot="title">
         [[i18nDynamic(locale, 'childSignInTitle')]]
       </h1>
@@ -213,7 +220,7 @@ found in the LICENSE file. -->
           [[i18nDynamic(locale, 'childSignInLearnMore')]]
         </a>
       </div>
-      <div slot="content" class="flex layout vertical">
+      <div slot="content" class="layout vertical landscape-vertical-centered">
         <cr-radio-group id="childSignInMethod"
             selected="{{selectedSignInMethod}}">
           <cr-card-radio-button id="childCreateButton" name="create"

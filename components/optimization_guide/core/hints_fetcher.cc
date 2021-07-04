@@ -98,7 +98,7 @@ HintsFetcher::HintsFetcher(
 HintsFetcher::~HintsFetcher() {
   if (active_url_loader_) {
     if (hints_fetched_callback_)
-      std::move(hints_fetched_callback_).Run(base::nullopt);
+      std::move(hints_fetched_callback_).Run(absl::nullopt);
     base::UmaHistogramExactLinear(
         "OptimizationGuide.HintsFetcher.GetHintsRequest."
         "ActiveRequestCanceled." +
@@ -136,7 +136,7 @@ bool HintsFetcher::WasHostCoveredByFetch(PrefService* pref_service,
 
   DictionaryPrefUpdate hosts_fetched(
       pref_service, prefs::kHintsFetcherHostsSuccessfullyFetched);
-  base::Optional<double> value =
+  absl::optional<double> value =
       hosts_fetched->FindDoubleKey(HashHostForDictionary(host));
   if (!value)
     return false;
@@ -146,12 +146,32 @@ bool HintsFetcher::WasHostCoveredByFetch(PrefService* pref_service,
   return host_valid_time > time_clock->Now();
 }
 
+// static
+void HintsFetcher::ClearSingleFetchedHost(PrefService* pref_service,
+                                          const std::string& host) {
+  DictionaryPrefUpdate hosts_fetched_list(
+      pref_service, prefs::kHintsFetcherHostsSuccessfullyFetched);
+  hosts_fetched_list->Remove(HashHostForDictionary(host), nullptr);
+}
+
+// static
+void HintsFetcher::AddFetchedHostForTesting(PrefService* pref_service,
+                                            const std::string& host,
+                                            base::Time time) {
+  DictionaryPrefUpdate hosts_fetched_list(
+      pref_service, prefs::kHintsFetcherHostsSuccessfullyFetched);
+  hosts_fetched_list->SetDoubleKey(
+      HashHostForDictionary(host),
+      time.ToDeltaSinceWindowsEpoch().InSecondsF());
+}
+
 bool HintsFetcher::FetchOptimizationGuideServiceHints(
     const std::vector<std::string>& hosts,
     const std::vector<GURL>& urls,
     const base::flat_set<optimization_guide::proto::OptimizationType>&
         optimization_types,
     optimization_guide::proto::RequestContext request_context,
+    const std::string& locale,
     HintsFetchedCallback hints_fetched_callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_GT(optimization_types.size(), 0u);
@@ -159,14 +179,14 @@ bool HintsFetcher::FetchOptimizationGuideServiceHints(
   if (network_connection_tracker_->IsOffline()) {
     RecordRequestStatusHistogram(request_context,
                                  HintsFetcherRequestStatus::kNetworkOffline);
-    std::move(hints_fetched_callback).Run(base::nullopt);
+    std::move(hints_fetched_callback).Run(absl::nullopt);
     return false;
   }
 
   if (active_url_loader_) {
     RecordRequestStatusHistogram(request_context,
                                  HintsFetcherRequestStatus::kFetcherBusy);
-    std::move(hints_fetched_callback).Run(base::nullopt);
+    std::move(hints_fetched_callback).Run(absl::nullopt);
     return false;
   }
 
@@ -176,7 +196,7 @@ bool HintsFetcher::FetchOptimizationGuideServiceHints(
   if (filtered_hosts.empty() && valid_urls.empty()) {
     RecordRequestStatusHistogram(
         request_context, HintsFetcherRequestStatus::kNoHostsOrURLsToFetch);
-    std::move(hints_fetched_callback).Run(base::nullopt);
+    std::move(hints_fetched_callback).Run(absl::nullopt);
     return false;
   }
 
@@ -189,7 +209,7 @@ bool HintsFetcher::FetchOptimizationGuideServiceHints(
     RecordRequestStatusHistogram(
         request_context,
         HintsFetcherRequestStatus::kNoSupportedOptimizationTypes);
-    std::move(hints_fetched_callback).Run(base::nullopt);
+    std::move(hints_fetched_callback).Run(absl::nullopt);
     return false;
   }
 
@@ -207,6 +227,8 @@ bool HintsFetcher::FetchOptimizationGuideServiceHints(
 
   *get_hints_request.mutable_active_field_trials() =
       GetActiveFieldTrialsAllowedForFetch();
+
+  get_hints_request.set_locale(locale);
 
   for (const auto& url : valid_urls)
     get_hints_request.add_urls()->set_url(url.spec());
@@ -330,7 +352,7 @@ void HintsFetcher::HandleResponse(const std::string& get_hints_response_data,
     hosts_fetched_.clear();
     RecordRequestStatusHistogram(request_context_,
                                  HintsFetcherRequestStatus::kResponseError);
-    std::move(hints_fetched_callback_).Run(base::nullopt);
+    std::move(hints_fetched_callback_).Run(absl::nullopt);
   }
 }
 
@@ -346,7 +368,7 @@ void HintsFetcher::UpdateHostsSuccessfullyFetched(
 
   // Remove any expired hosts.
   std::vector<std::string> entries_to_remove;
-  for (const auto& it : hosts_fetched_list->DictItems()) {
+  for (auto it : hosts_fetched_list->DictItems()) {
     if (base::Time::FromDeltaSinceWindowsEpoch(base::TimeDelta::FromSecondsD(
             it.second.GetDouble())) < time_clock_->Now()) {
       entries_to_remove.emplace_back(it.first);
@@ -361,13 +383,13 @@ void HintsFetcher::UpdateHostsSuccessfullyFetched(
 
   // Ensure there is enough space in the dictionary pref for the
   // most recent set of hosts to be stored.
-  if (hosts_fetched_list->size() + hosts_fetched_.size() >
+  if (hosts_fetched_list->DictSize() + hosts_fetched_.size() >
       features::MaxHostsForRecordingSuccessfullyCovered()) {
     entries_to_remove.clear();
     size_t num_entries_to_remove =
-        hosts_fetched_list->size() + hosts_fetched_.size() -
+        hosts_fetched_list->DictSize() + hosts_fetched_.size() -
         features::MaxHostsForRecordingSuccessfullyCovered();
-    for (const auto& it : hosts_fetched_list->DictItems()) {
+    for (auto it : hosts_fetched_list->DictItems()) {
       if (entries_to_remove.size() >= num_entries_to_remove)
         break;
       entries_to_remove.emplace_back(it.first);
@@ -384,7 +406,7 @@ void HintsFetcher::UpdateHostsSuccessfullyFetched(
         HashHostForDictionary(host),
         host_invalid_time.ToDeltaSinceWindowsEpoch().InSecondsF());
   }
-  DCHECK_LE(hosts_fetched_list->size(),
+  DCHECK_LE(hosts_fetched_list->DictSize(),
             features::MaxHostsForRecordingSuccessfullyCovered());
   hosts_fetched_.clear();
 }
@@ -431,13 +453,13 @@ std::vector<std::string> HintsFetcher::GetSizeLimitedHostsDueForHintsRefresh(
 
     bool host_hints_due_for_refresh = true;
 
-    base::Optional<double> value =
+    absl::optional<double> value =
         hosts_fetched->FindDoubleKey(HashHostForDictionary(host));
     if (value && optimization_guide::features::ShouldPersistHintsToDisk()) {
       base::Time host_valid_time = base::Time::FromDeltaSinceWindowsEpoch(
           base::TimeDelta::FromSecondsD(*value));
       host_hints_due_for_refresh =
-          (host_valid_time - features::GetHintsFetchRefreshDuration() <=
+          (host_valid_time - features::GetHostHintsFetchRefreshDuration() <=
            time_clock_->Now());
     }
     if (host_hints_due_for_refresh)

@@ -13,17 +13,22 @@
 #include "base/time/clock.h"
 #include "base/time/default_clock.h"
 #include "base/time/time.h"
+#include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/read_later/reading_list_model_factory.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/webui/read_later/read_later_ui.h"
 #include "chrome/common/webui_url_constants.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/reading_list/core/reading_list_entry.h"
-#include "components/reading_list/core/reading_list_model.h"
 #include "components/url_formatter/url_formatter.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_ui.h"
 #include "ui/base/l10n/time_format.h"
+#include "ui/base/models/simple_menu_model.h"
 #include "url/gurl.h"
 
 namespace {
@@ -55,21 +60,106 @@ bool IsActiveTabNTP(Browser* browser) {
   return false;
 }
 
+class ReadLaterItemContextMenu : public ui::SimpleMenuModel,
+                                 public ui::SimpleMenuModel::Delegate {
+ public:
+  ReadLaterItemContextMenu(Browser* browser,
+                           ReadingListModel* reading_list_model,
+                           GURL url)
+      : ui::SimpleMenuModel(this),
+        browser_(browser),
+        reading_list_model_(reading_list_model),
+        url_(url) {
+    AddItemWithStringId(IDC_CONTENT_CONTEXT_OPENLINKNEWTAB,
+                        IDS_CONTENT_CONTEXT_OPENLINKNEWTAB);
+    AddItemWithStringId(IDC_CONTENT_CONTEXT_OPENLINKNEWWINDOW,
+                        IDS_CONTENT_CONTEXT_OPENLINKNEWWINDOW);
+    AddItemWithStringId(IDC_CONTENT_CONTEXT_OPENLINKOFFTHERECORD,
+                        IDS_CONTENT_CONTEXT_OPENLINKOFFTHERECORD);
+    AddSeparator(ui::NORMAL_SEPARATOR);
+
+    if (reading_list_model->GetEntryByURL(url)->IsRead()) {
+      AddItemWithStringId(kMarkAsUnread,
+                          IDS_READ_LATER_CONTEXT_MENU_MARK_AS_UNREAD);
+    } else {
+      AddItemWithStringId(kMarkAsRead,
+                          IDS_READ_LATER_CONTEXT_MENU_MARK_AS_READ);
+    }
+    AddItemWithStringId(kDelete, IDS_READ_LATER_CONTEXT_MENU_DELETE);
+  }
+  ~ReadLaterItemContextMenu() override = default;
+
+  void ExecuteCommand(int command_id, int event_flags) override {
+    switch (command_id) {
+      case IDC_CONTENT_CONTEXT_OPENLINKNEWTAB: {
+        content::OpenURLParams params(url_, content::Referrer(),
+                                      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                                      ui::PAGE_TRANSITION_AUTO_BOOKMARK, false);
+        browser_->OpenURL(params);
+        reading_list_model_->SetReadStatus(url_, true);
+        break;
+      }
+
+      case IDC_CONTENT_CONTEXT_OPENLINKNEWWINDOW: {
+        content::OpenURLParams params(url_, content::Referrer(),
+                                      WindowOpenDisposition::NEW_WINDOW,
+                                      ui::PAGE_TRANSITION_AUTO_BOOKMARK, false);
+        browser_->OpenURL(params);
+        reading_list_model_->SetReadStatus(url_, true);
+        break;
+      }
+
+      case IDC_CONTENT_CONTEXT_OPENLINKOFFTHERECORD: {
+        content::OpenURLParams params(url_, content::Referrer(),
+                                      WindowOpenDisposition::OFF_THE_RECORD,
+                                      ui::PAGE_TRANSITION_AUTO_BOOKMARK, false);
+        browser_->OpenURL(params);
+        break;
+      }
+
+      case kMarkAsRead:
+        reading_list_model_->SetReadStatus(url_, true);
+        break;
+      case kMarkAsUnread:
+        reading_list_model_->SetReadStatus(url_, false);
+        break;
+      case kDelete:
+        reading_list_model_->RemoveEntryByURL(url_);
+        break;
+      default:
+        NOTREACHED();
+        break;
+    }
+  }
+
+ private:
+  enum MenuCommands {
+    kMarkAsRead,
+    kMarkAsUnread,
+    kDelete,
+  };
+  Browser* const browser_;
+  ReadingListModel* reading_list_model_;
+  GURL url_;
+};
+
 }  // namespace
 
 ReadLaterPageHandler::ReadLaterPageHandler(
     mojo::PendingReceiver<read_later::mojom::PageHandler> receiver,
     mojo::PendingRemote<read_later::mojom::Page> page,
-    ReadLaterUI* read_later_ui)
+    ReadLaterUI* read_later_ui,
+    content::WebUI* web_ui)
     : receiver_(this, std::move(receiver)),
       page_(std::move(page)),
-      browser_(chrome::FindLastActive()),
       read_later_ui_(read_later_ui),
+      web_contents_(web_ui->GetWebContents()),
       clock_(base::DefaultClock::GetInstance()) {
-  DCHECK(browser_);
+  Profile* profile = Profile::FromWebUI(web_ui);
+  DCHECK(profile);
 
-  reading_list_model_ =
-      ReadingListModelFactory::GetForBrowserContext(browser_->profile());
+  reading_list_model_ = ReadingListModelFactory::GetForBrowserContext(profile);
+  reading_list_model_scoped_observation_.Observe(reading_list_model_);
 }
 
 ReadLaterPageHandler::~ReadLaterPageHandler() = default;
@@ -79,26 +169,51 @@ void ReadLaterPageHandler::GetReadLaterEntries(
   std::move(callback).Run(CreateReadLaterEntriesByStatusData());
 }
 
-void ReadLaterPageHandler::OpenSavedEntry(const GURL& url) {
+void ReadLaterPageHandler::OpenURL(const GURL& url, bool mark_as_read) {
+  Browser* browser = chrome::FindLastActive();
+  if (!browser)
+    return;
+
   // Open in active tab if the user is on the NTP.
   WindowOpenDisposition open_location =
-      IsActiveTabNTP(browser_) ? WindowOpenDisposition::CURRENT_TAB
-                               : WindowOpenDisposition::NEW_FOREGROUND_TAB;
+      IsActiveTabNTP(browser) ||
+              base::FeatureList::IsEnabled(features::kSidePanel)
+          ? WindowOpenDisposition::CURRENT_TAB
+          : WindowOpenDisposition::NEW_FOREGROUND_TAB;
 
   content::OpenURLParams params(url, content::Referrer(), open_location,
                                 ui::PAGE_TRANSITION_AUTO_BOOKMARK, false);
-  browser_->OpenURL(params);
-  reading_list_model_->SetReadStatus(url, true);
+  browser->OpenURL(params);
+
+  if (mark_as_read)
+    reading_list_model_->SetReadStatus(url, true);
 }
 
 void ReadLaterPageHandler::UpdateReadStatus(const GURL& url, bool read) {
   reading_list_model_->SetReadStatus(url, read);
-  page_->ItemsChanged(CreateReadLaterEntriesByStatusData());
+}
+
+void ReadLaterPageHandler::AddCurrentTab() {
+  Browser* browser = chrome::FindLastActive();
+  if (!browser)
+    return;
+
+  chrome::MoveCurrentTabToReadLater(browser);
 }
 
 void ReadLaterPageHandler::RemoveEntry(const GURL& url) {
   reading_list_model_->RemoveEntryByURL(url);
-  page_->ItemsChanged(CreateReadLaterEntriesByStatusData());
+}
+
+void ReadLaterPageHandler::ShowContextMenuForURL(const GURL& url,
+                                                 int32_t x,
+                                                 int32_t y) {
+  auto embedder = read_later_ui_->embedder();
+  Browser* browser = chrome::FindLastActive();
+  if (embedder)
+    embedder->ShowContextMenu(gfx::Point(x, y),
+                              std::make_unique<ReadLaterItemContextMenu>(
+                                  browser, reading_list_model_, url));
 }
 
 void ReadLaterPageHandler::ShowUI() {
@@ -111,6 +226,32 @@ void ReadLaterPageHandler::CloseUI() {
   auto embedder = read_later_ui_->embedder();
   if (embedder)
     embedder->CloseUI();
+}
+
+void ReadLaterPageHandler::ReadingListModelCompletedBatchUpdates(
+    const ReadingListModel* model) {
+  DCHECK(model == reading_list_model_);
+  if (web_contents_->GetVisibility() == content::Visibility::HIDDEN)
+    return;
+  page_->ItemsChanged(CreateReadLaterEntriesByStatusData());
+}
+
+void ReadLaterPageHandler::ReadingListModelBeingDeleted(
+    const ReadingListModel* model) {
+  DCHECK(model == reading_list_model_);
+  DCHECK(reading_list_model_scoped_observation_.IsObservingSource(
+      reading_list_model_));
+  reading_list_model_scoped_observation_.Reset();
+  reading_list_model_ = nullptr;
+}
+
+void ReadLaterPageHandler::ReadingListDidApplyChanges(ReadingListModel* model) {
+  DCHECK(model == reading_list_model_);
+  if (web_contents_->GetVisibility() == content::Visibility::HIDDEN ||
+      reading_list_model_->IsPerformingBatchUpdates()) {
+    return;
+  }
+  page_->ItemsChanged(CreateReadLaterEntriesByStatusData());
 }
 
 read_later::mojom::ReadLaterEntryPtr ReadLaterPageHandler::GetEntryData(

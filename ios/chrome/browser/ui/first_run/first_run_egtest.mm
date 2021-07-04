@@ -25,6 +25,7 @@
 using chrome_test_util::ButtonWithAccessibilityLabel;
 using chrome_test_util::SyncSettingsConfirmButton;
 using chrome_test_util::MatchInWindowWithNumber;
+using chrome_test_util::MatchInBlockerWindowWithNumber;
 using chrome_test_util::FakeOmnibox;
 
 namespace {
@@ -48,13 +49,14 @@ id<GREYMatcher> SkipSigninButton() {
 @implementation FirstRunTestCase
 
 - (void)setUp {
+  [[self class] testForStartup];
+
   [super setUp];
   [FirstRunAppInterface setUMACollectionEnabled:NO];
   [FirstRunAppInterface resetUMACollectionEnabledByDefault];
 }
 
 - (void)tearDown {
-  [ChromeEarlGrey closeAllExtraWindows];
   [super tearDown];
   [FirstRunAppInterface setUMACollectionEnabled:NO];
   [FirstRunAppInterface resetUMACollectionEnabledByDefault];
@@ -63,13 +65,20 @@ id<GREYMatcher> SkipSigninButton() {
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config;
   config.features_disabled.push_back(kLocationPermissionsPrompt);
+  config.features_disabled.push_back(kEnableFREUIModuleIOS);
+
+  // Show the First Run UI at startup.
+  config.additional_args.push_back("-FirstRunForceEnabled");
+  config.additional_args.push_back("true");
+
+  // Relaunch app at each test to rewind the startup state.
+  config.relaunch_policy = ForceRelaunchByKilling;
+
   return config;
 }
 
 // Navigates to the terms of service and back.
 - (void)testTermsAndConditions {
-  [FirstRunAppInterface showFirstRunUI];
-
   id<GREYMatcher> termsOfServiceLink =
       grey_accessibilityLabel(@"Terms of Service");
   [[EarlGrey selectElementWithMatcher:termsOfServiceLink]
@@ -101,8 +110,6 @@ id<GREYMatcher> SkipSigninButton() {
 
 // Toggle the UMA checkbox.
 - (void)testToggleMetricsOn {
-  [FirstRunAppInterface showFirstRunUI];
-
   id<GREYMatcher> metrics =
       grey_accessibilityID(first_run::kUMAMetricsButtonAccessibilityIdentifier);
   [[EarlGrey selectElementWithMatcher:metrics] performAction:grey_tap()];
@@ -122,8 +129,6 @@ id<GREYMatcher> SkipSigninButton() {
 
 // Dismisses the first run screens.
 - (void)testDismissFirstRun {
-  [FirstRunAppInterface showFirstRunUI];
-
   [[EarlGrey selectElementWithMatcher:FirstRunOptInAcceptButton()]
       performAction:grey_tap()];
 
@@ -144,7 +149,6 @@ id<GREYMatcher> SkipSigninButton() {
   [SigninEarlGrey addFakeIdentity:fakeIdentity];
 
   // Launch First Run and accept tems of services.
-  [FirstRunAppInterface showFirstRunUI];
   [[EarlGrey selectElementWithMatcher:FirstRunOptInAcceptButton()]
       performAction:grey_tap()];
 
@@ -170,20 +174,18 @@ id<GREYMatcher> SkipSigninButton() {
   if (![ChromeEarlGrey areMultipleWindowsSupported])
     EARL_GREY_TEST_DISABLED(@"Multiple windows can't be opened.");
 
-  [FirstRunAppInterface showFirstRunUI];
-
   [ChromeEarlGrey openNewWindow];
   [ChromeEarlGrey waitForForegroundWindowCount:2];
 
   [[EarlGrey selectElementWithMatcher:MatchInWindowWithNumber(
                                           0, grey_accessibilityLabel(
                                                  @"Terms of Service"))]
-      assertWithMatcher:grey_sufficientlyVisible()];
+      assertWithMatcher:grey_notNil()];
 
   // Check UI Blocked in second window and that message is a button.
   [[EarlGrey
       selectElementWithMatcher:
-          MatchInWindowWithNumber(
+          MatchInBlockerWindowWithNumber(
               1,
               grey_text(l10n_util::GetNSString(
                   IDS_IOS_UI_BLOCKED_USE_OTHER_WINDOW_SWITCH_WINDOW_ACTION)))]

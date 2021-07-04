@@ -10,6 +10,7 @@ import logging
 from multiprocessing import pool
 import os
 import subprocess
+import sys
 import time
 
 import file_util
@@ -354,17 +355,28 @@ class SimulatorParallelTestRunner(test_runner.SimulatorTestRunner):
     env['NSUnbufferedIO'] = 'YES'
     return env
 
+  def get_launch_test_app(self, params):
+    """Returns the proper test_app for the run, requiring sharding data.
+
+    Args:
+      params: A collection of sharding_data params.
+
+    Returns:
+      An implementation of EgtestsApp included the sharding_data params
+    """
+    return test_apps.EgtestsApp(
+        params['app'],
+        included_tests=params['test_cases'],
+        env_vars=self.env_vars,
+        test_args=self.test_args,
+        release=self.release,
+        host_app_path=params['host'])
+
   def launch(self):
     """Launches tests using xcodebuild."""
     launch_commands = []
     for params in self.sharding_data:
-      test_app = test_apps.EgtestsApp(
-          params['app'],
-          included_tests=params['test_cases'],
-          env_vars=self.env_vars,
-          test_args=self.test_args,
-          release=self.release,
-          host_app_path=params['host'])
+      test_app = self.get_launch_test_app(params)
       launch_commands.append(
           LaunchCommand(
               test_app,
@@ -450,8 +462,17 @@ class SimulatorParallelTestRunner(test_runner.SimulatorTestRunner):
       for attempt, attempt_results in enumerate(shard_attempts):
 
         for test in attempt_results['failed'].keys():
-          output.mark_failed(
-              test, test_log='\n'.join(self.logs.get(test, [])).encode('utf8'))
+          # TODO(crbug.com/1178923): Remove unicode check when it's figured out
+          # where unicode is introduced.
+          log_lines = []
+          for line in self.logs.get(test, []):
+            if sys.version_info.major == 2:
+              if isinstance(line, unicode):
+                LOGGER.warning('Unicode string: %s' % line)
+                line = line.encode('utf-8')
+            log_lines.append(line)
+
+          output.mark_failed(test, test_log='\n'.join(log_lines))
 
         # 'aborted tests' in logs is an array of strings, each string defined
         # as "{TestCase}/{testMethod}"
@@ -461,7 +482,7 @@ class SimulatorParallelTestRunner(test_runner.SimulatorTestRunner):
         for test in attempt_results['passed']:
           output.mark_passed(test)
 
-    output.mark_all_skipped(self.logs['disabled tests'])
+    output.mark_all_disabled(self.logs['disabled tests'])
     output.finalize()
 
     self.test_results['tests'] = output.tests

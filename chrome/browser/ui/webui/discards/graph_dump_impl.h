@@ -115,8 +115,11 @@ class DiscardsGraphDumpImpl : public discards::mojom::GraphDump,
       const performance_manager::PageNode* page_node) override;
   void OnOpenerFrameNodeChanged(
       const performance_manager::PageNode* page_node,
-      const performance_manager::FrameNode* previous_opener,
-      OpenedType previous_opened_type) override;
+      const performance_manager::FrameNode* previous_opener) override;
+  void OnEmbedderFrameNodeChanged(
+      const performance_manager::PageNode* page_node,
+      const performance_manager::FrameNode* previous_embedder,
+      EmbeddingType previous_embedding_type) override;
   // Ignored.
   void OnIsVisibleChanged(
       const performance_manager::PageNode* page_node) override {}
@@ -154,7 +157,11 @@ class DiscardsGraphDumpImpl : public discards::mojom::GraphDump,
   // Ignored.
   void OnFreezingVoteChanged(
       const performance_manager::PageNode* page_node,
-      base::Optional<performance_manager::freezing::FreezingVote>) override {}
+      absl::optional<performance_manager::freezing::FreezingVote>) override {}
+  // Ignored.
+  void OnPageStateChanged(
+      const performance_manager::PageNode* page_node,
+      performance_manager::PageNode::PageState old_state) override {}
 
   // ProcessNodeObserver implementation:
   void OnProcessNodeAdded(

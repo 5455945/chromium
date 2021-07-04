@@ -5,7 +5,6 @@
 #ifndef IOS_CHROME_BROWSER_TABS_TAB_PARENTING_GLOBAL_OBSERVER_H_
 #define IOS_CHROME_BROWSER_TABS_TAB_PARENTING_GLOBAL_OBSERVER_H_
 
-#include <memory>
 
 #include "base/callback_list.h"
 #include "base/macros.h"
@@ -38,7 +37,8 @@ class TabParentingGlobalObserver {
   TabParentingGlobalObserver();
   ~TabParentingGlobalObserver();
 
-  base::CallbackList<void(web::WebState*)> on_tab_parented_callback_list_;
+  base::RepeatingCallbackList<void(web::WebState*)>
+      on_tab_parented_callback_list_;
 
   DISALLOW_COPY_AND_ASSIGN(TabParentingGlobalObserver);
 };

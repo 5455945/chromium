@@ -358,14 +358,14 @@ TEST_P(Configuration3rdPartyPolicyProviderTest, Load3rdParty) {
   policy_dict.SetInteger("int", 789);
   policy_dict.SetString("string", "string value");
 
-  auto list = std::make_unique<base::ListValue>();
+  base::ListValue list;
   for (int i = 0; i < 2; ++i) {
     auto dict = std::make_unique<base::DictionaryValue>();
     dict->SetInteger("subdictindex", i);
     dict->SetKey("subdict", policy_dict.Clone());
-    list->Append(std::move(dict));
+    list.Append(std::move(dict));
   }
-  policy_dict.Set("list", std::move(list));
+  policy_dict.SetKey("list", std::move(list));
   policy_dict.SetKey("dict", policy_dict.Clone());
 
   // Install these policies as a Chrome policy.
@@ -393,19 +393,19 @@ TEST_P(Configuration3rdPartyPolicyProviderTest, Load3rdParty) {
                       test_harness_->policy_source(), policy_dict.Clone(),
                       nullptr);
   PolicyBundle expected_bundle;
-  expected_bundle.Get(PolicyNamespace(POLICY_DOMAIN_CHROME, std::string()))
-      .CopyFrom(expected_policy);
+  expected_bundle.Get(PolicyNamespace(POLICY_DOMAIN_CHROME, std::string())) =
+      expected_policy.Clone();
   expected_policy.Clear();
   expected_policy.LoadFrom(&policy_dict,
                            test_harness_->policy_level(),
                            test_harness_->policy_scope(),
                            test_harness_->policy_source());
   expected_bundle.Get(PolicyNamespace(POLICY_DOMAIN_EXTENSIONS,
-                                      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
-      .CopyFrom(expected_policy);
+                                      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")) =
+      expected_policy.Clone();
   expected_bundle.Get(PolicyNamespace(POLICY_DOMAIN_EXTENSIONS,
-                                      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
-      .CopyFrom(expected_policy);
+                                      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")) =
+      expected_policy.Clone();
   EXPECT_TRUE(provider_->policies().Equals(expected_bundle));
 }
 

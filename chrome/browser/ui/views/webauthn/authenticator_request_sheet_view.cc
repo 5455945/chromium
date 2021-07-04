@@ -15,6 +15,7 @@
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/native_theme/native_theme.h"
@@ -24,7 +25,6 @@
 #include "ui/views/controls/progress_bar.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 
 namespace {
 
@@ -65,12 +65,16 @@ void AuthenticatorRequestSheetView::ReInitChildViews() {
 }
 
 views::View* AuthenticatorRequestSheetView::GetInitiallyFocusedView() {
-  return step_specific_content_;
+  if (should_focus_step_specific_content_ == AutoFocus::kYes) {
+    return step_specific_content_;
+  }
+  return nullptr;
 }
 
-std::unique_ptr<views::View>
+std::pair<std::unique_ptr<views::View>,
+          AuthenticatorRequestSheetView::AutoFocus>
 AuthenticatorRequestSheetView::BuildStepSpecificContent() {
-  return nullptr;
+  return std::make_pair(nullptr, AutoFocus::kNo);
 }
 
 std::unique_ptr<views::View>
@@ -86,7 +90,6 @@ AuthenticatorRequestSheetView::CreateIllustrationWithOverlays() {
 
   auto image_view = std::make_unique<NonAccessibleImageView>();
   step_illustration_ = image_view.get();
-  UpdateIconImageFromModel();
   image_view->SetSize(illustration_size);
   image_view->SetVerticalAlignment(views::ImageView::Alignment::kLeading);
   image_with_overlays->AddChildView(image_view.release());
@@ -112,9 +115,10 @@ AuthenticatorRequestSheetView::CreateIllustrationWithOverlays() {
     // between the top/left side of the back button and the dialog borders.
     const gfx::Insets dialog_insets =
         views::LayoutProvider::Get()->GetDialogInsetsForContentType(
-            views::CONTROL, views::CONTROL);
+            views::DialogContentType::kControl,
+            views::DialogContentType::kControl);
     auto color_reference = std::make_unique<views::Label>(
-        base::string16(), views::style::CONTEXT_DIALOG_TITLE,
+        std::u16string(), views::style::CONTEXT_DIALOG_TITLE,
         views::style::STYLE_PRIMARY);
     back_arrow->SizeToPreferredSize();
     back_arrow->SetX(dialog_insets.left());
@@ -122,6 +126,10 @@ AuthenticatorRequestSheetView::CreateIllustrationWithOverlays() {
     back_arrow_ = back_arrow.get();
     back_arrow_button_ =
         image_with_overlays->AddChildView(std::move(back_arrow));
+  }
+
+  if (GetWidget()) {
+    UpdateIconImageFromModel();
     UpdateIconColors();
   }
 
@@ -139,7 +147,8 @@ AuthenticatorRequestSheetView::CreateContentsBelowIllustration() {
 
   contents->SetBorder(views::CreateEmptyBorder(
       views::LayoutProvider::Get()->GetDialogInsetsForContentType(
-          views::CONTROL, views::CONTROL)));
+          views::DialogContentType::kControl,
+          views::DialogContentType::kControl)));
 
   auto label_container = std::make_unique<views::View>();
   label_container->SetLayoutManager(std::make_unique<BoxLayout>(
@@ -155,7 +164,7 @@ AuthenticatorRequestSheetView::CreateContentsBelowIllustration() {
   title_label->SetAllowCharacterBreak(true);
   label_container->AddChildView(title_label.release());
 
-  base::string16 description = model()->GetStepDescription();
+  std::u16string description = model()->GetStepDescription();
   if (!description.empty()) {
     auto description_label = std::make_unique<views::Label>(
         std::move(description), views::style::CONTEXT_DIALOG_BODY_TEXT);
@@ -165,7 +174,7 @@ AuthenticatorRequestSheetView::CreateContentsBelowIllustration() {
     label_container->AddChildView(description_label.release());
   }
 
-  base::string16 additional_desciption = model()->GetAdditionalDescription();
+  std::u16string additional_desciption = model()->GetAdditionalDescription();
   if (!additional_desciption.empty()) {
     auto label =
         std::make_unique<views::Label>(std::move(additional_desciption),
@@ -178,15 +187,18 @@ AuthenticatorRequestSheetView::CreateContentsBelowIllustration() {
 
   contents->AddChildView(label_container.release());
 
-  std::unique_ptr<views::View> step_specific_content =
+  std::unique_ptr<views::View> step_specific_content;
+  std::tie(step_specific_content, should_focus_step_specific_content_) =
       BuildStepSpecificContent();
+  DCHECK(should_focus_step_specific_content_ == AutoFocus::kNo ||
+         step_specific_content);
   if (step_specific_content) {
     step_specific_content_ = step_specific_content.get();
     contents->AddChildView(step_specific_content.release());
     contents_layout->SetFlexForView(step_specific_content_, 1);
   }
 
-  base::string16 error = model()->GetError();
+  std::u16string error = model()->GetError();
   if (!error.empty()) {
     auto error_label = std::make_unique<views::Label>(
         std::move(error), views::style::CONTEXT_LABEL, STYLE_RED);

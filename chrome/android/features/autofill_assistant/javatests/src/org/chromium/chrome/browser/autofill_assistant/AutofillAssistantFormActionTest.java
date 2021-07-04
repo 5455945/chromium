@@ -44,6 +44,7 @@ import android.app.Instrumentation.ActivityResult;
 import android.content.Intent;
 import android.graphics.Typeface;
 import android.net.Uri;
+import android.support.test.InstrumentationRegistry;
 import android.widget.RadioButton;
 
 import androidx.test.espresso.intent.Intents;
@@ -76,6 +77,7 @@ import org.chromium.chrome.browser.autofill_assistant.proto.ShowFormProto;
 import org.chromium.chrome.browser.autofill_assistant.proto.SupportedScriptProto;
 import org.chromium.chrome.browser.autofill_assistant.proto.SupportedScriptProto.PresentationProto;
 import org.chromium.chrome.browser.customtabs.CustomTabActivityTestRule;
+import org.chromium.chrome.browser.customtabs.CustomTabsTestUtils;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 
@@ -98,10 +100,9 @@ public class AutofillAssistantFormActionTest {
     @Before
     public void setUp() {
         AutofillAssistantPreferencesUtil.setInitialPreferences(true);
-        mTestRule.startCustomTabActivityWithIntent(
-                AutofillAssistantUiTestUtil.createMinimalCustomTabIntentForAutobot(
-                        mTestRule.getTestServer().getURL(TEST_PAGE),
-                        /* startImmediately = */ true));
+        mTestRule.startCustomTabActivityWithIntent(CustomTabsTestUtils.createMinimalCustomTabIntent(
+                InstrumentationRegistry.getTargetContext(),
+                mTestRule.getTestServer().getURL(TEST_PAGE)));
         mTestRule.getActivity()
                 .getRootUiCoordinatorForTesting()
                 .getScrimCoordinator()
@@ -161,7 +162,7 @@ public class AutofillAssistantFormActionTest {
                                                 .setDescriptionLine1("$20.00 per item")
                                                 .setDescriptionLine2("<link1>Details</link1>"))));
         // FormAction.
-        list.add((ActionProto) ActionProto.newBuilder()
+        list.add(ActionProto.newBuilder()
                          .setShowForm(ShowFormProto.newBuilder()
                                               .setChip(ChipProto.newBuilder()
                                                                .setType(ChipType.HIGHLIGHTED_ACTION)
@@ -170,7 +171,7 @@ public class AutofillAssistantFormActionTest {
                          .build());
 
         AutofillAssistantTestScript script = new AutofillAssistantTestScript(
-                (SupportedScriptProto) SupportedScriptProto.newBuilder()
+                SupportedScriptProto.newBuilder()
                         .setPath("autofill_assistant_target_website.html")
                         .setPresentation(PresentationProto.newBuilder().setAutostart(true).setChip(
                                 ChipProto.newBuilder().setText("Autostart")))
@@ -238,7 +239,7 @@ public class AutofillAssistantFormActionTest {
 
         // Finish form action, wait for response and prepare next set of actions.
         List<ActionProto> nextActions = new ArrayList<>();
-        nextActions.add((ActionProto) ActionProto.newBuilder()
+        nextActions.add(ActionProto.newBuilder()
                                 .setPrompt(PromptProto.newBuilder()
                                                    .setMessage("Finished")
                                                    .addChoices(Choice.newBuilder().setChip(
@@ -306,7 +307,7 @@ public class AutofillAssistantFormActionTest {
                                 .setMinCountersSum(2)
                                 .setMinimizeText("Minimize")
                                 .setExpandText("Expand")));
-        list.add((ActionProto) ActionProto.newBuilder()
+        list.add(ActionProto.newBuilder()
                          .setShowForm(ShowFormProto.newBuilder()
                                               .setChip(ChipProto.newBuilder()
                                                                .setType(ChipType.HIGHLIGHTED_ACTION)
@@ -315,7 +316,7 @@ public class AutofillAssistantFormActionTest {
                          .build());
 
         AutofillAssistantTestScript script = new AutofillAssistantTestScript(
-                (SupportedScriptProto) SupportedScriptProto.newBuilder()
+                SupportedScriptProto.newBuilder()
                         .setPath("autofill_assistant_target_website.html")
                         .setPresentation(PresentationProto.newBuilder().setAutostart(true).setChip(
                                 ChipProto.newBuilder().setText("Autostart")))
@@ -385,7 +386,7 @@ public class AutofillAssistantFormActionTest {
                                                                 OpenUrlInCCT.newBuilder().setUrl(
                                                                         "https://www.google.com"))));
         // FormAction.
-        list.add((ActionProto) ActionProto.newBuilder()
+        list.add(ActionProto.newBuilder()
                          .setShowForm(ShowFormProto.newBuilder()
                                               .setChip(ChipProto.newBuilder()
                                                                .setType(ChipType.HIGHLIGHTED_ACTION)
@@ -394,7 +395,7 @@ public class AutofillAssistantFormActionTest {
                          .build());
 
         AutofillAssistantTestScript script = new AutofillAssistantTestScript(
-                (SupportedScriptProto) SupportedScriptProto.newBuilder()
+                SupportedScriptProto.newBuilder()
                         .setPath("autofill_assistant_target_website.html")
                         .setPresentation(PresentationProto.newBuilder().setAutostart(true).setChip(
                                 ChipProto.newBuilder().setText("Autostart")))
@@ -448,7 +449,7 @@ public class AutofillAssistantFormActionTest {
                                               .setTitle("Prompt title")
                                               .setText("Prompt text"));
         // FormAction.
-        list.add((ActionProto) ActionProto.newBuilder()
+        list.add(ActionProto.newBuilder()
                          .setShowForm(ShowFormProto.newBuilder()
                                               .setChip(ChipProto.newBuilder()
                                                                .setType(ChipType.HIGHLIGHTED_ACTION)
@@ -457,7 +458,7 @@ public class AutofillAssistantFormActionTest {
                          .build());
 
         AutofillAssistantTestScript script = new AutofillAssistantTestScript(
-                (SupportedScriptProto) SupportedScriptProto.newBuilder()
+                SupportedScriptProto.newBuilder()
                         .setPath("autofill_assistant_target_website.html")
                         .setPresentation(PresentationProto.newBuilder().setAutostart(true).setChip(
                                 ChipProto.newBuilder().setText("Autostart")))
@@ -492,7 +493,7 @@ public class AutofillAssistantFormActionTest {
                                                 .setDescriptionLine2("<link1>Details</link1>"))))
                         .setInfoLabel("Info label");
         // FormAction.
-        list.add((ActionProto) ActionProto.newBuilder()
+        list.add(ActionProto.newBuilder()
                          .setShowForm(ShowFormProto.newBuilder()
                                               .setChip(ChipProto.newBuilder()
                                                                .setType(ChipType.HIGHLIGHTED_ACTION)
@@ -508,7 +509,7 @@ public class AutofillAssistantFormActionTest {
                                 .setDescriptionLine2("<link1>Details</link1>"))));
 
         // FormAction.
-        list.add((ActionProto) ActionProto.newBuilder()
+        list.add(ActionProto.newBuilder()
                          .setShowForm(ShowFormProto.newBuilder()
                                               .setChip(ChipProto.newBuilder()
                                                                .setType(ChipType.HIGHLIGHTED_ACTION)
@@ -517,7 +518,7 @@ public class AutofillAssistantFormActionTest {
                          .build());
 
         AutofillAssistantTestScript script = new AutofillAssistantTestScript(
-                (SupportedScriptProto) SupportedScriptProto.newBuilder()
+                SupportedScriptProto.newBuilder()
                         .setPath("autofill_assistant_target_website.html")
                         .setPresentation(PresentationProto.newBuilder().setAutostart(true).setChip(
                                 ChipProto.newBuilder().setText("Autostart")))

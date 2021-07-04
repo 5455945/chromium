@@ -27,60 +27,18 @@ TARGET_DEVICES = {
         'rendering.mobile': {
             'css_transitions_triggered_style_element': 4,
             'canvas_animation_no_clear': 4
-        }
-    },
-    'android-pixel2_weblayer-perf': {
-        'startup.mobile': {
-            'intent:coldish:bbc': 4,
-            'intent:warm:bbc': 4,
-            'cct:coldish:bbc': 4
-        }
+        },
     },
     'android-pixel2-perf': {
-        'startup.mobile': {
-            'intent:coldish:bbc': 10,
-            'intent:warm:bbc': 10,
-            'cct:coldish:bbc': 10
-        },
-        'system_health.common_mobile': {
-            # timeToFirstContentfulPaint
-            'browse:media:googleplaystore:2019': 10,
-            'load:social:pinterest:2019': 10,
-            'browse:media:facebook_photos:2019': 10
-        }
-    },
-    'Android Nexus5 Perf': {
-        'startup.mobile': {
-            'intent:coldish:bbc': 10,
-            'intent:warm:bbc': 10,
-            'cct:coldish:bbc': 10
-        }
+        'system_health.common_mobile': 3,
+        'system_health.memory_mobile': 3,
     },
     'android-go-perf': {
-        'startup.mobile': {
-            'intent:coldish:bbc': 10,
-            'intent:warm:bbc': 10,
-            'cct:coldish:bbc': 10
-        },
         'system_health.common_mobile': {
             # timeToFirstContentfulPaint
             'background:social:facebook:2019': 10,
             # cputimeToFirstContentfulPaint
             'load:search:google:2018': 10
-        }
-    },
-    'android-pixel4-perf': {
-        'startup.mobile': {
-            'intent:coldish:bbc': 10,
-            'intent:warm:bbc': 10,
-            'cct:coldish:bbc': 10
-        }
-    },
-    'android-pixel4_weblayer-perf': {
-        'startup.mobile': {
-            'intent:coldish:bbc': 4,
-            'intent:warm:bbc': 4,
-            'cct:coldish:bbc': 4
         }
     },
     'linux-perf': {
@@ -99,4 +57,18 @@ TARGET_DEVICES = {
             'load:search:google:2018': 10,
         }
     },
+    'linux-perf-calibration': {
+        'speedometer2': {
+            'Speedometer2': 28,
+        },
+        'blink_perf.shadow_dom': 31
+    },
+    'android-pixel2-perf-calibration': {
+        'system_health.common_mobile': {
+            'browse:news:cnn:2021': 50,
+        },
+        'system_health.memory_mobile': {
+            'browse:news:cnn:2021': 50,
+        },
+    }
 }

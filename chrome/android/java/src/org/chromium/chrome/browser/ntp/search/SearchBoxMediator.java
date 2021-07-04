@@ -22,13 +22,16 @@ import org.chromium.chrome.browser.lens.LensEntryPoint;
 import org.chromium.chrome.browser.lens.LensIntentParams;
 import org.chromium.chrome.browser.lens.LensQueryParams;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
-import org.chromium.chrome.browser.lifecycle.Destroyable;
+import org.chromium.chrome.browser.lifecycle.DestroyObserver;
 import org.chromium.chrome.browser.lifecycle.NativeInitObserver;
 import org.chromium.chrome.browser.omnibox.voice.AssistantVoiceSearchService;
 import org.chromium.chrome.browser.preferences.SharedPreferencesManager;
+import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
+import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.components.browser_ui.styles.ChromeColors;
 import org.chromium.components.externalauth.ExternalAuthUtils;
+import org.chromium.components.signin.AccountManagerFacadeProvider;
 import org.chromium.ui.base.ViewUtils;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -38,7 +41,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 class SearchBoxMediator
-        implements Destroyable, NativeInitObserver, AssistantVoiceSearchService.Observer {
+        implements DestroyObserver, NativeInitObserver, AssistantVoiceSearchService.Observer {
     private final Context mContext;
     private final PropertyModel mModel;
     private final ViewGroup mView;
@@ -72,7 +75,7 @@ class SearchBoxMediator
     }
 
     @Override
-    public void destroy() {
+    public void onDestroy() {
         if (mAssistantVoiceSearchService != null) {
             mAssistantVoiceSearchService.destroy();
             mAssistantVoiceSearchService = null;
@@ -88,7 +91,10 @@ class SearchBoxMediator
     public void onFinishNativeInitialization() {
         mAssistantVoiceSearchService = new AssistantVoiceSearchService(mContext,
                 ExternalAuthUtils.getInstance(), TemplateUrlServiceFactory.get(),
-                GSAState.getInstance(mContext), this, SharedPreferencesManager.getInstance());
+                GSAState.getInstance(mContext), this, SharedPreferencesManager.getInstance(),
+                IdentityServicesProvider.get().getIdentityManager(
+                        Profile.getLastUsedRegularProfile()),
+                AccountManagerFacadeProvider.getInstance());
         onAssistantVoiceSearchServiceChanged();
     }
 
@@ -103,7 +109,7 @@ class SearchBoxMediator
         final @ColorInt int primaryColor = ChromeColors.getDefaultThemeColor(
                 mContext.getResources(), false /* forceDarkBgColor= */);
         ColorStateList colorStateList =
-                mAssistantVoiceSearchService.getMicButtonColorStateList(primaryColor, mContext);
+                mAssistantVoiceSearchService.getButtonColorStateList(primaryColor, mContext);
         mModel.set(SearchBoxProperties.VOICE_SEARCH_COLOR_STATE_LIST, colorStateList);
     }
 
@@ -188,11 +194,13 @@ class SearchBoxMediator
      * Check whether the Lens is enabled for an entry point.
      * @param lensEntryPoint A {@link LensEntryPoint}.
      * @param isIncognito Whether the request is from a Incognito tab.
+     * @param isTablet Whether the request is from a tablet.
      * @return Whether the Lens is currently enabled.
      */
-    boolean isLensEnabled(@LensEntryPoint int lensEntryPoint, boolean isIncognito) {
+    boolean isLensEnabled(
+            @LensEntryPoint int lensEntryPoint, boolean isIncognito, boolean isTablet) {
         return LensController.getInstance().isLensEnabled(
-                new LensQueryParams.Builder(lensEntryPoint, isIncognito).build());
+                new LensQueryParams.Builder(lensEntryPoint, isIncognito, isTablet).build());
     }
 
     private Drawable getRoundedDrawable(Bitmap bitmap) {

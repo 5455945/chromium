@@ -11,7 +11,6 @@
 #include <wrl/module.h>
 
 #include "base/macros.h"
-#include "base/strings/string16.h"
 #include "chrome/elevation_service/elevation_service_idl.h"
 
 namespace elevation_service {

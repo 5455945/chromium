@@ -68,12 +68,10 @@ bool DictionaryToPrinter(const DictionaryValue& value, Printer* printer) {
     printer->set_description(description);
 
   std::string manufacturer;
-  if (value.GetString(kManufacturer, &manufacturer))
-    printer->set_manufacturer(manufacturer);
+  value.GetString(kManufacturer, &manufacturer);
 
   std::string model;
-  if (value.GetString(kModel, &model))
-    printer->set_model(model);
+  value.GetString(kModel, &model);
 
   std::string make_and_model = manufacturer;
   if (!manufacturer.empty() && !model.empty())
@@ -94,14 +92,13 @@ bool DictionaryToPrinter(const DictionaryValue& value, Printer* printer) {
 std::unique_ptr<base::DictionaryValue> CreateEmptyPrinterInfo() {
   std::unique_ptr<base::DictionaryValue> printer_info =
       std::make_unique<base::DictionaryValue>();
+  printer_info->SetBoolean("isManaged", false);
   printer_info->SetString("ppdManufacturer", "");
   printer_info->SetString("ppdModel", "");
   printer_info->SetString("printerAddress", "");
   printer_info->SetBoolean("printerPpdReference.autoconf", false);
   printer_info->SetString("printerDescription", "");
   printer_info->SetString("printerId", "");
-  printer_info->SetString("printerManufacturer", "");
-  printer_info->SetString("printerModel", "");
   printer_info->SetString("printerMakeAndModel", "");
   printer_info->SetString("printerName", "");
   printer_info->SetString("printerPPDPath", "");
@@ -175,11 +172,11 @@ std::unique_ptr<base::DictionaryValue> GetCupsPrinterInfo(
   std::unique_ptr<base::DictionaryValue> printer_info =
       CreateEmptyPrinterInfo();
 
+  printer_info->SetBoolean("isManaged",
+                           printer.source() == Printer::Source::SRC_POLICY);
   printer_info->SetString("printerId", printer.id());
   printer_info->SetString("printerName", printer.display_name());
   printer_info->SetString("printerDescription", printer.description());
-  printer_info->SetString("printerManufacturer", printer.manufacturer());
-  printer_info->SetString("printerModel", printer.model());
   printer_info->SetString("printerMakeAndModel", printer.make_and_model());
   // NOTE: This assumes the the function IsIppEverywhere() simply returns
   // |printer.ppd_reference_.autoconf|. If the implementation of
@@ -200,8 +197,9 @@ std::unique_ptr<base::DictionaryValue> GetCupsPrinterInfo(
     return printer_info;
   }
 
-  if (printer.uri().GetScheme() == "usb")
-    printer_info->SetString("ppdManufacturer", printer.manufacturer());
+  if (printer.IsUsbProtocol())
+    printer_info->SetString("ppdManufacturer",
+                            printer.usb_printer_manufacturer());
   printer_info->SetString("printerProtocol", printer.uri().GetScheme());
   printer_info->SetString("printerAddress", PrinterAddress(printer.uri()));
   std::string printer_queue = printer.uri().GetPathEncodedAsString();

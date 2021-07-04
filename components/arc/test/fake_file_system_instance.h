@@ -96,7 +96,7 @@ class FakeFileSystemInstance : public mojom::FileSystemInstance {
     Seekable seekable;
 
     // Override of |content| length in bytes.
-    base::Optional<int64_t> size_override;
+    absl::optional<int64_t> size_override;
 
     // The thumbnail of a file, which can be read by OpenThumbnail().
     std::string thumbnail_content;
@@ -354,6 +354,10 @@ class FakeFileSystemInstance : public mojom::FileSystemInstance {
   void ReindexDirectory(const std::string& directory_path) override;
   void OpenUrlsWithPermission(mojom::OpenUrlsRequestPtr request,
                               OpenUrlsWithPermissionCallback callback) override;
+  void OpenUrlsWithPermissionAndWindowInfo(
+      mojom::OpenUrlsRequestPtr request,
+      mojom::WindowInfoPtr window_info,
+      OpenUrlsWithPermissionCallback callback) override;
 
  private:
   // A pair of an authority and a document ID which identifies the location

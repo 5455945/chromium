@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "base/macros.h"
-#include "base/optional.h"
 #include "base/time/time.h"
 #include "chromeos/services/cros_healthd/public/mojom/cros_healthd.mojom.h"
 #include "chromeos/services/cros_healthd/public/mojom/cros_healthd_diagnostics.mojom.h"
@@ -17,10 +16,12 @@
 #include "chromeos/services/cros_healthd/public/mojom/cros_healthd_probe.mojom.h"
 #include "chromeos/services/network_health/public/mojom/network_diagnostics.mojom.h"
 #include "chromeos/services/network_health/public/mojom/network_health.mojom.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/remote_set.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace chromeos {
 namespace cros_healthd {
@@ -50,10 +51,13 @@ class FakeCrosHealthdService final
   ~FakeCrosHealthdService() override;
 
   // CrosHealthdServiceFactory overrides:
-  void GetProbeService(mojom::CrosHealthdProbeServiceRequest service) override;
+  void GetProbeService(
+      mojo::PendingReceiver<mojom::CrosHealthdProbeService> service) override;
   void GetDiagnosticsService(
-      mojom::CrosHealthdDiagnosticsServiceRequest service) override;
-  void GetEventService(mojom::CrosHealthdEventServiceRequest service) override;
+      mojo::PendingReceiver<mojom::CrosHealthdDiagnosticsService> service)
+      override;
+  void GetEventService(
+      mojo::PendingReceiver<mojom::CrosHealthdEventService> service) override;
   void SendNetworkHealthService(
       mojo::PendingRemote<chromeos::network_health::mojom::NetworkHealthService>
           remote) override;
@@ -62,7 +66,7 @@ class FakeCrosHealthdService final
           chromeos::network_diagnostics::mojom::NetworkDiagnosticsRoutines>
           network_diagnostics_routines) override;
   void GetSystemService(
-      mojom::CrosHealthdSystemServiceRequest service) override;
+      mojo::PendingReceiver<mojom::CrosHealthdSystemService> service) override;
 
   // CrosHealthdDiagnosticsService overrides:
   void GetAvailableRoutines(GetAvailableRoutinesCallback callback) override;
@@ -79,7 +83,7 @@ class FakeCrosHealthdService final
   void RunSmartctlCheckRoutine(
       RunSmartctlCheckRoutineCallback callback) override;
   void RunAcPowerRoutine(mojom::AcPowerStatusEnum expected_status,
-                         const base::Optional<std::string>& expected_power_type,
+                         const absl::optional<std::string>& expected_power_type,
                          RunAcPowerRoutineCallback callback) override;
   void RunCpuCacheRoutine(mojom::NullableUint32Ptr length_seconds,
                           RunCpuCacheRoutineCallback callback) override;
@@ -128,14 +132,17 @@ class FakeCrosHealthdService final
       RunHttpsFirewallRoutineCallback callback) override;
   void RunHttpsLatencyRoutine(RunHttpsLatencyRoutineCallback callback) override;
   void RunVideoConferencingRoutine(
-      const base::Optional<std::string>& stun_server_hostname,
+      const absl::optional<std::string>& stun_server_hostname,
       RunVideoConferencingRoutineCallback callback) override;
 
   // CrosHealthdEventService overrides:
   void AddBluetoothObserver(
-      mojom::CrosHealthdBluetoothObserverPtr observer) override;
-  void AddLidObserver(mojom::CrosHealthdLidObserverPtr observer) override;
-  void AddPowerObserver(mojom::CrosHealthdPowerObserverPtr observer) override;
+      mojo::PendingRemote<mojom::CrosHealthdBluetoothObserver> observer)
+      override;
+  void AddLidObserver(
+      mojo::PendingRemote<mojom::CrosHealthdLidObserver> observer) override;
+  void AddPowerObserver(
+      mojo::PendingRemote<mojom::CrosHealthdPowerObserver> observer) override;
   void AddNetworkObserver(
       mojo::PendingRemote<
           chromeos::network_health::mojom::NetworkEventsObserver> observer)
@@ -243,7 +250,7 @@ class FakeCrosHealthdService final
 
   // Returns the parameters passed for the most recent call to
   // `GetRoutineUpdate`.
-  base::Optional<RoutineUpdateParams> GetRoutineUpdateParams() const;
+  absl::optional<RoutineUpdateParams> GetRoutineUpdateParams() const;
 
  private:
   // Used as the response to any GetAvailableRoutines IPCs received.
@@ -283,7 +290,7 @@ class FakeCrosHealthdService final
 
   // Contains the most recent params passed to `GetRoutineUpdate`, if it has
   // been called.
-  base::Optional<RoutineUpdateParams> routine_update_params_;
+  absl::optional<RoutineUpdateParams> routine_update_params_;
 
   // Allow |this| to call the methods on the NetworkDiagnosticsRoutines
   // interface.

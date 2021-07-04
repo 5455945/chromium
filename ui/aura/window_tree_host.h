@@ -15,9 +15,8 @@
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
-#include "base/optional.h"
 #include "build/build_config.h"
-#include "components/viz/common/surfaces/frame_sink_id.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/aura/aura_export.h"
 #include "ui/aura/scoped_enable_unadjusted_mouse_events.h"
 #include "ui/aura/window.h"
@@ -44,6 +43,10 @@ class EventSink;
 class InputMethod;
 class ViewProp;
 struct PlatformWindowInitProperties;
+}
+
+namespace viz {
+class FrameSinkId;
 }
 
 namespace aura {
@@ -220,7 +223,7 @@ class AURA_EXPORT WindowTreeHost : public ui::internal::InputMethodDelegate,
   // intercepted.  Returns a ScopedKeyboardHook instance which stops capturing
   // system key events when destroyed.
   std::unique_ptr<ScopedKeyboardHook> CaptureSystemKeyEvents(
-      base::Optional<base::flat_set<ui::DomCode>> codes);
+      absl::optional<base::flat_set<ui::DomCode>> codes);
 
   // Returns a map of KeyboardEvent code to KeyboardEvent key values.
   virtual base::flat_map<std::string, std::string> GetKeyboardLayoutMap() = 0;
@@ -250,6 +253,9 @@ class AURA_EXPORT WindowTreeHost : public ui::internal::InputMethodDelegate,
   virtual std::unique_ptr<ScopedEnableUnadjustedMouseEvents>
   RequestUnadjustedMovement();
 
+  virtual void LockMouse(Window* window);
+  virtual void UnlockMouse(Window* window);
+
   bool holding_pointer_moves() const { return holding_pointer_moves_; }
 
  protected:
@@ -265,9 +271,7 @@ class AURA_EXPORT WindowTreeHost : public ui::internal::InputMethodDelegate,
   void DestroyCompositor();
   void DestroyDispatcher();
 
-  // If frame_sink_id is not passed in, one will be grabbed from ContextFactory.
   void CreateCompositor(
-      const viz::FrameSinkId& frame_sink_id = viz::FrameSinkId(),
       bool force_software_compositor = false,
       bool use_external_begin_frame_control = false,
       bool enable_compositing_based_throttling = false);
@@ -307,7 +311,7 @@ class AURA_EXPORT WindowTreeHost : public ui::internal::InputMethodDelegate,
 
   // Begins capturing system key events.  Returns true if successful.
   virtual bool CaptureSystemKeyEventsImpl(
-      base::Optional<base::flat_set<ui::DomCode>> dom_codes) = 0;
+      absl::optional<base::flat_set<ui::DomCode>> dom_codes) = 0;
 
   // Stops capturing system keyboard events.
   virtual void ReleaseSystemKeyEventCapture() = 0;
@@ -334,9 +338,11 @@ class AURA_EXPORT WindowTreeHost : public ui::internal::InputMethodDelegate,
   void MoveCursorToInternal(const gfx::Point& root_location,
                             const gfx::Point& host_location);
 
-  // Overrided from CompositorObserver:
-  void OnCompositingEnded(ui::Compositor* compositor) override;
-  void OnCompositingChildResizing(ui::Compositor* compositor) override;
+  // Overridden from CompositorObserver:
+  void OnCompositingEnded(ui::Compositor* compositor) final;
+  void OnCompositingChildResizing(ui::Compositor* compositor) final;
+  void OnFrameSinksToThrottleUpdated(
+      const base::flat_set<viz::FrameSinkId>& ids) final;
 
   // We don't use a std::unique_ptr for |window_| since we need this ptr to be
   // valid during its deletion. (Window's dtor notifies observers that may

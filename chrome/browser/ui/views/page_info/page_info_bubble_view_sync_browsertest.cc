@@ -8,16 +8,17 @@
 #include "chrome/browser/safe_browsing/chrome_password_protection_service.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ssl/security_state_tab_helper.h"
-#include "chrome/browser/sync/profile_sync_service_factory.h"
-#include "chrome/browser/sync/test/integration/profile_sync_service_harness.h"
+#include "chrome/browser/sync/sync_service_factory.h"
+#include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/location_bar/location_icon_view.h"
+#include "chrome/browser/ui/views/page_info/page_info_view_factory.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
-#include "components/safe_browsing/content/password_protection/password_protection_test_util.h"
-#include "components/safe_browsing/core/password_protection/metrics_util.h"
+#include "components/safe_browsing/content/browser/password_protection/password_protection_test_util.h"
+#include "components/safe_browsing/core/browser/password_protection/metrics_util.h"
 #include "components/signin/public/base/signin_pref_names.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
@@ -91,8 +92,8 @@ class PageInfoBubbleViewSyncBrowserTest : public SyncTest {
 
  protected:
   void SetupSyncForAccount(Profile* profile) {
-    syncer::ProfileSyncService* sync_service =
-        ProfileSyncServiceFactory::GetAsProfileSyncServiceForProfile(profile);
+    syncer::SyncServiceImpl* sync_service =
+        SyncServiceFactory::GetAsSyncServiceImplForProfile(profile);
 
     sync_service->OverrideNetworkForTest(
         fake_server::CreateFakeServerHttpPostProviderFactory(
@@ -104,10 +105,10 @@ class PageInfoBubbleViewSyncBrowserTest : public SyncTest {
       username = "user@gmail.com";
     }
 
-    std::unique_ptr<ProfileSyncServiceHarness> harness =
-        ProfileSyncServiceHarness::Create(
+    std::unique_ptr<SyncServiceImplHarness> harness =
+        SyncServiceImplHarness::Create(
             browser()->profile(), username, "password",
-            ProfileSyncServiceHarness::SigninType::FAKE_SIGNIN);
+            SyncServiceImplHarness::SigninType::FAKE_SIGNIN);
 
     // Sign the profile in.
     ASSERT_TRUE(harness->SignInPrimaryAccount());
@@ -128,7 +129,7 @@ class PageInfoBubbleViewSyncBrowserTest : public SyncTest {
     ASSERT_TRUE(harness->SetupSync());
   }
 
-  const base::string16 GetPageInfoBubbleViewDetailText() {
+  const std::u16string GetPageInfoBubbleViewDetailText() {
     PageInfoBubbleView* page_info_bubble_view =
         static_cast<PageInfoBubbleView*>(
             PageInfoBubbleView::GetPageInfoBubbleForTesting());
@@ -173,10 +174,10 @@ IN_PROC_BROWSER_TEST_F(PageInfoBubbleViewSyncBrowserTest,
 
   OpenPageInfoBubble(browser());
   views::View* change_password_button = GetView(
-      browser(), PageInfoBubbleView::VIEW_ID_PAGE_INFO_BUTTON_CHANGE_PASSWORD);
+      browser(), PageInfoViewFactory::VIEW_ID_PAGE_INFO_BUTTON_CHANGE_PASSWORD);
   views::View* safelist_password_reuse_button = GetView(
       browser(),
-      PageInfoBubbleView::VIEW_ID_PAGE_INFO_BUTTON_ALLOWLIST_PASSWORD_REUSE);
+      PageInfoViewFactory::VIEW_ID_PAGE_INFO_BUTTON_ALLOWLIST_PASSWORD_REUSE);
 
   SecurityStateTabHelper* helper =
       SecurityStateTabHelper::FromWebContents(contents);

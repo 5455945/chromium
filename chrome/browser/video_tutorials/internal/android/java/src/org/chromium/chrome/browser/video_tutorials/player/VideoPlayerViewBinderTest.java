@@ -114,14 +114,6 @@ public class VideoPlayerViewBinderTest {
     @Test
     @UiThreadTest
     @SmallTest
-    public void testControlsVisibility() {
-        mModel.set(VideoPlayerProperties.SHOW_MEDIA_CONTROLS, true);
-        assertEquals(View.VISIBLE, mControls.getVisibility());
-    }
-
-    @Test
-    @UiThreadTest
-    @SmallTest
     public void testTryNowButton() {
         View tryNowButton = mControls.findViewById(R.id.try_now);
         mModel.set(VideoPlayerProperties.SHOW_TRY_NOW, false);
@@ -156,6 +148,22 @@ public class VideoPlayerViewBinderTest {
     @Test
     @UiThreadTest
     @SmallTest
+    public void testPlayButton() {
+        View playButton = mControls.findViewById(R.id.play_button);
+        mModel.set(VideoPlayerProperties.SHOW_PLAY_BUTTON, false);
+        assertEquals(View.GONE, playButton.getVisibility());
+        mModel.set(VideoPlayerProperties.SHOW_PLAY_BUTTON, true);
+        assertEquals(View.VISIBLE, playButton.getVisibility());
+
+        AtomicBoolean buttonClicked = new AtomicBoolean();
+        mModel.set(VideoPlayerProperties.CALLBACK_PLAY_BUTTON, () -> buttonClicked.set(true));
+        playButton.performClick();
+        assertTrue(buttonClicked.get());
+    }
+
+    @Test
+    @UiThreadTest
+    @SmallTest
     public void testChangeLanguageButton() {
         TextView changeLanguage = mControls.findViewById(R.id.change_language);
         String languageName = "XYZ";
@@ -177,6 +185,8 @@ public class VideoPlayerViewBinderTest {
     @SmallTest
     public void testShareButton() {
         View shareButton = mControls.findViewById(R.id.share_button);
+        mModel.set(VideoPlayerProperties.SHOW_SHARE, true);
+        assertEquals(View.VISIBLE, shareButton.getVisibility());
         AtomicBoolean buttonClicked = new AtomicBoolean();
         mModel.set(VideoPlayerProperties.CALLBACK_SHARE, () -> buttonClicked.set(true));
         shareButton.performClick();

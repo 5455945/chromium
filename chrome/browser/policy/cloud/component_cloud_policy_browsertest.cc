@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <memory>
 #include <string>
 
 #include "base/base64url.h"
@@ -25,7 +26,7 @@
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_client.h"
-#include "components/policy/core/common/cloud/policy_builder.h"
+#include "components/policy/core/common/cloud/test/policy_builder.h"
 #include "components/policy/core/common/policy_service.h"
 #include "components/policy/core/common/policy_switches.h"
 #include "components/policy/core/common/policy_test_utils.h"
@@ -41,7 +42,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #include "ash/constants/ash_switches.h"
-#include "chrome/browser/chromeos/policy/user_cloud_policy_manager_chromeos.h"
+#include "chrome/browser/ash/policy/core/user_cloud_policy_manager_chromeos.h"
 #else
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
@@ -135,7 +136,8 @@ class ComponentCloudPolicyTest : public extensions::ExtensionBrowserTest {
 
     // Install the initial extension.
     ExtensionTestMessageListener ready_listener("ready", false);
-    event_listener_.reset(new ExtensionTestMessageListener("event", true));
+    event_listener_ =
+        std::make_unique<ExtensionTestMessageListener>("event", true);
     extension_ = LoadExtension(kTestExtensionPath);
     ASSERT_TRUE(extension_.get());
     ASSERT_EQ(kTestExtension, extension_->id());
@@ -184,7 +186,7 @@ class ComponentCloudPolicyTest : public extensions::ExtensionBrowserTest {
     // the account id to the UserCloudPolicyValidator.
     signin::SetPrimaryAccount(
         IdentityManagerFactory::GetForProfile(browser()->profile()),
-        PolicyBuilder::kFakeUsername);
+        PolicyBuilder::kFakeUsername, signin::ConsentLevel::kSync);
 
     UserCloudPolicyManager* policy_manager =
         browser()->profile()->GetUserCloudPolicyManager();
@@ -222,7 +224,7 @@ class ComponentCloudPolicyTest : public extensions::ExtensionBrowserTest {
             ->GetPrimaryAccountMutator();
     primary_account_mutator->ClearPrimaryAccount(
         signin_metrics::SIGNOUT_TEST,
-        signin_metrics::SignoutDelete::IGNORE_METRIC);
+        signin_metrics::SignoutDelete::kIgnoreMetric);
   }
 #endif
 
@@ -241,21 +243,34 @@ class ComponentCloudPolicyTest : public extensions::ExtensionBrowserTest {
   CloudPolicyClient* client_ = nullptr;
 };
 
-IN_PROC_BROWSER_TEST_F(ComponentCloudPolicyTest, FetchExtensionPolicy) {
+// crbug.com/1224925 flaky on Win.
+#if defined(OS_WIN)
+#define MAYBE_FetchExtensionPolicy DISABLED_FetchExtensionPolicy
+#else
+#define MAYBE_FetchExtensionPolicy FetchExtensionPolicy
+#endif
+IN_PROC_BROWSER_TEST_F(ComponentCloudPolicyTest, MAYBE_FetchExtensionPolicy) {
   // Read the initial policy.
   ExtensionTestMessageListener policy_listener(kTestPolicyJSON, false);
   event_listener_->Reply("get-policy-Name");
   EXPECT_TRUE(policy_listener.WaitUntilSatisfied());
 }
 
-IN_PROC_BROWSER_TEST_F(ComponentCloudPolicyTest, UpdateExtensionPolicy) {
+// crbug.com/1224925 flaky on Win.
+#if defined(OS_WIN)
+#define MAYBE_UpdateExtensionPolicy DISABLED_UpdateExtensionPolicy
+#else
+#define MAYBE_UpdateExtensionPolicy UpdateExtensionPolicy
+#endif
+IN_PROC_BROWSER_TEST_F(ComponentCloudPolicyTest, MAYBE_UpdateExtensionPolicy) {
   // Read the initial policy.
   ExtensionTestMessageListener policy_listener(kTestPolicyJSON, true);
   event_listener_->Reply("get-policy-Name");
   EXPECT_TRUE(policy_listener.WaitUntilSatisfied());
 
   // Update the policy at the server and reload policy.
-  event_listener_.reset(new ExtensionTestMessageListener("event", true));
+  event_listener_ =
+      std::make_unique<ExtensionTestMessageListener>("event", true);
   policy_listener.Reply("idle");
   EXPECT_TRUE(test_server_.UpdatePolicyData(
       dm_protocol::kChromeExtensionPolicyType, kTestExtension, kTestPolicy2));
@@ -275,7 +290,13 @@ IN_PROC_BROWSER_TEST_F(ComponentCloudPolicyTest, UpdateExtensionPolicy) {
   EXPECT_TRUE(policy_listener2.WaitUntilSatisfied());
 }
 
-IN_PROC_BROWSER_TEST_F(ComponentCloudPolicyTest, InstallNewExtension) {
+// crbug.com/1224925 flaky on Win.
+#if defined(OS_WIN)
+#define MAYBE_InstallNewExtension DISABLED_InstallNewExtension
+#else
+#define MAYBE_InstallNewExtension InstallNewExtension
+#endif
+IN_PROC_BROWSER_TEST_F(ComponentCloudPolicyTest, MAYBE_InstallNewExtension) {
   event_listener_->Reply("idle");
   event_listener_.reset();
 
@@ -307,7 +328,8 @@ IN_PROC_BROWSER_TEST_F(ComponentCloudPolicyTest, InstallNewExtension) {
 // This test verifies that when the user signs out then any existing component
 // policy caches are dropped, and that it's still possible to sign back in and
 // get policy for components working again.
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+// crbug.com/1224925 flaky on Win.
+#if !BUILDFLAG(IS_CHROMEOS_ASH) && !defined(OS_WIN)
 IN_PROC_BROWSER_TEST_F(ComponentCloudPolicyTest, SignOutAndBackIn) {
   // Read the initial policy.
   ExtensionTestMessageListener initial_policy_listener(kTestPolicyJSON, true);
@@ -383,7 +405,13 @@ class KeyRotationComponentCloudPolicyTest : public ComponentCloudPolicyTest {
   }
 };
 
-IN_PROC_BROWSER_TEST_F(KeyRotationComponentCloudPolicyTest, Basic) {
+// crbug.com/1224925 flaky on Win.
+#if defined(OS_WIN)
+#define MAYBE_Basic DISABLED_Basic
+#else
+#define MAYBE_Basic Basic
+#endif
+IN_PROC_BROWSER_TEST_F(KeyRotationComponentCloudPolicyTest, MAYBE_Basic) {
   // Read the initial policy.
   ExtensionTestMessageListener policy_listener(kTestPolicyJSON, true);
   event_listener_->Reply("get-policy-Name");
@@ -394,7 +422,8 @@ IN_PROC_BROWSER_TEST_F(KeyRotationComponentCloudPolicyTest, Basic) {
 
   // Update the policy at the server and reload the policy, causing also the key
   // rotation to be performed by the policy test server.
-  event_listener_.reset(new ExtensionTestMessageListener("event", true));
+  event_listener_ =
+      std::make_unique<ExtensionTestMessageListener>("event", true);
   policy_listener.Reply("idle");
   EXPECT_TRUE(test_server_.UpdatePolicyData(
       dm_protocol::kChromeExtensionPolicyType, kTestExtension, kTestPolicy2));

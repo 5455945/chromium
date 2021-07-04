@@ -4,11 +4,13 @@
 
 #include "chrome/browser/browsing_data/site_data_size_collector.h"
 
+#include <memory>
+
 #include "base/bind.h"
 #include "base/callback_helpers.h"
+#include "base/cxx17_backports.h"
 #include "base/files/file_util.h"
 #include "base/run_loop.h"
-#include "base/stl_util.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/browsing_data/content/mock_appcache_helper.h"
@@ -34,7 +36,7 @@ class SiteDataSizeCollectorTest : public testing::Test {
   }
 
   void SetUp() override {
-    profile_.reset(new TestingProfile());
+    profile_ = std::make_unique<TestingProfile>();
     mock_browsing_data_cookie_helper_ =
         new browsing_data::MockCookieHelper(profile_.get());
     mock_browsing_data_database_helper_ =

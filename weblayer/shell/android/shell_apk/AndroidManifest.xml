@@ -7,6 +7,7 @@
  -->
 
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     package="org.chromium.weblayer.shell">
 
     <application android:label="WebLayer shell"
@@ -54,9 +55,25 @@
           </intent-filter>
       </activity>
 
+      <!-- Enable BGF, which is still in development. Don't enable this in production apps. -->
+      <meta-data
+          android:name="org.chromium.weblayer.ENABLE_BACKGROUND_FETCH" android:value="true"/>
+
+      <!-- Enable ADB logging of js logs (console.log). This is disabled by default because some
+           websites log PII. -->
+      <meta-data
+          android:name="org.chromium.weblayer.ENABLE_LOGGING_OF_JS_CONSOLE_MESSAGES" android:value="true"/>
+
+      <!-- Disables at startup init of Emoji2. See http://crbug.com/1205141 -->
+      <provider
+          android:authorities="org.chromium.weblayer.shell.androidx-startup"
+          android:name="androidx.startup.InitializationProvider"
+          android:exported="false"
+          tools:node="remove">
+      </provider>
+
       <!-- AR (Augmented Reality) support. -->
-      <meta-data android:name="com.google.ar.core"
-                 android:value="optional" />
+      <meta-data android:name="com.google.ar.core" android:value="optional" />
       <!-- This needs to be in the application's manifest because arcore looks for it
            there. Chrome achieves this by including com_google_ar_core_java, merging
            the arcore manifest which contains this value, however it's added manually
@@ -67,8 +84,8 @@
                  android:value="1" />
 
       {% if weblayer_package is defined %}
-      <meta-data android:name="org.chromium.weblayer.WebLayerPackage"
-                 android:value="{{ weblayer_package }}"/>
-      {% endif %}
+            <meta-data android:name="org.chromium.weblayer.WebLayerPackage"
+                       android:value="{{ weblayer_package }}"/>
+        {% endif %}
     </application>
 </manifest>

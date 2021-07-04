@@ -5,6 +5,7 @@
 /accessibility_test_framework/lib/
 /adobe/flash/binaries
 /adobe/flash/symbols
+/aemu-linux-arm64
 /aemu-linux-x64
 /amd/
 /android_build_tools/aapt2/aapt2
@@ -71,6 +72,7 @@
 /depot_tools
 /devtools-frontend/src
 /directxsdk
+/distributed_point_functions/src
 /dom_distiller_js/dist
 /eigen3/src
 /elfutils/src
@@ -113,6 +115,7 @@
 /guava/lib/
 /hamcrest/lib/
 /harfbuzz-ng/src
+/highway/src
 /hunspell_dictionaries
 /icu
 /icu4j/lib/
@@ -140,6 +143,7 @@
 /libipp/libipp
 /libjingle/source
 /libjpeg_turbo
+/libjxl/src
 /liblouis/src
 /libphonenumber/dist
 /libsrtp
@@ -172,6 +176,8 @@
 /neon_2_sse/src
 /netty-tcnative/src
 /netty4/src
+/js_code_coverage/node_modules
+/js_code_coverage/*.tar.gz
 /node/linux
 /node/mac
 /node/node_modules
@@ -221,6 +227,9 @@
 /smhasher/src
 /snappy/src
 /soda
+/soda-mac64
+/soda-win32
+/soda-win64
 /speex
 /sqlite/src
 /sqlite4java/lib/
@@ -232,7 +241,6 @@
 /tflite/src
 /tint/src
 /tsan/
-/turbine/src
 /turbine/*.jar
 /ub-uiautomator/lib
 /ukey2/src
@@ -243,6 +251,8 @@
 /vulkan-deps
 /vulkan_memory_allocator
 /wayland/src
+/wayland-protocols/gtk
+/wayland-protocols/kde
 /wayland-protocols/src
 /webdriver/pylib
 /webdriver/python/selenium
@@ -263,7 +273,4 @@
 /wix
 /wuffs/src
 /xdg-utils
-/xstream/lib/
 /xulrunner-sdk
-/zstd-linux-arm64
-/zstd-linux-x64

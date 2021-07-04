@@ -9,11 +9,9 @@
 
 #include "base/guid.h"
 #include "base/observer_list_threadsafe.h"
-#include "base/optional.h"
 #include "base/synchronization/lock.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
 #include "chrome/browser/chromeos/printing/enterprise_printers_provider.h"
 #include "chrome/browser/chromeos/printing/printers_sync_bridge.h"
 #include "chrome/browser/chromeos/printing/specifics_translation.h"
@@ -24,6 +22,7 @@
 #include "components/policy/policy_constants.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace chromeos {
 
@@ -91,7 +90,7 @@ class SyncedPrintersManagerImpl : public SyncedPrintersManager,
   std::unique_ptr<Printer> GetPrinterLocked(
       const std::string& printer_id) const {
     lock_.AssertAcquired();
-    base::Optional<sync_pb::PrinterSpecifics> printer =
+    absl::optional<sync_pb::PrinterSpecifics> printer =
         sync_bridge_->GetPrinter(printer_id);
     return printer.has_value() ? SpecificsToPrinter(*printer) : nullptr;
   }

@@ -9,11 +9,11 @@
 
 #include "ash/accelerometer/accelerometer_reader.h"
 #include "ash/accelerometer/accelerometer_types.h"
+#include "ash/constants/app_types.h"
+#include "ash/constants/ash_features.h"
+#include "ash/constants/ash_switches.h"
 #include "ash/display/screen_orientation_controller.h"
 #include "ash/display/screen_orientation_controller_test_api.h"
-#include "ash/public/cpp/app_types.h"
-#include "ash/public/cpp/ash_features.h"
-#include "ash/public/cpp/ash_switches.h"
 #include "ash/shell.h"
 #include "ash/system/screen_layout_observer.h"
 #include "ash/test/ash_test_base.h"
@@ -896,7 +896,7 @@ TEST_F(ScreenOrientationControllerTest, GetCurrentAppRequestedOrientationLock) {
   EXPECT_EQ(display::Display::ROTATE_270, GetCurrentInternalDisplayRotation());
   EXPECT_EQ(OrientationLockType::kAny, UserLockedOrientation());
 
-  display_manager()->SetMirrorMode(display::MirrorMode::kOff, base::nullopt);
+  display_manager()->SetMirrorMode(display::MirrorMode::kOff, absl::nullopt);
   base::RunLoop().RunUntilIdle();
 
   roots = Shell::GetAllRootWindows();
@@ -942,7 +942,7 @@ TEST_F(ScreenOrientationControllerTest,
   base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(display_manager()->IsInSoftwareMirrorMode());
   // Now switch mirror mode off so that we can have two displays in tablet mode.
-  display_manager()->SetMirrorMode(display::MirrorMode::kOff, base::nullopt);
+  display_manager()->SetMirrorMode(display::MirrorMode::kOff, absl::nullopt);
   base::RunLoop().RunUntilIdle();
   auto roots = Shell::GetAllRootWindows();
   ASSERT_EQ(2u, roots.size());
@@ -998,28 +998,27 @@ TEST_F(ScreenOrientationControllerTest,
   EXPECT_EQ(OrientationLockType::kAny, UserLockedOrientation());
 }
 
-class ForceInPhysicalTabletStateTest : public ScreenOrientationControllerTest {
+class SupportsClamshellAutoRotation : public ScreenOrientationControllerTest {
  public:
-  ForceInPhysicalTabletStateTest() = default;
-  ForceInPhysicalTabletStateTest(const ForceInPhysicalTabletStateTest&) =
-      delete;
-  ForceInPhysicalTabletStateTest& operator=(
-      const ForceInPhysicalTabletStateTest&) = delete;
-  ~ForceInPhysicalTabletStateTest() override = default;
+  SupportsClamshellAutoRotation() = default;
+  SupportsClamshellAutoRotation(const SupportsClamshellAutoRotation&) = delete;
+  SupportsClamshellAutoRotation& operator=(
+      const SupportsClamshellAutoRotation&) = delete;
+  ~SupportsClamshellAutoRotation() override = default;
 
   // ScreenOrientationControllerTest:
   void SetUp() override {
     base::CommandLine::ForCurrentProcess()->AppendSwitch(
-        switches::kForceInTabletPhysicalState);
+        switches::kSupportsClamshellAutoRotation);
     ScreenOrientationControllerTest::SetUp();
   }
 };
 
-// Tests that screen rotation is supported while the device is forced to stay
-// in physical tablet state.
-TEST_F(ForceInPhysicalTabletStateTest, ScreenRotation) {
+// Tests that auto rotation is supported even in clamshell when
+// kSupportsClamshellAutoRotation is set.
+TEST_F(SupportsClamshellAutoRotation, ScreenRotation) {
   TabletModeControllerTestApi tablet_mode_controller_test_api;
-  ASSERT_TRUE(tablet_mode_controller_test_api.IsInPhysicalTabletState());
+  ASSERT_FALSE(tablet_mode_controller_test_api.IsTabletModeStarted());
 
   // Test rotating in all directions are supported.
   TriggerLidUpdate(gfx::Vector3dF(kMeanGravityFloat, 0.0f, 0.0f));

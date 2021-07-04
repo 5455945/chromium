@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <memory>
 
 #include "base/bind.h"
 #include "base/callback_list.h"
@@ -21,7 +22,7 @@
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "components/prefs/pref_service.h"
 #include "components/safe_browsing/buildflags.h"
-#include "components/safe_browsing/core/db/util.h"
+#include "components/safe_browsing/core/browser/db/util.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/browser/extension_prefs.h"
@@ -277,7 +278,7 @@ void Blocklist::RequestExtensionsBlocklistState(
     base::OnceClosure callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   if (!state_fetcher_)
-    state_fetcher_.reset(new BlocklistStateFetcher());
+    state_fetcher_ = std::make_unique<BlocklistStateFetcher>();
 
   state_requests_.emplace_back(std::vector<std::string>(ids.begin(), ids.end()),
                                std::move(callback));
@@ -327,6 +328,10 @@ BlocklistStateFetcher* Blocklist::ResetBlocklistStateFetcherForTest() {
 
 void Blocklist::ResetDatabaseUpdatedListenerForTest() {
   database_updated_subscription_ = {};
+}
+
+void Blocklist::ResetBlocklistStateCacheForTest() {
+  blocklist_state_cache_.clear();
 }
 
 void Blocklist::AddObserver(Observer* observer) {

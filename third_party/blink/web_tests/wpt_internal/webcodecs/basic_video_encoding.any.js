@@ -12,8 +12,8 @@ async function encode_decode_test(codec, acc, avc_format) {
 
   let decoder = new VideoDecoder({
     output(frame) {
-      assert_equals(frame.cropWidth, w, "cropWidth");
-      assert_equals(frame.cropHeight, h, "cropHeight");
+      assert_equals(frame.visibleRect.width, w, "visibleRect.width");
+      assert_equals(frame.visibleRect.height, h, "visibleRect.height");
       assert_equals(frame.timestamp, next_ts++, "timestamp");
       frames_decoded++;
       frame.close();
@@ -25,9 +25,9 @@ async function encode_decode_test(codec, acc, avc_format) {
   });
 
   const encoder_init = {
-    output(chunk, config) {
-      var data = new Uint8Array(chunk.data);
-      if (decoder.state != "configured" || config.description) {
+    output(chunk, metadata) {
+      let config = metadata.decoderConfig;
+      if (config) {
         decoder.configure(config);
       }
       decoder.decode(chunk);
@@ -44,7 +44,8 @@ async function encode_decode_test(codec, acc, avc_format) {
     hardwareAcceleration: acc,
     width: w,
     height: h,
-    bitrate: 5000000,
+    bitrate: 1000000,
+    bitrateMode: "constant"
   };
 
   if (avc_format != null) {
@@ -58,11 +59,7 @@ async function encode_decode_test(codec, acc, avc_format) {
     let frame = await createFrame(w, h, i);
     let keyframe = (i % 5 == 0);
     encoder.encode(frame, { keyFrame: keyframe });
-
-    // Wait to prevent queueing all frames before encoder.configure() completes.
-    // Queuing them all at once should still work, but would not be as
-    // repesentative of a real world scenario.
-    await delay(1);
+    frame.close();
   }
   await encoder.flush();
   await decoder.flush();
@@ -81,8 +78,9 @@ async function encode_test(codec, acc) {
   let frames_processed = 0;
   let errors = 0;
 
-  let process_video_chunk = function (chunk, config) {
+  let process_video_chunk = function (chunk, metadata) {
     assert_greater_than_equal(chunk.timestamp, next_ts++);
+    let config = metadata.decoderConfig;
     let data = new Uint8Array(chunk.data);
     let type = (chunk.timestamp % 5 == 0) ? "key" : "delta";
     assert_equals(chunk.type, type);
@@ -118,7 +116,7 @@ async function encode_test(codec, acc) {
     let frame = await createFrame(w + size_mismatch, h + size_mismatch, i);
     let keyframe = (i % 5 == 0);
     encoder.encode(frame, { keyFrame: keyframe });
-    await delay(1);
+    frame.close();
   }
   await encoder.flush();
   encoder.close();
@@ -148,10 +146,3 @@ promise_test(
 promise_test(
   encode_decode_test.bind(null, "avc1.42001E", "allow", "avc"),
   "encoding and decoding avc1.42001E (avc)");
-
-/* Uncomment this for manual testing, before we have GPU tests for that */
-// promise_test(encode_test.bind(null, "avc1.42001E", "require"),
-//  "encoding avc1.42001E");
-
-// promise_test(encode_decode_test.bind(null, "avc1.42001E", "require"),
-//  "encoding and decoding avc1.42001E req");

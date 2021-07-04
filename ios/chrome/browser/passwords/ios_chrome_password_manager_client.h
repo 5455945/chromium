@@ -6,11 +6,11 @@
 #define IOS_CHROME_BROWSER_PASSWORDS_IOS_CHROME_PASSWORD_MANAGER_CLIENT_H_
 
 #include <memory>
+#include <string>
 
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
-#include "base/strings/string16.h"
 #include "components/autofill/core/common/language_code.h"
 #include "components/password_manager/core/browser/leak_detection_dialog_utils.h"
 #include "components/password_manager/core/browser/password_feature_manager_impl.h"
@@ -19,6 +19,7 @@
 #include "components/password_manager/core/browser/password_manager_metrics_recorder.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/password_manager/core/browser/password_reuse_detection_manager.h"
+#include "components/password_manager/core/browser/password_reuse_manager.h"
 #include "components/password_manager/core/browser/sync_credentials_filter.h"
 #include "components/password_manager/ios/password_manager_client_bridge.h"
 #include "components/prefs/pref_member.h"
@@ -27,6 +28,7 @@
 #import "ios/web/public/web_state.h"
 #include "ios/web/public/web_state_observer.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class ChromeBrowserState;
 
@@ -77,7 +79,6 @@ class IOSChromePasswordManagerClient
   void PromptUserToMovePasswordToAccount(
       std::unique_ptr<password_manager::PasswordFormManagerForUI> form_to_move)
       override;
-  bool RequiresReauthToFill() override;
   void ShowManualFallbackForSaving(
       std::unique_ptr<password_manager::PasswordFormManagerForUI> form_to_save,
       bool has_generated_password,
@@ -85,6 +86,7 @@ class IOSChromePasswordManagerClient
   void HideManualFallbackForSaving() override;
   void FocusedInputChanged(
       password_manager::PasswordManagerDriver* driver,
+      autofill::FieldRendererId focused_field_id,
       autofill::mojom::FocusedFieldType focused_field_type) override;
   bool PromptUserToChooseCredentials(
       std::vector<std::unique_ptr<password_manager::PasswordForm>> local_forms,
@@ -101,6 +103,9 @@ class IOSChromePasswordManagerClient
   PrefService* GetPrefs() const override;
   password_manager::PasswordStore* GetProfilePasswordStore() const override;
   password_manager::PasswordStore* GetAccountPasswordStore() const override;
+  password_manager::PasswordReuseManager* GetPasswordReuseManager()
+      const override;
+
   void NotifyUserAutoSignin(
       std::vector<std::unique_ptr<password_manager::PasswordForm>> local_forms,
       const url::Origin& origin) override;
@@ -112,9 +117,8 @@ class IOSChromePasswordManagerClient
   void NotifyStorePasswordCalled() override;
   void NotifyUserCredentialsWereLeaked(
       password_manager::CredentialLeakType leak_type,
-      password_manager::CompromisedSitesCount saved_sites,
       const GURL& origin,
-      const base::string16& username) override;
+      const std::u16string& username) override;
   bool IsSavingAndFillingEnabled(const GURL& url) const override;
   bool IsFillingEnabled(const GURL& url) const override;
   bool IsCommittedMainFrameSecure() const override;
@@ -151,7 +155,7 @@ class IOSChromePasswordManagerClient
   // Shows the password protection UI. |warning_text| is the displayed text.
   // |callback| is invoked when the user dismisses the UI.
   void NotifyUserPasswordProtectionWarning(
-      const base::string16& warning_text,
+      const std::u16string& warning_text,
       base::OnceCallback<void(safe_browsing::WarningAction)> callback);
 
  private:
@@ -182,7 +186,7 @@ class IOSChromePasswordManagerClient
   // Recorder of metrics that is associated with the last committed navigation
   // of the tab owning this ChromePasswordManagerClient. May be unset at
   // times. Sends statistics on destruction.
-  base::Optional<password_manager::PasswordManagerMetricsRecorder>
+  absl::optional<password_manager::PasswordManagerMetricsRecorder>
       metrics_recorder_;
 
   // Helper for performing logic that is common between

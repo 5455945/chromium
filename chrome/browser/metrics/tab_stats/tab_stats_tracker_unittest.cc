@@ -8,12 +8,19 @@
 
 #include "base/strings/strcat.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/power_monitor_test_base.h"
+#include "base/test/power_monitor_test.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_group.h"
+#include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
+#include "chrome/test/base/test_browser_window.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
+#include "components/tab_groups/tab_group_color.h"
+#include "components/tab_groups/tab_group_id.h"
+#include "components/tab_groups/tab_group_visual_data.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/web_contents_tester.h"
@@ -62,23 +69,26 @@ class TestTabStatsTracker : public TabStatsTracker {
   // Helper functions to update the number of tabs/windows.
 
   size_t AddTabs(size_t tab_count,
-                 ChromeRenderViewHostTestHarness* test_harness) {
+                 ChromeRenderViewHostTestHarness* test_harness,
+                 TabStripModel* tab_strip_model) {
     EXPECT_TRUE(test_harness);
     for (size_t i = 0; i < tab_count; ++i) {
       std::unique_ptr<content::WebContents> tab =
           test_harness->CreateTestWebContents();
-      tab_stats_data_store()->OnTabAdded(tab.get());
-      tabs_.emplace_back(std::move(tab));
+      tab_strip_model->InsertWebContentsAt(
+          tab_strip_model->count(), std::move(tab), TabStripModel::ADD_ACTIVE);
     }
+    EXPECT_EQ(tab_stats_data_store()->tab_stats().total_tab_count,
+              static_cast<size_t>(tab_strip_model->count()));
     return tab_stats_data_store()->tab_stats().total_tab_count;
   }
 
-  size_t RemoveTabs(size_t tab_count) {
+  size_t RemoveTabs(size_t tab_count, TabStripModel* tab_strip_model) {
     EXPECT_LE(tab_count, tab_stats_data_store()->tab_stats().total_tab_count);
-    EXPECT_LE(tab_count, tabs_.size());
+    EXPECT_LE(tab_count, static_cast<size_t>(tab_strip_model->count()));
     for (size_t i = 0; i < tab_count; ++i) {
-      tab_stats_data_store()->OnTabRemoved(tabs_.back().get());
-      tabs_.pop_back();
+      tab_strip_model->CloseWebContentsAt(tab_strip_model->count() - 1,
+                                          TabStripModel::CLOSE_USER_GESTURE);
     }
     return tab_stats_data_store()->tab_stats().total_tab_count;
   }
@@ -124,8 +134,6 @@ class TestTabStatsTracker : public TabStatsTracker {
  private:
   PrefService* pref_service_;
 
-  std::vector<std::unique_ptr<content::WebContents>> tabs_;
-
   DISALLOW_COPY_AND_ASSIGN(TestTabStatsTracker);
 };
 
@@ -151,33 +159,42 @@ class TabStatsTrackerTest : public ChromeRenderViewHostTestHarness {
       TestTabStatsTracker::UmaStatsReportingDelegate;
 
   TabStatsTrackerTest() {
-    power_monitor_source_ = new base::PowerMonitorTestSource();
-    base::PowerMonitor::Initialize(
-        std::unique_ptr<base::PowerMonitorSource>(power_monitor_source_));
-
     TabStatsTracker::RegisterPrefs(pref_service_.registry());
 
     // The tab stats tracker has to be created after the power monitor as it's
     // using it.
-    tab_stats_tracker_.reset(new TestTabStatsTracker(&pref_service_));
+    tab_stats_tracker_ = std::make_unique<TestTabStatsTracker>(&pref_service_);
+  }
+
+  void SetUp() override {
+    ChromeRenderViewHostTestHarness::SetUp();
+    browser_ = CreateBrowserWithTestWindowForParams(
+        Browser::CreateParams(profile(), true));
+    tab_strip_model_ = browser_->tab_strip_model();
   }
 
   void TearDown() override {
+    tab_stats_tracker_->RemoveTabs(tab_strip_model_->count(), tab_strip_model_);
+
     tab_stats_tracker_.reset(nullptr);
+    tab_strip_model_ = nullptr;
+    browser_.reset(nullptr);
     ChromeRenderViewHostTestHarness::TearDown();
-    base::PowerMonitor::ShutdownForTesting();
   }
 
   // The tabs stat tracker instance, it should be created in the SetUp
   std::unique_ptr<TestTabStatsTracker> tab_stats_tracker_;
 
   // Used to simulate power events.
-  base::PowerMonitorTestSource* power_monitor_source_;
+  base::test::ScopedPowerMonitorTestSource power_monitor_source_;
 
   // Used to make sure that the metrics are reported properly.
   base::HistogramTester histogram_tester_;
 
   TestingPrefServiceSimple pref_service_;
+
+  std::unique_ptr<Browser> browser_;
+  TabStripModel* tab_strip_model_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(TabStatsTrackerTest);
@@ -235,17 +252,18 @@ TEST_F(TabStatsTrackerTest, OnResume) {
       UmaStatsReportingDelegate::kNumberOfTabsOnResumeHistogramName, 0);
 
   // Creates some tabs.
-  size_t expected_tab_count = tab_stats_tracker_->AddTabs(12, this);
+  size_t expected_tab_count =
+      tab_stats_tracker_->AddTabs(12, this, tab_strip_model_);
 
   std::vector<base::Bucket> count_buckets;
   count_buckets.emplace_back(base::Bucket(expected_tab_count, 1));
 
-  EXPECT_FALSE(power_monitor_source_->IsOnBatteryPower());
+  EXPECT_FALSE(power_monitor_source_.IsOnBatteryPower());
 
   // Generates a resume event that should end up calling the
   // |ReportTabCountOnResume| method of the reporting delegate.
-  power_monitor_source_->GenerateSuspendEvent();
-  power_monitor_source_->GenerateResumeEvent();
+  power_monitor_source_.GenerateSuspendEvent();
+  power_monitor_source_.GenerateResumeEvent();
 
   // There should be only one sample for the |kNumberOfTabsOnResume| histogram.
   histogram_tester_.ExpectTotalCount(
@@ -264,15 +282,15 @@ TEST_F(TabStatsTrackerTest, OnResume) {
       count_buckets);
 
   // Removes some tabs and update the expectations.
-  expected_tab_count = tab_stats_tracker_->RemoveTabs(5);
+  expected_tab_count = tab_stats_tracker_->RemoveTabs(5, tab_strip_model_);
   count_buckets.emplace_back(base::Bucket(expected_tab_count, 1));
   std::sort(count_buckets.begin(), count_buckets.end(), CompareHistogramBucket);
 
-  power_monitor_source_->GeneratePowerStateEvent(true);
-  EXPECT_TRUE(power_monitor_source_->IsOnBatteryPower());
+  power_monitor_source_.GeneratePowerStateEvent(true);
+  EXPECT_TRUE(power_monitor_source_.IsOnBatteryPower());
   // Generates another resume event.
-  power_monitor_source_->GenerateSuspendEvent();
-  power_monitor_source_->GenerateResumeEvent();
+  power_monitor_source_.GenerateSuspendEvent();
+  power_monitor_source_.GenerateResumeEvent();
 
   // There should be 2 samples for this metric now.
   histogram_tester_.ExpectTotalCount(
@@ -297,18 +315,19 @@ TEST_F(TabStatsTrackerTest, StatsGetReportedDaily) {
 
   // Adds some tabs and windows, then remove some so the maximums are not equal
   // to the current state.
-  size_t expected_tab_count = tab_stats_tracker_->AddTabs(12, this);
+  size_t expected_tab_count =
+      tab_stats_tracker_->AddTabs(12, this, tab_strip_model_);
   size_t expected_window_count = tab_stats_tracker_->AddWindows(5);
-  size_t expected_max_tab_per_window = expected_tab_count - 1;
+  size_t expected_max_tab_per_window = expected_tab_count;
   tab_stats_tracker_->data_store()->UpdateMaxTabsPerWindowIfNeeded(
       expected_max_tab_per_window);
-  expected_tab_count = tab_stats_tracker_->RemoveTabs(5);
+  expected_tab_count = tab_stats_tracker_->RemoveTabs(5, tab_strip_model_);
   expected_window_count = tab_stats_tracker_->RemoveWindows(2);
-  expected_max_tab_per_window = expected_tab_count - 1;
+  expected_max_tab_per_window = expected_tab_count;
 
   TabsStats stats = tab_stats_tracker_->data_store()->tab_stats();
 
-  EXPECT_FALSE(power_monitor_source_->IsOnBatteryPower());
+  EXPECT_FALSE(power_monitor_source_.IsOnBatteryPower());
   // Trigger the daily event.
   tab_stats_tracker_->TriggerDailyEvent();
 
@@ -355,8 +374,8 @@ TEST_F(TabStatsTrackerTest, StatsGetReportedDaily) {
   EXPECT_EQ(expected_window_count, static_cast<size_t>(pref_service_.GetInteger(
                                        prefs::kTabStatsWindowCountMax)));
 
-  power_monitor_source_->GeneratePowerStateEvent(true);
-  EXPECT_TRUE(power_monitor_source_->IsOnBatteryPower());
+  power_monitor_source_.GeneratePowerStateEvent(true);
+  EXPECT_TRUE(power_monitor_source_.IsOnBatteryPower());
 
   // Trigger the daily event.
   tab_stats_tracker_->TriggerDailyEvent();
@@ -506,24 +525,42 @@ TEST_F(TabStatsTrackerTest, TabUsageGetsReported) {
 }
 
 TEST_F(TabStatsTrackerTest, HeartbeatMetrics) {
-  size_t expected_tab_count = tab_stats_tracker_->AddTabs(12, this);
+  size_t expected_tab_count =
+      tab_stats_tracker_->AddTabs(12, this, tab_strip_model_);
   size_t expected_window_count = tab_stats_tracker_->AddWindows(5);
+  int collapsed_tab_count = 0;
 
   tab_stats_tracker_->OnHeartbeatEvent();
 
+  histogram_tester_.ExpectBucketCount(
+      UmaStatsReportingDelegate::kCollapsedTabHistogramName,
+      collapsed_tab_count, 1);
   histogram_tester_.ExpectBucketCount(
       UmaStatsReportingDelegate::kTabCountHistogramName, expected_tab_count, 1);
   histogram_tester_.ExpectBucketCount(
       UmaStatsReportingDelegate::kWindowCountHistogramName,
       expected_window_count, 1);
 
-  expected_tab_count = tab_stats_tracker_->RemoveTabs(4);
+  expected_tab_count = tab_stats_tracker_->RemoveTabs(4, tab_strip_model_);
   expected_window_count = tab_stats_tracker_->RemoveWindows(3);
+  tab_groups::TabGroupId group_id1 = tab_strip_model_->AddToNewGroup({0, 1});
+  tab_groups::TabGroupId group_id2 = tab_strip_model_->AddToNewGroup({5});
+  const tab_groups::TabGroupVisualData visual_data(
+      u"Foo", tab_groups::TabGroupColorId::kCyan, /* is_collapsed = */ true);
+  TabGroup* group1 = tab_strip_model_->group_model()->GetTabGroup(group_id1);
+  TabGroup* group2 = tab_strip_model_->group_model()->GetTabGroup(group_id2);
+  group1->SetVisualData(visual_data);
+  group2->SetVisualData(visual_data);
+  ASSERT_TRUE(tab_strip_model_->IsGroupCollapsed(group_id1));
+  ASSERT_TRUE(tab_strip_model_->IsGroupCollapsed(group_id2));
+  collapsed_tab_count += group1->ListTabs().length();
+  collapsed_tab_count += group2->ListTabs().length();
 
   tab_stats_tracker_->OnHeartbeatEvent();
 
   histogram_tester_.ExpectBucketCount(
-      UmaStatsReportingDelegate::kTabCountHistogramName, expected_tab_count, 1);
+      UmaStatsReportingDelegate::kCollapsedTabHistogramName,
+      collapsed_tab_count, 1);
   histogram_tester_.ExpectBucketCount(
       UmaStatsReportingDelegate::kWindowCountHistogramName,
       expected_window_count, 1);

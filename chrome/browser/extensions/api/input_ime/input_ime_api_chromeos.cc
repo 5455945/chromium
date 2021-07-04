@@ -14,12 +14,12 @@
 #include "base/macros.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/ash/login/lock/screen_locker.h"
+#include "chrome/browser/ash/login/session/user_session_manager.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/chromeos/input_method/assistive_window_properties.h"
 #include "chrome/browser/chromeos/input_method/input_host_helper.h"
 #include "chrome/browser/chromeos/input_method/input_method_engine.h"
 #include "chrome/browser/chromeos/input_method/native_input_method_engine.h"
-#include "chrome/browser/chromeos/login/session/user_session_manager.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/keyboard/chrome_keyboard_controller_client.h"
 #include "chrome/common/extensions/api/input_ime.h"
@@ -87,16 +87,12 @@ void SetMenuItemToMenu(
             input.style);
   }
 
-  if (input.visible)
-    out->modified |= InputMethodEngine::MENU_ITEM_MODIFIED_VISIBLE;
   out->visible = input.visible ? *input.visible : true;
 
   if (input.checked)
     out->modified |= InputMethodEngine::MENU_ITEM_MODIFIED_CHECKED;
   out->checked = input.checked ? *input.checked : false;
 
-  if (input.enabled)
-    out->modified |= InputMethodEngine::MENU_ITEM_MODIFIED_ENABLED;
   out->enabled = input.enabled ? *input.enabled : true;
 }
 
@@ -133,6 +129,7 @@ input_ime::AssistiveWindowButton ConvertAssistiveWindowButton(
     case ui::ime::ButtonId::kSmartInputsSettingLink:
     case ui::ime::ButtonId::kSuggestion:
     case ui::ime::ButtonId::kLearnMore:
+    case ui::ime::ButtonId::kIgnoreSuggestion:
       return input_ime::ASSISTIVE_WINDOW_BUTTON_NONE;
     case ui::ime::ButtonId::kUndo:
       return input_ime::ASSISTIVE_WINDOW_BUTTON_UNDO;
@@ -147,6 +144,7 @@ input_ime::AssistiveWindowType ConvertAssistiveWindowType(
     case ui::ime::AssistiveWindowType::kNone:
     case ui::ime::AssistiveWindowType::kEmojiSuggestion:
     case ui::ime::AssistiveWindowType::kPersonalInfoSuggestion:
+    case ui::ime::AssistiveWindowType::kGrammarSuggestion:
       return input_ime::AssistiveWindowType::ASSISTIVE_WINDOW_TYPE_NONE;
     case ui::ime::AssistiveWindowType::kUndoWindow:
       return input_ime::AssistiveWindowType::ASSISTIVE_WINDOW_TYPE_UNDO;
@@ -186,8 +184,8 @@ class ImeObserverChromeOS : public ui::ImeObserver {
         break;
     }
 
-    std::unique_ptr<base::ListValue> args(input_ime::OnCandidateClicked::Create(
-        component_id, candidate_id, button_enum));
+    auto args(input_ime::OnCandidateClicked::Create(component_id, candidate_id,
+                                                    button_enum));
 
     DispatchEventToExtension(extensions::events::INPUT_IME_ON_CANDIDATE_CLICKED,
                              input_ime::OnCandidateClicked::kEventName,
@@ -200,8 +198,7 @@ class ImeObserverChromeOS : public ui::ImeObserver {
         !HasListener(input_ime::OnMenuItemActivated::kEventName))
       return;
 
-    std::unique_ptr<base::ListValue> args(
-        input_ime::OnMenuItemActivated::Create(component_id, menu_id));
+    auto args(input_ime::OnMenuItemActivated::Create(component_id, menu_id));
 
     DispatchEventToExtension(
         extensions::events::INPUT_IME_ON_MENU_ITEM_ACTIVATED,
@@ -214,8 +211,8 @@ class ImeObserverChromeOS : public ui::ImeObserver {
       return;
     }
     // Note: this is a private API event.
-    std::unique_ptr<base::ListValue> args(new base::ListValue());
-    args->Append(std::make_unique<base::Value>(is_projected));
+    std::vector<base::Value> args;
+    args.push_back(base::Value(is_projected));
 
     DispatchEventToExtension(
         extensions::events::INPUT_METHOD_PRIVATE_ON_SCREEN_PROJECTION_CHANGED,
@@ -224,31 +221,29 @@ class ImeObserverChromeOS : public ui::ImeObserver {
 
   void OnCompositionBoundsChanged(
       const std::vector<gfx::Rect>& bounds) override {
-    if (extension_id_.empty() ||
-        !HasListener(OnCompositionBoundsChanged::kEventName))
+    if (bounds.empty() || extension_id_.empty() ||
+        !HasListener(OnCompositionBoundsChanged::kEventName)) {
       return;
-
-    // Note: this is a private API event.
-    auto bounds_list = std::make_unique<base::ListValue>();
-    for (auto bound : bounds) {
-      auto bounds_value = std::make_unique<base::DictionaryValue>();
-      bounds_value->SetInteger("x", bound.x());
-      bounds_value->SetInteger("y", bound.y());
-      bounds_value->SetInteger("w", bound.width());
-      bounds_value->SetInteger("h", bound.height());
-      bounds_list->Append(std::move(bounds_value));
     }
 
-    if (bounds_list->GetSize() <= 0)
-      return;
-    std::unique_ptr<base::ListValue> args(new base::ListValue());
+    // Note: this is a private API event.
+    std::vector<base::Value> bounds_list;
+    bounds_list.reserve(bounds.size());
+    for (const auto& bound : bounds) {
+      base::Value bounds_value(base::Value::Type::DICTIONARY);
+      bounds_value.SetIntKey("x", bound.x());
+      bounds_value.SetIntKey("y", bound.y());
+      bounds_value.SetIntKey("w", bound.width());
+      bounds_value.SetIntKey("h", bound.height());
+      bounds_list.push_back(std::move(bounds_value));
+    }
+
+    std::vector<base::Value> args;
 
     // The old extension code uses the first parameter to get the bounds of the
     // first composition character, so for backward compatibility, add it here.
-    base::Value* first_value = NULL;
-    if (bounds_list->Get(0, &first_value))
-      args->Append(first_value->CreateDeepCopy());
-    args->Append(std::move(bounds_list));
+    args.push_back(bounds_list[0].Clone());
+    args.push_back(base::Value(std::move(bounds_list)));
 
     DispatchEventToExtension(
         extensions::events::INPUT_METHOD_PRIVATE_ON_COMPOSITION_BOUNDS_CHANGED,
@@ -256,6 +251,8 @@ class ImeObserverChromeOS : public ui::ImeObserver {
   }
 
   void OnFocus(
+      const std::string& engine_id,
+      int context_id,
       const IMEEngineHandlerInterface::InputContext& context) override {
     if (extension_id_.empty())
       return;
@@ -265,7 +262,7 @@ class ImeObserverChromeOS : public ui::ImeObserver {
     // inputs. We ensure that we only trigger one OnFocus event.
     if (ExtensionHasListener(input_method_private::OnFocus::kEventName)) {
       input_method_private::InputContext input_context;
-      input_context.context_id = context.id;
+      input_context.context_id = context_id;
       input_context.type = input_method_private::ParseInputContextType(
           ConvertInputContextType(context));
       input_context.mode = input_method_private::ParseInputModeType(
@@ -286,8 +283,7 @@ class ImeObserverChromeOS : public ui::ImeObserver {
       chromeos::input_host_helper::PopulateInputHost(&host);
       input_context.app_key = std::make_unique<std::string>(host.app_key);
 
-      std::unique_ptr<base::ListValue> args(
-          input_method_private::OnFocus::Create(input_context));
+      auto args(input_method_private::OnFocus::Create(input_context));
 
       DispatchEventToExtension(
           extensions::events::INPUT_METHOD_PRIVATE_ON_FOCUS,
@@ -295,7 +291,7 @@ class ImeObserverChromeOS : public ui::ImeObserver {
       return;
     }
 
-    ImeObserver::OnFocus(context);
+    ImeObserver::OnFocus(engine_id, context_id, context);
   }
 
   void OnAssistiveWindowButtonClicked(
@@ -308,8 +304,7 @@ class ImeObserverChromeOS : public ui::ImeObserver {
     details.button_id = ConvertAssistiveWindowButton(button.id);
     details.window_type = ConvertAssistiveWindowType(button.window_type);
 
-    std::unique_ptr<base::ListValue> args(
-        input_ime::OnAssistiveWindowButtonClicked::Create(details));
+    auto args(input_ime::OnAssistiveWindowButtonClicked::Create(details));
     DispatchEventToExtension(
         extensions::events::INPUT_IME_ON_ASSISTIVE_WINDOW_BUTTON_CLICKED,
         input_ime::OnAssistiveWindowButtonClicked::kEventName, std::move(args));
@@ -317,8 +312,7 @@ class ImeObserverChromeOS : public ui::ImeObserver {
 
   void OnSuggestionsChanged(
       const std::vector<std::string>& suggestions) override {
-    std::unique_ptr<base::ListValue> args(
-        input_method_private::OnSuggestionsChanged::Create(suggestions));
+    auto args(input_method_private::OnSuggestionsChanged::Create(suggestions));
     DispatchEventToExtension(
         extensions::events::INPUT_IME_ON_SUGGESTIONS_CHANGED,
         input_method_private::OnSuggestionsChanged::kEventName,
@@ -326,7 +320,7 @@ class ImeObserverChromeOS : public ui::ImeObserver {
   }
 
   void OnInputMethodOptionsChanged(const std::string& engine_id) override {
-    std::unique_ptr<base::ListValue> args(
+    auto args(
         input_method_private::OnInputMethodOptionsChanged::Create(engine_id));
     DispatchEventToExtension(
         extensions::events::INPUT_IME_ON_INPUT_METHOD_OPTIONS_CHANGED,
@@ -339,7 +333,7 @@ class ImeObserverChromeOS : public ui::ImeObserver {
   void DispatchEventToExtension(
       extensions::events::HistogramValue histogram_value,
       const std::string& event_name,
-      std::unique_ptr<base::ListValue> args) override {
+      std::vector<base::Value> args) override {
     if (event_name == input_ime::OnActivate::kEventName) {
       // Send onActivate event regardless of it's listened by the IME.
       auto event = std::make_unique<extensions::Event>(
@@ -591,7 +585,7 @@ bool InputImeEventRouter::RegisterImeExtension(
   }
 
   if (is_login && profile->HasPrimaryOTRProfile()) {
-    profile = profile->GetPrimaryOTRProfile();
+    profile = profile->GetPrimaryOTRProfile(/*create_if_needed=*/true);
   }
 
   auto observer = std::make_unique<ImeObserverChromeOS>(extension_id, profile);
@@ -601,7 +595,7 @@ bool InputImeEventRouter::RegisterImeExtension(
   engine->Initialize(std::move(observer), extension_id.c_str(), profile);
   engine_map_[extension_id] = std::move(engine);
 
-  chromeos::UserSessionManager::GetInstance()
+  ash::UserSessionManager::GetInstance()
       ->GetDefaultIMEState(profile)
       ->AddInputMethodExtension(extension_id, descriptors,
                                 engine_map_[extension_id].get());
@@ -630,7 +624,7 @@ InputMethodEngine* InputImeEventRouter::GetEngine(
   }
 }
 
-InputMethodEngineBase* InputImeEventRouter::GetEngineIfActive(
+InputMethodEngine* InputImeEventRouter::GetEngineIfActive(
     const std::string& extension_id,
     std::string* error) {
   auto it = engine_map_.find(extension_id);
@@ -1032,7 +1026,7 @@ void InputImeAPI::OnExtensionLoaded(content::BrowserContext* browser_context,
       // can receive the onActivate event to recover itself upon the
       // unexpected unload.
       std::string error;
-      InputMethodEngineBase* engine =
+      InputMethodEngine* engine =
           event_router->GetEngineIfActive(extension->id(), &error);
       DCHECK(engine) << error;
       // When extension is unloaded unexpectedly and reloaded, OS doesn't pass

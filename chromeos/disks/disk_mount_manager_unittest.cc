@@ -11,8 +11,8 @@
 #include <vector>
 
 #include "base/bind.h"
+#include "base/cxx17_backports.h"
 #include "base/run_loop.h"
-#include "base/stl_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/task_environment.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
@@ -522,6 +522,7 @@ class DiskMountManagerTest : public testing::Test {
   // Adds a test observer to the disk mount manager.
   void SetUp() override {
     fake_cros_disks_client_ = new FakeCrosDisksClient;
+    DBusThreadManager::Initialize();
     DBusThreadManager::GetSetterForTesting()->SetCrosDisksClient(
         std::unique_ptr<CrosDisksClient>(fake_cros_disks_client_));
     PowerManagerClient::InitializeFake();
@@ -530,8 +531,8 @@ class DiskMountManagerTest : public testing::Test {
 
     InitDisksAndMountPoints();
 
-    observer_.reset(
-        new MockDiskMountManagerObserver(DiskMountManager::GetInstance()));
+    observer_ = std::make_unique<MockDiskMountManagerObserver>(
+        DiskMountManager::GetInstance());
     DiskMountManager::GetInstance()->AddObserver(observer_.get());
   }
 

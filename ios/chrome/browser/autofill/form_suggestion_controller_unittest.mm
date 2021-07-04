@@ -9,7 +9,6 @@
 
 #include "base/mac/foundation_util.h"
 #include "base/path_service.h"
-#include "base/strings/stringprintf.h"
 #import "components/autofill/ios/browser/form_suggestion.h"
 #import "components/autofill/ios/browser/form_suggestion_provider.h"
 #import "components/autofill/ios/form_util/form_activity_observer_bridge.h"
@@ -143,6 +142,10 @@ using autofill::FieldRendererId;
   completion();
 }
 
+- (SuggestionProviderType)type {
+  return SuggestionProviderTypeUnknown;
+}
+
 @end
 
 namespace {
@@ -262,7 +265,7 @@ TEST_F(FormSuggestionControllerTest,
   SetUpController(@[ [TestSuggestionProvider providerWithSuggestions] ]);
   GURL url("http://foo.com");
   fake_web_state_.SetCurrentURL(url);
-  web::FakeMainWebFrame main_frame(url);
+  auto main_frame = web::FakeWebFrame::CreateMainWebFrame(url);
 
   // Trigger form activity, which should set up the suggestions view.
   autofill::FormActivityParams params;
@@ -272,7 +275,8 @@ TEST_F(FormSuggestionControllerTest,
   params.type = "type";
   params.value = "value";
   params.input_missing = false;
-  test_form_activity_tab_helper_.FormActivityRegistered(&main_frame, params);
+  test_form_activity_tab_helper_.FormActivityRegistered(main_frame.get(),
+                                                        params);
   EXPECT_TRUE(received_suggestions_.count);
 
   // Trigger another page load. The suggestions should not be present.
@@ -285,7 +289,7 @@ TEST_F(FormSuggestionControllerTest, FormActivityBlurShouldBeIgnored) {
   SetUpController(@[ [TestSuggestionProvider providerWithSuggestions] ]);
   GURL url("http://foo.com");
   fake_web_state_.SetCurrentURL(url);
-  web::FakeMainWebFrame main_frame(url);
+  auto main_frame = web::FakeWebFrame::CreateMainWebFrame(url);
 
   autofill::FormActivityParams params;
   params.form_name = "form";
@@ -294,7 +298,8 @@ TEST_F(FormSuggestionControllerTest, FormActivityBlurShouldBeIgnored) {
   params.type = "blur";  // blur!
   params.value = "value";
   params.input_missing = false;
-  test_form_activity_tab_helper_.FormActivityRegistered(&main_frame, params);
+  test_form_activity_tab_helper_.FormActivityRegistered(main_frame.get(),
+                                                        params);
   EXPECT_FALSE(received_suggestions_.count);
 }
 
@@ -305,7 +310,7 @@ TEST_F(FormSuggestionControllerTest,
   SetUpController(@[]);
   GURL url("http://foo.com");
   fake_web_state_.SetCurrentURL(url);
-  web::FakeMainWebFrame main_frame(url);
+  auto main_frame = web::FakeWebFrame::CreateMainWebFrame(url);
 
   autofill::FormActivityParams params;
   params.form_name = "form";
@@ -314,7 +319,8 @@ TEST_F(FormSuggestionControllerTest,
   params.type = "type";
   params.value = "value";
   params.input_missing = false;
-  test_form_activity_tab_helper_.FormActivityRegistered(&main_frame, params);
+  test_form_activity_tab_helper_.FormActivityRegistered(main_frame.get(),
+                                                        params);
 
   // The suggestions should be empty.
   EXPECT_TRUE(received_suggestions_);
@@ -334,7 +340,7 @@ TEST_F(FormSuggestionControllerTest,
   SetUpController(@[ provider1, provider2 ]);
   GURL url("http://foo.com");
   fake_web_state_.SetCurrentURL(url);
-  web::FakeMainWebFrame main_frame(url);
+  auto main_frame = web::FakeWebFrame::CreateMainWebFrame(url);
 
   autofill::FormActivityParams params;
   params.form_name = "form";
@@ -343,7 +349,8 @@ TEST_F(FormSuggestionControllerTest,
   params.type = "type";
   params.value = "value";
   params.input_missing = false;
-  test_form_activity_tab_helper_.FormActivityRegistered(&main_frame, params);
+  test_form_activity_tab_helper_.FormActivityRegistered(main_frame.get(),
+                                                        params);
 
   // The providers should each be asked if they have suggestions for the
   // form in question.
@@ -385,7 +392,7 @@ TEST_F(FormSuggestionControllerTest,
   SetUpController(@[ provider1, provider2 ]);
   GURL url("http://foo.com");
   fake_web_state_.SetCurrentURL(url);
-  web::FakeMainWebFrame main_frame(url);
+  auto main_frame = web::FakeWebFrame::CreateMainWebFrame(url);
 
   autofill::FormActivityParams params;
   params.form_name = "form";
@@ -394,7 +401,8 @@ TEST_F(FormSuggestionControllerTest,
   params.type = "type";
   params.value = "value";
   params.input_missing = false;
-  test_form_activity_tab_helper_.FormActivityRegistered(&main_frame, params);
+  test_form_activity_tab_helper_.FormActivityRegistered(main_frame.get(),
+                                                        params);
 
   // Since the first provider has suggestions available, it and only it
   // should have been asked.
@@ -427,7 +435,7 @@ TEST_F(FormSuggestionControllerTest, SelectingSuggestionShouldNotifyDelegate) {
   SetUpController(@[ provider ]);
   GURL url("http://foo.com");
   fake_web_state_.SetCurrentURL(url);
-  web::FakeMainWebFrame main_frame(url);
+  auto main_frame = web::FakeWebFrame::CreateMainWebFrame(url);
 
   autofill::FormActivityParams params;
   params.form_name = "form";
@@ -437,7 +445,8 @@ TEST_F(FormSuggestionControllerTest, SelectingSuggestionShouldNotifyDelegate) {
   params.value = "value";
   params.frame_id = "frame_id";
   params.input_missing = false;
-  test_form_activity_tab_helper_.FormActivityRegistered(&main_frame, params);
+  test_form_activity_tab_helper_.FormActivityRegistered(main_frame.get(),
+                                                        params);
 
   // Selecting a suggestion should notify the delegate.
   [suggestion_controller_ didSelectSuggestion:suggestions[0]];

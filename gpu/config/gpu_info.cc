@@ -22,9 +22,11 @@ void EnumerateGPUDevice(const gpu::GPUInfo::GPUDevice& device,
   enumerator->BeginGPUDevice();
   enumerator->AddInt("vendorId", device.vendor_id);
   enumerator->AddInt("deviceId", device.device_id);
+#if defined(OS_WIN) || defined(OS_CHROMEOS)
+  enumerator->AddInt("revision", device.revision);
+#endif
 #if defined(OS_WIN)
   enumerator->AddInt("subSysId", device.sub_sys_id);
-  enumerator->AddInt("revision", device.revision);
 #endif  // OS_WIN
   enumerator->AddBool("active", device.active);
   enumerator->AddString("vendorString", device.vendor_string);
@@ -313,7 +315,7 @@ void GPUInfo::EnumerateFields(Enumerator* enumerator) const {
     bool subpixel_font_rendering;
 
 #if BUILDFLAG(ENABLE_VULKAN)
-    base::Optional<VulkanInfo> vulkan_info;
+    absl::optional<VulkanInfo> vulkan_info;
 #endif
   };
 

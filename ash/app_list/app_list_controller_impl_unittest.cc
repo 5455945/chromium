@@ -5,30 +5,34 @@
 #include "ash/app_list/app_list_controller_impl.h"
 
 #include <set>
+#include <string>
 
+#include "ash/app_list/app_list_bubble_presenter.h"
 #include "ash/app_list/app_list_metrics.h"
+#include "ash/app_list/app_list_presenter_impl.h"
+#include "ash/app_list/app_list_test_view_delegate.h"
 #include "ash/app_list/test/app_list_test_helper.h"
-#include "ash/app_list/test/app_list_test_view_delegate.h"
 #include "ash/app_list/views/app_list_item_view.h"
 #include "ash/app_list/views/app_list_main_view.h"
 #include "ash/app_list/views/app_list_view.h"
 #include "ash/app_list/views/apps_container_view.h"
 #include "ash/app_list/views/apps_grid_view.h"
+#include "ash/app_list/views/apps_grid_view_test_api.h"
 #include "ash/app_list/views/contents_view.h"
 #include "ash/app_list/views/expand_arrow_view.h"
+#include "ash/app_list/views/paged_apps_grid_view.h"
 #include "ash/app_list/views/search_box_view.h"
-#include "ash/app_list/views/test/apps_grid_view_test_api.h"
-#include "ash/home_screen/home_screen_controller.h"
+#include "ash/constants/ash_features.h"
 #include "ash/ime/ime_controller_impl.h"
 #include "ash/ime/test_ime_controller_client.h"
 #include "ash/keyboard/keyboard_controller_impl.h"
 #include "ash/keyboard/ui/test/keyboard_test_util.h"
 #include "ash/public/cpp/app_list/app_list_config.h"
-#include "ash/public/cpp/ash_features.h"
 #include "ash/public/cpp/presentation_time_recorder.h"
 #include "ash/public/cpp/shelf_config.h"
 #include "ash/public/cpp/shelf_types.h"
 #include "ash/public/cpp/system_tray_test_api.h"
+#include "ash/public/cpp/test/shell_test_api.h"
 #include "ash/public/cpp/window_properties.h"
 #include "ash/shelf/shelf.h"
 #include "ash/shelf/shelf_layout_manager.h"
@@ -42,14 +46,17 @@
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "ash/wm/window_state.h"
 #include "ash/wm/window_util.h"
+#include "base/bind.h"
 #include "base/i18n/number_formatting.h"
 #include "base/macros.h"
-#include "base/strings/string16.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/with_feature_override.h"
+#include "ui/base/emoji/emoji_panel_helper.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/message_center/message_center.h"
@@ -96,7 +103,7 @@ AppsGridView* GetAppsGridView() {
 void ShowAppListNow(AppListViewState state) {
   Shell::Get()->app_list_controller()->presenter()->Show(
       state, display::Screen::GetScreen()->GetPrimaryDisplay().id(),
-      base::TimeTicks::Now());
+      base::TimeTicks::Now(), /*show_source*/ absl::nullopt);
 }
 
 void DismissAppListNow() {
@@ -106,6 +113,10 @@ void DismissAppListNow() {
 
 aura::Window* GetAppListViewNativeWindow() {
   return GetAppListView()->GetWidget()->GetNativeView();
+}
+
+void EnableTabletMode() {
+  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
 }
 
 }  // namespace
@@ -127,7 +138,7 @@ class AppListControllerImplTest : public AshTestBase {
     AppListView* app_list_view = GetAppListTestHelper()->GetAppListView();
     ui::Layer* widget_layer =
         app_list_view ? app_list_view->GetWidget()->GetLayer() : nullptr;
-    return widget_layer && !widget_layer->GetAnimator()->is_animating();
+    return widget_layer && widget_layer->GetAnimator()->is_animating();
   }
 
  private:
@@ -199,6 +210,8 @@ TEST_F(AppListControllerImplTest, HideRoundingCorners) {
 // Verify that when the emoji panel shows and AppListView is in Peeking state,
 // AppListView's rounded corners should be hidden (see https://crbug.com/950468)
 TEST_F(AppListControllerImplTest, HideRoundingCornersWhenEmojiShows) {
+  ui::SetShowEmojiKeyboardCallback(
+      base::BindRepeating(ui::ShowTabletModeEmojiPanel));
   // Set IME client. Otherwise the emoji panel is unable to show.
   ImeController* ime_controller = Shell::Get()->ime_controller();
   TestImeControllerClient client;
@@ -461,9 +474,8 @@ TEST_F(AppListControllerImplTest, MAYBE_CloseNotificationWithAppListShown) {
   message_center::MessageCenter::Get()->AddNotification(
       std::make_unique<message_center::Notification>(
           message_center::NOTIFICATION_TYPE_BASE_FORMAT, notification_id,
-          base::UTF8ToUTF16(notification_title),
-          base::UTF8ToUTF16("test message"), gfx::Image(),
-          base::string16() /* display_source */, GURL(),
+          base::UTF8ToUTF16(notification_title), u"test message", gfx::Image(),
+          std::u16string() /* display_source */, GURL(),
           message_center::NotifierId(), message_center::RichNotificationData(),
           new message_center::NotificationDelegate()));
   base::RunLoop().RunUntilIdle();
@@ -527,12 +539,10 @@ TEST_F(AppListControllerImplTest,
   // Tap at the textfield in |window1|. The virtual keyboard should be visible.
   const gfx::Point tap_point = text_field_p->GetBoundsInScreen().CenterPoint();
   GetEventGenerator()->GestureTapAt(tap_point);
-  base::RunLoop().RunUntilIdle();
   ASSERT_TRUE(keyboard::WaitUntilShown());
 
   // Tap at the center of |window2| to hide the virtual keyboard.
   GetEventGenerator()->GestureTapAt(window2->GetBoundsInScreen().CenterPoint());
-  base::RunLoop().RunUntilIdle();
   ASSERT_TRUE(keyboard::WaitUntilHidden());
 
   // Press the home button to show the launcher. Wait for the animation of
@@ -601,20 +611,20 @@ TEST_F(AppListControllerImplTest,
 // closed.
 TEST_F(AppListControllerImplTest,
        CloseAppListShownFromOverviewAfterTabletExit) {
+  auto* shell = Shell::Get();
+  auto* tablet_mode_controller = shell->tablet_mode_controller();
   // Move to tablet mode and back.
-  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
-  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(false);
+  tablet_mode_controller->SetEnabledForTest(true);
+  tablet_mode_controller->SetEnabledForTest(false);
 
   std::unique_ptr<aura::Window> w(
       AshTestBase::CreateTestWindow(gfx::Rect(0, 0, 400, 400)));
-  OverviewController* const overview_controller =
-      Shell::Get()->overview_controller();
-  overview_controller->StartOverview();
+  EnterOverview();
 
   // Press home button - verify overview exits and the app list is shown.
   PressHomeButton();
 
-  EXPECT_FALSE(overview_controller->InOverviewSession());
+  EXPECT_FALSE(shell->overview_controller()->InOverviewSession());
   EXPECT_EQ(AppListViewState::kPeeking, GetAppListView()->app_list_state());
   GetAppListTestHelper()->CheckVisibility(true);
   ASSERT_TRUE(GetAppListView()->GetWidget());
@@ -749,8 +759,7 @@ TEST_F(AppListControllerImplTest, DragItemFromAppsGridView) {
   EXPECT_EQ(1.0f, shelf_icon_view->layer()->opacity());
 }
 
-// Tests for HomeScreenDelegate::GetInitialAppListItemScreenBoundsForWindow
-// implemtenation.
+// Tests for GetInitialAppListItemScreenBoundsForWindow.
 TEST_F(AppListControllerImplTest, GetItemBoundsForWindow) {
   // Populate app list model with 25 items, of which items at indices in
   // |folders| are folders containing a single item.
@@ -788,23 +797,23 @@ TEST_F(AppListControllerImplTest, GetItemBoundsForWindow) {
     // be returned by GetInitialAppListItemScreenBoundsForWindow().
     // If nullopt, GetInitialAppListItemScreenBoundsForWindow() is expected to
     // return the apps grid center rect.
-    base::Optional<GridIndex> grid_position;
+    absl::optional<GridIndex> grid_position;
   } kTestCases[] = {{"fake_id_0", GridIndex(0, 0)},
                     {"fake_id_2", GridIndex(0, 2)},
-                    {"fake_id_in_folder_5", base::nullopt},
+                    {"fake_id_in_folder_5", absl::nullopt},
                     {"fake_id_15", GridIndex(0, 15)},
-                    {"fake_id_in_folder_23", base::nullopt},
-                    {"non_existent", base::nullopt},
-                    {"", base::nullopt},
-                    {"fake_id_22", base::nullopt}};
+                    {"fake_id_in_folder_23", absl::nullopt},
+                    {"non_existent", absl::nullopt},
+                    {"", absl::nullopt},
+                    {"fake_id_22", absl::nullopt}};
 
   // Tests the case app ID property is not set on the window.
   gfx::Rect init_bounds(0, 0, 400, 400);
   std::unique_ptr<views::Widget> widget_without_app_id =
       TestWidgetBuilder().SetBounds(init_bounds).BuildOwnsNativeWidget();
 
-  HomeScreenDelegate* const home_screen_delegate =
-      Shell::Get()->home_screen_controller()->delegate();
+  AppListControllerImpl* app_list_controller =
+      Shell::Get()->app_list_controller();
   // NOTE: Calculate the apps grid bounds after test window is shown, as showing
   // the window can change the app list layout (due to the change in the shelf
   // height).
@@ -813,7 +822,7 @@ TEST_F(AppListControllerImplTest, GetItemBoundsForWindow) {
       gfx::Rect(apps_grid_bounds.CenterPoint(), gfx::Size(1, 1));
 
   EXPECT_EQ(apps_grid_center,
-            home_screen_delegate->GetInitialAppListItemScreenBoundsForWindow(
+            app_list_controller->GetInitialAppListItemScreenBoundsForWindow(
                 widget_without_app_id->GetNativeWindow()));
 
   // Run tests cases, both for when the first and the second apps grid page is
@@ -839,7 +848,7 @@ TEST_F(AppListControllerImplTest, GetItemBoundsForWindow) {
               .BuildOwnsNativeWidget();
 
       const gfx::Rect item_bounds =
-          home_screen_delegate->GetInitialAppListItemScreenBoundsForWindow(
+          app_list_controller->GetInitialAppListItemScreenBoundsForWindow(
               widget->GetNativeWindow());
       if (!test_case.grid_position.has_value()) {
         EXPECT_EQ(apps_grid_center, item_bounds);
@@ -882,6 +891,38 @@ TEST_F(AppListControllerImplTest, NoOverlapWithHotseatOnSwitchFromSideShelf) {
       shelf->shelf_widget()->GetWindowBoundsInScreen()));
   EXPECT_FALSE(apps_grid_view_bounds.Intersects(
       shelf->hotseat_widget()->GetWindowBoundsInScreen()));
+}
+
+TEST_F(AppListControllerImplTest, OnlyMinimizeCycleListWindows) {
+  std::unique_ptr<aura::Window> w1(CreateTestWindow(gfx::Rect(0, 0, 400, 400)));
+  std::unique_ptr<aura::Window> w2(CreateTestWindow(
+      gfx::Rect(0, 0, 400, 400), aura::client::WINDOW_TYPE_POPUP));
+
+  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
+  std::unique_ptr<ui::Event> test_event = std::make_unique<ui::KeyEvent>(
+      ui::EventType::ET_MOUSE_PRESSED, ui::VKEY_UNKNOWN, ui::EF_NONE);
+  Shell::Get()->app_list_controller()->GoHome(GetPrimaryDisplay().id());
+  EXPECT_TRUE(WindowState::Get(w1.get())->IsMinimized());
+  EXPECT_FALSE(WindowState::Get(w2.get())->IsMinimized());
+}
+
+// Tests that the home screen is visible after rotating the screen in overview
+// mode.
+TEST_F(AppListControllerImplTest,
+       HomeScreenVisibleAfterDisplayUpdateInOverview) {
+  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
+  EnterOverview();
+
+  // Trigger a display configuration change, this simulates screen rotation.
+  Shell::Get()->app_list_controller()->OnDisplayConfigurationChanged();
+
+  // End overview mode, the home launcher should be visible.
+  ExitOverview();
+  ShellTestApi().WaitForOverviewAnimationState(
+      OverviewAnimationState::kExitAnimationComplete);
+
+  EXPECT_TRUE(
+      Shell::Get()->app_list_controller()->GetHomeScreenWindow()->IsVisible());
 }
 
 // The test parameter indicates whether the shelf should auto-hide. In either
@@ -938,7 +979,7 @@ class AppListAnimationTest : public AshTestBase,
   // The app list view y coordinate in peeking state.
   int PeekingHeightTop() const {
     return shown_shelf_bounds_.bottom() -
-           AppListConfig::instance().peeking_app_list_height();
+           GetAppListView()->GetAppListConfig().peeking_app_list_height();
   }
 
  private:
@@ -1128,7 +1169,7 @@ TEST_F(AppListControllerImplMetricsTest,
   // hidden.
   std::unique_ptr<aura::Window> w(
       AshTestBase::CreateTestWindow(gfx::Rect(0, 0, 400, 400)));
-  Shell::Get()->home_screen_controller()->GoHome(
+  Shell::Get()->app_list_controller()->GoHome(
       display::Screen::GetScreen()->GetPrimaryDisplay().id());
   EXPECT_FALSE(w->IsVisible());
   EXPECT_EQ(AppListViewState::kFullscreenAllApps,
@@ -1187,6 +1228,80 @@ TEST_F(AppListControllerImplMetricsTest,
 
   histogram_tester_.ExpectTotalCount(
       "Apps.StateTransition.Drag.PresentationTime.MaxLatency.ClamshellMode", 1);
+}
+
+// Tests with feature AppListBubble enabled. This is a separate test suite
+// because the feature must be enabled before ash::Shell constructs the
+// AppListControllerImpl.
+class AppListControllerImplAppListBubbleTest : public AshTestBase {
+ public:
+  AppListControllerImplAppListBubbleTest() {
+    scoped_features_.InitAndEnableFeature(features::kAppListBubble);
+  }
+  ~AppListControllerImplAppListBubbleTest() override = default;
+
+  base::test::ScopedFeatureList scoped_features_;
+};
+
+TEST_F(AppListControllerImplAppListBubbleTest, ShowAppListOpensBubble) {
+  auto* controller = Shell::Get()->app_list_controller();
+  controller->ShowAppList();
+
+  EXPECT_TRUE(controller->bubble_presenter_for_test()->IsShowing());
+  EXPECT_TRUE(controller->IsVisible());
+}
+
+TEST_F(AppListControllerImplAppListBubbleTest, ToggleAppListOpensBubble) {
+  auto* controller = Shell::Get()->app_list_controller();
+  controller->ToggleAppList(GetPrimaryDisplay().id(),
+                            AppListShowSource::kShelfButton,
+                            /*event_time_stamp=*/{});
+
+  EXPECT_TRUE(controller->bubble_presenter_for_test()->IsShowing());
+  EXPECT_TRUE(controller->IsVisible());
+}
+
+TEST_F(AppListControllerImplAppListBubbleTest, DismissAppListClosesBubble) {
+  auto* controller = Shell::Get()->app_list_controller();
+  controller->ShowAppList();
+
+  controller->DismissAppList();
+
+  EXPECT_FALSE(controller->bubble_presenter_for_test()->IsShowing());
+  EXPECT_FALSE(controller->IsVisible());
+}
+
+TEST_F(AppListControllerImplAppListBubbleTest,
+       ShowAppListDoesNotOpenBubbleInTabletMode) {
+  EnableTabletMode();
+
+  auto* controller = Shell::Get()->app_list_controller();
+  controller->ShowAppList();
+
+  EXPECT_FALSE(controller->bubble_presenter_for_test()->IsShowing());
+  EXPECT_TRUE(controller->IsVisible());
+}
+
+TEST_F(AppListControllerImplAppListBubbleTest,
+       ToggleAppListDoesNotOpenBubbleInTabletMode) {
+  EnableTabletMode();
+
+  auto* controller = Shell::Get()->app_list_controller();
+  controller->ToggleAppList(GetPrimaryDisplay().id(),
+                            AppListShowSource::kShelfButton,
+                            /*event_time_stamp=*/{});
+
+  EXPECT_FALSE(controller->bubble_presenter_for_test()->IsShowing());
+  EXPECT_TRUE(controller->IsVisible());
+}
+
+TEST_F(AppListControllerImplAppListBubbleTest, EnteringTabletModeClosesBubble) {
+  auto* controller = Shell::Get()->app_list_controller();
+  controller->ShowAppList();
+
+  EnableTabletMode();
+
+  EXPECT_FALSE(controller->bubble_presenter_for_test()->IsShowing());
 }
 
 }  // namespace ash

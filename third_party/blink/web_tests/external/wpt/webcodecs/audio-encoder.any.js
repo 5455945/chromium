@@ -1,29 +1,6 @@
 // META: global=window
 // META: script=/webcodecs/utils.js
 
-function make_audio_frame(timestamp, channels, sampleRate, length) {
-  let buffer = new AudioBuffer({
-    length: length,
-    numberOfChannels: channels,
-    sampleRate: sampleRate
-  });
-
-  for (var channel = 0; channel < buffer.numberOfChannels; channel++) {
-    // This gives us the actual array that contains the data
-    var array = buffer.getChannelData(channel);
-    let hz = 100 + channel * 50; // sound frequency
-    for (var i = 0; i < array.length; i++) {
-      let t = (i / sampleRate) * hz * (Math.PI * 2);
-      array[i] = Math.sin(t);
-    }
-  }
-
-  return new AudioFrame({
-    timestamp: timestamp,
-    buffer: buffer
-  });
-}
-
 // Merge all audio buffers into a new big one with all the data.
 function join_buffers(buffers) {
   assert_greater_than_equal(buffers.length, 0);
@@ -55,17 +32,10 @@ function join_buffers(buffers) {
   return result;
 }
 
-function clone_frame(frame) {
-  return new AudioFrame({
-    timestamp: frame.timestamp,
-    buffer: join_buffers([frame.buffer])
-  });
-}
-
 promise_test(async t => {
   let sample_rate = 48000;
-  let total_duration_s = 2;
-  let frame_count = 20;
+  let total_duration_s = 1;
+  let data_count = 10;
   let outputs = [];
   let init = {
     error: e => {
@@ -89,43 +59,171 @@ promise_test(async t => {
   encoder.configure(config);
 
   let timestamp_us = 0;
-  for (let i = 0; i < frame_count; i++) {
-    let frame_duration_s = total_duration_s / frame_count;
-    let length = frame_duration_s * config.sampleRate;
-    let frame = make_audio_frame(timestamp_us, config.numberOfChannels,
-      config.sampleRate, length);
-    encoder.encode(frame);
-    timestamp_us += frame_duration_s * 1_000_000;
+  let data_duration_s = total_duration_s / data_count;
+  let data_length = data_duration_s * config.sampleRate;
+  for (let i = 0; i < data_count; i++) {
+    let data = make_audio_data(timestamp_us, config.numberOfChannels,
+      config.sampleRate, data_length);
+    encoder.encode(data);
+    data.close();
+    timestamp_us += data_duration_s * 1_000_000;
   }
   await encoder.flush();
   encoder.close();
-  assert_greater_than_equal(outputs.length, frame_count);
+  assert_greater_than_equal(outputs.length, data_count);
   assert_equals(outputs[0].timestamp, 0, "first chunk timestamp");
   for (chunk of outputs) {
-    assert_greater_than(chunk.data.byteLength, 0);
-    assert_greater_than(timestamp_us, chunk.timestamp);
+    assert_greater_than(chunk.byteLength, 0);
+    assert_greater_than_equal(timestamp_us, chunk.timestamp);
   }
 }, 'Simple audio encoding');
 
+promise_test(async t => {
+  let sample_rate = 48000;
+  let total_duration_s = 1;
+  let data_count = 10;
+  let outputs = [];
+  let init = {
+    error: e => {
+      assert_unreached('error: ' + e);
+    },
+    output: chunk => {
+      outputs.push(chunk);
+    }
+  };
+
+  let encoder = new AudioEncoder(init);
+
+  assert_equals(encoder.state, 'unconfigured');
+  let config = {
+    codec: 'opus',
+    sampleRate: sample_rate,
+    numberOfChannels: 2,
+    bitrate: 256000  // 256kbit
+  };
+
+  encoder.configure(config);
+
+  let timestamp_us = -10000;
+  let data = make_audio_data(
+      timestamp_us, config.numberOfChannels, config.sampleRate, 10000);
+  encoder.encode(data);
+  data.close();
+  await encoder.flush();
+  encoder.close();
+  assert_greater_than_equal(outputs.length, 1);
+  assert_equals(outputs[0].timestamp, -10000, 'first chunk timestamp');
+  for (chunk of outputs) {
+    assert_greater_than(chunk.byteLength, 0);
+    assert_greater_than_equal(chunk.timestamp, timestamp_us);
+  }
+}, 'Encode audio with negative timestamp');
+
+async function checkEncodingError(config, good_data, bad_data) {
+  let error = null;
+  let outputs = 0;
+  let init = {
+    error: e => {
+      error = e;
+    },
+    output: chunk => {
+      outputs++;
+    }
+  };
+  let encoder = new AudioEncoder(init);
+
+
+  let support = await AudioEncoder.isConfigSupported(config);
+  assert_true(support.supported)
+  config = support.config;
+
+  encoder.configure(config);
+  for (let data of good_data) {
+    encoder.encode(data);
+    data.close();
+  }
+  await encoder.flush();
+
+  let txt_config = "sampleRate: " + config.sampleRate
+                 + " numberOfChannels: " + config.numberOfChannels;
+  assert_equals(error, null, txt_config);
+  assert_greater_than(outputs, 0);
+  encoder.encode(bad_data);
+  await encoder.flush().catch(() => {});
+  assert_not_equals(error, null, txt_config);
+}
+
+function channelNumberVariationTests() {
+  let sample_rate = 48000;
+  for (let channels = 1; channels <= 2; channels++) {
+    let config = {
+      codec: 'opus',
+      sampleRate: sample_rate,
+      numberOfChannels: channels,
+      bitrate: 128000
+    };
+
+    let ts = 0;
+    let length = sample_rate / 10;
+    let data1 = make_audio_data(ts, channels, sample_rate, length);
+
+    ts += Math.floor(data1.buffer.duration / 1000000);
+    let data2 = make_audio_data(ts, channels, sample_rate, length);
+    ts += Math.floor(data2.buffer.duration / 1000000);
+
+    let bad_data = make_audio_data(ts, channels + 1, sample_rate, length);
+    promise_test(async t =>
+      checkEncodingError(config, [data1, data2], bad_data),
+      "Channel number variation: " + channels);
+  }
+}
+channelNumberVariationTests();
+
+function sampleRateVariationTests() {
+  let channels = 1
+  for (let sample_rate = 3000; sample_rate < 96000; sample_rate += 10000) {
+    let config = {
+      codec: 'opus',
+      sampleRate: sample_rate,
+      numberOfChannels: channels,
+      bitrate: 128000
+    };
+
+    let ts = 0;
+    let length = sample_rate / 10;
+    let data1 = make_audio_data(ts, channels, sample_rate, length);
+
+    ts += Math.floor(data1.buffer.duration / 1000000);
+    let data2 = make_audio_data(ts, channels, sample_rate, length);
+    ts += Math.floor(data2.buffer.duration / 1000000);
+
+    let bad_data = make_audio_data(ts, channels, sample_rate + 333, length);
+    promise_test(async t =>
+      checkEncodingError(config, [data1, data2], bad_data),
+      "Sample rate variation: " + sample_rate);
+  }
+}
+sampleRateVariationTests();
 
 promise_test(async t => {
   let sample_rate = 48000;
-  let total_duration_s = 2;
-  let frame_count = 20;
-  let input_frames = [];
-  let output_frames = [];
+  let total_duration_s = 1;
+  let data_count = 10;
+  let input_data = [];
+  let output_data = [];
 
   let decoder_init = {
     error: t.unreached_func("Decode error"),
-    output: frame => {
-      output_frames.push(frame);
+    output: data => {
+      output_data.push(data);
     }
   };
   let decoder = new AudioDecoder(decoder_init);
 
   let encoder_init = {
     error: t.unreached_func("Encoder error"),
-    output: (chunk, config) => {
+    output: (chunk, metadata) => {
+      let config = metadata.decoderConfig;
       if (config)
         decoder.configure(config);
       decoder.decode(chunk);
@@ -142,14 +240,14 @@ promise_test(async t => {
   encoder.configure(config);
 
   let timestamp_us = 0;
-  const frame_duration_s = total_duration_s / frame_count;
-  const frame_length = frame_duration_s * config.sampleRate;
-  for (let i = 0; i < frame_count; i++) {
-    let frame = make_audio_frame(timestamp_us, config.numberOfChannels,
-      config.sampleRate, frame_length);
-    input_frames.push(clone_frame(frame));
-    encoder.encode(frame);
-    timestamp_us += frame_duration_s * 1_000_000;
+  const data_duration_s = total_duration_s / data_count;
+  const data_length = data_duration_s * config.sampleRate;
+  for (let i = 0; i < data_count; i++) {
+    let data = make_audio_data(timestamp_us, config.numberOfChannels,
+      config.sampleRate, data_length);
+    input_data.push(data);
+    encoder.encode(data);
+    timestamp_us += data_duration_s * 1_000_000;
   }
   await encoder.flush();
   encoder.close();
@@ -157,8 +255,8 @@ promise_test(async t => {
   decoder.close();
 
 
-  let total_input = join_buffers(input_frames.map(f => f.buffer));
-  let total_output = join_buffers(output_frames.map(f => f.buffer));
+  let total_input = join_buffers(input_data.map(f => f.buffer));
+  let total_output = join_buffers(output_data.map(f => f.buffer));
   assert_equals(total_output.numberOfChannels, 2);
   assert_equals(total_output.sampleRate, sample_rate);
 
@@ -171,7 +269,9 @@ promise_test(async t => {
   for (let channel = 0; channel < total_input.numberOfChannels; channel++) {
     let input_data = total_input.getChannelData(channel);
     let output_data = total_output.getChannelData(channel);
-    for (let i = 0; i < total_input.length; i++) {
+    for (let i = 0; i < total_input.length; i += 10) {
+      // Checking only every 10th sample to save test time in slow
+      // configurations like MSAN etc.
       assert_approx_equals(input_data[i], output_data[i], 0.5,
         "Difference between input and output is too large."
         + " index: " + i
@@ -194,7 +294,8 @@ promise_test(async t => {
 
   let init = {
     error: t.unreached_func("Encoder error"),
-    output: (chunk, config) => {
+    output: (chunk, metadata) => {
+      let config = metadata.decoderConfig;
       // Only the first invocation of the output callback is supposed to have
       // a |config| in it.
       output_count++;
@@ -210,12 +311,12 @@ promise_test(async t => {
   let encoder = new AudioEncoder(init);
   encoder.configure(encoder_config);
 
-  let long_frame = make_audio_frame(0, encoder_config.numberOfChannels,
+  let large_data = make_audio_data(0, encoder_config.numberOfChannels,
     encoder_config.sampleRate, encoder_config.sampleRate);
-  encoder.encode(clone_frame(long_frame));
+  encoder.encode(large_data);
   await encoder.flush();
 
-  // Long frame produced more than one output, and we've got decoder_config
+  // Large data produced more than one output, and we've got decoder_config
   assert_greater_than(output_count, 1);
   assert_not_equals(decoder_config, null);
   assert_equals(decoder_config.codec, encoder_config.codec);
@@ -233,7 +334,7 @@ promise_test(async t => {
   output_count = 0;
   encoder_config.bitrate = 256000;
   encoder.configure(encoder_config);
-  encoder.encode(clone_frame(long_frame));
+  encoder.encode(large_data);
   await encoder.flush();
 
   // After reconfiguring encoder should produce decoder config again

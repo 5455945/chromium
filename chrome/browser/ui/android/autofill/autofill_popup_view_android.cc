@@ -10,6 +10,7 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
 #include "base/command_line.h"
+#include "base/strings/strcat.h"
 #include "chrome/android/chrome_jni_headers/AutofillPopupBridge_jni.h"
 #include "chrome/browser/android/resource_mapper.h"
 #include "chrome/browser/autofill/autofill_keyboard_accessory_adapter.h"
@@ -54,8 +55,8 @@ void AutofillPopupViewAndroid::Hide() {
 }
 
 void AutofillPopupViewAndroid::OnSelectedRowChanged(
-    base::Optional<int> previous_row_selection,
-    base::Optional<int> current_row_selection) {}
+    absl::optional<int> previous_row_selection,
+    absl::optional<int> current_row_selection) {}
 
 void AutofillPopupViewAndroid::OnSuggestionsChanged() {
   if (java_object_.is_null())
@@ -76,8 +77,13 @@ void AutofillPopupViewAndroid::OnSuggestionsChanged() {
       Java_AutofillPopupBridge_createAutofillSuggestionArray(env, count);
 
   for (size_t i = 0; i < count; ++i) {
-    ScopedJavaLocalRef<jstring> value = base::android::ConvertUTF16ToJavaString(
-        env, controller_->GetSuggestionValueAt(i));
+    std::u16string value_text =
+        controller_->GetSuggestionMinorTextAt(i).empty()
+            ? controller_->GetSuggestionMainTextAt(i)
+            : base::StrCat({controller_->GetSuggestionMainTextAt(i), u" ",
+                            controller_->GetSuggestionMinorTextAt(i)});
+    ScopedJavaLocalRef<jstring> value =
+        base::android::ConvertUTF16ToJavaString(env, value_text);
     ScopedJavaLocalRef<jstring> label = base::android::ConvertUTF16ToJavaString(
         env, controller_->GetSuggestionLabelAt(i));
     int android_icon_id = 0;
@@ -101,7 +107,7 @@ void AutofillPopupViewAndroid::OnSuggestionsChanged() {
             env, base::FeatureList::IsEnabled(
                      features::kAutofillEnableOffersInDownstream)
                      ? suggestion.offer_label
-                     : base::string16());
+                     : std::u16string());
     Java_AutofillPopupBridge_addToAutofillSuggestionArray(
         env, data_array, i, value, label, item_tag, android_icon_id,
         /*icon_at_start=*/false, suggestion.frontend_id, is_deletable,
@@ -112,9 +118,9 @@ void AutofillPopupViewAndroid::OnSuggestionsChanged() {
                                 controller_->IsRTL());
 }
 
-base::Optional<int32_t> AutofillPopupViewAndroid::GetAxUniqueId() {
+absl::optional<int32_t> AutofillPopupViewAndroid::GetAxUniqueId() {
   NOTIMPLEMENTED() << "See https://crbug.com/985927";
-  return base::nullopt;
+  return absl::nullopt;
 }
 
 void AutofillPopupViewAndroid::SuggestionSelected(
@@ -133,7 +139,7 @@ void AutofillPopupViewAndroid::DeletionRequested(
   if (!controller_ || java_object_.is_null())
     return;
 
-  base::string16 confirmation_title, confirmation_body;
+  std::u16string confirmation_title, confirmation_body;
   if (!controller_->GetRemovalConfirmationText(list_index, &confirmation_title,
           &confirmation_body)) {
     return;

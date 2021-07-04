@@ -43,11 +43,11 @@ class TestSearchEngineDelegate
  public:
   TestSearchEngineDelegate()
       : dse_origin_(url::Origin::Create(GURL(kGoogleURL))) {}
-  base::string16 GetDSEName() override {
+  std::u16string GetDSEName() override {
     if (dse_origin_.host().find("google") != std::string::npos)
-      return base::ASCIIToUTF16("Google");
+      return u"Google";
 
-    return base::ASCIIToUTF16("Example");
+    return u"Example";
   }
 
   url::Origin GetDSEOrigin() override { return dse_origin_; }
@@ -75,7 +75,7 @@ class TestSearchEngineDelegate
 class SearchPermissionsServiceTest : public testing::Test {
  public:
   void SetUp() override {
-    profile_.reset(new TestingProfile);
+    profile_ = std::make_unique<TestingProfile>();
 
     ClearNotificationsChannels();
 
@@ -249,7 +249,8 @@ TEST_F(SearchPermissionsServiceTest, InitializationInconsistent) {
 
 TEST_F(SearchPermissionsServiceTest, Incognito) {
   // Service isn't constructed for Incognito profile.
-  Profile* incognito_profile = profile()->GetPrimaryOTRProfile();
+  Profile* incognito_profile =
+      profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true);
   SearchPermissionsService* service =
       SearchPermissionsService::Factory::GetForBrowserContext(
           incognito_profile);
@@ -259,7 +260,8 @@ TEST_F(SearchPermissionsServiceTest, Incognito) {
 TEST_F(SearchPermissionsServiceTest, NonPrimaryOffTheRecord) {
   // Service isn't constructed for non-primary OTR profiles.
   Profile* otr_profile = profile()->GetOffTheRecordProfile(
-      Profile::OTRProfileID("Test::SearchPermissions"));
+      Profile::OTRProfileID::CreateUniqueForTesting(),
+      /*create_if_needed=*/true);
   SearchPermissionsService* service =
       SearchPermissionsService::Factory::GetForBrowserContext(otr_profile);
   EXPECT_EQ(nullptr, service);

@@ -9,6 +9,7 @@
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "components/shared_highlighting/core/common/shared_highlighting_features.h"
 #include "components/shared_highlighting/core/common/shared_highlighting_metrics.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
@@ -18,6 +19,7 @@
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 #include "third_party/blink/renderer/core/editing/iterators/text_iterator.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/page/scrolling/text_fragment_handler.h"
 #include "third_party/blink/renderer/core/testing/scoped_fake_ukm_recorder.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_request.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_test.h"
@@ -47,7 +49,11 @@ class TextFragmentSelectorGeneratorTest : public SimTest {
     // Should not have logged errors in a success case.
     histogram_tester_.ExpectTotalCount("SharedHighlights.LinkGenerated.Error",
                                        0);
+    histogram_tester_.ExpectTotalCount(
+        "SharedHighlights.LinkGenerated.Error.Requested", 0);
 
+    histogram_tester_.ExpectTotalCount("SharedHighlights.LinkGenerated",
+                                       generate_call_count_);
     auto entries = ukm_recorder()->GetEntriesByName(
         ukm::builders::SharedHighlights_LinkGenerated::kEntryName);
     ASSERT_EQ(1u, entries.size());
@@ -63,9 +69,10 @@ class TextFragmentSelectorGeneratorTest : public SimTest {
     String generated_selector = GenerateSelector(selected_start, selected_end);
     EXPECT_EQ("", generated_selector);
 
+    histogram_tester_.ExpectTotalCount("SharedHighlights.LinkGenerated",
+                                       generate_call_count_);
     histogram_tester_.ExpectBucketCount("SharedHighlights.LinkGenerated.Error",
                                         error, 1);
-
     auto entries = ukm_recorder()->GetEntriesByName(
         ukm::builders::SharedHighlights_LinkGenerated::kEntryName);
     ASSERT_EQ(1u, entries.size());
@@ -77,30 +84,33 @@ class TextFragmentSelectorGeneratorTest : public SimTest {
   }
 
   String GenerateSelector(Position selected_start, Position selected_end) {
-    GetDocument()
-        .GetFrame()
-        ->GetTextFragmentSelectorGenerator()
-        ->UpdateSelection(GetDocument().GetFrame(),
-                          ToEphemeralRangeInFlatTree(
-                              EphemeralRange(selected_start, selected_end)));
+    generate_call_count_++;
 
     bool callback_called = false;
     String selector;
     auto lambda = [](bool& callback_called, String& selector,
-                     const String& generated_selector) {
-      selector = generated_selector;
+                     const TextFragmentSelector& generated_selector) {
+      selector = generated_selector.ToString();
       callback_called = true;
     };
     auto callback =
         WTF::Bind(lambda, std::ref(callback_called), std::ref(selector));
-    GetDocument()
-        .GetFrame()
-        ->GetTextFragmentSelectorGenerator()
-        ->GenerateSelector(std::move(callback));
+    GetTextFragmentSelectorGenerator()->Generate(
+        *MakeGarbageCollected<RangeInFlatTree>(
+            ToPositionInFlatTree(selected_start),
+            ToPositionInFlatTree(selected_end)),
+        std::move(callback));
     base::RunLoop().RunUntilIdle();
 
     EXPECT_TRUE(callback_called);
     return selector;
+  }
+
+  TextFragmentSelectorGenerator* GetTextFragmentSelectorGenerator() {
+    return GetDocument()
+        .GetFrame()
+        ->GetTextFragmentHandler()
+        ->GetTextFragmentSelectorGenerator();
   }
 
  protected:
@@ -110,6 +120,7 @@ class TextFragmentSelectorGeneratorTest : public SimTest {
 
   base::HistogramTester histogram_tester_;
   ScopedFakeUkmRecorder scoped_ukm_recorder_;
+  int generate_call_count_ = 0;
 };
 
 // Basic exact selector case.
@@ -1127,6 +1138,66 @@ TEST_F(TextFragmentSelectorGeneratorTest, Input) {
   VerifySelector(start, end, "First%20paragraph,Second");
 }
 
+// Checks selection across a shadow tree. Input that has text value will create
+// a shadow tree,
+TEST_F(TextFragmentSelectorGeneratorTest, InputSubmit) {
+  SimRequest request("https://example.com/test.html", "text/html");
+  LoadURL("https://example.com/test.html");
+  request.Complete(R"HTML(
+    <!DOCTYPE html>
+  <div id='div'>
+    First paragraph<input type='submit' value="button text"> Second paragraph
+  </div>
+  )HTML");
+  GetDocument().UpdateStyleAndLayoutTree();
+  Node* div = GetDocument().getElementById("div");
+  const auto& start = Position(div->firstChild(), 0);
+  const auto& end = Position(div->lastChild(), 7);
+  ASSERT_EQ("First paragraph Second", PlainText(EphemeralRange(start, end)));
+
+  VerifySelector(start, end, "First%20paragraph,Second");
+}
+
+// Checks selection right after a shadow tree will use the shadow tree for
+// prefix. Input with text value will create a shadow tree.
+TEST_F(TextFragmentSelectorGeneratorTest, InputSubmitPrefix) {
+  SimRequest request("https://example.com/test.html", "text/html");
+  LoadURL("https://example.com/test.html");
+  request.Complete(R"HTML(
+    <!DOCTYPE html>
+  <div id='div'>
+    <input type='submit' value="button text"> paragraph text
+  </div>
+  )HTML");
+  GetDocument().UpdateStyleAndLayoutTree();
+  Node* div = GetDocument().getElementById("div");
+  const auto& start = Position(div->lastChild(), 0);
+  const auto& end = Position(div->lastChild(), 10);
+  ASSERT_EQ(" paragraph", PlainText(EphemeralRange(start, end)));
+
+  VerifySelector(start, end, "button%20text-,paragraph,-text");
+}
+
+// Checks selection right after a shadow tree will use the shadow tree for
+// prefix. Input with text value will create a shadow tree.
+TEST_F(TextFragmentSelectorGeneratorTest, InputSubmitOneWordPrefix) {
+  SimRequest request("https://example.com/test.html", "text/html");
+  LoadURL("https://example.com/test.html");
+  request.Complete(R"HTML(
+    <!DOCTYPE html>
+  <div id='div'>
+    <input type='submit' value="button"> paragraph text
+  </div>
+  )HTML");
+  GetDocument().UpdateStyleAndLayoutTree();
+  Node* div = GetDocument().getElementById("div");
+  const auto& start = Position(div->lastChild(), 0);
+  const auto& end = Position(div->lastChild(), 10);
+  ASSERT_EQ(" paragraph", PlainText(EphemeralRange(start, end)));
+
+  VerifySelector(start, end, "button-,paragraph,-text");
+}
+
 // Basic test case for |GetNextTextBlock|.
 TEST_F(TextFragmentSelectorGeneratorTest, GetPreviousTextBlock) {
   SimRequest request("https://example.com/test.html", "text/html");
@@ -1140,10 +1211,9 @@ TEST_F(TextFragmentSelectorGeneratorTest, GetPreviousTextBlock) {
   const auto& end = Position(first_paragraph, 20);
   ASSERT_EQ("text", PlainText(EphemeralRange(start, end)));
 
-  EXPECT_EQ("First paragraph", GetDocument()
-                                   .GetFrame()
-                                   ->GetTextFragmentSelectorGenerator()
-                                   ->GetPreviousTextBlockForTesting(start));
+  EXPECT_EQ("First paragraph",
+            GetTextFragmentSelectorGenerator()->GetPreviousTextBlockForTesting(
+                start));
 }
 
 // Check the case when available prefix contains collapsible space.
@@ -1161,10 +1231,9 @@ TEST_F(TextFragmentSelectorGeneratorTest, GetPreviousTextBlock_ExtraSpace) {
   const auto& end = Position(first_paragraph, 30);
   ASSERT_EQ("text", PlainText(EphemeralRange(start, end)));
 
-  EXPECT_EQ("First paragraph", GetDocument()
-                                   .GetFrame()
-                                   ->GetTextFragmentSelectorGenerator()
-                                   ->GetPreviousTextBlockForTesting(start));
+  EXPECT_EQ("First paragraph",
+            GetTextFragmentSelectorGenerator()->GetPreviousTextBlockForTesting(
+                start));
 }
 
 // Check the case when available prefix complete text content of the previous
@@ -1183,10 +1252,8 @@ TEST_F(TextFragmentSelectorGeneratorTest, GetPreviousTextBlock_PrevNode) {
   ASSERT_EQ("Second", PlainText(EphemeralRange(start, end)));
 
   EXPECT_EQ("First paragraph text",
-            GetDocument()
-                .GetFrame()
-                ->GetTextFragmentSelectorGenerator()
-                ->GetPreviousTextBlockForTesting(start));
+            GetTextFragmentSelectorGenerator()->GetPreviousTextBlockForTesting(
+                start));
 }
 
 // Check the case when there is a commented block between selection and the
@@ -1209,10 +1276,8 @@ TEST_F(TextFragmentSelectorGeneratorTest,
   ASSERT_EQ("Second", PlainText(EphemeralRange(start, end)));
 
   EXPECT_EQ("First paragraph text",
-            GetDocument()
-                .GetFrame()
-                ->GetTextFragmentSelectorGenerator()
-                ->GetPreviousTextBlockForTesting(start));
+            GetTextFragmentSelectorGenerator()->GetPreviousTextBlockForTesting(
+                start));
 }
 
 // Check the case when available prefix is a text node outside of selection
@@ -1230,10 +1295,9 @@ TEST_F(TextFragmentSelectorGeneratorTest, GetPreviousTextBlock_PrevTextNode) {
   const auto& end = Position(first_paragraph, 5);
   ASSERT_EQ("First", PlainText(EphemeralRange(start, end)));
 
-  EXPECT_EQ("text", GetDocument()
-                        .GetFrame()
-                        ->GetTextFragmentSelectorGenerator()
-                        ->GetPreviousTextBlockForTesting(start));
+  EXPECT_EQ("text",
+            GetTextFragmentSelectorGenerator()->GetPreviousTextBlockForTesting(
+                start));
 }
 
 // Check the case when available prefix is a parent node text content outside of
@@ -1251,10 +1315,9 @@ TEST_F(TextFragmentSelectorGeneratorTest, GetPreviousTextBlock_ParentNode) {
   const auto& end = Position(first_paragraph, 5);
   ASSERT_EQ("First", PlainText(EphemeralRange(start, end)));
 
-  EXPECT_EQ("nested", GetDocument()
-                          .GetFrame()
-                          ->GetTextFragmentSelectorGenerator()
-                          ->GetPreviousTextBlockForTesting(start));
+  EXPECT_EQ("nested",
+            GetTextFragmentSelectorGenerator()->GetPreviousTextBlockForTesting(
+                start));
 }
 
 // Check the case when available prefix contains non-block tag(e.g. <b>).
@@ -1271,10 +1334,8 @@ TEST_F(TextFragmentSelectorGeneratorTest, GetPreviousTextBlock_NestedTextNode) {
   ASSERT_EQ("text", PlainText(EphemeralRange(start, end)));
 
   EXPECT_EQ("First bold text paragraph",
-            GetDocument()
-                .GetFrame()
-                ->GetTextFragmentSelectorGenerator()
-                ->GetPreviousTextBlockForTesting(start));
+            GetTextFragmentSelectorGenerator()->GetPreviousTextBlockForTesting(
+                start));
 }
 
 // Check the case when available prefix is collected until nested block.
@@ -1290,10 +1351,9 @@ TEST_F(TextFragmentSelectorGeneratorTest, GetPreviousTextBlock_NestedBlock) {
   const auto& end = Position(first_paragraph, 15);
   ASSERT_EQ("text", PlainText(EphemeralRange(start, end)));
 
-  EXPECT_EQ("paragraph", GetDocument()
-                             .GetFrame()
-                             ->GetTextFragmentSelectorGenerator()
-                             ->GetPreviousTextBlockForTesting(start));
+  EXPECT_EQ("paragraph",
+            GetTextFragmentSelectorGenerator()->GetPreviousTextBlockForTesting(
+                start));
 }
 
 // Check the case when available prefix includes non-block element but stops at
@@ -1311,10 +1371,9 @@ TEST_F(TextFragmentSelectorGeneratorTest,
   const auto& end = Position(first_paragraph, 15);
   ASSERT_EQ("text", PlainText(EphemeralRange(start, end)));
 
-  EXPECT_EQ("bold paragraph", GetDocument()
-                                  .GetFrame()
-                                  ->GetTextFragmentSelectorGenerator()
-                                  ->GetPreviousTextBlockForTesting(start));
+  EXPECT_EQ("bold paragraph",
+            GetTextFragmentSelectorGenerator()->GetPreviousTextBlockForTesting(
+                start));
 }
 
 // Check the case when available prefix includes invisible block.
@@ -1331,10 +1390,9 @@ TEST_F(TextFragmentSelectorGeneratorTest,
   const auto& end = Position(first_paragraph, 10);
   ASSERT_EQ("paragraph", PlainText(EphemeralRange(start, end)));
 
-  EXPECT_EQ("First", GetDocument()
-                         .GetFrame()
-                         ->GetTextFragmentSelectorGenerator()
-                         ->GetPreviousTextBlockForTesting(start));
+  EXPECT_EQ("First",
+            GetTextFragmentSelectorGenerator()->GetPreviousTextBlockForTesting(
+                start));
 }
 
 // Check the case when previous node is used for available prefix when selection
@@ -1356,10 +1414,8 @@ TEST_F(TextFragmentSelectorGeneratorTest,
   ASSERT_EQ("Second", PlainText(EphemeralRange(start, end)));
 
   EXPECT_EQ("First paragraph text",
-            GetDocument()
-                .GetFrame()
-                ->GetTextFragmentSelectorGenerator()
-                ->GetPreviousTextBlockForTesting(start));
+            GetTextFragmentSelectorGenerator()->GetPreviousTextBlockForTesting(
+                start));
 }
 
 // Check the case when previous node is used for available prefix when selection
@@ -1385,10 +1441,8 @@ TEST_F(TextFragmentSelectorGeneratorTest,
   ASSERT_EQ("Second", PlainText(EphemeralRange(start, end)));
 
   EXPECT_EQ("First paragraph text",
-            GetDocument()
-                .GetFrame()
-                ->GetTextFragmentSelectorGenerator()
-                ->GetPreviousTextBlockForTesting(start));
+            GetTextFragmentSelectorGenerator()->GetPreviousTextBlockForTesting(
+                start));
 }
 
 // Similar test for suffix.
@@ -1406,10 +1460,9 @@ TEST_F(TextFragmentSelectorGeneratorTest, GetNextTextBlock) {
   const auto& end = Position(first_paragraph, 5);
   ASSERT_EQ("First", PlainText(EphemeralRange(start, end)));
 
-  EXPECT_EQ("paragraph text", GetDocument()
-                                  .GetFrame()
-                                  ->GetTextFragmentSelectorGenerator()
-                                  ->GetNextTextBlockForTesting(end));
+  EXPECT_EQ(
+      "paragraph text",
+      GetTextFragmentSelectorGenerator()->GetNextTextBlockForTesting(end));
 }
 
 // Check the case when available suffix contains collapsible space.
@@ -1428,10 +1481,9 @@ TEST_F(TextFragmentSelectorGeneratorTest, GetNextTextBlock_ExtraSpace) {
   const auto& end = Position(first_paragraph, 5);
   ASSERT_EQ("First", PlainText(EphemeralRange(start, end)));
 
-  EXPECT_EQ("paragraph text", GetDocument()
-                                  .GetFrame()
-                                  ->GetTextFragmentSelectorGenerator()
-                                  ->GetNextTextBlockForTesting(end));
+  EXPECT_EQ(
+      "paragraph text",
+      GetTextFragmentSelectorGenerator()->GetNextTextBlockForTesting(end));
 }
 
 // Check the case when available suffix is complete text content of the next
@@ -1449,10 +1501,9 @@ TEST_F(TextFragmentSelectorGeneratorTest, GetNextTextBlock_NextNode) {
   const auto& end = Position(first_paragraph, 20);
   ASSERT_EQ("First paragraph text", PlainText(EphemeralRange(start, end)));
 
-  EXPECT_EQ("Second paragraph text", GetDocument()
-                                         .GetFrame()
-                                         ->GetTextFragmentSelectorGenerator()
-                                         ->GetNextTextBlockForTesting(end));
+  EXPECT_EQ(
+      "Second paragraph text",
+      GetTextFragmentSelectorGenerator()->GetNextTextBlockForTesting(end));
 }
 
 // Check the case when there is a commented block between selection and the
@@ -1474,10 +1525,9 @@ TEST_F(TextFragmentSelectorGeneratorTest,
   const auto& end = Position(first_paragraph, 20);
   ASSERT_EQ("First paragraph text", PlainText(EphemeralRange(start, end)));
 
-  EXPECT_EQ("Second paragraph text", GetDocument()
-                                         .GetFrame()
-                                         ->GetTextFragmentSelectorGenerator()
-                                         ->GetNextTextBlockForTesting(end));
+  EXPECT_EQ(
+      "Second paragraph text",
+      GetTextFragmentSelectorGenerator()->GetNextTextBlockForTesting(end));
 }
 
 // Check the case when available suffix is a text node outside of selection
@@ -1495,10 +1545,9 @@ TEST_F(TextFragmentSelectorGeneratorTest, GetNextTextBlock_NextTextNode) {
   const auto& end = Position(first_paragraph, 20);
   ASSERT_EQ("First paragraph text", PlainText(EphemeralRange(start, end)));
 
-  EXPECT_EQ("text", GetDocument()
-                        .GetFrame()
-                        ->GetTextFragmentSelectorGenerator()
-                        ->GetNextTextBlockForTesting(end));
+  EXPECT_EQ(
+      "text",
+      GetTextFragmentSelectorGenerator()->GetNextTextBlockForTesting(end));
 }
 
 // Check the case when available suffix is a parent node text content outside of
@@ -1515,10 +1564,9 @@ TEST_F(TextFragmentSelectorGeneratorTest, GetNextTextBlock_ParentNode) {
   const auto& end = Position(first_paragraph, 20);
   ASSERT_EQ("First paragraph text", PlainText(EphemeralRange(start, end)));
 
-  EXPECT_EQ("nested", GetDocument()
-                          .GetFrame()
-                          ->GetTextFragmentSelectorGenerator()
-                          ->GetNextTextBlockForTesting(end));
+  EXPECT_EQ(
+      "nested",
+      GetTextFragmentSelectorGenerator()->GetNextTextBlockForTesting(end));
 }
 
 // Check the case when available suffix contains non-block tag(e.g. <b>).
@@ -1534,10 +1582,9 @@ TEST_F(TextFragmentSelectorGeneratorTest, GetNextTextBlock_NestedTextNode) {
   const auto& end = Position(first_paragraph, 5);
   ASSERT_EQ("First", PlainText(EphemeralRange(start, end)));
 
-  EXPECT_EQ("bold text paragraph text", GetDocument()
-                                            .GetFrame()
-                                            ->GetTextFragmentSelectorGenerator()
-                                            ->GetNextTextBlockForTesting(end));
+  EXPECT_EQ(
+      "bold text paragraph text",
+      GetTextFragmentSelectorGenerator()->GetNextTextBlockForTesting(end));
 }
 
 // Check the case when available suffix is collected until nested block.
@@ -1553,10 +1600,9 @@ TEST_F(TextFragmentSelectorGeneratorTest, GetNextTextBlock_NestedBlock) {
   const auto& end = Position(first_paragraph, 5);
   ASSERT_EQ("First", PlainText(EphemeralRange(start, end)));
 
-  EXPECT_EQ("paragraph", GetDocument()
-                             .GetFrame()
-                             ->GetTextFragmentSelectorGenerator()
-                             ->GetNextTextBlockForTesting(end));
+  EXPECT_EQ(
+      "paragraph",
+      GetTextFragmentSelectorGenerator()->GetNextTextBlockForTesting(end));
 }
 
 // Check the case when available suffix includes non-block element but stops at
@@ -1574,10 +1620,9 @@ TEST_F(TextFragmentSelectorGeneratorTest,
   const auto& end = Position(first_paragraph, 5);
   ASSERT_EQ("First", PlainText(EphemeralRange(start, end)));
 
-  EXPECT_EQ("bold", GetDocument()
-                        .GetFrame()
-                        ->GetTextFragmentSelectorGenerator()
-                        ->GetNextTextBlockForTesting(end));
+  EXPECT_EQ(
+      "bold",
+      GetTextFragmentSelectorGenerator()->GetNextTextBlockForTesting(end));
 }
 
 // Check the case when available suffix includes invisible block.
@@ -1594,10 +1639,9 @@ TEST_F(TextFragmentSelectorGeneratorTest,
   const auto& end = Position(first_paragraph, 5);
   ASSERT_EQ("First", PlainText(EphemeralRange(start, end)));
 
-  EXPECT_EQ("paragraph text", GetDocument()
-                                  .GetFrame()
-                                  ->GetTextFragmentSelectorGenerator()
-                                  ->GetNextTextBlockForTesting(end));
+  EXPECT_EQ(
+      "paragraph text",
+      GetTextFragmentSelectorGenerator()->GetNextTextBlockForTesting(end));
 }
 
 // Check the case when next node is used for available suffix when selection is
@@ -1620,10 +1664,9 @@ TEST_F(TextFragmentSelectorGeneratorTest,
   const auto& end = Position(first_paragraph, 27);
   ASSERT_EQ("text", PlainText(EphemeralRange(start, end)));
 
-  EXPECT_EQ("Second paragraph text", GetDocument()
-                                         .GetFrame()
-                                         ->GetTextFragmentSelectorGenerator()
-                                         ->GetNextTextBlockForTesting(end));
+  EXPECT_EQ(
+      "Second paragraph text",
+      GetTextFragmentSelectorGenerator()->GetNextTextBlockForTesting(end));
 }
 
 // Check the case when next node is used for available suffix when selection is
@@ -1649,10 +1692,9 @@ TEST_F(TextFragmentSelectorGeneratorTest,
   const auto& end = Position(first_paragraph, 27);
   ASSERT_EQ("text", PlainText(EphemeralRange(start, end)));
 
-  EXPECT_EQ("Second paragraph text", GetDocument()
-                                         .GetFrame()
-                                         ->GetTextFragmentSelectorGenerator()
-                                         ->GetNextTextBlockForTesting(end));
+  EXPECT_EQ(
+      "Second paragraph text",
+      GetTextFragmentSelectorGenerator()->GetNextTextBlockForTesting(end));
 }
 
 // Check the case when previous node is used for available prefix when selection
@@ -1689,10 +1731,25 @@ TEST_F(TextFragmentSelectorGeneratorTest,
   const auto& end = Position(first_paragraph, 27);
   ASSERT_EQ("text", PlainText(EphemeralRange(start, end)));
 
-  EXPECT_EQ("Second paragraph text", GetDocument()
-                                         .GetFrame()
-                                         ->GetTextFragmentSelectorGenerator()
-                                         ->GetNextTextBlockForTesting(end));
+  EXPECT_EQ(
+      "Second paragraph text",
+      GetTextFragmentSelectorGenerator()->GetNextTextBlockForTesting(end));
+}
+
+TEST_F(TextFragmentSelectorGeneratorTest, BeforeAndAfterAnchor) {
+  SimRequest request("https://example.com/test.html", "text/html");
+  LoadURL("https://example.com/test.html");
+  request.Complete(R"HTML(
+    <!DOCTYPE html>
+    Foo
+    <div id="first">Hello World</div>
+    Bar
+  )HTML");
+
+  Node* node = GetDocument().getElementById("first");
+  const auto& start = Position(node, PositionAnchorType::kBeforeAnchor);
+  const auto& end = Position(node, PositionAnchorType::kAfterAnchor);
+  VerifySelectorFails(start, end, LinkGenerationError::kEmptySelection);
 }
 
 }  // namespace blink

@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/app/vector_icons/vector_icons.h"
@@ -17,8 +18,8 @@
 #include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/resource/resource_bundle.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 
 WebAuthnIconView::WebAuthnIconView(
     CommandUpdater* command_updater,
@@ -65,10 +66,13 @@ void WebAuthnIconView::UpdateImpl() {
   }
 
   SetVisible(dialog_model->current_step() ==
-             AuthenticatorRequestDialogModel::Step::kSubtleUI);
+             AuthenticatorRequestDialogModel::Step::kLocationBarBubble);
   if (dialog_models_.find(web_contents) == dialog_models_.end()) {
     dialog_model->AddObserver(this);
     dialog_models_.insert({web_contents, dialog_model});
+    if (!dialog_model->users().empty()) {
+      ExecuteCommand(EXECUTE_SOURCE_MOUSE);
+    }
   }
 }
 
@@ -78,8 +82,12 @@ void WebAuthnIconView::OnExecuting(
     return;
   }
   content::WebContents* web_contents = GetWebContents();
+  AuthenticatorRequestDialogModel* model = dialog_models_.at(web_contents);
   webauthn_bubble_ = WebAuthnBubbleView::Create(
-      dialog_models_.at(web_contents)->relying_party_id(), web_contents);
+      model->relying_party_id(), model->users(),
+      base::BindOnce(&AuthenticatorRequestDialogModel::OnAccountSelected,
+                     model->GetWeakPtr()),
+      web_contents);
   webauthn_bubble_->GetWidget()->AddObserver(this);
 }
 
@@ -87,9 +95,9 @@ const gfx::VectorIcon& WebAuthnIconView::GetVectorIcon() const {
   return kFingerprintIcon;
 }
 
-base::string16 WebAuthnIconView::GetTextForTooltipAndAccessibleName() const {
+std::u16string WebAuthnIconView::GetTextForTooltipAndAccessibleName() const {
   // TODO(crbug.com/1179014): go through ux review and i18n this string.
-  return base::UTF8ToUTF16("Sign in with your security key");
+  return u"Sign in with your security key";
 }
 
 void WebAuthnIconView::OnWidgetDestroying(views::Widget* widget) {

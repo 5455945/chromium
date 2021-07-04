@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/bind.h"
 #include "base/containers/contains.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/themes/theme_properties.h"
@@ -13,14 +14,15 @@
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_button.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_ink_drop_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/compositor/paint_recorder.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/gfx/canvas.h"
 #include "ui/native_theme/native_theme.h"
+#include "ui/views/animation/ink_drop.h"
 #include "ui/views/background.h"
 #include "ui/views/layout/animating_layout_manager.h"
 #include "ui/views/layout/flex_layout.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/view_observer.h"
 
@@ -41,7 +43,7 @@ void ToolbarIconContainerView::RoundRectBorder::OnPaintLayer(
   gfx::Canvas* canvas = paint_recorder.canvas();
 
   const int radius = ChromeLayoutProvider::Get()->GetCornerRadiusMetric(
-      views::EMPHASIS_MAXIMUM, layer_.size());
+      views::Emphasis::kMaximum, layer_.size());
   cc::PaintFlags flags;
   flags.setAntiAlias(true);
   flags.setStyle(cc::PaintFlags::kStroke_Style);
@@ -141,9 +143,10 @@ void ToolbarIconContainerView::ObserveButton(views::Button* button) {
   // We don't care about the main button being highlighted.
   if (button != main_button_) {
     subscriptions_.push_back(
-        button->AddHighlightedChangedCallback(base::BindRepeating(
-            &ToolbarIconContainerView::OnButtonHighlightedChanged,
-            base::Unretained(this), base::Unretained(button))));
+        views::InkDrop::Get(button)->AddHighlightedChangedCallback(
+            base::BindRepeating(
+                &ToolbarIconContainerView::OnButtonHighlightedChanged,
+                base::Unretained(this), base::Unretained(button))));
   }
   subscriptions_.push_back(button->AddStateChangedCallback(base::BindRepeating(
       &ToolbarIconContainerView::UpdateHighlight, base::Unretained(this))));
@@ -199,6 +202,11 @@ bool ToolbarIconContainerView::GetHighlighted() const {
   return false;
 }
 
+void ToolbarIconContainerView::OnThemeChanged() {
+  views::View::OnThemeChanged();
+  border_.layer()->SchedulePaint(GetLocalBounds());
+}
+
 void ToolbarIconContainerView::OnViewFocused(views::View* observed_view) {
   UpdateHighlight();
 }
@@ -224,9 +232,9 @@ views::FlexLayout* ToolbarIconContainerView::GetTargetLayoutManager() {
 
 void ToolbarIconContainerView::OnBoundsChanged(
     const gfx::Rect& previous_bounds) {
-  const gfx::Rect bounds = ConvertRectToWidget(GetLocalBounds());
-  border_.layer()->SetBounds(bounds);
-  border_.layer()->SchedulePaint(gfx::Rect(bounds.size()));
+  const gfx::Rect bounds = GetLocalBounds();
+  border_.layer()->SetBounds(ConvertRectToWidget(bounds));
+  border_.layer()->SchedulePaint(bounds);
 }
 
 void ToolbarIconContainerView::OnMouseEntered(const ui::MouseEvent& event) {
@@ -251,6 +259,16 @@ void ToolbarIconContainerView::UpdateHighlight() {
     border_.layer()->SetOpacity(GetHighlighted() ? 1 : 0);
   }
 
+  // TODO(crbug.com/1194150): For some reason, the SchedulePaint() calls that
+  // happen initially -- in OnThemeChanged() and OnBoundsChanged() -- do not
+  // result in the layer getting painted for the first time. Calling
+  // SchedulePaint() here works. Without this, the highlight will not appear
+  // until an extension icon is added or removed or the theme is changed.
+  if (!ever_painted_highlight_ && GetHighlighted()) {
+    ever_painted_highlight_ = true;
+    border_.layer()->SchedulePaint(GetLocalBounds());
+  }
+
   if (showing_before == (border_.layer()->GetTargetOpacity() == 1))
     return;
   for (Observer& observer : observers_)
@@ -259,7 +277,7 @@ void ToolbarIconContainerView::UpdateHighlight() {
 
 void ToolbarIconContainerView::OnButtonHighlightedChanged(
     views::Button* button) {
-  if (button->GetHighlighted())
+  if (views::InkDrop::Get(button)->GetHighlighted())
     highlighted_buttons_.insert(button);
   else
     highlighted_buttons_.erase(button);
@@ -268,6 +286,6 @@ void ToolbarIconContainerView::OnButtonHighlightedChanged(
 }
 
 BEGIN_METADATA(ToolbarIconContainerView, views::View)
-ADD_PROPERTY_METADATA(SkColor, IconColor, views::metadata::SkColorConverter)
+ADD_PROPERTY_METADATA(SkColor, IconColor, ui::metadata::SkColorConverter)
 ADD_READONLY_PROPERTY_METADATA(bool, Highlighted)
 END_METADATA

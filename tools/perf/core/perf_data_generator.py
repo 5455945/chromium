@@ -100,6 +100,46 @@ LIGHTWEIGHT_TESTERS = [
     'win-10_laptop_low_end-perf'
 ]
 
+# This is an opt-in list for builders which uses dynamic sharding.
+DYNAMIC_SHARDING_TESTERS = [
+    'android-pixel2-perf', 'win-10_amd-perf', 'android-pixel2-perf-fyi',
+    'android-pixel2-perf-calibration', 'linux-perf-calibration'
+]
+
+CALIBRATION_BUILDERS = {
+    'linux-perf-calibration': {
+        'tests': [
+            {
+                'isolate': 'performance_test_suite',
+                'extra_args': [
+                    '--assert-gpu-compositing',
+                ],
+            },
+        ],
+        'platform':
+        'linux',
+        'dimension': {
+            'gpu': '10de:1cb3-440.100',
+            'os': 'Ubuntu-18.04',
+            'pool': 'chrome.tests.perf',
+            'synthetic_product_name': 'PowerEdge R230 (Dell Inc.)'
+        },
+    },
+    'android-pixel2-perf-calibration': {
+        'tests': [{
+            'isolate': 'performance_test_suite',
+        }],
+        'platform': 'android-chrome-64-bundle',
+        'dimension': {
+            'pool': 'chrome.tests.perf',
+            'os': 'Android',
+            'device_type': 'walleye',
+            'device_os': 'OPM1.171019.021',
+            'device_os_flavor': 'google',
+        },
+    },
+}
+
 FYI_BUILDERS = {
     'android-cfi-builder-perf-fyi': {
         'additional_compile_targets': [
@@ -197,20 +237,17 @@ FYI_BUILDERS = {
         },
     },
     'fuchsia-perf-fyi': {
-        # TODO(rohpavone): Temporarily using telemetry_gpu_tests until custom
-        # test is created to run telemetry benchmarks, as this gets infra up.
         'tests': [{
             'isolate':
-            'fuchsia_telemetry_gpu_integration_test',
+            'performance_web_engine_test_suite',
             'extra_args': [
-                'hardware_accelerated_feature', '--show-stdout',
-                '--browser=web-engine-shell', '--passthrough', '-v',
-                '--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc',
+                '--output-format=histograms',
+                '--experimental-tbmv3-metrics',
                 '--device=custom',
-                '--custom-device-target=internal.astro_target'
+                '--custom-device-target=internal.astro_target',
             ],
             'type':
-            TEST_TYPES.GENERIC,
+            TEST_TYPES.TELEMETRY,
         }],
         'platform':
         'fuchsia',
@@ -423,21 +460,81 @@ BUILDERS = {
     },
     'linux-builder-perf': {
         'additional_compile_targets': ['chromedriver', 'chromium_builder_perf'],
+        'tests': [{
+            'name': 'chrome_sizes',
+            'isolate': 'chrome_sizes',
+            'type': TEST_TYPES.GENERIC,
+        }],
+        'dimension': {
+            'cpu': 'x86-64',
+            'os': 'Ubuntu-16.04',
+            'pool': 'chrome.tests',
+        },
+        'perf_trigger':
+        False,
     },
     'linux-builder-perf-rel': {
         'additional_compile_targets': ['chromium_builder_perf'],
     },
     'mac-builder-perf': {
         'additional_compile_targets': ['chromedriver', 'chromium_builder_perf'],
+        'tests': [{
+            'name': 'chrome_sizes',
+            'isolate': 'chrome_sizes',
+            'type': TEST_TYPES.GENERIC,
+        }],
+        'dimension': {
+            'cpu': 'x86-64',
+            'os': 'Mac',
+            'pool': 'chrome.tests',
+        },
+        'perf_trigger':
+        False,
     },
     'mac-arm-builder-perf': {
         'additional_compile_targets': ['chromedriver', 'chromium_builder_perf'],
+        'tests': [{
+            'name': 'chrome_sizes',
+            'isolate': 'chrome_sizes',
+            'type': TEST_TYPES.GENERIC,
+        }],
+        'dimension': {
+            'cpu': 'x86',
+            'os': 'Mac',
+            'pool': 'chrome.tests',
+        },
+        'perf_trigger':
+        False,
     },
     'win32-builder-perf': {
         'additional_compile_targets': ['chromedriver', 'chromium_builder_perf'],
+        'tests': [{
+            'name': 'chrome_sizes',
+            'isolate': 'chrome_sizes',
+            'type': TEST_TYPES.GENERIC,
+        }],
+        'dimension': {
+            'cpu': 'x86',
+            'os': 'Windows',
+            'pool': 'chrome.tests',
+        },
+        'perf_trigger':
+        False,
     },
     'win64-builder-perf': {
         'additional_compile_targets': ['chromedriver', 'chromium_builder_perf'],
+        'tests': [{
+            'name': 'chrome_sizes',
+            'isolate': 'chrome_sizes',
+            'type': TEST_TYPES.GENERIC,
+        }],
+        'dimension': {
+            'cpu': 'x86-64',
+            'os': 'Windows',
+            'pool': 'chrome.tests',
+        },
+        'perf_trigger':
+        False,
     },
     'android-go-perf': {
         'tests': [{
@@ -546,7 +643,7 @@ BUILDERS = {
         'tests': [{
             'isolate': 'performance_webview_test_suite',
         }],
-        'platform': 'android-webview-google',
+        'platform': 'android-webview-trichrome-google-bundle',
         'dimension': {
             'pool': 'chrome.tests.perf-webview',
             'os': 'Android',
@@ -559,7 +656,7 @@ BUILDERS = {
         'tests': [{
             'isolate': 'performance_weblayer_test_suite',
         }],
-        'platform': 'android-weblayer',
+        'platform': 'android-weblayer-trichrome-google-bundle',
         'dimension': {
             'pool': 'chrome.tests.perf-weblayer',
             'os': 'Android',
@@ -572,7 +669,7 @@ BUILDERS = {
         'tests': [{
             'isolate': 'performance_test_suite',
         }],
-        'platform': 'android-chrome-64-bundle',
+        'platform': 'android-trichrome-bundle',
         'dimension': {
             'pool': 'chrome.tests.perf',
             'os': 'Android',
@@ -648,6 +745,30 @@ BUILDERS = {
             'synthetic_product_name': 'OptiPlex 7050 (Dell Inc.)'
         },
     },
+    'win-10_amd-perf': {
+        'tests': [
+            {
+                'isolate': 'performance_test_suite',
+                'extra_args': [
+                    '--assert-gpu-compositing',
+                ],
+            },
+        ],
+        'platform':
+        'win',
+        'target_bits':
+        64,
+        'dimension': {
+            'pool': 'chrome.tests.perf',
+            # Explicitly set GPU driver version and Windows OS version such
+            # that we can be informed if this
+            # version ever changes or becomes inconsistent. It is important
+            # that bots are homogeneous. See crbug.com/988045 for history.
+            'os': 'Windows-10-18363.476',
+            'gpu': '1002:15d8-27.20.1034.6',
+            'synthetic_product_name': '11A5S4L300 [ThinkCentre M75q-1] (LENOVO)'
+        },
+    },
     'Win 7 Perf': {
         'tests': [
             {
@@ -695,6 +816,8 @@ BUILDERS = {
         'platform':
         'mac',
         'dimension': {
+            'cpu':
+            'x86-64',
             'gpu':
             '8086:1626',
             'os':
@@ -703,24 +826,6 @@ BUILDERS = {
             'chrome.tests.perf',
             'synthetic_product_name':
             'MacBookAir7,2_x86-64-i5-5350U_Intel Broadwell HD Graphics 6000_8192_APPLE SSD SM0128G'
-        },
-    },
-    'mac-arm_dtk_arm-perf': {
-        'tests': [
-            {
-                'isolate': 'performance_test_suite',
-                'extra_args': [
-                    '--assert-gpu-compositing',
-                ],
-            },
-        ],
-        'platform':
-        'mac',
-        'dimension': {
-            'cpu': 'arm',
-            'mac_model': 'ADP3,2',
-            'os': 'Mac',
-            'pool': 'chrome.tests.perf',
         },
     },
     'mac-m1_mini_2020-perf': {
@@ -789,6 +894,8 @@ BUILDERS = {
         'platform':
         'mac',
         'dimension': {
+            'cpu':
+            'x86-64',
             'gpu':
             '1002:6821-4.0.20-3.2.8',
             'os':
@@ -831,6 +938,23 @@ BUILDERS = {
         'platform': 'linux',
         'perf_processor': True,
     },
+    'chromecast-linux-builder-perf': {
+        'additional_compile_targets': ['cast_shell'],
+        'tests': [
+            {
+                'name': 'resource_sizes_chromecast',
+                'isolate': 'resource_sizes_chromecast',
+                'type': TEST_TYPES.GENERIC,
+            },
+        ],
+        'dimension': {
+            'cpu': 'x86-64',
+            'os': 'Ubuntu-16.04',
+            'pool': 'chrome.tests',
+        },
+        'perf_trigger':
+        False,
+    },
     'chromeos-amd64-generic-lacros-builder-perf': {
         'additional_compile_targets': ['chrome'],
         'tests': [
@@ -864,11 +988,12 @@ BUILDERS = {
         'target_bits':
         64,
         'dimension': {
-            'pool': 'chrome.tests',
+            'pool': 'chrome.tests.perf',
             # TODO(crbug.com/971204): Explicitly set the gpu to None to make
             # chromium_swarming recipe_module ignore this dimension.
             'gpu': None,
             'os': 'ChromeOS',
+            'device_status': 'available',
             'device_type': 'eve',
         },
     },
@@ -889,12 +1014,16 @@ def update_all_fyi_builders(file_path):
   return _update_builders(FYI_BUILDERS, file_path)
 
 
+def update_all_calibration_builders(file_path):
+  return _update_builders(CALIBRATION_BUILDERS, file_path)
+
+
 def _update_builders(builders_dict, file_path):
   tests = {}
   tests['AAAAA1 AUTOGENERATED FILE DO NOT EDIT'] = {}
   tests['AAAAA2 See //tools/perf/generate_perf_data to make changes'] = {}
 
-  for name, config in builders_dict.iteritems():
+  for name, config in builders_dict.items():
     tests[name] = generate_builder_config(config, name)
 
   with open(file_path, 'w') as fp:
@@ -955,7 +1084,8 @@ GTEST_BENCHMARKS = {
     BenchmarkMetadata('xhwang@chromium.org, jrummell@chromium.org',
                       'Internals>Media>Encrypted'),
     'performance_browser_tests':
-    BenchmarkMetadata('miu@chromium.org', 'Internals>Media>ScreenCapture'),
+    BenchmarkMetadata('johnchen@chromium.org, jophba@chromium.org',
+                      'Internals>Media>ScreenCapture'),
     'views_perftests':
     BenchmarkMetadata('tapted@chromium.org', 'Internals>Views'),
     'components_perftests':
@@ -987,6 +1117,28 @@ OTHER_BENCHMARKS = {
     'resource_sizes_system_webview_google_bundle': RESOURCE_SIZES_METADATA,
 }
 
+
+OTHER_BENCHMARKS.update({
+    'chrome_sizes':
+    BenchmarkMetadata(
+        emails='heiserya@chromium.org, johnchen@chromium.org',
+        component='Build',
+        documentation_url=(
+            'https://chromium.googlesource.com/chromium/'
+            'src/+/HEAD/tools/binary_size/README.md#resource_sizes_py'),
+    ),
+})
+
+OTHER_BENCHMARKS.update({
+    'resource_sizes_chromecast':
+    BenchmarkMetadata(
+        emails='juke@chromium.org, eliribble@chromium.org',
+        component='Chromecast',
+        documentation_url=(
+            'https://chromium.googlesource.com/chromium/'
+            'src/+/HEAD/tools/binary_size/README.md#resource_sizes_py'),
+    ),
+})
 
 OTHER_BENCHMARKS.update({
     'resource_sizes_lacros_chrome':
@@ -1109,6 +1261,14 @@ def _verify_benchmark_owners(benchmark_metadatas):
       'benchmarks:\n%s' % '\n'.join(unowned_benchmarks))
 
 
+# Open a CSV file for writing, handling the differences between Python 2 and 3.
+def _create_csv(file_path):
+  if sys.version_info.major == 2:
+    return open(file_path, 'wb')
+  else:
+    return open(file_path, 'w', newline='')
+
+
 def update_benchmark_csv(file_path):
   """Updates go/chrome-benchmarks.
 
@@ -1172,7 +1332,7 @@ def update_benchmark_csv(file_path):
   csv_data = sorted(csv_data, key=lambda b: b[0])
   csv_data = header_data + csv_data
 
-  with open(file_path, 'wb') as f:
+  with _create_csv(file_path) as f:
     writer = csv.writer(f, lineterminator='\n')
     writer.writerows(csv_data)
   return True
@@ -1203,7 +1363,7 @@ def update_system_health_stories(filepath):
         stories[story.name]['platforms'].add(platform)
         stories[story.name]['tags'].update(story.tags)
 
-  with open(filepath, 'wb') as f:
+  with _create_csv(filepath) as f:
     writer = csv.writer(f, lineterminator='\n')
     for row in header_data:
       writer.writerow(row)
@@ -1228,7 +1388,7 @@ def update_labs_docs_md(filepath):
 # Platforms tested in the Performance Lab
 
 """)
-    for platform, testers in sorted(configs.iteritems()):
+    for platform, testers in sorted(configs.items()):
       f.write('## %s\n\n' % platform.title())
       testers.sort()
       for tester in testers:
@@ -1257,6 +1417,8 @@ def generate_telemetry_args(tester_config, platform):
   elif (tester_config['platform'] == 'win'
     and tester_config['target_bits'] == 64):
     browser_name = 'release_x64'
+  elif tester_config['platform'] == 'fuchsia':
+    browser_name = 'web-engine-shell'
   else:
     browser_name ='release'
   test_args = [
@@ -1313,6 +1475,11 @@ def generate_performance_test(tester_config, test, builder_name):
     ]
   }
 
+  # Enable Result DB on all perf test bots. Builders with names including
+  # "builder-perf" are used for compiling only, and do not run perf tests.
+  if 'builder-perf' not in builder_name:
+    result['resultdb'] = {'enable': True}
+
   # For now we either get shards from the number of devices specified
   # or a test entry needs to specify the num shards if it supports
   # soft device affinity.
@@ -1326,6 +1493,8 @@ def generate_performance_test(tester_config, test, builder_name):
             'True'
         ],
     }
+    if builder_name in DYNAMIC_SHARDING_TESTERS:
+      result['trigger_script']['args'].append('--use-dynamic-shards')
 
   result['merge'] = {
       'script': '//tools/perf/process_perf_results.py',
@@ -1407,11 +1576,13 @@ def generate_builder_config(condensed_config, builder_name):
 # functions must return True on success and False otherwise. File paths are
 # relative to chromium src and should use posix path separators (i.e. '/').
 ALL_UPDATERS_AND_FILES = [
-  (update_all_builders, 'testing/buildbot/chromium.perf.json'),
-  (update_all_fyi_builders, 'testing/buildbot/chromium.perf.fyi.json'),
-  (update_benchmark_csv, 'tools/perf/benchmark.csv'),
-  (update_system_health_stories, 'tools/perf/system_health_stories.csv'),
-  (update_labs_docs_md, 'docs/speed/perf_lab_platforms.md'),
+    (update_all_builders, 'testing/buildbot/chromium.perf.json'),
+    (update_all_fyi_builders, 'testing/buildbot/chromium.perf.fyi.json'),
+    (update_all_calibration_builders,
+     'testing/buildbot/chromium.perf.calibration.json'),
+    (update_benchmark_csv, 'tools/perf/benchmark.csv'),
+    (update_system_health_stories, 'tools/perf/system_health_stories.csv'),
+    (update_labs_docs_md, 'docs/speed/perf_lab_platforms.md'),
 ]
 
 

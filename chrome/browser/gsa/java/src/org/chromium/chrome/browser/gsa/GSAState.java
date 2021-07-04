@@ -12,8 +12,6 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.content.pm.ResolveInfo;
-import android.database.Cursor;
-import android.net.Uri;
 import android.text.TextUtils;
 
 import androidx.annotation.NonNull;
@@ -24,7 +22,6 @@ import org.chromium.base.Log;
 import org.chromium.base.ObserverList;
 import org.chromium.base.PackageManagerUtils;
 import org.chromium.base.PackageUtils;
-import org.chromium.base.ThreadUtils;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
@@ -33,6 +30,8 @@ import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * A class responsible for representing the current state of Chrome's integration with GSA.
@@ -70,6 +69,9 @@ public class GSAState {
      */
     @SuppressLint("StaticFieldLeak")
     private static GSAState sGSAState;
+
+    private static final Pattern MAJOR_MINOR_VERSION_PATTERN =
+            Pattern.compile("^(\\d+)\\.(\\d+)(\\.\\d+)*$");
 
     /**
      * The application context to use.
@@ -168,6 +170,16 @@ public class GSAState {
         return mGsaAvailable;
     }
 
+    /** Returns whether the GSA package is installed on device. */
+    public boolean isGsaInstalled() {
+        try {
+            PackageInfo packageInfo = mContext.getPackageManager().getPackageInfo(PACKAGE_NAME, 0);
+            return true;
+        } catch (NameNotFoundException e) {
+            return false;
+        }
+    }
+
     /**
      * Check whether the given package meets min requirements for using full document mode.
      * @param packageName The package name we are inquiring about.
@@ -249,44 +261,41 @@ public class GSAState {
     }
 
     /**
-     * @return Whether the AGSA app installed on the device supports Assistant voice search. This
-     *         reads from a content provider and shouldn't be called directly on the UI thread.
+     * Converts the given version name into a reportable integer which contains the major and minor
+     * version.
+     * - The returned integer ranges between 1,000 - 999,999.
+     * - The major version is represented by the numbers in the hundred/ten/thousanths places.
+     * - The minor version is represented by the numbers in the tens/hundredths places.
+     * - The max for both major and minor versions is 999. If either exceeds the maximum, null is
+     *   returned.
+     *
+     * @param versionName The version name as a string (eg 11.9).
+     * @return The version name as an integer between 1,000 - 999,999 as described above or null if
+     *         the above conditions aren't satisfied.
      */
-    public boolean agsaSupportsAssistantVoiceSearch() {
-        ThreadUtils.assertOnBackgroundThread();
+    public @Nullable Integer parseAgsaMajorMinorVersionAsInteger(String versionName) {
+        if (versionName == null) return null;
 
-        Cursor cursor = null;
+        Matcher matcher = MAJOR_MINOR_VERSION_PATTERN.matcher(versionName);
+        if (!matcher.find() || matcher.groupCount() < 2) return null;
+
         try {
-            cursor = mContext.getContentResolver().query(
-                    Uri.parse(ROTI_CHROME_ENABLED_PROVIDER), null, null, null, null);
-            return parseAgsaAssistantCursorResult(cursor);
-        } catch (Exception e) {
-            Log.e(TAG, "Failed due to unexpected exception.", e);
-            return false;
-        } finally {
-            if (cursor != null) {
-                cursor.close();
+            int major = Integer.parseInt(matcher.group(1));
+            if (major > 999) {
+                Log.e(TAG, "Major verison exceeded maximum of 999.");
+                return null;
             }
-        }
-    }
 
-    @VisibleForTesting
-    boolean parseAgsaAssistantCursorResult(Cursor cursor) {
-        if (cursor == null) {
-            Log.e(TAG, "Failed due to cursor being null.");
-            return false;
+            int minor = Integer.parseInt(matcher.group(2));
+            if (minor > 999) {
+                Log.e(TAG, "Minor verison exceeded maximum of 999.");
+                return null;
+            }
+            return major * 1000 + minor;
+        } catch (NumberFormatException e) {
+            Log.e(TAG, "Version was incorrectly formatted.");
+            return null;
         }
-        boolean isValidCursor = cursor.moveToFirst();
-        if (!isValidCursor) {
-            Log.e(TAG, "Failed due cursor being empty.");
-            return false;
-        }
-        if (cursor.getType(0) != Cursor.FIELD_TYPE_STRING) {
-            Log.e(TAG, "Failed due cursor having unexpected datatype (expected string).");
-            return false;
-        }
-
-        return Boolean.parseBoolean(cursor.getString(0));
     }
 
     /**

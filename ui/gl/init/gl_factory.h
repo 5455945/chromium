@@ -32,6 +32,12 @@ namespace init {
 // be the first item.
 GL_INIT_EXPORT std::vector<GLImplementation> GetAllowedGLImplementations();
 
+// Returns the software GL implementation used for tests
+GL_INIT_EXPORT GLImplementationParts GetSoftwareGLForTestsImplementation();
+
+// Returns the software GL implementation used for headless
+GL_INIT_EXPORT GLImplementationParts GetSoftwareGLForHeadlessImplementation();
+
 // Initializes GL bindings and extension settings.
 GL_INIT_EXPORT bool InitializeGLOneOff();
 
@@ -49,7 +55,7 @@ GL_INIT_EXPORT bool InitializeExtensionSettingsOneOffPlatform();
 // Initializes GL bindings using the provided parameters. This might be required
 // for use in tests.
 GL_INIT_EXPORT bool InitializeStaticGLBindingsImplementation(
-    GLImplementation impl,
+    GLImplementationParts impl,
     bool fallback_to_software_gl);
 
 // Initializes GL platform using the provided parameters. This might be required

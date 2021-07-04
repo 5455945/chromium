@@ -5,13 +5,21 @@
 import * as barcodeChip from '../../barcode_chip.js';
 import {assert, assertInstanceof} from '../../chrome_util.js';
 import * as dom from '../../dom.js';
+import {reportError} from '../../error.js';
 import {FaceOverlay} from '../../face.js';
 import {BarcodeScanner} from '../../models/barcode.js';
 import {DeviceOperator, parseMetadata} from '../../mojo/device_operator.js';
 import * as nav from '../../nav.js';
 import * as state from '../../state.js';
-import {Mode} from '../../type.js';
+import {
+  ErrorLevel,
+  ErrorType,
+  Facing,
+  Mode,
+  Resolution,
+} from '../../type.js';
 import * as util from '../../util.js';
+import {windowController} from '../../window_controller.js';
 
 /**
  * Creates a controller for the video preview of Camera view.
@@ -34,24 +42,6 @@ export class Preview {
      * @private
      */
     this.video_ = dom.get('#preview-video', HTMLVideoElement);
-
-    /**
-     * @type {!HTMLDivElement}
-     * @private
-     */
-    this.panSlider_ = dom.get('#pan-slider', HTMLDivElement);
-
-    /**
-     * @type {!HTMLDivElement}
-     * @private
-     */
-    this.tiltSlider_ = dom.get('#tilt-slider', HTMLDivElement);
-
-    /**
-     * @type {!HTMLDivElement}
-     * @private
-     */
-    this.zoomSlider_ = dom.get('#zoom-slider', HTMLDivElement);
 
     /**
      * The observer id for preview metadata.
@@ -94,7 +84,21 @@ export class Preview {
      */
     this.scanner_ = null;
 
-    window.addEventListener('resize', () => this.onWindowResize_());
+    /**
+     * @type {!Facing}
+     * @private
+     */
+    this.facing_ = Facing.NOT_SET;
+
+    /**
+     * @type {?string}
+     * @private
+     */
+    this.vidPid_ = null;
+
+    window.addEventListener('resize', () => this.onWindowStatusChanged_());
+
+    windowController.addListener(() => this.onWindowStatusChanged_());
 
     [state.State.EXPERT, state.State.SHOW_METADATA].forEach((s) => {
       state.addObserver(s, this.updateShowMetadata_.bind(this));
@@ -102,62 +106,13 @@ export class Preview {
     [state.State.EXPERT, state.State.SCAN_BARCODE].forEach((s) => {
       state.addObserver(s, this.updateScanBarcode_.bind(this));
     });
-
-    this.initPTZOptions_();
   }
 
   /**
-   * @private
+   * @return {!HTMLVideoElement}
    */
-  initPTZOptions_() {
-    const getSliderInput = (slider) =>
-        dom.getFrom(slider, 'input[type=range]', HTMLInputElement);
-    for (const {attr, slider} of
-             [{attr: 'pan', slider: this.panSlider_},
-              {attr: 'tilt', slider: this.tiltSlider_},
-              {attr: 'zoom', slider: this.zoomSlider_}]) {
-      const input = getSliderInput(slider);
-      input.addEventListener('input', () => {
-        const track =
-            assertInstanceof(this.stream, MediaStream).getVideoTracks()[0];
-        track.applyConstraints({advanced: [{[attr]: Number(input.value)}]});
-      });
-    }
-    const ptzUIStates = [
-      state.State.EXPERT,
-      state.State.SHOW_PTZ_OPTIONS,
-      state.State.STREAMING,
-    ];
-    const onStateToggled = () => {
-      if (!ptzUIStates.every((s) => state.get(s))) {
-        [this.panSlider_, this.tiltSlider_, this.zoomSlider_].forEach(
-            (slider) => {
-              slider.hidden = true;
-            });
-        return;
-      }
-      const initSlider = (capability, value, slider) => {
-        if (capability === undefined) {
-          slider.hidden = true;
-          return;
-        }
-        slider.hidden = false;
-        const input = getSliderInput(slider);
-        input.min = capability.min;
-        input.max = capability.max;
-        input.step = capability.step;
-        input.value = value;
-      };
-      const track = this.stream.getVideoTracks()[0];
-      const settings = track.getSettings();
-      const cap = track.getCapabilities();
-      initSlider(cap.pan, settings.pan, this.panSlider_);
-      initSlider(cap.tilt, settings.tilt, this.tiltSlider_);
-      initSlider(cap.zoom, settings.zoom, this.zoomSlider_);
-    };
-    for (const s of ptzUIStates) {
-      state.addObserver(s, onStateToggled);
-    }
+  get video() {
+    return this.video_;
   }
 
   /**
@@ -169,10 +124,70 @@ export class Preview {
   }
 
   /**
-   * @return {!HTMLVideoElement}
+   * @return {!MediaStreamTrack}
    */
-  get video() {
-    return this.video_;
+  getVideoTrack_() {
+    const stream = assertInstanceof(this.stream, MediaStream);
+    return stream.getVideoTracks()[0];
+  }
+
+  /**
+   * @return {!Facing}
+   */
+  getFacing() {
+    return this.facing_;
+  }
+
+  /**
+   * USB camera vid:pid identifier of the opened stream.
+   * @return {?string} Identifier formatted as "vid:pid" or null for non-USB
+   *     camera.
+   */
+  getVidPid() {
+    return this.vidPid_;
+  }
+
+  /**
+   * @private
+   */
+  async updateFacing_() {
+    if (!(await DeviceOperator.isSupported())) {
+      this.facing_ = Facing.NOT_SET;
+      return;
+    }
+    const {facingMode} = this.getVideoTrack_().getSettings();
+    if (facingMode === undefined) {
+      this.facing_ = Facing.EXTERNAL;
+      return;
+    }
+    switch (facingMode) {
+      case 'user':
+        this.facing_ = Facing.USER;
+        return;
+      case 'environment':
+        this.facing_ = Facing.ENVIRONMENT;
+        return;
+      default:
+        throw new Error('Unknown facing: ' + facingMode);
+    }
+  }
+
+  /**
+   * If the preview camera support PTZ controls.
+   * @return {boolean}
+   */
+  isSupportPTZ() {
+    const {pan, tilt, zoom} = this.getVideoTrack_().getCapabilities();
+    return pan !== undefined || tilt !== undefined || zoom !== undefined;
+  }
+
+  /**
+   * Preview resolution.
+   * @return {!Resolution}
+   */
+  getResolution() {
+    const {videoWidth, videoHeight} = this.video_;
+    return new Resolution(videoWidth, videoHeight);
   }
 
   /**
@@ -201,8 +216,7 @@ export class Preview {
     });
     await video.play();
     this.video_.parentElement.replaceChild(tpl, this.video_);
-    this.video_.removeAttribute('srcObject');
-    this.video_.load();
+    this.video_.srcObject = null;
     this.video_ = video;
     video.addEventListener('resize', () => this.onIntrinsicSizeChanged_());
     video.addEventListener(
@@ -232,11 +246,28 @@ export class Preview {
           this.onNewStreamNeeded_();
         }
       }, 100);
+      await this.updateFacing_();
       this.scanner_ = new BarcodeScanner(this.video_, (value) => {
         barcodeChip.show(value);
       });
       this.updateScanBarcode_();
       this.updateShowMetadata_();
+
+      const deviceOperator = await DeviceOperator.getInstance();
+      if (deviceOperator !== null) {
+        const {deviceId} = this.getVideoTrack_().getSettings();
+        const isSuccess =
+            await deviceOperator.setCameraFrameRotationEnabledAtSource(
+                deviceId, false);
+        if (!isSuccess) {
+          reportError(
+              ErrorType.FRAME_ROTATION_NOT_DISABLED, ErrorLevel.WARNING,
+              new Error(
+                  'Cannot disable camera frame rotation. ' +
+                  'The camera is probably being used by another app.'));
+        }
+        this.vidPid_ = await deviceOperator.getVidPid(deviceId);
+      }
 
       state.set(state.State.STREAMING, true);
     } catch (e) {
@@ -257,13 +288,14 @@ export class Preview {
     }
     // Pause video element to avoid black frames during transition.
     this.video_.pause();
+    this.disableShowMetadata_();
     if (this.stream_ !== null) {
-      const track = this.stream_.getVideoTracks()[0];
+      const track = this.getVideoTrack_();
       const {deviceId} = track.getSettings();
       track.stop();
       const deviceOperator = await DeviceOperator.getInstance();
       if (deviceOperator !== null) {
-        await deviceOperator.waitForDeviceClose(deviceId);
+        deviceOperator.dropConnection(deviceId);
       }
       this.stream_ = null;
     }
@@ -357,7 +389,9 @@ export class Preview {
           continue;
         }
         if (map.has(val)) {
-          console.error(`Duplicated value: ${val}`);
+          reportError(
+              ErrorType.METADATA_MAPPING_FAILURE, ErrorLevel.ERROR,
+              new Error(`Duplicated value: ${val}`));
           continue;
         }
         map.set(val, key.slice(prefix.length));
@@ -440,7 +474,7 @@ export class Preview {
     // recalculate them in every callback.
     const {videoWidth, videoHeight} = this.video_;
     const resolution = `${videoWidth}x${videoHeight}`;
-    const videoTrack = this.stream_.getVideoTracks()[0];
+    const videoTrack = this.getVideoTrack_();
     const deviceName = videoTrack.label;
 
     // Currently there is no easy way to calculate the fps of a video element.
@@ -552,12 +586,14 @@ export class Preview {
       return;
     }
 
-    const deviceId = this.stream_.getVideoTracks()[0].getSettings().deviceId;
+    const {deviceId} = this.getVideoTrack_().getSettings();
     const isSuccess = await deviceOperator.removeMetadataObserver(
         deviceId, this.metadataObserverId_);
     if (!isSuccess) {
-      console.error(`Failed to remove metadata observer with id: ${
-          this.metadataObserverId_}`);
+      reportError(
+          ErrorType.REMOVE_METADATA_OBSERVER_FAILURE, ErrorLevel.ERROR,
+          new Error(`Failed to remove metadata observer with id: ${
+              this.metadataObserverId_}`));
     }
     this.metadataObserverId_ = null;
 
@@ -568,11 +604,11 @@ export class Preview {
   }
 
   /**
-   * Handles resizing the window for preview's aspect ratio changes.
+   * Handles the the window state or window size changed.
    * @private
    */
-  onWindowResize_() {
-    nav.onWindowResized();
+  onWindowStatusChanged_() {
+    nav.onWindowStatusChanged();
   }
 
   /**
@@ -582,7 +618,7 @@ export class Preview {
    */
   async onIntrinsicSizeChanged_() {
     if (this.video_.videoWidth && this.video_.videoHeight) {
-      this.onWindowResize_();
+      this.onWindowStatusChanged_();
     }
     this.cancelFocus_();
   }
@@ -599,7 +635,7 @@ export class Preview {
     const x = event.offsetX / this.video_.offsetWidth;
     const y = event.offsetY / this.video_.offsetHeight;
     const constraints = {advanced: [{pointsOfInterest: [{x, y}]}]};
-    const track = this.stream.getVideoTracks()[0];
+    const track = this.getVideoTrack_();
     const focus = (async () => {
       try {
         await track.applyConstraints(constraints);

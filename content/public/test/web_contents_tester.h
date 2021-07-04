@@ -13,7 +13,6 @@
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
-#include "third_party/blink/public/mojom/loader/pause_subresource_loading_handle.mojom.h"
 #include "ui/base/page_transition_types.h"
 
 class GURL;
@@ -104,7 +103,7 @@ class WebContentsTester {
   virtual const std::string& GetSaveFrameHeaders() = 0;
 
   // Returns the suggested file name passed in the SaveFrameWithHeaders call.
-  virtual const base::string16& GetSuggestedFileName() = 0;
+  virtual const std::u16string& GetSuggestedFileName() = 0;
 
   // Returns whether a download request triggered via DownloadImage() is in
   // progress for |url|.
@@ -123,7 +122,7 @@ class WebContentsTester {
 
   // Sets the return value of GetTitle() of TestWebContents. Once set, the real
   // title will never be returned.
-  virtual void SetTitle(const base::string16& new_title) = 0;
+  virtual void SetTitle(const std::u16string& new_title) = 0;
 
   // Sets the return value of GetContentsMimeType().
   virtual void SetMainFrameMimeType(const std::string& mime_type) = 0;
@@ -163,6 +162,15 @@ class WebContentsTester {
   // Indicates if this WebContents has been frozen via a call to
   // SetPageFrozen().
   virtual bool IsPageFrozen() = 0;
+
+  // Starts prerendering a page with |url|, and returns the root frame tree node
+  // id of the page. The page has a pending navigation in the root frame tree
+  // node when this method returns.
+  virtual int AddPrerender(const GURL& url) = 0;
+  // Starts prerendering a page, simulates a navigation to |url| in the main
+  // frame and returns the main frame of the page after the navigation is
+  // complete.
+  virtual RenderFrameHost* AddPrerenderAndCommitNavigation(const GURL& url) = 0;
 };
 
 }  // namespace content

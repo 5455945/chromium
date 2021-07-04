@@ -7,11 +7,18 @@
 #include <memory>
 #include <utility>
 
-#include "ash/public/cpp/ash_features.h"
+#include "ash/constants/app_types.h"
+#include "ash/constants/ash_features.h"
+#include "ash/public/cpp/window_properties.h"
 #include "ash/screenshot_delegate.h"
 #include "base/bind.h"
+#include "base/check.h"
+#include "base/command_line.h"
+#include "cc/input/touch_action.h"
+#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part_chromeos.h"
+#include "chrome/browser/chromeos/file_manager/path_util.h"
 #include "chrome/browser/chromeos/multidevice_setup/multidevice_setup_service_factory.h"
 #include "chrome/browser/nearby_sharing/nearby_share_delegate_impl.h"
 #include "chrome/browser/profiles/profile.h"
@@ -36,12 +43,20 @@
 #include "chrome/browser/ui/views/chrome_browser_main_extra_parts_views.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/webui/tab_strip/tab_strip_ui_util.h"
+#include "chrome/common/chrome_switches.h"
 #include "chromeos/services/multidevice_setup/multidevice_setup_service.h"
+#include "components/full_restore/app_launch_info.h"
+#include "components/full_restore/app_restore_data.h"
+#include "components/full_restore/full_restore_save_handler.h"
+#include "components/full_restore/full_restore_utils.h"
+#include "components/full_restore/restore_data.h"
 #include "components/ui_devtools/devtools_server.h"
+#include "components/user_manager/user_manager.h"
 #include "content/public/browser/device_service.h"
 #include "content/public/browser/media_session_service.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
+#include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
 #include "url/gurl.h"
 
@@ -50,15 +65,58 @@ namespace {
 const char kKeyboardShortcutHelpPageUrl[] =
     "https://support.google.com/chromebook/answer/183101";
 
+// Browser tests are always started with --disable-logging-redirect, so we need
+// independent option here.
+absl::optional<bool> disable_logging_redirect_for_testing;
+
+// Returns the TabStripModel that associates with |window| if the given |window|
+// contains a browser frame, otherwise returns nullptr.
+TabStripModel* GetTabstripModelForWindowIfAny(aura::Window* window) {
+  BrowserView* browser_view =
+      BrowserView::GetBrowserViewForNativeWindow(window);
+  return browser_view ? browser_view->browser()->tab_strip_model() : nullptr;
+}
+
 content::WebContents* GetActiveWebContentsForNativeBrowserWindow(
     gfx::NativeWindow window) {
   if (!window)
     return nullptr;
+
+  TabStripModel* tab_strip_model = GetTabstripModelForWindowIfAny(window);
+  return tab_strip_model ? tab_strip_model->GetActiveWebContents() : nullptr;
+}
+
+// Returns the list of URLs that are open in |tab_strip_model|.
+std::vector<GURL> GetURLsIfApplicable(TabStripModel* tab_strip_model) {
+  DCHECK(tab_strip_model);
+
+  std::vector<GURL> urls;
+  for (int i = 0; i < tab_strip_model->count(); ++i)
+    urls.push_back(tab_strip_model->GetWebContentsAt(i)->GetLastCommittedURL());
+  return urls;
+}
+
+// Returns true if |window| is supported in desk templates feature.
+bool IsWindowSupportedForDeskTemplate(aura::Window* window) {
+  // For now we'll ignore ARC, crostini and lacros windows in desk template.
+  const ash::AppType app_type =
+      static_cast<ash::AppType>(window->GetProperty(aura::client::kAppType));
+  if (app_type != ash::AppType::BROWSER &&
+      app_type != ash::AppType::CHROME_APP &&
+      app_type != ash::AppType::SYSTEM_APP) {
+    return false;
+  }
+  // Exclude window that does not asscociate with an app id.
+  const std::string* const app_id = window->GetProperty(ash::kAppIDKey);
+  if (!app_id)
+    return false;
+  // Exclude incognito browser window.
   BrowserView* browser_view =
       BrowserView::GetBrowserViewForNativeWindow(window);
-  if (!browser_view)
-    return nullptr;
-  return browser_view->browser()->tab_strip_model()->GetActiveWebContents();
+  if (browser_view && browser_view->GetIncognito())
+    return false;
+
+  return true;
 }
 
 }  // namespace
@@ -88,11 +146,6 @@ void ChromeShellDelegate::OpenKeyboardShortcutHelpPage() const {
   Navigate(&params);
 }
 
-void ChromeShellDelegate::DesksStateChanged(int num_desks) const {
-  for (auto* browser : *BrowserList::GetInstance())
-    browser->command_controller()->DesksStateChanged(num_desks);
-}
-
 bool ChromeShellDelegate::CanGoBack(gfx::NativeWindow window) const {
   content::WebContents* contents =
       GetActiveWebContentsForNativeBrowserWindow(window);
@@ -116,7 +169,7 @@ bool ChromeShellDelegate::AllowDefaultTouchActions(gfx::NativeWindow window) {
       render_widget_host_view->GetRenderWidgetHost();
   if (!render_widget_host)
     return true;
-  base::Optional<cc::TouchAction> allowed_touch_action =
+  absl::optional<cc::TouchAction> allowed_touch_action =
       render_widget_host->GetAllowedTouchAction();
   return allowed_touch_action.has_value()
              ? *allowed_touch_action != cc::TouchAction::kNone
@@ -237,4 +290,92 @@ int ChromeShellDelegate::GetUiDevToolsPort() const {
   return ChromeBrowserMainExtraPartsViews::Get()
       ->GetUiDevToolsServerInstance()
       ->port();
+}
+
+bool ChromeShellDelegate::IsLoggingRedirectDisabled() const {
+  if (disable_logging_redirect_for_testing.has_value())
+    return disable_logging_redirect_for_testing.value();
+
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kDisableLoggingRedirect);
+}
+
+base::FilePath ChromeShellDelegate::GetPrimaryUserDownloadsFolder() const {
+  const user_manager::User* primary_user =
+      user_manager::UserManager::Get()->GetPrimaryUser();
+  if (!primary_user)
+    return base::FilePath();
+
+  Profile* user_profile =
+      ash::ProfileHelper::Get()->GetProfileByUser(primary_user);
+  if (user_profile)
+    return file_manager::util::GetDownloadsFolderForProfile(user_profile);
+
+  return base::FilePath();
+}
+
+std::unique_ptr<full_restore::AppLaunchInfo>
+ChromeShellDelegate::GetAppLaunchDataForDeskTemplate(
+    aura::Window* window) const {
+  if (!IsWindowSupportedForDeskTemplate(window))
+    return nullptr;
+
+  const user_manager::User* active_user =
+      user_manager::UserManager::Get()->GetActiveUser();
+  DCHECK(active_user);
+  Profile* user_profile =
+      ash::ProfileHelper::Get()->GetProfileByUser(active_user);
+  if (!user_profile)
+    return nullptr;
+
+  // Get |full_restore_data| from FullRestoreSaveHandler which contains all
+  // restoring information for all apps running on the device.
+  const ::full_restore::RestoreData* full_restore_data =
+      ::full_restore::FullRestoreSaveHandler::GetInstance()->GetRestoreData(
+          user_profile->GetPath());
+  DCHECK(full_restore_data);
+
+  const std::string* const app_id = window->GetProperty(ash::kAppIDKey);
+  DCHECK(app_id);
+  const int32_t window_id = window->GetProperty(full_restore::kWindowIdKey);
+  std::unique_ptr<full_restore::AppLaunchInfo> app_launch_info =
+      std::make_unique<full_restore::AppLaunchInfo>(*app_id, window_id);
+  auto* tab_strip_model = GetTabstripModelForWindowIfAny(window);
+  if (tab_strip_model) {
+    app_launch_info->urls = GetURLsIfApplicable(tab_strip_model);
+    app_launch_info->active_tab_index = tab_strip_model->active_index();
+  }
+
+  // Read all other relevant app launching information from
+  // |app_restore_data| to |app_launch_info|.
+  const full_restore::AppRestoreData* app_restore_data =
+      full_restore_data->GetAppRestoreData(*app_id, window_id);
+  if (app_restore_data) {
+    app_launch_info->event_flag = app_restore_data->event_flag;
+    app_launch_info->container = app_restore_data->container;
+    app_launch_info->disposition = app_restore_data->disposition;
+    app_launch_info->file_paths = app_restore_data->file_paths;
+    if (app_restore_data->intent.has_value() &&
+        app_restore_data->intent.value()) {
+      app_launch_info->intent = app_restore_data->intent.value()->Clone();
+    }
+  }
+
+  return app_launch_info;
+}
+
+void ChromeShellDelegate::OpenFeedbackPageForPersistentDesksBar() {
+  chrome::OpenFeedbackDialog(/*browser=*/nullptr,
+                             chrome::kFeedbackSourceBentoBar,
+                             /*description_template=*/"#BentoBar\n\n");
+}
+
+// static
+void ChromeShellDelegate::SetDisableLoggingRedirectForTesting(bool value) {
+  disable_logging_redirect_for_testing = value;
+}
+
+// static
+void ChromeShellDelegate::ResetDisableLoggingRedirectForTesting() {
+  disable_logging_redirect_for_testing.reset();
 }

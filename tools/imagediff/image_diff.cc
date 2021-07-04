@@ -23,13 +23,13 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/optional.h"
 #include "base/process/memory.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "tools/imagediff/image_diff_png.h"
 
 #if defined(OS_WIN)
@@ -497,7 +497,7 @@ int DiffImages(const base::FilePath& file1,
 // paths as non-wide strings anyway.
 base::FilePath FilePathFromASCII(const std::string& str) {
 #if defined(OS_WIN)
-  return base::FilePath(base::ASCIIToUTF16(str));
+  return base::FilePath(base::ASCIIToWide(str));
 #else
   return base::FilePath(str);
 #endif

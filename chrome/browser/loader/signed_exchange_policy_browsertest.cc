@@ -4,7 +4,6 @@
 
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/ssl/cert_verifier_browser_test.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -63,7 +62,7 @@ IN_PROC_BROWSER_TEST_F(SignedExchangePolicyBrowserTest, BlackList) {
   const GURL url =
       embedded_test_server()->GetURL("/sxg/test.example.org_test.sxg");
 
-  base::string16 expected_title(base::UTF8ToUTF16(inner_url.spec()));
+  std::u16string expected_title(base::UTF8ToUTF16(inner_url.spec()));
   content::WebContents* contents =
       browser()->tab_strip_model()->GetActiveWebContents();
   content::TitleWatcher title_watcher(contents, expected_title);
@@ -77,8 +76,8 @@ IN_PROC_BROWSER_TEST_F(SignedExchangePolicyBrowserTest, BlackList) {
                policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_CLOUD,
                blacklist.Clone(), nullptr);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  policy::SetEnterpriseUsersDefaults(&policies);
+#if defined(OS_CHROMEOS)
+  policy::SetEnterpriseUsersProfileDefaults(&policies);
 #endif
   policy_provider_.UpdateChromePolicy(policies);
   base::RunLoop loop;
@@ -92,7 +91,7 @@ IN_PROC_BROWSER_TEST_F(SignedExchangePolicyBrowserTest, BlackList) {
 
   ui_test_utils::NavigateToURL(browser(), url);
 
-  base::string16 blocked_page_title(base::UTF8ToUTF16("test.example.org"));
+  std::u16string blocked_page_title(u"test.example.org");
   EXPECT_EQ(blocked_page_title, contents->GetTitle());
 
   // Verify that the expected error page is being displayed.

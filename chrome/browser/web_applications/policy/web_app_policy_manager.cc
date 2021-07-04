@@ -10,17 +10,20 @@
 
 #include "base/bind.h"
 #include "base/callback_helpers.h"
+#include "base/containers/contains.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/syslog_logging.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/web_applications/components/app_registrar.h"
 #include "chrome/browser/web_applications/components/app_registry_controller.h"
 #include "chrome/browser/web_applications/components/external_install_options.h"
 #include "chrome/browser/web_applications/components/os_integration_manager.h"
 #include "chrome/browser/web_applications/components/policy/web_app_policy_constants.h"
 #include "chrome/browser/web_applications/components/web_app_constants.h"
+#include "chrome/browser/web_applications/components/web_app_id_constants.h"
 #include "chrome/browser/web_applications/components/web_app_install_utils.h"
-#include "chrome/browser/web_applications/system_web_app_manager.h"
+#include "chrome/browser/web_applications/system_web_apps/system_web_app_manager.h"
 #include "chrome/common/pref_names.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
@@ -29,7 +32,7 @@
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chromeos/policy/system_features_disable_list_policy_handler.h"
+#include "chrome/browser/chromeos/policy/handlers/system_features_disable_list_policy_handler.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
@@ -94,17 +97,17 @@ WebAppPolicyManager::WebAppPolicyManager(Profile* profile)
 WebAppPolicyManager::~WebAppPolicyManager() = default;
 
 void WebAppPolicyManager::SetSubsystems(
-    PendingAppManager* pending_app_manager,
+    ExternallyManagedAppManager* externally_managed_app_manager,
     AppRegistrar* app_registrar,
     AppRegistryController* app_registry_controller,
     SystemWebAppManager* web_app_manager,
     OsIntegrationManager* os_integration_manager) {
-  DCHECK(pending_app_manager);
+  DCHECK(externally_managed_app_manager);
   DCHECK(app_registrar);
   DCHECK(app_registry_controller);
   DCHECK(os_integration_manager);
 
-  pending_app_manager_ = pending_app_manager;
+  externally_managed_app_manager_ = externally_managed_app_manager;
   app_registrar_ = app_registrar;
   app_registry_controller_ = app_registry_controller;
   web_app_manager_ = web_app_manager;
@@ -143,9 +146,10 @@ void WebAppPolicyManager::ReinstallPlaceholderAppIfNecessary(const GURL& url) {
       (GetUrlRunOnOsLoginPolicy(install_options.install_url) ==
        RunOnOsLoginPolicy::kRunWindowed);
 
-  // If the app is not a placeholder app, PendingAppManager will ignore the
-  // request.
-  pending_app_manager_->Install(std::move(install_options), base::DoNothing());
+  // If the app is not a placeholder app, ExternallyManagedAppManager will
+  // ignore the request.
+  externally_managed_app_manager_->InstallNow(std::move(install_options),
+                                              base::DoNothing());
 }
 
 // static
@@ -168,49 +172,45 @@ void WebAppPolicyManager::InitChangeRegistrarAndRefreshPolicy() {
 
   RefreshPolicySettings();
   RefreshPolicyInstalledApps();
-  ObserveSystemDisableListPolicy();
+  ObserveDisabledSystemFeaturesPolicy();
 }
 
-void WebAppPolicyManager::OnAppsPolicyChanged() {
+void WebAppPolicyManager::OnDisableListPolicyChanged() {
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-  auto disabled_web_apps = GetDisabledWebAppsIds();
+  PopulateDisabledWebAppsIdsLists();
   std::vector<web_app::AppId> app_ids = app_registrar_->GetAppIds();
   for (const auto& id : app_ids) {
-    const bool is_disabled = base::Contains(disabled_web_apps, id);
+    const bool is_disabled = base::Contains(disabled_web_apps_, id);
     app_registry_controller_->SetAppIsDisabled(id, is_disabled);
   }
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 }
 
-std::set<SystemAppType> WebAppPolicyManager::GetDisabledSystemWebApps() const {
-  std::set<SystemAppType> disabled_system_apps;
+const std::set<SystemAppType>& WebAppPolicyManager::GetDisabledSystemWebApps()
+    const {
+  return disabled_system_apps_;
+}
 
+const std::set<AppId>& WebAppPolicyManager::GetDisabledWebAppsIds() const {
+  return disabled_web_apps_;
+}
+
+bool WebAppPolicyManager::IsWebAppInDisabledList(const AppId& app_id) const {
+  return base::Contains(GetDisabledWebAppsIds(), app_id);
+}
+
+bool WebAppPolicyManager::IsDisabledAppsModeHidden() const {
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   PrefService* const local_state = g_browser_process->local_state();
   if (!local_state)  // Sometimes it's not available in tests.
-    return disabled_system_apps;
+    return false;
 
-  const base::ListValue* disabled_system_features_pref =
-      local_state->GetList(policy::policy_prefs::kSystemFeaturesDisableList);
-  if (!disabled_system_features_pref)
-    return disabled_system_apps;
-
-  for (const auto& entry : *disabled_system_features_pref) {
-    switch (entry.GetInt()) {
-      case policy::SystemFeature::kCamera:
-        disabled_system_apps.insert(SystemAppType::CAMERA);
-        break;
-      case policy::SystemFeature::kOsSettings:
-        disabled_system_apps.insert(SystemAppType::SETTINGS);
-        break;
-      case policy::SystemFeature::kScanning:
-        disabled_system_apps.insert(SystemAppType::SCANNING);
-        break;
-    }
-  }
+  std::string disabled_mode =
+      local_state->GetString(policy::policy_prefs::kSystemFeaturesDisableMode);
+  if (disabled_mode == policy::kHiddenDisableMode)
+    return true;
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-
-  return disabled_system_apps;
+  return false;
 }
 
 void WebAppPolicyManager::RefreshPolicyInstalledApps() {
@@ -246,7 +246,7 @@ void WebAppPolicyManager::RefreshPolicyInstalledApps() {
     install_options_list.push_back(std::move(install_options));
   }
 
-  pending_app_manager_->SynchronizeInstalledApps(
+  externally_managed_app_manager_->SynchronizeInstalledApps(
       std::move(install_options_list), ExternalInstallSource::kExternalPolicy,
       base::BindOnce(&WebAppPolicyManager::OnAppsSynchronized,
                      weak_ptr_factory_.GetWeakPtr()));
@@ -313,16 +313,16 @@ void WebAppPolicyManager::ApplyPolicySettings() {
         GetUrlRunOnOsLoginPolicy(policy_installed_apps_[app_id]);
     if (policy == RunOnOsLoginPolicy::kBlocked) {
       app_registry_controller_->SetAppRunOnOsLoginMode(
-          app_id, web_app::RunOnOsLoginMode::kNotRun);
-      web_app::OsHooksResults os_hooks;
-      os_hooks[web_app::OsHookType::kRunOnOsLogin] = true;
+          app_id, RunOnOsLoginMode::kNotRun);
+      OsHooksResults os_hooks;
+      os_hooks[OsHookType::kRunOnOsLogin] = true;
       os_integration_manager_->UninstallOsHooks(app_id, os_hooks,
                                                 base::DoNothing());
     } else if (policy == RunOnOsLoginPolicy::kRunWindowed) {
       app_registry_controller_->SetAppRunOnOsLoginMode(
-          app_id, web_app::RunOnOsLoginMode::kWindowed);
-      web_app::InstallOsHooksOptions options;
-      options.os_hooks[web_app::OsHookType::kRunOnOsLogin] = true;
+          app_id, RunOnOsLoginMode::kWindowed);
+      InstallOsHooksOptions options;
+      options.os_hooks[OsHookType::kRunOnOsLogin] = true;
       os_integration_manager_->InstallOsHooks(app_id, base::DoNothing(),
                                               nullptr, options);
     }
@@ -342,7 +342,7 @@ void WebAppPolicyManager::RemoveObserver(
 }
 
 RunOnOsLoginPolicy WebAppPolicyManager::GetUrlRunOnOsLoginPolicy(
-    base::Optional<GURL> url) const {
+    absl::optional<GURL> url) const {
   if (url) {
     auto it = settings_by_url_.find(url.value());
     if (it != settings_by_url_.end())
@@ -362,7 +362,7 @@ void WebAppPolicyManager::SetRefreshPolicySettingsCompletedCallbackForTesting(
 }
 
 void WebAppPolicyManager::OnAppsSynchronized(
-    std::map<GURL, PendingAppManager::InstallResult> install_results,
+    std::map<GURL, ExternallyManagedAppManager::InstallResult> install_results,
     std::map<GURL, bool> uninstall_results) {
   is_refreshing_ = false;
 
@@ -388,14 +388,13 @@ WebAppPolicyManager::WebAppSetting::WebAppSetting() {
 bool WebAppPolicyManager::WebAppSetting::Parse(
     const base::DictionaryValue* dict,
     bool for_default_settings) {
-  std::string run_on_os_login_str;
-  if (dict->GetStringWithoutPathExpansion(kRunOnOsLogin,
-                                          &run_on_os_login_str)) {
-    if (run_on_os_login_str == kAllowed) {
+  const std::string* run_on_os_login_str = dict->FindStringKey(kRunOnOsLogin);
+  if (run_on_os_login_str) {
+    if (*run_on_os_login_str == kAllowed) {
       run_on_os_login_policy = RunOnOsLoginPolicy::kAllowed;
-    } else if (run_on_os_login_str == kBlocked) {
+    } else if (*run_on_os_login_str == kBlocked) {
       run_on_os_login_policy = RunOnOsLoginPolicy::kBlocked;
-    } else if (!for_default_settings && run_on_os_login_str == kRunWindowed) {
+    } else if (!for_default_settings && *run_on_os_login_str == kRunWindowed) {
       run_on_os_login_policy = RunOnOsLoginPolicy::kRunWindowed;
     } else {
       SYSLOG(WARNING) << "Malformed web app run on os login preference.";
@@ -410,7 +409,7 @@ void WebAppPolicyManager::WebAppSetting::ResetSettings() {
   run_on_os_login_policy = RunOnOsLoginPolicy::kAllowed;
 }
 
-void WebAppPolicyManager::ObserveSystemDisableListPolicy() {
+void WebAppPolicyManager::ObserveDisabledSystemFeaturesPolicy() {
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   PrefService* const local_state = g_browser_process->local_state();
   if (!local_state) {  // Sometimes it's not available in tests.
@@ -420,25 +419,68 @@ void WebAppPolicyManager::ObserveSystemDisableListPolicy() {
 
   local_state_pref_change_registrar_.Add(
       policy::policy_prefs::kSystemFeaturesDisableList,
-      base::BindRepeating(&WebAppPolicyManager::OnAppsPolicyChanged,
+      base::BindRepeating(&WebAppPolicyManager::OnDisableListPolicyChanged,
                           base::Unretained(this)));
-
+  local_state_pref_change_registrar_.Add(
+      policy::policy_prefs::kSystemFeaturesDisableMode,
+      base::BindRepeating(&WebAppPolicyManager::OnDisableModePolicyChanged,
+                          base::Unretained(this)));
+  // Make sure we get the right disabled mode in case it was changed before
+  // policy registration.
+  OnDisableModePolicyChanged();
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 }
 
-std::set<AppId> WebAppPolicyManager::GetDisabledWebAppsIds() const {
-  std::set<AppId> disabled_web_apps;
+void WebAppPolicyManager::OnDisableModePolicyChanged() {
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-  auto disabled_system_apps = GetDisabledSystemWebApps();
-  for (const auto& app_type : disabled_system_apps) {
-    base::Optional<AppId> app_id =
+  app_registry_controller_->UpdateAppsDisableMode();
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+}
+
+void WebAppPolicyManager::PopulateDisabledWebAppsIdsLists() {
+  disabled_system_apps_.clear();
+  disabled_web_apps_.clear();
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+  PrefService* const local_state = g_browser_process->local_state();
+  if (!local_state)  // Sometimes it's not available in tests.
+    return;
+
+  const base::ListValue* disabled_system_features_pref =
+      local_state->GetList(policy::policy_prefs::kSystemFeaturesDisableList);
+  if (!disabled_system_features_pref)
+    return;
+
+  for (const auto& entry : disabled_system_features_pref->GetList()) {
+    switch (entry.GetInt()) {
+      case policy::SystemFeature::kCamera:
+        disabled_system_apps_.insert(SystemAppType::CAMERA);
+        break;
+      case policy::SystemFeature::kOsSettings:
+        disabled_system_apps_.insert(SystemAppType::SETTINGS);
+        break;
+      case policy::SystemFeature::kScanning:
+        disabled_system_apps_.insert(SystemAppType::SCANNING);
+        break;
+      case policy::SystemFeature::kExplore:
+        disabled_system_apps_.insert(SystemAppType::HELP);
+        break;
+      case policy::SystemFeature::kCanvas:
+        disabled_web_apps_.insert(web_app::kCanvasAppId);
+        break;
+      case policy::SystemFeature::kGoogleNews:
+        disabled_web_apps_.insert(web_app::kGoogleNewsAppId);
+        break;
+    }
+  }
+
+  for (const auto& app_type : disabled_system_apps_) {
+    absl::optional<AppId> app_id =
         web_app_manager_->GetAppIdForSystemApp(app_type);
     if (app_id.has_value()) {
-      disabled_web_apps.insert(app_id.value());
+      disabled_web_apps_.insert(app_id.value());
     }
   }
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-  return disabled_web_apps;
 }
 
 }  // namespace web_app

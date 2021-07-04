@@ -18,14 +18,15 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
 #include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager.h"
+#include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager_factory.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "components/keyed_service/core/service_access_type.h"
 #include "components/prefs/pref_service.h"
-#include "components/safe_browsing/content/web_ui/safe_browsing_ui.h"
+#include "components/safe_browsing/content/browser/web_ui/safe_browsing_ui.h"
+#include "components/safe_browsing/core/browser/db/database_manager.h"
+#include "components/safe_browsing/core/browser/ping_manager.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
-#include "components/safe_browsing/core/db/database_manager.h"
-#include "components/safe_browsing/core/features.h"
-#include "components/safe_browsing/core/ping_manager.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_item_utils.h"
@@ -109,9 +110,6 @@ void AndroidTelemetryService::OnDownloadUpdated(download::DownloadItem* item) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   if (!CanSendPing(item)) {
-    // No longer interested in this |DownloadItem| since the download is
-    // not APK.
-    item->RemoveObserver(this);
     return;
   }
 
@@ -183,11 +181,17 @@ void AndroidTelemetryService::FillReferrerChain(
       web_contents
           ? ApkDownloadTelemetryIncompleteReason::COMPLETE
           : ApkDownloadTelemetryIncompleteReason::MISSING_WEB_CONTENTS);
+  SafeBrowsingNavigationObserverManager* observer_manager =
+      web_contents
+          ? SafeBrowsingNavigationObserverManagerFactory::GetForBrowserContext(
+                web_contents->GetBrowserContext())
+          : nullptr;
   SafeBrowsingNavigationObserverManager::AttributionResult result =
-      sb_service_->navigation_observer_manager()
-          ->IdentifyReferrerChainByWebContents(
-              web_contents, kAndroidTelemetryUserGestureLimit,
-              report->mutable_referrer_chain());
+      observer_manager
+          ? observer_manager->IdentifyReferrerChainByWebContents(
+                web_contents, kAndroidTelemetryUserGestureLimit,
+                report->mutable_referrer_chain())
+          : SafeBrowsingNavigationObserverManager::NAVIGATION_EVENT_NOT_FOUND;
 
   size_t referrer_chain_length = report->referrer_chain().size();
   UMA_HISTOGRAM_COUNTS_100(
@@ -202,8 +206,10 @@ void AndroidTelemetryService::FillReferrerChain(
       profile_ ? SafeBrowsingNavigationObserverManager::
                      CountOfRecentNavigationsToAppend(*profile_, result)
                : 0u;
-  sb_service_->navigation_observer_manager()->AppendRecentNavigations(
-      recent_navigations_to_collect, report->mutable_referrer_chain());
+  if (observer_manager) {
+    observer_manager->AppendRecentNavigations(recent_navigations_to_collect,
+                                              report->mutable_referrer_chain());
+  }
 }
 
 std::unique_ptr<ClientSafeBrowsingReportRequest>

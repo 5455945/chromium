@@ -48,15 +48,19 @@ import org.chromium.base.compat.ApiHelperForO;
 import org.chromium.base.library_loader.LibraryLoader;
 import org.chromium.base.library_loader.LibraryProcessType;
 import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.base.task.AsyncTask;
+import org.chromium.base.task.BackgroundOnlyAsyncTask;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.components.browser_ui.contacts_picker.ContactsPickerDialog;
 import org.chromium.components.browser_ui.photo_picker.DecoderServiceHost;
 import org.chromium.components.browser_ui.photo_picker.ImageDecoder;
+import org.chromium.components.browser_ui.photo_picker.PhotoPickerDelegateBase;
 import org.chromium.components.browser_ui.photo_picker.PhotoPickerDialog;
 import org.chromium.components.embedder_support.application.ClassLoaderContextWrapperFactory;
 import org.chromium.components.embedder_support.application.FirebaseConfig;
 import org.chromium.components.embedder_support.util.Origin;
+import org.chromium.components.payments.PaymentDetailsUpdateService;
 import org.chromium.content_public.browser.BrowserStartupController;
 import org.chromium.content_public.browser.ChildProcessCreationParams;
 import org.chromium.content_public.browser.ChildProcessLauncherHelper;
@@ -66,7 +70,6 @@ import org.chromium.content_public.browser.DeviceUtils;
 import org.chromium.content_public.browser.SelectionPopupController;
 import org.chromium.net.NetworkChangeNotifier;
 import org.chromium.ui.base.PhotoPicker;
-import org.chromium.ui.base.PhotoPickerDelegate;
 import org.chromium.ui.base.PhotoPickerListener;
 import org.chromium.ui.base.ResourceBundle;
 import org.chromium.ui.base.SelectFileDialog;
@@ -137,6 +140,8 @@ public final class WebLayerImpl extends IWebLayer.Stub {
     // Whether WebView is running in process. Set in init().
     private boolean mIsWebViewCompatMode;
 
+    private boolean mOnNativeLoadedCalled;
+
     private static class FileProviderHelper implements ContentUriUtils.FileProviderUtil {
         // Keep this variable in sync with the value defined in AndroidManifest.xml.
         private static final String API_AUTHORITY_SUFFIX =
@@ -160,13 +165,15 @@ public final class WebLayerImpl extends IWebLayer.Stub {
 
         final ValueCallback<Boolean> loadedCallback = (ValueCallback<Boolean>) ObjectWrapper.unwrap(
                 loadedCallbackWrapper, ValueCallback.class);
+        // WARNING: Ensure any method calls from this guard against the possibility of being called
+        // multiple times (see comment in loadSync()).
         BrowserStartupController.getInstance().startBrowserProcessesAsync(
                 LibraryProcessType.PROCESS_WEBLAYER,
                 /* startGpu */ true, /* startMinimalBrowser */ false,
                 new BrowserStartupController.StartupCallback() {
                     @Override
                     public void onSuccess() {
-                        onNativeLoaded(appContextWrapper);
+                        onNativeLoaded();
                         loadedCallback.onReceiveValue(true);
                     }
                     @Override
@@ -185,10 +192,17 @@ public final class WebLayerImpl extends IWebLayer.Stub {
                 LibraryProcessType.PROCESS_WEBLAYER,
                 /* singleProcess*/ false);
 
-        onNativeLoaded(appContextWrapper);
+        onNativeLoaded();
+        // WARNING: loadAsync() may be in progress, and may call methods that this does as well.
+        // Ensure any method calls from this guard against the possibility of being called multiple
+        // times.
     }
 
-    private void onNativeLoaded(IObjectWrapper appContextWrapper) {
+    private void onNativeLoaded() {
+        // This may be called multiple times, ensure processing only happens once.
+        if (mOnNativeLoadedCalled) return;
+        mOnNativeLoadedCalled = true;
+
         CrashReporterControllerImpl.getInstance().notifyNativeInitialized();
         NetworkChangeNotifier.init();
         NetworkChangeNotifier.registerToReceiveNotificationsAlways();
@@ -227,15 +241,21 @@ public final class WebLayerImpl extends IWebLayer.Stub {
             notifyWebViewRunningInProcess(remoteContext.getClassLoader());
         }
 
+        Context appContext = minimalInitForContext(
+                ObjectWrapper.unwrap(appContextWrapper, Context.class), remoteContext);
+        GmsBridge.getInstance().checkClientAppContext(appContext);
+
         // Load library in the background since it may be expensive.
         // TODO(crbug.com/1146438): Look into enabling relro sharing in browser process. It seems to
         // crash when WebView is loaded in the same process.
-        new Thread(() -> {
-            LibraryLoader.getInstance().loadNowOverrideApplicationContext(remoteContext);
-        }).start();
+        new BackgroundOnlyAsyncTask<Void>() {
+            @Override
+            protected Void doInBackground() {
+                LibraryLoader.getInstance().loadNow();
+                return null;
+            }
+        }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
 
-        Context appContext = minimalInitForContext(
-                ObjectWrapper.unwrap(appContextWrapper, Context.class), remoteContext);
         PackageInfo packageInfo = WebViewFactory.getLoadedPackageInfo();
 
         if (!CommandLine.isInitialized()) {
@@ -307,20 +327,15 @@ public final class WebLayerImpl extends IWebLayer.Stub {
                 });
 
         DecoderServiceHost.setIntentSupplier(() -> { return createImageDecoderServiceIntent(); });
-        SelectFileDialog.setPhotoPickerDelegate(new PhotoPickerDelegate() {
+        SelectFileDialog.setPhotoPickerDelegate(new PhotoPickerDelegateBase() {
             @Override
             public PhotoPicker showPhotoPicker(WindowAndroid windowAndroid,
                     PhotoPickerListener listener, boolean allowMultiple, List<String> mimeTypes) {
                 PhotoPickerDialog dialog = new PhotoPickerDialog(windowAndroid,
                         windowAndroid.getContext().get().getContentResolver(), listener,
-                        allowMultiple, /* animatedThumbnailsSupported = */ false, mimeTypes);
+                        allowMultiple, mimeTypes);
                 dialog.show();
                 return dialog;
-            }
-
-            @Override
-            public boolean supportsVideos() {
-                return false;
             }
         });
 
@@ -460,6 +475,12 @@ public final class WebLayerImpl extends IWebLayer.Stub {
     public IObjectWrapper createGooglePayDataCallbacksService() {
         StrictModeWorkaround.apply();
         return ObjectWrapper.wrap(GmsBridge.getInstance().createGooglePayDataCallbacksService());
+    }
+
+    @Override
+    public IObjectWrapper createPaymentDetailsUpdateService() {
+        StrictModeWorkaround.apply();
+        return ObjectWrapper.wrap(new PaymentDetailsUpdateService());
     }
 
     @Override

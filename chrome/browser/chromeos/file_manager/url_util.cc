@@ -9,7 +9,6 @@
 #include <memory>
 #include <utility>
 
-#include "ash/constants/ash_features.h"
 #include "base/json/json_writer.h"
 #include "base/values.h"
 #include "chrome/browser/chromeos/file_manager/app_id.h"
@@ -66,16 +65,12 @@ std::string GetDialogTypeAsString(
 }  // namespace
 
 GURL GetFileManagerMainPageUrl() {
-  if (base::FeatureList::IsEnabled(chromeos::features::kFilesJsModules)) {
-    return GetFileManagerUrl("/main_modules.html");
-  } else {
-    return GetFileManagerUrl("/main.html");
-  }
+  return GetFileManagerUrl("/main.html");
 }
 
 GURL GetFileManagerMainPageUrlWithParams(
     ui::SelectFileDialog::Type type,
-    const base::string16& title,
+    const std::u16string& title,
     const GURL& current_directory_url,
     const GURL& selection_url,
     const std::string& target_name,
@@ -93,7 +88,7 @@ GURL GetFileManagerMainPageUrlWithParams(
   arg_value.SetBoolean("showAndroidPickerApps", show_android_picker_apps);
 
   if (file_types) {
-    auto types_list = std::make_unique<base::ListValue>();
+    base::ListValue types_list;
     for (size_t i = 0; i < file_types->extensions.size(); ++i) {
       auto extensions_list = std::make_unique<base::ListValue>();
       for (size_t j = 0; j < file_types->extensions[i].size(); ++j) {
@@ -104,7 +99,7 @@ GURL GetFileManagerMainPageUrlWithParams(
       dict->Set("extensions", std::move(extensions_list));
 
       if (i < file_types->extension_description_overrides.size()) {
-        base::string16 desc = file_types->extension_description_overrides[i];
+        std::u16string desc = file_types->extension_description_overrides[i];
         dict->SetString("description", desc);
       }
 
@@ -112,9 +107,9 @@ GURL GetFileManagerMainPageUrlWithParams(
       dict->SetBoolean("selected",
                        (static_cast<size_t>(file_type_index) == (i + 1)));
 
-      types_list->Set(i, std::move(dict));
+      types_list.Set(i, std::move(dict));
     }
-    arg_value.Set("typeList", std::move(types_list));
+    arg_value.SetKey("typeList", std::move(types_list));
 
     arg_value.SetBoolean("includeAllFiles", file_types->include_all_files);
   }

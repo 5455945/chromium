@@ -29,6 +29,7 @@
 #include "cc/base/switches.h"
 #include "components/autofill/core/common/autofill_prefs.h"
 #include "components/embedder_support/android/metrics/android_metrics_service_client.h"
+#include "components/embedder_support/origin_trials/origin_trial_prefs.h"
 #include "components/metrics/metrics_pref_names.h"
 #include "components/metrics/persistent_histograms.h"
 #include "components/policy/core/browser/configuration_policy_pref_store.h"
@@ -38,6 +39,7 @@
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/pref_service_factory.h"
+#include "components/prefs/segregated_pref_store.h"
 #include "components/variations/entropy_provider.h"
 #include "components/variations/pref_names.h"
 #include "components/variations/service/safe_seed_manager.h"
@@ -45,7 +47,6 @@
 #include "content/public/common/content_switch_dependent_feature_overrides.h"
 #include "net/base/features.h"
 #include "net/nqe/pref_names.h"
-#include "services/preferences/tracked/segregated_pref_store.h"
 
 namespace android_webview {
 
@@ -106,14 +107,6 @@ GetSwitchDependentFeatureOverrides(const base::CommandLine& command_line) {
   std::vector<base::FeatureList::FeatureOverrideInfo> feature_overrides =
       content::GetSwitchDependentFeatureOverrides(command_line);
 
-  // TODO(chlily): This can be removed when Schemeful Same-Site is enabled by
-  // default.
-  if (command_line.HasSwitch(switches::kWebViewEnableModernCookieSameSite)) {
-    feature_overrides.push_back(
-        std::make_pair(std::cref(net::features::kSchemefulSameSite),
-                       base::FeatureList::OVERRIDE_ENABLE_FEATURE));
-  }
-
   return feature_overrides;
 }
 
@@ -130,6 +123,7 @@ std::unique_ptr<PrefService> AwFeatureListCreator::CreatePrefService() {
   AwMetricsServiceClient::RegisterPrefs(pref_registry.get());
   variations::VariationsService::RegisterPrefs(pref_registry.get());
 
+  embedder_support::OriginTrialPrefs::RegisterPrefs(pref_registry.get());
   AwBrowserProcess::RegisterNetworkContextLocalStatePrefs(pref_registry.get());
 
   PrefServiceFactory pref_service_factory;
@@ -148,8 +142,8 @@ std::unique_ptr<PrefService> AwFeatureListCreator::CreatePrefService() {
   // is unnnecessary. Thus validation_delegate is null.
   pref_service_factory.set_user_prefs(base::MakeRefCounted<SegregatedPrefStore>(
       base::MakeRefCounted<InMemoryPrefStore>(),
-      base::MakeRefCounted<JsonPrefStore>(GetPrefStorePath()), persistent_prefs,
-      mojo::Remote<::prefs::mojom::TrackedPreferenceValidationDelegate>()));
+      base::MakeRefCounted<JsonPrefStore>(GetPrefStorePath()),
+      std::move(persistent_prefs)));
 
   pref_service_factory.set_managed_prefs(
       base::MakeRefCounted<policy::ConfigurationPolicyPrefStore>(
@@ -210,8 +204,7 @@ void AwFeatureListCreator::SetUpFieldTrials() {
   variations::UIStringOverrider ui_string_overrider;
   variations_field_trial_creator_ =
       std::make_unique<variations::VariationsFieldTrialCreator>(
-          local_state_.get(), client_.get(), std::move(seed_store),
-          ui_string_overrider);
+          client_.get(), std::move(seed_store), ui_string_overrider);
   variations_field_trial_creator_->OverrideVariationsPlatform(
       variations::Study::PLATFORM_ANDROID_WEBVIEW);
 
@@ -222,10 +215,9 @@ void AwFeatureListCreator::SetUpFieldTrials() {
   // downloading and disseminating seeds is handled by the WebView service,
   // which itself doesn't support variations; therefore a bad seed shouldn't be
   // able to break seed downloads. See https://crbug.com/801771 for more info.
-  variations::SafeSeedManager ignored_safe_seed_manager(true,
-                                                        local_state_.get());
+  variations::SafeSeedManager ignored_safe_seed_manager(local_state_.get());
 
-  // Populate FieldTrialList. Since low_entropy_provider is null, it will fall
+  // Populate FieldTrialList. Since |low_entropy_provider| is null, it will fall
   // back to the provider we previously gave to FieldTrialList, which is a low
   // entropy provider. The X-Client-Data header is not reported on WebView, so
   // we pass an empty object as the |low_entropy_source_value|.
@@ -235,8 +227,8 @@ void AwFeatureListCreator::SetUpFieldTrials() {
       GetSwitchDependentFeatureOverrides(
           *base::CommandLine::ForCurrentProcess()),
       /*low_entropy_provider=*/nullptr, std::make_unique<base::FeatureList>(),
-      aw_field_trials_.get(), &ignored_safe_seed_manager,
-      /*low_entropy_source_value=*/base::nullopt);
+      metrics_client->metrics_state_manager(), aw_field_trials_.get(),
+      &ignored_safe_seed_manager, /*low_entropy_source_value=*/absl::nullopt);
 }
 
 void AwFeatureListCreator::CreateLocalState() {

@@ -5,11 +5,11 @@
 #include "chrome/browser/ui/views/bulleted_label_list_view.h"
 
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/canvas.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/grid_layout.h"
-#include "ui/views/metadata/metadata_header_macros.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 
 namespace {
 constexpr int kColumnSetId = 0;
@@ -48,10 +48,10 @@ END_METADATA
 }  // namespace
 
 BulletedLabelListView::BulletedLabelListView()
-    : BulletedLabelListView(std::vector<base::string16>()) {}
+    : BulletedLabelListView(std::vector<std::u16string>()) {}
 
 BulletedLabelListView::BulletedLabelListView(
-    const std::vector<base::string16>& texts) {
+    const std::vector<std::u16string>& texts) {
   views::GridLayout* layout =
       SetLayoutManager(std::make_unique<views::GridLayout>());
   views::ColumnSet* columns = layout->AddColumnSet(kColumnSetId);
@@ -70,7 +70,7 @@ BulletedLabelListView::BulletedLabelListView(
 
 BulletedLabelListView::~BulletedLabelListView() {}
 
-void BulletedLabelListView::AddLabel(const base::string16& text) {
+void BulletedLabelListView::AddLabel(const std::u16string& text) {
   views::GridLayout* layout =
       static_cast<views::GridLayout*>(GetLayoutManager());
   layout->StartRow(views::GridLayout::kFixedSize, kColumnSetId);

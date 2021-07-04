@@ -18,9 +18,10 @@ import androidx.browser.customtabs.CustomTabsService;
 import androidx.browser.customtabs.CustomTabsSessionToken;
 
 import org.chromium.base.Log;
-import org.chromium.chrome.browser.browserservices.BrowserServicesIntentDataProvider;
 import org.chromium.chrome.browser.browserservices.SessionDataHolder;
 import org.chromium.chrome.browser.browserservices.SessionHandler;
+import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
+import org.chromium.chrome.browser.browserservices.intents.CustomButtonParams;
 import org.chromium.chrome.browser.browserservices.verification.OriginVerifier;
 import org.chromium.chrome.browser.customtabs.content.CustomTabActivityTabProvider;
 import org.chromium.chrome.browser.customtabs.content.CustomTabIntentHandler;
@@ -121,7 +122,7 @@ public class CustomTabSessionHandler implements SessionHandler, StartStopWithNat
     @Nullable
     public String getCurrentUrl() {
         Tab tab = mTabProvider.getTab();
-        return tab == null ? null : tab.getUrlString();
+        return tab == null ? null : tab.getUrl().getSpec();
     }
 
     @Override

@@ -46,13 +46,15 @@ class WebContentsObserverConsistencyChecker
   void RenderFrameDeleted(RenderFrameHost* render_frame_host) override;
   void RenderFrameHostChanged(RenderFrameHost* old_host,
                               RenderFrameHost* new_host) override;
-  void FrameDeleted(RenderFrameHost* render_frame_host) override;
+  void FrameDeleted(int frame_tree_node_id) override;
   void DidStartNavigation(NavigationHandle* navigation_handle) override;
   void DidRedirectNavigation(NavigationHandle* navigation_handle) override;
   void ReadyToCommitNavigation(NavigationHandle* navigation_handle) override;
   void DidFinishNavigation(NavigationHandle* navigation_handle) override;
-  void DocumentAvailableInMainFrame() override;
-  void DocumentOnLoadCompletedInMainFrame() override;
+  void DocumentAvailableInMainFrame(
+      RenderFrameHost* render_frame_host) override;
+  void DocumentOnLoadCompletedInMainFrame(
+      RenderFrameHost* render_frame_host) override;
   void DOMContentLoaded(RenderFrameHost* render_frame_host) override;
   void DidFinishLoad(RenderFrameHost* render_frame_host,
                      const GURL& validated_url) override;
@@ -80,6 +82,8 @@ class WebContentsObserverConsistencyChecker
   void DidStopLoading() override;
 
  private:
+  class TestInputEventObserver;
+
   explicit WebContentsObserverConsistencyChecker(WebContents* web_contents);
 
   std::string Format(RenderFrameHost* render_frame_host);
@@ -91,6 +95,9 @@ class WebContentsObserverConsistencyChecker
   void EnsureStableParentValue(RenderFrameHost* render_frame_host);
   bool HasAnyChildren(RenderFrameHost* render_frame_host);
 
+  void AddInputEventObserver(RenderFrameHost* render_frame_host);
+  void RemoveInputEventObserver(RenderFrameHost* render_frame_host);
+
   std::map<int64_t, RenderFrameHost*> ready_to_commit_hosts_;
   std::set<GlobalRoutingID> current_hosts_;
   std::set<GlobalRoutingID> live_routes_;
@@ -99,8 +106,13 @@ class WebContentsObserverConsistencyChecker
   std::set<NavigationHandle*> ongoing_navigations_;
   std::vector<MediaPlayerId> active_media_players_;
 
+  std::map<RenderFrameHost*, std::unique_ptr<TestInputEventObserver>>
+      input_observer_map_;
+
   // Remembers parents to make sure RenderFrameHost::GetParent() never changes.
   std::map<GlobalRoutingID, GlobalRoutingID> parent_ids_;
+
+  std::set<int> frame_tree_node_ids_;
 
   bool is_loading_;
 

@@ -19,10 +19,8 @@
 #include "base/memory/weak_ptr.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/no_destructor.h"
-#include "base/optional.h"
 #include "base/process/process_handle.h"
 #include "base/single_thread_task_runner.h"
-#include "base/stl_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/post_task.h"
 #include "build/build_config.h"
@@ -46,6 +44,7 @@
 #include "services/service_manager/service_manager.h"
 #include "services/service_manager/service_process_host.h"
 #include "services/service_manager/service_process_launcher.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/base/buildflags.h"
 #include "ui/base/ui_base_features.h"
 
@@ -112,7 +111,7 @@ class ContentChildServiceProcessHost
   mojo::PendingRemote<service_manager::mojom::Service> Launch(
       const service_manager::Identity& identity,
       sandbox::policy::SandboxType sandbox_type,
-      const base::string16& display_name,
+      const std::u16string& display_name,
       LaunchCallback callback) override {
     // Start a new process for this service.
     mojo::PendingRemote<service_manager::mojom::Service> remote;
@@ -141,7 +140,7 @@ class ServiceExecutableProcessHost
   mojo::PendingRemote<service_manager::mojom::Service> Launch(
       const service_manager::Identity& identity,
       sandbox::policy::SandboxType sandbox_type,
-      const base::string16& display_name,
+      const std::u16string& display_name,
       LaunchCallback callback) override {
     // TODO(https://crbug.com/781334): Support sandboxing.
     return launcher_.Start(identity, sandbox::policy::SandboxType::kNoSandbox,
@@ -303,7 +302,7 @@ ServiceManagerContext::ServiceManagerContext(
   manifests.push_back(GetBrowserManifest());
   manifests.push_back(GetSystemManifest(cast_content_browser_client_));
   for (auto& manifest : manifests) {
-    base::Optional<service_manager::Manifest> overlay =
+    absl::optional<service_manager::Manifest> overlay =
         cast_content_browser_client_->GetServiceManifestOverlay(
             manifest.service_name);
     if (overlay)

@@ -4,6 +4,10 @@
 
 #include "chrome/browser/ui/global_media_controls/cast_media_notification_item.h"
 
+#include <memory>
+#include <string>
+#include <utility>
+
 #include "chrome/browser/bitmap_fetcher/bitmap_fetcher.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/media_message_center/media_notification_controller.h"
@@ -80,6 +84,8 @@ class MockMediaNotificationView
                void(const media_session::MediaMetadata&));
   MOCK_METHOD1(UpdateWithMediaActions,
                void(const base::flat_set<MediaSessionAction>&));
+  MOCK_METHOD1(UpdateWithMediaPosition,
+               void(const media_session::MediaPosition&));
   MOCK_METHOD1(UpdateWithMediaArtwork, void(const gfx::ImageSkia&));
   MOCK_METHOD1(UpdateWithFavicon, void(const gfx::ImageSkia&));
   MOCK_METHOD1(UpdateWithVectorIcon, void(const gfx::VectorIcon& vector_icon));
@@ -101,8 +107,9 @@ class MockSessionController : public CastMediaSessionController {
 class CastMediaNotificationItemTest : public testing::Test {
  public:
   void SetUp() override {
-    auto session_controller = std::make_unique<MockSessionController>(
-        mojo::Remote<media_router::mojom::MediaController>());
+    auto session_controller =
+        std::make_unique<testing::NiceMock<MockSessionController>>(
+            mojo::Remote<media_router::mojom::MediaController>());
     session_controller_ = session_controller.get();
     item_ = std::make_unique<CastMediaNotificationItem>(
         CreateMediaRoute(), &notification_controller_,
@@ -149,9 +156,12 @@ class CastMediaNotificationItemTest : public testing::Test {
 
   content::BrowserTaskEnvironment task_environment_;
   TestingProfile profile_;
-  MockMediaNotificationController notification_controller_;
+  testing::NiceMock<MockMediaNotificationController> notification_controller_;
   MockSessionController* session_controller_ = nullptr;
-  MockMediaNotificationView view_;
+  // This needs to be a NiceMock, because the uninteresting mock function calls
+  // slow down the tests enough to make
+  // CastMediaNotificationItemTest.MediaPositionUpdate flaky.
+  testing::NiceMock<MockMediaNotificationView> view_;
   std::unique_ptr<CastMediaNotificationItem> item_;
 };
 
@@ -292,4 +302,68 @@ TEST_F(CastMediaNotificationItemTest, DownloadImage) {
   SkBitmap bitmap;
   EXPECT_CALL(view_, UpdateWithMediaArtwork(_));
   bitmap_fetcher_delegate->OnFetchComplete(image_url, &bitmap);
+}
+
+TEST_F(CastMediaNotificationItemTest, MediaPositionUpdate) {
+  SetView();
+  const base::TimeDelta duration = base::TimeDelta::FromSeconds(100);
+  const base::TimeDelta current_time = base::TimeDelta::FromSeconds(70);
+
+  {
+    // Test that media position updated correctly with playing video.
+    auto status = MediaStatus::New();
+    status->play_state = MediaStatus::PlayState::PLAYING;
+    status->duration = duration;
+    status->current_time = current_time;
+    EXPECT_CALL(view_, UpdateWithMediaPosition(_))
+        .WillOnce([&](const media_session::MediaPosition& position) {
+          EXPECT_EQ(1.0, position.playback_rate());
+          EXPECT_EQ(duration, position.duration());
+          EXPECT_NEAR(current_time.InSecondsF(),
+                      position.GetPosition().InSecondsF(), 1e-3);
+        });
+    item_->OnMediaStatusUpdated(std::move(status));
+  }
+
+  {
+    // Test that media position updated correctly with paused video.
+    auto status = MediaStatus::New();
+    status->play_state = MediaStatus::PlayState::PAUSED;
+    status->duration = duration;
+    status->current_time = current_time;
+    EXPECT_CALL(view_, UpdateWithMediaPosition(_))
+        .WillOnce([&](const media_session::MediaPosition& position) {
+          EXPECT_EQ(0.0, position.playback_rate());
+          EXPECT_EQ(duration, position.duration());
+          EXPECT_NEAR(current_time.InSecondsF(),
+                      position.GetPosition().InSecondsF(), 1e-3);
+        });
+    item_->OnMediaStatusUpdated(std::move(status));
+  }
+
+  {
+    // Test that media position should not be updated with 0 duration.
+    auto status = MediaStatus::New();
+    status->play_state = MediaStatus::PlayState::PLAYING;
+    status->duration = base::TimeDelta();
+    status->current_time = current_time;
+    EXPECT_CALL(view_, UpdateWithMediaPosition(_)).Times(0);
+    item_->OnMediaStatusUpdated(std::move(status));
+  }
+
+  {
+    // Test that current time should not exceed duration.
+    auto status = MediaStatus::New();
+    status->play_state = MediaStatus::PlayState::PLAYING;
+    status->duration = duration;
+    status->current_time = duration + current_time;
+    EXPECT_CALL(view_, UpdateWithMediaPosition(_))
+        .WillOnce([&](const media_session::MediaPosition& position) {
+          EXPECT_EQ(1.0, position.playback_rate());
+          EXPECT_EQ(duration, position.duration());
+          EXPECT_NEAR(duration.InSecondsF(),
+                      position.GetPosition().InSecondsF(), 1e-3);
+        });
+    item_->OnMediaStatusUpdated(std::move(status));
+  }
 }

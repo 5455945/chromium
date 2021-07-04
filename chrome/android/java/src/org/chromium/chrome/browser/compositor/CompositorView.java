@@ -341,12 +341,15 @@ public class CompositorView
      * Enables/disables immersive AR overlay mode, a variant of overlay video mode.
      * @param enabled Whether to enter or leave overlay immersive ar mode.
      */
-    public void setOverlayImmersiveArMode(boolean enabled) {
+    public void setOverlayImmersiveArMode(boolean enabled, boolean domSurfaceNeedsConfiguring) {
         // Disable SurfaceControl for the duration of the session. This works around a black
         // screen after activating the screen keyboard (IME), see https://crbug.com/1166248.
         mIsInXr = enabled;
 
-        setOverlayVideoMode(enabled);
+        if (domSurfaceNeedsConfiguring) {
+            setOverlayVideoMode(enabled);
+        }
+
         CompositorViewJni.get().setOverlayImmersiveArMode(
                 mNativeCompositorView, CompositorView.this, enabled);
         // Entering or exiting AR mode can leave SurfaceControl in a confused state, especially if
@@ -410,8 +413,16 @@ public class CompositorView
     }
 
     @Override
-    public void surfaceDestroyed(Surface surface) {
+    public void surfaceDestroyed(Surface surface, boolean androidSurfaceDestroyed) {
         if (mNativeCompositorView == 0) return;
+
+        // When we switch from Chrome to other app we can't detach child surface controls because it
+        // leads to a visible hole: b/157439199. To avoid this we don't detach surfaces if the
+        // surface is going to be destroyed, they will be detached and freed by OS.
+        if (androidSurfaceDestroyed) {
+            CompositorViewJni.get().preserveChildSurfaceControls(
+                    mNativeCompositorView, CompositorView.this);
+        }
 
         CompositorViewJni.get().surfaceDestroyed(mNativeCompositorView, CompositorView.this);
     }
@@ -673,5 +684,6 @@ public class CompositorView
         void cacheBackBufferForCurrentSurface(long nativeCompositorView, CompositorView caller);
         void evictCachedBackBuffer(long nativeCompositorView, CompositorView caller);
         void onTabChanged(long nativeCompositorView, CompositorView caller);
+        void preserveChildSurfaceControls(long nativeCompositorView, CompositorView caller);
     }
 }

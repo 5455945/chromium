@@ -18,7 +18,6 @@ import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.gsa.GSAState;
 import org.chromium.chrome.browser.lens.LensController;
 import org.chromium.chrome.browser.lens.LensEntryPoint;
-import org.chromium.chrome.browser.lens.LensIntentParams;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.components.externalauth.ExternalAuthUtils;
@@ -43,7 +42,6 @@ public class LensUtils {
     private static final String PAGE_URI_KEY = "PageUrl";
     private static final String VARIATION_ID_URI_KEY = "Gid";
     private static final String LENS_INTENT_TYPE_KEY = "lens_intent_type";
-    private static final String REQUIRE_ACCOUNT_DIALOG_KEY = "requiresConfirmation";
 
     private static final String MIN_AGSA_VERSION_FEATURE_PARAM_NAME = "minAgsaVersionName";
     private static final String MIN_AGSA_VERSION_SHOPPING_FEATURE_PARAM_NAME =
@@ -52,8 +50,8 @@ public class LensUtils {
             "minAgsaVersionForDirectIntent";
     private static final String MIN_AGSA_VERSION_DIRECT_INTENT_SDK_FEATURE_PARAM_NAME =
             "minAgsaVersionForDirectIntentSdk";
-    private static final String USE_SEARCH_BY_IMAGE_TEXT_FEATURE_PARAM_NAME =
-            "useSearchByImageText";
+    private static final String MIN_AGSA_VERSION_LENS_INTENT_API_FEATURE_PARAM_NAME =
+            "minAgsaVersionForLensIntentApi";
     private static final String LENS_SHOPPING_ALLOWLIST_ENTRIES_FEATURE_PARAM_NAME =
             "allowlistEntries";
     private static final String LENS_SHOPPING_URL_PATTERNS_FEATURE_PARAM_NAME =
@@ -74,8 +72,8 @@ public class LensUtils {
     private static final String MIN_AGSA_VERSION_NAME_FOR_LENS_CHROME_SHOPPING_INTENT = "11.16";
     private static final String MIN_AGSA_VERSION_NAME_FOR_LENS_DIRECT_INTENT = "11.34";
     private static final String MIN_AGSA_VERSION_NAME_FOR_LENS_DIRECT_INTENT_SDK = "11.39.7";
+    private static final String MIN_AGSA_VERSION_NAME_FOR_LENS_INTENT_API = "12.10";
     private static final int LENS_INTENT_TYPE_LENS_CHROME_SHOPPING = 18;
-    private static final String LENS_SHOPPING_FEATURE_FLAG_VARIANT_NAME = "lensShopVariation";
     private static final String LENS_DEFAULT_SHOPPING_URL_PATTERNS =
             "^https://www.google.com/shopping/.*|^https://www.google.com/.*tbm=shop.*";
 
@@ -257,6 +255,27 @@ public class LensUtils {
     }
 
     /**
+     * Gets the minimum AGSA version required to support the LensIntent APIs
+     * on this device. Takes the value from a server provided value if a
+     * field trial is active but otherwise will take the value from a client side
+     * default (unless the lens feature is not enabled at all, in which case return
+     * an empty string).
+     *
+     * @return The minimum version name string or an empty string if not available.
+     */
+    public static String getMinimumAgsaVersionForLensIntentApiSupport() {
+        final String serverProvidedMinAgsaVersion = ChromeFeatureList.getFieldTrialParamByFeature(
+                ChromeFeatureList.GOOGLE_LENS_SDK_INTENT,
+                MIN_AGSA_VERSION_LENS_INTENT_API_FEATURE_PARAM_NAME);
+        if (TextUtils.isEmpty(serverProvidedMinAgsaVersion)) {
+            // Falls into this block if the user enabled the feature using chrome://flags
+            // and the param was not set by the server.
+            return MIN_AGSA_VERSION_NAME_FOR_LENS_INTENT_API;
+        }
+        return serverProvidedMinAgsaVersion;
+    }
+
+    /**
      * Checks whether the device is below Android O. We restrict to these versions
      * to limit to OS"s where image processing vulnerabilities can be retroactively
      * fixed if they are discovered in the future.
@@ -299,16 +318,11 @@ public class LensUtils {
      *                             image.
      * @param pageUrl              The url of the top level frame of the page.
      * @param lensEntryPoint       The entry point that launches the Lens app.
-     * @param requiresConfirmation A boolean to indicate whether the request is from one of the
-     *                             entry points that are not explicitly specified with
-     *                             "Google Lens". We will show a confirmation dialog for this
-     *                             request if true.
      * @return The intent to Google Lens.
      */
     public static Intent getShareWithGoogleLensIntent(final Context context, final Uri imageUri,
             final boolean isIncognito, final long currentTimeNanos, final GURL srcUrl,
-            final String titleOrAltText, final GURL pageUrl, @LensEntryPoint int lensEntryPoint,
-            boolean requiresConfirmation) {
+            final String titleOrAltText, final GURL pageUrl, @LensEntryPoint int lensEntryPoint) {
         int lensIntentType = lensEntryPoint == LensEntryPoint.CONTEXT_MENU_SHOP_MENU_ITEM
                 ? LensUtils.getLensShoppingIntentType()
                 : 0;
@@ -335,11 +349,6 @@ public class LensUtils {
             if (lensIntentType > 0) {
                 lensUriBuilder.appendQueryParameter(
                         LENS_INTENT_TYPE_KEY, Integer.toString(lensIntentType));
-            }
-
-            if (requiresConfirmation) {
-                lensUriBuilder.appendQueryParameter(
-                        REQUIRE_ACCOUNT_DIALOG_KEY, Boolean.toString(requiresConfirmation));
             }
 
             if (!isIncognito) {
@@ -409,44 +418,6 @@ public class LensUtils {
         }
     }
 
-    /**
-     * Build a LensIntentParams object from the provided parameters in order to intent into Lens.
-     *
-     * @param imageUri         The content provider URI generated by chrome (or
-     *                         empty URI) if only resolving the activity.
-     * @param isIncognito      Whether the current tab is in incognito mode.
-     * @param srcUrl           The 'src' attribute of the image.
-     * @param titleOrAltText   The 'title' or, if empty, the 'alt' attribute of the
-     *                         image.
-     * @param pageUrl          The url of the top level frame of the page.
-     * @param lensEntryPoint   The entry point that launches the Lens app.
-     * @param requiresConfirmation A boolean to indicate whether the request is from one of the
-     *                             entry points that are not explicitly specified with
-     *                             "Google Lens". We will show a confirmation dialog for this
-     *                             request if true.
-     * @return The intent parameters to intent to Google Lens.
-     */
-    public static LensIntentParams buildLensIntentParams(final Uri imageUri,
-            final boolean isIncognito, final String srcUrl, final String titleOrAltText,
-            final String pageUrl, @LensEntryPoint int lensEntryPoint,
-            boolean requiresConfirmation) {
-        // TODO(yusuyoutube): deprecate lensIntentType once we have the mapping for LensEntryPoint
-        // to intent type in the Lens closed source repository.
-        int lensIntentType = lensEntryPoint == LensEntryPoint.CONTEXT_MENU_SHOP_MENU_ITEM
-                ? LensUtils.getLensShoppingIntentType()
-                : 0;
-
-        LensIntentParams.Builder intentParamsBuilder =
-                new LensIntentParams.Builder(lensEntryPoint, isIncognito);
-        return intentParamsBuilder.withImageUri(imageUri)
-                .withRequiresConfirmation(requiresConfirmation)
-                .withIntentType(lensIntentType)
-                .withImageTitleOrAltText(titleOrAltText)
-                .withSrcUrl(srcUrl)
-                .withPageUrl(pageUrl)
-                .build();
-    }
-
     public static boolean isGoogleLensFeatureEnabled(boolean isIncognito) {
         return ChromeFeatureList.isEnabled(ChromeFeatureList.CONTEXT_MENU_SEARCH_WITH_GOOGLE_LENS)
                 && !(isIncognito
@@ -456,14 +427,24 @@ public class LensUtils {
     }
 
     public static boolean isGoogleLensShoppingFeatureEnabled(boolean isIncognito) {
-        return (useLensWithShopSimilarProducts() || useLensWithShopImageWithGoogleLens()
-                       || useLensWithSearchSimilarProducts())
-                && !(isIncognito
-                        && ChromeFeatureList.getFieldTrialParamByFeatureAsBoolean(
-                                ChromeFeatureList.CONTEXT_MENU_SHOP_WITH_GOOGLE_LENS,
-                                DISABLE_ON_INCOGNITO_PARAM_NAME, true))
-                // Dont enable both the chip and the shopping menu item.
-                && !ChromeFeatureList.isEnabled(ChromeFeatureList.CONTEXT_MENU_GOOGLE_LENS_CHIP);
+        if (!ChromeFeatureList.isEnabled(ChromeFeatureList.CONTEXT_MENU_SHOP_WITH_GOOGLE_LENS)) {
+            return false;
+        }
+
+        // Dont enable both the chip and the shopping menu item.
+        if (ChromeFeatureList.isEnabled(ChromeFeatureList.CONTEXT_MENU_GOOGLE_LENS_CHIP)) {
+            return false;
+        }
+
+        // Disable on Incognito.
+        if (isIncognito
+                && ChromeFeatureList.getFieldTrialParamByFeatureAsBoolean(
+                        ChromeFeatureList.CONTEXT_MENU_SHOP_WITH_GOOGLE_LENS,
+                        DISABLE_ON_INCOGNITO_PARAM_NAME, true)) {
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -487,8 +468,10 @@ public class LensUtils {
     /**
      * Enables the starting of LenActivity directly, rather than going through the Lens
      * session running in AGSA. Also checks if the required AGSA version for direct intent
-     * is below or equal to the provided version.
+     * is below or equal to the provided version. This feature will not be launched and is
+     * experimental.
      */
+    @Deprecated
     public static boolean useDirectIntentSdkIntegration(final Context context) {
         // TODO(https://crbug.com/1146591): Refactor GSA state checks to avoid multiple version
         // grabs.
@@ -503,34 +486,20 @@ public class LensUtils {
     }
 
     /**
-     * Whether to display the lens menu item with the search by image text
+     * Enables the starting of LenActivity via LensIntent API, rather than using a deeplink or
+     * bundle clients via SDK. This will allow Chrome to share the intent library with other
+     * surfaces, while still entering LensActivity directly.
      */
-    public static boolean useLensWithSearchByImageText() {
-        return ChromeFeatureList.getFieldTrialParamByFeatureAsBoolean(
-                ChromeFeatureList.CONTEXT_MENU_SEARCH_WITH_GOOGLE_LENS,
-                USE_SEARCH_BY_IMAGE_TEXT_FEATURE_PARAM_NAME, false);
-    }
-
-    /**
-     * Whether to display the lens menu item shop similar products. only one of the
-     * 3 params should be set to true: useLensWithShopSimilarProducts,
-     * useLensWithShopImageWithGoogleLens and useLensWithShopImageWithGoogleLens.
-     */
-    public static boolean useLensWithShopSimilarProducts() {
-        String variation = ChromeFeatureList.getFieldTrialParamByFeature(
-                ChromeFeatureList.CONTEXT_MENU_SHOP_WITH_GOOGLE_LENS,
-                LENS_SHOPPING_FEATURE_FLAG_VARIANT_NAME);
-        return variation.equals("ShopSimilarProducts");
-    }
-
-    /**
-     * Whether to display the lens menu item shop image with google lens.
-     */
-    public static boolean useLensWithShopImageWithGoogleLens() {
-        String variation = ChromeFeatureList.getFieldTrialParamByFeature(
-                ChromeFeatureList.CONTEXT_MENU_SHOP_WITH_GOOGLE_LENS,
-                LENS_SHOPPING_FEATURE_FLAG_VARIANT_NAME);
-        return variation.equals("ShopImageWithGoogleLens");
+    public static boolean useLensIntentApi() {
+        // TODO(https://crbug.com/1146591): Refactor GSA state checks to avoid multiple version
+        // grabs.
+        String agsaVersionName = sFakeInstalledAgsaVersion != null
+                ? sFakeInstalledAgsaVersion
+                : getLensActivityVersionNameIfAvailable(ContextUtils.getApplicationContext());
+        return ChromeFeatureList.isEnabled(ChromeFeatureList.GOOGLE_LENS_SDK_INTENT)
+                && !GSAState.getInstance(ContextUtils.getApplicationContext())
+                            .isAgsaVersionBelowMinimum(agsaVersionName,
+                                    getMinimumAgsaVersionForLensIntentApiSupport());
     }
 
     /**
@@ -559,21 +528,6 @@ public class LensUtils {
         return ChromeFeatureList.getFieldTrialParamByFeatureAsBoolean(
                 ChromeFeatureList.CONTEXT_MENU_GOOGLE_LENS_CHIP,
                 ORDER_SHARE_IMAGE_BEFORE_LENS_PARAM_NAME, false);
-    }
-
-    /**
-     * Whether to display the lens menu item search similar products.
-     */
-    public static boolean useLensWithSearchSimilarProducts() {
-        String variation = ChromeFeatureList.getFieldTrialParamByFeature(
-                ChromeFeatureList.CONTEXT_MENU_SHOP_WITH_GOOGLE_LENS,
-                LENS_SHOPPING_FEATURE_FLAG_VARIANT_NAME);
-        return variation.equals("SearchSimilarProducts");
-    }
-
-    public static boolean showBothSearchAndShopImageWithLens() {
-        return ChromeFeatureList.isEnabled(
-                ChromeFeatureList.CONTEXT_MENU_SEARCH_AND_SHOP_WITH_GOOGLE_LENS);
     }
 
     /**

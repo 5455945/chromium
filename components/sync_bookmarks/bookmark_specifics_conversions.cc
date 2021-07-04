@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/guid.h"
 #include "base/hash/sha1.h"
@@ -21,7 +22,6 @@
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_node.h"
 #include "components/favicon/core/favicon_service.h"
-#include "components/sync/engine/engine_util.h"
 #include "components/sync/engine/entity_data.h"
 #include "components/sync/protocol/sync.pb.h"
 #include "components/sync_bookmarks/switches.h"
@@ -35,6 +35,9 @@ namespace {
 // Maximum number of bytes to allow in a legacy canonicalized title (must match
 // sync's internal limits; see write_node.cc).
 const int kLegacyCanonicalizedTitleLimitBytes = 255;
+
+// The list of bookmark titles which are reserved for use by the server.
+const char* const kForbiddenTitles[] = {"", ".", ".."};
 
 // Used in metrics: "Sync.InvalidBookmarkSpecifics". These values are
 // persisted to logs. Entries should not be renumbered and numeric values
@@ -54,6 +57,10 @@ void LogInvalidSpecifics(InvalidBookmarkSpecificsError error) {
   base::UmaHistogramEnumeration("Sync.InvalidBookmarkSpecifics", error);
 }
 
+void LogFaviconContainedInSpecifics(bool contains_favicon) {
+  base::UmaHistogramBoolean(
+      "Sync.BookmarkSpecificsExcludingFoldersContainFavicon", contains_favicon);
+}
 void UpdateBookmarkSpecificsMetaInfo(
     const bookmarks::BookmarkNode::MetaInfoMap* metainfo_map,
     sync_pb::BookmarkSpecifics* bm_specifics) {
@@ -82,6 +89,7 @@ void SetBookmarkFaviconFromSpecifics(
     const bookmarks::BookmarkNode* bookmark_node,
     favicon::FaviconService* favicon_service) {
   DCHECK(bookmark_node);
+  DCHECK(!bookmark_node->is_folder());
   DCHECK(favicon_service);
 
   favicon_service->AddPageNoVisitForBookmark(bookmark_node->url(),
@@ -96,10 +104,13 @@ void SetBookmarkFaviconFromSpecifics(
 
   if (icon_bytes->size() == 0 && icon_url.is_empty()) {
     // Empty icon URL and no bitmap data means no icon mapping.
+    LogFaviconContainedInSpecifics(false);
     favicon_service->DeleteFaviconMappings({bookmark_node->url()},
                                            favicon_base::IconType::kFavicon);
     return;
   }
+
+  LogFaviconContainedInSpecifics(true);
 
   if (icon_url.is_empty()) {
     // WebUI pages such as "chrome://bookmarks/" are missing a favicon URL but
@@ -166,23 +177,35 @@ std::string InferGuidForLegacyBookmark(
   return guid;
 }
 
-base::string16 NodeTitleFromSpecifics(
+bool IsForbiddenTitleWithMaybeTrailingSpaces(const std::string& title) {
+  return base::Contains(
+      kForbiddenTitles,
+      base::TrimWhitespaceASCII(title, base::TrimPositions::TRIM_TRAILING));
+}
+
+std::u16string NodeTitleFromSpecifics(
     const sync_pb::BookmarkSpecifics& specifics) {
   if (specifics.has_full_title()) {
     return base::UTF8ToUTF16(specifics.full_title());
   }
-  std::string node_title;
-  syncer::ServerNameToSyncAPIName(specifics.legacy_canonicalized_title(),
-                                  &node_title);
+
+  std::string node_title = specifics.legacy_canonicalized_title();
+  if (base::EndsWith(node_title, " ") &&
+      IsForbiddenTitleWithMaybeTrailingSpaces(node_title)) {
+    // Legacy clients added an extra space to the real title, so remove it here.
+    // See also FullTitleToLegacyCanonicalizedTitle().
+    node_title.pop_back();
+  }
   return base::UTF8ToUTF16(node_title);
 }
 
 }  // namespace
 
 std::string FullTitleToLegacyCanonicalizedTitle(const std::string& node_title) {
-  // Adjust the title for backward compatibility with legacy clients.
-  std::string specifics_title;
-  syncer::SyncAPINameToServerName(node_title, &specifics_title);
+  // Add an extra space for backward compatibility with legacy clients.
+  std::string specifics_title =
+      IsForbiddenTitleWithMaybeTrailingSpaces(node_title) ? node_title + " "
+                                                          : node_title;
   base::TruncateUTF8ToByteSize(
       specifics_title, kLegacyCanonicalizedTitleLimitBytes, &specifics_title);
   return specifics_title;
@@ -270,20 +293,23 @@ const bookmarks::BookmarkNode* CreateBookmarkNodeFromSpecifics(
 
   bookmarks::BookmarkNode::MetaInfoMap metainfo =
       GetBookmarkMetaInfo(specifics);
-  const bookmarks::BookmarkNode* node;
+
+  const int64_t creation_time_us = specifics.creation_time_us();
+  const base::Time creation_time = base::Time::FromDeltaSinceWindowsEpoch(
+      // Use FromDeltaSinceWindowsEpoch because creation_time_us has
+      // always used the Windows epoch.
+      base::TimeDelta::FromMicroseconds(creation_time_us));
+
   if (is_folder) {
-    node = model->AddFolder(parent, index, NodeTitleFromSpecifics(specifics),
-                            &metainfo, guid);
-  } else {
-    const int64_t create_time_us = specifics.creation_time_us();
-    base::Time create_time = base::Time::FromDeltaSinceWindowsEpoch(
-        // Use FromDeltaSinceWindowsEpoch because create_time_us has
-        // always used the Windows epoch.
-        base::TimeDelta::FromMicroseconds(create_time_us));
-    node = model->AddURL(parent, index, NodeTitleFromSpecifics(specifics),
-                         GURL(specifics.url()), &metainfo, create_time, guid);
+    return model->AddFolder(parent, index, NodeTitleFromSpecifics(specifics),
+                            &metainfo, creation_time, guid);
   }
+
+  const bookmarks::BookmarkNode* node =
+      model->AddURL(parent, index, NodeTitleFromSpecifics(specifics),
+                    GURL(specifics.url()), &metainfo, creation_time, guid);
   SetBookmarkFaviconFromSpecifics(specifics, node, favicon_service);
+
   return node;
 }
 
@@ -301,17 +327,15 @@ void UpdateBookmarkNodeFromSpecifics(
   base::GUID guid = base::GUID::ParseLowercase(specifics.guid());
   DCHECK(!guid.is_valid() || guid == node->guid());
 
-  if (!node->is_folder()) {
-    model->SetURL(node, GURL(specifics.url()));
-  }
-
   model->SetTitle(node, NodeTitleFromSpecifics(specifics));
   model->SetNodeMetaInfoMap(node, GetBookmarkMetaInfo(specifics));
-  SetBookmarkFaviconFromSpecifics(specifics, node, favicon_service);
+
+  if (!node->is_folder()) {
+    model->SetURL(node, GURL(specifics.url()));
+    SetBookmarkFaviconFromSpecifics(specifics, node, favicon_service);
+  }
 }
 
-// TODO(crbug.com/1005219): Replace this function to move children between
-// parent nodes more efficiently.
 const bookmarks::BookmarkNode* ReplaceBookmarkNodeGUID(
     const bookmarks::BookmarkNode* node,
     const base::GUID& guid,
@@ -325,9 +349,9 @@ const bookmarks::BookmarkNode* ReplaceBookmarkNodeGUID(
 
   const bookmarks::BookmarkNode* new_node = nullptr;
   if (node->is_folder()) {
-    new_node =
-        model->AddFolder(node->parent(), node->parent()->GetIndexOf(node),
-                         node->GetTitle(), node->GetMetaInfoMap(), guid);
+    new_node = model->AddFolder(
+        node->parent(), node->parent()->GetIndexOf(node), node->GetTitle(),
+        node->GetMetaInfoMap(), node->date_added(), guid);
   } else {
     new_node = model->AddURL(node->parent(), node->parent()->GetIndexOf(node),
                              node->GetTitle(), node->url(),
@@ -389,6 +413,20 @@ bool IsValidBookmarkSpecifics(const sync_pb::BookmarkSpecifics& specifics,
   return is_valid;
 }
 
+base::GUID InferGuidFromLegacyOriginatorId(
+    const std::string& originator_cache_guid,
+    const std::string& originator_client_item_id) {
+  // Bookmarks created around 2016, between [M44..M52) use an uppercase GUID
+  // as originator client item ID, so it requires case-insensitive parsing.
+  base::GUID guid = base::GUID::ParseCaseInsensitive(originator_client_item_id);
+  if (guid.is_valid()) {
+    return guid;
+  }
+
+  return base::GUID::ParseLowercase(InferGuidForLegacyBookmark(
+      originator_cache_guid, originator_client_item_id));
+}
+
 bool HasExpectedBookmarkGuid(const sync_pb::BookmarkSpecifics& specifics,
                              const syncer::ClientTagHash& client_tag_hash,
                              const std::string& originator_cache_guid,
@@ -401,16 +439,9 @@ bool HasExpectedBookmarkGuid(const sync_pb::BookmarkSpecifics& specifics,
     return true;
   }
 
-  if (base::GUID::ParseCaseInsensitive(originator_client_item_id).is_valid()) {
-    // Bookmarks created around 2016, between [M44..M52) use an uppercase GUID
-    // as originator client item ID, so it needs to be lowercased to adhere to
-    // the invariant that GUIDs in specifics are canonicalized.
-    return specifics.guid() == base::ToLowerASCII(originator_client_item_id);
-  }
-
-  return specifics.guid() ==
-         InferGuidForLegacyBookmark(originator_cache_guid,
-                                    originator_client_item_id);
+  return base::GUID::ParseLowercase(specifics.guid()) ==
+         InferGuidFromLegacyOriginatorId(originator_cache_guid,
+                                         originator_client_item_id);
 }
 
 }  // namespace sync_bookmarks

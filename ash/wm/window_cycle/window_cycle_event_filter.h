@@ -8,8 +8,8 @@
 #include "ash/ash_export.h"
 #include "ash/wm/window_cycle/window_cycle_controller.h"
 #include "base/macros.h"
-#include "base/optional.h"
 #include "base/timer/timer.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/events/event_handler.h"
 #include "ui/gfx/geometry/point.h"
 
@@ -88,7 +88,7 @@ class ASH_EXPORT WindowCycleEventFilter : public ui::EventHandler {
 
   // Depending on the properties of |event|, may continuously scroll the window
   // cycle list, move the cycle view's focus ring or complete cycling.
-  bool ProcessGestureEvent(ui::GestureEvent* event);
+  void ProcessGestureEvent(ui::GestureEvent* event);
 
   // Called by ProcessMouseEvent() and OnScrollEvent(). May cycle the window
   // cycle list. Returns true if the event has been handled and should not be
@@ -131,7 +131,7 @@ class ASH_EXPORT WindowCycleEventFilter : public ui::EventHandler {
 
   // Stores the current scroll session data. If it does not exist, there is no
   // active scroll session.
-  base::Optional<ScrollData> scroll_data_;
+  absl::optional<ScrollData> scroll_data_;
 
   // When a user taps on a preview item it should move the focus ring to it.
   // However, the focus ring should not move if the user is scrolling. Store

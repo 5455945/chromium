@@ -23,10 +23,13 @@
 #include "ash/public/cpp/view_shadow.h"
 #include "ash/search_box/search_box_constants.h"
 #include "ash/strings/grit/ash_strings.h"
+#include "base/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/compositor/animation_throughput_reporter.h"
+#include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/compositor_extra/shadow.h"
 #include "ui/views/background.h"
@@ -147,10 +150,6 @@ AssistantPageView::AssistantPageView(
 AssistantPageView::~AssistantPageView() {
   if (AssistantUiController::Get())
     AssistantUiController::Get()->GetModel()->RemoveObserver(this);
-}
-
-const char* AssistantPageView::GetClassName() const {
-  return "AssistantPageView";
 }
 
 gfx::Size AssistantPageView::GetMinimumSize() const {
@@ -316,15 +315,17 @@ gfx::Size AssistantPageView::GetPreferredSearchBoxSize() const {
   return gfx::Size(kPreferredWidthDip, kSearchBoxHeightDip);
 }
 
-base::Optional<int> AssistantPageView::GetSearchBoxTop(
+absl::optional<int> AssistantPageView::GetSearchBoxTop(
     AppListViewState view_state) const {
   if (view_state == AppListViewState::kPeeking ||
       view_state == AppListViewState::kHalf) {
-    return AppListConfig::instance().search_box_fullscreen_top_padding();
+    return contents_view()
+        ->GetAppListConfig()
+        .search_box_fullscreen_top_padding();
   }
-  // For other view states, return base::nullopt so the ContentsView
+  // For other view states, return absl::nullopt so the ContentsView
   // sets the default search box widget origin.
-  return base::nullopt;
+  return absl::nullopt;
 }
 
 views::View* AssistantPageView::GetFirstFocusableView() {
@@ -400,8 +401,8 @@ void AssistantPageView::OnAssistantControllerDestroying() {
 void AssistantPageView::OnUiVisibilityChanged(
     AssistantVisibility new_visibility,
     AssistantVisibility old_visibility,
-    base::Optional<AssistantEntryPoint> entry_point,
-    base::Optional<AssistantExitPoint> exit_point) {
+    absl::optional<AssistantEntryPoint> entry_point,
+    absl::optional<AssistantExitPoint> exit_point) {
   if (!assistant_view_delegate_)
     return;
 
@@ -458,5 +459,8 @@ void AssistantPageView::MaybeUpdateAppListState(int child_height) {
   if (child_height > GetPreferredHeightForAppListState(app_list_view))
     app_list_view->SetState(AppListViewState::kHalf);
 }
+
+BEGIN_METADATA(AssistantPageView, views::View)
+END_METADATA
 
 }  // namespace ash

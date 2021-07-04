@@ -49,10 +49,27 @@ Polymer({
     showAndroidApps: Boolean,
 
     /**
+     * Whether the App Notifications page should be shown.
+     * @type {boolean}
+     */
+    showAppNotificationsRow_: {
+      type: Boolean,
+      value() {
+        return loadTimeData.getBoolean('showOsSettingsAppNotificationsRow');
+      },
+    },
+
+    /**
      * Show Plugin VM shared folders sub-page.
      * @type {boolean}
      */
     showPluginVm: Boolean,
+
+    /**
+     * Show On startup settings and sub-page.
+     * @type {boolean}
+     */
+    showStartup: Boolean,
 
     /** @private {!Map<string, string>} */
     focusConfig_: {
@@ -78,6 +95,22 @@ Polymer({
     app_: Object,
 
     /**
+     * List of options for the on startup drop-down menu.
+     * @type {!DropdownMenuOptionList}
+     */
+    onStartupOptions_: {
+      readOnly: true,
+      type: Array,
+      value() {
+        return [
+          {value: 1, name: loadTimeData.getString('onStartupAlways')},
+          {value: 2, name: loadTimeData.getString('onStartupAskEveryTime')},
+          {value: 3, name: loadTimeData.getString('onStartupDoNotRestore')},
+        ];
+      },
+    },
+
+    /**
      * Used by DeepLinkingBehavior to focus this page's deep links.
      * @type {!Set<!chromeos.settings.mojom.Setting>}
      */
@@ -86,6 +119,7 @@ Polymer({
       value: () => new Set([
         chromeos.settings.mojom.Setting.kManageAndroidPreferences,
         chromeos.settings.mojom.Setting.kTurnOnPlayStore,
+        chromeos.settings.mojom.Setting.kRestoreAppsAndPages,
       ]),
     },
   },
@@ -128,6 +162,11 @@ Polymer({
     settings.Router.getInstance().navigateTo(settings.routes.APP_MANAGEMENT);
   },
 
+  /** @private */
+  onClickAppNotifications_() {
+    settings.Router.getInstance().navigateTo(settings.routes.APP_NOTIFICATIONS);
+  },
+
   /**
    * @param {!Event} event
    * @private
@@ -163,4 +202,5 @@ Polymer({
     settings.AndroidAppsBrowserProxyImpl.getInstance().showAndroidAppsSettings(
         isKeyboardAction);
   },
+
 });

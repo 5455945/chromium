@@ -5,6 +5,7 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/run_loop.h"
+#include "base/strings/stringprintf.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "cc/base/math_util.h"
@@ -23,6 +24,7 @@
 #include "media/base/media_switches.h"
 #include "media/base/video_frame.h"
 #include "media/base/video_frame_metadata.h"
+#include "media/capture/mojom/video_capture_buffer.mojom.h"
 #include "media/capture/mojom/video_capture_types.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -30,10 +32,10 @@
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "mojo/public/cpp/system/platform_handle.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "services/video_capture/public/cpp/mock_video_frame_handler.h"
 #include "services/video_capture/public/mojom/constants.mojom.h"
 #include "services/video_capture/public/mojom/device_factory.mojom.h"
 #include "services/video_capture/public/mojom/producer.mojom.h"
-#include "services/video_capture/public/mojom/scoped_access_permission.mojom.h"
 #include "services/video_capture/public/mojom/virtual_device.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/khronos/GLES2/gl2ext.h"
@@ -50,18 +52,6 @@
 namespace content {
 
 namespace {
-
-class InvokeClosureOnDelete
-    : public video_capture::mojom::ScopedAccessPermission {
- public:
-  explicit InvokeClosureOnDelete(base::OnceClosure closure)
-      : closure_(std::move(closure)) {}
-
-  ~InvokeClosureOnDelete() override { std::move(closure_).Run(); }
-
- private:
-  base::OnceClosure closure_;
-};
 
 static const char kVideoCaptureHtmlFile[] = "/media/video_capture_test.html";
 static const char kStartVideoCaptureAndVerify[] =
@@ -142,13 +132,20 @@ class TextureDeviceExerciser : public VirtualDeviceExerciser {
       return;
     }
 
-    mojo::PendingRemote<video_capture::mojom::ScopedAccessPermission>
-        access_permission_proxy;
-    mojo::MakeSelfOwnedReceiver<video_capture::mojom::ScopedAccessPermission>(
-        std::make_unique<InvokeClosureOnDelete>(
-            base::BindOnce(&TextureDeviceExerciser::OnFrameConsumptionFinished,
-                           weak_factory_.GetWeakPtr(), dummy_frame_index_)),
-        access_permission_proxy.InitWithNewPipeAndPassReceiver());
+    if (!virtual_device_has_frame_access_handler_) {
+      mojo::PendingRemote<video_capture::mojom::VideoFrameAccessHandler>
+          pending_frame_access_handler;
+      mojo::MakeSelfOwnedReceiver<
+          video_capture::mojom::VideoFrameAccessHandler>(
+          std::make_unique<video_capture::FakeVideoFrameAccessHandler>(
+              base::BindRepeating(
+                  &TextureDeviceExerciser::OnFrameConsumptionFinished,
+                  weak_factory_.GetWeakPtr())),
+          pending_frame_access_handler.InitWithNewPipeAndPassReceiver());
+      virtual_device_->OnFrameAccessHandlerReady(
+          std::move(pending_frame_access_handler));
+      virtual_device_has_frame_access_handler_ = true;
+    }
 
     media::VideoFrameMetadata metadata;
     metadata.frame_rate = kDummyFrameRate;
@@ -162,9 +159,7 @@ class TextureDeviceExerciser : public VirtualDeviceExerciser {
     info->metadata = metadata;
 
     frame_being_consumed_[dummy_frame_index_] = true;
-    virtual_device_->OnFrameReadyInBuffer(dummy_frame_index_,
-                                          std::move(access_permission_proxy),
-                                          std::move(info));
+    virtual_device_->OnFrameReadyInBuffer(dummy_frame_index_, std::move(info));
 
     dummy_frame_index_ = (dummy_frame_index_ + 1) % 2;
   }
@@ -218,7 +213,7 @@ class TextureDeviceExerciser : public VirtualDeviceExerciser {
     CHECK_EQ(gl->GetError(), static_cast<GLenum>(GL_NO_ERROR));
   }
 
-  void OnFrameConsumptionFinished(int frame_index) {
+  void OnFrameConsumptionFinished(int32_t frame_index) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     frame_being_consumed_[frame_index] = false;
   }
@@ -226,6 +221,7 @@ class TextureDeviceExerciser : public VirtualDeviceExerciser {
   SEQUENCE_CHECKER(sequence_checker_);
   scoped_refptr<viz::ContextProvider> context_provider_;
   mojo::Remote<video_capture::mojom::TextureVirtualDevice> virtual_device_;
+  bool virtual_device_has_frame_access_handler_ = false;
   int dummy_frame_index_ = 0;
   std::vector<gpu::MailboxHolder> dummy_frame_0_mailbox_holder_;
   std::vector<gpu::MailboxHolder> dummy_frame_1_mailbox_holder_;
@@ -480,11 +476,9 @@ class WebRtcVideoCaptureServiceBrowserTest : public ContentBrowserTest {
 
     std::string javascript_to_execute = base::StringPrintf(
         kStartVideoCaptureAndVerify, video_size_.width(), video_size_.height());
-    std::string result;
     // Start video capture and wait until it started rendering
-    ASSERT_TRUE(
-        ExecuteScriptAndExtractString(shell(), javascript_to_execute, &result));
-    ASSERT_EQ("OK", result);
+    ASSERT_EQ("OK", EvalJs(shell(), javascript_to_execute,
+                           EXECUTE_SCRIPT_USE_MANUAL_REPLY));
 
     std::move(finish_test_cb).Run();
   }

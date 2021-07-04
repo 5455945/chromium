@@ -8,9 +8,11 @@ import org.chromium.base.BaseSwitches;
 import org.chromium.blink_public.common.BlinkFeatures;
 import org.chromium.cc.base.CcSwitches;
 import org.chromium.components.metrics.MetricsSwitches;
+import org.chromium.components.power_scheduler.PowerSchedulerFeatures;
 import org.chromium.components.viz.common.VizFeatures;
 import org.chromium.gpu.config.GpuFeatures;
 import org.chromium.gpu.config.GpuSwitches;
+import org.chromium.services.network.NetworkServiceFeatures;
 import org.chromium.ui.base.UiFeatures;
 
 /**
@@ -72,17 +74,14 @@ public final class ProductionSupportedFlagList {
                     "Enables modern SameSite cookie behavior: 1) SameSite=Lax by default "
                             + "(cookies without a SameSite attribute are treated as SameSite=Lax); "
                             + "2) Schemeful Same-Site (site boundaries include the URL scheme)."),
-            Flag.baseFeature(GpuFeatures.ENABLE_SHARED_IMAGE_FOR_WEBVIEW,
-                    "Enables shared images for WebView."),
             Flag.baseFeature(GpuFeatures.WEBVIEW_VULKAN,
-                    "Use Vulkan for composite. Requires VizForWebView and Android device and "
-                            + "OS support. May crash if enabled on unsupported device."),
+                    "Use Vulkan for composite. Requires Android device and OS support. May crash "
+                            + "if enabled on unsupported device."),
             Flag.baseFeature(GpuFeatures.WEBVIEW_SURFACE_CONTROL,
-                    "Use SurfaceControl. Requires VizForWebView, WebViewZeroCopyVideo and Android "
-                            + "device and OS support."),
+                    "Use SurfaceControl. Requires WebViewZeroCopyVideo and Android device and OS "
+                            + "support."),
             Flag.baseFeature(GpuFeatures.WEBVIEW_ZERO_COPY_VIDEO,
                     "Avoid extra copy for video frames when possible"),
-            Flag.baseFeature(VizFeatures.VIZ_FOR_WEBVIEW, "Enables Viz for WebView."),
             Flag.baseFeature(
                     VizFeatures.WEBVIEW_VULKAN_INTERMEDIATE_BUFFER, "For debugging vulkan"),
             Flag.baseFeature(
@@ -104,8 +103,14 @@ public final class ProductionSupportedFlagList {
                             + "feature flag until the true runtime cost can be measured."),
             Flag.baseFeature(AwFeatures.WEBVIEW_DISPLAY_CUTOUT,
                     "Enables display cutout (notch) support in WebView for Android P and above."),
-            Flag.baseFeature(AwFeatures.WEBVIEW_CPU_AFFINITY_RESTRICT_TO_LITTLE_CORES,
-                    "Forces WebView to do rendering work in little cores"),
+            Flag.baseFeature(PowerSchedulerFeatures.WEBVIEW_CPU_AFFINITY_RESTRICT_TO_LITTLE_CORES,
+                    "Forces WebView to do rendering work on LITTLE CPU cores on big.LITTLE "
+                            + "architectures"),
+            Flag.baseFeature(PowerSchedulerFeatures.WEBVIEW_POWER_SCHEDULER_THROTTLE_IDLE,
+                    "Restricts all of WebView's out-of-process renderer threads to use only LITTLE "
+                            + "CPU cores on big.LITTLE architectures when the power mode is idle. "
+                            + "WebViewCpuAffinityRestrictToLittleCores, if set, takes precedence "
+                            + "over this flag."),
             Flag.baseFeature(BlinkFeatures.WEBVIEW_ACCELERATE_SMALL_CANVASES,
                     "Accelerate all canvases in webview."),
             Flag.baseFeature(AwFeatures.WEBVIEW_MIXED_CONTENT_AUTOUPGRADES,
@@ -116,5 +121,11 @@ public final class ProductionSupportedFlagList {
                             + "This flag will only take effect on Android 11 and above."),
             Flag.baseFeature(AwFeatures.WEBVIEW_JAVA_JS_BRIDGE_MOJO,
                     "Enables the new Java/JS Bridge code path with mojo implementation."),
+            Flag.baseFeature(
+                    AwFeatures.WEBVIEW_ORIGIN_TRIALS, "Enables Origin Trials support on WebView."),
+            Flag.baseFeature(
+                    BlinkFeatures.LAYOUT_NG_TABLE, "Enables Blink's next generation table layout."),
+            Flag.baseFeature(
+                    NetworkServiceFeatures.TRUST_TOKENS, "Enables the prototype Trust Tokens API."),
     };
 }

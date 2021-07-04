@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "base/bind.h"
-#include "base/stl_util.h"
+#include "base/cxx17_backports.h"
 #include "base/synchronization/atomic_flag.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -27,6 +27,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/webui/new_tab_page/new_tab_page_ui.h"
 #include "chrome/common/pref_names.h"
 #include "components/browsing_data/content/browsing_data_helper.h"
 #include "components/content_settings/core/browser/content_settings_info.h"
@@ -244,7 +245,7 @@ void ProfileResetter::ResetCookiesAndSiteData() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!cookies_remover_);
 
-  cookies_remover_ = content::BrowserContext::GetBrowsingDataRemover(profile_);
+  cookies_remover_ = profile_->GetBrowsingDataRemover();
   cookies_remover_->AddObserver(this);
   uint64_t remove_mask = chrome_browsing_data_remover::DATA_TYPE_SITE_DATA |
                          content::BrowsingDataRemover::DATA_TYPE_CACHE;
@@ -281,7 +282,8 @@ void ProfileResetter::ResetExtensions() {
   DCHECK(extension_registry);
   std::vector<extensions::ExtensionId> extension_ids_to_reenable;
   for (const auto& extension : extension_registry->disabled_extensions()) {
-    if (extension->location() == extensions::Manifest::EXTERNAL_COMPONENT)
+    if (extension->location() ==
+        extensions::mojom::ManifestLocation::kExternalComponent)
       extension_ids_to_reenable.push_back(extension->id());
   }
   for (const auto& extension_id : extension_ids_to_reenable) {
@@ -341,6 +343,7 @@ void ProfileResetter::ResetShortcuts() {
 
 void ProfileResetter::ResetNtpCustomizations() {
   ntp_service_->ResetToDefault();
+  NewTabPageUI::ResetProfilePrefs(profile_->GetPrefs());
   MarkAsDone(NTP_CUSTOMIZATIONS);
 }
 

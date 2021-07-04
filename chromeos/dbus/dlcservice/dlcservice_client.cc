@@ -20,9 +20,7 @@
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
-#include "base/optional.h"
 #include "base/single_thread_task_runner.h"
-#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/threading/thread_task_runner_handle.h"
@@ -32,6 +30,7 @@
 #include "dbus/message.h"
 #include "dbus/object_path.h"
 #include "dbus/object_proxy.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
 namespace chromeos {
@@ -68,6 +67,7 @@ class DlcserviceErrorResponseHandler {
         dlcservice::kErrorBusy,
         dlcservice::kErrorNeedReboot,
         dlcservice::kErrorInvalidDlc,
+        dlcservice::kErrorNoImageFound,
     });
     // Lookup the dlcservice error code and provide default on invalid.
     auto itr = err_set->find(err);

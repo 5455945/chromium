@@ -18,10 +18,12 @@
 #import "ios/chrome/browser/main/browser.h"
 #import "ios/chrome/browser/ui/alert_coordinator/action_sheet_coordinator.h"
 #import "ios/chrome/browser/ui/list_model/list_item+Controller.h"
+#import "ios/chrome/browser/ui/list_model/list_item.h"
 #import "ios/chrome/browser/ui/reading_list/empty_reading_list_message_util.h"
 #import "ios/chrome/browser/ui/reading_list/reading_list_constants.h"
 #import "ios/chrome/browser/ui/reading_list/reading_list_data_sink.h"
 #import "ios/chrome/browser/ui/reading_list/reading_list_data_source.h"
+#import "ios/chrome/browser/ui/reading_list/reading_list_features.h"
 #import "ios/chrome/browser/ui/reading_list/reading_list_list_item.h"
 #import "ios/chrome/browser/ui/reading_list/reading_list_list_item_updater.h"
 #import "ios/chrome/browser/ui/reading_list/reading_list_list_view_controller_audience.h"
@@ -29,6 +31,8 @@
 #import "ios/chrome/browser/ui/reading_list/reading_list_menu_provider.h"
 #import "ios/chrome/browser/ui/reading_list/reading_list_toolbar_button_commands.h"
 #import "ios/chrome/browser/ui/reading_list/reading_list_toolbar_button_manager.h"
+#import "ios/chrome/browser/ui/settings/cells/settings_switch_cell.h"
+#import "ios/chrome/browser/ui/settings/cells/sync_switch_item.h"
 #import "ios/chrome/browser/ui/table_view/cells/table_view_text_header_footer_item.h"
 #import "ios/chrome/browser/ui/table_view/table_view_utils.h"
 #include "ios/chrome/browser/ui/ui_feature_flags.h"
@@ -42,16 +46,17 @@
 #endif
 
 namespace {
-// The image to use in the placeholder view while the table is empty.
-NSString* const kEmptyStateImage = @"reading_list_empty_state_new";
 // Types of ListItems used by the reading list UI.
 typedef NS_ENUM(NSInteger, ItemType) {
   ItemTypeHeader = kItemTypeEnumZero,
   ItemTypeItem,
+  SwitchItemType,
+  SwitchItemFooterType,
 };
 // Identifiers for sections in the reading list.
 typedef NS_ENUM(NSInteger, SectionIdentifier) {
-  SectionIdentifierUnread = kSectionIdentifierEnumZero,
+  SectionIdentifierMessagesSwitch = kSectionIdentifierEnumZero,
+  SectionIdentifierUnread,
   SectionIdentifierRead,
 };
 // Returns the ReadingListSelectionState corresponding with the provided numbers
@@ -77,8 +82,10 @@ ReadingListSelectionState GetSelectionStateForSelectedCounts(
 @property(nonatomic, readonly)
     TableViewModel<TableViewItem<ReadingListListItem>*>* tableViewModel;
 
-// Whether the UI is currently modifying the model.
-@property(nonatomic, assign) BOOL dataSourceBeingModifiedByUI;
+// The number of batch operation triggered by UI.
+// One UI operation can trigger multiple batch operation, so this can be greater
+// than 1.
+@property(nonatomic, assign) int numberOfBatchOperationInProgress;
 // Whether the data source has been modified while in editing mode.
 @property(nonatomic, assign) BOOL dataSourceModifiedWhileEditing;
 // The toolbar button manager.
@@ -248,6 +255,36 @@ ReadingListSelectionState GetSelectionStateForSelectedCounts(
 
 #pragma mark - UITableViewDataSource
 
+- (UITableViewCell*)tableView:(UITableView*)tableView
+        cellForRowAtIndexPath:(NSIndexPath*)indexPath {
+  UITableViewCell* cell = [super tableView:tableView
+                     cellForRowAtIndexPath:indexPath];
+  if ([cell isKindOfClass:[SettingsSwitchCell class]]) {
+    DCHECK(IsReadingListMessagesEnabled());
+    SettingsSwitchCell* switchCell =
+        base::mac::ObjCCastStrict<SettingsSwitchCell>(cell);
+    [switchCell.switchView addTarget:self
+                              action:@selector(switchAction:)
+                    forControlEvents:UIControlEventValueChanged];
+    TableViewItem* item = [self.tableViewModel itemAtIndexPath:indexPath];
+    switchCell.switchView.tag = item.type;
+  }
+  return cell;
+}
+
+- (UIView*)tableView:(UITableView*)tableView
+    viewForFooterInSection:(NSInteger)section {
+  UIView* footer = [super tableView:tableView viewForFooterInSection:section];
+  if ([footer isKindOfClass:[TableViewTextHeaderFooterView class]]) {
+    DCHECK(IsReadingListMessagesEnabled());
+    TableViewTextHeaderFooterView* textFooter =
+        base::mac::ObjCCastStrict<TableViewTextHeaderFooterView>(footer);
+    textFooter.subtitleLabel.numberOfLines = 0;
+    textFooter.subtitleLabel.lineBreakMode = NSLineBreakByWordWrapping;
+  }
+  return footer;
+}
+
 - (void)tableView:(UITableView*)tableView
     commitEditingStyle:(UITableViewCellEditingStyle)editingStyle
      forRowAtIndexPath:(NSIndexPath*)indexPath {
@@ -262,6 +299,13 @@ ReadingListSelectionState GetSelectionStateForSelectedCounts(
   [self deleteItemsAtIndexPaths:@[ indexPath ]
                      endEditing:NO
             removeEmptySections:NO];
+}
+
+#pragma mark - SettingsSwitchCell action
+
+- (void)switchAction:(UISwitch*)sender {
+  // TODO(crbug.com/1195978): Log metric to indicate toggle. Toggle Reading List
+  // Browser Pref.
 }
 
 #pragma mark - UITableViewDelegate
@@ -371,7 +415,7 @@ ReadingListSelectionState GetSelectionStateForSelectedCounts(
 - (void)dataSourceChanged {
   // If the model is updated when the UI is already making a change, set a flag
   // to reload the data at the end of the editing.
-  if (self.dataSourceBeingModifiedByUI) {
+  if (self.numberOfBatchOperationInProgress) {
     self.dataSourceModifiedWhileEditing = YES;
   } else {
     [self reloadData];
@@ -591,12 +635,12 @@ ReadingListSelectionState GetSelectionStateForSelectedCounts(
 
 - (void)performBatchTableViewUpdates:(void (^)(void))updates
                           completion:(void (^)(BOOL finished))completion {
-  DCHECK(!self.dataSourceBeingModifiedByUI);
-  self.dataSourceBeingModifiedByUI = YES;
+  self.numberOfBatchOperationInProgress += 1;
   void (^releaseDataSource)(BOOL) = ^(BOOL finished) {
-    // Set dataSourceBeingModifiedByUI before calling completion, as completion
-    // may trigger another change.
-    self.dataSourceBeingModifiedByUI = NO;
+    // Set numberOfBatchOperationInProgress before calling completion, as
+    // completion may trigger another change.
+    DCHECK_GT(self.numberOfBatchOperationInProgress, 0);
+    self.numberOfBatchOperationInProgress -= 1;
     if (completion) {
       completion(finished);
     }
@@ -622,6 +666,9 @@ ReadingListSelectionState GetSelectionStateForSelectedCounts(
 
 // Uses self.dataSource to load the TableViewItems into self.tableViewModel.
 - (void)loadItems {
+  if (IsReadingListMessagesEnabled()) {
+    [self addPromptToggleItemAndSection];
+  }
   NSMutableArray<id<ReadingListListItem>>* readArray = [NSMutableArray array];
   NSMutableArray<id<ReadingListListItem>>* unreadArray = [NSMutableArray array];
   [self.dataSource fillReadItems:readArray unreadItems:unreadArray];
@@ -629,6 +676,27 @@ ReadingListSelectionState GetSelectionStateForSelectedCounts(
   [self loadItemsFromArray:readArray toSection:SectionIdentifierRead];
 
   [self updateToolbarItems];
+}
+
+// Adds section and SyncSwitchItem instance for the toggle setting of showing
+// the Reading List Messages prompt.
+- (void)addPromptToggleItemAndSection {
+  TableViewModel* model = self.tableViewModel;
+  [model addSectionWithIdentifier:SectionIdentifierMessagesSwitch];
+  SyncSwitchItem* switchItem =
+      [[SyncSwitchItem alloc] initWithType:SwitchItemType];
+  switchItem.text =
+      l10n_util::GetNSString(IDS_IOS_READING_LIST_MESSAGES_SETTING_TITLE);
+  switchItem.enabled = YES;
+  [model addItem:switchItem
+      toSectionWithIdentifier:SectionIdentifierMessagesSwitch];
+
+  TableViewTextHeaderFooterItem* footerItem =
+      [[TableViewTextHeaderFooterItem alloc] initWithType:SwitchItemFooterType];
+  footerItem.subtitleText =
+      l10n_util::GetNSString(IDS_IOS_READING_LIST_MESSAGES_MODAL_DESCRIPTION);
+  [model setFooter:footerItem
+      forSectionWithIdentifier:SectionIdentifierMessagesSwitch];
 }
 
 // Adds |items| to self.tableViewModel for the section designated by
@@ -661,6 +729,8 @@ ReadingListSelectionState GetSelectionStateForSelectedCounts(
       break;
     case SectionIdentifierUnread:
       header.text = l10n_util::GetNSString(IDS_IOS_READING_LIST_UNREAD_HEADER);
+      break;
+    case SectionIdentifierMessagesSwitch:
       break;
   }
   return header;
@@ -973,13 +1043,12 @@ ReadingListSelectionState GetSelectionStateForSelectedCounts(
       }
     }
   };
-  void (^completion)(BOOL) = ^(BOOL) {
-    if (!self.dataSource.hasElements)
-      [self tableIsEmpty];
-    else
-      [self updateToolbarItems];
-  };
-  [self performBatchTableViewUpdates:updates completion:completion];
+
+  [self performBatchTableViewUpdates:updates completion:nil];
+  if (!self.dataSource.hasElements)
+    [self tableIsEmpty];
+  else
+    [self updateToolbarItems];
   return removedSectionCount;
 }
 
@@ -999,23 +1068,14 @@ ReadingListSelectionState GetSelectionStateForSelectedCounts(
   // elements may be outdated and the layout triggered by this function will
   // generate access non-existing items.
   [self.tableView reloadData];
-  if (base::FeatureList::IsEnabled(kIllustratedEmptyStates)) {
-    UIImage* emptyImage = [UIImage imageNamed:@"reading_list_empty"];
-    NSString* title =
-        l10n_util::GetNSString(IDS_IOS_READING_LIST_NO_ENTRIES_TITLE);
-    NSString* subtitle =
-        l10n_util::GetNSString(IDS_IOS_READING_LIST_NO_ENTRIES_MESSAGE);
-    [self addEmptyTableViewWithImage:emptyImage title:title subtitle:subtitle];
-    self.navigationItem.largeTitleDisplayMode =
-        UINavigationItemLargeTitleDisplayModeNever;
-  } else {
-    UIImage* emptyImage = [[UIImage imageNamed:kEmptyStateImage]
-        imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-    [self addEmptyTableViewWithAttributedMessage:GetReadingListEmptyMessage()
-                                           image:emptyImage];
-    [self updateEmptyTableViewAccessibilityLabel:
-              GetReadingListEmptyMessageA11yLabel()];
-  }
+  UIImage* emptyImage = [UIImage imageNamed:@"reading_list_empty"];
+  NSString* title =
+      l10n_util::GetNSString(IDS_IOS_READING_LIST_NO_ENTRIES_TITLE);
+  NSString* subtitle =
+      l10n_util::GetNSString(IDS_IOS_READING_LIST_NO_ENTRIES_MESSAGE);
+  [self addEmptyTableViewWithImage:emptyImage title:title subtitle:subtitle];
+  self.navigationItem.largeTitleDisplayMode =
+      UINavigationItemLargeTitleDisplayModeNever;
   self.tableView.alwaysBounceVertical = NO;
   self.tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
   [self.audience readingListHasItems:NO];

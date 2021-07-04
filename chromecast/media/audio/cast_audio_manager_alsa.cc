@@ -6,9 +6,9 @@
 
 #include <utility>
 
+#include "base/cxx17_backports.h"
 #include "base/logging.h"
 #include "base/memory/free_deleter.h"
-#include "base/stl_util.h"
 #include "base/strings/string_piece.h"
 #include "chromecast/media/api/cma_backend_factory.h"
 #include "chromecast/media/audio/audio_buildflags.h"
@@ -81,16 +81,16 @@ std::string UnwantedDeviceTypeWhenEnumerating(
 CastAudioManagerAlsa::CastAudioManagerAlsa(
     std::unique_ptr<::media::AudioThread> audio_thread,
     ::media::AudioLogFactory* audio_log_factory,
+    CastAudioManagerHelper::Delegate* delegate,
     base::RepeatingCallback<CmaBackendFactory*()> backend_factory_getter,
-    CastAudioManagerHelper::GetSessionIdCallback get_session_id_callback,
     scoped_refptr<base::SingleThreadTaskRunner> browser_task_runner,
     scoped_refptr<base::SingleThreadTaskRunner> media_task_runner,
     mojo::PendingRemote<chromecast::mojom::ServiceConnector> connector,
     bool use_mixer)
     : CastAudioManager(std::move(audio_thread),
                        audio_log_factory,
+                       delegate,
                        std::move(backend_factory_getter),
-                       std::move(get_session_id_callback),
                        browser_task_runner,
                        media_task_runner,
                        std::move(connector),

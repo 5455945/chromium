@@ -5,9 +5,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_CSSPAINT_BACKGROUND_COLOR_PAINT_WORKLET_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_CSSPAINT_BACKGROUND_COLOR_PAINT_WORKLET_H_
 
-#include <memory>
-
 #include "base/macros.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/renderer/core/animation/keyframe_effect_model.h"
 #include "third_party/blink/renderer/modules/csspaint/native_paint_worklet.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
@@ -34,14 +33,23 @@ class MODULES_EXPORT BackgroundColorPaintWorklet : public NativePaintWorklet {
   scoped_refptr<Image> Paint(const FloatSize& container_size,
                              const Node*,
                              const Vector<Color>& animated_colors,
-                             const Vector<double>& offsets);
+                             const Vector<double>& offsets,
+                             const absl::optional<double>& progress);
 
-  // Get the animated colors and offsets from the animation keyframes.
-  // Returning false meaning that we need to fall back to the main thread for
-  // the animation.
+  // Get the animated colors and offsets from the animation keyframes. Moreover,
+  // we obtain the progress of the animation from the main thread, such that if
+  // the animation failed to run on the compositor thread, we can still paint
+  // the element off the main thread with that progress + the keyframes.
+  // Returning false meaning that we cannot paint background color with
+  // BackgroundColorPaintWorklet.
+  // A side effect of this is that it will ensure a unique_id exists.
   static bool GetBGColorPaintWorkletParams(Node* node,
                                            Vector<Color>* animated_colors,
-                                           Vector<double>* offsets);
+                                           Vector<double>* offsets,
+                                           absl::optional<double>* progress);
+
+  // Shared code that is being called in multiple places.
+  static Animation* GetAnimationIfCompositable(const Element* element);
 
   // For testing purpose only.
   static sk_sp<cc::PaintRecord> ProxyClientPaintForTest(

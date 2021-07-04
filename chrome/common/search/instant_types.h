@@ -11,7 +11,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/strings/string16.h"
 #include "base/time/time.h"
 #include "components/ntp_tiles/tile_source.h"
 #include "components/ntp_tiles/tile_title_source.h"
@@ -173,7 +172,7 @@ struct InstantMostVisitedItem {
 
   // The title of the Most Visited page.  May be empty, in which case the |url|
   // is used as the title.
-  base::string16 title;
+  std::u16string title;
 
   // The external URL of the favicon associated with this page.
   GURL favicon;
@@ -195,18 +194,6 @@ struct InstantMostVisitedInfo {
   ~InstantMostVisitedInfo();
 
   std::vector<InstantMostVisitedItem> items;
-
-  // True if the source of the |items| is custom links (i.e.
-  // ntp_tiles::TileSource::CUSTOM_LINKS). Required since the source cannot be
-  // checked if |items| is empty.
-  bool items_are_custom_links = false;
-
-  // True if Most Visited functionality is enabled instead of customizable
-  // shortcuts.
-  bool use_most_visited = false;
-
-  // True if the items are visible and not hidden by the user.
-  bool is_visible = true;
 };
 
 // An InstantMostVisitedItem along with its assigned restricted ID.

@@ -10,10 +10,10 @@
 
 #include "base/bind.h"
 #include "base/callback_helpers.h"
+#include "base/cxx17_backports.h"
 #include "base/format_macros.h"
 #include "base/memory/aligned_memory.h"
 #include "base/memory/unsafe_shared_memory_region.h"
-#include "base/stl_util.h"
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
 #include "gpu/command_buffer/common/mailbox_holder.h"
@@ -291,6 +291,11 @@ TEST(VideoFrame, CreateFrame) {
   // Test an empty frame.
   frame = VideoFrame::CreateEOSFrame();
   EXPECT_TRUE(frame->metadata().end_of_stream);
+
+  // Test an video hole frame.
+  frame = VideoFrame::CreateVideoHoleFrame(base::UnguessableToken::Create(),
+                                           size, kTimestamp);
+  ASSERT_TRUE(frame);
 }
 
 TEST(VideoFrame, CreateZeroInitializedFrame) {
@@ -454,7 +459,9 @@ TEST(VideoFrame, WrapExternalGpuMemoryBuffer) {
       gpu::MailboxHolder(gpu::Mailbox::Generate(), gpu::SyncToken(), 10)};
   auto frame = VideoFrame::WrapExternalGpuMemoryBuffer(
       visible_rect, coded_size, std::move(gmb), mailbox_holders,
-      base::DoNothing::Once<const gpu::SyncToken&>(), timestamp);
+      base::DoNothing::Once<const gpu::SyncToken&,
+                            std::unique_ptr<gfx::GpuMemoryBuffer>>(),
+      timestamp);
 
   EXPECT_EQ(frame->layout().format(), PIXEL_FORMAT_NV12);
   EXPECT_EQ(frame->layout().coded_size(), coded_size);

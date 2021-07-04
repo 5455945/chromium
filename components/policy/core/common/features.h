@@ -6,6 +6,7 @@
 #define COMPONENTS_POLICY_CORE_COMMON_FEATURES_H_
 
 #include "base/feature_list.h"
+#include "base/metrics/field_trial_params.h"
 #include "build/build_config.h"
 #include "components/policy/policy_export.h"
 
@@ -32,6 +33,9 @@ POLICY_EXPORT extern const base::FeatureParam<base::TimeDelta>
 
 // Update browser device identifier during enrollment and fetching policies.
 POLICY_EXPORT extern const base::Feature kUploadBrowserDeviceIdentifier;
+
+// Enable Chrome Remote Desktop for Managed Guest Sessions and affiliated users.
+POLICY_EXPORT extern const base::Feature kCRDForManagedUserSessions;
 
 }  // namespace features
 }  // namespace policy

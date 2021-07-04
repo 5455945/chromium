@@ -7,7 +7,6 @@
 
 set noparent
 # layers
-danakj@chromium.org
 pdr@chromium.org
 wangxianzhu@chromium.org
 
@@ -24,6 +23,7 @@ vmpstr@chromium.org
 sunnyps@chromium.org
 
 # math / geometry
+dbaron@chromium.org
 flackr@chromium.org
 
 # property trees
@@ -55,7 +55,8 @@ sadrul@chromium.org
 # paint
 sunnyps@chromium.org
 vasilyt@chromium.org
+reed@google.com
+fmalita@chromium.org
 
 # general
-danakj@chromium.org
 vmpstr@chromium.org

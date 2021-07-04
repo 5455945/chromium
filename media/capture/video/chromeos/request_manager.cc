@@ -14,9 +14,11 @@
 
 #include "base/bind.h"
 #include "base/callback_helpers.h"
+#include "base/containers/contains.h"
 #include "base/posix/safe_strerror.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/trace_event/trace_event.h"
+#include "media/capture/video/chromeos/camera_app_device_bridge_impl.h"
 #include "media/capture/video/chromeos/camera_buffer_factory.h"
 #include "media/capture/video/chromeos/camera_metadata_utils.h"
 #include "media/capture/video/chromeos/video_capture_features_chromeos.h"
@@ -34,6 +36,7 @@ constexpr std::initializer_list<StreamType> kYUVReprocessStreams = {
 }  // namespace
 
 RequestManager::RequestManager(
+    const std::string& device_id,
     mojo::PendingReceiver<cros::mojom::Camera3CallbackOps>
         callback_ops_receiver,
     std::unique_ptr<StreamCaptureInterface> capture_interface,
@@ -42,8 +45,9 @@ RequestManager::RequestManager(
     std::unique_ptr<CameraBufferFactory> camera_buffer_factory,
     BlobifyCallback blobify_callback,
     scoped_refptr<base::SingleThreadTaskRunner> ipc_task_runner,
-    CameraAppDeviceImpl* camera_app_device)
-    : callback_ops_(this, std::move(callback_ops_receiver)),
+    uint32_t device_api_version)
+    : device_id_(device_id),
+      callback_ops_(this, std::move(callback_ops_receiver)),
       capture_interface_(std::move(capture_interface)),
       device_context_(device_context),
       video_capture_use_gmb_(buffer_type ==
@@ -57,7 +61,7 @@ RequestManager::RequestManager(
       capturing_(false),
       partial_result_count_(1),
       first_frame_shutter_time_(base::TimeTicks()),
-      camera_app_device_(std::move(camera_app_device)) {
+      device_api_version_(device_api_version) {
   DCHECK(ipc_task_runner_->BelongsToCurrentThread());
   DCHECK(callback_ops_.is_bound());
   DCHECK(device_context_);
@@ -286,7 +290,7 @@ void RequestManager::PrepareCaptureRequest() {
   std::set<StreamType> stream_types;
   cros::mojom::CameraMetadataPtr settings;
   TakePhotoCallback callback = base::NullCallback();
-  base::Optional<uint64_t> input_buffer_id;
+  absl::optional<uint64_t> input_buffer_id;
   cros::mojom::Effect reprocess_effect = cros::mojom::Effect::NO_EFFECT;
 
   bool is_reprocess_request = false;
@@ -368,6 +372,10 @@ void RequestManager::PrepareCaptureRequest() {
   if (!is_reprocess_request) {
     UpdateCaptureSettings(&capture_request->settings);
   }
+  if (device_api_version_ >= cros::mojom::CAMERA_DEVICE_API_VERSION_3_5) {
+    capture_request->physcam_settings =
+        std::vector<cros::mojom::Camera3PhyscamMetadataPtr>();
+  }
   capture_interface_->ProcessCaptureRequest(
       std::move(capture_request),
       base::BindOnce(&RequestManager::OnProcessedCaptureRequest, GetWeakPtr()));
@@ -377,7 +385,7 @@ bool RequestManager::TryPrepareReprocessRequest(
     std::set<StreamType>* stream_types,
     cros::mojom::CameraMetadataPtr* settings,
     TakePhotoCallback* callback,
-    base::Optional<uint64_t>* input_buffer_id,
+    absl::optional<uint64_t>* input_buffer_id,
     cros::mojom::Effect* reprocess_effect) {
   if (buffer_id_reprocess_job_info_map_.empty() ||
       !stream_buffer_manager_->HasFreeBuffers(kYUVReprocessStreams)) {
@@ -701,8 +709,12 @@ void RequestManager::Notify(cros::mojom::Camera3NotifyMsgPtr message) {
       first_frame_shutter_time_ = reference_time;
     }
     pending_result.timestamp = reference_time - first_frame_shutter_time_;
-    if (camera_app_device_ && pending_result.still_capture_callback) {
-      camera_app_device_->OnShutterDone();
+
+    auto camera_app_device =
+        CameraAppDeviceBridgeImpl::GetInstance()->GetWeakCameraAppDevice(
+            device_id_);
+    if (camera_app_device && pending_result.still_capture_callback) {
+      camera_app_device->OnShutterDone();
     }
 
     TrySubmitPendingBuffers(frame_number);
@@ -796,8 +808,11 @@ void RequestManager::SubmitCaptureResult(
     observer->OnResultMetadataAvailable(frame_number, pending_result.metadata);
   }
 
-  if (camera_app_device_) {
-    camera_app_device_->OnResultMetadataAvailable(
+  auto camera_app_device =
+      CameraAppDeviceBridgeImpl::GetInstance()->GetWeakCameraAppDevice(
+          device_id_);
+  if (camera_app_device) {
+    camera_app_device->OnResultMetadataAvailable(
         pending_result.metadata,
         static_cast<cros::mojom::StreamType>(stream_type));
   }
@@ -874,7 +889,7 @@ void RequestManager::SubmitCapturedPreviewRecordingBuffer(
   auto client_type = kStreamClientTypeMap[static_cast<int>(stream_type)];
   if (video_capture_use_gmb_) {
     VideoCaptureFormat format;
-    base::Optional<VideoCaptureDevice::Client::Buffer> buffer =
+    absl::optional<VideoCaptureDevice::Client::Buffer> buffer =
         stream_buffer_manager_->AcquireBufferForClientById(
             stream_type, buffer_ipc_id, &format);
     CHECK(buffer);
@@ -883,8 +898,7 @@ void RequestManager::SubmitCapturedPreviewRecordingBuffer(
     // to populate the camera metadata with the color space reported by the V4L2
     // device.
     VideoFrameMetadata metadata;
-    if (base::FeatureList::IsEnabled(
-            features::kDisableCameraFrameRotationAtSource)) {
+    if (!device_context_->IsCameraFrameRotationEnabledAtSource()) {
       // Camera frame rotation at source is disabled, so we record the intended
       // video frame rotation in the metadata.  The consumer of the video frame
       // is responsible for taking care of the frame rotation.
@@ -902,7 +916,7 @@ void RequestManager::SubmitCapturedPreviewRecordingBuffer(
         return VIDEO_ROTATION_0;
       };
       metadata.transformation =
-          translate_rotation(device_context_->GetRotationForDisplay());
+          translate_rotation(device_context_->GetCameraFrameRotation());
     } else {
       // All frames are pre-rotated to the display orientation.
       metadata.transformation = VIDEO_ROTATION_0;

@@ -10,7 +10,6 @@
 
 #include "base/component_export.h"
 #include "base/memory/weak_ptr.h"
-#include "base/time/time.h"
 #include "chromeos/attestation/attestation_flow.h"
 #include "chromeos/attestation/attestation_flow_factory.h"
 #include "chromeos/attestation/attestation_flow_status_reporter.h"
@@ -95,6 +94,8 @@ class COMPONENT_EXPORT(CHROMEOS_ATTESTATION) AttestationFlowAdaptive
   // to gather proxy information, and the attestation flow factory to
   // initialize.
   std::unique_ptr<ServerProxy> server_proxy_;
+  // Owened by either `server_proxy_` or `attestation_flow_factory_`.
+  ServerProxy* const raw_server_proxy_;
 
   // `AttestationFlowTypeDecider` object that decides which attestation flow
   // type we can use.
@@ -108,5 +109,14 @@ class COMPONENT_EXPORT(CHROMEOS_ATTESTATION) AttestationFlowAdaptive
 
 }  // namespace attestation
 }  // namespace chromeos
+
+// TODO(https://crbug.com/1164001): remove when //chromeos/attestation
+// moved to ash
+namespace ash {
+namespace attestation {
+using ::chromeos::attestation::AttestationFlowAdaptive;
+using ::chromeos::attestation::ServerProxy;
+}  // namespace attestation
+}  // namespace ash
 
 #endif  // CHROMEOS_ATTESTATION_ATTESTATION_FLOW_ADAPTIVE_H_

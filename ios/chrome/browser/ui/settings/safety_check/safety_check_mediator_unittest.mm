@@ -17,8 +17,8 @@
 #include "components/password_manager/core/browser/test_password_store.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/testing_pref_service.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
-#include "components/safe_browsing/core/features.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/sync_preferences/pref_service_mock_factory.h"
 #include "ios/chrome/browser/application_context.h"
@@ -31,7 +31,6 @@
 #include "ios/chrome/browser/passwords/password_check_observer_bridge.h"
 #include "ios/chrome/browser/signin/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/authentication_service_fake.h"
-#include "ios/chrome/browser/sync/profile_sync_service_factory.h"
 #include "ios/chrome/browser/sync/sync_setup_service_factory.h"
 #include "ios/chrome/browser/sync/sync_setup_service_mock.h"
 #import "ios/chrome/browser/ui/settings/cells/settings_check_item.h"
@@ -102,7 +101,7 @@ typedef NS_ENUM(NSInteger, SafetyCheckItemType) {
   TimestampFooterItem,
 };
 
-using password_manager::CompromisedCredentials;
+using password_manager::InsecureCredential;
 using password_manager::InsecureType;
 using password_manager::TestPasswordStore;
 using l10n_util::GetNSString;
@@ -183,24 +182,15 @@ class SafetyCheckMediatorTest : public PlatformTest {
     auto form = std::make_unique<password_manager::PasswordForm>();
     form->url = GURL("http://www.example.com/accounts/LoginAuth");
     form->action = GURL("http://www.example.com/accounts/Login");
-    form->username_element = base::ASCIIToUTF16("Email");
-    form->username_value = base::ASCIIToUTF16("test@egmail.com");
-    form->password_element = base::ASCIIToUTF16("Passwd");
-    form->password_value = base::ASCIIToUTF16("test");
-    form->submit_element = base::ASCIIToUTF16("signIn");
+    form->username_element = u"Email";
+    form->username_value = u"test@egmail.com";
+    form->password_element = u"Passwd";
+    form->password_value = u"test";
+    form->submit_element = u"signIn";
     form->signon_realm = "http://www.example.com/";
     form->scheme = password_manager::PasswordForm::Scheme::kHtml;
     form->blocked_by_user = false;
     AddPasswordForm(std::move(form));
-  }
-
-  password_manager::CompromisedCredentials MakeCompromised(
-      base::StringPiece signon_realm,
-      base::StringPiece username) {
-    return password_manager::CompromisedCredentials(
-        std::string(signon_realm), base::ASCIIToUTF16(username),
-        base::Time::Now(), InsecureType::kLeaked,
-        password_manager::IsMuted(false));
   }
 
   TestPasswordStore& GetTestStore() {
@@ -211,8 +201,9 @@ class SafetyCheckMediatorTest : public PlatformTest {
   }
 
   void AddCompromisedCredential() {
-    GetTestStore().AddInsecureCredential(
-        MakeCompromised("http://www.example.com/", "test@egmail.com"));
+    GetTestStore().AddInsecureCredential(password_manager::InsecureCredential(
+        "http://www.example.com/", u"test@egmail.com", base::Time::Now(),
+        InsecureType::kLeaked, password_manager::IsMuted(false)));
     RunUntilIdle();
   }
 

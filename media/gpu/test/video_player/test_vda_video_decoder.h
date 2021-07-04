@@ -8,7 +8,6 @@
 #include <stdint.h>
 #include <map>
 #include <memory>
-#include <string>
 
 #include "base/containers/mru_cache.h"
 #include "base/macros.h"
@@ -33,11 +32,8 @@ class FrameRenderer;
 class TestVDAVideoDecoder : public media::VideoDecoder,
                             public VideoDecodeAccelerator::Client {
  public:
-  // Constructor for the TestVDAVideoDecoder. The |allocation_mode| specifies
-  // whether allocating video frames will be done by the TestVDAVideoDecoder, or
-  // delegated to the underlying VDA.
-  TestVDAVideoDecoder(AllocationMode allocation_mode,
-                      bool use_vd_vda,
+  // Constructor for the TestVDAVideoDecoder.
+  TestVDAVideoDecoder(bool use_vd_vda,
                       const gfx::ColorSpace& target_color_space,
                       FrameRenderer* const frame_renderer,
                       gpu::GpuMemoryBufferFactory* gpu_memory_buffer_factory);
@@ -45,7 +41,6 @@ class TestVDAVideoDecoder : public media::VideoDecoder,
   ~TestVDAVideoDecoder() override;
 
   // media::VideoDecoder implementation
-  std::string GetDisplayName() const override;
   VideoDecoderType GetDecoderType() const override;
   bool IsPlatformDecoder() const override;
   void Initialize(const VideoDecoderConfig& config,
@@ -84,7 +79,7 @@ class TestVDAVideoDecoder : public media::VideoDecoder,
 
   // Helper thunk to avoid dereferencing WeakPtrs on the wrong thread.
   static void ReusePictureBufferThunk(
-      base::Optional<base::WeakPtr<TestVDAVideoDecoder>> decoder_client,
+      absl::optional<base::WeakPtr<TestVDAVideoDecoder>> decoder_client,
       scoped_refptr<base::SequencedTaskRunner> task_runner,
       int32_t picture_buffer_id);
 
@@ -102,9 +97,6 @@ class TestVDAVideoDecoder : public media::VideoDecoder,
   DecodeCB flush_cb_;
   // Called when the decoder finished resetting.
   base::OnceClosure reset_cb_;
-
-  // Video decode accelerator output mode.
-  const VideoDecodeAccelerator::Config::OutputMode output_mode_;
 
   // Whether VdVideoDecodeAccelerator is used.
   bool use_vd_vda_;

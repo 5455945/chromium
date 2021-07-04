@@ -6,7 +6,7 @@
 
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/sync/profile_sync_service_factory.h"
+#include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/ui/passwords/passwords_model_delegate_mock.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/testing_profile.h"
@@ -43,7 +43,7 @@ class MoveToAccountStoreBubbleControllerTest : public ::testing::Test {
 
     // Make sure no real SyncService gets created (it's not needed for these
     // tests, and it'd require more setup).
-    ProfileSyncServiceFactory::GetInstance()->SetTestingFactory(
+    SyncServiceFactory::GetInstance()->SetTestingFactory(
         &profile_, base::BindRepeating(&BuildTestSyncService));
 
     web_contents_ =
@@ -115,7 +115,7 @@ TEST_F(MoveToAccountStoreBubbleControllerTest, ProvidesProfileIcon) {
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile());
   AccountInfo info = signin::MakePrimaryAccountAvailable(
-      identity_manager, "todd.tester@gmail.com");
+      identity_manager, "todd.tester@gmail.com", signin::ConsentLevel::kSync);
   signin::SimulateAccountImageFetch(
       identity_manager, info.account_id, "https://todd.tester.com/avatar.png",
       gfx::Image(gfx::test::CreateImageSkia(96, 96)));

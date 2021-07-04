@@ -8,6 +8,7 @@
 #include <xdg-shell-client-protocol.h>
 #include <xdg-shell-unstable-v6-client-protocol.h>
 
+#include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
 #include "ui/base/hit_test.h"
 #include "ui/ozone/platform/wayland/common/wayland_util.h"
@@ -98,7 +99,7 @@ void XDGToplevelWrapperImpl::SurfaceResize(WaylandConnection* connection,
                       wl::IdentifyDirection(*connection, hittest));
 }
 
-void XDGToplevelWrapperImpl::SetTitle(const base::string16& title) {
+void XDGToplevelWrapperImpl::SetTitle(const std::u16string& title) {
   DCHECK(xdg_toplevel_);
   xdg_toplevel_set_title(xdg_toplevel_.get(), base::UTF16ToUTF8(title).c_str());
 }
@@ -129,6 +130,11 @@ void XDGToplevelWrapperImpl::SetDecoration(DecorationMode decoration) {
 void XDGToplevelWrapperImpl::AckConfigure(uint32_t serial) {
   DCHECK(xdg_surface_wrapper_);
   xdg_surface_wrapper_->AckConfigure(serial);
+}
+
+bool XDGToplevelWrapperImpl::IsConfigured() {
+  DCHECK(xdg_surface_wrapper_);
+  return xdg_surface_wrapper_->IsConfigured();
 }
 
 // static

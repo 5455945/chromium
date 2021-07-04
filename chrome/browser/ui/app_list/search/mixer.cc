@@ -19,7 +19,7 @@
 #include "base/strings/string_util.h"
 #include "chrome/browser/ui/app_list/app_list_model_updater.h"
 #include "chrome/browser/ui/app_list/search/chrome_search_result.h"
-#include "chrome/browser/ui/app_list/search/search_controller.h"
+#include "chrome/browser/ui/app_list/search/search_controller_impl.h"
 #include "chrome/browser/ui/app_list/search/search_provider.h"
 #include "chrome/browser/ui/app_list/search/search_result_ranker/chip_ranker.h"
 #include "chrome/browser/ui/app_list/search/search_result_ranker/ranking_item_util.h"
@@ -114,14 +114,14 @@ class Mixer::Group {
   DISALLOW_COPY_AND_ASSIGN(Group);
 };
 
-Mixer::Mixer(AppListModelUpdater* model_updater)
-    : model_updater_(model_updater) {}
+Mixer::Mixer(AppListModelUpdater* model_updater,
+             SearchControllerImpl* search_controller)
+    : model_updater_(model_updater), search_controller_(search_controller) {}
 Mixer::~Mixer() = default;
 
-void Mixer::InitializeRankers(Profile* profile,
-                              SearchController* search_controller) {
+void Mixer::InitializeRankers(Profile* profile) {
   search_result_ranker_ = std::make_unique<SearchResultRanker>(profile);
-  search_result_ranker_->InitializeRankers(search_controller);
+  search_result_ranker_->InitializeRankers(search_controller_);
 
   if (app_list_features::IsSuggestedFilesEnabled()) {
     chip_ranker_ = std::make_unique<ChipRanker>(profile);
@@ -137,7 +137,7 @@ void Mixer::AddProviderToGroup(size_t group_id, SearchProvider* provider) {
   groups_[group_id]->AddProvider(provider);
 }
 
-void Mixer::MixAndPublish(size_t num_max_results, const base::string16& query) {
+void Mixer::MixAndPublish(size_t num_max_results, const std::u16string& query) {
   FetchResults(query);
 
   SortedResults results;
@@ -187,21 +187,22 @@ void Mixer::MixAndPublish(size_t num_max_results, const base::string16& query) {
     sort_data.result->SetDisplayScore(sort_data.score);
     new_results.push_back(sort_data.result);
   }
+  search_controller_->NotifyResultsAdded(new_results);
   model_updater_->PublishSearchResults(new_results);
 }
 
-void Mixer::FetchResults(const base::string16& query) {
+void Mixer::FetchResults(const std::u16string& query) {
   if (search_result_ranker_)
     search_result_ranker_->FetchRankings(query);
   for (const auto& group : groups_)
     group->FetchResults(search_result_ranker_.get());
 }
 
-void Mixer::Train(const AppLaunchData& app_launch_data) {
+void Mixer::Train(const LaunchData& launch_data) {
   if (search_result_ranker_)
-    search_result_ranker_->Train(app_launch_data);
+    search_result_ranker_->Train(launch_data);
   if (chip_ranker_)
-    chip_ranker_->Train(app_launch_data);
+    chip_ranker_->Train(launch_data);
 }
 
 }  // namespace app_list

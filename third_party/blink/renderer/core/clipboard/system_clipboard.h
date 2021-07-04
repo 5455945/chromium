@@ -16,6 +16,7 @@
 namespace blink {
 
 class DataObject;
+class DocumentFragment;
 class Image;
 class KURL;
 class LocalFrame;
@@ -38,9 +39,8 @@ class CORE_EXPORT SystemClipboard final
   uint64_t SequenceNumber();
   bool IsSelectionMode() const;
   void SetSelectionMode(bool);
-  bool CanSmartReplace();
-  bool IsHTMLAvailable();
   Vector<String> ReadAvailableTypes();
+  bool IsFormatAvailable(mojom::ClipboardFormat format);
 
   String ReadPlainText();
   String ReadPlainText(mojom::ClipboardBuffer buffer);
@@ -62,6 +62,7 @@ class CORE_EXPORT SystemClipboard final
 
   String ReadRTF();
 
+  mojo_base::BigBuffer ReadPng(mojom::blink::ClipboardBuffer);
   SkBitmap ReadImage(mojom::ClipboardBuffer);
   String ReadImageAsImageMarkup(mojom::blink::ClipboardBuffer);
 
@@ -82,6 +83,9 @@ class CORE_EXPORT SystemClipboard final
 
   void CopyToFindPboard(const String& text);
 
+  void RecordClipboardImageUrls(DocumentFragment* pasting_fragment);
+  void RecordImageLoadError(const String& image_url);
+
   void Trace(Visitor*) const;
 
  private:
@@ -95,7 +99,8 @@ class CORE_EXPORT SystemClipboard final
 
   // Whether the selection buffer is available on the underlying platform.
   bool is_selection_buffer_available_ = false;
-
+  // Cache of image elements inserted by paste.
+  WTF::HashSet<String> image_urls_in_paste_;
 };
 
 }  // namespace blink

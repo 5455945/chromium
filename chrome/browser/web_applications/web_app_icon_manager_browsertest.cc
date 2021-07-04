@@ -29,6 +29,7 @@
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/gfx/image/image_skia.h"
+#include "ui/views/image_model_utils.h"
 #include "url/gurl.h"
 
 namespace web_app {
@@ -74,14 +75,14 @@ IN_PROC_BROWSER_TEST_F(WebAppIconManagerBrowserTest, SingleIcon) {
         std::make_unique<WebApplicationInfo>();
     web_application_info->start_url = start_url;
     web_application_info->scope = start_url.GetWithoutFilename();
-    web_application_info->title = base::ASCIIToUTF16("App Name");
+    web_application_info->title = u"App Name";
     web_application_info->open_as_window = true;
 
     {
       SkBitmap bitmap;
       bitmap.allocN32Pixels(icon_size::k32, icon_size::k32, true);
       bitmap.eraseColor(SK_ColorBLUE);
-      web_application_info->icon_bitmaps_any[icon_size::k32] =
+      web_application_info->icon_bitmaps.any[icon_size::k32] =
           std::move(bitmap);
     }
 
@@ -109,7 +110,7 @@ IN_PROC_BROWSER_TEST_F(WebAppIconManagerBrowserTest, SingleIcon) {
   if (base::FeatureList::IsEnabled(features::kAppServiceAdaptiveIcon)) {
     app_service_test().FlushMojoCalls();
     image_skia = app_service_test().LoadAppIconBlocking(
-        apps::mojom::AppType::kWeb, app_id, web_app::kWebAppIconSmall);
+        apps::mojom::AppType::kWeb, app_id, kWebAppIconSmall);
   }
 #endif
 
@@ -135,7 +136,8 @@ IN_PROC_BROWSER_TEST_F(WebAppIconManagerBrowserTest, SingleIcon) {
     controller->SetReadIconCallbackForTesting(base::BindLambdaForTesting(
         [controller, &image_skia, &run_loop, this]() {
           EXPECT_TRUE(app_service_test().AreIconImageEqual(
-              image_skia, controller->GetWindowAppIcon()));
+              image_skia, views::GetImageSkiaFromImageModel(
+                              controller->GetWindowAppIcon(), nullptr)));
           run_loop.Quit();
         }));
     run_loop.Run();
@@ -145,7 +147,9 @@ IN_PROC_BROWSER_TEST_F(WebAppIconManagerBrowserTest, SingleIcon) {
 
   controller->SetReadIconCallbackForTesting(
       base::BindLambdaForTesting([controller, &run_loop]() {
-        const SkBitmap* bitmap = controller->GetWindowAppIcon().bitmap();
+        const SkBitmap* bitmap = views::GetImageSkiaFromImageModel(
+                                     controller->GetWindowAppIcon(), nullptr)
+                                     .bitmap();
         EXPECT_EQ(SK_ColorBLUE, bitmap->getColor(0, 0));
         EXPECT_EQ(32, bitmap->width());
         EXPECT_EQ(32, bitmap->height());

@@ -107,22 +107,21 @@ class ExternalCacheImplTest : public testing::Test,
     return dir.Append(id + "-" + version + ".crx");
   }
 
-  std::unique_ptr<base::DictionaryValue> CreateEntryWithUpdateUrl(
-      bool from_webstore) {
-    auto entry = std::make_unique<base::DictionaryValue>();
-    entry->SetString(extensions::ExternalProviderImpl::kExternalUpdateUrl,
-                     from_webstore
-                         ? extension_urls::GetWebstoreUpdateUrl().spec()
-                         : kNonWebstoreUpdateUrl);
+  base::DictionaryValue CreateEntryWithUpdateUrl(bool from_webstore) {
+    base::DictionaryValue entry;
+    entry.SetString(extensions::ExternalProviderImpl::kExternalUpdateUrl,
+                    from_webstore
+                        ? extension_urls::GetWebstoreUpdateUrl().spec()
+                        : kNonWebstoreUpdateUrl);
     return entry;
   }
 
-  std::unique_ptr<base::DictionaryValue> CreateEntryWithExternalCrx() {
-    auto entry = std::make_unique<base::DictionaryValue>();
-    entry->SetString(extensions::ExternalProviderImpl::kExternalCrx,
-                     kExternalCrxPath);
-    entry->SetString(extensions::ExternalProviderImpl::kExternalVersion,
-                     kExternalCrxVersion);
+  base::DictionaryValue CreateEntryWithExternalCrx() {
+    base::DictionaryValue entry;
+    entry.SetString(extensions::ExternalProviderImpl::kExternalCrx,
+                    kExternalCrxPath);
+    entry.SetString(extensions::ExternalProviderImpl::kExternalVersion,
+                    kExternalCrxVersion);
     return entry;
   }
 
@@ -150,27 +149,29 @@ TEST_F(ExternalCacheImplTest, Basic) {
       true, false);
 
   std::unique_ptr<base::DictionaryValue> prefs(new base::DictionaryValue);
-  prefs->Set(kTestExtensionId1, CreateEntryWithUpdateUrl(true));
+  prefs->SetKey(kTestExtensionId1, CreateEntryWithUpdateUrl(true));
   CreateExtensionFile(cache_dir, kTestExtensionId1, "1");
-  prefs->Set(kTestExtensionId2, CreateEntryWithUpdateUrl(true));
-  prefs->Set(kTestExtensionId3, CreateEntryWithUpdateUrl(false));
+  prefs->SetKey(kTestExtensionId2, CreateEntryWithUpdateUrl(true));
+  prefs->SetKey(kTestExtensionId3, CreateEntryWithUpdateUrl(false));
   CreateExtensionFile(cache_dir, kTestExtensionId3, "3");
-  prefs->Set(kTestExtensionId4, CreateEntryWithUpdateUrl(false));
+  prefs->SetKey(kTestExtensionId4, CreateEntryWithUpdateUrl(false));
 
   external_cache.UpdateExtensionsList(std::move(prefs));
   content::RunAllTasksUntilIdle();
 
   ASSERT_TRUE(provided_prefs());
-  EXPECT_EQ(provided_prefs()->size(), 2ul);
+  EXPECT_EQ(provided_prefs()->DictSize(), 2ul);
 
   // File in cache from Webstore.
   const base::DictionaryValue* entry1 = NULL;
   ASSERT_TRUE(provided_prefs()->GetDictionary(kTestExtensionId1, &entry1));
-  EXPECT_FALSE(
-      entry1->HasKey(extensions::ExternalProviderImpl::kExternalUpdateUrl));
-  EXPECT_TRUE(entry1->HasKey(extensions::ExternalProviderImpl::kExternalCrx));
-  EXPECT_TRUE(
-      entry1->HasKey(extensions::ExternalProviderImpl::kExternalVersion));
+  EXPECT_EQ(
+      entry1->FindKey(extensions::ExternalProviderImpl::kExternalUpdateUrl),
+      nullptr);
+  EXPECT_NE(entry1->FindKey(extensions::ExternalProviderImpl::kExternalCrx),
+            nullptr);
+  EXPECT_NE(entry1->FindKey(extensions::ExternalProviderImpl::kExternalVersion),
+            nullptr);
   bool from_webstore = false;
   EXPECT_TRUE(entry1->GetBoolean(
       extensions::ExternalProviderImpl::kIsFromWebstore, &from_webstore));
@@ -179,13 +180,15 @@ TEST_F(ExternalCacheImplTest, Basic) {
   // File in cache not from Webstore.
   const base::DictionaryValue* entry3 = NULL;
   ASSERT_TRUE(provided_prefs()->GetDictionary(kTestExtensionId3, &entry3));
-  EXPECT_FALSE(
-      entry3->HasKey(extensions::ExternalProviderImpl::kExternalUpdateUrl));
-  EXPECT_TRUE(entry3->HasKey(extensions::ExternalProviderImpl::kExternalCrx));
-  EXPECT_TRUE(
-      entry3->HasKey(extensions::ExternalProviderImpl::kExternalVersion));
-  EXPECT_FALSE(
-      entry3->HasKey(extensions::ExternalProviderImpl::kIsFromWebstore));
+  EXPECT_EQ(
+      entry3->FindKey(extensions::ExternalProviderImpl::kExternalUpdateUrl),
+      nullptr);
+  EXPECT_NE(entry3->FindKey(extensions::ExternalProviderImpl::kExternalCrx),
+            nullptr);
+  EXPECT_NE(entry3->FindKey(extensions::ExternalProviderImpl::kExternalVersion),
+            nullptr);
+  EXPECT_EQ(entry3->FindKey(extensions::ExternalProviderImpl::kIsFromWebstore),
+            nullptr);
 
   // Update from Webstore.
   base::FilePath temp_dir(CreateTempDir());
@@ -201,15 +204,17 @@ TEST_F(ExternalCacheImplTest, Basic) {
       extensions::ExtensionDownloaderDelegate::InstallCallback());
 
   content::RunAllTasksUntilIdle();
-  EXPECT_EQ(provided_prefs()->size(), 3ul);
+  EXPECT_EQ(provided_prefs()->DictSize(), 3ul);
 
   const base::DictionaryValue* entry2 = NULL;
   ASSERT_TRUE(provided_prefs()->GetDictionary(kTestExtensionId2, &entry2));
-  EXPECT_FALSE(
-      entry2->HasKey(extensions::ExternalProviderImpl::kExternalUpdateUrl));
-  EXPECT_TRUE(entry2->HasKey(extensions::ExternalProviderImpl::kExternalCrx));
-  EXPECT_TRUE(
-      entry2->HasKey(extensions::ExternalProviderImpl::kExternalVersion));
+  EXPECT_EQ(
+      entry2->FindKey(extensions::ExternalProviderImpl::kExternalUpdateUrl),
+      nullptr);
+  EXPECT_NE(entry2->FindKey(extensions::ExternalProviderImpl::kExternalCrx),
+            nullptr);
+  EXPECT_NE(entry2->FindKey(extensions::ExternalProviderImpl::kExternalVersion),
+            nullptr);
   from_webstore = false;
   EXPECT_TRUE(entry2->GetBoolean(
       extensions::ExternalProviderImpl::kIsFromWebstore, &from_webstore));
@@ -232,17 +237,19 @@ TEST_F(ExternalCacheImplTest, Basic) {
   }
 
   content::RunAllTasksUntilIdle();
-  EXPECT_EQ(provided_prefs()->size(), 4ul);
+  EXPECT_EQ(provided_prefs()->DictSize(), 4ul);
 
   const base::DictionaryValue* entry4 = NULL;
   ASSERT_TRUE(provided_prefs()->GetDictionary(kTestExtensionId4, &entry4));
-  EXPECT_FALSE(
-      entry4->HasKey(extensions::ExternalProviderImpl::kExternalUpdateUrl));
-  EXPECT_TRUE(entry4->HasKey(extensions::ExternalProviderImpl::kExternalCrx));
-  EXPECT_TRUE(
-      entry4->HasKey(extensions::ExternalProviderImpl::kExternalVersion));
-  EXPECT_FALSE(
-      entry4->HasKey(extensions::ExternalProviderImpl::kIsFromWebstore));
+  EXPECT_EQ(
+      entry4->FindKey(extensions::ExternalProviderImpl::kExternalUpdateUrl),
+      nullptr);
+  EXPECT_NE(entry4->FindKey(extensions::ExternalProviderImpl::kExternalCrx),
+            nullptr);
+  EXPECT_NE(entry4->FindKey(extensions::ExternalProviderImpl::kExternalVersion),
+            nullptr);
+  EXPECT_EQ(entry4->FindKey(extensions::ExternalProviderImpl::kIsFromWebstore),
+            nullptr);
   EXPECT_TRUE(
       base::PathExists(GetExtensionFile(cache_dir, kTestExtensionId4, "4")));
 
@@ -251,7 +258,7 @@ TEST_F(ExternalCacheImplTest, Basic) {
   external_cache.OnDamagedFileDetected(
       GetExtensionFile(cache_dir, kTestExtensionId2, "2"));
   content::RunAllTasksUntilIdle();
-  EXPECT_EQ(3ul, provided_prefs()->size());
+  EXPECT_EQ(3ul, provided_prefs()->DictSize());
   EXPECT_FALSE(
       base::PathExists(GetExtensionFile(cache_dir, kTestExtensionId2, "2")));
   EXPECT_EQ(1ul, deleted_extension_files().size());
@@ -263,7 +270,7 @@ TEST_F(ExternalCacheImplTest, Basic) {
       base::BindOnce(&ExternalCacheImplTest::OnExtensionListsUpdated,
                      base::Unretained(this), base::Unretained(empty.get())));
   content::RunAllTasksUntilIdle();
-  EXPECT_EQ(provided_prefs()->size(), 0ul);
+  EXPECT_EQ(provided_prefs()->DictSize(), 0ul);
 
   // After Shutdown directory shouldn't be touched.
   external_cache.OnDamagedFileDetected(
@@ -281,14 +288,14 @@ TEST_F(ExternalCacheImplTest, PreserveExternalCrx) {
       true, false);
 
   std::unique_ptr<base::DictionaryValue> prefs(new base::DictionaryValue);
-  prefs->Set(kTestExtensionId1, CreateEntryWithExternalCrx());
-  prefs->Set(kTestExtensionId2, CreateEntryWithUpdateUrl(true));
+  prefs->SetKey(kTestExtensionId1, CreateEntryWithExternalCrx());
+  prefs->SetKey(kTestExtensionId2, CreateEntryWithUpdateUrl(true));
 
   external_cache.UpdateExtensionsList(std::move(prefs));
   content::RunAllTasksUntilIdle();
 
   ASSERT_TRUE(provided_prefs());
-  EXPECT_EQ(provided_prefs()->size(), 1ul);
+  EXPECT_EQ(provided_prefs()->DictSize(), 1ul);
 
   // Extensions downloaded from update url will only be visible in the provided
   // prefs once the download of the .crx has finished. Extensions that are
@@ -296,11 +303,13 @@ TEST_F(ExternalCacheImplTest, PreserveExternalCrx) {
   // provided prefs directly.
   const base::DictionaryValue* entry1 = NULL;
   ASSERT_TRUE(provided_prefs()->GetDictionary(kTestExtensionId1, &entry1));
-  EXPECT_FALSE(
-      entry1->HasKey(extensions::ExternalProviderImpl::kExternalUpdateUrl));
-  EXPECT_TRUE(entry1->HasKey(extensions::ExternalProviderImpl::kExternalCrx));
-  EXPECT_TRUE(
-      entry1->HasKey(extensions::ExternalProviderImpl::kExternalVersion));
+  EXPECT_EQ(
+      entry1->FindKey(extensions::ExternalProviderImpl::kExternalUpdateUrl),
+      nullptr);
+  EXPECT_NE(entry1->FindKey(extensions::ExternalProviderImpl::kExternalCrx),
+            nullptr);
+  EXPECT_NE(entry1->FindKey(extensions::ExternalProviderImpl::kExternalVersion),
+            nullptr);
 }
 
 }  // namespace chromeos

@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <utility>
 
 #include "base/bind.h"
@@ -132,7 +133,7 @@ class DriveWebContentsManager : public content::WebContentsObserver,
       const GURL& opener_url,
       const std::string& frame_name,
       const GURL& target_url,
-      const std::string& partition_id,
+      const content::StoragePartitionId& partition_id,
       content::SessionStorageNamespace* session_storage_namespace) override;
 
   // BackgroundContentsServiceObserver:
@@ -212,7 +213,11 @@ void DriveWebContentsManager::RunCompletionCallback(
 
 void DriveWebContentsManager::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
-  if (navigation_handle->IsInMainFrame() && navigation_handle->IsErrorPage()) {
+  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
+  // frames. This caller was converted automatically to the primary main frame
+  // to preserve its semantics. Follow up to confirm correctness.
+  if (navigation_handle->IsInPrimaryMainFrame() &&
+      navigation_handle->IsErrorPage()) {
     LOG(WARNING) << "Failed to load WebContents to enable offline mode.";
     OnOfflineInit(false,
                   DriveFirstRunController::OUTCOME_WEB_CONTENTS_LOAD_FAILED);
@@ -254,7 +259,7 @@ content::WebContents* DriveWebContentsManager::CreateCustomWebContents(
     const GURL& opener_url,
     const std::string& frame_name,
     const GURL& target_url,
-    const std::string& partition_id,
+    const content::StoragePartitionId& partition_id,
     content::SessionStorageNamespace* session_storage_namespace) {
   // The background contents creation is normally done in Browser, but
   // because we're using a detached WebContents, we need to do it ourselves.
@@ -337,10 +342,10 @@ void DriveFirstRunController::EnableOfflineMode() {
     return;
   }
 
-  web_contents_manager_.reset(new DriveWebContentsManager(
+  web_contents_manager_ = std::make_unique<DriveWebContentsManager>(
       profile_, drive_hosted_app_id_, drive_offline_endpoint_url_,
       base::BindOnce(&DriveFirstRunController::OnOfflineInit,
-                     base::Unretained(this))));
+                     base::Unretained(this)));
   web_contents_manager_->StartLoad();
   web_contents_timer_.Start(
       FROM_HERE,
@@ -414,7 +419,7 @@ void DriveFirstRunController::ShowNotification() {
   auto delegate =
       base::MakeRefCounted<message_center::HandleNotificationClickDelegate>(
           base::BindRepeating(
-              [](Profile* profile, base::Optional<int> button_index) {
+              [](Profile* profile, absl::optional<int> button_index) {
                 if (!button_index)
                   return;
 
@@ -433,7 +438,7 @@ void DriveFirstRunController::ShowNotification() {
 
   message_center::Notification notification(
       message_center::NOTIFICATION_TYPE_SIMPLE, kDriveOfflineNotificationId,
-      base::string16(),  // title
+      std::u16string(),  // title
       l10n_util::GetStringUTF16(IDS_DRIVE_OFFLINE_NOTIFICATION_MESSAGE),
       resource_bundle.GetImageNamed(IDR_NOTIFICATION_DRIVE),
       base::UTF8ToUTF16(extension->name()), GURL(),

@@ -4,7 +4,6 @@
 
 #include "ash/system/update/update_notification_controller.h"
 
-#include "ash/public/cpp/ash_features.h"
 #include "ash/shell.h"
 #include "ash/system/model/system_tray_model.h"
 #include "ash/system/session/shutdown_confirmation_dialog.h"
@@ -13,10 +12,10 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/optional.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/branding_buildflags.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/message_center/message_center.h"
 #include "ui/message_center/message_center_observer.h"
 #include "ui/message_center/public/cpp/notification_delegate.h"
@@ -352,7 +351,7 @@ TEST_F(UpdateNotificationControllerTest, SetUpdateNotificationStateTest) {
 
   // Simulate notification type set back to default.
   Shell::Get()->system_tray_model()->SetUpdateNotificationState(
-      NotificationStyle::kDefault, base::string16(), base::string16());
+      NotificationStyle::kDefault, std::u16string(), std::u16string());
 
   // Showing Update Notification posts a task to check for slow boot request
   // and use the result of that check to generate appropriate notification. Wait
@@ -391,7 +390,7 @@ TEST_F(UpdateNotificationControllerTest, VisibilityAfterLacrosUpdate) {
   message_center::MessageCenter::Get()
       ->FindVisibleNotificationById(kNotificationId)
       ->delegate()
-      ->Click(/*button_index=*/0, /*reply=*/base::nullopt);
+      ->Click(/*button_index=*/0, /*reply=*/absl::nullopt);
 
   // Controller tried to restart chrome.
   EXPECT_EQ(1, GetSessionControllerClient()->attempt_restart_chrome_count());

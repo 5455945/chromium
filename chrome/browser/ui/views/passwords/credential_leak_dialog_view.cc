@@ -12,6 +12,7 @@
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/password_manager/core/browser/leak_detection_dialog_utils.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/views/border.h"
@@ -19,7 +20,6 @@
 #include "ui/views/bubble/tooltip_icon.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/fill_layout.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 
 namespace {
 
@@ -101,11 +101,8 @@ void CredentialLeakDialogView::AddedToWidget() {
   auto image_view = std::make_unique<ThemeTrackingNonAccessibleImageView>(
       *bundle.GetImageSkiaNamed(IDR_PASSWORD_CHECK),
       *bundle.GetImageSkiaNamed(IDR_PASSWORD_CHECK_DARK),
-      base::BindRepeating(
-          [](CredentialLeakDialogView* view) {
-            return view->GetBubbleFrameView()->GetBackgroundColor();
-          },
-          this));
+      base::BindRepeating(&views::BubbleFrameView::GetBackgroundColor,
+                          base::Unretained(GetBubbleFrameView())));
 
   gfx::Size preferred_size = image_view->GetPreferredSize();
   if (!preferred_size.IsEmpty()) {
@@ -125,17 +122,18 @@ void CredentialLeakDialogView::AddedToWidget() {
   GetBubbleFrameView()->SetHeaderView(std::move(image_view));
 }
 
-base::string16 CredentialLeakDialogView::GetWindowTitle() const {
+std::u16string CredentialLeakDialogView::GetWindowTitle() const {
   // |controller_| can be nullptr when the framework calls this method after a
   // button click.
-  return controller_ ? controller_->GetTitle() : base::string16();
+  return controller_ ? controller_->GetTitle() : std::u16string();
 }
 
 void CredentialLeakDialogView::InitWindow() {
   SetLayoutManager(std::make_unique<views::FillLayout>());
   SetBorder(views::CreateEmptyBorder(
       views::LayoutProvider::Get()->GetDialogInsetsForContentType(
-          views::CONTROL, views::CONTROL)));
+          views::DialogContentType::kControl,
+          views::DialogContentType::kControl)));
 
   auto description_label = std::make_unique<views::Label>(
       controller_->GetDescription(), views::style::CONTEXT_LABEL,

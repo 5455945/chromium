@@ -19,6 +19,8 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/gfx/canvas.h"
@@ -39,8 +41,6 @@
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/layout/grid_layout.h"
-#include "ui/views/metadata/metadata_header_macros.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 
 namespace enterprise_connectors {
 
@@ -80,8 +80,8 @@ class CircleBackground : public views::Background {
   }
 };
 
-SkColor GetBackgroundColor(const views::Widget* widget) {
-  return widget->GetNativeTheme()->GetSystemColor(
+SkColor GetBackgroundColor(const views::View* view) {
+  return view->GetNativeTheme()->GetSystemColor(
       ui::NativeTheme::kColorId_DialogBackground);
 }
 
@@ -109,7 +109,11 @@ class DeepScanningTopImageView : public DeepScanningBaseView,
 
   using DeepScanningBaseView::DeepScanningBaseView;
 
-  void Update() { SetImage(dialog()->GetTopImage()); }
+  void Update() {
+    if (!GetWidget())
+      return;
+    SetImage(dialog()->GetTopImage());
+  }
 
  protected:
   void OnThemeChanged() override {
@@ -129,6 +133,8 @@ class DeepScanningSideIconImageView : public DeepScanningBaseView,
   using DeepScanningBaseView::DeepScanningBaseView;
 
   void Update() {
+    if (!GetWidget())
+      return;
     SetImage(gfx::CreateVectorIcon(vector_icons::kBusinessIcon, kSideImageSize,
                                    dialog()->GetSideImageLogoColor()));
     if (dialog()->is_result()) {
@@ -179,6 +185,8 @@ class DeepScanningMessageView : public DeepScanningBaseView,
   using DeepScanningBaseView::DeepScanningBaseView;
 
   void Update() {
+    if (!GetWidget())
+      return;
     if (dialog()->is_failure() || dialog()->is_warning())
       SetEnabledColor(dialog()->GetSideImageBackgroundColor());
   }
@@ -204,25 +212,38 @@ base::TimeDelta ContentAnalysisDialog::GetSuccessDialogTimeout() {
 }
 
 ContentAnalysisDialog::ContentAnalysisDialog(
-    std::unique_ptr<ContentAnalysisDelegate> delegate,
+    std::unique_ptr<ContentAnalysisDelegateBase> delegate,
     content::WebContents* web_contents,
     safe_browsing::DeepScanAccessPoint access_point,
-    int files_count)
+    int files_count,
+    ContentAnalysisDelegateBase::FinalResult final_result)
     : content::WebContentsObserver(web_contents),
       delegate_(std::move(delegate)),
       web_contents_(web_contents),
+      final_result_(final_result),
       access_point_(std::move(access_point)),
       files_count_(files_count) {
+  DCHECK(delegate_);
   SetOwnedByWidget(true);
 
   if (observer_for_testing)
     observer_for_testing->ConstructorCalled(this, base::TimeTicks::Now());
 
-  Show();
+  if (final_result_ != ContentAnalysisDelegateBase::FinalResult::SUCCESS)
+    UpdateStateFromFinalResult(final_result_);
+
+  SetupButtons();
+
+  first_shown_timestamp_ = base::TimeTicks::Now();
+
+  constrained_window::ShowWebModalDialogViews(this, web_contents_);
+
+  if (observer_for_testing)
+    observer_for_testing->ViewsFirstShown(this, first_shown_timestamp_);
 }
 
-base::string16 ContentAnalysisDialog::GetWindowTitle() const {
-  return base::string16();
+std::u16string ContentAnalysisDialog::GetWindowTitle() const {
+  return std::u16string();
 }
 
 void ContentAnalysisDialog::AcceptButtonCallback() {
@@ -238,10 +259,11 @@ void ContentAnalysisDialog::CancelButtonCallback() {
 
 void ContentAnalysisDialog::LearnMoreLinkClickedCallback(
     const ui::Event& event) {
-  web_contents_->OpenURL(
-      content::OpenURLParams(final_learn_more_url_, content::Referrer(),
-                             WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                             ui::PAGE_TRANSITION_LINK, false));
+  DCHECK(has_learn_more_url());
+  web_contents_->OpenURL(content::OpenURLParams(
+      (*delegate_->GetCustomLearnMoreUrl()), content::Referrer(),
+      WindowOpenDisposition::NEW_FOREGROUND_TAB, ui::PAGE_TRANSITION_LINK,
+      false));
 }
 
 void ContentAnalysisDialog::SuccessCallback() {
@@ -334,6 +356,11 @@ views::View* ContentAnalysisDialog::GetContentsView() {
 
     // Add padding to distance the message from the button(s).
     layout->AddPaddingRow(views::GridLayout::kFixedSize, 10);
+
+    // If the dialog was started in a state other than pending, setup the views
+    // accordingly.
+    if (!is_pending())
+      UpdateViews();
   }
 
   return contents_view_;
@@ -359,36 +386,10 @@ void ContentAnalysisDialog::WebContentsDestroyed() {
 }
 
 void ContentAnalysisDialog::ShowResult(
-    ContentAnalysisDelegate::FinalResult result,
-    const base::string16& custom_message,
-    const GURL& learn_more_url) {
+    ContentAnalysisDelegateBase::FinalResult result) {
   DCHECK(is_pending());
-  final_result_ = result;
-  final_custom_message_ = custom_message;
-  final_learn_more_url_ = learn_more_url;
 
-  switch (final_result_) {
-    case ContentAnalysisDelegate::FinalResult::ENCRYPTED_FILES:
-    case ContentAnalysisDelegate::FinalResult::LARGE_FILES:
-    case ContentAnalysisDelegate::FinalResult::FAILURE:
-      dialog_status_ = DeepScanningDialogStatus::FAILURE;
-      break;
-    case ContentAnalysisDelegate::FinalResult::SUCCESS:
-      dialog_status_ = DeepScanningDialogStatus::SUCCESS;
-      break;
-    case ContentAnalysisDelegate::FinalResult::WARNING:
-      dialog_status_ = DeepScanningDialogStatus::WARNING;
-      break;
-  }
-
-  // Do nothing if the pending dialog wasn't shown, the delayed |Show| callback
-  // will show the negative result later if that's the verdict.
-  if (!shown_) {
-    // Cleanup if the pending dialog wasn't shown and the verdict is safe.
-    if (is_success())
-      delete this;
-    return;
-  }
+  UpdateStateFromFinalResult(result);
 
   // Update the pending dialog only after it has been shown for a minimum amount
   // of time.
@@ -409,40 +410,64 @@ ContentAnalysisDialog::~ContentAnalysisDialog() {
     observer_for_testing->DestructorCalled(this);
 }
 
-void ContentAnalysisDialog::UpdateDialog() {
-  DCHECK(shown_);
-  views::Widget* widget = GetWidget();
-  DCHECK(widget);
-  DCHECK(is_result());
+void ContentAnalysisDialog::UpdateStateFromFinalResult(
+    ContentAnalysisDelegateBase::FinalResult final_result) {
+  final_result_ = final_result;
+  switch (final_result_) {
+    case ContentAnalysisDelegateBase::FinalResult::ENCRYPTED_FILES:
+    case ContentAnalysisDelegateBase::FinalResult::LARGE_FILES:
+    case ContentAnalysisDelegateBase::FinalResult::FAILURE:
+      dialog_state_ = State::FAILURE;
+      break;
+    case ContentAnalysisDelegateBase::FinalResult::SUCCESS:
+      dialog_state_ = State::SUCCESS;
+      break;
+    case ContentAnalysisDelegateBase::FinalResult::WARNING:
+      dialog_state_ = State::WARNING;
+      break;
+  }
+}
 
-  auto height_before = contents_view_->GetPreferredSize().height();
+void ContentAnalysisDialog::UpdateViews() {
+  DCHECK(contents_view_);
 
   // Update the style of the dialog to reflect the new state.
   message_->Update();
   image_->Update();
   side_icon_image_->Update();
-  side_icon_spinner_->Update();
-  side_icon_spinner_ = nullptr;
+  // There isn't always a spinner, for instance when the dialog is started in a
+  // state other than the "pending" state.
+  if (side_icon_spinner_) {
+    side_icon_spinner_->Update();
+    side_icon_spinner_ = nullptr;
+  }
 
   // Update the buttons.
   SetupButtons();
 
   // Update the message's text, and send an alert for screen readers since the
   // text changed.
-  base::string16 new_message = GetDialogMessage();
+  std::u16string new_message = GetDialogMessage();
   message_->SetText(new_message);
   message_->GetViewAccessibility().AnnounceText(std::move(new_message));
 
   // Update the visibility of the Learn More link, which should only be visible
   // if the dialog is in the warning or failure state, and there's a link to
   // display.
-  learn_more_link_->SetVisible(
-      (is_failure() || is_warning()) &&
-      (final_learn_more_url_.is_valid() && !final_learn_more_url_.is_empty()));
+  learn_more_link_->SetVisible((is_failure() || is_warning()) &&
+                               has_learn_more_url());
+}
+
+void ContentAnalysisDialog::UpdateDialog() {
+  DCHECK(contents_view_);
+  DCHECK(is_result());
+
+  auto height_before = contents_view_->GetPreferredSize().height();
+
+  UpdateViews();
 
   // Resize the dialog's height. This is needed since the text might take more
   // lines after changing.
-
   auto height_after = contents_view_->GetPreferredSize().height();
   int height_to_add = std::max(height_after - height_before, 0);
   if (height_to_add > 0)
@@ -450,7 +475,7 @@ void ContentAnalysisDialog::UpdateDialog() {
 
   // Update the dialog.
   DialogDelegate::DialogModelChanged();
-  widget->ScheduleLayout();
+  contents_view_->InvalidateLayout();
 
   // Schedule the dialog to close itself in the success case.
   if (is_success()) {
@@ -547,64 +572,46 @@ void ContentAnalysisDialog::SetupButtons() {
   }
 }
 
-base::string16 ContentAnalysisDialog::GetDialogMessage() const {
-  switch (dialog_status_) {
-    case DeepScanningDialogStatus::PENDING:
+std::u16string ContentAnalysisDialog::GetDialogMessage() const {
+  switch (dialog_state_) {
+    case State::PENDING:
       return GetPendingMessage();
-    case DeepScanningDialogStatus::FAILURE:
+    case State::FAILURE:
       return GetFailureMessage();
-    case DeepScanningDialogStatus::SUCCESS:
+    case State::SUCCESS:
       return GetSuccessMessage();
-    case DeepScanningDialogStatus::WARNING:
+    case State::WARNING:
       return GetWarningMessage();
   }
 }
 
-base::string16 ContentAnalysisDialog::GetCancelButtonText() const {
+std::u16string ContentAnalysisDialog::GetCancelButtonText() const {
   int text_id;
-  switch (dialog_status_) {
-    case DeepScanningDialogStatus::SUCCESS:
+  auto overriden_text = delegate_->OverrideCancelButtonText();
+  if (overriden_text) {
+    return overriden_text.value();
+  }
+
+  switch (dialog_state_) {
+    case State::SUCCESS:
       NOTREACHED();
       FALLTHROUGH;
-    case DeepScanningDialogStatus::PENDING:
+    case State::PENDING:
       text_id = IDS_DEEP_SCANNING_DIALOG_CANCEL_UPLOAD_BUTTON;
       break;
-    case DeepScanningDialogStatus::FAILURE:
+    case State::FAILURE:
       text_id = IDS_CLOSE;
       break;
-    case DeepScanningDialogStatus::WARNING:
+    case State::WARNING:
       text_id = IDS_DEEP_SCANNING_DIALOG_CANCEL_WARNING_BUTTON;
       break;
   }
   return l10n_util::GetStringUTF16(text_id);
 }
 
-base::string16 ContentAnalysisDialog::GetBypassWarningButtonText() const {
+std::u16string ContentAnalysisDialog::GetBypassWarningButtonText() const {
   DCHECK(is_warning());
   return l10n_util::GetStringUTF16(IDS_DEEP_SCANNING_DIALOG_PROCEED_BUTTON);
-}
-
-void ContentAnalysisDialog::Show() {
-  DCHECK(!shown_);
-
-  // The only state that cannot be shown immediately is SUCCESS, the dialog
-  // doesn't appear in that case.
-  DCHECK(!is_success());
-
-  shown_ = true;
-  first_shown_timestamp_ = base::TimeTicks::Now();
-
-  SetupButtons();
-
-  constrained_window::ShowWebModalDialogViews(this, web_contents_);
-
-  if (observer_for_testing)
-    observer_for_testing->ViewsFirstShown(this, first_shown_timestamp_);
-
-  // Cancel the dialog as it is shown in tests if the failure dialog is shown
-  // immediately.
-  if (observer_for_testing && is_failure())
-    CancelDialog();
 }
 
 std::unique_ptr<views::View> ContentAnalysisDialog::CreateSideIcon() {
@@ -636,12 +643,12 @@ std::unique_ptr<views::View> ContentAnalysisDialog::CreateSideIcon() {
 
 SkColor ContentAnalysisDialog::GetSideImageBackgroundColor() const {
   DCHECK(is_result());
-  const views::Widget* widget = GetWidget();
-  DCHECK(widget);
+  DCHECK(contents_view_);
+
   ui::NativeTheme::ColorId color_id =
       is_success() ? ui::NativeTheme::kColorId_AlertSeverityLow
                    : ui::NativeTheme::kColorId_AlertSeverityHigh;
-  return widget->GetNativeTheme()->GetSystemColor(color_id);
+  return contents_view_->GetNativeTheme()->GetSystemColor(color_id);
 }
 
 int ContentAnalysisDialog::GetPasteImageId(bool use_dark) const {
@@ -660,13 +667,13 @@ int ContentAnalysisDialog::GetUploadImageId(bool use_dark) const {
   return use_dark ? IDR_UPLOAD_VIOLATION_DARK : IDR_UPLOAD_VIOLATION;
 }
 
-base::string16 ContentAnalysisDialog::GetPendingMessage() const {
+std::u16string ContentAnalysisDialog::GetPendingMessage() const {
   DCHECK(is_pending());
   return l10n_util::GetPluralStringFUTF16(
       IDS_DEEP_SCANNING_DIALOG_UPLOAD_PENDING_MESSAGE, files_count_);
 }
 
-base::string16 ContentAnalysisDialog::GetFailureMessage() const {
+std::u16string ContentAnalysisDialog::GetFailureMessage() const {
   DCHECK(is_failure());
 
   // If the admin has specified a custom message for this failure, it takes
@@ -674,12 +681,13 @@ base::string16 ContentAnalysisDialog::GetFailureMessage() const {
   if (has_custom_message())
     return GetCustomMessage();
 
-  if (final_result_ == ContentAnalysisDelegate::FinalResult::LARGE_FILES) {
+  if (final_result_ == ContentAnalysisDelegateBase::FinalResult::LARGE_FILES) {
     return l10n_util::GetPluralStringFUTF16(
         IDS_DEEP_SCANNING_DIALOG_LARGE_FILE_FAILURE_MESSAGE, files_count_);
   }
 
-  if (final_result_ == ContentAnalysisDelegate::FinalResult::ENCRYPTED_FILES) {
+  if (final_result_ ==
+      ContentAnalysisDelegateBase::FinalResult::ENCRYPTED_FILES) {
     return l10n_util::GetPluralStringFUTF16(
         IDS_DEEP_SCANNING_DIALOG_ENCRYPTED_FILE_FAILURE_MESSAGE, files_count_);
   }
@@ -688,7 +696,7 @@ base::string16 ContentAnalysisDialog::GetFailureMessage() const {
       IDS_DEEP_SCANNING_DIALOG_UPLOAD_FAILURE_MESSAGE, files_count_);
 }
 
-base::string16 ContentAnalysisDialog::GetWarningMessage() const {
+std::u16string ContentAnalysisDialog::GetWarningMessage() const {
   DCHECK(is_warning());
 
   // If the admin has specified a custom message for this warning, it takes
@@ -700,21 +708,20 @@ base::string16 ContentAnalysisDialog::GetWarningMessage() const {
       IDS_DEEP_SCANNING_DIALOG_UPLOAD_WARNING_MESSAGE, files_count_);
 }
 
-base::string16 ContentAnalysisDialog::GetSuccessMessage() const {
+std::u16string ContentAnalysisDialog::GetSuccessMessage() const {
   DCHECK(is_success());
   return l10n_util::GetPluralStringFUTF16(
       IDS_DEEP_SCANNING_DIALOG_SUCCESS_MESSAGE, files_count_);
 }
 
-base::string16 ContentAnalysisDialog::GetCustomMessage() const {
+std::u16string ContentAnalysisDialog::GetCustomMessage() const {
   DCHECK(is_warning() || is_failure());
   DCHECK(has_custom_message());
-  return l10n_util::GetStringFUTF16(IDS_DEEP_SCANNING_DIALOG_CUSTOM_MESSAGE,
-                                    final_custom_message_);
+  return *(delegate_->GetCustomMessage());
 }
 
 const gfx::ImageSkia* ContentAnalysisDialog::GetTopImage() const {
-  const bool use_dark = color_utils::IsDark(GetBackgroundColor(GetWidget()));
+  const bool use_dark = color_utils::IsDark(GetBackgroundColor(contents_view_));
   const bool treat_as_text_paste =
       access_point_ == safe_browsing::DeepScanAccessPoint::PASTE ||
       (access_point_ == safe_browsing::DeepScanAccessPoint::DRAG_AND_DROP &&
@@ -727,19 +734,19 @@ const gfx::ImageSkia* ContentAnalysisDialog::GetTopImage() const {
 }
 
 SkColor ContentAnalysisDialog::GetSideImageLogoColor() const {
-  const views::Widget* widget = GetWidget();
-  DCHECK(widget);
-  switch (dialog_status_) {
-    case DeepScanningDialogStatus::PENDING:
+  DCHECK(contents_view_);
+
+  switch (dialog_state_) {
+    case State::PENDING:
       // Match the spinner in the pending state.
-      return widget->GetNativeTheme()->GetSystemColor(
+      return contents_view_->GetNativeTheme()->GetSystemColor(
           ui::NativeTheme::kColorId_ThrobberSpinningColor);
-    case DeepScanningDialogStatus::SUCCESS:
-    case DeepScanningDialogStatus::FAILURE:
-    case DeepScanningDialogStatus::WARNING:
+    case State::SUCCESS:
+    case State::FAILURE:
+    case State::WARNING:
       // In a result state the background will have the result's color, so the
       // logo should have the same color as the background.
-      return GetBackgroundColor(widget);
+      return GetBackgroundColor(contents_view_);
   }
 }
 

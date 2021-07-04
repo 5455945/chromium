@@ -5,14 +5,14 @@
 #include "chrome/browser/ui/bluetooth/bluetooth_chooser_desktop.h"
 
 #include "base/check.h"
-#include "chrome/browser/ui/bluetooth/bluetooth_chooser_controller.h"
+#include "chrome/browser/ui/bluetooth/chrome_bluetooth_chooser_controller.h"
 #include "chrome/browser/ui/browser_dialogs.h"
 
 BluetoothChooserDesktop::BluetoothChooserDesktop(
     content::RenderFrameHost* frame,
     const content::BluetoothChooser::EventHandler& event_handler) {
   auto controller =
-      std::make_unique<BluetoothChooserController>(frame, event_handler);
+      std::make_unique<ChromeBluetoothChooserController>(frame, event_handler);
   bluetooth_chooser_controller_ = controller->GetWeakPtr();
   close_closure_ =
       chrome::ShowDeviceChooserDialog(frame, std::move(controller));
@@ -41,7 +41,7 @@ void BluetoothChooserDesktop::ShowDiscoveryState(DiscoveryState state) {
 void BluetoothChooserDesktop::AddOrUpdateDevice(
     const std::string& device_id,
     bool should_update_name,
-    const base::string16& device_name,
+    const std::u16string& device_name,
     bool is_gatt_connected,
     bool is_paired,
     int signal_strength_level) {

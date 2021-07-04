@@ -16,7 +16,6 @@
 #include "base/logging.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringize_macros.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "mojo/core/embedder/embedder.h"
@@ -166,15 +165,6 @@ int HostMain(int argc, char** argv) {
 #endif
 
   base::CommandLine::Init(argc, argv);
-
-#if !defined(NDEBUG)
-  // Always enable Webrtc logging for debug builds.
-  // Without this switch, Webrtc errors will still be logged but
-  // RTC_LOG(LS_INFO) lines will not.
-  // See https://webrtc.org/native-code/logging
-  auto* cl = base::CommandLine::ForCurrentProcess();
-  cl->AppendSwitch("vmodule=*/webrtc/*=1");
-#endif
 
   // Parse the command line.
   const base::CommandLine* command_line =

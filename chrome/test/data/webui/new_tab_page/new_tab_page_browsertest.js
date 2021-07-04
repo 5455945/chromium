@@ -28,18 +28,6 @@ TEST_F('NewTabPageAppTest', 'All', function() {
 });
 
 // eslint-disable-next-line no-var
-var NewTabPageMostVisitedTest = class extends NewTabPageBrowserTest {
-  /** @override */
-  get browsePreload() {
-    return 'chrome://new-tab-page/test_loader.html?module=new_tab_page/most_visited_test.js';
-  }
-};
-
-TEST_F('NewTabPageMostVisitedTest', 'All', function() {
-  mocha.run();
-});
-
-// eslint-disable-next-line no-var
 var NewTabPageCustomizeDialogTest = class extends NewTabPageBrowserTest {
   /** @override */
   get browsePreload() {
@@ -60,6 +48,18 @@ var NewTabPageUtilsTest = class extends NewTabPageBrowserTest {
 };
 
 TEST_F('NewTabPageUtilsTest', 'All', function() {
+  mocha.run();
+});
+
+// eslint-disable-next-line no-var
+var NewTabPageMetricsUtilsTest = class extends NewTabPageBrowserTest {
+  /** @override */
+  get browsePreload() {
+    return 'chrome://new-tab-page/test_loader.html?module=new_tab_page/metrics_utils_test.js';
+  }
+};
+
+TEST_F('NewTabPageMetricsUtilsTest', 'All', function() {
   mocha.run();
 });
 
@@ -172,14 +172,14 @@ TEST_F('NewTabPageModulesModuleWrapperTest', 'All', function() {
 });
 
 // eslint-disable-next-line no-var
-var NewTabPageImgTest = class extends NewTabPageBrowserTest {
+var NewTabPageModulesModulesTest = class extends NewTabPageBrowserTest {
   /** @override */
   get browsePreload() {
-    return 'chrome://new-tab-page/test_loader.html?module=new_tab_page/img_test.js';
+    return 'chrome://new-tab-page/test_loader.html?module=new_tab_page/modules/modules_test.js';
   }
 };
 
-TEST_F('NewTabPageImgTest', 'All', function() {
+TEST_F('NewTabPageModulesModulesTest', 'All', function() {
   mocha.run();
 });
 
@@ -205,6 +205,30 @@ var NewTabPageModulesModuleRegistryTest = class extends NewTabPageBrowserTest {
 };
 
 TEST_F('NewTabPageModulesModuleRegistryTest', 'All', function() {
+  mocha.run();
+});
+
+// eslint-disable-next-line no-var
+var NewTabPageModulesModuleHeaderTest = class extends NewTabPageBrowserTest {
+  /** @override */
+  get browsePreload() {
+    return 'chrome://new-tab-page/test_loader.html?module=new_tab_page/modules/module_header_test.js';
+  }
+};
+
+TEST_F('NewTabPageModulesModuleHeaderTest', 'All', function() {
+  mocha.run();
+});
+
+// eslint-disable-next-line no-var
+var NewTabPageModulesInfoDialogTest = class extends NewTabPageBrowserTest {
+  /** @override */
+  get browsePreload() {
+    return 'chrome://new-tab-page/test_loader.html?module=new_tab_page/modules/info_dialog_test.js';
+  }
+};
+
+TEST_F('NewTabPageModulesInfoDialogTest', 'All', function() {
   mocha.run();
 });
 

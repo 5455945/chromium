@@ -103,6 +103,9 @@ ScriptValue ModuleRecord::Instantiate(ScriptState* script_state,
 
   DCHECK(!record.IsEmpty());
   v8::Local<v8::Context> context = script_state->GetContext();
+  v8::MicrotasksScope microtasks_scope(
+      isolate, ToMicrotaskQueue(script_state),
+      v8::MicrotasksScope::kDoNotRunMicrotasks);
 
   // Script IDs are not available on errored modules or on non-source text
   // modules, so we give them a default value.
@@ -188,7 +191,7 @@ v8::MaybeLocal<v8::Module> ModuleRecord::ResolveModuleCallback(
   DCHECK(modulator);
 
   ModuleRequest module_request(
-      ToCoreStringWithNullCheck(specifier), TextPosition(),
+      ToCoreStringWithNullCheck(specifier), TextPosition::MinimumPosition(),
       ModuleRecord::ToBlinkImportAssertions(
           context, referrer, import_assertions,
           /*v8_import_assertions_has_positions=*/true));
@@ -227,7 +230,7 @@ Vector<ImportAssertion> ModuleRecord::ToBlinkImportAssertions(
     v8::Local<v8::String> v8_assertion_value =
         v8_import_assertions->Get(context, (i * kV8AssertionEntrySize) + 1)
             .As<v8::String>();
-    TextPosition assertion_position;
+    TextPosition assertion_position = TextPosition::MinimumPosition();
     if (v8_import_assertions_has_positions) {
       int32_t v8_assertion_source_offset =
           v8_import_assertions->Get(context, (i * kV8AssertionEntrySize) + 2)

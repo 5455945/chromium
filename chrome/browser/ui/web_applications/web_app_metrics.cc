@@ -7,13 +7,13 @@
 #include "base/bind.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/optional.h"
 #include "base/power_monitor/power_monitor.h"
 #include "base/time/time.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/web_app_metrics_factory.h"
 #include "chrome/browser/web_applications/components/web_app_prefs_utils.h"
 #include "chrome/browser/web_applications/components/web_app_tab_helper_base.h"
@@ -24,10 +24,11 @@
 #include "components/site_engagement/content/site_engagement_service.h"
 #include "components/webapps/browser/banners/app_banner_manager.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/manifest/display_mode.mojom.h"
 
 using DisplayMode = blink::mojom::DisplayMode;
-using base::Optional;
+using absl::optional;
 using content::WebContents;
 
 namespace web_app {
@@ -62,9 +63,9 @@ void RecordUserInstalledHistogram(
   RecordTabOrWindowHistogram(histogram_prefix, in_window, engagement_type);
 }
 
-Optional<int> GetLatestWebAppInstallSource(const AppId& app_id,
+optional<int> GetLatestWebAppInstallSource(const AppId& app_id,
                                            PrefService* prefs) {
-  Optional<int> value =
+  optional<int> value =
       GetIntWebAppPref(prefs, app_id, kLatestWebAppInstallSource);
   DCHECK_GE(value.value_or(0), 0);
   DCHECK_LT(value.value_or(0),
@@ -85,7 +86,7 @@ WebAppMetrics::WebAppMetrics(Profile* profile)
       profile_(profile),
       browser_tab_strip_tracker_(this, nullptr) {
   browser_tab_strip_tracker_.Init();
-  base::PowerMonitor::AddObserver(this);
+  base::PowerMonitor::AddPowerSuspendObserver(this);
   BrowserList::AddObserver(this);
 
   WebAppProvider* provider = WebAppProvider::Get(profile_);
@@ -97,7 +98,7 @@ WebAppMetrics::WebAppMetrics(Profile* profile)
 
 WebAppMetrics::~WebAppMetrics() {
   BrowserList::RemoveObserver(this);
-  base::PowerMonitor::RemoveObserver(this);
+  base::PowerMonitor::RemovePowerSuspendObserver(this);
 }
 
 void WebAppMetrics::OnEngagementEvent(
@@ -203,9 +204,10 @@ void WebAppMetrics::OnTabStripModelChanged(
   }
 
   if (change.type() == TabStripModelChange::kRemoved) {
-    for (const TabStripModelChange::ContentsWithIndexAndWillBeDeleted&
-             contents : change.GetRemove()->contents) {
-      if (contents.will_be_deleted) {
+    for (const TabStripModelChange::RemovedTab& contents :
+         change.GetRemove()->contents) {
+      if (contents.remove_reason ==
+          TabStripModelChange::RemoveReason::kDeleted) {
         auto* tab_helper =
             WebAppTabHelperBase::FromWebContents(contents.contents);
         if (tab_helper && !tab_helper->GetAppId().empty())

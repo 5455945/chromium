@@ -1,6 +1,7 @@
 include_rules = [
   "+chrome/app",
   "+chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java",
+  "+chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java",
   "+chrome/browser/android/browserservices/verification",
   "+chrome/browser/android/lifecycle",
   "+chrome/browser/image_fetcher",
@@ -52,6 +53,7 @@ include_rules = [
   # We should only depend on the util package of something that lives in
   # javatests.
   "+components/sync/test/android/javatests/src/org/chromium/components/sync/test/util",
+  "+components/webauthn/android/java",
 
   "-content/public/android/java",
   "+content/public/android/java/src/org/chromium/content_public",

@@ -1,9 +1,12 @@
 // Copyright 2018 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 #include "content/browser/devtools/devtools_instrumentation.h"
 
+#include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
+#include "base/trace_event/traced_value.h"
 #include "components/download/public/common/download_create_info.h"
 #include "components/download/public/common/download_item.h"
 #include "content/browser/devtools/browser_devtools_agent_host.h"
@@ -14,6 +17,7 @@
 #include "content/browser/devtools/protocol/browser_handler.h"
 #include "content/browser/devtools/protocol/emulation_handler.h"
 #include "content/browser/devtools/protocol/fetch_handler.h"
+#include "content/browser/devtools/protocol/input_handler.h"
 #include "content/browser/devtools/protocol/log_handler.h"
 #include "content/browser/devtools/protocol/network.h"
 #include "content/browser/devtools/protocol/network_handler.h"
@@ -24,9 +28,10 @@
 #include "content/browser/devtools/service_worker_devtools_agent_host.h"
 #include "content/browser/renderer_host/frame_tree_node.h"
 #include "content/browser/renderer_host/navigation_request.h"
+#include "content/browser/service_worker/service_worker_context_wrapper.h"
+#include "content/browser/storage_partition_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/browser/web_package/signed_exchange_envelope.h"
-#include "content/common/navigation_params.mojom.h"
 #include "content/public/browser/browser_context.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
@@ -35,12 +40,13 @@
 #include "net/cookies/cookie_inclusion_status.h"
 #include "net/http/http_request_headers.h"
 #include "net/proxy_resolution/proxy_config.h"
-#include "net/quic/quic_transport_error.h"
+#include "net/quic/web_transport_error.h"
 #include "net/ssl/ssl_info.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "third_party/blink/public/mojom/devtools/inspector_issue.mojom.h"
+#include "third_party/blink/public/mojom/navigation/navigation_params.mojom.h"
 
 namespace content {
 namespace devtools_instrumentation {
@@ -66,33 +72,6 @@ void DispatchToAgents(int frame_tree_node_id,
   FrameTreeNode* ftn = FrameTreeNode::GloballyFindByID(frame_tree_node_id);
   if (ftn)
     DispatchToAgents(ftn, method, std::forward<Args>(args)...);
-}
-
-template <typename Handler, typename... MethodArgs, typename... Args>
-void DispatchToWorkerAgents(int32_t worker_process_id,
-                            int32_t worker_route_id,
-                            void (Handler::*method)(MethodArgs...),
-                            Args&&... args) {
-  ServiceWorkerDevToolsAgentHost* service_worker_host =
-      ServiceWorkerDevToolsManager::GetInstance()
-          ->GetDevToolsAgentHostForWorker(worker_process_id, worker_route_id);
-  if (!service_worker_host)
-    return;
-  for (auto* h : Handler::ForAgentHost(service_worker_host))
-    (h->*method)(std::forward<Args>(args)...);
-
-  // TODO(crbug.com/1004979): Look for shared worker hosts here as well.
-}
-
-FrameTreeNode* GetFtnForNetworkRequest(int process_id, int routing_id) {
-  // Navigation requests start in the browser, before process_id is assigned, so
-  // the id is set to 0. In these situations, the routing_id is the frame tree
-  // node id, and can be used directly.
-  if (process_id == 0) {
-    return FrameTreeNode::GloballyFindByID(routing_id);
-  }
-  return FrameTreeNode::GloballyFindByID(
-      RenderFrameHost::GetFrameTreeNodeIdForRoutingId(process_id, routing_id));
 }
 
 std::unique_ptr<protocol::Audits::InspectorIssue> BuildHeavyAdIssue(
@@ -192,6 +171,11 @@ void OnResetNavigationRequest(NavigationRequest* navigation_request) {
 void OnNavigationResponseReceived(
     const NavigationRequest& nav_request,
     const network::mojom::URLResponseHead& response) {
+  // This response is artificial (see CachedNavigationURLLoader), so we don't
+  // want to report it.
+  if (nav_request.IsPageActivation())
+    return;
+
   FrameTreeNode* ftn = nav_request.frame_tree_node();
   std::string id = nav_request.devtools_navigation_token().ToString();
   std::string frame_id = ftn->devtools_frame_token().ToString();
@@ -199,6 +183,15 @@ void OnNavigationResponseReceived(
   DispatchToAgents(ftn, &protocol::NetworkHandler::ResponseReceived, id, id,
                    url, protocol::Network::ResourceTypeEnum::Document, response,
                    frame_id);
+}
+
+void BackForwardCacheNotUsed(
+    const NavigationRequest* nav_request,
+    const BackForwardCacheCanStoreDocumentResult* result) {
+  DCHECK(nav_request);
+  FrameTreeNode* ftn = nav_request->frame_tree_node();
+  DispatchToAgents(ftn, &protocol::PageHandler::BackForwardCacheNotUsed,
+                   nav_request, result);
 }
 
 namespace {
@@ -272,8 +265,28 @@ void OnNavigationRequestFailed(
                                 inspector_issue.get());
   }
 
+  // If a BFCache navigation fails, it will be restarted as a regular
+  // navigation, so we don't want to report this failure.
+  // TODO(https://crbug.com/1195751): Stop reporting this for Prerender as well
+  // after it supports fallback to regular navigation on activation failures.
+  if (nav_request.IsServedFromBackForwardCache())
+    return;
+
   DispatchToAgents(ftn, &protocol::NetworkHandler::LoadingComplete, id,
                    protocol::Network::ResourceTypeEnum::Document, status);
+}
+
+bool ShouldBypassCSP(const NavigationRequest& nav_request) {
+  DevToolsAgentHostImpl* agent_host =
+      RenderFrameDevToolsAgentHost::GetFor(nav_request.frame_tree_node());
+  if (!agent_host)
+    return false;
+
+  for (auto* page : protocol::PageHandler::ForAgentHost(agent_host)) {
+    if (page->ShouldBypassCSP())
+      return true;
+  }
+  return false;
 }
 
 void WillBeginDownload(download::DownloadCreateInfo* info,
@@ -287,17 +300,26 @@ void WillBeginDownload(download::DownloadCreateInfo* info,
           : nullptr;
   if (!ftn)
     return;
+  DispatchToAgents(ftn, &protocol::BrowserHandler::DownloadWillBegin, ftn,
+                   item);
   DispatchToAgents(ftn, &protocol::PageHandler::DownloadWillBegin, ftn, item);
+
+  for (auto* agent_host : BrowserDevToolsAgentHost::Instances()) {
+    for (auto* browser_handler :
+         protocol::BrowserHandler::ForAgentHost(agent_host)) {
+      browser_handler->DownloadWillBegin(ftn, item);
+    }
+  }
 }
 
 void OnSignedExchangeReceived(
     FrameTreeNode* frame_tree_node,
-    base::Optional<const base::UnguessableToken> devtools_navigation_token,
+    absl::optional<const base::UnguessableToken> devtools_navigation_token,
     const GURL& outer_request_url,
     const network::mojom::URLResponseHead& outer_response,
-    const base::Optional<SignedExchangeEnvelope>& envelope,
+    const absl::optional<SignedExchangeEnvelope>& envelope,
     const scoped_refptr<net::X509Certificate>& certificate,
-    const base::Optional<net::SSLInfo>& ssl_info,
+    const absl::optional<net::SSLInfo>& ssl_info,
     const std::vector<SignedExchangeError>& errors) {
   DispatchToAgents(frame_tree_node,
                    &protocol::NetworkHandler::OnSignedExchangeReceived,
@@ -412,12 +434,28 @@ bool ShouldWaitForDebuggerInWindowOpen() {
   return false;
 }
 
-void ApplyNetworkRequestOverrides(FrameTreeNode* frame_tree_node,
-                                  mojom::BeginNavigationParams* begin_params,
-                                  bool* report_raw_headers) {
+void ApplyNetworkRequestOverrides(
+    FrameTreeNode* frame_tree_node,
+    blink::mojom::BeginNavigationParams* begin_params,
+    bool* report_raw_headers,
+    absl::optional<std::vector<net::SourceStream::SourceType>>*
+        devtools_accepted_stream_types) {
   bool disable_cache = false;
   DevToolsAgentHostImpl* agent_host =
       RenderFrameDevToolsAgentHost::GetFor(frame_tree_node);
+  // Prerendered pages do not have DevTools attached but it's important for
+  // developers that they get the UA override of the visible DevTools for
+  // testing mobile sites. Use the DevTools agent of the primary main frame of
+  // the WebContents.
+  // TODO(https://crbug.com/1221419): The real fix may be to make a separate
+  // target for the prerendered page.
+  if (frame_tree_node->frame_tree()->is_prerendering()) {
+    DCHECK(!agent_host);
+    agent_host = RenderFrameDevToolsAgentHost::GetFor(
+        WebContentsImpl::FromFrameTreeNode(frame_tree_node)
+            ->GetMainFrame()
+            ->frame_tree_node());
+  }
   if (!agent_host)
     return;
   net::HttpRequestHeaders headers;
@@ -427,7 +465,7 @@ void ApplyNetworkRequestOverrides(FrameTreeNode* frame_tree_node,
       continue;
     *report_raw_headers = true;
     network->ApplyOverrides(&headers, &begin_params->skip_service_worker,
-                            &disable_cache);
+                            &disable_cache, devtools_accepted_stream_types);
   }
 
   for (auto* emulation : protocol::EmulationHandler::ForAgentHost(agent_host))
@@ -445,9 +483,22 @@ void ApplyNetworkRequestOverrides(FrameTreeNode* frame_tree_node,
 
 bool ApplyUserAgentMetadataOverrides(
     FrameTreeNode* frame_tree_node,
-    base::Optional<blink::UserAgentMetadata>* override_out) {
+    absl::optional<blink::UserAgentMetadata>* override_out) {
   DevToolsAgentHostImpl* agent_host =
       RenderFrameDevToolsAgentHost::GetFor(frame_tree_node);
+  // Prerendered pages do not have DevTools attached but it's important for
+  // developers that they get the UA override of the visible DevTools for
+  // testing mobile sites. Use the DevTools agent of the primary main frame of
+  // the WebContents.
+  // TODO(https://crbug.com/1221419): The real fix may be to make a separate
+  // target for the prerendered page.
+  if (frame_tree_node->frame_tree()->is_prerendering()) {
+    DCHECK(!agent_host);
+    agent_host = RenderFrameDevToolsAgentHost::GetFor(
+        WebContentsImpl::FromFrameTreeNode(frame_tree_node)
+            ->GetMainFrame()
+            ->frame_tree_node());
+  }
   if (!agent_host)
     return false;
 
@@ -462,7 +513,8 @@ namespace {
 template <typename HandlerType>
 bool MaybeCreateProxyForInterception(
     DevToolsAgentHostImpl* agent_host,
-    RenderProcessHost* rph,
+    int process_id,
+    StoragePartition* storage_partition,
     const base::UnguessableToken& frame_token,
     bool is_navigation,
     bool is_download,
@@ -472,10 +524,10 @@ bool MaybeCreateProxyForInterception(
   bool had_interceptors = false;
   const auto& handlers = HandlerType::ForAgentHost(agent_host);
   for (auto it = handlers.rbegin(); it != handlers.rend(); ++it) {
-    had_interceptors =
-        (*it)->MaybeCreateProxyForInterception(rph, frame_token, is_navigation,
-                                               is_download, agent_override) ||
-        had_interceptors;
+    had_interceptors = (*it)->MaybeCreateProxyForInterception(
+                           process_id, storage_partition, frame_token,
+                           is_navigation, is_download, agent_override) ||
+                       had_interceptors;
   }
   return had_interceptors;
 }
@@ -484,6 +536,30 @@ bool MaybeCreateProxyForInterception(
 
 bool WillCreateURLLoaderFactory(
     RenderFrameHostImpl* rfh,
+    bool is_navigation,
+    bool is_download,
+    mojo::PendingReceiver<network::mojom::URLLoaderFactory>*
+        target_factory_receiver,
+    network::mojom::URLLoaderFactoryOverridePtr* factory_override) {
+  DCHECK(!is_download || is_navigation);
+
+  RenderProcessHost* rph = rfh->GetProcess();
+  DCHECK(rph);
+
+  DevToolsAgentHostImpl* frame_agent_host =
+      RenderFrameDevToolsAgentHost::GetFor(rfh);
+
+  return WillCreateURLLoaderFactoryInternal(
+      frame_agent_host, rfh->GetDevToolsFrameToken(), rph->GetID(),
+      rph->GetStoragePartition(), is_navigation, is_download,
+      target_factory_receiver, factory_override);
+}
+
+bool WillCreateURLLoaderFactoryInternal(
+    DevToolsAgentHostImpl* agent_host,
+    const base::UnguessableToken& devtools_token,
+    int process_id,
+    StoragePartition* storage_partition,
     bool is_navigation,
     bool is_download,
     mojo::PendingReceiver<network::mojom::URLLoaderFactory>*
@@ -503,27 +579,24 @@ bool WillCreateURLLoaderFactory(
   // the closer it is to the network. So start with frame's NetworkHandler,
   // then process frame's FetchHandler and then browser's FetchHandler.
   // Within the target, the agents added earlier are closer to network.
-  DevToolsAgentHostImpl* frame_agent_host =
-      RenderFrameDevToolsAgentHost::GetFor(rfh);
-  RenderProcessHost* rph = rfh->GetProcess();
-  const base::UnguessableToken& frame_token = rfh->GetDevToolsFrameToken();
-
   bool had_interceptors =
       MaybeCreateProxyForInterception<protocol::NetworkHandler>(
-          frame_agent_host, rph, frame_token, is_navigation, is_download,
-          handler_override);
+          agent_host, process_id, storage_partition, devtools_token,
+          is_navigation, is_download, handler_override);
 
-  had_interceptors = MaybeCreateProxyForInterception<protocol::FetchHandler>(
-                         frame_agent_host, rph, frame_token, is_navigation,
-                         is_download, handler_override) ||
-                     had_interceptors;
+  had_interceptors =
+      MaybeCreateProxyForInterception<protocol::FetchHandler>(
+          agent_host, process_id, storage_partition, devtools_token,
+          is_navigation, is_download, handler_override) ||
+      had_interceptors;
 
   // TODO(caseq): assure deterministic order of browser agents (or sessions).
   for (auto* browser_agent_host : BrowserDevToolsAgentHost::Instances()) {
-    had_interceptors = MaybeCreateProxyForInterception<protocol::FetchHandler>(
-                           browser_agent_host, rph, frame_token, is_navigation,
-                           is_download, handler_override) ||
-                       had_interceptors;
+    had_interceptors =
+        MaybeCreateProxyForInterception<protocol::FetchHandler>(
+            browser_agent_host, process_id, storage_partition, devtools_token,
+            is_navigation, is_download, handler_override) ||
+        had_interceptors;
   }
   if (!had_interceptors)
     return false;
@@ -549,58 +622,42 @@ bool WillCreateURLLoaderFactory(
   return true;
 }
 
-bool WillCreateURLLoaderFactoryForWorker(
-    DevToolsAgentHostImpl* host,
-    const base::UnguessableToken& worker_token,
-    network::mojom::URLLoaderFactoryOverridePtr* factory_override) {
-  network::mojom::URLLoaderFactoryOverride devtools_override;
-  // If caller passed some existing overrides, use those.
-  // Otherwise, use our local var, then if handlers actually
-  // decide to intercept, move it to |factory_override|.
-  network::mojom::URLLoaderFactoryOverride* handler_override =
-      *factory_override ? factory_override->get() : &devtools_override;
-
-  RenderProcessHost* rph = host->GetProcessHost();
-  bool had_interceptors =
-      MaybeCreateProxyForInterception<protocol::FetchHandler>(
-          host, rph, worker_token, false, false, handler_override);
-
-  // TODO(caseq): assure deterministic order of browser agents (or sessions).
-  for (auto* browser_agent_host : BrowserDevToolsAgentHost::Instances()) {
-    had_interceptors = MaybeCreateProxyForInterception<protocol::FetchHandler>(
-                           browser_agent_host, rph, worker_token, false, false,
-                           handler_override) ||
-                       had_interceptors;
-  }
-  if (!had_interceptors)
-    return false;
-
-  DCHECK(handler_override->overriding_factory);
-  DCHECK(handler_override->overridden_factory_receiver);
-  if (!*factory_override) {
-    *factory_override = network::mojom::URLLoaderFactoryOverride::New(
-        std::move(devtools_override.overriding_factory),
-        std::move(devtools_override.overridden_factory_receiver), false);
-  }
-  return true;
-}
-
 bool WillCreateURLLoaderFactoryForServiceWorker(
     RenderProcessHost* rph,
     int routing_id,
     network::mojom::URLLoaderFactoryOverridePtr* factory_override) {
+  DCHECK(rph);
   DCHECK(factory_override);
 
   ServiceWorkerDevToolsAgentHost* worker_agent_host =
       ServiceWorkerDevToolsManager::GetInstance()
           ->GetDevToolsAgentHostForWorker(rph->GetID(), routing_id);
-  if (!worker_agent_host) {
-    NOTREACHED();
-    return false;
-  }
-  return WillCreateURLLoaderFactoryForWorker(
+  DCHECK(worker_agent_host);
+
+  return WillCreateURLLoaderFactoryInternal(
       worker_agent_host, worker_agent_host->devtools_worker_token(),
-      factory_override);
+      rph->GetID(), rph->GetStoragePartition(),
+      /*is_navigation=*/false, /*is_download=*/false,
+      /*target_factory_receiver=*/nullptr, factory_override);
+}
+
+bool WillCreateURLLoaderFactoryForServiceWorkerMainScript(
+    const ServiceWorkerContextWrapper* context_wrapper,
+    int64_t version_id,
+    mojo::PendingReceiver<network::mojom::URLLoaderFactory>*
+        target_factory_receiver) {
+  ServiceWorkerDevToolsAgentHost* worker_agent_host =
+      ServiceWorkerDevToolsManager::GetInstance()
+          ->GetDevToolsAgentHostForNewInstallingWorker(context_wrapper,
+                                                       version_id);
+  DCHECK(worker_agent_host);
+
+  return WillCreateURLLoaderFactoryInternal(
+      worker_agent_host, worker_agent_host->devtools_worker_token(),
+      ChildProcessHost::kInvalidUniqueID, context_wrapper->storage_partition(),
+      /*is_navigation=*/true,
+      /*is_download=*/false, target_factory_receiver,
+      /*factory_override=*/nullptr);
 }
 
 bool WillCreateURLLoaderFactoryForSharedWorker(
@@ -610,9 +667,27 @@ bool WillCreateURLLoaderFactoryForSharedWorker(
   if (!worker_agent_host)
     return false;
 
-  return WillCreateURLLoaderFactoryForWorker(
+  RenderProcessHost* rph = worker_agent_host->GetProcessHost();
+  DCHECK(rph);
+
+  return WillCreateURLLoaderFactoryInternal(
       worker_agent_host, worker_agent_host->devtools_worker_token(),
-      factory_override);
+      rph->GetID(), rph->GetStoragePartition(),
+      /*is_navigation=*/false, /*is_download=*/false,
+      /*target_factory_receiver=*/nullptr, factory_override);
+}
+
+bool WillCreateURLLoaderFactoryForWorkerMainScript(
+    DevToolsAgentHostImpl* host,
+    const base::UnguessableToken& worker_token,
+    network::mojom::URLLoaderFactoryOverridePtr* factory_override) {
+  RenderProcessHost* rph = host->GetProcessHost();
+  DCHECK(rph);
+
+  return WillCreateURLLoaderFactoryInternal(
+      host, worker_token, rph->GetID(), rph->GetStoragePartition(),
+      /*is_navigation=*/false, /*is_download=*/false,
+      /*target_factory_receiver=*/nullptr, factory_override);
 }
 
 bool WillCreateURLLoaderFactory(
@@ -652,6 +727,12 @@ void OnNavigationRequestWillBeSent(
       continue;
     agent_host->OnNavigationRequestWillBeSent(navigation_request);
   }
+
+  // We use CachedNavigationURLLoader for page activation (BFCache navigations
+  // and Prerender activations) and don't actually send a network request, so we
+  // don't report this request to DevTools.
+  if (navigation_request.IsPageActivation())
+    return;
 
   // Make sure both back-ends yield the same timestamp.
   auto timestamp = base::TimeTicks::Now();
@@ -719,169 +800,13 @@ void PortalActivated(RenderFrameHostImpl* render_frame_host_impl) {
                    &protocol::TargetHandler::UpdatePortals);
 }
 
-void OnRequestWillBeSentExtraInfo(
-    int process_id,
-    int routing_id,
-    const std::string& devtools_request_id,
-    const net::CookieAccessResultList& request_cookie_list,
-    const std::vector<network::mojom::HttpRawHeaderPairPtr>& request_headers,
-    const network::mojom::ClientSecurityStatePtr security_state) {
-  FrameTreeNode* ftn = GetFtnForNetworkRequest(process_id, routing_id);
-  if (ftn) {
-    DispatchToAgents(ftn,
-                     &protocol::NetworkHandler::OnRequestWillBeSentExtraInfo,
-                     devtools_request_id, request_cookie_list, request_headers,
-                     security_state);
-    return;
-  }
-
-  // In the case of service worker network requests, there is no
-  // FrameTreeNode to use so instead we use the "routing_id" created with the
-  // worker and sent to the renderer process to send as the render_frame_id in
-  // the renderer's network::ResourceRequest which gets plubmed to here as
-  // routing_id.
-  DispatchToWorkerAgents(
-      process_id, routing_id,
-      &protocol::NetworkHandler::OnRequestWillBeSentExtraInfo,
-      devtools_request_id, request_cookie_list, request_headers,
-      security_state);
-}
-
-void OnResponseReceivedExtraInfo(
-    int process_id,
-    int routing_id,
-    const std::string& devtools_request_id,
-    const net::CookieAndLineAccessResultList& response_cookie_list,
-    const std::vector<network::mojom::HttpRawHeaderPairPtr>& response_headers,
-    const base::Optional<std::string>& response_headers_text,
-    network::mojom::IPAddressSpace resource_address_space) {
-  FrameTreeNode* ftn = GetFtnForNetworkRequest(process_id, routing_id);
-  if (ftn) {
-    DispatchToAgents(
-        ftn, &protocol::NetworkHandler::OnResponseReceivedExtraInfo,
-        devtools_request_id, response_cookie_list, response_headers,
-        response_headers_text, resource_address_space);
-    return;
-  }
-
-  // See comment on DispatchToWorkerAgents in OnRequestWillBeSentExtraInfo.
-  DispatchToWorkerAgents(process_id, routing_id,
-                         &protocol::NetworkHandler::OnResponseReceivedExtraInfo,
-                         devtools_request_id, response_cookie_list,
-                         response_headers, response_headers_text,
-                         resource_address_space);
-}
-
-void OnPrivateNetworkRequest(
-    int32_t process_id,
-    int32_t routing_id,
-    const base::Optional<std::string>& devtools_request_id,
-    const GURL& url,
-    bool is_warning,
-    network::mojom::IPAddressSpace resource_address_space,
-    const network::mojom::ClientSecurityStatePtr client_security_state) {
-  FrameTreeNode* ftn = GetFtnForNetworkRequest(process_id, routing_id);
-  if (!ftn)
-    return;
-  auto cors_error_status =
-      protocol::Network::CorsErrorStatus::Create()
-          .SetCorsError(
-              protocol::Network::CorsErrorEnum::InsecurePrivateNetwork)
-          .SetFailedParameter("")
-          .Build();
-  std::unique_ptr<protocol::Audits::AffectedRequest> affected_request =
-      protocol::Audits::AffectedRequest::Create()
-          .SetRequestId(devtools_request_id.value_or(""))
-          .SetUrl(url.spec())
-          .Build();
-  auto cors_issue_details =
-      protocol::Audits::CorsIssueDetails::Create()
-          .SetIsWarning(is_warning)
-          .SetResourceIPAddressSpace(
-              protocol::NetworkHandler::BuildIpAddressSpace(
-                  resource_address_space))
-          .SetRequest(std::move(affected_request))
-          .SetCorsErrorStatus(std::move(cors_error_status))
-          .Build();
-  auto maybe_protocol_security_state =
-      protocol::NetworkHandler::MaybeBuildClientSecurityState(
-          client_security_state);
-  if (maybe_protocol_security_state.isJust()) {
-    cors_issue_details->SetClientSecurityState(
-        maybe_protocol_security_state.takeJust());
-  }
-  auto details = protocol::Audits::InspectorIssueDetails::Create()
-                     .SetCorsIssueDetails(std::move(cors_issue_details))
-                     .Build();
-
-  auto issue = protocol::Audits::InspectorIssue::Create()
-                   .SetCode(protocol::Audits::InspectorIssueCodeEnum::CorsIssue)
-                   .SetDetails(std::move(details))
-                   .Build();
-  ReportBrowserInitiatedIssue(ftn->current_frame_host(), issue.get());
-}
-
-void OnCorsPreflightRequest(int32_t process_id,
-                            int32_t render_frame_id,
-                            const base::UnguessableToken& devtools_request_id,
-                            const network::ResourceRequest& request,
-                            const GURL& initiator_url,
-                            const std::string& initiator_devtools_request_id) {
-  FrameTreeNode* ftn = GetFtnForNetworkRequest(process_id, render_frame_id);
-  if (!ftn)
-    return;
-  auto timestamp = base::TimeTicks::Now();
-  auto id = devtools_request_id.ToString();
-  DispatchToAgents(ftn, &protocol::NetworkHandler::RequestSent, id,
-                   /* loader_id=*/"", request,
-                   protocol::Network::Initiator::TypeEnum::Preflight,
-                   initiator_url, initiator_devtools_request_id, timestamp);
-}
-
-void OnCorsPreflightResponse(int32_t process_id,
-                             int32_t render_frame_id,
-                             const base::UnguessableToken& devtools_request_id,
-                             const GURL& url,
-                             network::mojom::URLResponseHeadPtr head) {
-  FrameTreeNode* ftn = GetFtnForNetworkRequest(process_id, render_frame_id);
-  if (!ftn)
-    return;
-  auto id = devtools_request_id.ToString();
-  DispatchToAgents(ftn, &protocol::NetworkHandler::ResponseReceived, id,
-                   /* loader_id=*/"", url,
-                   protocol::Network::ResourceTypeEnum::Preflight, *head,
-                   protocol::Maybe<std::string>());
-}
-
-void OnCorsPreflightRequestCompleted(
-    int32_t process_id,
-    int32_t render_frame_id,
-    const base::UnguessableToken& devtools_request_id,
-    const network::URLLoaderCompletionStatus& status) {
-  FrameTreeNode* ftn = GetFtnForNetworkRequest(process_id, render_frame_id);
-  if (!ftn)
-    return;
-  auto id = devtools_request_id.ToString();
-  DispatchToAgents(ftn, &protocol::NetworkHandler::LoadingComplete, id,
-                   protocol::Network::ResourceTypeEnum::Preflight, status);
-}
-
-void OnTrustTokenOperationDone(
-    int32_t process_id,
-    int32_t routing_id,
-    const std::string& devtools_request_id,
-    const network::mojom::TrustTokenOperationResultPtr result) {
-  FrameTreeNode* ftn = GetFtnForNetworkRequest(process_id, routing_id);
-  if (ftn) {
-    DispatchToAgents(ftn, &protocol::NetworkHandler::OnTrustTokenOperationDone,
-                     devtools_request_id, *result);
-    return;
-  }
-
-  // See comment on DispatchToWorkerAgents in OnRequestWillBeSentExtraInfo.
-  DispatchToWorkerAgents(process_id, routing_id,
-                         &protocol::NetworkHandler::OnTrustTokenOperationDone,
-                         devtools_request_id, *result);
+void WillStartDragging(FrameTreeNode* main_frame_tree_node,
+                       const blink::mojom::DragDataPtr drag_data,
+                       blink::DragOperationsMask drag_operations_mask,
+                       bool* intercepted) {
+  DCHECK(main_frame_tree_node->frame_tree()->root() == main_frame_tree_node);
+  DispatchToAgents(main_frame_tree_node, &protocol::InputHandler::StartDragging,
+                   *drag_data, drag_operations_mask, intercepted);
 }
 
 namespace {
@@ -914,6 +839,12 @@ std::unique_ptr<protocol::Array<protocol::String>> BuildExclusionReasons(
         protocol::Audits::SameSiteCookieExclusionReasonEnum::
             ExcludeSameSiteStrict);
   }
+  if (status.HasExclusionReason(
+          net::CookieInclusionStatus::EXCLUDE_INVALID_SAMEPARTY)) {
+    exclusion_reasons->push_back(
+        protocol::Audits::SameSiteCookieExclusionReasonEnum::
+            ExcludeInvalidSameParty);
+  }
 
   return exclusion_reasons;
 }
@@ -940,10 +871,6 @@ std::unique_ptr<protocol::Array<protocol::String>> BuildWarningReasons(
         protocol::Audits::SameSiteCookieWarningReasonEnum::
             WarnSameSiteUnspecifiedLaxAllowUnsafe);
   }
-
-  // If schemeful messages are disabled, don't add a warning for them.
-  if (!base::FeatureList::IsEnabled(features::kCookieDeprecationMessages))
-    return warning_reasons;
 
   // There can only be one of the following warnings.
   if (status.HasWarningReason(net::CookieInclusionStatus::
@@ -994,11 +921,11 @@ protocol::String BuildCookieOperation(
 
 void ReportSameSiteCookieIssue(
     RenderFrameHostImpl* render_frame_host_impl,
-    const net::CookieWithAccessResult& excluded_cookie,
+    const network::mojom::CookieOrLineWithAccessResultPtr& excluded_cookie,
     const GURL& url,
     const net::SiteForCookies& site_for_cookies,
     blink::mojom::SameSiteCookieOperation operation,
-    const base::Optional<std::string>& devtools_request_id) {
+    const absl::optional<std::string>& devtools_request_id) {
   std::unique_ptr<protocol::Audits::AffectedRequest> affected_request;
   if (devtools_request_id) {
     // We can report the url here, because if devtools_request_id is set, the
@@ -1009,23 +936,30 @@ void ReportSameSiteCookieIssue(
                            .Build();
   }
 
-  auto affected_cookie = protocol::Audits::AffectedCookie::Create()
-                             .SetName(excluded_cookie.cookie.Name())
-                             .SetPath(excluded_cookie.cookie.Path())
-                             .SetDomain(excluded_cookie.cookie.Domain())
-                             .Build();
-
   auto same_site_details =
       protocol::Audits::SameSiteCookieIssueDetails::Create()
-          .SetCookie(std::move(affected_cookie))
           .SetCookieExclusionReasons(
-              BuildExclusionReasons(excluded_cookie.access_result.status))
+              BuildExclusionReasons(excluded_cookie->access_result.status))
           .SetCookieWarningReasons(
-              BuildWarningReasons(excluded_cookie.access_result.status))
+              BuildWarningReasons(excluded_cookie->access_result.status))
           .SetOperation(BuildCookieOperation(operation))
           .SetCookieUrl(url.spec())
           .SetRequest(std::move(affected_request))
           .Build();
+
+  if (excluded_cookie->cookie_or_line->is_cookie()) {
+    const auto& cookie = excluded_cookie->cookie_or_line->get_cookie();
+    auto affected_cookie = protocol::Audits::AffectedCookie::Create()
+                               .SetName(cookie.Name())
+                               .SetPath(cookie.Path())
+                               .SetDomain(cookie.Domain())
+                               .Build();
+    same_site_details->SetCookie(std::move(affected_cookie));
+  } else {
+    CHECK(excluded_cookie->cookie_or_line->is_cookie_string());
+    same_site_details->SetRawCookieLine(
+        excluded_cookie->cookie_or_line->get_cookie_string());
+  }
 
   if (!site_for_cookies.IsNull()) {
     same_site_details->SetSiteForCookies(
@@ -1095,10 +1029,10 @@ void BuildAndReportBrowserInitiatedIssue(
   ReportBrowserInitiatedIssue(frame, issue.get());
 }
 
-void OnQuicTransportHandshakeFailed(
+void OnWebTransportHandshakeFailed(
     RenderFrameHostImpl* frame,
     const GURL& url,
-    const base::Optional<net::QuicTransportError>& error) {
+    const absl::optional<net::WebTransportError>& error) {
   FrameTreeNode* ftn = frame->frame_tree_node();
   if (!ftn)
     return;
@@ -1106,11 +1040,53 @@ void OnQuicTransportHandshakeFailed(
       "Failed to establish a connection to %s", url.spec().c_str());
   if (error) {
     text += ": ";
-    text += net::QuicTransportErrorToString(*error);
+    text += net::WebTransportErrorToString(*error);
   }
   text += ".";
   auto entry = protocol::Log::LogEntry::Create()
                    .SetSource(protocol::Log::LogEntry::SourceEnum::Network)
+                   .SetLevel(protocol::Log::LogEntry::LevelEnum::Error)
+                   .SetText(text)
+                   .SetTimestamp(base::Time::Now().ToDoubleT() * 1000.0)
+                   .Build();
+  DispatchToAgents(ftn, &protocol::LogHandler::EntryAdded, entry.get());
+}
+
+void OnServiceWorkerMainScriptFetchingFailed(
+    const GlobalRenderFrameHostId& requesting_frame_id,
+    const std::string& error) {
+  // If we have a requesting_frame_id, we should have a frame and a frame tree
+  // node. However since the lifetime of these objects can be complex, we check
+  // at each step that we indeed can go reach all the way to the FrameTreeNode.
+  if (!requesting_frame_id)
+    return;
+
+  RenderFrameHostImpl* requesting_frame =
+      RenderFrameHostImpl::FromID(requesting_frame_id);
+  if (!requesting_frame)
+    return;
+
+  FrameTreeNode* ftn = requesting_frame->frame_tree_node();
+  if (!ftn)
+    return;
+
+  auto entry = protocol::Log::LogEntry::Create()
+                   .SetSource(protocol::Log::LogEntry::SourceEnum::Network)
+                   .SetLevel(protocol::Log::LogEntry::LevelEnum::Error)
+                   .SetText(error)
+                   .SetTimestamp(base::Time::Now().ToDoubleT() * 1000.0)
+                   .Build();
+  DispatchToAgents(ftn, &protocol::LogHandler::EntryAdded, entry.get());
+}
+
+void LogWorkletError(RenderFrameHostImpl* frame_host,
+                     const std::string& error) {
+  FrameTreeNode* ftn = frame_host->frame_tree_node();
+  if (!ftn)
+    return;
+  std::string text = base::StrCat({"Worklet error: ", error});
+  auto entry = protocol::Log::LogEntry::Create()
+                   .SetSource(protocol::Log::LogEntry::SourceEnum::Other)
                    .SetLevel(protocol::Log::LogEntry::LevelEnum::Error)
                    .SetText(text)
                    .SetTimestamp(base::Time::Now().ToDoubleT() * 1000.0)

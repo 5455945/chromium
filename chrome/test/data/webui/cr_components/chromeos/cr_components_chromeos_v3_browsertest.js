@@ -20,6 +20,7 @@ GEN('#include "content/public/test/browser_test.h"');
  ['NetworkConfigInput', 'network/network_config_input_test.m.js'],
  ['NetworkConfigSelect', 'network/network_config_select_test.m.js'],
  ['NetworkConfigToggle', 'network/network_config_toggle_test.m.js'],
+ ['NetworkIcon', 'network/network_icon_test.m.js'],
  ['NetworkIpConfig', 'network/network_ip_config_test.m.js'],
  ['NetworkList', 'network/network_list_test.m.js'],
  ['NetworkListItem', 'network/network_list_item_test.m.js'],
@@ -31,6 +32,7 @@ GEN('#include "content/public/test/browser_test.h"');
  ['NetworkProxy', 'network/network_proxy_test.m.js'],
  ['NetworkSelect', 'network/network_select_test.m.js'],
  ['NetworkSiminfo', 'network/network_siminfo_test.m.js'],
+ ['SimLockDialogs', 'network/sim_lock_dialogs_test.m.js'],
 ].forEach(test => registerTest('NetworkComponents', 'os-settings', ...test));
 
 [['RoutineGroup', 'network_health/routine_group_test.m.js'],
@@ -46,13 +48,13 @@ GEN('#include "content/public/test/browser_test.h"');
  ['ActivationCodePage', 'cellular_setup/activation_code_page_test.m.js'],
  ['BasePage', 'cellular_setup/base_page_test.m.js'],
  ['ButtonBar', 'cellular_setup/button_bar_test.m.js'],
- ['CellularEidPopup', 'cellular_setup/cellular_eid_popup_test.m.js'],
+ ['ConfirmationCodePage', 'cellular_setup/confirmation_code_page_test.m.js'],
+ ['CellularEidDialog', 'cellular_setup/cellular_eid_dialog_test.m.js'],
  ['CellularSetup', 'cellular_setup/cellular_setup_test.m.js'],
  ['EsimFlowUi', 'cellular_setup/esim_flow_ui_test.m.js'],
  ['FinalPage', 'cellular_setup/final_page_test.m.js'],
  ['ProvisioningPage', 'cellular_setup/provisioning_page_test.m.js'],
  ['PsimFlowUi', 'cellular_setup/psim_flow_ui_test.m.js'],
- ['SetupSelectionFlow', 'cellular_setup/setup_selection_flow_test.m.js'],
  ['SetupLoadingPage', 'cellular_setup/setup_loading_page_test.m.js'],
 ].forEach(test => registerTest('CellularSetup', 'os-settings', ...test));
 // clang-format on
@@ -72,9 +74,8 @@ function registerTest(componentName, webuiHost, testName, module, caseName) {
     get featureList() {
       return {
         enabled: [
-          'chromeos::features::kConnectivityDiagnosticsWebUi',
-          'chromeos::features::kOsSettingsPolymer3',
           'chromeos::features::kUpdatedCellularActivationUi',
+          'chromeos::features::kCellularUseAttachApn',
         ],
       };
     }

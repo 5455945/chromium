@@ -8,6 +8,7 @@
 
 #include "base/check_op.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "components/signin/public/identity_manager/access_token_constants.h"
 #include "components/signin/public/identity_manager/access_token_info.h"
 #include "google_apis/gaia/gaia_constants.h"
@@ -112,6 +113,12 @@ AccessTokenFetcher::AccessTokenFetcher(
 AccessTokenFetcher::~AccessTokenFetcher() {}
 
 void AccessTokenFetcher::VerifyScopeAccess() {
+  if (account_id_.empty()) {
+    // Fetching access tokens for an empty account should fail, but not crash.
+    // Verifying the OAuth scopes based on the consent level is thus not needed.
+    return;
+  }
+
   // The consumer has privileged access to all scopes, return early.
   if (GetPrivilegedOAuth2Consumers().count(/*oauth_consumer_name=*/id())) {
     VLOG(1) << id() << " has access rights to scopes: "
@@ -168,7 +175,7 @@ void AccessTokenFetcher::StartAccessTokenRequest() {
   DCHECK(!access_token_request_);
 
   // Ensure that the client has the appropriate user consent for accessing the
-  // API scopes in this request.
+  // OAuth API scopes in this request.
   VerifyScopeAccess();
 
   // TODO(843510): Consider making the request to ProfileOAuth2TokenService

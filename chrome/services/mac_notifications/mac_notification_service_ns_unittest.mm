@@ -9,8 +9,8 @@
 #include <utility>
 #include <vector>
 
+#include "base/barrier_closure.h"
 #include "base/run_loop.h"
-#include "base/strings/string16.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
@@ -204,8 +204,7 @@ TEST_F(MacNotificationServiceNSTest, DisplayNotification) {
 
   std::vector<mac_notifications::mojom::NotificationActionButtonPtr> buttons;
   auto notification = mac_notifications::mojom::Notification::New(
-      std::move(meta), STRING16_LITERAL("title"), STRING16_LITERAL("subtitle"),
-      STRING16_LITERAL("body"), /*renotify=*/true,
+      std::move(meta), u"title", u"subtitle", u"body", /*renotify=*/true,
       /*show_settings_button=*/true, std::move(buttons),
       /*icon=*/gfx::ImageSkia());
   service_remote_->DisplayNotification(std::move(notification));
@@ -256,6 +255,28 @@ TEST_F(MacNotificationServiceNSTest, CloseNotification) {
   auto notification_identifier = mojom::NotificationIdentifier::New(
       "notificationId", std::move(profile_identifier));
   service_remote_->CloseNotification(std::move(notification_identifier));
+
+  run_loop.Run();
+  [mock_notification_center_ verify];
+}
+
+TEST_F(MacNotificationServiceNSTest, CloseProfileNotifications) {
+  auto notifications = SetupNotifications();
+
+  // Expect to close the expected notifications.
+  base::RunLoop run_loop;
+  base::RepeatingClosure barrier =
+      base::BarrierClosure(/*num_closures=*/2, run_loop.QuitClosure());
+  [[[mock_notification_center_ expect] andDo:^(NSInvocation*) {
+    barrier.Run();
+  }] removeDeliveredNotification:notifications[2]];
+  [[[mock_notification_center_ expect] andDo:^(NSInvocation*) {
+    barrier.Run();
+  }] removeDeliveredNotification:notifications[3]];
+
+  auto profile_identifier =
+      mojom::ProfileIdentifier::New("profileId", /*incognito=*/true);
+  service_remote_->CloseNotificationsForProfile(std::move(profile_identifier));
 
   run_loop.Run();
   [mock_notification_center_ verify];

@@ -10,6 +10,7 @@
 #include "base/strings/sys_string_conversions.h"
 #import "base/test/ios/wait_util.h"
 #include "components/strings/grit/components_strings.h"
+#import "ios/chrome/browser/ui/fullscreen/fullscreen_features.h"
 #import "ios/chrome/browser/ui/fullscreen/test/fullscreen_app_interface.h"
 #include "ios/chrome/grit/ios_strings.h"
 #import "ios/chrome/test/earl_grey/chrome_actions.h"
@@ -53,7 +54,9 @@ const char kLogoPageText[] = "Page with some text and the chromium logo image.";
 const char kDestinationPageUrl[] = "/destination";
 // HTML content of the destination page.
 const char kDestinationHtml[] =
-    "<html><body><script>document.title='new doc'</script>"
+    "<html><head><meta name='viewport' content='width=device-width, "
+    "initial-scale=1.0, maximum-scale=1.0, user-scalable=no' "
+    "/></head><body><script>document.title='new doc'</script>"
     "<center><span id=\"message\">You made it!</span></center>"
     "</body></html>";
 // The DOM element ID of the message on the destination page.
@@ -65,7 +68,9 @@ const char kDestinationPageText[] = "You made it!";
 const char kInitialPageUrl[] = "/scenarioContextMenuOpenInNewSurface";
 // HTML content of a page with a link to the destination page.
 const char kInitialPageHtml[] =
-    "<html><body><a style='margin-left:150px' href='/destination' id='link'>"
+    "<html><head><meta name='viewport' content='width=device-width, "
+    "initial-scale=1.0, maximum-scale=1.0, user-scalable=no' /></head><body><a "
+    "style='margin-left:150px' href='/destination' id='link'>"
     "link</a></body></html>";
 // The DOM element ID of the link to the destination page.
 const char kInitialPageDestinationLinkId[] = "link";
@@ -80,7 +85,9 @@ const char kInitialPageDestinationLinkText[] = "link";
 //    [2] NSString - image title
 //    [3] char[]   - image element ID.
 NSString* const kTruncationTestPageTemplateHtml =
-    @"<html><body><p style='margin-bottom:50px'>Short title test.</p>"
+    @"<html><head><meta name='viewport' content='width=device-width, "
+     "initial-scale=1.0, maximum-scale=1.0, user-scalable=no' "
+     "/></head><body><p style='margin-bottom:50px'>Short title test.</p>"
      "<p><a style='margin-left:150px' href='%@' id='%s'>LINK</a></p>"
      "<img src='chromium_logo.png' title='%@' id='%s'/>"
      "</body></html>";
@@ -180,6 +187,14 @@ void TapOnContextMenuButton(id<GREYMatcher> context_menu_item_button) {
 
 @implementation ContextMenuTestCase
 
+- (AppLaunchConfiguration)appConfigurationForTestCase {
+  AppLaunchConfiguration config;
+
+  config.features_disabled.push_back(
+      fullscreen::features::kSmoothScrollingDefault);
+  return config;
+}
+
 + (void)setUpForTestCase {
   [super setUpForTestCase];
   [ChromeEarlGrey setContentSettings:CONTENT_SETTING_ALLOW];
@@ -187,7 +202,6 @@ void TapOnContextMenuButton(id<GREYMatcher> context_menu_item_button) {
 
 + (void)tearDown {
   [ChromeEarlGrey setContentSettings:CONTENT_SETTING_DEFAULT];
-  [ChromeEarlGrey closeAllExtraWindows];
   [super tearDown];
 }
 
@@ -245,6 +259,7 @@ void TapOnContextMenuButton(id<GREYMatcher> context_menu_item_button) {
   [ChromeEarlGrey loadURL:initialURL];
   [ChromeEarlGrey
       waitForWebStateContainingText:kInitialPageDestinationLinkText];
+  [ChromeEarlGrey waitForWebStateZoomScale:1.0];
 
   LongPressElement(kInitialPageDestinationLinkId);
   TapOnContextMenuButton(OpenLinkInNewTabButton());
@@ -266,8 +281,7 @@ void TapOnContextMenuButton(id<GREYMatcher> context_menu_item_button) {
 
   // Calculate a point inside the displayed image.
   CGFloat topInset = 0.0;
-  if ([ChromeEarlGrey webStateWebViewUsesContentInset] ||
-      [FullscreenAppInterface isFullscreenInitialized]) {
+  if ([ChromeEarlGrey webStateWebViewUsesContentInset]) {
     topInset = [FullscreenAppInterface currentViewportInsets].top;
   }
   CGPoint pointOnImage = CGPointZero;
@@ -306,6 +320,7 @@ void TapOnContextMenuButton(id<GREYMatcher> context_menu_item_button) {
   const GURL shortTtileURL = self.testServer->GetURL(kShortTruncationPageUrl);
   [ChromeEarlGrey loadURL:shortTtileURL];
   [ChromeEarlGrey waitForPageToFinishLoading];
+  [ChromeEarlGrey waitForWebStateZoomScale:1.0];
 
   LongPressElement(kLogoPageChromiumImageId);
   [[EarlGrey selectElementWithMatcher:grey_text(kShortImgTitile)]
@@ -322,6 +337,7 @@ void TapOnContextMenuButton(id<GREYMatcher> context_menu_item_button) {
   const GURL longTtileURL = self.testServer->GetURL(kLongTruncationPageUrl);
   [ChromeEarlGrey loadURL:longTtileURL];
   [ChromeEarlGrey waitForPageToFinishLoading];
+  [ChromeEarlGrey waitForWebStateZoomScale:1.0];
 
   LongPressElement(kLogoPageChromiumImageId);
   [[EarlGrey selectElementWithMatcher:grey_text(kLongImgTitle)]
@@ -366,6 +382,7 @@ void TapOnContextMenuButton(id<GREYMatcher> context_menu_item_button) {
   const GURL destinationURL = self.testServer->GetURL(kDestinationPageUrl);
   [ChromeEarlGrey loadURL:destinationURL];
   [ChromeEarlGrey waitForWebStateContainingText:kDestinationPageText];
+  [ChromeEarlGrey waitForWebStateZoomScale:1.0];
 
   LongPressElement(kDestinationPageTextId);
 
@@ -384,6 +401,7 @@ void TapOnContextMenuButton(id<GREYMatcher> context_menu_item_button) {
   [ChromeEarlGrey loadURL:initialURL];
   [ChromeEarlGrey
       waitForWebStateContainingText:kInitialPageDestinationLinkText];
+  [ChromeEarlGrey waitForWebStateZoomScale:1.0];
 
   // Display the context menu twice.
   for (NSInteger i = 0; i < 2; i++) {
@@ -420,6 +438,7 @@ void TapOnContextMenuButton(id<GREYMatcher> context_menu_item_button) {
   [ChromeEarlGrey loadURL:initialURL];
   [ChromeEarlGrey
       waitForWebStateContainingText:kInitialPageDestinationLinkText];
+  [ChromeEarlGrey waitForWebStateZoomScale:1.0];
 
   LongPressElement(kInitialPageDestinationLinkId);
 
@@ -459,6 +478,7 @@ void TapOnContextMenuButton(id<GREYMatcher> context_menu_item_button) {
 
   [ChromeEarlGrey waitForWebStateContainingText:kInitialPageDestinationLinkText
                              inWindowWithNumber:0];
+  [ChromeEarlGrey waitForWebStateZoomScale:1.0];
 
   // Display the context menu.
   LongPressElement(kInitialPageDestinationLinkId);

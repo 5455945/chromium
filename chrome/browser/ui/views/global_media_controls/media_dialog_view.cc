@@ -19,13 +19,16 @@
 #include "chrome/browser/ui/views/global_media_controls/media_notification_container_impl_view.h"
 #include "chrome/browser/ui/views/global_media_controls/media_notification_list_view.h"
 #include "chrome/browser/ui/views/user_education/new_badge_label.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/live_caption/pref_names.h"
+#include "components/soda/constants.h"
 #include "components/sync_preferences/pref_service_syncable.h"
 #include "components/vector_icons/vector_icons.h"
+#include "content/public/browser/web_contents.h"
 #include "media/base/media_switches.h"
 #include "services/media_session/public/mojom/media_session.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/views/background.h"
 #include "ui/views/bubble/bubble_frame_view.h"
@@ -34,7 +37,6 @@
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/views_features.h"
 
 using media_session::mojom::MediaSessionAction;
@@ -55,12 +57,26 @@ MediaDialogView* MediaDialogView::instance_ = nullptr;
 bool MediaDialogView::has_been_opened_ = false;
 
 // static
-views::Widget* MediaDialogView::ShowDialog(views::View* anchor_view,
-                                           MediaNotificationService* service,
-                                           Profile* profile) {
+views::Widget* MediaDialogView::ShowDialog(
+    views::View* anchor_view,
+    MediaNotificationService* service,
+    Profile* profile,
+    GlobalMediaControlsEntryPoint entry_point) {
+  return ShowDialogForPresentationRequest(anchor_view, service, profile,
+                                          nullptr, entry_point);
+}
+
+// static
+views::Widget* MediaDialogView::ShowDialogForPresentationRequest(
+    views::View* anchor_view,
+    MediaNotificationService* service,
+    Profile* profile,
+    content::WebContents* contents,
+    GlobalMediaControlsEntryPoint entry_point) {
   DCHECK(!instance_);
   DCHECK(service);
-  instance_ = new MediaDialogView(anchor_view, service, profile);
+  instance_ =
+      new MediaDialogView(anchor_view, service, profile, contents, entry_point);
 
   views::Widget* widget =
       views::BubbleDialogDelegateView::CreateBubble(instance_);
@@ -68,6 +84,8 @@ views::Widget* MediaDialogView::ShowDialog(views::View* anchor_view,
 
   base::UmaHistogramBoolean("Media.GlobalMediaControls.RepeatUsage",
                             has_been_opened_);
+  base::UmaHistogramEnumeration("Media.GlobalMediaControls.EntryPoint",
+                                entry_point);
   has_been_opened_ = true;
 
   return widget;
@@ -95,8 +113,8 @@ bool MediaDialogView::IsShowing() {
 MediaNotificationContainerImpl* MediaDialogView::ShowMediaSession(
     const std::string& id,
     base::WeakPtr<media_message_center::MediaNotificationItem> item) {
-  auto container =
-      std::make_unique<MediaNotificationContainerImplView>(id, item, service_);
+  auto container = std::make_unique<MediaNotificationContainerImplView>(
+      id, item, service_, entry_point_);
   MediaNotificationContainerImplView* container_ptr = container.get();
   container_ptr->AddObserver(this);
   observed_containers_[id] = container_ptr;
@@ -133,12 +151,18 @@ void MediaDialogView::HideMediaDialog() {
 }
 
 void MediaDialogView::AddedToWidget() {
-  int corner_radius =
-      views::LayoutProvider::Get()->GetCornerRadiusMetric(views::EMPHASIS_HIGH);
+  int corner_radius = views::LayoutProvider::Get()->GetCornerRadiusMetric(
+      views::Emphasis::kHigh);
   views::BubbleFrameView* frame = GetBubbleFrameView();
-  if (frame)
+  if (frame) {
     frame->SetCornerRadius(corner_radius);
-  service_->SetDialogDelegate(this);
+  }
+  if (entry_point_ == GlobalMediaControlsEntryPoint::kPresentation) {
+    service_->SetDialogDelegateForWebContents(
+        this, web_contents_for_presentation_request_);
+  } else {
+    service_->SetDialogDelegate(this);
+  }
   speech::SodaInstaller::GetInstance()->AddObserver(this);
 }
 
@@ -155,10 +179,10 @@ gfx::Size MediaDialogView::CalculatePreferredSize() const {
 
 void MediaDialogView::UpdateBubbleSize() {
   SizeToContents();
-  if (!base::FeatureList::IsEnabled(media::kLiveCaption))
+  if (!media::IsLiveCaptionFeatureEnabled())
     return;
 
-  const int width = GetPreferredSize().width();
+  const int width = active_sessions_view_->GetPreferredSize().width();
   const int height = live_caption_container_->GetPreferredSize().height();
   live_caption_container_->SetPreferredSize(gfx::Size(width, height));
 }
@@ -205,12 +229,16 @@ const MediaNotificationListView* MediaDialogView::GetListViewForTesting()
 
 MediaDialogView::MediaDialogView(views::View* anchor_view,
                                  MediaNotificationService* service,
-                                 Profile* profile)
+                                 Profile* profile,
+                                 content::WebContents* contents,
+                                 GlobalMediaControlsEntryPoint entry_point)
     : BubbleDialogDelegateView(anchor_view, views::BubbleBorder::TOP_RIGHT),
       service_(service),
       profile_(profile->GetOriginalProfile()),
       active_sessions_view_(
-          AddChildView(std::make_unique<MediaNotificationListView>())) {
+          AddChildView(std::make_unique<MediaNotificationListView>())),
+      web_contents_for_presentation_request_(contents),
+      entry_point_(entry_point) {
   // Enable layer based clipping to ensure children using layers are clipped
   // appropriately.
   SetPaintClientToLayer(true);
@@ -226,7 +254,7 @@ MediaDialogView::~MediaDialogView() {
 void MediaDialogView::Init() {
   // Remove margins.
   set_margins(gfx::Insets());
-  if (!base::FeatureList::IsEnabled(media::kLiveCaption)) {
+  if (!media::IsLiveCaptionFeatureEnabled()) {
     SetLayoutManager(std::make_unique<views::FillLayout>());
     return;
   }
@@ -249,10 +277,17 @@ void MediaDialogView::Init() {
       SkColor(gfx::kGoogleGrey700)));
   live_caption_container->AddChildView(std::move(live_caption_image));
 
+  // Live Caption multi language is only enabled when SODA is also enabled.
+  const int live_caption_title_message =
+      base::FeatureList::IsEnabled(media::kLiveCaptionMultiLanguage) &&
+              base::FeatureList::IsEnabled(media::kUseSodaForLiveCaption)
+          ? IDS_GLOBAL_MEDIA_CONTROLS_LIVE_CAPTION
+          : IDS_GLOBAL_MEDIA_CONTROLS_LIVE_CAPTION_ENGLISH_ONLY;
   auto live_caption_title = std::make_unique<views::Label>(
-      l10n_util::GetStringUTF16(IDS_GLOBAL_MEDIA_CONTROLS_LIVE_CAPTION));
+      l10n_util::GetStringUTF16(live_caption_title_message));
   live_caption_title->SetHorizontalAlignment(
       gfx::HorizontalAlignment::ALIGN_LEFT);
+  live_caption_title->SetMultiLine(true);
   live_caption_title_ =
       live_caption_container->AddChildView(std::move(live_caption_title));
   live_caption_container_layout->SetFlexForView(live_caption_title_, 1);
@@ -261,7 +296,7 @@ void MediaDialogView::Init() {
   // initialization of the MediaDialogView.
   if (!profile_->GetPrefs()->GetBoolean(prefs::kLiveCaptionEnabled)) {
     auto live_caption_title_new_badge = std::make_unique<NewBadgeLabel>(
-        l10n_util::GetStringUTF16(IDS_GLOBAL_MEDIA_CONTROLS_LIVE_CAPTION));
+        l10n_util::GetStringUTF16(live_caption_title_message));
     live_caption_title_new_badge->SetHorizontalAlignment(
         gfx::HorizontalAlignment::ALIGN_LEFT);
     live_caption_title_new_badge_ = live_caption_container->AddChildView(
@@ -314,19 +349,29 @@ void MediaDialogView::ToggleLiveCaption(bool enabled) {
 
 void MediaDialogView::OnSodaInstalled() {
   speech::SodaInstaller::GetInstance()->RemoveObserver(this);
+  // Live Caption multi language is only enabled when SODA is also enabled.
+  const int live_caption_title_message =
+      base::FeatureList::IsEnabled(media::kLiveCaptionMultiLanguage) &&
+              base::FeatureList::IsEnabled(media::kUseSodaForLiveCaption)
+          ? IDS_GLOBAL_MEDIA_CONTROLS_LIVE_CAPTION
+          : IDS_GLOBAL_MEDIA_CONTROLS_LIVE_CAPTION_ENGLISH_ONLY;
   live_caption_title_->SetText(
-      l10n_util::GetStringUTF16(IDS_GLOBAL_MEDIA_CONTROLS_LIVE_CAPTION));
+      l10n_util::GetStringUTF16(live_caption_title_message));
 }
 
 void MediaDialogView::OnSodaError() {
-  ToggleLiveCaption(false);
+  if (!base::FeatureList::IsEnabled(media::kLiveCaptionMultiLanguage)) {
+    ToggleLiveCaption(false);
+  }
+
   live_caption_title_->SetText(l10n_util::GetStringUTF16(
       IDS_GLOBAL_MEDIA_CONTROLS_LIVE_CAPTION_DOWNLOAD_ERROR));
 }
 
-void MediaDialogView::OnSodaProgress(int progress) {
+void MediaDialogView::OnSodaProgress(int combined_progress) {
   live_caption_title_->SetText(l10n_util::GetStringFUTF16Int(
-      IDS_GLOBAL_MEDIA_CONTROLS_LIVE_CAPTION_DOWNLOAD_PROGRESS, progress));
+      IDS_GLOBAL_MEDIA_CONTROLS_LIVE_CAPTION_DOWNLOAD_PROGRESS,
+      combined_progress));
 }
 
 BEGIN_METADATA(MediaDialogView, views::BubbleDialogDelegateView)

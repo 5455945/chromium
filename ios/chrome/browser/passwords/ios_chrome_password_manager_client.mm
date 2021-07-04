@@ -9,6 +9,7 @@
 
 #include "base/bind.h"
 #include "base/no_destructor.h"
+#include "base/stl_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/autofill/core/browser/logging/log_manager.h"
@@ -29,6 +30,7 @@
 #import "components/ukm/ios/ukm_url_recorder.h"
 #include "ios/chrome/browser/application_context.h"
 #include "ios/chrome/browser/browser_state/chrome_browser_state.h"
+#include "ios/chrome/browser/passwords/ios_chrome_password_reuse_manager_factory.h"
 #include "ios/chrome/browser/passwords/ios_chrome_password_store_factory.h"
 #include "ios/chrome/browser/passwords/ios_password_requirements_service_factory.h"
 #include "ios/chrome/browser/passwords/password_manager_log_router_factory.h"
@@ -36,7 +38,7 @@
 #import "ios/chrome/browser/safe_browsing/chrome_password_protection_service_factory.h"
 #include "ios/chrome/browser/safe_browsing/features.h"
 #include "ios/chrome/browser/signin/identity_manager_factory.h"
-#include "ios/chrome/browser/sync/profile_sync_service_factory.h"
+#include "ios/chrome/browser/sync/sync_service_factory.h"
 #include "ios/chrome/browser/system_flags.h"
 #include "ios/chrome/browser/translate/chrome_ios_translate_client.h"
 #import "ios/chrome/browser/ui/ui_feature_flags.h"
@@ -58,7 +60,7 @@ using password_manager::SyncState;
 namespace {
 
 const syncer::SyncService* GetSyncService(ChromeBrowserState* browser_state) {
-  return ProfileSyncServiceFactory::GetForBrowserStateIfExists(browser_state);
+  return SyncServiceFactory::GetForBrowserStateIfExists(browser_state);
 }
 
 }  // namespace
@@ -94,7 +96,7 @@ IOSChromePasswordManagerClient::~IOSChromePasswordManagerClient() = default;
 
 SyncState IOSChromePasswordManagerClient::GetPasswordSyncState() const {
   syncer::SyncService* sync_service =
-      ProfileSyncServiceFactory::GetForBrowserState(bridge_.browserState);
+      SyncServiceFactory::GetForBrowserState(bridge_.browserState);
   return password_manager_util::GetPasswordSyncState(sync_service);
 }
 
@@ -128,10 +130,6 @@ void IOSChromePasswordManagerClient::PromptUserToMovePasswordToAccount(
   NOTIMPLEMENTED();
 }
 
-bool IOSChromePasswordManagerClient::RequiresReauthToFill() {
-  return true;
-}
-
 void IOSChromePasswordManagerClient::ShowManualFallbackForSaving(
     std::unique_ptr<password_manager::PasswordFormManagerForUI> form_to_save,
     bool has_generated_password,
@@ -149,6 +147,7 @@ void IOSChromePasswordManagerClient::HideManualFallbackForSaving() {
 
 void IOSChromePasswordManagerClient::FocusedInputChanged(
     password_manager::PasswordManagerDriver* driver,
+    autofill::FieldRendererId focused_field_id,
     autofill::mojom::FocusedFieldType focused_field_type) {
   NOTIMPLEMENTED();
 }
@@ -192,6 +191,12 @@ PasswordStore* IOSChromePasswordManagerClient::GetAccountPasswordStore() const {
   return nullptr;
 }
 
+password_manager::PasswordReuseManager*
+IOSChromePasswordManagerClient::GetPasswordReuseManager() const {
+  return IOSChromePasswordReuseManagerFactory::GetForBrowserState(
+      bridge_.browserState);
+}
+
 void IOSChromePasswordManagerClient::NotifyUserAutoSignin(
     std::vector<std::unique_ptr<password_manager::PasswordForm>> local_forms,
     const url::Origin& origin) {
@@ -218,9 +223,8 @@ void IOSChromePasswordManagerClient::NotifyStorePasswordCalled() {
 
 void IOSChromePasswordManagerClient::NotifyUserCredentialsWereLeaked(
     password_manager::CredentialLeakType leak_type,
-    password_manager::CompromisedSitesCount saved_sites,
     const GURL& origin,
-    const base::string16& username) {
+    const std::u16string& username) {
   [bridge_ showPasswordBreachForLeakType:leak_type URL:origin];
 }
 
@@ -346,7 +350,7 @@ void IOSChromePasswordManagerClient::LogPasswordReuseDetectedEvent() {
 }
 
 void IOSChromePasswordManagerClient::NotifyUserPasswordProtectionWarning(
-    const base::string16& warning_text,
+    const std::u16string& warning_text,
     base::OnceCallback<void(safe_browsing::WarningAction)> callback) {
   __block auto block_callback = std::move(callback);
   [bridge_

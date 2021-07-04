@@ -356,12 +356,11 @@ void GpuArcVideoDecodeAccelerator::InitializeTask(
   client_count_++;
   VLOGF(2) << "Number of concurrent clients: " << client_count_;
 
-  secure_mode_ = base::nullopt;
+  secure_mode_ = absl::nullopt;
   error_state_ = false;
   pending_requests_ = {};
   pending_flush_callbacks_ = {};
   pending_reset_callback_.Reset();
-  protected_input_buffer_count_ = 0;
 
   if (!vda_config.is_deferred_initialization_allowed)
     return OnInitializeDone(mojom::VideoDecodeAccelerator::Result::SUCCESS);
@@ -507,7 +506,8 @@ void GpuArcVideoDecodeAccelerator::ImportBufferForPicture(
     int32_t picture_buffer_id,
     mojom::HalPixelFormat format,
     mojo::ScopedHandle handle,
-    std::vector<VideoFramePlane> planes) {
+    std::vector<VideoFramePlane> planes,
+    mojom::BufferModifierPtr modifier_ptr) {
   DVLOGF(3);
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   if (!vda_) {
@@ -549,6 +549,10 @@ void GpuArcVideoDecodeAccelerator::ImportBufferForPicture(
           mojom::VideoDecodeAccelerator::Result::INVALID_ARGUMENT);
       return;
   }
+  uint64_t modifier = gfx::NativePixmapHandle::kNoModifier;
+  if (modifier_ptr) {
+    modifier = modifier_ptr->val;
+  }
 
   gfx::GpuMemoryBufferHandle gmb_handle;
   gmb_handle.type = gfx::NATIVE_PIXMAP;
@@ -577,8 +581,8 @@ void GpuArcVideoDecodeAccelerator::ImportBufferForPicture(
       return;
     }
 
-    auto handle = CreateGpuMemoryBufferHandle(pixel_format, coded_size_,
-                                              std::move(handle_fds), planes);
+    auto handle = CreateGpuMemoryBufferHandle(
+        pixel_format, modifier, coded_size_, std::move(handle_fds), planes);
     if (!handle) {
       VLOGF(1) << "Failed to create GpuMemoryBufferHandle";
       client_->NotifyError(

@@ -6,6 +6,9 @@
 #define ASH_PUBLIC_CPP_PROJECTOR_PROJECTOR_CONTROLLER_H_
 
 #include "ash/public/cpp/ash_public_export.h"
+#include "base/time/time.h"
+#include "media/mojo/mojom/speech_recognition_service.mojom.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace ash {
 
@@ -14,6 +17,19 @@ class ProjectorClient;
 // Interface to control projector in ash.
 class ASH_PUBLIC_EXPORT ProjectorController {
  public:
+  class ScopedInstanceResetterForTest {
+   public:
+    ScopedInstanceResetterForTest();
+    ScopedInstanceResetterForTest(const ScopedInstanceResetterForTest&) =
+        delete;
+    ScopedInstanceResetterForTest& operator=(
+        const ScopedInstanceResetterForTest&) = delete;
+    ~ScopedInstanceResetterForTest();
+
+   private:
+    ProjectorController* const controller_;
+  };
+
   ProjectorController();
   ProjectorController(const ProjectorController&) = delete;
   ProjectorController& operator=(const ProjectorController&) = delete;
@@ -25,8 +41,15 @@ class ASH_PUBLIC_EXPORT ProjectorController {
   // ProjectorController.
   virtual void SetClient(ProjectorClient* client) = 0;
 
-  // TODO(ylkal): Add OnTranscriptionResult method to receive transcription
-  // results here.
+  // Called when speech recognition using SODA is available.
+  virtual void OnSpeechRecognitionAvailable(bool available) = 0;
+
+  // Called when transcription result from mic input is ready.
+  virtual void OnTranscription(
+      const media::SpeechRecognitionResult& result) = 0;
+
+  // Called when there is an error in transcription.
+  virtual void OnTranscriptionError() = 0;
 };
 
 }  // namespace ash

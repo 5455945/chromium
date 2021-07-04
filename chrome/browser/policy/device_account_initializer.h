@@ -13,15 +13,14 @@
 #include "base/compiler_specific.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "base/optional.h"
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/cloud_policy_store.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "google_apis/gaia/gaia_oauth_client.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace policy {
-class DMAuth;
 class EnrollmentStatus;
 
 // Implements the logic that initializes device account during enrollment.
@@ -96,9 +95,6 @@ class DeviceAccountInitializer : public CloudPolicyClient::Observer,
   void OnNetworkError(int response_code) override;
 
  private:
-  // Initiates storing of robot auth token.
-  void StartStoreRobotAuth();
-
   // Handles completion of the robot token store operation.
   void HandleStoreRobotAuthTokenResult(bool result);
 
@@ -111,7 +107,6 @@ class DeviceAccountInitializer : public CloudPolicyClient::Observer,
   Delegate* delegate_;
 
   std::unique_ptr<gaia::GaiaOAuthClient> gaia_oauth_client_;
-  std::unique_ptr<DMAuth> dm_auth_;
 
   // Flag that undicates if there are requests that were not completed yet.
   // It is used to ignore CloudPolicyClient errors that are not relevant to

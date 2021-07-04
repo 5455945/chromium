@@ -4,6 +4,7 @@
 
 #include "chrome/browser/media/cast_mirroring_service_host.h"
 
+#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/run_loop.h"
 #include "base/test/test_timeouts.h"
@@ -21,6 +22,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "media/capture/mojom/video_capture.mojom.h"
+#include "media/capture/mojom/video_capture_buffer.mojom.h"
 #include "media/capture/mojom/video_capture_types.mojom.h"
 #include "media/capture/video_capture_types.h"
 #include "media/mojo/mojom/audio_data_pipe.mojom.h"
@@ -60,8 +62,8 @@ content::DesktopMediaID BuildMediaIdForTabMirroring(
   const int process_id = main_frame->GetProcess()->GetID();
   const int frame_id = main_frame->GetRoutingID();
   media_id.type = content::DesktopMediaID::TYPE_WEB_CONTENTS;
-  media_id.web_contents_id =
-      content::WebContentsMediaCaptureId(process_id, frame_id, true, true);
+  media_id.web_contents_id = content::WebContentsMediaCaptureId(
+      process_id, frame_id, true /* disable_local_echo */);
   return media_id;
 }
 

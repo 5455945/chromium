@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <chrome/browser/ash/app_mode/web_app/web_kiosk_app_launcher.h>
+#include "chrome/browser/ash/app_mode/web_app/web_kiosk_app_launcher.h"
 
 #include <memory>
 
@@ -14,6 +14,7 @@
 #include "chrome/browser/extensions/api/tabs/tabs_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/web_applications/components/web_app_data_retriever.h"
 #include "chrome/browser/web_applications/components/web_app_url_loader.h"
@@ -55,10 +56,10 @@ void WebKioskAppLauncher::Initialize() {
 void WebKioskAppLauncher::ContinueWithNetworkReady() {
   delegate_->OnAppInstalling();
   DCHECK(!is_installed_);
-  install_task_.reset(new web_app::WebAppInstallTask(
+  install_task_ = std::make_unique<web_app::WebAppInstallTask>(
       profile_, /*os_integration_manager=*/nullptr,
       /*install_finalizer=*/nullptr, data_retriever_factory_.Run(),
-      /*registrar=*/nullptr));
+      /*registrar=*/nullptr);
   install_task_->LoadAndRetrieveWebApplicationInfoWithIcons(
       WebKioskAppManager::Get()->GetAppByAccountId(account_id_)->install_url(),
       url_loader_.get(),

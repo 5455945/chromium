@@ -8,11 +8,11 @@
 #include <set>
 #include <string>
 
-#include "base/optional.h"
 #include "base/values.h"
 #include "chrome/browser/enterprise/connectors/common.h"
 #include "chrome/browser/enterprise/connectors/service_provider_config.h"
 #include "components/url_matcher/url_matcher.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace enterprise_connectors {
 
@@ -25,8 +25,8 @@ class FileSystemServiceSettings {
   FileSystemServiceSettings(FileSystemServiceSettings&&);
   ~FileSystemServiceSettings();
 
-  // Get the settings to apply. base::nullopt implies no file system settings.
-  base::Optional<FileSystemSettings> GetSettings(const GURL& url) const;
+  // Get the settings to apply. absl::nullopt implies no file system settings.
+  absl::optional<FileSystemSettings> GetSettings(const GURL& url) const;
 
  private:
   // The setting to apply when a specific URL pattern is matched.
@@ -47,12 +47,12 @@ class FileSystemServiceSettings {
       std::map<url_matcher::URLMatcherConditionSet::ID, URLPatternSettings>;
 
   // Accessors for the pattern setting maps.
-  static base::Optional<URLPatternSettings> GetPatternSettings(
+  static absl::optional<URLPatternSettings> GetPatternSettings(
       const PatternSettings& patterns,
       url_matcher::URLMatcherConditionSet::ID match);
 
   // Returns true if the settings were initialized correctly. If this returns
-  // false, then GetSettings will always return base::nullopt.
+  // false, then GetSettings will always return absl::nullopt.
   bool IsValid() const;
 
   // Updates the states of |matcher_|, |enabled_patterns_settings_| and/or
@@ -92,10 +92,14 @@ class FileSystemServiceSettings {
   PatternSettings enabled_patterns_settings_;
   PatternSettings disabled_patterns_settings_;
 
-  // When signing in to Box only accounts that belong to this enterprise are
-  // accepted.  This prevents people from connecting arbitrary Box accounts
-  // and helps restrict to the enterprise the administrator wants.
+  // When signing in to the service provider, only accounts that belong to this
+  // enterprise are accepted.  This prevents people from connecting arbitrary
+  // accounts and helps restrict to the enterprise the administrator wants.
   std::string enterprise_id_;
+
+  // The enterprise domain name provided as a hint to the user when they are
+  // are asked to sign-in to the service provider.  May be empty if not needed.
+  std::string email_domain_;
 };
 
 }  // namespace enterprise_connectors

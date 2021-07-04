@@ -6,6 +6,7 @@
 
 #include "media/base/video_frame.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/modules/webcodecs/webcodecs_logger.h"
 #include "third_party/skia/include/core/SkImage.h"
 
 namespace blink {
@@ -16,7 +17,7 @@ VideoFrameHandle::VideoFrameHandle(scoped_refptr<media::VideoFrame> frame,
   DCHECK(frame_);
   DCHECK(context);
 
-  close_auditor_ = VideoFrameLogger::From(*context).GetCloseAuditor();
+  close_auditor_ = WebCodecsLogger::From(*context).GetCloseAuditor();
 
   DCHECK(close_auditor_);
 }
@@ -31,7 +32,7 @@ VideoFrameHandle::VideoFrameHandle(scoped_refptr<media::VideoFrame> frame,
 VideoFrameHandle::VideoFrameHandle(
     scoped_refptr<media::VideoFrame> frame,
     sk_sp<SkImage> sk_image,
-    scoped_refptr<VideoFrameLogger::VideoFrameCloseAuditor> close_auditor)
+    scoped_refptr<WebCodecsLogger::VideoFrameCloseAuditor> close_auditor)
     : sk_image_(std::move(sk_image)),
       frame_(std::move(frame)),
       close_auditor_(std::move(close_auditor)) {
@@ -65,22 +66,38 @@ sk_sp<SkImage> VideoFrameHandle::sk_image() {
 
 void VideoFrameHandle::Invalidate() {
   WTF::MutexLocker locker(mutex_);
-  frame_.reset();
-  sk_image_.reset();
-  close_auditor_.reset();
+  InvalidateLocked();
+}
+
+void VideoFrameHandle::SetCloseOnClone() {
+  WTF::MutexLocker locker(mutex_);
+  close_on_clone_ = true;
 }
 
 scoped_refptr<VideoFrameHandle> VideoFrameHandle::Clone() {
   WTF::MutexLocker locker(mutex_);
-  return frame_ ? base::MakeRefCounted<VideoFrameHandle>(frame_, sk_image_,
-                                                         close_auditor_)
-                : nullptr;
+  auto cloned_handle = frame_ ? base::MakeRefCounted<VideoFrameHandle>(
+                                    frame_, sk_image_, close_auditor_)
+                              : nullptr;
+
+  if (close_on_clone_)
+    InvalidateLocked();
+
+  return cloned_handle;
 }
 
 scoped_refptr<VideoFrameHandle> VideoFrameHandle::CloneForInternalUse() {
   WTF::MutexLocker locker(mutex_);
   return frame_ ? base::MakeRefCounted<VideoFrameHandle>(frame_, sk_image_)
                 : nullptr;
+}
+
+void VideoFrameHandle::InvalidateLocked() {
+  mutex_.AssertAcquired();
+
+  frame_.reset();
+  sk_image_.reset();
+  close_auditor_.reset();
 }
 
 }  // namespace blink

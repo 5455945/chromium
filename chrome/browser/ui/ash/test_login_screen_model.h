@@ -34,11 +34,11 @@ class TestLoginScreenModel : public ash::LoginScreenModel {
                                     bool enabled) override;
   void ForceOnlineSignInForUser(const AccountId& account_id) override;
   void ShowEasyUnlockIcon(const AccountId& user,
-                          const ash::EasyUnlockIconOptions& icon) override;
+                          const ash::EasyUnlockIconInfo& icon_info) override;
   void SetChallengeResponseAuthEnabledForUser(const AccountId& user,
                                               bool enabled) override;
 
-  void UpdateWarningMessage(const base::string16& message) override;
+  void UpdateWarningMessage(const std::u16string& message) override;
   void SetSystemInfo(bool show,
                      bool enforced,
                      const std::string& os_version_label_text,

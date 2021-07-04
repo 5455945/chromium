@@ -12,12 +12,12 @@
 #include <vector>
 
 #include "base/callback.h"
-#include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "chrome/browser/media/router/discovery/media_sink_discovery_metrics.h"
 #include "chrome/browser/media/router/providers/wired_display/wired_display_presentation_receiver.h"
 #include "components/media_router/common/media_route_provider_helper.h"
 #include "components/media_router/common/mojom/media_router.mojom.h"
+#include "components/media_router/common/mojom/media_status.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -174,7 +174,7 @@ class WiredDisplayMediaRouteProvider : public mojom::MediaRouteProvider,
   void TerminatePresentationsOnDisplay(const display::Display& display);
 
   // Returns a display associated with |sink_id|, or a nullopt if not found.
-  base::Optional<display::Display> GetDisplayBySinkId(
+  absl::optional<display::Display> GetDisplayBySinkId(
       const std::string& sink_id) const;
 
   // Returns a list of available sinks.
@@ -207,9 +207,7 @@ class WiredDisplayMediaRouteProvider : public mojom::MediaRouteProvider,
   // Used for recording UMA metrics for the number of sinks available.
   WiredDisplayDeviceCountMetrics device_count_metrics_;
 
-  // Keeps track of whether |this| is registered with display::Screen as a
-  // DisplayObserver.
-  bool is_observing_displays_ = false;
+  absl::optional<display::ScopedDisplayObserver> display_observer_;
 
   DISALLOW_COPY_AND_ASSIGN(WiredDisplayMediaRouteProvider);
 };

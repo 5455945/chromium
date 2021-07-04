@@ -35,7 +35,6 @@ bool IsValidRoleForViews(ax::mojom::Role role) {
     case ax::mojom::Role::kDocument:  // Used for ARIA role="document".
     case ax::mojom::Role::kIframe:
     case ax::mojom::Role::kIframePresentational:
-    case ax::mojom::Role::kNone:
     case ax::mojom::Role::kPdfRoot:
     case ax::mojom::Role::kPortal:
     case ax::mojom::Role::kRootWebArea:
@@ -81,7 +80,8 @@ ViewAccessibility::~ViewAccessibility() = default;
 
 void ViewAccessibility::AddVirtualChildView(
     std::unique_ptr<AXVirtualView> virtual_view) {
-  AddVirtualChildViewAt(std::move(virtual_view), int{virtual_children_.size()});
+  AddVirtualChildViewAt(std::move(virtual_view),
+                        static_cast<int>(virtual_children_.size()));
 }
 
 void ViewAccessibility::AddVirtualChildViewAt(
@@ -89,7 +89,7 @@ void ViewAccessibility::AddVirtualChildViewAt(
     int index) {
   DCHECK(virtual_view);
   DCHECK_GE(index, 0);
-  DCHECK_LE(size_t{index}, virtual_children_.size());
+  DCHECK_LE(static_cast<size_t>(index), virtual_children_.size());
 
   if (virtual_view->parent_view() == this)
     return;
@@ -211,6 +211,7 @@ void ViewAccessibility::GetAccessibleNodeData(ui::AXNodeData* data) const {
   }
 
   static constexpr ax::mojom::IntListAttribute kOverridableIntListAttributes[]{
+      ax::mojom::IntListAttribute::kLabelledbyIds,
       ax::mojom::IntListAttribute::kDescribedbyIds,
   };
   for (auto attribute : kOverridableIntListAttributes) {
@@ -220,7 +221,7 @@ void ViewAccessibility::GetAccessibleNodeData(ui::AXNodeData* data) const {
   }
 
   if (!data->HasStringAttribute(ax::mojom::StringAttribute::kDescription)) {
-    base::string16 tooltip = view_->GetTooltipText(gfx::Point());
+    std::u16string tooltip = view_->GetTooltipText(gfx::Point());
     // Some screen readers announce the accessible description right after the
     // accessible name. Only use the tooltip as the accessible description if
     // it's different from the name, otherwise users might be puzzled as to why
@@ -270,6 +271,13 @@ void ViewAccessibility::GetAccessibleNodeData(ui::AXNodeData* data) const {
 
   if (view_->context_menu_controller())
     data->AddAction(ax::mojom::Action::kShowContextMenu);
+
+  DCHECK(!data->HasStringAttribute(ax::mojom::StringAttribute::kChildTreeId))
+      << "Please annotate child tree ids using "
+         "ViewAccessibility::OverrideChildTreeID.";
+  if (child_tree_id_) {
+    data->AddChildTreeId(child_tree_id_.value());
+  }
 }
 
 void ViewAccessibility::OverrideFocus(AXVirtualView* virtual_view) {
@@ -327,7 +335,7 @@ void ViewAccessibility::OverrideName(const std::string& name) {
   custom_data_.SetName(name);
 }
 
-void ViewAccessibility::OverrideName(const base::string16& name) {
+void ViewAccessibility::OverrideName(const std::u16string& name) {
   custom_data_.SetName(name);
 }
 
@@ -335,7 +343,7 @@ void ViewAccessibility::OverrideDescription(const std::string& description) {
   custom_data_.SetDescription(description);
 }
 
-void ViewAccessibility::OverrideDescription(const base::string16& description) {
+void ViewAccessibility::OverrideDescription(const std::u16string& description) {
   custom_data_.SetDescription(description);
 }
 
@@ -395,8 +403,15 @@ void ViewAccessibility::OverrideBounds(const gfx::RectF& bounds) {
   custom_data_.relative_bounds.bounds = bounds;
 }
 
+void ViewAccessibility::OverrideLabelledBy(View* labelled_by_view) {
+  int32_t labelled_by_id =
+      labelled_by_view->GetViewAccessibility().GetUniqueId().Get();
+  custom_data_.AddIntListAttribute(ax::mojom::IntListAttribute::kLabelledbyIds,
+                                   {labelled_by_id});
+}
+
 void ViewAccessibility::OverrideDescribedBy(View* described_by_view) {
-  int described_by_id =
+  int32_t described_by_id =
       described_by_view->GetViewAccessibility().GetUniqueId().Get();
   custom_data_.AddIntListAttribute(ax::mojom::IntListAttribute::kDescribedbyIds,
                                    {described_by_id});
@@ -427,18 +442,28 @@ Widget* ViewAccessibility::GetPreviousFocus() const {
   return previous_focus_;
 }
 
+void ViewAccessibility::OverrideChildTreeID(ui::AXTreeID tree_id) {
+  if (tree_id == ui::AXTreeIDUnknown())
+    child_tree_id_ = absl::nullopt;
+  else
+    child_tree_id_ = tree_id;
+}
+
+ui::AXTreeID ViewAccessibility::GetChildTreeID() const {
+  return child_tree_id_ ? *child_tree_id_ : ui::AXTreeIDUnknown();
+}
+
 gfx::NativeViewAccessible ViewAccessibility::GetNativeObject() const {
   return nullptr;
 }
 
 void ViewAccessibility::NotifyAccessibilityEvent(ax::mojom::Event event_type) {
-  // On certain platforms, e.g. Chrome OS, we don't create any
-  // AXPlatformDelegates, so the base method in this file would be called.
+  // Used for unit testing.
   if (accessibility_events_callback_)
     accessibility_events_callback_.Run(nullptr, event_type);
 }
 
-void ViewAccessibility::AnnounceText(const base::string16& text) {
+void ViewAccessibility::AnnounceText(const std::u16string& text) {
   Widget* const widget = view_->GetWidget();
   if (!widget)
     return;

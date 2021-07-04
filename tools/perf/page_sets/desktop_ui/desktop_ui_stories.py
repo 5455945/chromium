@@ -3,17 +3,16 @@
 # found in the LICENSE file.
 
 from telemetry import story
-from page_sets.desktop_ui import tab_search_story
+from page_sets.desktop_ui import download_shelf_story, tab_search_story, webui_tab_strip_story
+from page_sets.desktop_ui.ui_devtools_utils import IsMac
 
 
 class DesktopUIStorySet(story.StorySet):
   TAB_SEARCH_STORIES = [
       tab_search_story.TabSearchStoryTop10,
       tab_search_story.TabSearchStoryTop50,
-      tab_search_story.TabSearchStoryTop100,
       tab_search_story.TabSearchStoryTop10Loading,
       tab_search_story.TabSearchStoryTop50Loading,
-      tab_search_story.TabSearchStoryTop100Loading,
       tab_search_story.TabSearchStoryCloseAndOpen,
       tab_search_story.TabSearchStoryCloseAndOpenLoading,
       tab_search_story.TabSearchStoryScrollUpAndDown,
@@ -25,12 +24,56 @@ class DesktopUIStorySet(story.StorySet):
       tab_search_story.TabSearchStoryMeasureMemory3TabSearch,
   ]
 
+  DOWNLOAD_SHELF_STORIES = [
+      download_shelf_story.DownloadShelfStory1File,
+      download_shelf_story.DownloadShelfStory5File,
+      download_shelf_story.DownloadShelfStoryMeasureMemory,
+      download_shelf_story.DownloadShelfStoryTop10Loading,
+  ]
+
+  DOWNLOAD_SHELF_WEBUI_STORIES = [
+      download_shelf_story.DownloadShelfWebUIStory1File,
+      download_shelf_story.DownloadShelfWebUIStory5File,
+      download_shelf_story.DownloadShelfWebUIStoryMeasureMemory,
+      download_shelf_story.DownloadShelfWebUIStoryTop10Loading,
+  ]
+
+  WEBUI_TAB_STRIP_STORIES = [
+      webui_tab_strip_story.WebUITabStripStoryCleanSlate,
+      webui_tab_strip_story.WebUITabStripStoryMeasureMemory,
+      webui_tab_strip_story.WebUITabStripStoryTop10,
+      webui_tab_strip_story.WebUITabStripStoryTop10Loading,
+  ]
+
   def __init__(self):
     super(DesktopUIStorySet,
           self).__init__(archive_data_file=('../data/desktop_ui.json'),
                          cloud_storage_bucket=story.PARTNER_BUCKET)
     for cls in self.TAB_SEARCH_STORIES:
       self.AddStory(
-          cls(self,
-              ['--enable-features=TabSearch', '--top-chrome-touch-ui=disabled'
-               ]))
+          cls(self, [
+              '--enable-ui-devtools=0',
+              '--top-chrome-touch-ui=disabled',
+          ]))
+
+    for cls in self.DOWNLOAD_SHELF_STORIES:
+      self.AddStory(cls(self, [
+          '--enable-ui-devtools=0',
+      ]))
+
+    for cls in self.DOWNLOAD_SHELF_WEBUI_STORIES:
+      self.AddStory(
+          cls(self, [
+              '--enable-features=WebUIDownloadShelf',
+              '--enable-ui-devtools=0',
+          ]))
+
+    # WebUI Tab Strip is not available on Mac.
+    if not IsMac():
+      for cls in self.WEBUI_TAB_STRIP_STORIES:
+        self.AddStory(
+            cls(self, [
+                '--enable-features=WebUITabStrip',
+                '--enable-ui-devtools=0',
+                '--top-chrome-touch-ui=enabled',
+            ]))

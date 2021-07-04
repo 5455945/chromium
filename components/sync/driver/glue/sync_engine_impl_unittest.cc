@@ -60,8 +60,7 @@ class TestSyncEngineHost : public SyncEngineHostStub {
  public:
   TestSyncEngineHost() = default;
 
-  void OnEngineInitialized(const WeakHandle<JsBackend>&,
-                           const WeakHandle<DataTypeDebugInfoListener>&,
+  void OnEngineInitialized(const WeakHandle<DataTypeDebugInfoListener>&,
                            bool success,
                            bool is_first_time_sync_configure) override {
     EXPECT_EQ(expect_success_, success);
@@ -87,7 +86,6 @@ class FakeSyncManagerFactory : public SyncManagerFactory {
       FakeSyncManager** fake_manager,
       network::NetworkConnectionTracker* network_connection_tracker)
       : SyncManagerFactory(network_connection_tracker),
-        should_fail_on_init_(false),
         fake_manager_(fake_manager) {
     *fake_manager_ = nullptr;
   }
@@ -98,7 +96,7 @@ class FakeSyncManagerFactory : public SyncManagerFactory {
       const std::string& /* name */) override {
     *fake_manager_ =
         new FakeSyncManager(initial_sync_ended_types_, progress_marker_types_,
-                            configure_fail_types_, should_fail_on_init_);
+                            configure_fail_types_);
     return std::unique_ptr<SyncManager>(*fake_manager_);
   }
 
@@ -114,15 +112,10 @@ class FakeSyncManagerFactory : public SyncManagerFactory {
     configure_fail_types_ = types;
   }
 
-  void set_should_fail_on_init(bool should_fail_on_init) {
-    should_fail_on_init_ = should_fail_on_init;
-  }
-
  private:
   ModelTypeSet initial_sync_ended_types_;
   ModelTypeSet progress_marker_types_;
   ModelTypeSet configure_fail_types_;
-  bool should_fail_on_init_;
   FakeSyncManager** fake_manager_;
 };
 
@@ -178,8 +171,7 @@ class MockActiveDevicesProvider : public ActiveDevicesProvider {
 std::unique_ptr<HttpPostProviderFactory> CreateHttpBridgeFactory() {
   return std::make_unique<HttpBridgeFactory>(
       /*user_agent=*/"",
-      /*pending_url_loader_factory=*/nullptr,
-      /*network_time_update_callback=*/base::DoNothing());
+      /*pending_url_loader_factory=*/nullptr);
 }
 
 class SyncEngineImplTest : public testing::Test {
@@ -267,8 +259,8 @@ class SyncEngineImplTest : public testing::Test {
   ModelTypeSet ConfigureDataTypesWithUnready(ModelTypeSet unready_types) {
     ModelTypeConfigurer::ConfigureParams params;
     params.reason = CONFIGURE_REASON_RECONFIGURATION;
-    params.enabled_types = Difference(enabled_types_, unready_types);
-    params.to_download = Difference(params.enabled_types, engine_types_);
+    ModelTypeSet enabled_types = Difference(enabled_types_, unready_types);
+    params.to_download = Difference(enabled_types, engine_types_);
     if (!params.to_download.Empty()) {
       params.to_download.Put(NIGORI);
     }
@@ -276,8 +268,7 @@ class SyncEngineImplTest : public testing::Test {
     params.ready_task = base::BindOnce(&SyncEngineImplTest::DownloadReady,
                                        base::Unretained(this));
 
-    ModelTypeSet ready_types =
-        Difference(params.enabled_types, params.to_download);
+    ModelTypeSet ready_types = Difference(enabled_types, params.to_download);
     backend_->ConfigureDataTypes(std::move(params));
     PumpSyncThread();
 
@@ -666,22 +657,6 @@ TEST_F(SyncEngineImplTest,
   EXPECT_CALL(invalidator_,
               UpdateInterestedTopics(backend_.get(), invalidation::TopicSet()));
   ShutdownBackend(STOP_SYNC);
-}
-
-// Regression test for crbug.com/1019956.
-TEST_F(SyncEngineImplTest, ShouldDestroyAfterInitFailure) {
-  fake_manager_factory_->set_should_fail_on_init(true);
-  // Sync manager will report initialization failure and gets destroyed during
-  // the error handling.
-  InitializeBackend(/*expect_success=*/false);
-
-  backend_->StopSyncingForShutdown();
-  // This line would post the task causing the crash before the fix, because
-  // sync manager was used during the shutdown handling.
-  backend_->Shutdown(STOP_SYNC);
-  backend_.reset();
-
-  base::RunLoop().RunUntilIdle();
 }
 
 TEST_F(SyncEngineImplWithSyncInvalidationsTest,

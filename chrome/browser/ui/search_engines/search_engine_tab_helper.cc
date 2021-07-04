@@ -37,11 +37,25 @@ bool IsFormSubmit(NavigationEntry* entry) {
                                       ui::PAGE_TRANSITION_FORM_SUBMIT);
 }
 
-base::string16 GenerateKeywordFromNavigationEntry(NavigationEntry* entry) {
+}  // namespace
+
+SearchEngineTabHelper::~SearchEngineTabHelper() = default;
+
+void SearchEngineTabHelper::DidFinishNavigation(
+    content::NavigationHandle* handle) {
+  GenerateKeywordIfNecessary(handle);
+}
+
+void SearchEngineTabHelper::WebContentsDestroyed() {
+  favicon_driver_observation_.Reset();
+}
+
+std::u16string SearchEngineTabHelper::GenerateKeywordFromNavigationEntry(
+    NavigationEntry* entry) {
   // Don't autogenerate keywords for pages that are the result of form
   // submissions.
   if (IsFormSubmit(entry))
-    return base::string16();
+    return std::u16string();
 
   // We want to use the user typed URL if available since that represents what
   // the user typed to get here, and fall back on the regular URL if not.
@@ -49,7 +63,7 @@ base::string16 GenerateKeywordFromNavigationEntry(NavigationEntry* entry) {
   if (!url.is_valid()) {
     url = entry->GetURL();
     if (!url.is_valid())
-      return base::string16();
+      return std::u16string();
   }
 
   // Don't autogenerate keywords for referrers that
@@ -61,33 +75,21 @@ base::string16 GenerateKeywordFromNavigationEntry(NavigationEntry* entry) {
   // See http://b/issue?id=863583.
   if (!(url.SchemeIs(url::kHttpScheme) || url.SchemeIs(url::kHttpsScheme)) ||
       (url.path().length() > 1)) {
-    return base::string16();
+    return std::u16string();
   }
 
   return TemplateURL::GenerateKeyword(url);
 }
 
-}  // namespace
-
-SearchEngineTabHelper::~SearchEngineTabHelper() {
-}
-
-void SearchEngineTabHelper::DidFinishNavigation(
-    content::NavigationHandle* handle) {
-  GenerateKeywordIfNecessary(handle);
-}
-
-void SearchEngineTabHelper::WebContentsDestroyed() {
-  favicon_driver_observer_.RemoveAll();
-}
-
 SearchEngineTabHelper::SearchEngineTabHelper(WebContents* web_contents)
     : content::WebContentsObserver(web_contents),
-      osdd_handler_receivers_(web_contents, this) {
+      osdd_handler_receivers_(web_contents,
+                              this,
+                              content::WebContentsFrameReceiverSetPassKey()) {
   DCHECK(web_contents);
 
   favicon::CreateContentFaviconDriverForWebContents(web_contents);
-  favicon_driver_observer_.Add(
+  favicon_driver_observation_.Observe(
       favicon::ContentFaviconDriver::FromWebContents(web_contents));
 }
 
@@ -130,7 +132,7 @@ void SearchEngineTabHelper::PageHasOpenSearchDescriptionDocument(
 
   // Autogenerate a keyword for the autodetected case; in the other cases we'll
   // generate a keyword later after fetching the OSDD.
-  base::string16 keyword = GenerateKeywordFromNavigationEntry(entry);
+  std::u16string keyword = GenerateKeywordFromNavigationEntry(entry);
   if (keyword.empty())
     return;
 
@@ -164,7 +166,8 @@ void SearchEngineTabHelper::OnFaviconUpdated(
 
 void SearchEngineTabHelper::GenerateKeywordIfNecessary(
     content::NavigationHandle* handle) {
-  if (!handle->IsInMainFrame() || !handle->GetSearchableFormURL().is_valid())
+  if (!handle->IsInPrimaryMainFrame() ||
+      !handle->GetSearchableFormURL().is_valid())
     return;
 
   Profile* profile =
@@ -181,7 +184,7 @@ void SearchEngineTabHelper::GenerateKeywordIfNecessary(
   if (last_index <= 0)
     return;
 
-  base::string16 keyword(GenerateKeywordFromNavigationEntry(
+  std::u16string keyword(GenerateKeywordFromNavigationEntry(
       controller.GetEntryAtIndex(last_index - 1)));
   if (keyword.empty())
     return;

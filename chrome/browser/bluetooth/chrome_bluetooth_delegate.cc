@@ -6,12 +6,11 @@
 
 #include <memory>
 
-#include "base/scoped_observer.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
-#include "chrome/browser/bluetooth/bluetooth_chooser_context.h"
 #include "chrome/browser/bluetooth/bluetooth_chooser_context_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "components/permissions/contexts/bluetooth_chooser_context.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "device/bluetooth/bluetooth_device.h"
@@ -20,14 +19,15 @@
 #include "third_party/blink/public/mojom/bluetooth/web_bluetooth.mojom.h"
 
 #if defined(OS_ANDROID)
-#include "chrome/browser/ui/android/device_dialog/bluetooth_chooser_android.h"
-#include "chrome/browser/ui/android/device_dialog/bluetooth_scanning_prompt_android.h"
+#include "chrome/browser/ui/android/device_dialog/chrome_bluetooth_chooser_android_delegate.h"
+#include "chrome/browser/ui/android/device_dialog/chrome_bluetooth_scanning_prompt_android_delegate.h"
 #include "chrome/browser/vr/vr_tab_helper.h"
+#include "components/permissions/android/bluetooth_chooser_android.h"
+#include "components/permissions/android/bluetooth_scanning_prompt_android.h"
 #else
-#include "chrome/browser/ui/bluetooth/bluetooth_chooser_controller.h"
 #include "chrome/browser/ui/bluetooth/bluetooth_chooser_desktop.h"
-#include "chrome/browser/ui/bluetooth/bluetooth_scanning_prompt_controller.h"
 #include "chrome/browser/ui/bluetooth/bluetooth_scanning_prompt_desktop.h"
+#include "components/permissions/bluetooth_scanning_prompt_controller.h"
 #include "extensions/browser/app_window/app_window_registry.h"
 #include "extensions/browser/extensions_browser_client.h"
 #endif  // OS_ANDROID
@@ -39,7 +39,8 @@ using device::BluetoothUUID;
 
 namespace {
 
-BluetoothChooserContext* GetBluetoothChooserContext(RenderFrameHost* frame) {
+permissions::BluetoothChooserContext* GetBluetoothChooserContext(
+    RenderFrameHost* frame) {
   auto* profile = Profile::FromBrowserContext(frame->GetBrowserContext());
   return BluetoothChooserContextFactory::GetForProfile(profile);
 }
@@ -60,7 +61,9 @@ ChromeBluetoothDelegate::RunBluetoothChooser(
           vr::UiSuppressedElement::kBluetoothChooser)) {
     return nullptr;
   }
-  return std::make_unique<BluetoothChooserAndroid>(frame, event_handler);
+  return std::make_unique<permissions::BluetoothChooserAndroid>(
+      frame, event_handler,
+      std::make_unique<ChromeBluetoothChooserAndroidDelegate>());
 #else
   if (extensions::AppWindowRegistry::Get(frame->GetBrowserContext())
           ->GetAppWindowForWebContents(
@@ -78,7 +81,9 @@ ChromeBluetoothDelegate::ShowBluetoothScanningPrompt(
     content::RenderFrameHost* frame,
     const content::BluetoothScanningPrompt::EventHandler& event_handler) {
 #if defined(OS_ANDROID)
-  return std::make_unique<BluetoothScanningPromptAndroid>(frame, event_handler);
+  return std::make_unique<permissions::BluetoothScanningPromptAndroid>(
+      frame, event_handler,
+      std::make_unique<ChromeBluetoothScanningPromptAndroidDelegate>());
 #else
   if (extensions::AppWindowRegistry::Get(frame->GetBrowserContext())
           ->GetAppWindowForWebContents(
@@ -94,7 +99,6 @@ WebBluetoothDeviceId ChromeBluetoothDelegate::GetWebBluetoothDeviceId(
     RenderFrameHost* frame,
     const std::string& device_address) {
   return GetBluetoothChooserContext(frame)->GetWebBluetoothDeviceId(
-      frame->GetLastCommittedOrigin(),
       frame->GetMainFrame()->GetLastCommittedOrigin(), device_address);
 }
 
@@ -102,7 +106,6 @@ std::string ChromeBluetoothDelegate::GetDeviceAddress(
     RenderFrameHost* frame,
     const WebBluetoothDeviceId& device_id) {
   return GetBluetoothChooserContext(frame)->GetDeviceAddress(
-      frame->GetLastCommittedOrigin(),
       frame->GetMainFrame()->GetLastCommittedOrigin(), device_id);
 }
 
@@ -110,7 +113,6 @@ WebBluetoothDeviceId ChromeBluetoothDelegate::AddScannedDevice(
     RenderFrameHost* frame,
     const std::string& device_address) {
   return GetBluetoothChooserContext(frame)->AddScannedDevice(
-      frame->GetLastCommittedOrigin(),
       frame->GetMainFrame()->GetLastCommittedOrigin(), device_address);
 }
 
@@ -119,7 +121,6 @@ WebBluetoothDeviceId ChromeBluetoothDelegate::GrantServiceAccessPermission(
     const device::BluetoothDevice* device,
     const blink::mojom::WebBluetoothRequestDeviceOptions* options) {
   return GetBluetoothChooserContext(frame)->GrantServiceAccessPermission(
-      frame->GetLastCommittedOrigin(),
       frame->GetMainFrame()->GetLastCommittedOrigin(), device, options);
 }
 
@@ -127,7 +128,6 @@ bool ChromeBluetoothDelegate::HasDevicePermission(
     RenderFrameHost* frame,
     const WebBluetoothDeviceId& device_id) {
   return GetBluetoothChooserContext(frame)->HasDevicePermission(
-      frame->GetLastCommittedOrigin(),
       frame->GetMainFrame()->GetLastCommittedOrigin(), device_id);
 }
 
@@ -136,7 +136,6 @@ bool ChromeBluetoothDelegate::IsAllowedToAccessService(
     const WebBluetoothDeviceId& device_id,
     const BluetoothUUID& service) {
   return GetBluetoothChooserContext(frame)->IsAllowedToAccessService(
-      frame->GetLastCommittedOrigin(),
       frame->GetMainFrame()->GetLastCommittedOrigin(), device_id, service);
 }
 
@@ -144,7 +143,6 @@ bool ChromeBluetoothDelegate::IsAllowedToAccessAtLeastOneService(
     RenderFrameHost* frame,
     const WebBluetoothDeviceId& device_id) {
   return GetBluetoothChooserContext(frame)->IsAllowedToAccessAtLeastOneService(
-      frame->GetLastCommittedOrigin(),
       frame->GetMainFrame()->GetLastCommittedOrigin(), device_id);
 }
 
@@ -153,7 +151,6 @@ bool ChromeBluetoothDelegate::IsAllowedToAccessManufacturerData(
     const WebBluetoothDeviceId& device_id,
     uint16_t manufacturer_code) {
   return GetBluetoothChooserContext(frame)->IsAllowedToAccessManufacturerData(
-      frame->GetLastCommittedOrigin(),
       frame->GetMainFrame()->GetLastCommittedOrigin(), device_id,
       manufacturer_code);
 }
@@ -181,16 +178,15 @@ void ChromeBluetoothDelegate::RemoveFramePermissionObserver(
 std::vector<blink::mojom::WebBluetoothDevicePtr>
 ChromeBluetoothDelegate::GetPermittedDevices(content::RenderFrameHost* frame) {
   auto* context = GetBluetoothChooserContext(frame);
-  std::vector<std::unique_ptr<permissions::ChooserContextBase::Object>>
+  std::vector<std::unique_ptr<permissions::ObjectPermissionContextBase::Object>>
       objects = context->GetGrantedObjects(
-          frame->GetLastCommittedOrigin(),
           frame->GetMainFrame()->GetLastCommittedOrigin());
   std::vector<blink::mojom::WebBluetoothDevicePtr> permitted_devices;
 
   for (const auto& object : objects) {
     auto permitted_device = blink::mojom::WebBluetoothDevice::New();
     permitted_device->id =
-        BluetoothChooserContext::GetObjectDeviceId(object->value);
+        permissions::BluetoothChooserContext::GetObjectDeviceId(object->value);
     permitted_device->name =
         base::UTF16ToUTF8(context->GetObjectDisplayName(object->value));
     permitted_devices.push_back(std::move(permitted_device));
@@ -200,8 +196,9 @@ ChromeBluetoothDelegate::GetPermittedDevices(content::RenderFrameHost* frame) {
 }
 
 ChromeBluetoothDelegate::ChooserContextPermissionObserver::
-    ChooserContextPermissionObserver(ChromeBluetoothDelegate* owning_delegate,
-                                     permissions::ChooserContextBase* context)
+    ChooserContextPermissionObserver(
+        ChromeBluetoothDelegate* owning_delegate,
+        permissions::ObjectPermissionContextBase* context)
     : owning_delegate_(owning_delegate) {
   observer_.Observe(context);
 }
@@ -210,13 +207,12 @@ ChromeBluetoothDelegate::ChooserContextPermissionObserver::
     ~ChooserContextPermissionObserver() = default;
 
 void ChromeBluetoothDelegate::ChooserContextPermissionObserver::
-    OnPermissionRevoked(const url::Origin& requesting_origin,
-                        const url::Origin& embedding_origin) {
+    OnPermissionRevoked(const url::Origin& origin) {
   observers_pending_removal_.clear();
   is_traversing_observers_ = true;
 
   for (auto& observer : observer_list_)
-    observer.OnPermissionRevoked(requesting_origin, embedding_origin);
+    observer.OnPermissionRevoked(origin);
 
   is_traversing_observers_ = false;
   for (FramePermissionObserver* observer : observers_pending_removal_)

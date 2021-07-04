@@ -5,6 +5,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_NG_INLINE_NG_FRAGMENT_ITEMS_BUILDER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_NG_INLINE_NG_FRAGMENT_ITEMS_BUILDER_H_
 
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/layout/ng/inline/ng_fragment_item.h"
 #include "third_party/blink/renderer/core/layout/ng/inline/ng_logical_line_item.h"
@@ -124,7 +125,7 @@ class CORE_EXPORT NGFragmentItemsBuilder {
   using ItemWithOffsetList = Vector<ItemWithOffset, 128>;
 
   // Find |LogicalOffset| of the first |NGFragmentItem| for |LayoutObject|.
-  base::Optional<LogicalOffset> LogicalOffsetFor(const LayoutObject&) const;
+  absl::optional<LogicalOffset> LogicalOffsetFor(const LayoutObject&) const;
 
   // Moves all the |NGFragmentItem|s by |offset| in the block-direction.
   void MoveChildrenInBlockDirection(LayoutUnit offset);

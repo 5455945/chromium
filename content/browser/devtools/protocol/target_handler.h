@@ -21,7 +21,6 @@
 namespace content {
 
 class DevToolsAgentHostImpl;
-class DevToolsRendererChannel;
 class DevToolsSession;
 class NavigationHandle;
 class NavigationThrottle;
@@ -46,7 +45,7 @@ class TargetHandler : public DevToolsDomainHandler,
   };
   TargetHandler(AccessMode access_mode,
                 const std::string& owner_target_id,
-                DevToolsRendererChannel* renderer_channel,
+                std::unique_ptr<TargetAutoAttacher> auto_attacher,
                 DevToolsSession* root_session);
   ~TargetHandler() override;
 
@@ -57,7 +56,7 @@ class TargetHandler : public DevToolsDomainHandler,
                    RenderFrameHostImpl* frame_host) override;
   Response Disable() override;
 
-  void DidFinishNavigation();
+  void DidFinishNavigation(NavigationHandle* navigation_handle);
   std::unique_ptr<NavigationThrottle> CreateThrottleForNavigation(
       NavigationHandle* navigation_handle);
   void UpdatePortals();
@@ -121,8 +120,11 @@ class TargetHandler : public DevToolsDomainHandler,
   class ResponseThrottle;
 
   // TargetAutoAttacher::Delegate implementation.
-  void AutoAttach(DevToolsAgentHost* host, bool waiting_for_debugger) override;
+  bool AutoAttach(DevToolsAgentHost* host, bool waiting_for_debugger) override;
   void AutoDetach(DevToolsAgentHost* host) override;
+  void SetAttachedTargetsOfType(
+      const base::flat_set<scoped_refptr<DevToolsAgentHost>>& new_hosts,
+      const std::string& type) override;
 
   Response FindSession(Maybe<std::string> session_id,
                        Maybe<std::string> target_id,
@@ -145,7 +147,7 @@ class TargetHandler : public DevToolsDomainHandler,
                                 base::TerminationStatus status) override;
 
   std::unique_ptr<Target::Frontend> frontend_;
-  TargetAutoAttacher auto_attacher_;
+  std::unique_ptr<TargetAutoAttacher> auto_attacher_;
   bool flatten_auto_attach_ = false;
   bool discover_;
   bool observing_agent_hosts_ = false;
@@ -158,7 +160,7 @@ class TargetHandler : public DevToolsDomainHandler,
   std::string owner_target_id_;
   DevToolsSession* root_session_;
   base::flat_set<Throttle*> throttles_;
-  base::Optional<net::ProxyConfig> pending_proxy_config_;
+  absl::optional<net::ProxyConfig> pending_proxy_config_;
   base::WeakPtrFactory<TargetHandler> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(TargetHandler);

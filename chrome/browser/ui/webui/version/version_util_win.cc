@@ -17,10 +17,10 @@ namespace win {
 std::string GetFullWindowsVersion() {
   std::string version;
   base::win::OSInfo* gi = base::win::OSInfo::GetInstance();
-  const int major = gi->version_number().major;
-  const int minor = gi->version_number().minor;
-  const int build = gi->version_number().build;
-  const int patch = gi->version_number().patch;
+  const uint32_t major = gi->version_number().major;
+  const uint32_t minor = gi->version_number().minor;
+  const uint32_t build = gi->version_number().build;
+  const uint32_t patch = gi->version_number().patch;
   // Server or Desktop
   const bool server =
       gi->version_type() == base::win::VersionType::SUITE_SERVER;
@@ -51,7 +51,7 @@ std::string GetFullWindowsVersion() {
         break;
       default:
         // unknown version
-        return base::StringPrintf("unknown version 6.%d", minor);
+        return base::StringPrintf("unknown version 6.%u", minor);
     }
   } else if ((major == 5) && (minor > 0)) {
     // Windows XP or Server 2003
@@ -59,7 +59,7 @@ std::string GetFullWindowsVersion() {
     version += sp;
   } else {
     // unknown version
-    return base::StringPrintf("unknown version %d.%d", major, minor);
+    return base::StringPrintf("unknown version %u.%u", major, minor);
   }
 
   const std::string release_id = gi->release_id();
@@ -68,13 +68,13 @@ std::string GetFullWindowsVersion() {
     version += " Version " + release_id;
 
   if (patch > 0)
-    version += base::StringPrintf(" (Build %d.%d)", build, patch);
+    version += base::StringPrintf(" (Build %u.%u)", build, patch);
   else
-    version += base::StringPrintf(" (Build %d)", build);
+    version += base::StringPrintf(" (Build %u)", build);
   return version;
 }
 
-base::string16 GetCohortVersionInfo() {
+std::u16string GetCohortVersionInfo() {
   std::wstring update_cohort_name =
       install_static::InstallDetails::Get().update_cohort_name();
   if (!update_cohort_name.empty()) {
@@ -82,7 +82,7 @@ base::string16 GetCohortVersionInfo() {
                                       base::WideToUTF16(update_cohort_name));
   }
 
-  return base::string16();
+  return std::u16string();
 }
 
 }  // namespace win

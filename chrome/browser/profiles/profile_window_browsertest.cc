@@ -23,6 +23,7 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_list.h"
@@ -111,6 +112,11 @@ class ProfileWindowBrowserTest : public InProcessBrowserTest {
   ~ProfileWindowBrowserTest() override = default;
 };
 
+IN_PROC_BROWSER_TEST_F(ProfileWindowBrowserTest, CountForNullBrowser) {
+  EXPECT_EQ(size_t{0}, chrome::GetBrowserCount(nullptr));
+  EXPECT_EQ(0, BrowserList::GetOffTheRecordBrowsersActiveForProfile(nullptr));
+}
+
 class ProfileWindowCountBrowserTest
     : public ProfileWindowBrowserTest,
       public testing::WithParamInterface<ProfileWindowType> {
@@ -156,35 +162,49 @@ class ProfileWindowCountBrowserTest
 };
 
 IN_PROC_BROWSER_TEST_P(ProfileWindowCountBrowserTest, CountProfileWindows) {
-  DCHECK_EQ(0, GetWindowCount());
+  EXPECT_EQ(0, GetWindowCount());
 
   // Create a browser and check the count.
   Browser* browser1 = CreateGuestOrIncognitoBrowser();
-  DCHECK_EQ(1, GetWindowCount());
+  EXPECT_EQ(1, GetWindowCount());
 
   // Create another browser and check the count.
   Browser* browser2 = CreateGuestOrIncognitoBrowser();
-  DCHECK_EQ(2, GetWindowCount());
-
-  // Open a docked DevTool window and count.
-  DevToolsWindow* devtools_window =
-      DevToolsWindowTesting::OpenDevToolsWindowSync(browser1, true);
-  DCHECK_EQ(2, GetWindowCount());
-  DevToolsWindowTesting::CloseDevToolsWindowSync(devtools_window);
-
-  // Open a detached DevTool window and count.
-  devtools_window =
-      DevToolsWindowTesting::OpenDevToolsWindowSync(browser1, false);
-  DCHECK_EQ(2, GetWindowCount());
-  DevToolsWindowTesting::CloseDevToolsWindowSync(devtools_window);
+  EXPECT_EQ(2, GetWindowCount());
 
   // Close one browser and count.
   CloseBrowserSynchronously(browser2);
-  DCHECK_EQ(1, GetWindowCount());
+  EXPECT_EQ(1, GetWindowCount());
 
   // Close another browser and count.
   CloseBrowserSynchronously(browser1);
-  DCHECK_EQ(0, GetWindowCount());
+  EXPECT_EQ(0, GetWindowCount());
+}
+
+// |OpenDevToolsWindowSync| is slow on Linux Debug and can result in flacky test
+// failure. See (crbug.com/1186994).
+#if defined(OS_LINUX) && !defined(NDEBUG)
+#define MAYBE_DevToolsWindowsNotCounted DISABLED_DevToolsWindowsNotCounted
+#else
+#define MAYBE_DevToolsWindowsNotCounted DevToolsWindowsNotCounted
+#endif
+IN_PROC_BROWSER_TEST_P(ProfileWindowCountBrowserTest,
+                       MAYBE_DevToolsWindowsNotCounted) {
+  Browser* browser = CreateGuestOrIncognitoBrowser();
+  EXPECT_EQ(1, GetWindowCount());
+
+  DevToolsWindow* devtools_window =
+      DevToolsWindowTesting::OpenDevToolsWindowSync(browser,
+                                                    /*is_docked=*/true);
+  EXPECT_EQ(1, GetWindowCount());
+  DevToolsWindowTesting::CloseDevToolsWindowSync(devtools_window);
+
+  devtools_window = DevToolsWindowTesting::OpenDevToolsWindowSync(
+      browser, /*is_docked=*/false);
+  EXPECT_EQ(1, GetWindowCount());
+  DevToolsWindowTesting::CloseDevToolsWindowSync(devtools_window);
+
+  EXPECT_EQ(1, GetWindowCount());
 }
 
 INSTANTIATE_TEST_SUITE_P(All,
@@ -273,8 +293,7 @@ IN_PROC_BROWSER_TEST_P(GuestProfileWindowBrowserTest,
   Browser* guest_browser = CreateGuestBrowser();
   Profile* guest_profile = guest_browser->profile();
 
-  base::string16 fip_text =
-      base::ASCIIToUTF16("first guest session search text");
+  std::u16string fip_text = u"first guest session search text";
   FindBarStateFactory::GetForBrowserContext(guest_profile)
       ->SetLastSearchText(fip_text);
 
@@ -291,6 +310,7 @@ IN_PROC_BROWSER_TEST_P(GuestProfileWindowBrowserTest,
   guest_browser = chrome::FindAnyBrowser(guest_profile, true);
   EXPECT_TRUE(guest_browser);
   CloseBrowserSynchronously(guest_browser);
+  content::RunAllTasksUntilIdle();
 
   // Open a new guest browser window. Since this is a separate session, the find
   // in page text should have been cleared (along with all other browsing data).
@@ -305,7 +325,7 @@ IN_PROC_BROWSER_TEST_P(GuestProfileWindowBrowserTest,
         guest_profile, chrome::startup::IS_NOT_PROCESS_STARTUP,
         chrome::startup::IS_NOT_FIRST_RUN, true /*always_create*/);
   }
-  EXPECT_EQ(base::string16(),
+  EXPECT_EQ(std::u16string(),
             FindBarStateFactory::GetForBrowserContext(guest_profile)
                 ->GetSearchPrepopulateText());
 }
@@ -364,13 +384,14 @@ IN_PROC_BROWSER_TEST_F(ProfileWindowBrowserTest, OpenBrowserWindowForProfile) {
 #endif
 IN_PROC_BROWSER_TEST_F(ProfileWindowBrowserTest,
                        MAYBE_OpenBrowserWindowForProfileWithSigninRequired) {
+  signin_util::ScopedForceSigninSetterForTesting force_signin_setter(true);
   Profile* profile = browser()->profile();
   ProfileAttributesEntry* entry =
       g_browser_process->profile_manager()
           ->GetProfileAttributesStorage()
           .GetProfileAttributesWithPath(profile->GetPath());
   ASSERT_NE(entry, nullptr);
-  entry->SetIsSigninRequired(true);
+  entry->LockForceSigninProfile(true);
   size_t num_browsers = BrowserList::GetInstance()->size();
   base::RunLoop run_loop;
   ProfilePicker::AddOnProfilePickerOpenedCallbackForTesting(

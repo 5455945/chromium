@@ -59,7 +59,7 @@ PaymentResponseHelper::PaymentResponseHelper(
 
   // Start to get the instrument details. Will call back into
   // OnInstrumentDetailsReady.
-  selected_app_->InvokePaymentApp(this);
+  selected_app_->InvokePaymentApp(weak_ptr_factory_.GetWeakPtr());
 }
 
 PaymentResponseHelper::~PaymentResponseHelper() {}
@@ -192,6 +192,9 @@ void PaymentResponseHelper::GeneratePaymentResponse() {
 
   // Contact Details section.
   payment_response->payer = GeneratePayerDetail(selected_contact_profile_);
+
+  payment_response =
+      selected_app_->SetAppSpecificResponseFields(std::move(payment_response));
 
   delegate_->OnPaymentResponseReady(std::move(payment_response));
 }

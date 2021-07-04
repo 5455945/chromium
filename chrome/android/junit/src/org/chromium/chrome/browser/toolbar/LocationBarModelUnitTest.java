@@ -70,7 +70,8 @@ public class LocationBarModelUnitTest {
 
         when(mCustomTabIncognitoManagerMock.getProfile()).thenReturn(mNonPrimaryOTRProfileMock);
         when(mRegularProfileMock.hasPrimaryOTRProfile()).thenReturn(true);
-        when(mRegularProfileMock.getPrimaryOTRProfile()).thenReturn(mPrimaryOTRProfileMock);
+        when(mRegularProfileMock.getPrimaryOTRProfile(/*createIfNeeded=*/true))
+                .thenReturn(mPrimaryOTRProfileMock);
         when(mIncognitoTabMock.getWindowAndroid()).thenReturn(mWindowAndroidMock);
         when(mIncognitoTabMock.isIncognito()).thenReturn(true);
     }
@@ -208,5 +209,24 @@ public class LocationBarModelUnitTest {
 
         regularLocationBarModel.notifyNtpStartedLoading();
         verify(mLocationBarDataObserver).onNtpStartedLoading();
+    }
+
+    @Test
+    @MediumTest
+    public void testObserversNotified_setIsShowingTabSwitcher() {
+        LocationBarModel regularLocationBarModel =
+                new TestRegularLocationBarModel(null, mSearchEngineLogoUtils);
+        regularLocationBarModel.addObserver(mLocationBarDataObserver);
+
+        verify(mLocationBarDataObserver, never()).onTitleChanged();
+        verify(mLocationBarDataObserver, never()).onUrlChanged();
+        verify(mLocationBarDataObserver, never()).onPrimaryColorChanged();
+        verify(mLocationBarDataObserver, never()).onSecurityStateChanged();
+
+        regularLocationBarModel.setIsShowingTabSwitcher(true);
+        verify(mLocationBarDataObserver).onTitleChanged();
+        verify(mLocationBarDataObserver).onUrlChanged();
+        verify(mLocationBarDataObserver).onPrimaryColorChanged();
+        verify(mLocationBarDataObserver).onSecurityStateChanged();
     }
 }

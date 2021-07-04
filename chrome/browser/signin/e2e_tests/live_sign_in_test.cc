@@ -13,7 +13,7 @@
 #include "chrome/browser/signin/e2e_tests/live_test.h"
 #include "chrome/browser/signin/e2e_tests/test_accounts_util.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/sync/profile_sync_service_factory.h"
+#include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
@@ -266,7 +266,7 @@ class LiveSignInTest : public signin::test::LiveTest {
   syncer::SyncService* sync_service() { return sync_service(browser()); }
 
   syncer::SyncService* sync_service(Browser* browser) {
-    return ProfileSyncServiceFactory::GetForProfile(browser->profile());
+    return SyncServiceFactory::GetForProfile(browser->profile());
   }
 
   AccountReconcilor* account_reconcilor() {
@@ -330,8 +330,8 @@ IN_PROC_BROWSER_TEST_F(LiveSignInTest, MANUAL_WebSignOut) {
       identity_manager()->HasAccountWithRefreshTokenInPersistentErrorState(
           primary_account.account_id));
 #if !BUILDFLAG(IS_CHROMEOS_ASH)
-  EXPECT_EQ(sync_ui_util::GetAvatarSyncErrorType(browser()->profile()),
-            sync_ui_util::AUTH_ERROR);
+  EXPECT_EQ(GetAvatarSyncErrorType(browser()->profile()),
+            AvatarSyncErrorType::kAuthError);
 #endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
 }
 

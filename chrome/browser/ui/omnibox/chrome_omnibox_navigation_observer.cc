@@ -6,10 +6,10 @@
 
 #include "base/bind.h"
 #include "chrome/browser/autocomplete/shortcuts_backend_factory.h"
-#include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/intranet_redirect_detector.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/ui/omnibox/alternate_nav_infobar_delegate.h"
+#include "components/infobars/content/content_infobar_manager.h"
 #include "components/omnibox/browser/shortcuts_backend.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_service.h"
@@ -76,7 +76,7 @@ bool OnlyChangeIsFromHTTPToHTTPS(const GURL& origin, const GURL& destination) {
 
 ChromeOmniboxNavigationObserver::ChromeOmniboxNavigationObserver(
     Profile* profile,
-    const base::string16& text,
+    const std::u16string& text,
     const AutocompleteMatch& match,
     const AutocompleteMatch& alternate_nav_match)
     : text_(text),
@@ -142,12 +142,13 @@ void ChromeOmniboxNavigationObserver::Observe(
   // It's possible for an attempted omnibox navigation to cause the extensions
   // system to synchronously navigate an extension background page.  Not only is
   // this navigation not the one we want to observe, the associated WebContents
-  // is invisible and has no InfoBarService, so trying to show an infobar in it
-  // later will crash.  Just ignore this navigation and keep listening.
+  // is invisible and has no infobars::ContentInfoBarManager, so trying to show
+  // an infobar in it later will crash.  Just ignore this navigation and keep
+  // listening.
   content::NavigationController* controller =
       content::Source<content::NavigationController>(source).ptr();
   content::WebContents* web_contents = controller->GetWebContents();
-  if (!InfoBarService::FromWebContents(web_contents))
+  if (!infobars::ContentInfoBarManager::FromWebContents(web_contents))
     return;
 
   // Ignore navigations to the wrong URL.
@@ -182,8 +183,8 @@ void ChromeOmniboxNavigationObserver::Observe(
     if (loader_factory_for_testing_) {
       loader_factory = loader_factory_for_testing_.get();
     } else {
-      loader_factory = content::BrowserContext::GetDefaultStoragePartition(
-                           controller->GetBrowserContext())
+      loader_factory = controller->GetBrowserContext()
+                           ->GetDefaultStoragePartition()
                            ->GetURLLoaderFactoryForBrowserProcess()
                            .get();
     }
@@ -197,8 +198,11 @@ void ChromeOmniboxNavigationObserver::Observe(
 
 void ChromeOmniboxNavigationObserver::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
+  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
+  // frames. This caller was converted automatically to the primary main frame
+  // to preserve its semantics. Follow up to confirm correctness.
   if ((load_state_ != LOAD_COMMITTED) && navigation_handle->IsErrorPage() &&
-      navigation_handle->IsInMainFrame() &&
+      navigation_handle->IsInPrimaryMainFrame() &&
       !navigation_handle->IsSameDocument())
     delete this;
 }
@@ -310,8 +314,7 @@ void ChromeOmniboxNavigationObserver::CreateLoader(
           destination: WEBSITE
         }
         policy {
-          cookies_allowed: YES
-          cookies_store: "user"
+          cookies_allowed: NO
           setting: "This feature cannot be disabled in settings."
           policy_exception_justification:
             "By disabling DefaultSearchProviderEnabled, one can disable "
@@ -322,7 +325,12 @@ void ChromeOmniboxNavigationObserver::CreateLoader(
   auto request = std::make_unique<network::ResourceRequest>();
   request->url = destination_url;
   request->method = "HEAD";
-  request->load_flags = net::LOAD_DO_NOT_SAVE_COOKIES;
+  // Perform a credential-less fetch. This prevents bearer tokens, like cookies
+  // or password hashes from HTTP auth from being leaked to attackers, and
+  // reduces the chance of sending TLS client certs in the clear.
+  // See https://crbug.com/693991 for discussion.
+  request->credentials_mode =
+      network::mojom::CredentialsMode::kOmitBug_775438_Workaround;
   loader_ =
       network::SimpleURLLoader::Create(std::move(request), traffic_annotation);
   loader_->SetAllowHttpErrorResults(true);

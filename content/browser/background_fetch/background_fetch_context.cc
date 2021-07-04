@@ -8,7 +8,6 @@
 
 #include "base/bind.h"
 #include "base/callback_helpers.h"
-#include "base/task/post_task.h"
 #include "content/browser/background_fetch/background_fetch_data_manager.h"
 #include "content/browser/background_fetch/background_fetch_job_controller.h"
 #include "content/browser/background_fetch/background_fetch_metrics.h"
@@ -25,6 +24,7 @@
 #include "content/public/browser/web_contents.h"
 #include "storage/browser/blob/blob_data_handle.h"
 #include "storage/browser/quota/quota_manager_proxy.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 
 namespace content {
 
@@ -37,8 +37,8 @@ BackgroundFetchContext::BackgroundFetchContext(
     scoped_refptr<storage::QuotaManagerProxy> quota_manager_proxy,
     scoped_refptr<DevToolsBackgroundServicesContextImpl> devtools_context)
     : base::RefCountedDeleteOnSequence<BackgroundFetchContext>(
-          base::CreateSequencedTaskRunner(
-              {ServiceWorkerContext::GetCoreThreadId()})),
+          BrowserThread::GetTaskRunnerForThread(
+              ServiceWorkerContext::GetCoreThreadId())),
       browser_context_(browser_context),
       service_worker_context_(service_worker_context),
       devtools_context_(std::move(devtools_context)),
@@ -97,25 +97,25 @@ void BackgroundFetchContext::DidGetInitializationData(
 
 void BackgroundFetchContext::GetRegistration(
     int64_t service_worker_registration_id,
-    const url::Origin& origin,
+    const blink::StorageKey& storage_key,
     const std::string& developer_id,
     blink::mojom::BackgroundFetchService::GetRegistrationCallback callback) {
   DCHECK_CURRENTLY_ON(ServiceWorkerContext::GetCoreThreadId());
 
   data_manager_->GetRegistration(
-      service_worker_registration_id, origin, developer_id,
+      service_worker_registration_id, storage_key, developer_id,
       base::BindOnce(&BackgroundFetchContext::DidGetRegistration,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void BackgroundFetchContext::GetDeveloperIdsForServiceWorker(
     int64_t service_worker_registration_id,
-    const url::Origin& origin,
+    const blink::StorageKey& storage_key,
     blink::mojom::BackgroundFetchService::GetDeveloperIdsCallback callback) {
   DCHECK_CURRENTLY_ON(ServiceWorkerContext::GetCoreThreadId());
 
-  data_manager_->GetDeveloperIdsForServiceWorker(service_worker_registration_id,
-                                                 origin, std::move(callback));
+  data_manager_->GetDeveloperIdsForServiceWorker(
+      service_worker_registration_id, storage_key, std::move(callback));
 }
 
 void BackgroundFetchContext::DidGetRegistration(
@@ -160,7 +160,7 @@ void BackgroundFetchContext::StartFetch(
   fetch_callbacks_[registration_id] = std::move(callback);
 
   delegate_proxy_.GetPermissionForOrigin(
-      registration_id.origin(), wc_getter,
+      registration_id.storage_key().origin(), wc_getter,
       base::BindOnce(&BackgroundFetchContext::DidGetPermission,
                      weak_factory_.GetWeakPtr(), registration_id,
                      std::move(requests), std::move(options), icon,
@@ -180,9 +180,9 @@ void BackgroundFetchContext::DidGetPermission(
   RunOrPostTaskOnThread(
       FROM_HERE, BrowserThread::UI,
       base::BindOnce(&background_fetch::RecordBackgroundFetchUkmEvent,
-                     registration_id.origin(), requests.size(), options.Clone(),
-                     icon, std::move(ukm_data), frame_tree_node_id,
-                     permission));
+                     registration_id.storage_key(), requests.size(),
+                     options.Clone(), icon, std::move(ukm_data),
+                     frame_tree_node_id, permission));
 
   if (permission != BackgroundFetchPermission::BLOCKED) {
     data_manager_->CreateRegistration(
@@ -240,8 +240,8 @@ void BackgroundFetchContext::AddRegistrationObserver(
 
 void BackgroundFetchContext::UpdateUI(
     const BackgroundFetchRegistrationId& registration_id,
-    const base::Optional<std::string>& title,
-    const base::Optional<SkBitmap>& icon,
+    const absl::optional<std::string>& title,
+    const absl::optional<SkBitmap>& icon,
     blink::mojom::BackgroundFetchRegistrationService::UpdateUICallback
         callback) {
   DCHECK_CURRENTLY_ON(ServiceWorkerContext::GetCoreThreadId());

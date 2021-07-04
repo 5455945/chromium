@@ -15,21 +15,21 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/system/sys_info.h"
+#include "chrome/browser/ash/arc/fileapi/arc_content_file_system_url_util.h"
+#include "chrome/browser/ash/arc/fileapi/arc_documents_provider_root.h"
+#include "chrome/browser/ash/arc/fileapi/arc_documents_provider_root_map.h"
+#include "chrome/browser/ash/arc/fileapi/chrome_content_provider_url_util.h"
+#include "chrome/browser/ash/crostini/crostini_manager.h"
+#include "chrome/browser/ash/crostini/crostini_util.h"
+#include "chrome/browser/ash/drive/drive_integration_service.h"
+#include "chrome/browser/ash/drive/file_system_util.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/chromeos/arc/fileapi/arc_content_file_system_url_util.h"
-#include "chrome/browser/chromeos/arc/fileapi/arc_documents_provider_root.h"
-#include "chrome/browser/chromeos/arc/fileapi/arc_documents_provider_root_map.h"
-#include "chrome/browser/chromeos/arc/fileapi/chrome_content_provider_url_util.h"
-#include "chrome/browser/chromeos/crostini/crostini_manager.h"
-#include "chrome/browser/chromeos/crostini/crostini_util.h"
-#include "chrome/browser/chromeos/drive/drive_integration_service.h"
-#include "chrome/browser/chromeos/drive/file_system_util.h"
+#include "chrome/browser/ash/smb_client/smb_service.h"
+#include "chrome/browser/ash/smb_client/smb_service_factory.h"
+#include "chrome/browser/ash/smb_client/smbfs_share.h"
 #include "chrome/browser/chromeos/file_manager/app_id.h"
 #include "chrome/browser/chromeos/fileapi/external_file_url_util.h"
 #include "chrome/browser/chromeos/fileapi/file_system_backend.h"
-#include "chrome/browser/chromeos/smb_client/smb_service.h"
-#include "chrome/browser/chromeos/smb_client/smb_service_factory.h"
-#include "chrome/browser/chromeos/smb_client/smbfs_share.h"
 #include "chrome/browser/download/download_dir_util.h"
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/profiles/profile.h"
@@ -428,7 +428,7 @@ bool ConvertFileSystemURLToPathInsideVM(
   } else if (id == GetCrostiniMountPointName(profile)) {
     // Crostini.
     if (map_crostini_home) {
-      base::Optional<crostini::ContainerInfo> container_info =
+      absl::optional<crostini::ContainerInfo> container_info =
           crostini::CrostiniManager::GetForProfile(profile)->GetContainerInfo(
               crostini::ContainerId::GetDefault());
       if (!container_info) {
@@ -483,7 +483,7 @@ bool ConvertPathInsideVMToFileSystemURL(
   base::FilePath relative_path;
 
   if (map_crostini_home) {
-    base::Optional<crostini::ContainerInfo> container_info =
+    absl::optional<crostini::ContainerInfo> container_info =
         crostini::CrostiniManager::GetForProfile(profile)->GetContainerInfo(
             crostini::ContainerId::GetDefault());
     if (container_info &&
@@ -660,10 +660,10 @@ bool ConvertPathToArcUrl(const base::FilePath& path,
   }
 
   // Force external URL for smbfs.
-  chromeos::smb_client::SmbService* smb_service =
-      chromeos::smb_client::SmbServiceFactory::Get(primary_profile);
+  ash::smb_client::SmbService* smb_service =
+      ash::smb_client::SmbServiceFactory::Get(primary_profile);
   if (smb_service) {
-    chromeos::smb_client::SmbFsShare* share =
+    ash::smb_client::SmbFsShare* share =
         smb_service->GetSmbFsShareForPath(path);
     if (share && share->mount_path().AppendRelativePath(path, &relative_path)) {
       force_external = true;
@@ -766,8 +766,7 @@ std::string GetPathDisplayTextForSettings(Profile* profile,
   if (ReplacePrefix(&result, "/home/chronos/user/Downloads",
                     kFolderNameDownloads)) {
   } else if (ReplacePrefix(&result,
-                           "/home/chronos/" +
-                               profile->GetPath().BaseName().value() +
+                           "/home/chronos/" + profile->GetBaseName().value() +
                                "/Downloads",
                            kFolderNameDownloads)) {
   } else if (ReplacePrefix(
@@ -775,9 +774,8 @@ std::string GetPathDisplayTextForSettings(Profile* profile,
                  std::string("/home/chronos/user/") + kFolderNameMyFiles,
                  "My files")) {
   } else if (ReplacePrefix(&result,
-                           "/home/chronos/" +
-                               profile->GetPath().BaseName().value() + "/" +
-                               kFolderNameMyFiles,
+                           "/home/chronos/" + profile->GetBaseName().value() +
+                               "/" + kFolderNameMyFiles,
                            "My files")) {
   } else if (drive_integration_service &&
              ReplacePrefix(&result,

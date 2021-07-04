@@ -13,6 +13,7 @@
 #include "chrome/services/mac_notifications/public/cpp/notification_operation.h"
 #include "chrome/services/mac_notifications/public/cpp/notification_test_utils_mac.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "testing/gtest_mac.h"
 
 namespace {
 
@@ -30,7 +31,7 @@ base::scoped_nsobject<UNNotificationBuilder> NewTestBuilder(
   [builder setProfileId:@"profileId"];
   [builder setIncognito:false];
   [builder setCreatorPid:@1];
-  [builder setNotificationType:[NSNumber numberWithInt:static_cast<int>(type)]];
+  [builder setNotificationType:@(static_cast<int>(type))];
   return builder;
 }
 
@@ -50,10 +51,10 @@ TEST(UNNotificationResponseBuilderMacTest, TestNoCreatorPid) {
         CreateFakeUNNotificationResponse(newUserInfo);
 
     NSDictionary* response = [UNNotificationResponseBuilder
-        buildDictionary:static_cast<UNNotificationResponse*>(
-                            fakeResponse.get())];
+        buildDictionary:static_cast<UNNotificationResponse*>(fakeResponse.get())
+              fromAlert:NO];
     NSNumber* creatorPid =
-        [response objectForKey:notification_constants::kNotificationCreatorPid];
+        response[notification_constants::kNotificationCreatorPid];
     EXPECT_TRUE([creatorPid isEqualToNumber:@0]);
   }
 }
@@ -70,13 +71,13 @@ TEST(UNNotificationResponseBuilderMacTest, TestNotificationClick) {
         CreateFakeUNNotificationResponse(userInfo);
 
     NSDictionary* response = [UNNotificationResponseBuilder
-        buildDictionary:static_cast<UNNotificationResponse*>(
-                            fakeResponse.get())];
+        buildDictionary:static_cast<UNNotificationResponse*>(fakeResponse.get())
+              fromAlert:NO];
 
     NSNumber* operation =
-        [response objectForKey:notification_constants::kNotificationOperation];
-    NSNumber* buttonIndex = [response
-        objectForKey:notification_constants::kNotificationButtonIndex];
+        response[notification_constants::kNotificationOperation];
+    NSNumber* buttonIndex =
+        response[notification_constants::kNotificationButtonIndex];
 
     EXPECT_EQ(static_cast<int>(NotificationOperation::NOTIFICATION_CLICK),
               operation.intValue);
@@ -98,13 +99,13 @@ TEST(UNNotificationResponseBuilderMacTest, TestNotificationClose) {
     fakeResponse.get().actionIdentifier = UNNotificationDismissActionIdentifier;
 
     NSDictionary* response = [UNNotificationResponseBuilder
-        buildDictionary:static_cast<UNNotificationResponse*>(
-                            fakeResponse.get())];
+        buildDictionary:static_cast<UNNotificationResponse*>(fakeResponse.get())
+              fromAlert:NO];
 
     NSNumber* operation =
-        [response objectForKey:notification_constants::kNotificationOperation];
-    NSNumber* buttonIndex = [response
-        objectForKey:notification_constants::kNotificationButtonIndex];
+        response[notification_constants::kNotificationOperation];
+    NSNumber* buttonIndex =
+        response[notification_constants::kNotificationButtonIndex];
 
     EXPECT_EQ(static_cast<int>(NotificationOperation::NOTIFICATION_CLOSE),
               operation.intValue);
@@ -127,13 +128,13 @@ TEST(UNNotificationResponseBuilderMacTest, TestNotificationCloseButton) {
         notification_constants::kNotificationCloseButtonTag;
 
     NSDictionary* response = [UNNotificationResponseBuilder
-        buildDictionary:static_cast<UNNotificationResponse*>(
-                            fakeResponse.get())];
+        buildDictionary:static_cast<UNNotificationResponse*>(fakeResponse.get())
+              fromAlert:NO];
 
     NSNumber* operation =
-        [response objectForKey:notification_constants::kNotificationOperation];
-    NSNumber* buttonIndex = [response
-        objectForKey:notification_constants::kNotificationButtonIndex];
+        response[notification_constants::kNotificationOperation];
+    NSNumber* buttonIndex =
+        response[notification_constants::kNotificationButtonIndex];
 
     EXPECT_EQ(static_cast<int>(NotificationOperation::NOTIFICATION_CLOSE),
               operation.intValue);
@@ -156,13 +157,13 @@ TEST(UNNotificationResponseBuilderMacTest, TestNotificationSettingsButton) {
         notification_constants::kNotificationSettingsButtonTag;
 
     NSDictionary* response = [UNNotificationResponseBuilder
-        buildDictionary:static_cast<UNNotificationResponse*>(
-                            fakeResponse.get())];
+        buildDictionary:static_cast<UNNotificationResponse*>(fakeResponse.get())
+              fromAlert:NO];
 
     NSNumber* operation =
-        [response objectForKey:notification_constants::kNotificationOperation];
-    NSNumber* buttonIndex = [response
-        objectForKey:notification_constants::kNotificationButtonIndex];
+        response[notification_constants::kNotificationOperation];
+    NSNumber* buttonIndex =
+        response[notification_constants::kNotificationButtonIndex];
 
     EXPECT_EQ(static_cast<int>(NotificationOperation::NOTIFICATION_SETTINGS),
               operation.intValue);
@@ -185,13 +186,13 @@ TEST(UNNotificationResponseBuilderMacTest, TestNotificationButtonOne) {
         notification_constants::kNotificationButtonOne;
 
     NSDictionary* response = [UNNotificationResponseBuilder
-        buildDictionary:static_cast<UNNotificationResponse*>(
-                            fakeResponse.get())];
+        buildDictionary:static_cast<UNNotificationResponse*>(fakeResponse.get())
+              fromAlert:NO];
 
     NSNumber* operation =
-        [response objectForKey:notification_constants::kNotificationOperation];
-    NSNumber* buttonIndex = [response
-        objectForKey:notification_constants::kNotificationButtonIndex];
+        response[notification_constants::kNotificationOperation];
+    NSNumber* buttonIndex =
+        response[notification_constants::kNotificationButtonIndex];
 
     EXPECT_EQ(static_cast<int>(NotificationOperation::NOTIFICATION_CLICK),
               operation.intValue);
@@ -213,16 +214,42 @@ TEST(UNNotificationResponseBuilderMacTest, TestNotificationButtonTwo) {
         notification_constants::kNotificationButtonTwo;
 
     NSDictionary* response = [UNNotificationResponseBuilder
-        buildDictionary:static_cast<UNNotificationResponse*>(
-                            fakeResponse.get())];
+        buildDictionary:static_cast<UNNotificationResponse*>(fakeResponse.get())
+              fromAlert:NO];
 
     NSNumber* operation =
-        [response objectForKey:notification_constants::kNotificationOperation];
-    NSNumber* buttonIndex = [response
-        objectForKey:notification_constants::kNotificationButtonIndex];
+        response[notification_constants::kNotificationOperation];
+    NSNumber* buttonIndex =
+        response[notification_constants::kNotificationButtonIndex];
 
     EXPECT_EQ(static_cast<int>(NotificationOperation::NOTIFICATION_CLICK),
               operation.intValue);
     EXPECT_EQ(1, buttonIndex.intValue);
+  }
+}
+
+TEST(UNNotificationResponseBuilderMacTest, TestFromAlert) {
+  if (@available(macOS 10.14, *)) {
+    base::scoped_nsobject<UNNotificationBuilder> builder =
+        NewTestBuilder(NotificationHandler::Type::WEB_PERSISTENT);
+    UNMutableNotificationContent* content = [builder buildUserNotification];
+    base::scoped_nsobject<NSMutableDictionary> userInfo(
+        [[content userInfo] mutableCopy]);
+    base::scoped_nsobject<FakeUNNotificationResponse> fakeResponse =
+        CreateFakeUNNotificationResponse(userInfo);
+    UNNotificationResponse* response =
+        static_cast<UNNotificationResponse*>(fakeResponse.get());
+
+    EXPECT_NSEQ(
+        @NO,
+        [UNNotificationResponseBuilder
+            buildDictionary:response
+                  fromAlert:NO][notification_constants::kNotificationIsAlert]);
+
+    EXPECT_NSEQ(
+        @YES,
+        [UNNotificationResponseBuilder
+            buildDictionary:response
+                  fromAlert:YES][notification_constants::kNotificationIsAlert]);
   }
 }

@@ -5,6 +5,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/layout/geometry/transform_state.h"
 #include "third_party/blink/renderer/core/layout/layout_inline.h"
+#include "third_party/blink/renderer/core/layout/layout_multi_column_flow_thread.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
@@ -806,11 +807,11 @@ TEST_F(MapCoordinatesTest, MulticolWithText) {
     </div>
   )HTML");
 
+  auto* const multicol =
+      To<LayoutBlockFlow>(GetLayoutBoxByElementId("multicol"));
   LayoutObject* target = GetLayoutObjectByElementId("sibling")->NextSibling();
   ASSERT_TRUE(target->IsText());
-  auto* flow_thread = To<LayoutBox>(target->Parent());
-  ASSERT_TRUE(flow_thread->IsLayoutFlowThread());
-  auto* multicol = GetLayoutBoxByElementId("multicol");
+  auto* const flow_thread = multicol->MultiColumnFlowThread();
 
   PhysicalOffset mapped_point =
       MapLocalToAncestor(target, flow_thread, PhysicalOffset(10, 70));
@@ -833,10 +834,10 @@ TEST_F(MapCoordinatesTest, MulticolWithInline) {
     </div>
   )HTML");
 
+  auto* const multicol =
+      To<LayoutBlockFlow>(GetLayoutBoxByElementId("multicol"));
   LayoutObject* target = GetLayoutObjectByElementId("target");
-  auto* flow_thread = To<LayoutBox>(target->Parent());
-  ASSERT_TRUE(flow_thread->IsLayoutFlowThread());
-  auto* multicol = GetLayoutBoxByElementId("multicol");
+  auto* const flow_thread = multicol->MultiColumnFlowThread();
 
   PhysicalOffset mapped_point =
       MapLocalToAncestor(target, flow_thread, PhysicalOffset(10, 70));
@@ -1676,35 +1677,105 @@ TEST_F(MapCoordinatesTest, LocalToAbsoluteTransformFlattens) {
 
   // With child1, the rotations cancel and points should map basically back to
   // themselves.
-  EXPECT_NEAR(100.0, matrix.ProjectPoint(FloatPoint(100.0, 50.0)).X(),
+  EXPECT_NEAR(100.0, matrix.MapPoint(FloatPoint(100.0, 50.0)).X(),
               LayoutUnit::Epsilon());
-  EXPECT_NEAR(50.0, matrix.ProjectPoint(FloatPoint(100.0, 50.0)).Y(),
+  EXPECT_NEAR(50.0, matrix.MapPoint(FloatPoint(100.0, 50.0)).Y(),
               LayoutUnit::Epsilon());
-  EXPECT_NEAR(50.0, matrix.ProjectPoint(FloatPoint(50.0, 100.0)).X(),
+  EXPECT_NEAR(50.0, matrix.MapPoint(FloatPoint(50.0, 100.0)).X(),
               LayoutUnit::Epsilon());
-  EXPECT_NEAR(100.0, matrix.ProjectPoint(FloatPoint(50.0, 100.0)).Y(),
+  EXPECT_NEAR(100.0, matrix.MapPoint(FloatPoint(50.0, 100.0)).Y(),
               LayoutUnit::Epsilon());
 
   // With child2, each rotation gets flattened and the end result is
-  // approximately a 90-degree rotation.
+  // approximately a scale(1.0, 0.5).
   matrix = child2->LocalToAbsoluteTransform();
-  EXPECT_NEAR(50.0, matrix.ProjectPoint(FloatPoint(100.0, 50.0)).X(),
+  EXPECT_NEAR(50.0, matrix.MapPoint(FloatPoint(100.0, 50.0)).X(),
               LayoutUnit::Epsilon());
-  EXPECT_NEAR(50.0, matrix.ProjectPoint(FloatPoint(100.0, 50.0)).Y(),
+  EXPECT_NEAR(50.0, matrix.MapPoint(FloatPoint(100.0, 50.0)).Y(),
               LayoutUnit::Epsilon());
-  EXPECT_NEAR(25.0, matrix.ProjectPoint(FloatPoint(50.0, 100.0)).X(),
+  EXPECT_NEAR(25.0, matrix.MapPoint(FloatPoint(50.0, 100.0)).X(),
               LayoutUnit::Epsilon());
-  EXPECT_NEAR(100.0, matrix.ProjectPoint(FloatPoint(50.0, 100.0)).Y(),
+  EXPECT_NEAR(100.0, matrix.MapPoint(FloatPoint(50.0, 100.0)).Y(),
               LayoutUnit::Epsilon());
 }
 
 TEST_F(MapCoordinatesTest, Transform3DWithOffset) {
+  ScopedTransformInteropForTest disabled(false);
   SetBodyInnerHTML(R"HTML(
     <style>
       body { margin: 0; }
     </style>
     <div style="perspective: 400px; width: 0; height: 0">
       <div>
+        <div style="height: 100px"></div>
+        <div style="transform-style: preserve-3d; transform: rotateY(0deg)">
+          <div id="target" style="width: 100px; height: 100px;
+                                  transform: translateZ(200px)">
+          </div>
+        </div>
+      </div>
+    </div>
+  )HTML");
+
+  auto* target = GetLayoutObjectByElementId("target");
+  EXPECT_EQ(FloatRect(0, 200, 200, 200),
+            MapLocalToAncestor(target, nullptr, FloatRect(0, 0, 100, 100)));
+}
+
+TEST_F(MapCoordinatesTest, Transform3DWithOffset2) {
+  ScopedTransformInteropForTest disabled(false);
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      body { margin: 0; }
+    </style>
+    <div style="perspective: 400px; width: 0; height: 0">
+      <div style="transform-style: preserve-3d">
+        <div style="height: 100px"></div>
+        <div style="transform-style: preserve-3d; transform: rotateY(0deg)">
+          <div id="target" style="width: 100px; height: 100px;
+                                  transform: translateZ(200px)">
+          </div>
+        </div>
+      </div>
+    </div>
+  )HTML");
+
+  auto* target = GetLayoutObjectByElementId("target");
+  EXPECT_EQ(FloatRect(0, 200, 200, 200),
+            MapLocalToAncestor(target, nullptr, FloatRect(0, 0, 100, 100)));
+}
+
+TEST_F(MapCoordinatesTest, Transform3DWithOffsetTransformInterop) {
+  ScopedTransformInteropForTest enabled(true);
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      body { margin: 0; }
+    </style>
+    <div style="perspective: 400px; width: 0; height: 0">
+      <div>
+        <div style="height: 100px"></div>
+        <div style="transform-style: preserve-3d; transform: rotateY(0deg)">
+          <div id="target" style="width: 100px; height: 100px;
+                                  transform: translateZ(200px)">
+          </div>
+        </div>
+      </div>
+    </div>
+  )HTML");
+
+  auto* target = GetLayoutObjectByElementId("target");
+  EXPECT_EQ(FloatRect(0, 100, 100, 100),
+            MapLocalToAncestor(target, nullptr, FloatRect(0, 0, 100, 100)));
+}
+
+TEST_F(MapCoordinatesTest, Transform3DWithOffset2TransformInterop) {
+  ScopedTransformInteropForTest enabled(true);
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      body { margin: 0; }
+    </style>
+    <div style="perspective: 400px; width: 0; height: 0">
+      <div style="transform-style: preserve-3d">
         <div style="height: 100px"></div>
         <div style="transform-style: preserve-3d; transform: rotateY(0deg)">
           <div id="target" style="width: 100px; height: 100px;

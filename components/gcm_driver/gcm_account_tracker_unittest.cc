@@ -196,9 +196,9 @@ GCMAccountTrackerTest::GCMAccountTrackerTest() {
   std::unique_ptr<AccountTracker> gaia_account_tracker(
       new AccountTracker(identity_test_env_.identity_manager()));
 
-  tracker_.reset(new GCMAccountTracker(std::move(gaia_account_tracker),
-                                       identity_test_env_.identity_manager(),
-                                       &driver_));
+  tracker_ = std::make_unique<GCMAccountTracker>(
+      std::move(gaia_account_tracker), identity_test_env_.identity_manager(),
+      &driver_);
 }
 
 GCMAccountTrackerTest::~GCMAccountTrackerTest() {
@@ -219,7 +219,8 @@ CoreAccountInfo GCMAccountTrackerTest::SetPrimaryAccount(
   // setting of the primary account is done afterward to check that the flow
   // that ensues from the GoogleSigninSucceeded callback firing works as
   // expected.
-  return identity_test_env_.MakePrimaryAccountAvailable(email);
+  return identity_test_env_.MakePrimaryAccountAvailable(
+      email, signin::ConsentLevel::kSync);
 }
 
 void GCMAccountTrackerTest::RemoveAccount(const CoreAccountId& account_id) {

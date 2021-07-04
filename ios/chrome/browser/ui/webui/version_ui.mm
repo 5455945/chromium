@@ -11,6 +11,7 @@
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
 #include "components/grit/components_resources.h"
+#include "components/grit/components_scaled_resources.h"
 #include "components/strings/grit/components_chromium_strings.h"
 #include "components/strings/grit/components_google_chrome_strings.h"
 #include "components/strings/grit/components_strings.h"
@@ -98,16 +99,15 @@ web::WebUIIOSDataSource* CreateVersionUIDataSource() {
 
   html_source->AddString(version_ui::kSanitizer, version_info::GetSanitizerList());
 
-#if defined(__apple_build_version__)
-  html_source->AddString(version_ui::kCompiler, "Apple Clang");
-#else
-  html_source->AddString(version_ui::kCompiler, "LLVM clang");
-#endif
-
   html_source->UseStringsJs();
   html_source->AddResourcePath(version_ui::kVersionJS, IDR_VERSION_UI_JS);
   html_source->AddResourcePath(version_ui::kAboutVersionCSS,
                                IDR_VERSION_UI_CSS);
+  html_source->AddResourcePath(version_ui::kAboutVersionMobileCSS,
+                               IDR_VERSION_UI_MOBILE_CSS);
+  html_source->AddResourcePath("images/product_logo.png", IDR_PRODUCT_LOGO);
+  html_source->AddResourcePath("images/product_logo_white.png",
+                               IDR_PRODUCT_LOGO_WHITE);
   html_source->SetDefaultResource(IDR_VERSION_UI_HTML);
   return html_source;
 }

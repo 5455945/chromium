@@ -8,13 +8,12 @@
 
 #include "base/bind.h"
 #include "base/memory/ptr_util.h"
-#include "base/optional.h"
 #include "base/sequenced_task_runner.h"
 #include "base/task/post_task.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
-#include "build/build_config.h"
 #include "media/base/async_destroy_video_decoder.h"
+#include "media/base/bind_to_current_loop.h"
 #include "media/base/limits.h"
 #include "media/base/media_log.h"
 #include "media/gpu/chromeos/dmabuf_video_frame_pool.h"
@@ -23,6 +22,7 @@
 #include "media/gpu/chromeos/platform_video_frame_pool.h"
 #include "media/gpu/macros.h"
 #include "media/media_buildflags.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace media {
 namespace {
@@ -33,7 +33,7 @@ constexpr size_t kNumFramesForImageProcessor = limits::kMaxVideoFrames + 1;
 
 // Pick a compositor renderable format from |candidates|.
 // Return zero if not found.
-base::Optional<Fourcc> PickRenderableFourcc(
+absl::optional<Fourcc> PickRenderableFourcc(
     const std::vector<Fourcc>& candidates) {
   // Hardcode compositor renderable format now.
   // TODO: figure out a way to pick the best one dynamically.
@@ -54,15 +54,7 @@ base::Optional<Fourcc> PickRenderableFourcc(
       return Fourcc(value);
     }
   }
-  return base::nullopt;
-}
-
-// Appends |new_status| to |parent_status| unless |parent_status| is kOk, in
-// that case we cannot append, just forward |new_status| then.
-Status AppendOrForwardStatus(Status parent_status, Status new_status) {
-  if (parent_status.is_ok())
-    return new_status;
-  return std::move(parent_status).AddCause(std::move(new_status));
+  return absl::nullopt;
 }
 
 }  //  namespace
@@ -74,26 +66,25 @@ DecoderInterface::DecoderInterface(
       client_(std::move(client)) {}
 DecoderInterface::~DecoderInterface() = default;
 
+bool DecoderInterface::NeedsTranscryption() {
+  return false;
+}
+
 // static
 std::unique_ptr<VideoDecoder> VideoDecoderPipeline::Create(
     scoped_refptr<base::SequencedTaskRunner> client_task_runner,
     std::unique_ptr<DmabufVideoFramePool> frame_pool,
     std::unique_ptr<VideoFrameConverter> frame_converter,
     std::unique_ptr<MediaLog> /*media_log*/,
-    GetCreateDecoderFunctionsCB get_create_decoder_functions_cb) {
+    CreateDecoderFunctionCB create_decoder_function_cb) {
   if (!client_task_runner || !frame_pool || !frame_converter) {
     VLOGF(1) << "One of arguments is nullptr.";
     return nullptr;
   }
 
-  if (get_create_decoder_functions_cb.Run().empty()) {
-    VLOGF(1) << "No available function to create video decoder.";
-    return nullptr;
-  }
-
   auto* decoder = new VideoDecoderPipeline(
       std::move(client_task_runner), std::move(frame_pool),
-      std::move(frame_converter), std::move(get_create_decoder_functions_cb));
+      std::move(frame_converter), std::move(create_decoder_function_cb));
   return std::make_unique<AsyncDestroyVideoDecoder<VideoDecoderPipeline>>(
       base::WrapUnique(decoder));
 }
@@ -102,13 +93,14 @@ VideoDecoderPipeline::VideoDecoderPipeline(
     scoped_refptr<base::SequencedTaskRunner> client_task_runner,
     std::unique_ptr<DmabufVideoFramePool> frame_pool,
     std::unique_ptr<VideoFrameConverter> frame_converter,
-    GetCreateDecoderFunctionsCB get_create_decoder_functions_cb)
+    CreateDecoderFunctionCB create_decoder_function_cb)
     : client_task_runner_(std::move(client_task_runner)),
       decoder_task_runner_(base::ThreadPool::CreateSingleThreadTaskRunner(
           {base::WithBaseSyncPrimitives(), base::TaskPriority::USER_VISIBLE},
           base::SingleThreadTaskRunnerThreadMode::DEDICATED)),
       main_frame_pool_(std::move(frame_pool)),
-      frame_converter_(std::move(frame_converter)) {
+      frame_converter_(std::move(frame_converter)),
+      create_decoder_function_cb_(std::move(create_decoder_function_cb)) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(client_sequence_checker_);
   DETACH_FROM_SEQUENCE(decoder_sequence_checker_);
   DCHECK(main_frame_pool_);
@@ -116,10 +108,7 @@ VideoDecoderPipeline::VideoDecoderPipeline(
   DCHECK(client_task_runner_);
   DVLOGF(2);
 
-  client_weak_this_ = client_weak_this_factory_.GetWeakPtr();
   decoder_weak_this_ = decoder_weak_this_factory_.GetWeakPtr();
-
-  remaining_create_decoder_functions_ = get_create_decoder_functions_cb.Run();
 
   main_frame_pool_->set_parent_task_runner(decoder_task_runner_);
   frame_converter_->Initialize(
@@ -139,9 +128,10 @@ VideoDecoderPipeline::~VideoDecoderPipeline() {
 
   main_frame_pool_.reset();
   frame_converter_.reset();
-
   decoder_.reset();
-  remaining_create_decoder_functions_.clear();
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+  buffer_transcryptor_.reset();
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 }
 
 void VideoDecoderPipeline::DestroyAsync(
@@ -150,19 +140,18 @@ void VideoDecoderPipeline::DestroyAsync(
   DCHECK(decoder);
   DCHECK_CALLED_ON_VALID_SEQUENCE(decoder->client_sequence_checker_);
 
-  decoder->client_weak_this_factory_.InvalidateWeakPtrs();
   auto* decoder_task_runner = decoder->decoder_task_runner_.get();
   decoder_task_runner->DeleteSoon(FROM_HERE, std::move(decoder));
 }
 
-std::string VideoDecoderPipeline::GetDisplayName() const {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(client_sequence_checker_);
-  return "VideoDecoderPipeline";
-}
-
 VideoDecoderType VideoDecoderPipeline::GetDecoderType() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(client_sequence_checker_);
-  return VideoDecoderType::kChromeOs;
+#if BUILDFLAG(USE_VAAPI)
+  return VideoDecoderType::kVaapi;
+#elif BUILDFLAG(USE_V4L2_CODEC)
+  return VideoDecoderType::kV4L2;
+#endif
+  return VideoDecoderType::kUnknown;
 }
 
 bool VideoDecoderPipeline::IsPlatformDecoder() const {
@@ -210,12 +199,12 @@ void VideoDecoderPipeline::Initialize(const VideoDecoderConfig& config,
     return;
   }
 #else   // BUILDFLAG(USE_CHROMEOS_PROTECTED_MEDIA)
-  if (config.is_encrypted()) {
+  if (config.is_encrypted() && !allow_encrypted_content_for_testing_) {
     VLOGF(1) << "Encrypted streams are not supported for this VD";
     std::move(init_cb).Run(StatusCode::kEncryptedContentUnsupported);
     return;
   }
-  if (cdm_context) {
+  if (cdm_context && !allow_encrypted_content_for_testing_) {
     VLOGF(1) << "cdm_context is not supported.";
     std::move(init_cb).Run(StatusCode::kEncryptedContentUnsupported);
     return;
@@ -239,130 +228,106 @@ void VideoDecoderPipeline::InitializeTask(const VideoDecoderConfig& config,
                                           const WaitingCB& waiting_cb) {
   DVLOGF(3);
   DCHECK_CALLED_ON_VALID_SEQUENCE(decoder_sequence_checker_);
-  DCHECK(!init_cb_);
 
   client_output_cb_ = std::move(output_cb);
-  init_cb_ = std::move(init_cb);
+  waiting_cb_ = std::move(waiting_cb);
 
   // Initialize() and correspondingly InitializeTask(), are called both on first
   // initialization and on subsequent stream |config| changes, e.g. change of
   // resolution. Subsequent initializations are marked by |decoder_| already
   // existing.
   if (!decoder_) {
-    CreateAndInitializeVD(config, cdm_context, std::move(waiting_cb), Status());
-  } else {
-    decoder_->Initialize(
-        config, cdm_context,
-        base::BindOnce(&VideoDecoderPipeline::OnInitializeDone,
-                       decoder_weak_this_, config, cdm_context, waiting_cb,
-                       Status()),
-        base::BindRepeating(&VideoDecoderPipeline::OnFrameDecoded,
-                            decoder_weak_this_),
-        waiting_cb);
-  }
-}
+    decoder_ = create_decoder_function_cb_.Run(decoder_task_runner_,
+                                               decoder_weak_this_);
 
-void VideoDecoderPipeline::CreateAndInitializeVD(VideoDecoderConfig config,
-                                                 CdmContext* cdm_context,
-                                                 const WaitingCB& waiting_cb,
-                                                 Status parent_error) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(decoder_sequence_checker_);
-  DCHECK(init_cb_);
-  DCHECK(!decoder_);
-  DVLOGF(3);
-
-  if (remaining_create_decoder_functions_.empty()) {
-    DVLOGF(2) << "No remaining video decoder create functions to try";
-    client_task_runner_->PostTask(
-        FROM_HERE,
-        base::BindOnce(
-            std::move(init_cb_),
-            AppendOrForwardStatus(
-                parent_error, StatusCode::kChromeOSVideoDecoderNoDecoders)));
-    return;
-  }
-
-  decoder_ = remaining_create_decoder_functions_.front()(decoder_task_runner_,
-                                                         decoder_weak_this_);
-  remaining_create_decoder_functions_.pop_front();
-
-  if (!decoder_) {
-    DVLOGF(2) << "|decoder_| creation failed, trying again with the next "
-                 "available create function.";
-    return CreateAndInitializeVD(
-        config, cdm_context, std::move(waiting_cb),
-        AppendOrForwardStatus(parent_error,
-                              StatusCode::kDecoderFailedCreation));
+    if (!decoder_) {
+      DVLOGF(2) << "|decoder_| creation failed.";
+      client_task_runner_->PostTask(
+          FROM_HERE, base::BindOnce(std::move(init_cb),
+                                    StatusCode::kDecoderFailedCreation));
+      return;
+    }
   }
 
   decoder_->Initialize(
       config, cdm_context,
       base::BindOnce(&VideoDecoderPipeline::OnInitializeDone,
-                     decoder_weak_this_, config, cdm_context, waiting_cb,
-                     std::move(parent_error)),
+                     decoder_weak_this_, std::move(init_cb), cdm_context),
       base::BindRepeating(&VideoDecoderPipeline::OnFrameDecoded,
                           decoder_weak_this_),
-      waiting_cb);
+      base::BindRepeating(&VideoDecoderPipeline::OnDecoderWaiting,
+                          decoder_weak_this_));
 }
 
-void VideoDecoderPipeline::OnInitializeDone(VideoDecoderConfig config,
+void VideoDecoderPipeline::OnInitializeDone(InitCB init_cb,
                                             CdmContext* cdm_context,
-                                            const WaitingCB& waiting_cb,
-                                            Status parent_error,
                                             Status status) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(decoder_sequence_checker_);
-  DCHECK(init_cb_);
   DVLOGF(4) << "Initialization status = " << status.code();
 
-  if (status.is_ok()) {
-    DVLOGF(2) << "|decoder_| successfully initialized.";
-    // TODO(tmathmeyer) consider logging the causes of |parent_error| as they
-    // might have infor about why other decoders failed.
-    client_task_runner_->PostTask(
-        FROM_HERE, base::BindOnce(std::move(init_cb_), OkStatus()));
-    return;
+  if (!status.is_ok()) {
+    decoder_ = nullptr;
   }
 
-  DVLOGF(3) << "|decoder_| initialization failed, trying again with the next "
-               "available create function.";
-  decoder_ = nullptr;
-  CreateAndInitializeVD(config, cdm_context, waiting_cb,
-                        AppendOrForwardStatus(parent_error, std::move(status)));
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+  if (decoder_ && decoder_->NeedsTranscryption()) {
+    if (!cdm_context) {
+      VLOGF(1) << "CdmContext required for transcryption";
+      decoder_ = nullptr;
+      status = Status(StatusCode::kDecoderMissingCdmForEncryptedContent);
+    } else {
+      // We need to enable transcryption for protected content.
+      buffer_transcryptor_ = std::make_unique<DecoderBufferTranscryptor>(
+          cdm_context,
+          base::BindRepeating(&VideoDecoderPipeline::OnBufferTranscrypted,
+                              decoder_weak_this_),
+          base::BindRepeating(&VideoDecoderPipeline::OnDecoderWaiting,
+                              decoder_weak_this_));
+    }
+  } else {
+    // In case this was created on a prior initialization but no longer needed.
+    buffer_transcryptor_.reset();
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+
+  client_task_runner_->PostTask(FROM_HERE,
+                                base::BindOnce(std::move(init_cb), status));
 }
 
-void VideoDecoderPipeline::Reset(base::OnceClosure closure) {
+void VideoDecoderPipeline::Reset(base::OnceClosure reset_cb) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(client_sequence_checker_);
   DVLOGF(3);
 
   decoder_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(&VideoDecoderPipeline::ResetTask,
-                                decoder_weak_this_, std::move(closure)));
+                                decoder_weak_this_, std::move(reset_cb)));
 }
 
-void VideoDecoderPipeline::ResetTask(base::OnceClosure closure) {
+void VideoDecoderPipeline::ResetTask(base::OnceClosure reset_cb) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(decoder_sequence_checker_);
-  DCHECK(decoder_);
-  DCHECK(!client_reset_cb_);
   DVLOGF(3);
 
   need_apply_new_resolution = false;
-  client_reset_cb_ = std::move(closure);
-  decoder_->Reset(
-      base::BindOnce(&VideoDecoderPipeline::OnResetDone, decoder_weak_this_));
+  decoder_->Reset(base::BindOnce(&VideoDecoderPipeline::OnResetDone,
+                                 decoder_weak_this_, std::move(reset_cb)));
 }
 
-void VideoDecoderPipeline::OnResetDone() {
+void VideoDecoderPipeline::OnResetDone(base::OnceClosure reset_cb) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(decoder_sequence_checker_);
-  DCHECK(client_reset_cb_);
   DVLOGF(3);
 
   if (image_processor_)
     image_processor_->Reset();
   frame_converter_->AbortPendingFrames();
 
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+  if (buffer_transcryptor_)
+    buffer_transcryptor_->Reset(DecodeStatus::ABORTED);
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+
   CallFlushCbIfNeeded(DecodeStatus::ABORTED);
 
-  client_task_runner_->PostTask(FROM_HERE, std::move(client_reset_cb_));
+  client_task_runner_->PostTask(FROM_HERE, std::move(reset_cb));
 }
 
 void VideoDecoderPipeline::Decode(scoped_refptr<DecoderBuffer> buffer,
@@ -382,7 +347,24 @@ void VideoDecoderPipeline::DecodeTask(scoped_refptr<DecoderBuffer> buffer,
   DCHECK(decoder_);
   DVLOGF(4);
 
-  bool is_flush = buffer->end_of_stream();
+  if (has_error_) {
+    client_task_runner_->PostTask(
+        FROM_HERE, base::BindOnce(std::move(decode_cb),
+                                  Status(DecodeStatus::DECODE_ERROR)));
+    return;
+  }
+
+  const bool is_flush = buffer->end_of_stream();
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+  if (buffer_transcryptor_) {
+    buffer_transcryptor_->EnqueueBuffer(
+        std::move(buffer),
+        base::BindOnce(&VideoDecoderPipeline::OnDecodeDone, decoder_weak_this_,
+                       is_flush, std::move(decode_cb)));
+    return;
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+
   decoder_->Decode(
       std::move(buffer),
       base::BindOnce(&VideoDecoderPipeline::OnDecodeDone, decoder_weak_this_,
@@ -460,6 +442,12 @@ void VideoDecoderPipeline::OnFrameConverted(scoped_refptr<VideoFrame> frame) {
   CallApplyResolutionChangeIfNeeded();
 }
 
+void VideoDecoderPipeline::OnDecoderWaiting(WaitingReason reason) {
+  DVLOGF(3);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(decoder_sequence_checker_);
+  client_task_runner_->PostTask(FROM_HERE, base::BindOnce(waiting_cb_, reason));
+}
+
 bool VideoDecoderPipeline::HasPendingFrames() const {
   DVLOGF(3);
   DCHECK_CALLED_ON_VALID_SEQUENCE(decoder_sequence_checker_);
@@ -473,6 +461,10 @@ void VideoDecoderPipeline::OnError(const std::string& msg) {
   VLOGF(1) << msg;
 
   has_error_ = true;
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+  if (buffer_transcryptor_)
+    buffer_transcryptor_->Reset(DecodeStatus::DECODE_ERROR);
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
   CallFlushCbIfNeeded(DecodeStatus::DECODE_ERROR);
 }
 
@@ -522,7 +514,7 @@ DmabufVideoFramePool* VideoDecoderPipeline::GetVideoFramePool() const {
   return main_frame_pool_.get();
 }
 
-base::Optional<std::pair<Fourcc, gfx::Size>>
+absl::optional<std::pair<Fourcc, gfx::Size>>
 VideoDecoderPipeline::PickDecoderOutputFormat(
     const std::vector<std::pair<Fourcc, gfx::Size>>& candidates,
     const gfx::Rect& visible_rect) {
@@ -530,7 +522,7 @@ VideoDecoderPipeline::PickDecoderOutputFormat(
   DCHECK_CALLED_ON_VALID_SEQUENCE(decoder_sequence_checker_);
 
   if (candidates.empty())
-    return base::nullopt;
+    return absl::nullopt;
 
   image_processor_.reset();
 
@@ -545,18 +537,19 @@ VideoDecoderPipeline::PickDecoderOutputFormat(
       if (candidate.first == renderable_fourcc)
         return candidate;
     DVLOGF(2) << "Renderable Fourcc not in candidates list. This is a bug.";
-    return base::nullopt;
+    return absl::nullopt;
   }
 
   std::unique_ptr<ImageProcessor> image_processor =
       ImageProcessorFactory::CreateWithInputCandidates(
           candidates, visible_rect.size(), kNumFramesForImageProcessor,
           decoder_task_runner_, base::BindRepeating(&PickRenderableFourcc),
-          base::BindRepeating(&VideoDecoderPipeline::OnImageProcessorError,
-                              decoder_weak_this_));
+          BindToCurrentLoop(base::BindRepeating(&VideoDecoderPipeline::OnError,
+                                                decoder_weak_this_,
+                                                "ImageProcessor error")));
   if (!image_processor) {
     DVLOGF(2) << "Unable to find ImageProcessor to convert format";
-    return base::nullopt;
+    return absl::nullopt;
   }
 
   // Note that fourcc is specified in ImageProcessor's factory method.
@@ -569,19 +562,26 @@ VideoDecoderPipeline::PickDecoderOutputFormat(
       kNumFramesForImageProcessor, decoder_task_runner_);
   if (!image_processor_) {
     DVLOGF(2) << "Unable to create ImageProcessorWithPool.";
-    return base::nullopt;
+    return absl::nullopt;
   }
 
   return std::make_pair(fourcc, size);
 }
 
-void VideoDecoderPipeline::OnImageProcessorError() {
-  VLOGF(1);
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+void VideoDecoderPipeline::OnBufferTranscrypted(
+    scoped_refptr<DecoderBuffer> transcrypted_buffer,
+    DecodeCB decode_callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(decoder_sequence_checker_);
+  DCHECK(!has_error_);
+  if (!transcrypted_buffer) {
+    OnError("Error in buffer transcryption");
+    std::move(decode_callback).Run(DecodeStatus::DECODE_ERROR);
+    return;
+  }
 
-  client_task_runner_->PostTask(
-      FROM_HERE, base::BindOnce(&VideoDecoderPipeline::OnError,
-                                client_weak_this_, "Image processor error"));
+  decoder_->Decode(std::move(transcrypted_buffer), std::move(decode_callback));
 }
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 }  // namespace media

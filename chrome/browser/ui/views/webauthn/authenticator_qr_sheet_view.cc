@@ -9,10 +9,10 @@
 #include "base/strings/string_piece.h"
 #include "components/qr_code_generator/dino_image.h"
 #include "components/qr_code_generator/qr_code_generator.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/canvas.h"
 #include "ui/views/layout/box_layout.h"
-#include "ui/views/metadata/metadata_header_macros.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/view.h"
 
 using QRCode = QRCodeGenerator;
@@ -51,7 +51,7 @@ class QRView : public views::View {
   explicit QRView(const std::string& qr_string) {
     CHECK_LE(qr_string.size(), QRCodeGenerator::V5::kInputBytes);
 
-    base::Optional<QRCode::GeneratedCode> code = qr_.Generate(
+    absl::optional<QRCode::GeneratedCode> code = qr_.Generate(
         base::as_bytes(base::make_span(qr_string)), kMinimumQRVersion);
     DCHECK(code);
     // The QR Encoder supports dynamic sizing but we expect our data to fit in
@@ -68,7 +68,7 @@ class QRView : public views::View {
     CHECK_LE(qr_string.size(), QRCodeGenerator::V5::kInputBytes);
 
     state_ = (state_ + 1) % 6;
-    base::Optional<QRCode::GeneratedCode> code =
+    absl::optional<QRCode::GeneratedCode> code =
         qr_.Generate(base::as_bytes(base::make_span(qr_string)),
                      kMinimumQRVersion, /*mask=*/state_);
     DCHECK(code);
@@ -224,14 +224,15 @@ AuthenticatorQRSheetView::AuthenticatorQRSheetView(
 
 AuthenticatorQRSheetView::~AuthenticatorQRSheetView() = default;
 
-std::unique_ptr<views::View>
+std::pair<std::unique_ptr<views::View>,
+          AuthenticatorRequestSheetView::AutoFocus>
 AuthenticatorQRSheetView::BuildStepSpecificContent() {
   auto qr_view = std::make_unique<AuthenticatorQRViewCentered>(qr_string_);
   qr_view_ = qr_view.get();
 
   timer_.Start(FROM_HERE, base::TimeDelta::FromMilliseconds(600), this,
                &AuthenticatorQRSheetView::Update);
-  return qr_view;
+  return std::make_pair(std::move(qr_view), AutoFocus::kYes);
 }
 
 void AuthenticatorQRSheetView::Update() {

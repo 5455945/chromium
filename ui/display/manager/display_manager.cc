@@ -26,6 +26,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_task_runner_handle.h"
+#include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/display/display.h"
@@ -1067,6 +1068,14 @@ void DisplayManager::UpdateDisplaysWith(
   active_display_list_.resize(active_display_list_size);
   is_updating_display_list_ = false;
 
+  // OnDidRemoveDisplays is called after the displays have been removed,
+  // in comparison to NotifyDisplayRemoved/OnDisplayRemoved which on Ash
+  // is called before.
+  if (!removed_displays.empty()) {
+    for (auto& observer : observers_)
+      observer.OnDidRemoveDisplays();
+  }
+
   UpdatePrimaryDisplayIdIfNecessary();
 
   bool notify_primary_change =
@@ -1352,7 +1361,7 @@ bool DisplayManager::ShouldSetMirrorModeOn(
 
 void DisplayManager::SetMirrorMode(
     MirrorMode mode,
-    const base::Optional<MixedMirrorModeParams>& mixed_params) {
+    const absl::optional<MixedMirrorModeParams>& mixed_params) {
   if (num_connected_displays() < 2)
     return;
 
@@ -1363,10 +1372,10 @@ void DisplayManager::SetMirrorMode(
     // 2. Restore the mixed mirror mode when display configuration changes.
     mixed_mirror_mode_params_ = mixed_params;
   } else {
-    DCHECK(mixed_params == base::nullopt);
+    DCHECK(mixed_params == absl::nullopt);
     // Clear mixed mirror mode parameters here to avoid restoring the mode after
     // display configuration changes.
-    mixed_mirror_mode_params_ = base::nullopt;
+    mixed_mirror_mode_params_ = absl::nullopt;
   }
 
   const bool enabled = mode != MirrorMode::kOff;
@@ -1399,7 +1408,8 @@ void DisplayManager::AddRemoveDisplay(
     gfx::Rect host_bounds = first_display.bounds_in_native();
     if (display_modes.empty()) {
       display_modes.emplace_back(
-          gfx::Size(600 /* width */, host_bounds.height()),
+          gfx::Size(host_bounds.height() + 100 /* width */,
+                    host_bounds.height()),
           60.0, /* refresh_rate */
           false /* is_interlaced */, true /* native */);
     }
@@ -1428,20 +1438,6 @@ void DisplayManager::AddRemoveDisplay(
   }
   num_connected_displays_ = new_display_info_list.size();
   ClearMirroringSourceAndDestination();
-  UpdateDisplaysWith(new_display_info_list);
-}
-
-void DisplayManager::ToggleDisplayScaleFactor() {
-  DCHECK(!active_display_list_.empty());
-  DisplayInfoList new_display_info_list;
-  for (Displays::const_iterator iter = active_display_list_.begin();
-       iter != active_display_list_.end(); ++iter) {
-    ManagedDisplayInfo display_info = GetDisplayInfo(iter->id());
-    display_info.set_device_scale_factor(
-        display_info.device_scale_factor() == 1.0f ? 2.0f : 1.0f);
-    new_display_info_list.push_back(display_info);
-  }
-  AddMirrorDisplayInfoIfAny(&new_display_info_list);
   UpdateDisplaysWith(new_display_info_list);
 }
 
@@ -1546,7 +1542,7 @@ void DisplayManager::SetTouchCalibrationData(
 
 void DisplayManager::ClearTouchCalibrationData(
     int64_t display_id,
-    base::Optional<ui::TouchscreenDevice> touchdevice) {
+    absl::optional<ui::TouchscreenDevice> touchdevice) {
   if (touchdevice) {
     touch_device_manager_->ClearTouchCalibrationData(*touchdevice, display_id);
   } else {

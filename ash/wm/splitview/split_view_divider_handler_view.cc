@@ -10,6 +10,7 @@
 #include "ash/wm/splitview/split_view_constants.h"
 #include "ash/wm/splitview/split_view_utils.h"
 #include "base/timer/timer.h"
+#include "ui/compositor/layer.h"
 #include "ui/gfx/animation/animation_delegate.h"
 #include "ui/gfx/animation/slide_animation.h"
 #include "ui/views/background.h"
@@ -142,7 +143,7 @@ void SplitViewDividerHandlerView::Refresh(bool is_resizing) {
     selection_animation_->Hide();
 }
 
-void SplitViewDividerHandlerView::UpdateCornerRadius(int radius) {
+void SplitViewDividerHandlerView::UpdateCornerRadius(float radius) {
   layer()->SetRoundedCornerRadius(gfx::RoundedCornersF{radius});
 }
 

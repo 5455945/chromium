@@ -10,6 +10,8 @@
 #include "base/auto_reset.h"
 #include "base/check_op.h"
 #include "base/containers/adapters.h"
+#include "base/feature_list.h"
+#include "base/i18n/rtl.h"
 #include "base/macros.h"
 #include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
@@ -19,7 +21,10 @@
 #include "ui/base/hit_test.h"
 #include "ui/base/ime/input_method.h"
 #include "ui/base/l10n/l10n_font_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/models/image_model.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/color/color_provider_manager.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/layer.h"
 #include "ui/display/screen.h"
@@ -31,7 +36,9 @@
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/focus/focus_manager_factory.h"
 #include "ui/views/focus/widget_focus_manager.h"
+#include "ui/views/image_model_utils.h"
 #include "ui/views/views_delegate.h"
+#include "ui/views/views_features.h"
 #include "ui/views/widget/any_widget_observer_singleton.h"
 #include "ui/views/widget/native_widget_private.h"
 #include "ui/views/widget/root_view.h"
@@ -42,6 +49,10 @@
 #include "ui/views/widget/widget_removals_observer.h"
 #include "ui/views/window/custom_frame_view.h"
 #include "ui/views/window/dialog_delegate.h"
+
+#if defined(OS_LINUX)
+#include "ui/views/linux_ui/linux_ui.h"
+#endif
 
 namespace views {
 
@@ -144,8 +155,8 @@ Widget::InitParams::InitParams(InitParams&& other) = default;
 Widget::InitParams::~InitParams() = default;
 
 bool Widget::InitParams::CanActivate() const {
-  if (activatable != InitParams::ACTIVATABLE_DEFAULT)
-    return activatable == InitParams::ACTIVATABLE_YES;
+  if (activatable != InitParams::Activatable::kDefault)
+    return activatable == InitParams::Activatable::kYes;
   return type != InitParams::TYPE_CONTROL && type != InitParams::TYPE_POPUP &&
          type != InitParams::TYPE_MENU && type != InitParams::TYPE_TOOLTIP &&
          type != InitParams::TYPE_DRAG;
@@ -177,15 +188,23 @@ Widget::Widget(InitParams params) {
 Widget::~Widget() {
   if (widget_delegate_)
     widget_delegate_->WidgetDestroying();
-  DestroyRootView();
   if (ownership_ == InitParams::WIDGET_OWNS_NATIVE_WIDGET) {
     delete native_widget_;
+    DCHECK(native_widget_destroyed_);
   } else {
     // TODO(crbug.com/937381): Revert to DCHECK once we figure out the reason.
     CHECK(native_widget_destroyed_)
         << "Destroying a widget with a live native widget. "
         << "Widget probably should use WIDGET_OWNS_NATIVE_WIDGET ownership.";
   }
+  // Destroy RootView after the native widget, so in case the WidgetDelegate is
+  // a View in the RootView hierarchy it gets destroyed as a WidgetDelegate
+  // first.
+  // This makes destruction order for WidgetDelegate consistent between
+  // different Widget/NativeWidget ownership models (WidgetDelegate is always
+  // deleted before here, which may have removed it as a View from the
+  // View hierarchy).
+  DestroyRootView();
 }
 
 // static
@@ -339,8 +358,8 @@ void Widget::Init(InitParams params) {
     params.opacity = views::Widget::InitParams::WindowOpacity::kOpaque;
 
   bool can_activate = params.CanActivate();
-  params.activatable =
-      can_activate ? InitParams::ACTIVATABLE_YES : InitParams::ACTIVATABLE_NO;
+  params.activatable = can_activate ? InitParams::Activatable::kYes
+                                    : InitParams::Activatable::kNo;
 
   widget_delegate_->SetCanActivate(can_activate);
 
@@ -398,7 +417,7 @@ void Widget::Init(InitParams params) {
     SetInitialBoundsForFramelessWindow(bounds);
   }
 
-  observation_.Observe(GetNativeTheme());
+  native_theme_observation_.Observe(GetNativeTheme());
   native_widget_initialized_ = true;
   native_widget_->OnWidgetInitDone();
 
@@ -416,10 +435,14 @@ void Widget::ShowEmojiPanel() {
 // Unconverted methods (see header) --------------------------------------------
 
 gfx::NativeView Widget::GetNativeView() const {
+  if (native_widget_destroyed_)
+    return gfx::kNullNativeView;
   return native_widget_->GetNativeView();
 }
 
 gfx::NativeWindow Widget::GetNativeWindow() const {
+  if (native_widget_destroyed_)
+    return gfx::kNullNativeWindow;
   return native_widget_->GetNativeWindow();
 }
 
@@ -460,7 +483,8 @@ void Widget::ViewHierarchyChanged(const ViewHierarchyChangedDetails& details) {
     FocusManager* focus_manager = GetFocusManager();
     if (focus_manager)
       focus_manager->ViewRemoved(details.child);
-    native_widget_->ViewRemoved(details.child);
+    if (!native_widget_destroyed_)
+      native_widget_->ViewRemoved(details.child);
   }
 }
 
@@ -471,11 +495,11 @@ void Widget::NotifyNativeViewHierarchyWillChange() {
   // to avoid these redundant steps and to avoid accessing deleted views
   // that may have been in focus.
   ClearFocusFromWidget();
-  native_widget_->OnNativeViewHierarchyChanged();
+  native_widget_->OnNativeViewHierarchyWillChange();
 }
 
 void Widget::NotifyNativeViewHierarchyChanged() {
-  native_widget_->OnNativeViewHierarchyWillChange();
+  native_widget_->OnNativeViewHierarchyChanged();
   root_view_->NotifyNativeViewHierarchyChanged();
 }
 
@@ -496,7 +520,18 @@ const Widget* Widget::GetTopLevelWidget() const {
   // property is gone after gobject gets deleted. Short circuit here
   // for toplevel so that InputMethod can remove itself from
   // focus manager.
-  return is_top_level() ? this : native_widget_->GetTopLevelWidget();
+  if (is_top_level())
+    return this;
+  return native_widget_destroyed_ ? nullptr
+                                  : native_widget_->GetTopLevelWidget();
+}
+
+Widget* Widget::GetPrimaryWindowWidget() {
+  return GetTopLevelWidget();
+}
+
+const Widget* Widget::GetPrimaryWindowWidget() const {
+  return const_cast<Widget*>(this)->GetPrimaryWindowWidget();
 }
 
 void Widget::SetContentsView(View* view) {
@@ -700,6 +735,7 @@ void Widget::ShowInactive() {
     saved_show_state_ = ui::SHOW_STATE_NORMAL;
   }
   native_widget_->Show(ui::SHOW_STATE_INACTIVE, gfx::Rect());
+  internal::AnyWidgetObserverSingleton::GetInstance()->OnAnyWidgetShown(this);
 }
 
 void Widget::Activate() {
@@ -751,11 +787,14 @@ bool Widget::IsMinimized() const {
   return native_widget_->IsMinimized();
 }
 
-void Widget::SetFullscreen(bool fullscreen) {
+void Widget::SetFullscreen(bool fullscreen, bool delay) {
   if (IsFullscreen() == fullscreen)
     return;
 
-  native_widget_->SetFullscreen(fullscreen);
+  auto weak_ptr = GetWeakPtr();
+  native_widget_->SetFullscreen(fullscreen, delay);
+  if (!weak_ptr)
+    return;
 
   if (non_client_view_)
     non_client_view_->InvalidateLayout();
@@ -801,6 +840,17 @@ const ui::ThemeProvider* Widget::GetThemeProvider() const {
   const Widget* root_widget = GetTopLevelWidget();
   return (root_widget && root_widget != this) ? root_widget->GetThemeProvider()
                                               : nullptr;
+}
+
+const ui::ColorProvider* Widget::GetColorProvider() const {
+  auto color_scheme = GetNativeTheme()->GetDefaultSystemColorScheme();
+  return ui::ColorProviderManager::Get().GetColorProviderFor(
+      {(color_scheme == ui::NativeTheme::ColorScheme::kDark)
+           ? ui::ColorProviderManager::ColorMode::kDark
+           : ui::ColorProviderManager::ColorMode::kLight,
+       (color_scheme == ui::NativeTheme::ColorScheme::kPlatformHighContrast)
+           ? ui::ColorProviderManager::ContrastMode::kHigh
+           : ui::ColorProviderManager::ContrastMode::kNormal});
 }
 
 FocusManager* Widget::GetFocusManager() {
@@ -861,6 +911,11 @@ void Widget::RunShellDrag(View* view,
 }
 
 void Widget::SchedulePaintInRect(const gfx::Rect& rect) {
+  // This happens when DestroyRootView removes all children from the
+  // RootView which triggers a SchedulePaint that ends up here. This happens
+  // after in ~Widget after native_widget_ is destroyed.
+  if (native_widget_destroyed_)
+    return;
   native_widget_->SchedulePaintInRect(rect);
 }
 
@@ -890,7 +945,7 @@ void Widget::UpdateWindowTitle() {
 
   // Update the native frame's text. We do this regardless of whether or not
   // the native frame is being used, since this also updates the taskbar, etc.
-  base::string16 window_title = widget_delegate_->GetWindowTitle();
+  std::u16string window_title = widget_delegate_->GetWindowTitle();
   base::i18n::AdjustStringForLocaleDirection(&window_title);
   if (!native_widget_->SetWindowTitle(window_title))
     return;
@@ -901,8 +956,32 @@ void Widget::UpdateWindowTitle() {
 void Widget::UpdateWindowIcon() {
   if (non_client_view_)
     non_client_view_->UpdateWindowIcon();
-  native_widget_->SetWindowIcons(widget_delegate_->GetWindowIcon(),
-                                 widget_delegate_->GetWindowAppIcon());
+
+  gfx::ImageSkia window_icon = GetImageSkiaFromImageModel(
+      widget_delegate_->GetWindowIcon(), GetNativeTheme());
+
+  // In general, icon information is read from a |widget_delegate_| and then
+  // passed to |native_widget_|. On ChromeOS, for lacros-chrome to support the
+  // initial window state as minimized state, a valid icon is added to
+  // |native_widget_| earlier stage of widget initialization. See
+  // https://crbug.com/1189981. As only lacros-chrome on ChromeOS supports this
+  // behavior other overrides of |native_widget_| will always have no icon
+  // information. This is also true for |app_icon| referred below.
+  if (window_icon.isNull()) {
+    const gfx::ImageSkia* icon = native_widget_->GetWindowIcon();
+    if (icon && !icon->isNull())
+      window_icon = *icon;
+  }
+
+  gfx::ImageSkia app_icon = GetImageSkiaFromImageModel(
+      widget_delegate_->GetWindowAppIcon(), GetNativeTheme());
+  if (app_icon.isNull()) {
+    const gfx::ImageSkia* icon = native_widget_->GetWindowAppIcon();
+    if (icon && !icon->isNull())
+      app_icon = *icon;
+  }
+
+  native_widget_->SetWindowIcons(window_icon, app_icon);
 }
 
 FocusTraversable* Widget::GetFocusTraversable() {
@@ -911,6 +990,9 @@ FocusTraversable* Widget::GetFocusTraversable() {
 
 void Widget::ThemeChanged() {
   root_view_->ThemeChanged();
+
+  for (WidgetObserver& observer : observers_)
+    observer.OnWidgetThemeChanged(this);
 }
 
 void Widget::DeviceScaleFactorChanged(float old_device_scale_factor,
@@ -972,14 +1054,20 @@ void Widget::FrameTypeChanged() {
 }
 
 const ui::Compositor* Widget::GetCompositor() const {
+  if (native_widget_destroyed_)
+    return nullptr;
   return native_widget_->GetCompositor();
 }
 
 const ui::Layer* Widget::GetLayer() const {
+  if (native_widget_destroyed_)
+    return nullptr;
   return native_widget_->GetLayer();
 }
 
 void Widget::ReorderNativeViews() {
+  if (native_widget_destroyed_)
+    return;
   native_widget_->ReorderNativeViews();
 }
 
@@ -1022,6 +1110,8 @@ bool Widget::HasCapture() {
 }
 
 TooltipManager* Widget::GetTooltipManager() {
+  if (native_widget_destroyed_)
+    return nullptr;
   return native_widget_->GetTooltipManager();
 }
 
@@ -1056,6 +1146,10 @@ ui::GestureRecognizer* Widget::GetGestureRecognizer() {
   return native_widget_->GetGestureRecognizer();
 }
 
+ui::GestureConsumer* Widget::GetGestureConsumer() {
+  return native_widget_->GetGestureConsumer();
+}
+
 void Widget::OnSizeConstraintsChanged() {
   native_widget_->OnSizeConstraintsChanged();
   if (non_client_view_)
@@ -1088,6 +1182,75 @@ base::WeakPtr<Widget> Widget::GetWeakPtr() {
 
 bool Widget::ShouldPaintAsActive() const {
   return native_widget_active_ || paint_as_active_refcount_;
+}
+
+void Widget::SetNativeTheme(ui::NativeTheme* native_theme) {
+  native_theme_ = native_theme;
+  native_theme_observation_.Reset();
+  if (native_theme)
+    native_theme_observation_.Observe(native_theme);
+  ThemeChanged();
+}
+
+int Widget::GetX() const {
+  return GetRestoredBounds().x();
+}
+
+int Widget::GetY() const {
+  return GetRestoredBounds().y();
+}
+
+int Widget::GetWidth() const {
+  return GetRestoredBounds().width();
+}
+
+int Widget::GetHeight() const {
+  return GetRestoredBounds().height();
+}
+
+bool Widget::GetVisible() const {
+  return IsVisible();
+}
+
+void Widget::SetX(int x) {
+  gfx::Rect bounds = GetRestoredBounds();
+  if (x == bounds.x())
+    return;
+  bounds.set_x(x);
+  SetBounds(bounds);
+}
+
+void Widget::SetY(int y) {
+  gfx::Rect bounds = GetRestoredBounds();
+  if (y == bounds.y())
+    return;
+  bounds.set_y(y);
+  SetBounds(bounds);
+}
+
+void Widget::SetWidth(int width) {
+  gfx::Rect bounds = GetRestoredBounds();
+  if (width == bounds.width())
+    return;
+  bounds.set_width(width);
+  SetBounds(bounds);
+}
+
+void Widget::SetHeight(int height) {
+  gfx::Rect bounds = GetRestoredBounds();
+  if (height == bounds.height())
+    return;
+  bounds.set_height(height);
+  SetBounds(bounds);
+}
+
+void Widget::SetVisible(bool visible) {
+  if (visible == IsVisible())
+    return;
+  if (visible)
+    Show();
+  else
+    Hide();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1187,6 +1350,9 @@ void Widget::OnNativeWidgetDestroyed() {
   widget_delegate_->can_delete_this_ = true;
   widget_delegate_->DeleteDelegate();
   widget_delegate_ = nullptr;
+  // TODO(pbos): Replace this with native_widget_ = nullptr; and nullptr
+  // checking. This currently breaks on reentrant calls to CloseNow() that I'm
+  // too scared to fix right now.
   native_widget_destroyed_ = true;
 }
 
@@ -1516,28 +1682,11 @@ View* Widget::GetFocusTraversableParentView() {
 
 void Widget::OnNativeThemeUpdated(ui::NativeTheme* observed_theme) {
   TRACE_EVENT0("ui", "Widget::OnNativeThemeUpdated");
-
-  DCHECK(observation_.IsObservingSource(observed_theme));
-
-#if defined(OS_APPLE) || defined(OS_WIN)
-  ui::NativeTheme* current_native_theme = observed_theme;
-#else
-  ui::NativeTheme* current_native_theme = GetNativeTheme();
-#endif
-  if (!observation_.IsObservingSource(current_native_theme)) {
-    observation_.Reset();
-    observation_.Observe(current_native_theme);
-  }
-
-  PropagateNativeThemeChanged();
+  ThemeChanged();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // Widget, protected:
-
-void Widget::PropagateNativeThemeChanged() {
-  root_view_->PropagateThemeChanged();
-}
 
 internal::RootView* Widget::CreateRootView() {
   return new internal::RootView(this);
@@ -1557,6 +1706,25 @@ void Widget::DestroyRootView() {
 void Widget::OnDragWillStart() {}
 
 void Widget::OnDragComplete() {}
+
+const ui::NativeTheme* Widget::GetNativeTheme() const {
+  if (native_theme_)
+    return native_theme_;
+
+  if (base::FeatureList::IsEnabled(
+          features::kInheritNativeThemeFromParentWidget) &&
+      parent_)
+    return parent_->GetNativeTheme();
+
+#if defined(OS_LINUX)
+  if (const views::LinuxUI* linux_ui = views::LinuxUI::instance()) {
+    if (auto* native_theme = linux_ui->GetNativeTheme(GetNativeWindow()))
+      return native_theme;
+  }
+#endif
+
+  return ui::NativeTheme::GetInstanceForNativeUi();
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 // Widget, private:
@@ -1675,6 +1843,20 @@ void Widget::ClearFocusFromWidget() {
     focus_manager->ViewRemoved(root_view_.get());
 }
 
+BEGIN_METADATA_BASE(Widget)
+ADD_READONLY_PROPERTY_METADATA(const char*, ClassName)
+ADD_READONLY_PROPERTY_METADATA(gfx::Rect, ClientAreaBoundsInScreen)
+ADD_READONLY_PROPERTY_METADATA(std::string, Name)
+ADD_READONLY_PROPERTY_METADATA(gfx::Rect, RestoredBounds)
+ADD_READONLY_PROPERTY_METADATA(gfx::Rect, WindowBoundsInScreen)
+ADD_PROPERTY_METADATA(int, X)
+ADD_PROPERTY_METADATA(int, Y)
+ADD_PROPERTY_METADATA(int, Width)
+ADD_PROPERTY_METADATA(int, Height)
+ADD_PROPERTY_METADATA(bool, Visible)
+ADD_PROPERTY_METADATA(ui::ZOrderLevel, ZOrderLevel)
+END_METADATA
+
 namespace internal {
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1686,3 +1868,10 @@ internal::NativeWidgetPrivate* NativeWidgetPrivate::AsNativeWidgetPrivate() {
 
 }  // namespace internal
 }  // namespace views
+
+DEFINE_ENUM_CONVERTERS(ui::ZOrderLevel,
+                       {ui::ZOrderLevel::kNormal, u"kNormal"},
+                       {ui::ZOrderLevel::kFloatingWindow, u"kFloatingWindow"},
+                       {ui::ZOrderLevel::kFloatingUIElement,
+                        u"kFloatingUIElement"},
+                       {ui::ZOrderLevel::kSecuritySurface, u"kSecuritySurface"})

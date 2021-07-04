@@ -28,6 +28,10 @@ class SharedURLLoaderFactory;
 class SimpleURLLoader;
 }
 
+namespace net {
+struct RedirectInfo;
+}
+
 // Monitors omnibox navigations in order to trigger behaviors that depend on
 // successful navigations.
 //
@@ -55,7 +59,7 @@ class ChromeOmniboxNavigationObserver : public OmniboxNavigationObserver,
   };
 
   ChromeOmniboxNavigationObserver(Profile* profile,
-                                  const base::string16& text,
+                                  const std::u16string& text,
                                   const AutocompleteMatch& match,
                                   const AutocompleteMatch& alternate_nav_match);
   ~ChromeOmniboxNavigationObserver() override;
@@ -128,7 +132,7 @@ class ChromeOmniboxNavigationObserver : public OmniboxNavigationObserver,
   // Does not start the loader.
   void CreateLoader(const GURL& destination_url);
 
-  const base::string16 text_;
+  const std::u16string text_;
   const AutocompleteMatch match_;
   const AutocompleteMatch alternate_nav_match_;
   TemplateURLService* template_url_service_;

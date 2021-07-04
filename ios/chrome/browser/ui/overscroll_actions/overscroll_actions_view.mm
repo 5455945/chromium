@@ -12,7 +12,6 @@
 #import "ios/chrome/browser/ui/content_suggestions/ntp_home_constant.h"
 #include "ios/chrome/browser/ui/util/rtl_geometry.h"
 #include "ios/chrome/browser/ui/util/uikit_ui_util.h"
-#import "ios/chrome/common/ui/colors/dynamic_color_util.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #include "ios/chrome/grit/ios_chromium_strings.h"
 #include "ios/chrome/grit/ios_strings.h"
@@ -395,18 +394,11 @@ const CGFloat kActionViewBackgroundColorBrightnessIncognito = 80.0 / 256.0;
 }
 
 - (void)displayActionAnimation {
+  __weak OverscrollActionsView* weakSelf = self;
   _animatingActionTrigger = YES;
   [CATransaction begin];
   [CATransaction setCompletionBlock:^{
-    _animatingActionTrigger = NO;
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    // See comment below for why we manually set opacity to 0 and remove
-    // the animation.
-    self.selectionCircleLayer.opacity = 0;
-    [self.selectionCircleLayer removeAnimationForKey:@"opacity"];
-    [self onStateChange];
-    [CATransaction commit];
+    [weakSelf completionForDisplayActionAnimation];
   }];
 
   CABasicAnimation* scaleAnimation =
@@ -433,6 +425,18 @@ const CGFloat kActionViewBackgroundColorBrightnessIncognito = 80.0 / 256.0;
   opacityAnimation.removedOnCompletion = NO;
   [self.selectionCircleLayer addAnimation:opacityAnimation forKey:@"opacity"];
 
+  [CATransaction commit];
+}
+
+- (void)completionForDisplayActionAnimation {
+  _animatingActionTrigger = NO;
+  [CATransaction begin];
+  [CATransaction setDisableActions:YES];
+  // See comment below for why we manually set opacity to 0 and remove
+  // the animation.
+  self.selectionCircleLayer.opacity = 0;
+  [self.selectionCircleLayer removeAnimationForKey:@"opacity"];
+  [self onStateChange];
   [CATransaction commit];
 }
 
@@ -730,25 +734,29 @@ const CGFloat kActionViewBackgroundColorBrightnessIncognito = 80.0 / 256.0;
       _animatingActionTrigger)
     return;
 
+  __weak OverscrollActionsView* weakSelf = self;
   [UIView animateWithDuration:kSelectionSnappingAnimationDuration
                    animations:^{
-                     if (self.selectedAction == OverscrollAction::NONE) {
-                       if (!_deformationBehaviorEnabled) {
-                         // Scale selection down.
-                         self.selectionCircleLayer.transform =
-                             CATransform3DMakeScale(kSelectionDownScale,
-                                                    kSelectionDownScale, 1);
-                       }
-                     } else {
-                       // Scale selection up.
-                       self.selectionCircleLayer.transform =
-                           CATransform3DMakeScale(1, 1, 1);
-                     }
+                     [weakSelf animateSelectedActionChanged];
                    }
                    completion:nil];
 
   [self.delegate overscrollActionsView:self
                selectedActionDidChange:self.selectedAction];
+}
+
+// Animation handler for onSelectedActionChangedFromAction
+- (void)animateSelectedActionChanged {
+  if (self.selectedAction == OverscrollAction::NONE) {
+    if (!_deformationBehaviorEnabled) {
+      // Scale selection down.
+      self.selectionCircleLayer.transform =
+          CATransform3DMakeScale(kSelectionDownScale, kSelectionDownScale, 1);
+    }
+  } else {
+    // Scale selection up.
+    self.selectionCircleLayer.transform = CATransform3DMakeScale(1, 1, 1);
+  }
 }
 
 - (NSArray*)layersToCenterVertically {
@@ -907,9 +915,7 @@ const CGFloat kActionViewBackgroundColorBrightnessIncognito = 80.0 / 256.0;
       self.backgroundColor = [UIColor colorNamed:kBackgroundColor];
       break;
     case OverscrollStyle::REGULAR_PAGE_INCOGNITO:
-      self.backgroundColor = color::DarkModeDynamicColor(
-          [UIColor colorNamed:kBackgroundColor], true,
-          [UIColor colorNamed:kBackgroundDarkColor]);
+      self.backgroundColor = [UIColor colorNamed:kBackgroundColor];
       break;
   }
 
@@ -987,11 +993,15 @@ const CGFloat kActionViewBackgroundColorBrightnessIncognito = 80.0 / 256.0;
 - (void)clearDirectTouchInteraction {
   if (!_viewTouched)
     return;
+  __weak OverscrollActionsView* weakSelf = self;
   dispatch_after(
       dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)),
       dispatch_get_main_queue(), ^{
-        _deformationBehaviorEnabled = YES;
-        _viewTouched = NO;
+        OverscrollActionsView* strongSelf = weakSelf;
+        if (strongSelf) {
+          strongSelf->_deformationBehaviorEnabled = YES;
+          strongSelf->_viewTouched = NO;
+        }
       });
 }
 

@@ -9,7 +9,6 @@
 #include "ash/keyboard/keyboard_controller_impl.h"
 #include "ash/keyboard/ui/keyboard_ui_controller.h"
 #include "ash/keyboard/virtual_keyboard_controller.h"
-#include "ash/public/cpp/ash_constants.h"
 #include "ash/public/cpp/system_tray_client.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/root_window_controller.h"
@@ -23,11 +22,13 @@
 #include "ash/system/tray/detailed_view_delegate.h"
 #include "ash/system/tray/system_menu_button.h"
 #include "ash/system/tray/system_tray_notifier.h"
+#include "ash/system/tray/tray_background_view.h"
 #include "ash/system/tray/tray_constants.h"
 #include "ash/system/tray/tray_container.h"
 #include "ash/system/tray/tray_popup_utils.h"
 #include "ash/system/tray/tray_utils.h"
 #include "ash/system/unified/top_shortcut_button.h"
+#include "base/bind.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "base/strings/utf_string_conversions.h"
@@ -36,7 +37,9 @@
 #include "ui/base/ime/chromeos/ime_bridge.h"
 #include "ui/base/ime/text_input_client.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/compositor/layer.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/gfx/range/range.h"
@@ -46,7 +49,6 @@
 #include "ui/views/controls/separator.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/box_layout_view.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 
 namespace ash {
 
@@ -331,18 +333,21 @@ ImeMenuTray::~ImeMenuTray() {
     keyboard_controller->RemoveObserver(this);
 }
 
-void ImeMenuTray::ShowImeMenuBubbleInternal(bool show_by_click) {
+void ImeMenuTray::ShowImeMenuBubbleInternal() {
   TrayBubbleView::InitParams init_params;
   init_params.delegate = this;
   init_params.parent_window = GetBubbleWindowContainer();
-  init_params.anchor_view = GetBubbleAnchor();
+  init_params.anchor_view = nullptr;
+  init_params.anchor_mode = TrayBubbleView::AnchorMode::kRect;
+  init_params.anchor_rect = GetBubbleAnchor()->GetAnchorBoundsInScreen();
+  init_params.anchor_rect.Inset(GetBubbleAnchorInsets());
   init_params.shelf_alignment = shelf()->alignment();
   init_params.preferred_width = kTrayMenuWidth;
   init_params.close_on_deactivate = true;
   init_params.has_shadow = false;
   init_params.translucent = true;
   init_params.corner_radius = kTrayItemCornerRadius;
-  init_params.show_by_click = show_by_click;
+  init_params.reroute_event_handler = true;
 
   auto setup_layered_view = [](views::View* view) {
     view->SetPaintToLayer();
@@ -350,7 +355,6 @@ void ImeMenuTray::ShowImeMenuBubbleInternal(bool show_by_click) {
   };
 
   TrayBubbleView* bubble_view = new TrayBubbleView(init_params);
-  bubble_view->set_anchor_view_insets(GetBubbleAnchorInsets());
   bubble_view->set_margins(GetSecondaryBubbleInsets());
 
   // Add a title item with a separator on the top of the IME menu.
@@ -371,8 +375,7 @@ void ImeMenuTray::ShowImeMenuBubbleInternal(bool show_by_click) {
             is_voice_enabled_)));
   }
 
-  bubble_ = std::make_unique<TrayBubbleWrapper>(this, bubble_view,
-                                                false /* is_persistent */);
+  bubble_ = std::make_unique<TrayBubbleWrapper>(this, bubble_view);
   SetIsActive(true);
 }
 
@@ -421,7 +424,7 @@ void ImeMenuTray::OnThemeChanged() {
   UpdateTrayLabel();
 }
 
-base::string16 ImeMenuTray::GetAccessibleNameForTray() {
+std::u16string ImeMenuTray::GetAccessibleNameForTray() {
   return l10n_util::GetStringUTF16(IDS_ASH_IME_MENU_ACCESSIBLE_NAME);
 }
 
@@ -445,13 +448,11 @@ void ImeMenuTray::ClickedOutsideBubble() {
 }
 
 bool ImeMenuTray::PerformAction(const ui::Event& event) {
-  UserMetricsRecorder::RecordUserClickOnTray(
-      LoginMetricsRecorder::TrayClickTarget::kImeTray);
-  if (bubble_)
-    CloseBubble();
-  else
-    ShowBubble(event.IsMouseEvent() || event.IsGestureEvent());
-  return true;
+  if (event.IsMouseEvent() || event.IsGestureEvent()) {
+    UserMetricsRecorder::RecordUserClickOnTray(
+        LoginMetricsRecorder::TrayClickTarget::kImeTray);
+  }
+  return TrayBackgroundView::PerformAction(event);
 }
 
 void ImeMenuTray::CloseBubble() {
@@ -461,7 +462,7 @@ void ImeMenuTray::CloseBubble() {
   shelf()->UpdateAutoHideState();
 }
 
-void ImeMenuTray::ShowBubble(bool show_by_click) {
+void ImeMenuTray::ShowBubble() {
   auto* keyboard_controller = keyboard::KeyboardUIController::Get();
   if (keyboard_controller->IsKeyboardVisible()) {
     show_bubble_after_keyboard_hidden_ = true;
@@ -469,21 +470,25 @@ void ImeMenuTray::ShowBubble(bool show_by_click) {
     keyboard_controller->HideKeyboardExplicitlyBySystem();
   } else {
     base::RecordAction(base::UserMetricsAction("Tray_ImeMenu_Opened"));
-    ShowImeMenuBubbleInternal(show_by_click);
+    ShowImeMenuBubbleInternal();
   }
 }
 
 TrayBubbleView* ImeMenuTray::GetBubbleView() {
-  return bubble_ ? bubble_->bubble_view() : nullptr;
+  return bubble_ ? bubble_->GetBubbleView() : nullptr;
+}
+
+views::Widget* ImeMenuTray::GetBubbleWidget() const {
+  return bubble_ ? bubble_->GetBubbleWidget() : nullptr;
 }
 
 void ImeMenuTray::OnIMERefresh() {
   UpdateTrayLabel();
   if (bubble_ && ime_list_view_) {
-    ime_list_view_->Update(ime_controller_->current_ime().id,
-                           ime_controller_->available_imes(),
-                           ime_controller_->current_ime_menu_items(), false,
-                           ImeListView::SHOW_SINGLE_IME);
+    ime_list_view_->Update(
+        ime_controller_->current_ime().id, ime_controller_->GetVisibleImes(),
+        ime_controller_->current_ime_menu_items(), ShouldShowKeyboardToggle(),
+        ImeListView::SHOW_SINGLE_IME);
   }
 }
 
@@ -495,7 +500,7 @@ void ImeMenuTray::OnIMEMenuActivationChanged(bool is_activated) {
     CloseBubble();
 }
 
-base::string16 ImeMenuTray::GetAccessibleNameForBubble() {
+std::u16string ImeMenuTray::GetAccessibleNameForBubble() {
   return l10n_util::GetStringUTF16(IDS_ASH_IME_MENU_ACCESSIBLE_NAME);
 }
 
@@ -513,7 +518,7 @@ void ImeMenuTray::OnKeyboardHidden(bool is_temporary_hide) {
     auto* keyboard_controller = keyboard::KeyboardUIController::Get();
     keyboard_controller->RemoveObserver(this);
 
-    ShowImeMenuBubbleInternal(false /* show_by_click */);
+    ShowImeMenuBubbleInternal();
     return;
   }
 }
@@ -545,7 +550,7 @@ void ImeMenuTray::UpdateTrayLabel() {
       AshColorProvider::ContentLayerType::kIconColorPrimary));
 
   if (current_ime.third_party)
-    label_->SetText(current_ime.short_name + base::UTF8ToUTF16("*"));
+    label_->SetText(current_ime.short_name + u"*");
   else
     label_->SetText(current_ime.short_name);
 }

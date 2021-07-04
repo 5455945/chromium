@@ -23,7 +23,6 @@
 #include "base/sequenced_task_runner.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/cancelable_task_tracker.h"
@@ -33,7 +32,6 @@
 #include "chrome/browser/bookmarks/managed_bookmark_service_factory.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/sync/test/integration/profile_sync_service_harness.h"
 #include "chrome/browser/sync/test/integration/sync_datatype_helper.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/undo/bookmark_undo_service_factory.h"
@@ -45,7 +43,7 @@
 #include "components/favicon/core/favicon_service.h"
 #include "components/favicon_base/favicon_util.h"
 #include "components/sync/base/unique_position.h"
-#include "components/sync/driver/profile_sync_service.h"
+#include "components/sync/driver/sync_service_impl.h"
 #include "components/sync/test/fake_server/entity_builder_factory.h"
 #include "content/public/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -177,7 +175,7 @@ class FaviconChangeObserver : public bookmarks::BookmarkModelObserver {
 // titles match the string |title|.
 size_t CountNodesWithTitlesMatching(BookmarkModel* model,
                                     BookmarkNode::Type node_type,
-                                    const base::string16& title) {
+                                    const std::u16string& title) {
   ui::TreeNodeIterator<const BookmarkNode> iterator(model->root_node());
   // Walk through the model tree looking for bookmark nodes of node type
   // |node_type| whose titles match |title|.
@@ -249,14 +247,14 @@ struct FaviconData {
 
 // Gets the favicon and icon URL associated with |node| in |model|. Returns
 // nullopt if the favicon is still loading.
-base::Optional<FaviconData> GetFaviconData(BookmarkModel* model,
+absl::optional<FaviconData> GetFaviconData(BookmarkModel* model,
                                            const BookmarkNode* node) {
   // We may need to wait for the favicon to be loaded via
   // BookmarkModel::GetFavicon(), which is an asynchronous operation.
   if (!node->is_favicon_loaded()) {
     model->GetFavicon(node);
     // Favicon still loading, no data available just yet.
-    return base::nullopt;
+    return absl::nullopt;
   }
 
   // Favicon loaded: return actual image, if there is one (the no-favicon case
@@ -344,8 +342,8 @@ bool FaviconsMatch(BookmarkModel* model_a,
   DCHECK(!node_a->is_folder());
   DCHECK(!node_b->is_folder());
 
-  base::Optional<FaviconData> favicon_data_a = GetFaviconData(model_a, node_a);
-  base::Optional<FaviconData> favicon_data_b = GetFaviconData(model_b, node_b);
+  absl::optional<FaviconData> favicon_data_a = GetFaviconData(model_a, node_a);
+  absl::optional<FaviconData> favicon_data_b = GetFaviconData(model_b, node_b);
 
   // If either of the two favicons is still loading, let's return false now
   // because observers will get notified when the load completes. Note that even
@@ -1142,7 +1140,7 @@ bool BookmarkFaviconLoadedChecker::IsExitConditionSatisfied(std::ostream* os) {
 }
 
 ServerBookmarksEqualityChecker::ServerBookmarksEqualityChecker(
-    syncer::ProfileSyncService* service,
+    syncer::SyncServiceImpl* service,
     fake_server::FakeServer* fake_server,
     std::vector<ExpectedBookmark> expected_bookmarks,
     syncer::Cryptographer* cryptographer)
@@ -1234,7 +1232,7 @@ BookmarksGUIDChecker::~BookmarksGUIDChecker() {}
 
 BookmarkModelMatchesFakeServerChecker::BookmarkModelMatchesFakeServerChecker(
     int profile,
-    syncer::ProfileSyncService* service,
+    syncer::SyncServiceImpl* service,
     fake_server::FakeServer* fake_server)
     : SingleClientStatusChangeChecker(service),
       fake_server_(fake_server),

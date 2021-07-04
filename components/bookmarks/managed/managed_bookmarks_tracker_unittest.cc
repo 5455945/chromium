@@ -60,7 +60,7 @@ class ManagedBookmarksTrackerTest : public testing::Test {
     managed_node_->SetTitle(l10n_util::GetStringUTF16(
         IDS_BOOKMARK_BAR_MANAGED_FOLDER_DEFAULT_NAME));
 
-    model_.reset(new BookmarkModel(std::move(client)));
+    model_ = std::make_unique<BookmarkModel>(std::move(client));
 
     model_->AddObserver(&observer_);
     EXPECT_CALL(observer_, BookmarkModelLoaded(model_.get(), _));
@@ -97,7 +97,8 @@ class ManagedBookmarksTrackerTest : public testing::Test {
       std::unique_ptr<base::ListValue> children) {
     std::unique_ptr<base::DictionaryValue> dict(new base::DictionaryValue());
     dict->SetString("name", title);
-    dict->Set("children", std::move(children));
+    dict->SetKey("children",
+                 base::Value::FromUniquePtrValue(std::move(children)));
     return dict;
   }
 
@@ -128,7 +129,7 @@ class ManagedBookmarksTrackerTest : public testing::Test {
 
   static bool NodeMatchesValue(const BookmarkNode* node,
                                const base::DictionaryValue* dict) {
-    base::string16 title;
+    std::u16string title;
     if (!dict->GetString("name", &title) || node->GetTitle() != title)
       return false;
 
@@ -205,14 +206,17 @@ TEST_F(ManagedBookmarksTrackerTest, SwapNodes) {
 
   // Swap the Google bookmark with the Folder.
   std::unique_ptr<base::ListValue> updated(CreateTestTree());
-  std::unique_ptr<base::Value> removed;
-  ASSERT_TRUE(updated->Remove(0, &removed));
+  base::Value::ListView updated_listview = updated->GetList();
+  ASSERT_FALSE(updated_listview.empty());
+  base::Value removed = std::move(updated_listview[0]);
+  ASSERT_TRUE(updated->EraseListIter(updated_listview.begin()));
   updated->Append(std::move(removed));
 
   // These two nodes should just be swapped.
   const BookmarkNode* parent = managed_node();
   EXPECT_CALL(observer_, BookmarkNodeMoved(model_.get(), parent, 1, parent, 0));
-  prefs_.SetManagedPref(prefs::kManagedBookmarks, updated->CreateDeepCopy());
+  prefs_.SetManagedPref(prefs::kManagedBookmarks,
+                        base::Value::ToUniquePtrValue(updated->Clone()));
   Mock::VerifyAndClearExpectations(&observer_);
 
   // Verify the final tree.
@@ -227,11 +231,12 @@ TEST_F(ManagedBookmarksTrackerTest, RemoveNode) {
 
   // Remove the Folder.
   std::unique_ptr<base::ListValue> updated(CreateTestTree());
-  ASSERT_TRUE(updated->Remove(1, nullptr));
+  ASSERT_TRUE(updated->EraseListIter(updated->GetList().begin() + 1));
 
   const BookmarkNode* parent = managed_node();
   EXPECT_CALL(observer_, BookmarkNodeRemoved(model_.get(), parent, 1, _, _));
-  prefs_.SetManagedPref(prefs::kManagedBookmarks, updated->CreateDeepCopy());
+  prefs_.SetManagedPref(prefs::kManagedBookmarks,
+                        base::Value::ToUniquePtrValue(updated->Clone()));
   Mock::VerifyAndClearExpectations(&observer_);
 
   // Verify the final tree.
@@ -254,7 +259,8 @@ TEST_F(ManagedBookmarksTrackerTest, CreateNewNodes) {
   const BookmarkNode* parent = managed_node();
   EXPECT_CALL(observer_, BookmarkNodeRemoved(model_.get(), parent, 1, _, _))
       .Times(2);
-  prefs_.SetManagedPref(prefs::kManagedBookmarks, updated->CreateDeepCopy());
+  prefs_.SetManagedPref(prefs::kManagedBookmarks,
+                        base::Value::ToUniquePtrValue(updated->Clone()));
   Mock::VerifyAndClearExpectations(&observer_);
 
   // Verify the final tree.
@@ -309,12 +315,9 @@ TEST_F(ManagedBookmarksTrackerTest, RemoveAllUserBookmarksDoesntRemoveManaged) {
               BookmarkNodeAdded(model_.get(), model_->bookmark_bar_node(), 0));
   EXPECT_CALL(observer_,
               BookmarkNodeAdded(model_.get(), model_->bookmark_bar_node(), 1));
-  model_->AddURL(model_->bookmark_bar_node(),
-                 0,
-                 base::ASCIIToUTF16("Test"),
+  model_->AddURL(model_->bookmark_bar_node(), 0, u"Test",
                  GURL("http://google.com/"));
-  model_->AddFolder(
-      model_->bookmark_bar_node(), 1, base::ASCIIToUTF16("Test Folder"));
+  model_->AddFolder(model_->bookmark_bar_node(), 1, u"Test Folder");
   EXPECT_EQ(2u, model_->bookmark_bar_node()->children().size());
   Mock::VerifyAndClearExpectations(&observer_);
 

@@ -28,12 +28,12 @@ void WebAppFrameToolbarTestMixin::InstallAndLaunchWebApp(
   auto web_app_info = std::make_unique<WebApplicationInfo>();
   web_app_info->start_url = start_url;
   web_app_info->scope = start_url.GetWithoutFilename();
-  web_app_info->title = base::ASCIIToUTF16("A minimal-ui app");
+  web_app_info->title = u"A minimal-ui app";
   web_app_info->display_mode = web_app::DisplayMode::kMinimalUi;
   web_app_info->open_as_window = true;
 
   web_app::AppId app_id =
-      web_app::InstallWebApp(browser->profile(), std::move(web_app_info));
+      web_app::test::InstallWebApp(browser->profile(), std::move(web_app_info));
   content::TestNavigationObserver navigation_observer(start_url);
   navigation_observer.StartWatchingNewWebContents();
   app_browser_ = web_app::LaunchWebAppBrowser(browser->profile(), app_id);

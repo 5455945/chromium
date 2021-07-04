@@ -12,9 +12,9 @@ import {assertEquals, assertFalse, assertTrue} from '../../chai_assert.js';
 import {assertOrderedAlphabetically, changeSelect} from './scanning_app_test_utils.js';
 
 const PageSize = {
-  A4: chromeos.scanning.mojom.PageSize.kIsoA4,
-  Letter: chromeos.scanning.mojom.PageSize.kNaLetter,
-  Max: chromeos.scanning.mojom.PageSize.kMax,
+  A4: ash.scanning.mojom.PageSize.kIsoA4,
+  Letter: ash.scanning.mojom.PageSize.kNaLetter,
+  Max: ash.scanning.mojom.PageSize.kMax,
 };
 
 export function pageSizeSelectTest() {
@@ -33,6 +33,8 @@ export function pageSizeSelectTest() {
     pageSizeSelect = null;
   });
 
+  // Verify that adding page sizes results in the dropdown displaying the
+  // correct options.
   test('initializePageSizeSelect', () => {
     // Before options are added, the dropdown should be enabled and empty.
     const select =
@@ -46,8 +48,6 @@ export function pageSizeSelectTest() {
     pageSizeSelect.options = [firstPageSize, secondPageSize];
     flush();
 
-    // Verify that adding page sizes results in the dropdown displaying the
-    // correct options.
     assertEquals(2, select.length);
     assertEquals(
         getPageSizeString(firstPageSize), select.options[0].textContent.trim());
@@ -65,6 +65,7 @@ export function pageSizeSelectTest() {
         });
   });
 
+  // Verify the pages sizes are sorted correctly.
   test('pageSizesSortedCorrectly', () => {
     pageSizeSelect.options = [PageSize.Letter, PageSize.Max, PageSize.A4];
     flush();

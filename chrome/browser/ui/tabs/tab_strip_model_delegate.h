@@ -8,9 +8,9 @@
 #include <memory>
 #include <vector>
 
-#include "base/optional.h"
 #include "components/sessions/core/session_id.h"
 #include "components/tab_groups/tab_group_id.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class Browser;
 class GURL;
@@ -55,7 +55,7 @@ class TabStripModelDelegate {
       const GURL& url,
       int index,
       bool foreground,
-      base::Optional<tab_groups::TabGroupId> group = base::nullopt) = 0;
+      absl::optional<tab_groups::TabGroupId> group = absl::nullopt) = 0;
 
   // Asks for a new TabStripModel to be created and the given web contentses to
   // be added to it. Its size and position are reflected in |window_bounds|.
@@ -92,6 +92,10 @@ class TabStripModelDelegate {
   // Returns whether some contents can be duplicated.
   virtual bool CanDuplicateContentsAt(int index) = 0;
 
+  // Returns whether tabs can be highlighted. This may return false due to tab
+  // dragging in process, for instance.
+  virtual bool IsTabStripEditable() = 0;
+
   // Duplicates the contents at the provided index and places it into a new tab.
   virtual void DuplicateContentsAt(int index) = 0;
 
@@ -100,7 +104,7 @@ class TabStripModelDelegate {
                                     int browser_index) = 0;
 
   // Get the list of existing windows that tabs can be moved to.
-  virtual std::vector<base::string16> GetExistingWindowsForMoveMenu() = 0;
+  virtual std::vector<std::u16string> GetExistingWindowsForMoveMenu() = 0;
 
   // Returns whether the contents at |indices| can be moved from the current
   // tabstrip to a different window.
@@ -118,8 +122,15 @@ class TabStripModelDelegate {
   // Creates an entry in the historical tab database for the specified
   // WebContents. Returns the tab's unique SessionID if a historical tab was
   // created.
-  virtual base::Optional<SessionID> CreateHistoricalTab(
+  virtual absl::optional<SessionID> CreateHistoricalTab(
       content::WebContents* contents) = 0;
+
+  // Creates an entry in the historical group database for the specified
+  // |group|.
+  virtual void CreateHistoricalGroup(const tab_groups::TabGroupId& group) = 0;
+
+  // Notifies the tab restore service that the group is no longer closing.
+  virtual void GroupCloseStopped(const tab_groups::TabGroupId& group) = 0;
 
   // Runs any unload listeners associated with the specified WebContents
   // before it is closed. If there are unload listeners that need to be run,

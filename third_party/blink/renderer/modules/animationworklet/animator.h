@@ -30,9 +30,9 @@ class Animator final : public GarbageCollected<Animator>, public NameClient {
            v8::Local<v8::Value> instance,
            const String& name,
            WorkletAnimationOptions options,
-           const Vector<base::Optional<base::TimeDelta>>& local_times,
+           const Vector<absl::optional<base::TimeDelta>>& local_times,
            const Vector<Timing>& timings);
-  ~Animator();
+  ~Animator() final;
   void Trace(Visitor*) const;
   const char* NameInHeapSnapshot() const override { return "Animator"; }
 

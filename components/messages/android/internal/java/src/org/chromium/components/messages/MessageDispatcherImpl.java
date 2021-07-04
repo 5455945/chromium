@@ -10,7 +10,6 @@ import org.chromium.base.Callback;
 import org.chromium.base.supplier.Supplier;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.modelutil.PropertyModel;
-import org.chromium.ui.util.AccessibilityUtil;
 
 /**
  * This class implements public MessageDispatcher interface, delegating the actual work to
@@ -20,50 +19,48 @@ public class MessageDispatcherImpl implements ManagedMessageDispatcher {
     private final MessageQueueManager mMessageQueueManager = new MessageQueueManager();
     private final MessageContainer mMessageContainer;
     private final Supplier<Integer> mMessageMaxTranslationSupplier;
-    private final AccessibilityUtil mAccessibilityUtil;
+    private final MessageAutodismissDurationProvider mAutodismissDurationProvider;
     private final Callback<Animator> mAnimatorStartCallback;
-    private final ScopeChangeController mScopeChangeController;
 
     /**
      * Build a new message dispatcher
      * @param messageContainer A container view for displaying message banners.
      * @param messageMaxTranslation A {@link Supplier} that supplies the maximum translation Y value
      *         the message banner can have as a result of the animations or the gestures.
-     * @param accessibilityUtil A util to expose information related to system accessibility state.
+     * @param autodismissDurationProvider A {@link MessageAutodismissDurationProvider} providing
+     *         autodismiss duration for message banner.
      * @param animatorStartCallback The {@link Callback} that will be used by the message to
      *         delegate starting the animations to the {@link WindowAndroid}.
      */
     public MessageDispatcherImpl(MessageContainer messageContainer,
-            Supplier<Integer> messageMaxTranslation, AccessibilityUtil accessibilityUtil,
+            Supplier<Integer> messageMaxTranslation,
+            MessageAutodismissDurationProvider autodismissDurationProvider,
             Callback<Animator> animatorStartCallback) {
         mMessageContainer = messageContainer;
         mMessageMaxTranslationSupplier = messageMaxTranslation;
-        mAccessibilityUtil = accessibilityUtil;
         mAnimatorStartCallback = animatorStartCallback;
-        mScopeChangeController = new ScopeChangeController(mMessageQueueManager);
+        mAutodismissDurationProvider = autodismissDurationProvider;
     }
 
     @Override
     public void enqueueMessage(PropertyModel messageProperties, WebContents webContents,
-            @MessageScopeType int scopeType) {
-        MessageStateHandler messageStateHandler =
-                new SingleActionMessage(mMessageContainer, messageProperties, this::dismissMessage,
-                        mMessageMaxTranslationSupplier, mAccessibilityUtil, mAnimatorStartCallback);
+            @MessageScopeType int scopeType, boolean highPriority) {
+        MessageStateHandler messageStateHandler = new SingleActionMessage(mMessageContainer,
+                messageProperties, this::dismissMessage, mMessageMaxTranslationSupplier,
+                mAutodismissDurationProvider, mAnimatorStartCallback);
+        ScopeKey scopeKey = new ScopeKey(scopeType, webContents);
         mMessageQueueManager.enqueueMessage(
-                messageStateHandler, messageProperties, scopeType, webContents);
-        mScopeChangeController.observe(messageProperties, webContents);
+                messageStateHandler, messageProperties, scopeKey, highPriority);
     }
 
     @Override
     public void dismissMessage(PropertyModel messageProperties, @DismissReason int dismissReason) {
         mMessageQueueManager.dismissMessage(messageProperties, dismissReason);
-        mScopeChangeController.stopObservation(messageProperties);
     }
 
     @Override
     public void dismissAllMessages(@DismissReason int dismissReason) {
         mMessageQueueManager.dismissAllMessages(dismissReason);
-        mScopeChangeController.stopAllObservation();
     }
 
     @Override

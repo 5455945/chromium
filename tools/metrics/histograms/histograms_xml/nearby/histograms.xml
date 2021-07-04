@@ -111,6 +111,63 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram
+    name="Nearby.Connections.InstantMessaging.ReceiveExpress.NumParsingAttempts"
+    units="attempts" expires_after="2021-08-19">
+  <owner>julietlevesque@chromium.org</owner>
+  <owner>nearby-share-chromeos-eng@google.com</owner>
+  <summary>
+    Records the number of parsing attempts it takes the stream parser to check
+    byte by byte if the data it received forms a valid StreamBody proto. Emitted
+    every time we get a receive-express HTTP response from the Instant Messaging
+    API.
+  </summary>
+</histogram>
+
+<histogram
+    name="Nearby.Connections.InstantMessaging.TachyonIceConfigFetcher.CacheHit"
+    enum="BooleanCacheHit" expires_after="2021-10-25">
+  <owner>cclem@chromium.org</owner>
+  <owner>nearby-share-chromeos-eng@google.com</owner>
+  <summary>
+    Records whether the cache was used to satisfy the GetIceServers request.
+    Emitted when GetIceServers is called.
+  </summary>
+</histogram>
+
+<histogram
+    name="Nearby.Connections.InstantMessaging.TachyonIceConfigFetcher.FailureReason"
+    enum="CombinedHttpResponseAndNetErrorCode" expires_after="2021-10-25">
+  <owner>cclem@chromium.org</owner>
+  <owner>nearby-share-chromeos-eng@google.com</owner>
+  <summary>
+    Records the HTTP response code or net error code of the GetIceServers API
+    call to the Tachyon server. Emitted only on failure or timeout.
+  </summary>
+</histogram>
+
+<histogram
+    name="Nearby.Connections.InstantMessaging.TachyonIceConfigFetcher.OAuthTokenFetchResult"
+    enum="BooleanSuccess" expires_after="2021-10-25">
+  <owner>cclem@chromium.org</owner>
+  <owner>nearby-share-chromeos-eng@google.com</owner>
+  <summary>
+    Records whether the Tachyon OAuth token was successfully fetched. Emitted
+    when the token fetcher request returns.
+  </summary>
+</histogram>
+
+<histogram
+    name="Nearby.Connections.InstantMessaging.TachyonIceConfigFetcher.Result"
+    enum="BooleanSuccess" expires_after="2021-10-25">
+  <owner>cclem@chromium.org</owner>
+  <owner>nearby-share-chromeos-eng@google.com</owner>
+  <summary>
+    Records the result of the GetIceServers API call to the Tachyon server.
+    Emitted when the http response is received or when the call times out.
+  </summary>
+</histogram>
+
+<histogram
     name="Nearby.Connections.InstantMessaging.{Direction}Express.OAuthTokenFetchResult"
     enum="BooleanSuccess" expires_after="2021-08-19">
   <owner>nohle@chromium.org</owner>
@@ -176,9 +233,11 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
   <owner>hansberry@chromium.org</owner>
   <owner>nearby-share-chromeos-eng@google.com</owner>
   <summary>
-    Records which Mojo dependency of the Sharing utility process disconnected.
-    This is a break down of the &quot;Mojo pipe disconnection&quot; bucket of
-    Nearby.Connections.UtilityProcessShutdownReason.
+    Records which Mojo dependency of the Sharing utility process disconnected
+    from the browser process. This will not necessarily line up with the counts
+    in the Mojo disconnect bucket of
+    Nearby.Connections.UtilityProcessShutdownReason which tracks disconnects on
+    the utility process side.
   </summary>
 </histogram>
 
@@ -242,7 +301,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram
     name="Nearby.Share.Certificates.Manager.DownloadPublicCertificatesHttpResult"
-    enum="NearbyShareHttpResult" expires_after="2021-08-19">
+    enum="NearbyShareHttpResult" expires_after="2021-12-26">
   <owner>cclem@chromium.org</owner>
   <owner>nearby-share-chromeos-eng@google.com</owner>
   <summary>
@@ -266,7 +325,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram
     name="Nearby.Share.Certificates.Manager.DownloadPublicCertificatesSuccessRate"
-    enum="BooleanSuccess" expires_after="2021-08-19">
+    enum="BooleanSuccess" expires_after="2021-10-25">
   <owner>cclem@chromium.org</owner>
   <owner>nearby-share-chromeos-eng@google.com</owner>
   <summary>
@@ -278,7 +337,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 <histogram
     name="Nearby.Share.Certificates.Manager.GetDecryptedPublicCertificateResult"
     enum="NearbyShareCertificateManagerGetDecryptedPublicCertificateResult"
-    expires_after="2021-08-19">
+    expires_after="2021-12-26">
   <owner>cclem@chromium.org</owner>
   <owner>nearby-share-chromeos-eng@google.com</owner>
   <summary>
@@ -309,6 +368,17 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
   </summary>
 </histogram>
 
+<histogram name="Nearby.Share.Certificates.Storage.InitializeSuccessDuration"
+    units="ms" expires_after="2021-10-25">
+  <owner>cvandermerwe@chromium.org</owner>
+  <owner>nearby-share-chromeos-eng@google.com</owner>
+  <summary>
+    Records the time necessary to successfully initialize the Nearby Share
+    public certificates database. Emitted once after sign-in when the Nearby
+    Share service starts.
+  </summary>
+</histogram>
+
 <histogram name="Nearby.Share.Certificates.Storage.{Operation}SuccessRate"
     enum="BooleanSuccess" expires_after="2021-08-19">
   <owner>cclem@chromium.org</owner>
@@ -329,8 +399,22 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
   </token>
 </histogram>
 
+<histogram name="Nearby.Share.Connection.EstablishOutgoingConnection.Success"
+    enum="BooleanSuccess" expires_after="2021-08-19">
+  <owner>nohle@chromium.org</owner>
+  <owner>nearby-share-chromeos-eng@google.com</owner>
+  <summary>
+    Records whether an attempt to establish a connection to a receiving device
+    succeeded or failed; cancellations are ignored. Emitted after the user
+    selects a device to send a payload to but before the payload begins its
+    transfer. Because the sending device initiates the connection--via the
+    Nearby Connections library--this metric is only emitted for outgoing
+    transfers.
+  </summary>
+</histogram>
+
 <histogram name="Nearby.Share.Connection.EstablishOutgoingConnectionStatus"
-    enum="NearbyShareFinalStatus" expires_after="2021-08-19">
+    enum="NearbyShareFinalStatus" expires_after="2021-12-26">
   <owner>nohle@chromium.org</owner>
   <owner>nearby-share-chromeos-eng@google.com</owner>
   <summary>
@@ -343,7 +427,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Nearby.Share.Connection.TimeToEstablishOutgoingConnection"
-    units="ms" expires_after="2021-08-19">
+    units="ms" expires_after="2021-12-26">
   <owner>nohle@chromium.org</owner>
   <owner>nearby-share-chromeos-eng@google.com</owner>
   <summary>
@@ -353,6 +437,21 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
     after a successful connection is established. Because the sending device
     initiates the connection--via the Nearby Connections library--this metric is
     only emitted for outgoing transfers.
+  </summary>
+</histogram>
+
+<histogram name="Nearby.Share.Contacts.CanGetProfileUserName"
+    enum="BooleanSuccess" expires_after="2021-08-19">
+  <owner>nohle@chromium.org</owner>
+  <owner>nearby-share-chromeos-eng@google.com</owner>
+  <summary>
+    Records whether or not we able to retrieve the profile user name--think
+    email address--from the Chromebook's profile data. This value is sent to the
+    Nearby Share server to allow sharing with other devices logged in with the
+    same account. Emitted every time contacts are downloaded for use in Nearby
+    Share. Because contacts are not stored locally, contacts are periodically
+    downloaded for users with Nearby Share enabled and additionally whenever a
+    user enters Nearby Share settings or participates in a sharing flow.
   </summary>
 </histogram>
 
@@ -500,7 +599,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Nearby.Share.Discovery.FurthestDiscoveryProgress"
-    enum="NearbyShareDiscoveryProgress" expires_after="2021-08-19">
+    enum="NearbyShareDiscoveryProgress" expires_after="2021-12-26">
   <owner>nohle@chromium.org</owner>
   <owner>nearby-share-chromeos-eng@google.com</owner>
   <summary>
@@ -556,20 +655,32 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Nearby.Share.Enabled" enum="NearbyShareEnabledState"
-    expires_after="2021-08-19">
+    expires_after="2021-12-26">
   <owner>nohle@chromium.org</owner>
   <owner>nearby-share-chromeos-eng@google.com</owner>
   <summary>
     Records if the user has the Nearby Share feature enabled, and if not,
     records why the feature is not enabled. For example, the feature is not
     allowed by policy, or the user onboarded but later disabled the feature.
-    Emitted when the Nearby Share service starts. This happens at login if the
-    feature flag is on.
+    Emitted on sign-in and whenever the feature state changes, for instance,
+    from disabled to enabled.
+  </summary>
+</histogram>
+
+<histogram name="Nearby.Share.EnabledStateChanged" enum="BooleanEnabled"
+    expires_after="2021-10-25">
+  <owner>nohle@chromium.org</owner>
+  <owner>nearby-share-chromeos-eng@google.com</owner>
+  <summary>
+    Records the enabled/disabled state of Nearby Share. Emitted when the feature
+    state changes from disabled to enabled or vice versa. This can happen after
+    Nearby Share onboarding or when the user enables/disables the Nearby Share
+    feature toggle in Settings.
   </summary>
 </histogram>
 
 <histogram name="Nearby.Share.IsKnownContact" enum="BooleanKnown"
-    expires_after="2021-08-19">
+    expires_after="2021-12-26">
   <owner>nohle@chromium.org</owner>
   <owner>nearby-share-chromeos-eng@google.com</owner>
   <summary>
@@ -580,7 +691,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Nearby.Share.LocalDeviceData.DeviceDataUpdater.HttpResult"
-    enum="NearbyShareHttpResult" expires_after="2021-08-19">
+    enum="NearbyShareHttpResult" expires_after="2021-12-26">
   <owner>cclem@chromium.org</owner>
   <owner>nearby-share-chromeos-eng@google.com</owner>
   <summary>
@@ -591,7 +702,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Nearby.Share.Medium.ChangedToMedium"
-    enum="NearbyConnectionsMedium" expires_after="2021-08-19">
+    enum="NearbyConnectionsMedium" expires_after="2021-12-26">
   <owner>nohle@chromium.org</owner>
   <owner>nearby-share-chromeos-eng@google.com</owner>
   <summary>
@@ -622,7 +733,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Nearby.Share.Medium.InitiateBandwidthUpgradeResult"
-    enum="BooleanSuccess" expires_after="2021-08-19">
+    enum="BooleanSuccess" expires_after="2021-12-26">
   <owner>nohle@chromium.org</owner>
   <owner>nearby-share-chromeos-eng@google.com</owner>
   <summary>
@@ -636,7 +747,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Nearby.Share.Medium.RequestedBandwidthUpgradeResult"
-    enum="BooleanUpgraded" expires_after="2021-08-19">
+    enum="BooleanUpgraded" expires_after="2021-12-26">
   <owner>nohle@chromium.org</owner>
   <owner>nearby-share-chromeos-eng@google.com</owner>
   <summary>
@@ -644,6 +755,61 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
     bandwidth upgrade request from the client. Emitted when the transfer channel
     is disconnected after a bandwidth upgrade request was made by the client.
   </summary>
+</histogram>
+
+<histogram name="Nearby.Share.Onboarding.Duration" units="ms"
+    expires_after="2021-08-19">
+  <owner>cvandermerwe@chromium.org</owner>
+  <owner>nearby-share-chromeos-eng@google.com</owner>
+  <summary>
+    Records the time that it took the user to successfully complete the
+    onboarding flow. Only emitted on successful completion of onboarding.
+  </summary>
+</histogram>
+
+<histogram name="Nearby.Share.Onboarding.EntryPoint"
+    enum="NearbyShareOnboardingEntryPoint" expires_after="2021-08-19">
+  <owner>cvandermerwe@chromium.org</owner>
+  <owner>nearby-share-chromeos-eng@google.com</owner>
+  <summary>
+    Records how the user entered the onboarding flow. The options are from OS
+    Settings, the tray icon and the share sheet. Emitted as soon as the user
+    embarks on the one-time Nearby Share onboarding flow, regardless of whether
+    or not they successfully finish.
+  </summary>
+</histogram>
+
+<histogram name="Nearby.Share.Onboarding.Result"
+    enum="NearbyShareOnboardingFinalState" expires_after="2021-08-19">
+  <owner>cvandermerwe@chromium.org</owner>
+  <owner>nearby-share-chromeos-eng@google.com</owner>
+  <summary>
+    Records how far the user made it through the onboarding flow. The user has
+    an option to cancel onboarding on the device name page or visibility page.
+    Once the user confirms device visibility onboarding is complete. Emitted
+    when the user cancels onboarding during one of the steps or on successful
+    completion.
+  </summary>
+</histogram>
+
+<histogram name="Nearby.Share.Payload.AttachmentType{Variation}"
+    enum="NearbyShareAttachmentType" expires_after="2021-08-19">
+  <owner>cvandermerwe@google.com</owner>
+  <owner>nearby-share-chromeos-eng@google.com</owner>
+  <summary>
+    Records the attachment types from {Variation}. Emitted after all attachment
+    transfers conclude, successfully or not, for a given share target.
+  </summary>
+  <token key="Variation">
+    <variant name=""
+        summary="any Nearby Share attempt, agnostic of final result and
+                 direction"/>
+    <variant name=".Cancelled" summary="a cancelled Nearby Share attempt"/>
+    <variant name=".Failed" summary="a failed Nearby Share attempt"/>
+    <variant name=".Receive" summary="an incoming (receive) payload transfer"/>
+    <variant name=".Send" summary="an outgoing (send) payload transfer"/>
+    <variant name=".Succeeded" summary="a successful Nearby Share attempt"/>
+  </token>
 </histogram>
 
 <histogram name="Nearby.Share.Payload.FinalStatus{UpgradedMedium}"
@@ -661,6 +827,37 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
     <variant name=".UnknownMediumUpgrade"
         summary="an unknown bandwidth-upgraded medium"/>
     <variant name=".WebRtcUpgrade" summary="an upgraded WebRTC medium"/>
+  </token>
+</histogram>
+
+<histogram name="Nearby.Share.Payload.Medium" enum="NearbyShareUpgradedMedium"
+    expires_after="2021-08-19">
+  <owner>nohle@chromium.org</owner>
+  <owner>nearby-share-chromeos-eng@google.com</owner>
+  <summary>
+    Records if a payload transfer used an upgraded bandwidth medium, and if so,
+    which medium. Emitted when the payload transfer finishes, independent of
+    whether the transfer was successful.
+  </summary>
+</histogram>
+
+<histogram
+    name="Nearby.Share.Payload.Medium.Over5MbTransferred{ShareTargetType}"
+    enum="NearbyShareUpgradedMedium" expires_after="2021-08-19">
+  <owner>nohle@chromium.org</owner>
+  <owner>nearby-share-chromeos-eng@google.com</owner>
+  <summary>
+    Records if a payload transfer with {ShareTargetType} used an upgraded
+    bandwidth medium, and if so, which medium. Emitted when the payload transfer
+    finishes if over 5MB was transferred, independent of whether the transfer
+    was successful.
+  </summary>
+  <token key="ShareTargetType">
+    <variant name="" summary="any device type"/>
+    <variant name=".Laptop" summary="a laptop"/>
+    <variant name=".Phone" summary="a phone"/>
+    <variant name=".Tablet" summary="a tablet"/>
+    <variant name=".UnknownDeviceType" summary="an unknown device type"/>
   </token>
 </histogram>
 
@@ -767,6 +964,33 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
     <variant name=".BLE" summary="BLE"/>
     <variant name=".HighVisibility" summary="high-visibility"/>
   </token>
+</histogram>
+
+<histogram name="Nearby.Share.TimeFromInitiateSendToRemoteDeviceNotification"
+    units="ms" expires_after="2021-08-19">
+  <owner>cvandermerwe@google.com</owner>
+  <owner>nearby-share-chromeos-eng@google.com</owner>
+  <summary>
+    Records the time from initiating a send on a share target to sending the
+    introduction frame. This roughly measures the delay between choosing a share
+    target to initiate a transfer and displaying the accept/reject notification
+    on the receiving device. Emitted after the user selects a device when the
+    introduction frame has been sent, and this is only emitted after a
+    successful connection is established. This metric is only emitted for
+    outgoing transfers.
+  </summary>
+</histogram>
+
+<histogram name="Nearby.Share.TimeFromLocalAcceptToTransferStart" units="ms"
+    expires_after="2021-08-19">
+  <owner>cvandermerwe@google.com</owner>
+  <owner>nearby-share-chromeos-eng@google.com</owner>
+  <summary>
+    Records the time from accepting a share on the receiving device until the
+    first payload byte is processed. Emitted after accepting a share when the
+    first in progress payload transfer update is received. This metric is only
+    emitted for incoming transfers.
+  </summary>
 </histogram>
 
 <histogram
@@ -950,6 +1174,44 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
   </token>
 </histogram>
 
+<histogram name="Nearby.Share.Transfer.Success" enum="BooleanSuccess"
+    expires_after="2021-08-19">
+  <owner>nohle@chromium.org</owner>
+  <owner>nearby-share-chromeos-eng@google.com</owner>
+  <summary>
+    Records the success/failure of a Nearby Share transfer. Emitted when a
+    transfer completes successfully or definitively fails, but not for
+    indeterminate states like cancellation.
+  </summary>
+</histogram>
+
+<histogram
+    name="Nearby.Share.Transfer.Success.{Direction}.{ShareTargetType}.{ContactStatus}"
+    enum="BooleanSuccess" expires_after="2021-08-19">
+  <owner>nohle@chromium.org</owner>
+  <owner>nearby-share-chromeos-eng@google.com</owner>
+  <summary>
+    Records the success/failure of a Nearby Share {Direction} transfer with
+    {ShareTargetType} using {ContactStatus}. Emitted when a transfer completes
+    successfully or definitively fails, but not for indeterminate states like
+    cancellation.
+  </summary>
+  <token key="Direction">
+    <variant name="Receive" summary="incoming (receive)"/>
+    <variant name="Send" summary="outgoing (send)"/>
+  </token>
+  <token key="ShareTargetType">
+    <variant name="Laptop" summary="a laptop"/>
+    <variant name="Phone" summary="a phone"/>
+    <variant name="Tablet" summary="a tablet"/>
+    <variant name="UnknownDeviceType" summary="an unknown device type"/>
+  </token>
+  <token key="ContactStatus">
+    <variant name="Contact" summary="contact-based sharing"/>
+    <variant name="NonContact" summary="non-contact-based sharing"/>
+  </token>
+</histogram>
+
 <histogram
     name="Nearby.Share.Transfer.TotalSize{Direction}{ShareTargetType}{UpgradedMedium}{PayloadStatus}"
     units="KB" expires_after="2021-08-19">
@@ -991,7 +1253,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Nearby.Share.VisibilityChoice" enum="NearbyShareVisibility"
-    expires_after="2021-08-19">
+    expires_after="2021-12-26">
   <owner>nohle@chromium.org</owner>
   <owner>nearby-share-chromeos-eng@google.com</owner>
   <summary>

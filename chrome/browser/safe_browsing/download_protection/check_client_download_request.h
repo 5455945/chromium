@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "base/callback.h"
-#include "base/containers/flat_map.h"
 #include "base/files/file_path.h"
 #include "base/memory/ref_counted.h"
 #include "base/time/time.h"
@@ -23,6 +22,10 @@
 #include "components/download/public/common/download_item.h"
 #include "content/public/browser/browser_thread.h"
 #include "url/gurl.h"
+
+namespace profile {
+class Profile;
+}
 
 namespace safe_browsing {
 
@@ -61,9 +64,9 @@ class CheckClientDownloadRequest : public CheckClientDownloadRequestBase,
 
   // Uploads the binary for deep scanning if the reason and policies indicate
   // it should be. ShouldUploadBinary will returns the settings to apply for
-  // deep scanning if it should occur, or base::nullopt if no scan should be
+  // deep scanning if it should occur, or absl::nullopt if no scan should be
   // done.
-  base::Optional<enterprise_connectors::AnalysisSettings> ShouldUploadBinary(
+  absl::optional<enterprise_connectors::AnalysisSettings> ShouldUploadBinary(
       DownloadCheckResultReason reason) override;
   void UploadBinary(DownloadCheckResultReason reason,
                     enterprise_connectors::AnalysisSettings settings) override;
@@ -74,10 +77,11 @@ class CheckClientDownloadRequest : public CheckClientDownloadRequestBase,
 
   // Called when finishing the download, to decide whether to prompt the user
   // for deep scanning or not.
-  bool ShouldPromptForDeepScanning(
-      DownloadCheckResultReason reason) const override;
+  bool ShouldPromptForDeepScanning(bool server_requests_prompt) const override;
 
   bool IsAllowlistedByPolicy() const override;
+
+  bool IsUnderAdvancedProtection(Profile* profile) const;
 
   // The DownloadItem we are checking. Will be NULL if the request has been
   // canceled. Must be accessed only on UI thread.

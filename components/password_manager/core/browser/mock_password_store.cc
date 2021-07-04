@@ -10,7 +10,6 @@
 namespace password_manager {
 
 MockPasswordStore::MockPasswordStore() = default;
-
 MockPasswordStore::~MockPasswordStore() = default;
 
 scoped_refptr<base::SequencedTaskRunner>
@@ -18,8 +17,7 @@ MockPasswordStore::CreateBackgroundTaskRunner() const {
   return base::SequencedTaskRunnerHandle::Get();
 }
 
-bool MockPasswordStore::InitOnBackgroundSequence(
-    bool upload_phished_credentials_to_sync) {
+bool MockPasswordStore::InitOnBackgroundSequence() {
   return true;
 }
 

@@ -87,7 +87,7 @@ TEST_F(CWVSyncControllerTest, StartSyncWithIdentity) {
   // Preconfigure TestSyncService as if it was enabled in transport mode.
   sync_service_.SetFirstSetupComplete(false);
   sync_service_.SetTransportState(syncer::SyncService::TransportState::ACTIVE);
-  sync_service_.SetIsUsingSecondaryPassphrase(false);
+  sync_service_.SetIsUsingExplicitPassphrase(false);
   sync_service_.SetAuthenticatedAccountInfo(account_info);
 
   CWVSyncController* sync_controller = [[CWVSyncController alloc]
@@ -114,7 +114,8 @@ TEST_F(CWVSyncControllerTest, StartSyncWithIdentity) {
 
 TEST_F(CWVSyncControllerTest, StopSyncAndClearIdentity) {
   CoreAccountInfo account_info =
-      identity_test_environment_.MakePrimaryAccountAvailable(kTestEmail);
+      identity_test_environment_.MakePrimaryAccountAvailable(
+          kTestEmail, signin::ConsentLevel::kSync);
 
   CWVSyncController* sync_controller = [[CWVSyncController alloc]
       initWithSyncService:&sync_service_

@@ -12,8 +12,8 @@
 #include "base/macros.h"
 #include "chrome/browser/ash/login/enrollment/enrollment_screen_view.h"
 #include "chrome/browser/ash/login/enrollment/enterprise_enrollment_helper.h"
-#include "chrome/browser/chromeos/login/screens/error_screen.h"
-#include "chrome/browser/chromeos/policy/enrollment_config.h"
+#include "chrome/browser/ash/login/screens/error_screen.h"
+#include "chrome/browser/chromeos/policy/enrollment/enrollment_config.h"
 #include "chrome/browser/ui/webui/chromeos/login/base_screen_handler.h"
 #include "chrome/browser/ui/webui/chromeos/login/network_state_informer.h"
 #include "net/base/net_errors.h"
@@ -72,7 +72,7 @@ class EnrollmentScreenHandler
                            const policy::EnrollmentConfig& config) override;
 
   void SetEnterpriseDomainInfo(const std::string& manager,
-                               const base::string16& device_type) override;
+                               const std::u16string& device_type) override;
   void Show() override;
   void Hide() override;
   void ShowSigninScreen() override;
@@ -151,11 +151,11 @@ class EnrollmentScreenHandler
   void DoShowWithPartition(const std::string& partition_name);
 
   // Returns true if current visible screen is the enrollment sign-in page.
-  bool IsOnEnrollmentScreen() const;
+  bool IsOnEnrollmentScreen();
 
   // Returns true if current visible screen is the error screen over
   // enrollment sign-in page.
-  bool IsEnrollmentScreenHiddenByError() const;
+  bool IsEnrollmentScreenHiddenByError();
 
   // Called after configuration seed was unlocked.
   void OnAdConfigurationUnlocked(std::string unlocked_data);
@@ -207,5 +207,12 @@ class EnrollmentScreenHandler
 };
 
 }  // namespace chromeos
+
+// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
+// source migration is finished.
+namespace ash {
+using ::chromeos::ActiveDirectoryErrorState;
+using ::chromeos::EnrollmentScreenHandler;
+}
 
 #endif  // CHROME_BROWSER_UI_WEBUI_CHROMEOS_LOGIN_ENROLLMENT_SCREEN_HANDLER_H_

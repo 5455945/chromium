@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <list>
+#include <memory>
 #include <utility>
 
 #include "base/bind.h"
@@ -24,7 +25,7 @@
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "components/download/public/common/download_item.h"
-#include "components/safe_browsing/core/proto/csd.pb.h"
+#include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/download_item_utils.h"
 
@@ -405,7 +406,7 @@ void DownloadMetadataManager::GetDownloadDetails(
 content::DownloadManager*
 DownloadMetadataManager::GetDownloadManagerForBrowserContext(
     content::BrowserContext* context) {
-  return content::BrowserContext::GetDownloadManager(context);
+  return context->GetDownloadManager();
 }
 
 void DownloadMetadataManager::OnDownloadCreated(
@@ -538,7 +539,7 @@ void DownloadMetadataManager::ManagerContext::CommitRequest(
     ClearPendingItems();
   }
   // Take the request.
-  download_metadata_.reset(new DownloadMetadata);
+  download_metadata_ = std::make_unique<DownloadMetadata>();
   download_metadata_->set_download_id(item->GetId());
   download_metadata_->mutable_download()->set_allocated_download(
       request.release());

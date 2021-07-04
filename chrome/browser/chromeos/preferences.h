@@ -17,8 +17,8 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "ui/base/ime/chromeos/input_method_manager.h"
 
+class ContentTracingManager;
 class PrefRegistrySimple;
-class TracingManager;
 
 namespace sync_preferences {
 class PrefServiceSyncable;
@@ -124,7 +124,7 @@ class Preferences : public sync_preferences::PrefServiceSyncableObserver,
   sync_preferences::PrefServiceSyncable* prefs_;
 
   input_method::InputMethodManager* input_method_manager_;
-  std::unique_ptr<TracingManager> tracing_manager_;
+  std::unique_ptr<ContentTracingManager> tracing_manager_;
 
   BooleanPrefMember performance_tracing_enabled_;
   BooleanPrefMember tap_to_click_enabled_;
@@ -163,6 +163,8 @@ class Preferences : public sync_preferences::PrefServiceSyncableObserver,
   BooleanPrefMember xkb_auto_repeat_enabled_;
   IntegerPrefMember xkb_auto_repeat_delay_pref_;
   IntegerPrefMember xkb_auto_repeat_interval_pref_;
+
+  BooleanPrefMember pci_data_access_enabled_pref_;
 
   PrefChangeRegistrar pref_change_registrar_;
 

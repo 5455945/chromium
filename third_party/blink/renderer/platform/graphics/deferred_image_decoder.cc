@@ -28,10 +28,9 @@
 #include <memory>
 #include <utility>
 
-#include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/optional.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/renderer/platform/graphics/decoding_image_generator.h"
 #include "third_party/blink/renderer/platform/graphics/image_decoding_store.h"
 #include "third_party/blink/renderer/platform/graphics/image_frame_generator.h"
@@ -59,7 +58,7 @@ enum class IncrementalDecodePerImageType {
 void ReportIncrementalDecodeNeeded(bool all_data_received,
                                    const String& image_type) {
   DCHECK(IsMainThread());
-  base::Optional<IncrementalDecodePerImageType> status;
+  absl::optional<IncrementalDecodePerImageType> status;
   if (image_type == "jpg") {
     status = all_data_received
                  ? IncrementalDecodePerImageType::kJpegAllDataReceivedInitially
@@ -124,14 +123,13 @@ struct DeferredFrameData {
  public:
   DeferredFrameData()
       : orientation_(ImageOrientationEnum::kDefault), is_received_(false) {}
+  DeferredFrameData(const DeferredFrameData&) = delete;
+  DeferredFrameData& operator=(const DeferredFrameData&) = delete;
 
   ImageOrientation orientation_;
   IntSize density_corrected_size_;
   base::TimeDelta duration_;
   bool is_received_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(DeferredFrameData);
 };
 
 std::unique_ptr<DeferredImageDecoder> DeferredImageDecoder::Create(

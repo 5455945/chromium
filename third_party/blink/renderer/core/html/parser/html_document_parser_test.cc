@@ -6,12 +6,14 @@
 
 #include <memory>
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/renderer/core/html/html_document.h"
 #include "third_party/blink/renderer/core/html/parser/text_resource_decoder.h"
 #include "third_party/blink/renderer/core/html/parser/text_resource_decoder_builder.h"
 #include "third_party/blink/renderer/core/loader/no_state_prefetch_client.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
 #include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 
 namespace blink {
@@ -33,24 +35,27 @@ class MockNoStatePrefetchClient : public NoStatePrefetchClient {
 class HTMLDocumentParserTest
     : public PageTestBase,
       public testing::WithParamInterface<
-          testing::tuple<ParserSynchronizationPolicy, int>> {
+          testing::tuple<ParserSynchronizationPolicy, int>>,
+      private ScopedForceSynchronousHTMLParsingForTest {
  protected:
+  HTMLDocumentParserTest()
+      : ScopedForceSynchronousHTMLParsingForTest(Policy() !=
+                                                 kAllowAsynchronousParsing),
+        original_threaded_parsing_(
+            Document::ThreadedParsingEnabledForTesting()) {
+    Document::SetThreadedParsingEnabledForTesting(Policy() !=
+                                                  kForceSynchronousParsing);
+  }
+  ~HTMLDocumentParserTest() override {
+    // Finish the pending tasks which may require the runtime enabled flags,
+    // before restoring the flags.
+    base::RunLoop().RunUntilIdle();
+    Document::SetThreadedParsingEnabledForTesting(original_threaded_parsing_);
+  }
+
   void SetUp() override {
     PageTestBase::SetUp();
     GetDocument().SetURL(KURL("https://example.test"));
-
-    ParserSynchronizationPolicy policy = testing::get<0>(GetParam());
-    if (policy == ParserSynchronizationPolicy::kForceSynchronousParsing) {
-      Document::SetThreadedParsingEnabledForTesting(false);
-    } else {
-      Document::SetThreadedParsingEnabledForTesting(true);
-    }
-    if (policy == ParserSynchronizationPolicy::kAllowDeferredParsing) {
-      RuntimeEnabledFeatures::SetForceSynchronousHTMLParsingEnabled(true);
-    } else if (policy ==
-               ParserSynchronizationPolicy::kAllowAsynchronousParsing) {
-      RuntimeEnabledFeatures::SetForceSynchronousHTMLParsingEnabled(false);
-    }
   }
 
   HTMLDocumentParser* CreateParser(HTMLDocument& document) {
@@ -62,6 +67,13 @@ class HTMLDocumentParserTest
     parser->SetDecoder(std::move(decoder));
     return parser;
   }
+
+ private:
+  ParserSynchronizationPolicy Policy() const {
+    return testing::get<0>(GetParam());
+  }
+
+  bool original_threaded_parsing_;
 };
 
 }  // namespace
@@ -124,7 +136,7 @@ TEST_P(HTMLDocumentParserTest, AppendPrefetch) {
   EXPECT_TRUE(document.IsPrefetchOnly());
   HTMLDocumentParser* parser = CreateParser(document);
 
-  const char kBytes[] = "<ht";
+  const char kBytes[] = "<httttttt";
   parser->AppendBytes(kBytes, sizeof(kBytes));
   // The bytes are forwarded to the preload scanner, not to the tokenizer.
   HTMLParserScriptRunnerHost* script_runner_host =
@@ -146,7 +158,7 @@ TEST_P(HTMLDocumentParserTest, AppendNoPrefetch) {
   // Use ForceSynchronousParsing to allow calling append().
   HTMLDocumentParser* parser = CreateParser(document);
 
-  const char kBytes[] = "<ht";
+  const char kBytes[] = "<htttttt";
   parser->AppendBytes(kBytes, sizeof(kBytes));
   test::RunPendingTasks();
   // The bytes are forwarded to the tokenizer.

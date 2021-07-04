@@ -14,6 +14,7 @@
 #include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/chromeos/input_method/ui/input_method_menu_item.h"
 #include "chrome/browser/chromeos/input_method/ui/input_method_menu_manager.h"
@@ -73,6 +74,30 @@ InputMethodEngine::CandidateWindowProperty::CandidateWindowProperty(
 InputMethodEngine::InputMethodEngine() = default;
 
 InputMethodEngine::~InputMethodEngine() = default;
+
+void InputMethodEngine::FocusIn(
+    const ui::IMEEngineHandlerInterface::InputContext& input_context) {
+  current_input_type_ = input_context.type;
+
+  if (!IsActive() || current_input_type_ == ui::TEXT_INPUT_TYPE_NONE)
+    return;
+
+  context_id_ = next_context_id_;
+  ++next_context_id_;
+
+  observer_->OnFocus(active_component_id_, context_id_, input_context);
+}
+
+void InputMethodEngine::FocusOut() {
+  if (!IsActive() || current_input_type_ == ui::TEXT_INPUT_TYPE_NONE)
+    return;
+
+  current_input_type_ = ui::TEXT_INPUT_TYPE_NONE;
+
+  int context_id = context_id_;
+  context_id_ = -1;
+  observer_->OnBlur(active_component_id_, context_id);
+}
 
 void InputMethodEngine::Enable(const std::string& component_id) {
   InputMethodEngineBase::Enable(component_id);
@@ -163,7 +188,7 @@ void InputMethodEngine::ClickButton(
 
 bool InputMethodEngine::AcceptSuggestionCandidate(
     int context_id,
-    const base::string16& suggestion,
+    const std::u16string& suggestion,
     std::string* error) {
   if (!IsActive()) {
     *error = kErrorNotActive;
@@ -174,7 +199,7 @@ bool InputMethodEngine::AcceptSuggestionCandidate(
     return false;
   }
 
-  CommitText(context_id, base::UTF16ToUTF8(suggestion).c_str(), error);
+  CommitText(context_id, suggestion, error);
 
   IMEAssistiveWindowHandlerInterface* aw_handler =
       ui::IMEBridge::Get()->GetAssistiveWindowHandler();
@@ -357,7 +382,7 @@ bool InputMethodEngine::AcceptSuggestion(int context_id, std::string* error) {
   IMEAssistiveWindowHandlerInterface* aw_handler =
       ui::IMEBridge::Get()->GetAssistiveWindowHandler();
   if (aw_handler) {
-    base::string16 suggestion_text = aw_handler->GetSuggestionText();
+    std::u16string suggestion_text = aw_handler->GetSuggestionText();
     if (suggestion_text.empty()) {
       *error = kSuggestionNotFound;
       return false;
@@ -367,8 +392,7 @@ bool InputMethodEngine::AcceptSuggestion(int context_id, std::string* error) {
       DeleteSurroundingText(context_id_, -confirmed_length, confirmed_length,
                             error);
     }
-    CommitText(context_id_, (base::UTF16ToUTF8(suggestion_text)).c_str(),
-               error);
+    CommitText(context_id_, suggestion_text, error);
     aw_handler->HideSuggestion();
   }
   return true;
@@ -495,7 +519,7 @@ bool InputMethodEngine::SetSelectionRange(uint32_t start, uint32_t end) {
 }
 
 void InputMethodEngine::CommitTextToInputContext(int context_id,
-                                                 const std::string& text) {
+                                                 const std::u16string& text) {
   ui::IMEInputContextHandlerInterface* input_context =
       ui::IMEBridge::Get()->GetInputContextHandler();
   if (!input_context)
@@ -508,8 +532,7 @@ void InputMethodEngine::CommitTextToInputContext(int context_id,
 
   if (had_composition_text) {
     // Records histograms for committed characters with composition text.
-    base::string16 wtext = base::UTF8ToUTF16(text);
-    UMA_HISTOGRAM_CUSTOM_COUNTS("InputMethod.CommitLength", wtext.length(), 1,
+    UMA_HISTOGRAM_CUSTOM_COUNTS("InputMethod.CommitLength", text.length(), 1,
                                 25, 25);
   }
 }
@@ -537,12 +560,6 @@ bool InputMethodEngine::SendKeyEvent(const ui::KeyEvent& event,
   return false;
 }
 
-bool InputMethodEngine::IsValidKeyEvent(const ui::KeyEvent* ui_event) {
-  // TODO(CRBUG/1070517): Update this check to verify that this KeyEvent should
-  // be allowed on this page, instead of assuming that it should be allowed.
-  return true;
-}
-
 void InputMethodEngine::EnableInputView() {
   input_method::InputMethodManager::Get()
       ->GetActiveIMEState()
@@ -562,14 +579,8 @@ void InputMethodEngine::MenuItemToProperty(
   if (item.modified & MENU_ITEM_MODIFIED_LABEL) {
     property->label = item.label;
   }
-  if (item.modified & MENU_ITEM_MODIFIED_VISIBLE) {
-    // TODO(nona): Implement it.
-  }
   if (item.modified & MENU_ITEM_MODIFIED_CHECKED) {
     property->is_selection_item_checked = item.checked;
-  }
-  if (item.modified & MENU_ITEM_MODIFIED_ENABLED) {
-    // TODO(nona): implement sensitive entry(crbug.com/140192).
   }
   if (item.modified & MENU_ITEM_MODIFIED_STYLE) {
     if (!item.children.empty()) {

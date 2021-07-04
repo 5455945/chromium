@@ -86,14 +86,14 @@
   <message name="IDS_OS_SETTINGS_TAG_CELLULAR_TURN_OFF_ALT1" desc="Text for search result item which, when clicked, navigates the user to cellular network settings, with a toggle to turn off cellular. Alternate phrase for: 'Turn off cellular network'">
     Disable Cellular
   </message>
-  <message name="IDS_OS_SETTINGS_TAG_ADD_CELLULAR" desc="Text for search result item which, when clicked, navigates the user to cellular network settings, with an add cellular icon button. Alternate phrase for: 'Activate physical SIM', 'Set up eSIM'">
-    Add Cellular
+  <message name="IDS_OS_SETTINGS_TAG_ADD_ESIM" desc="Text for search result item which, when clicked, navigates the user to cellular network settings, with an add eSIM icon button. Alternate phrase for: 'Install eSIM profile', 'Download eSIM profile'">
+    Add eSIM profile
   </message>
-  <message name="IDS_OS_SETTINGS_TAG_ADD_CELLULAR_ALT1" desc="Text for search result item which, when clicked, navigates the user to cellular network settings, with an add cellular icon button. Alternate phrase for: 'Add Cellular', 'Set up eSIM'">
-    Activate physical SIM
+  <message name="IDS_OS_SETTINGS_TAG_ADD_ESIM_ALT1" desc="Text for search result item which, when clicked, navigates the user to cellular network settings, with an add eSIM icon button. Alternate phrase for: 'Add eSIM profile', 'Download eSIM profile'">
+    Install eSIM profile
   </message>
-  <message name="IDS_OS_SETTINGS_TAG_ADD_CELLULAR_ALT2" desc="Text for search result item which, when clicked, navigates the user to cellular network settings, with an add cellular icon button. Alternate phrase for: 'Add Cellular', 'Activate physical SIM'">
-    Set up eSIM
+  <message name="IDS_OS_SETTINGS_TAG_ADD_ESIM_ALT2" desc="Text for search result item which, when clicked, navigates the user to cellular network settings, with an add eSIM icon button. Alternate phrase for: 'Add eSIM profile', 'Install eSIM profile'">
+    Download eSIM profile
   </message>
   <message name="IDS_OS_SETTINGS_TAG_CELLULAR_TURN_ON" desc="Text for search result item which, when clicked, navigates the user to cellular network settings, with a toggle to turn on cellular. Alternate phrase for: 'Enable cellular'">
     Turn on Cellular network
@@ -145,6 +145,12 @@
   </message>
   <message name="IDS_OS_SETTINGS_TAG_AUTO_CONNECT_NETWORK_ALT1" desc="Text for search result item which, when clicked, navigates the user to settings to toggle whether the device auto-connects to a network. Alternate phrase for: 'Automatically connect to network'">
     Auto connect to network
+  </message>
+  <message name="IDS_OS_SETTINGS_TAG_HIDDEN_NETWORK" desc="Text for search result item which, when clicked, navigates the user to settings to toggle whether the device auto-connects to a network. Alternate phrase for: 'Auto connect to network'">
+    Hidden network
+  </message>
+  <message name="IDS_OS_SETTINGS_TAG_HIDDEN_NETWORK_ALT1" desc="Text for search result item which, when clicked, navigates the user to settings to toggle whether the device auto-connects to a network. Alternate phrase for: 'Automatically connect to network'">
+    Hidden SSID
   </message>
   <message name="IDS_OS_SETTINGS_TAG_CONFIGURE_IP_AUTOMATICALLY" desc="Text for search result item which, when clicked, navigates the user to network settings which allow the user to set whether the device's IP address is configured automatically. Alternate phrase for: 'Auto configure IP address', 'Configure network address'">
     Configure IP address automatically
@@ -308,6 +314,9 @@
   </message>
   <message name="IDS_OS_SETTINGS_TAG_LOCK_SCREEN" desc="Text for search result item which, when clicked, navigates the user to security and sign-in settings.">
     Security and sign-in
+  </message>
+  <message name="IDS_OS_SETTINGS_TAG_LOCK_SCREEN_V2" desc="Text for search result item which, when clicked, navigates the user to security and sign-in settings.">
+    Lock screen and sign-in
   </message>
   <message name="IDS_OS_SETTINGS_TAG_LOCK_SCREEN_WHEN_WAKING" desc="Text for search result item which, when clicked, navigates the user to lock screen settings. Alternate phrase for: 'Login screen'">
     Lock screen
@@ -707,6 +716,27 @@
   <message name="IDS_OS_SETTINGS_TAG_PREFERRED_SEARCH_ENGINE" desc="Text for search result item which, when clicked, navigates the user to search settings, with an option to set the user's preferred search engine.">
     Preferred search engine
   </message>
+  <message name="IDS_OS_SETTINGS_TAG_QUICK_ANSWERS" desc="Text for search result item which, when clicked, navigates the user to Quick Answers settings, with a toggle to enable/disable the functionality. Alternate phrase for: 'Look up', 'Quick search', 'Right click card'">
+    Quick Answers
+  </message>
+  <message name="IDS_OS_SETTINGS_TAG_QUICK_ANSWERS_ALT1" desc="Text for search result item which, when clicked, navigates the user to Quick Answers settings, with a toggle to enable/disable the functionality. Alternate phrase for: 'Quick Answers', 'Quick search', 'Right click card'">
+    Look up
+  </message>
+  <message name="IDS_OS_SETTINGS_TAG_QUICK_ANSWERS_ALT2" desc="Text for search result item which, when clicked, navigates the user to Quick Answers settings, with a toggle to enable/disable the functionality. Alternate phrase for: 'Quick Answers', 'Look up', 'Right click card'">
+    Quick search
+  </message>
+  <message name="IDS_OS_SETTINGS_TAG_QUICK_ANSWERS_ALT3" desc="Text for search result item which, when clicked, navigates the user to Quick Answers settings, with a toggle to enable/disable the functionality. Alternate phrase for: 'Quick Answers', 'Look up', 'Quick search'">
+    Right click card
+  </message>
+  <message name="IDS_OS_SETTINGS_TAG_QUICK_ANSWERS_DEFINITION" desc="Text for search result item which, when clicked, navigates the user to Quick Answers settings, with a toggle to enable/disable the Quick Answers definition functionality.">
+    Quick Answers definition
+  </message>
+  <message name="IDS_OS_SETTINGS_TAG_QUICK_ANSWERS_TRANSLATION" desc="Text for search result item which, when clicked, navigates the user to Quick Answers settings, with a toggle to enable/disable the Quick Answers translation functionality.">
+    Quick Answers translation
+  </message>
+  <message name="IDS_OS_SETTINGS_TAG_QUICK_ANSWERS_UNIT_CONVERSION" desc="Text for search result item which, when clicked, navigates the user to Quick Answers settings, with a toggle to enable/disable the Quick Answers unit conversion functionality.">
+    Quick Answers unit conversion
+  </message>
   <message name="IDS_OS_SETTINGS_TAG_ASSISTANT" desc="Text for search result item which, when clicked, navigates the user to Google Assistant settings.">
     Google Assistant
   </message>
@@ -910,14 +940,26 @@
   <message name="IDS_OS_SETTINGS_TAG_PRIVACY_CRASH_REPORTS_ALT1" desc="Text for search result item which, when clicked, navigates the user to privacy settings, with a toggle to enable/disable allowing usage statistics and crash reports to be sent to Google. Alternate phrase for: 'Usage statistics and crash reports'">
     Feedback reports
   </message>
-  <message name="IDS_OS_SETTINGS_TAG_PRIVACY_PERIPHERAL_DATA_ACCESS_PROTECTION" desc="Text for search result item which, when clicked, navigates the user to privacy settings, with a toggle to enable/disable peripheral data access protection.">
+  <message name="IDS_OS_SETTINGS_TAG_PRIVACY_PERIPHERAL_DATA_ACCESS_PROTECTION" desc="Text for search result item which, when clicked, navigates the user to privacy settings, with a toggle to enable/disable peripheral data access protection. Alternate phrases include: 'PCIe', 'Thunderbolt', 'USB', 'USB4', 'USB-C'">
     Data access protection for peripherals
+  </message>
+  <message name="IDS_OS_SETTINGS_TAG_PRIVACY_PERIPHERAL_DATA_ACCESS_PROTECTION_ALT1" desc="Text for search result item which, when clicked, navigates the user to privacy settings, with a toggle to enable/disable peripheral data access protection. PCIe is the abbreviated form of PCI Express (Peripheral Component Interconnect Express). Alternate phrase for: 'Data access protection for peripherals', 'Thunderbolt', 'USB', 'USB4', 'USB-C'">
+    PCIe
+  </message>
+  <message name="IDS_OS_SETTINGS_TAG_PRIVACY_PERIPHERAL_DATA_ACCESS_PROTECTION_ALT2" desc="Text for search result item which, when clicked, navigates the user to privacy settings, with a toggle to enable/disable peripheral data access protection. Alternate phrase for: 'Data access protection for peripherals', 'PCIe', 'USB', 'USB4', 'USB-C'">
+    Thunderbolt
+  </message>
+  <message name="IDS_OS_SETTINGS_TAG_PRIVACY_PERIPHERAL_DATA_ACCESS_PROTECTION_ALT3" desc="Text for search result item which, when clicked, navigates the user to privacy settings, with a toggle to enable/disable peripheral data access protection. Alternate phrase for: 'Data access protection for peripherals', 'PCIe', 'Thunderbolt', 'USB4', 'USB-C'">
+    USB
+  </message>
+  <message name="IDS_OS_SETTINGS_TAG_PRIVACY_PERIPHERAL_DATA_ACCESS_PROTECTION_ALT4" desc="Text for search result item which, when clicked, navigates the user to privacy settings, with a toggle to enable/disable peripheral data access protection. Alternate phrase for: 'Data access protection for peripherals', 'PCIe', 'Thunderbolt', 'USB', 'USB-C'">
+    USB4
+  </message>
+  <message name="IDS_OS_SETTINGS_TAG_PRIVACY_PERIPHERAL_DATA_ACCESS_PROTECTION_ALT5" desc="Text for search result item which, when clicked, navigates the user to privacy settings, with a toggle to enable/disable peripheral data access protection. Alternate phrase for: 'Data access protection for peripherals', 'PCIe', 'Thunderbolt', 'USB', 'USB4'">
+    USB-C
   </message>
 
   <!-- Languages and Input section. -->
-  <message name="IDS_OS_SETTINGS_TAG_LANGUAGES_INPUT" desc="Text for search result item which, when clicked, navigates the user to languages and input settings.">
-    Languages and inputs
-  </message>
   <message name="IDS_OS_SETTINGS_TAG_LANGUAGES" desc="Text for search result item which, when clicked, navigates the user to languages settings.">
     Languages
   </message>
@@ -942,9 +984,6 @@
   <message name="IDS_OS_SETTINGS_TAG_LANGUAGES_EDIT_DICTIONARY" desc="Text for search result item which, when clicked, navigates the user to edit dictionary page.">
     Customize spell check
   </message>
-  <message name="IDS_OS_SETTINGS_TAG_LANGUAGES_INPUT_METHODS" desc="Text for search result item which, when clicked, navigates the user to input settings, with the option to enable/disable input in supported languages.">
-    Manage input methods
-  </message>
   <message name="IDS_OS_SETTINGS_TAG_LANGUAGES_INPUT_INPUT_OPTIONS_SHELF" desc="Text for search result item which, when clicked, navigates the user to languages and input settings, with a toggle to enable/disable showing input options in the shelf. Alternate phrase for: 'Input options in toolbar'">
     Show input options in the shelf
   </message>
@@ -959,6 +998,15 @@
   </message>
   <message name="IDS_OS_SETTINGS_TAG_LANGUAGES_EMOJI_SUGGESTIONS" desc="Text for search result item which, when clicked, navigates the user to suggestions settings, with a section having a toggle to enable/disable showing emoji suggestions after an user types a word.">
     Emoji suggestions
+  </message>
+  <message name="IDS_OS_SETTINGS_TAG_LANGUAGES_PREDICTIVE_WRITING" desc="Text for search result item which, when clicked, navigates the user to suggestions settings, with a section having a toggle to enable/disable showing predictive writing suggestions after a user types a word.">
+    Predictive writing
+  </message>
+  <message name="IDS_OS_SETTINGS_TAG_LANGUAGES_PREDICTIVE_WRITING_ALT1" desc="Text for search result item which, when clicked, navigates the user to suggestions settings, with a section having a toggle to enable/disable showing predictive writing suggestions after a user types a word.">
+    Text suggestions
+  </message>
+  <message name="IDS_OS_SETTINGS_TAG_LANGUAGES_PREDICTIVE_WRITING_ALT2" desc="Text for search result item which, when clicked, navigates the user to suggestions settings, with a section having a toggle to enable/disable showing predictive writing suggestions after a user types a word.">
+    Next word prediction
   </message>
 
   <!-- Files section. -->

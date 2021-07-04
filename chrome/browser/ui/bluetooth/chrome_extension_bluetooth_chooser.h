@@ -10,11 +10,14 @@
 #include "base/macros.h"
 #include "content/public/browser/bluetooth_chooser.h"
 
-class BluetoothChooserController;
 class ChromeExtensionChooserDialog;
 
 namespace content {
 class RenderFrameHost;
+}
+
+namespace permissions {
+class BluetoothChooserController;
 }
 
 // Represents a Bluetooth chooser to ask the user to select a Bluetooth
@@ -31,14 +34,14 @@ class ChromeExtensionBluetoothChooser : public content::BluetoothChooser {
   void ShowDiscoveryState(DiscoveryState state) override;
   void AddOrUpdateDevice(const std::string& device_id,
                          bool should_update_name,
-                         const base::string16& device_name,
+                         const std::u16string& device_name,
                          bool is_gatt_connected,
                          bool is_paired,
                          int signal_strength_level) override;
 
  private:
   // Weak. DeviceChooserContentView[Cocoa] owns it.
-  BluetoothChooserController* bluetooth_chooser_controller_;
+  permissions::BluetoothChooserController* bluetooth_chooser_controller_;
   std::unique_ptr<ChromeExtensionChooserDialog> chooser_dialog_;
 
   DISALLOW_COPY_AND_ASSIGN(ChromeExtensionBluetoothChooser);

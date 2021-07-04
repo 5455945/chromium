@@ -12,6 +12,7 @@
 #include "ash/wm/tablet_mode/tablet_mode_controller_test_api.h"
 #include "ash/wm/window_state.h"
 #include "ash/wm/workspace_controller.h"
+#include "base/bind.h"
 #include "chromeos/ui/base/window_properties.h"
 #include "components/prefs/pref_service.h"
 #include "ui/aura/client/aura_constants.h"
@@ -742,6 +743,17 @@ void ShelfLayoutManagerTestBase::RunGestureDragTests(
   EXPECT_EQ(SHELF_AUTO_HIDE_SHOWN, shelf->GetAutoHideState());
   EXPECT_EQ(shelf_shown.ToString(),
             GetShelfWidget()->GetWindowBoundsInScreen().ToString());
+}
+
+bool ShelfLayoutManagerTestBase::RunVisibilityUpdateForTrayCallback() {
+  if (!GetShelfLayoutManager()
+           ->visibility_update_for_tray_callback_.callback()) {
+    return false;
+  }
+  GetShelfLayoutManager()
+      ->visibility_update_for_tray_callback_.callback()
+      .Run();
+  return true;
 }
 
 }  //  namespace ash

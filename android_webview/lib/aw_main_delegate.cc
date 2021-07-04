@@ -40,6 +40,7 @@
 #include "components/crash/core/common/crash_key.h"
 #include "components/gwp_asan/buildflags/buildflags.h"
 #include "components/metrics/unsent_log_store_metrics.h"
+#include "components/power_scheduler/power_scheduler.h"
 #include "components/safe_browsing/android/safe_browsing_api_handler_bridge.h"
 #include "components/services/heap_profiling/public/cpp/profiling_client.h"
 #include "components/spellcheck/spellcheck_buildflags.h"
@@ -52,7 +53,7 @@
 #include "content/public/common/content_descriptor_keys.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
-#include "content/public/common/cpu_affinity.h"
+#include "device/base/features.h"
 #include "gin/public/isolate_holder.h"
 #include "gin/v8_initializer.h"
 #include "gpu/command_buffer/service/gpu_switches.h"
@@ -143,6 +144,12 @@ bool AwMainDelegate::BasicStartupComplete(int* exit_code) {
   // isn't much point in having the crash dumps there.
   cl->AppendSwitch(switches::kDisableOoprDebugCrashDump);
 
+  // Disable BackForwardCache for Android WebView as it is not supported.
+  // WebView-specific code hasn't been audited and fixed to ensure compliance
+  // with the changed API contracts around new navigation types and changes to
+  // the document lifecycle.
+  cl->AppendSwitch(switches::kDisableBackForwardCache);
+
   if (cl->GetSwitchValueASCII(switches::kProcessType).empty()) {
     // Browser process (no type specified).
 
@@ -189,19 +196,13 @@ bool AwMainDelegate::BasicStartupComplete(int* exit_code) {
       features.EnableIfNotSet(autofill::features::kAutofillExtractAllDatalists);
       features.EnableIfNotSet(
           autofill::features::kAutofillSkipComparingInferredLabels);
-      features.DisableIfNotSet(
-          autofill::features::kAutofillRestrictUnownedFieldsToFormlessCheckout);
     }
 
     if (cl->HasSwitch(switches::kWebViewLogJsConsoleMessages)) {
       features.EnableIfNotSet(::features::kLogJsConsoleMessages);
     }
 
-    if (cl->HasSwitch(switches::kWebViewDrawFunctorUsesVulkan)) {
-      // When draw functor uses vulkan, assume that it is safe to enable viz
-      // which depends on shared images.
-      features.EnableIfNotSet(::features::kEnableSharedImageForWebview);
-    } else {
+    if (!cl->HasSwitch(switches::kWebViewDrawFunctorUsesVulkan)) {
       // Not use ANGLE's Vulkan backend, if the draw functor is not using
       // Vulkan.
       features.DisableIfNotSet(::features::kDefaultANGLEVulkan);
@@ -217,15 +218,8 @@ bool AwMainDelegate::BasicStartupComplete(int* exit_code) {
     // WebView does not and should not support WebAuthN.
     features.DisableIfNotSet(::features::kWebAuth);
 
-    // Enable VizForWebView by default.
-    features.EnableIfNotSet(::features::kVizForWebViewDefault);
-
-    // WebView doesn't support surface embedding without viz.The media code
-    // checks for both media::kDisableSurfaceLayerForVideo and VizForWebView to
-    // decide if it can embed, so we always enable kDisableSurfaceLayerForVideo
-    // here.
-    // https://crbug.com/853832
-    features.EnableIfNotSet(media::kDisableSurfaceLayerForVideo);
+    // WebView requires SkiaRenderer.
+    features.EnableIfNotSet(::features::kUseSkiaRenderer);
 
     // WebView does not support overlay fullscreen yet for video overlays.
     features.DisableIfNotSet(media::kOverlayFullscreenVideo);
@@ -239,7 +233,7 @@ bool AwMainDelegate::BasicStartupComplete(int* exit_code) {
 
     features.DisableIfNotSet(::features::kBackgroundFetch);
 
-    // SurfaceControl is not supported on webview.
+    // SurfaceControl is controlled by kWebViewSurfaceControl flag.
     features.DisableIfNotSet(::features::kAndroidSurfaceControl);
 
     // TODO(https://crbug.com/963653): WebOTP is not yet supported on
@@ -251,7 +245,7 @@ bool AwMainDelegate::BasicStartupComplete(int* exit_code) {
 
     features.DisableIfNotSet(::features::kWebXrArModule);
 
-    features.DisableIfNotSet(::features::kWebXrHitTest);
+    features.DisableIfNotSet(device::features::kWebXrHitTest);
 
     features.DisableIfNotSet(::features::kDynamicColorGamut);
 
@@ -272,12 +266,18 @@ bool AwMainDelegate::BasicStartupComplete(int* exit_code) {
     // TODO(crbug.com/921655): Add support for User Agent Client hints on
     // WebView.
     features.DisableIfNotSet(::features::kUserAgentClientHint);
+
+    // Disabled until viz scheduling can be improved.
+    features.DisableIfNotSet(::features::kUseSurfaceLayerForVideoDefault);
+
+    // Disable dr-dc on webview.
+    features.DisableIfNotSet(::features::kEnableDrDc);
   }
 
   android_webview::RegisterPathProvider();
 
-  safe_browsing_api_handler_.reset(
-      new safe_browsing::SafeBrowsingApiHandlerBridge());
+  safe_browsing_api_handler_ =
+      std::make_unique<safe_browsing::SafeBrowsingApiHandlerBridge>();
   safe_browsing::SafeBrowsingApiHandler::SetInstance(
       safe_browsing_api_handler_.get());
 
@@ -390,13 +390,12 @@ void AwMainDelegate::PostFieldTrialInitialization() {
   ALLOW_UNUSED_LOCAL(is_canary_dev);
   ALLOW_UNUSED_LOCAL(is_browser_process);
 
-  // Enable LITTLE-cores only mode if the feature is enabled, but only for child
-  // processes, as the browser process is shared with the hosting app.
-  if (!is_browser_process &&
-      base::FeatureList::IsEnabled(
-          android_webview::features::
-              kWebViewCpuAffinityRestrictToLittleCores)) {
-    content::EnforceProcessCpuAffinity(base::CpuAffinityMode::kLittleCoresOnly);
+  // Enable LITTLE-cores only mode/idle power mode throttling if the features
+  // are enabled, but only for child processes, as the browser process is shared
+  // with the hosting app.
+  if (!is_browser_process) {
+    power_scheduler::PowerScheduler::GetInstance()
+        ->InitializePolicyFromFeatureList();
   }
 
 #if BUILDFLAG(ENABLE_GWP_ASAN_MALLOC)
@@ -417,8 +416,8 @@ content::ContentClient* AwMainDelegate::CreateContentClient() {
 content::ContentBrowserClient* AwMainDelegate::CreateContentBrowserClient() {
   DCHECK(!aw_feature_list_creator_);
   aw_feature_list_creator_ = std::make_unique<AwFeatureListCreator>();
-  content_browser_client_.reset(
-      new AwContentBrowserClient(aw_feature_list_creator_.get()));
+  content_browser_client_ =
+      std::make_unique<AwContentBrowserClient>(aw_feature_list_creator_.get());
   return content_browser_client_.get();
 }
 
@@ -430,17 +429,11 @@ gpu::SyncPointManager* GetSyncPointManager() {
 
 gpu::SharedImageManager* GetSharedImageManager() {
   DCHECK(GpuServiceWebView::GetInstance());
-  const bool enable_shared_image =
-      base::FeatureList::IsEnabled(::features::kEnableSharedImageForWebview);
-  return enable_shared_image
-             ? GpuServiceWebView::GetInstance()->shared_image_manager()
-             : nullptr;
+  return GpuServiceWebView::GetInstance()->shared_image_manager();
 }
 
 viz::VizCompositorThreadRunner* GetVizCompositorThreadRunner() {
-  return ::features::IsUsingVizForWebView()
-             ? VizCompositorThreadRunnerWebView::GetInstance()
-             : nullptr;
+  return VizCompositorThreadRunnerWebView::GetInstance();
 }
 
 }  // namespace
@@ -454,7 +447,7 @@ content::ContentGpuClient* AwMainDelegate::CreateContentGpuClient() {
 }
 
 content::ContentRendererClient* AwMainDelegate::CreateContentRendererClient() {
-  content_renderer_client_.reset(new AwContentRendererClient());
+  content_renderer_client_ = std::make_unique<AwContentRendererClient>();
   return content_renderer_client_.get();
 }
 

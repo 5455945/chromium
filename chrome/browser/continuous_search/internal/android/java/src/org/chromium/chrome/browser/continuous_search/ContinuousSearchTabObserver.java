@@ -4,8 +4,13 @@
 
 package org.chromium.chrome.browser.continuous_search;
 
+import androidx.annotation.Nullable;
+
+import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.components.continuous_search.SearchResultExtractorClientStatus;
+import org.chromium.ui.base.WindowAndroid;
 import org.chromium.url.GURL;
 
 /**
@@ -21,9 +26,17 @@ public class ContinuousSearchTabObserver extends EmptyTabObserver implements Sea
     }
 
     @Override
+    public void onPageLoadStarted(Tab tab, GURL url) {
+        ContinuousNavigationUserDataImpl continuousNavigationUserData =
+                ContinuousNavigationUserDataImpl.getOrCreateForTab(tab);
+        continuousNavigationUserData.updateCurrentUrl(url);
+    }
+
+    @Override
     public void onPageLoadFinished(Tab tab, GURL url) {
-        SearchResultUserData searchResultUserData = SearchResultUserData.getForTab(tab);
-        searchResultUserData.updateCurrentUrl(url);
+        ContinuousNavigationUserDataImpl continuousNavigationUserData =
+                ContinuousNavigationUserDataImpl.getOrCreateForTab(tab);
+        continuousNavigationUserData.updateCurrentUrl(url);
 
         // Cancel any existing requests.
         resetProducer();
@@ -42,34 +55,60 @@ public class ContinuousSearchTabObserver extends EmptyTabObserver implements Sea
     @Override
     public void onCloseContents(Tab tab) {
         resetProducer();
-        SearchResultUserData.getForTab(tab).invalidateData();
+        ContinuousNavigationUserDataImpl.getOrCreateForTab(tab).invalidateData();
     }
 
     @Override
     public void onDestroyed(Tab tab) {
+        // If the tab is destroyed the {@link UserDataHost} will also be destroyed. We need to stop
+        // {@link #onResult()} from running by resetting the producer and cancelling the request.
+        resetProducer();
+
+        // The tab's {@link UserDataHost} is destroyed after running observers so this is safe.
+        ContinuousNavigationUserDataImpl.getOrCreateForTab(tab).invalidateData();
+
         tab.removeObserver(this);
     }
 
     // SearchResultListener
 
     @Override
-    public void onResult(SearchResultMetadata metadata) {
+    public void onResult(ContinuousNavigationMetadata metadata) {
         assert metadata != null;
+
+        if (mProducer == null) return;
+
+        reportStatus(mProducer.getSuccessStatus(), mProducer.getClass());
         mProducer = null;
 
-        SearchResultUserData.getForTab(mTab).updateData(metadata, mTab.getUrl());
+        ContinuousNavigationUserDataImpl.getOrCreateForTab(mTab).updateData(
+                metadata, mTab.getUrl());
     }
 
     @Override
     public void onError(int errorCode) {
         // TODO: Handle errors.
+        reportStatus(errorCode, mProducer.getClass());
         mProducer = null;
+    }
+
+    @Override
+    public void onActivityAttachmentChanged(Tab tab, @Nullable WindowAndroid window) {
+        // Intentionally do nothing to prevent automatic observer removal on detachment.
     }
 
     private void resetProducer() {
         if (mProducer != null) {
             mProducer.cancel();
             mProducer = null;
+        }
+    }
+
+    private void reportStatus(int status, Class<?> clazz) {
+        if (clazz == SearchResultExtractorProducer.class) {
+            RecordHistogram.recordEnumeratedHistogram(
+                    "Browser.ContinuousSearch.SearchResultExtractionStatus", status,
+                    SearchResultExtractorClientStatus.MAX_VALUE);
         }
     }
 }

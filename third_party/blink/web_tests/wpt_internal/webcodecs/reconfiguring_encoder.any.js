@@ -17,7 +17,8 @@ async function change_encoding_params_test(codec, acc) {
   let after_reconf_frames = 0;
   let errors = 0;
 
-  let process_video_chunk = function (chunk, config) {
+  let process_video_chunk = function (chunk, metadata) {
+    let config = metadata.decoderConfig;
     var data = new Uint8Array(chunk.data);
     assert_greater_than_equal(data.length, 0);
     let after_reconf = (reconf_ts != 0) && (chunk.timestamp >= reconf_ts);
@@ -58,7 +59,6 @@ async function change_encoding_params_test(codec, acc) {
   for (let i = 0; i < frames_to_encode; i++) {
     var frame = await createFrame(original_w, original_h, next_ts++);
     encoder.encode(frame, {});
-    await delay(1);
   }
 
   params.width = new_w;
@@ -72,7 +72,6 @@ async function change_encoding_params_test(codec, acc) {
   for (let i = 0; i < frames_to_encode; i++) {
     var frame = await createFrame(new_w, new_h, next_ts++);
     encoder.encode(frame, {});
-    await delay(1);
   }
 
   await encoder.flush();

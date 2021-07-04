@@ -7,6 +7,7 @@
 
 #include "chrome/browser/performance_manager/mechanisms/page_discarder.h"
 #include "chrome/browser/performance_manager/policies/page_discarding_helper.h"
+#include "components/performance_manager/graph/graph_impl.h"
 #include "components/performance_manager/test_support/graph_test_harness.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -54,6 +55,7 @@ class GraphTestHarnessWithMockDiscarder : public GraphTestHarness {
   PageNodeImpl* page_node() { return page_node_.get(); }
   ProcessNodeImpl* process_node() { return process_node_.get(); }
   FrameNodeImpl* frame_node() { return main_frame_node_.get(); }
+  SystemNodeImpl* system_node() { return graph()->GetSystemNodeImpl(); }
   void ResetFrameNode() { main_frame_node_.reset(); }
   testing::MockPageDiscarder* discarder() { return mock_discarder_; }
 

@@ -7,7 +7,6 @@
 #include <memory>
 
 #include "ash/animation/animation_change_type.h"
-#include "ash/public/cpp/ash_switches.h"
 #include "ash/public/cpp/shelf_config.h"
 #include "ash/session/test_session_controller_client.h"
 #include "ash/shelf/shelf.h"
@@ -144,7 +143,7 @@ void ShelfBackgroundAnimatorTest::SetUp() {
       GetPrimaryShelf()->shelf_widget()->background_animator_for_testing();
   animator_->AddObserver(&observer_);
 
-  test_api_.reset(new ShelfBackgroundAnimatorTestApi(animator_));
+  test_api_ = std::make_unique<ShelfBackgroundAnimatorTestApi>(animator_);
 }
 
 void ShelfBackgroundAnimatorTest::PaintBackground(

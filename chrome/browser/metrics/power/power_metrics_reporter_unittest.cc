@@ -10,11 +10,14 @@
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "chrome/browser/lifetime/browser_shutdown.h"
+#include "chrome/browser/metrics/power/power_details_provider.h"
 #include "chrome/browser/metrics/usage_scenario/usage_scenario_data_store.h"
 #include "chrome/browser/performance_monitor/process_monitor.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "services/metrics/public/cpp/metrics_utils.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
+#include "services/metrics/public/cpp/ukm_source_id.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -23,6 +26,12 @@ constexpr const char* kBatteryDischargeRateHistogramName =
     "Power.BatteryDischargeRate2";
 constexpr const char* kBatteryDischargeModeHistogramName =
     "Power.BatteryDischargeMode";
+constexpr const char* kZeroWindowSuffix = ".ZeroWindow";
+constexpr const char* kMainScreenBrightnessHistogramName =
+    "Power.MainScreenBrightness";
+constexpr const char* kMainScreenBrightnessAvailableHistogramName =
+    "Power.MainScreenBrightnessAvailable";
+
 constexpr base::TimeDelta kExpectedMetricsCollectionInterval =
     base::TimeDelta::FromSeconds(120);
 constexpr double kTolerableTimeElapsedRatio = 0.10;
@@ -34,14 +43,16 @@ using UkmEntry = ukm::builders::PowerUsageScenariosIntervalData;
 class PowerMetricsReporterAccess : public PowerMetricsReporter {
  public:
   using PowerMetricsReporter::BatteryDischargeMode;
-  static void ReportHistograms(
+  static void ReportBatteryHistograms(
+      const UsageScenarioDataStore::IntervalData& interval_data,
       base::TimeDelta sampling_interval,
       base::TimeDelta interval_duration,
       BatteryDischargeMode discharge_mode,
-      base::Optional<int64_t> discharge_rate_during_interval) {
-    PowerMetricsReporter::ReportHistograms(
-        sampling_interval, interval_duration, discharge_mode,
-        std::move(discharge_rate_during_interval));
+      absl::optional<int64_t> discharge_rate_during_interval,
+      const std::vector<const char*>& suffixes) {
+    PowerMetricsReporter::ReportBatteryHistograms(
+        interval_data, sampling_interval, interval_duration, discharge_mode,
+        std::move(discharge_rate_during_interval), suffixes);
   }
 };
 
@@ -52,18 +63,15 @@ class FakeBatteryLevelProvider : public BatteryLevelProvider {
       std::queue<BatteryLevelProvider::BatteryState>* battery_states)
       : battery_states_(battery_states) {}
 
-  BatteryState GetBatteryState() override {
+  void GetBatteryState(
+      base::OnceCallback<void(const BatteryState&)> callback) override {
     DCHECK(!battery_states_->empty());
     BatteryLevelProvider::BatteryState state = battery_states_->front();
     battery_states_->pop();
-    return state;
+    std::move(callback).Run(state);
   }
 
  private:
-  std::vector<BatteryInterface> GetBatteryInterfaceList() override {
-    return {};
-  }
-
   std::queue<BatteryLevelProvider::BatteryState>* battery_states_;
 };
 
@@ -122,8 +130,19 @@ class PowerMetricsReporterUnitTest : public testing::Test {
     std::unique_ptr<BatteryLevelProvider> battery_provider =
         std::make_unique<FakeBatteryLevelProvider>(&battery_states_);
     battery_provider_ = battery_provider.get();
+    base::RunLoop run_loop;
     power_metrics_reporter_ = std::make_unique<PowerMetricsReporter>(
-        data_store_.GetWeakPtr(), std::move(battery_provider));
+        data_store_.AsWeakPtr(), std::move(battery_provider));
+    power_metrics_reporter_->OnFirstSampleForTesting(run_loop.QuitClosure());
+    run_loop.Run();
+  }
+
+  void WaitForNextSample(
+      const performance_monitor::ProcessMonitor::Metrics& metrics) {
+    base::RunLoop run_loop;
+    power_metrics_reporter_->OnNextSampleForTesting(run_loop.QuitClosure());
+    process_monitor_.NotifyObserversForOnAggregatedMetricsSampled(metrics);
+    run_loop.Run();
   }
 
  protected:
@@ -160,6 +179,14 @@ TEST_F(PowerMetricsReporterUnitTest, UKMs) {
       base::TimeDelta::FromSeconds(++fake_value);
   fake_interval_data.time_playing_video_in_visible_tab =
       base::TimeDelta::FromSeconds(++fake_value);
+  fake_interval_data.time_since_last_user_interaction_with_browser =
+      base::TimeDelta::FromSeconds(++fake_value);
+  fake_interval_data.time_capturing_video =
+      base::TimeDelta::FromSeconds(++fake_value);
+  fake_interval_data.time_playing_audio =
+      base::TimeDelta::FromSeconds(++fake_value);
+  fake_interval_data.longest_visible_origin_duration =
+      base::TimeDelta::FromSeconds(++fake_value);
 
   task_environment_.FastForwardBy(kExpectedMetricsCollectionInterval);
   // Pretend that the battery has dropped by 50% in 2 minutes, for a rate of
@@ -177,12 +204,14 @@ TEST_F(PowerMetricsReporterUnitTest, UKMs) {
   fake_metrics.energy_impact = ++fake_value;
 #endif
 
-  process_monitor_.NotifyObserversForOnAggregatedMetricsSampled(fake_metrics);
+  WaitForNextSample(fake_metrics);
 
   auto entries = test_ukm_recorder_.GetEntriesByName(
       ukm::builders::PowerUsageScenariosIntervalData::kEntryName);
   EXPECT_EQ(1u, entries.size());
 
+  EXPECT_EQ(entries[0]->source_id,
+            fake_interval_data.source_id_for_longest_visible_origin);
   test_ukm_recorder_.ExpectEntryMetric(
       entries[0], UkmEntry::kUptimeSecondsName,
       ukm::GetExponentialBucketMinForUserTiming(
@@ -227,26 +256,75 @@ TEST_F(PowerMetricsReporterUnitTest, UKMs) {
           fake_interval_data.user_interaction_count));
   test_ukm_recorder_.ExpectEntryMetric(
       entries[0], UkmEntry::kFullscreenVideoSingleMonitorSecondsName,
-      ukm::GetExponentialBucketMinForUserTiming(
-          fake_interval_data.time_playing_video_full_screen_single_monitor
-              .InSeconds()));
+      PowerMetricsReporter::GetBucketForSampleForTesting(
+          fake_interval_data.time_playing_video_full_screen_single_monitor));
   test_ukm_recorder_.ExpectEntryMetric(
       entries[0], UkmEntry::kTimeWithOpenWebRTCConnectionSecondsName,
-      ukm::GetExponentialBucketMinForUserTiming(
-          fake_interval_data.time_with_open_webrtc_connection.InSeconds()));
+      PowerMetricsReporter::GetBucketForSampleForTesting(
+          fake_interval_data.time_with_open_webrtc_connection));
   test_ukm_recorder_.ExpectEntryMetric(
       entries[0], UkmEntry::kTimePlayingVideoInVisibleTabName,
-      ukm::GetExponentialBucketMinForUserTiming(
-          fake_interval_data.time_playing_video_in_visible_tab.InSeconds()));
+      PowerMetricsReporter::GetBucketForSampleForTesting(
+          fake_interval_data.time_playing_video_in_visible_tab));
   test_ukm_recorder_.ExpectEntryMetric(
       entries[0], UkmEntry::kIntervalDurationSecondsName,
       kExpectedMetricsCollectionInterval.InSeconds());
+  test_ukm_recorder_.ExpectEntryMetric(
+      entries[0], UkmEntry::kTimeSinceInteractionWithBrowserSecondsName,
+      PowerMetricsReporter::GetBucketForSampleForTesting(
+          fake_interval_data.time_since_last_user_interaction_with_browser));
+  test_ukm_recorder_.ExpectEntryMetric(
+      entries[0], UkmEntry::kVideoCaptureSecondsName,
+      PowerMetricsReporter::GetBucketForSampleForTesting(
+          fake_interval_data.time_capturing_video));
+  test_ukm_recorder_.ExpectEntryMetric(
+      entries[0], UkmEntry::kBrowserShuttingDownName, false);
+  test_ukm_recorder_.ExpectEntryMetric(
+      entries[0], UkmEntry::kPlayingAudioSecondsName,
+      PowerMetricsReporter::GetBucketForSampleForTesting(
+          fake_interval_data.time_playing_audio));
+  test_ukm_recorder_.ExpectEntryMetric(
+      entries[0], UkmEntry::kOriginVisibilityTimeSecondsName,
+      PowerMetricsReporter::GetBucketForSampleForTesting(
+          fake_interval_data.longest_visible_origin_duration));
 
   histogram_tester_.ExpectUniqueSample(kBatteryDischargeRateHistogramName, 2500,
                                        1);
   histogram_tester_.ExpectUniqueSample(
       kBatteryDischargeModeHistogramName,
       PowerMetricsReporterAccess::BatteryDischargeMode::kDischarging, 1);
+}
+
+TEST_F(PowerMetricsReporterUnitTest, UKMsBrowserShuttingDown) {
+  UsageScenarioDataStore::IntervalData fake_interval_data = {};
+  fake_interval_data.source_id_for_longest_visible_origin = 42;
+  task_environment_.FastForwardBy(kExpectedMetricsCollectionInterval);
+  battery_states_.push(BatteryLevelProvider::BatteryState{
+      1, 1, 0.50, true, base::TimeTicks::Now()});
+  data_store_.SetIntervalDataToReturn(fake_interval_data);
+
+  performance_monitor::ProcessMonitor::Metrics fake_metrics = {};
+  fake_metrics.cpu_usage = 0.5;
+#if defined(OS_MAC)
+  fake_metrics.idle_wakeups = 42;
+  fake_metrics.package_idle_wakeups = 43;
+  fake_metrics.energy_impact = 44;
+#endif
+
+  {
+    auto fake_shutdown = browser_shutdown::SetShutdownTypeForTesting(
+        browser_shutdown::ShutdownType::kBrowserExit);
+    EXPECT_TRUE(browser_shutdown::HasShutdownStarted());
+    WaitForNextSample(fake_metrics);
+  }
+
+  auto entries = test_ukm_recorder_.GetEntriesByName(
+      ukm::builders::PowerUsageScenariosIntervalData::kEntryName);
+  EXPECT_EQ(1u, entries.size());
+
+  EXPECT_EQ(entries[0]->source_id, 42);
+  test_ukm_recorder_.ExpectEntryMetric(
+      entries[0], UkmEntry::kBrowserShuttingDownName, true);
 }
 
 TEST_F(PowerMetricsReporterUnitTest, UKMsPluggedIn) {
@@ -263,7 +341,8 @@ TEST_F(PowerMetricsReporterUnitTest, UKMsPluggedIn) {
   UsageScenarioDataStore::IntervalData fake_interval_data;
   fake_interval_data.source_id_for_longest_visible_origin = 42;
   data_store_.SetIntervalDataToReturn(fake_interval_data);
-  process_monitor_.NotifyObserversForOnAggregatedMetricsSampled({});
+
+  WaitForNextSample({});
 
   auto entries = test_ukm_recorder_.GetEntriesByName(
       ukm::builders::PowerUsageScenariosIntervalData::kEntryName);
@@ -291,7 +370,8 @@ TEST_F(PowerMetricsReporterUnitTest, UKMsBatteryStateChanges) {
   UsageScenarioDataStore::IntervalData fake_interval_data;
   fake_interval_data.source_id_for_longest_visible_origin = 42;
   data_store_.SetIntervalDataToReturn(fake_interval_data);
-  process_monitor_.NotifyObserversForOnAggregatedMetricsSampled({});
+
+  WaitForNextSample({});
 
   auto entries = test_ukm_recorder_.GetEntriesByName(
       ukm::builders::PowerUsageScenariosIntervalData::kEntryName);
@@ -313,12 +393,13 @@ TEST_F(PowerMetricsReporterUnitTest, UKMsBatteryStateUnavailable) {
   task_environment_.FastForwardBy(kExpectedMetricsCollectionInterval);
   // A nullopt battery value indicates that the battery level is unavailable.
   battery_states_.push(BatteryLevelProvider::BatteryState{
-      1, 1, base::nullopt, true, base::TimeTicks::Now()});
+      1, 1, absl::nullopt, true, base::TimeTicks::Now()});
 
   UsageScenarioDataStore::IntervalData fake_interval_data;
   fake_interval_data.source_id_for_longest_visible_origin = 42;
   data_store_.SetIntervalDataToReturn(fake_interval_data);
-  process_monitor_.NotifyObserversForOnAggregatedMetricsSampled({});
+
+  WaitForNextSample({});
 
   auto entries = test_ukm_recorder_.GetEntriesByName(
       ukm::builders::PowerUsageScenariosIntervalData::kEntryName);
@@ -346,7 +427,8 @@ TEST_F(PowerMetricsReporterUnitTest, UKMsNoBattery) {
   UsageScenarioDataStore::IntervalData fake_interval_data;
   fake_interval_data.source_id_for_longest_visible_origin = 42;
   data_store_.SetIntervalDataToReturn(fake_interval_data);
-  process_monitor_.NotifyObserversForOnAggregatedMetricsSampled({});
+
+  WaitForNextSample({});
 
   auto entries = test_ukm_recorder_.GetEntriesByName(
       ukm::builders::PowerUsageScenariosIntervalData::kEntryName);
@@ -376,7 +458,8 @@ TEST_F(PowerMetricsReporterUnitTest, UKMsBatteryStateIncrease) {
   UsageScenarioDataStore::IntervalData fake_interval_data;
   fake_interval_data.source_id_for_longest_visible_origin = 42;
   data_store_.SetIntervalDataToReturn(fake_interval_data);
-  process_monitor_.NotifyObserversForOnAggregatedMetricsSampled({});
+
+  WaitForNextSample({});
 
   auto entries = test_ukm_recorder_.GetEntriesByName(
       ukm::builders::PowerUsageScenariosIntervalData::kEntryName);
@@ -396,12 +479,72 @@ TEST_F(PowerMetricsReporterUnitTest, UKMsBatteryStateIncrease) {
       1);
 }
 
-TEST_F(PowerMetricsReporterUnitTest, BatteryDischargeCaptureIsTooEarly) {
-  PowerMetricsReporterAccess::ReportHistograms(
+TEST_F(PowerMetricsReporterUnitTest, BatteryDischargeCaptureZeroWindow) {
+  // Default value for interval_data.max_tab_count is zero.
+  UsageScenarioDataStore::IntervalData interval_data;
+
+  PowerMetricsReporterAccess::ReportBatteryHistograms(
+      interval_data, kExpectedMetricsCollectionInterval,
       kExpectedMetricsCollectionInterval,
+      PowerMetricsReporterAccess::BatteryDischargeMode::kDischarging, 2500,
+      PowerMetricsReporter::GetSuffixesForTesting(interval_data));
+
+  histogram_tester_.ExpectUniqueSample(kBatteryDischargeRateHistogramName, 2500,
+                                       1);
+  histogram_tester_.ExpectUniqueSample(
+      kBatteryDischargeModeHistogramName,
+      PowerMetricsReporterAccess::BatteryDischargeMode::kDischarging, 1);
+
+  // There were no tabs shown during the interval so no windows either.
+  // ZeroWindow suffix should be recorded.
+  histogram_tester_.ExpectUniqueSample(
+      base::JoinString({kBatteryDischargeRateHistogramName, kZeroWindowSuffix},
+                       ""),
+      2500, 1);
+  histogram_tester_.ExpectUniqueSample(
+      base::JoinString({kBatteryDischargeModeHistogramName, kZeroWindowSuffix},
+                       ""),
+      PowerMetricsReporterAccess::BatteryDischargeMode::kDischarging, 1);
+}
+
+TEST_F(PowerMetricsReporterUnitTest, BatteryDischargeCaptureMultipleWindows) {
+  // Tabs were shown during interval so windows too.
+  UsageScenarioDataStore::IntervalData interval_data;
+  interval_data.max_tab_count = 1;
+
+  PowerMetricsReporterAccess::ReportBatteryHistograms(
+      interval_data, kExpectedMetricsCollectionInterval,
+      kExpectedMetricsCollectionInterval,
+      PowerMetricsReporterAccess::BatteryDischargeMode::kDischarging, 2500,
+      PowerMetricsReporter::GetSuffixesForTesting(interval_data));
+
+  histogram_tester_.ExpectUniqueSample(kBatteryDischargeRateHistogramName, 2500,
+                                       1);
+  histogram_tester_.ExpectUniqueSample(
+      kBatteryDischargeModeHistogramName,
+      PowerMetricsReporterAccess::BatteryDischargeMode::kDischarging, 1);
+
+  // Tabs were shown during the interval so windows too. ZeroWindow
+  // suffix should not be recorded.
+  histogram_tester_.ExpectTotalCount(
+      base::JoinString({kBatteryDischargeRateHistogramName, kZeroWindowSuffix},
+                       ""),
+      0);
+  histogram_tester_.ExpectTotalCount(
+      base::JoinString({kBatteryDischargeModeHistogramName, kZeroWindowSuffix},
+                       ""),
+      0);
+}
+
+TEST_F(PowerMetricsReporterUnitTest, BatteryDischargeCaptureIsTooEarly) {
+  UsageScenarioDataStore::IntervalData interval_data;
+
+  PowerMetricsReporterAccess::ReportBatteryHistograms(
+      interval_data, kExpectedMetricsCollectionInterval,
       (kExpectedMetricsCollectionInterval * kTolerableNegativeDrift) -
           base::TimeDelta::FromSeconds(1),
-      PowerMetricsReporterAccess::BatteryDischargeMode::kDischarging, 2500);
+      PowerMetricsReporterAccess::BatteryDischargeMode::kDischarging, 2500,
+      PowerMetricsReporter::GetSuffixesForTesting(interval_data));
 
   histogram_tester_.ExpectTotalCount(kBatteryDischargeRateHistogramName, 0);
   histogram_tester_.ExpectUniqueSample(
@@ -410,11 +553,14 @@ TEST_F(PowerMetricsReporterUnitTest, BatteryDischargeCaptureIsTooEarly) {
 }
 
 TEST_F(PowerMetricsReporterUnitTest, BatteryDischargeCaptureIsEarly) {
-  PowerMetricsReporterAccess::ReportHistograms(
-      kExpectedMetricsCollectionInterval,
+  UsageScenarioDataStore::IntervalData interval_data;
+
+  PowerMetricsReporterAccess::ReportBatteryHistograms(
+      interval_data, kExpectedMetricsCollectionInterval,
       (kExpectedMetricsCollectionInterval * kTolerableNegativeDrift) +
           base::TimeDelta::FromSeconds(1),
-      PowerMetricsReporterAccess::BatteryDischargeMode::kDischarging, 2500);
+      PowerMetricsReporterAccess::BatteryDischargeMode::kDischarging, 2500,
+      PowerMetricsReporter::GetSuffixesForTesting(interval_data));
 
   histogram_tester_.ExpectUniqueSample(kBatteryDischargeRateHistogramName, 2500,
                                        1);
@@ -424,11 +570,14 @@ TEST_F(PowerMetricsReporterUnitTest, BatteryDischargeCaptureIsEarly) {
 }
 
 TEST_F(PowerMetricsReporterUnitTest, BatteryDischargeCaptureIsTooLate) {
-  PowerMetricsReporterAccess::ReportHistograms(
-      kExpectedMetricsCollectionInterval,
+  UsageScenarioDataStore::IntervalData interval_data;
+
+  PowerMetricsReporterAccess::ReportBatteryHistograms(
+      interval_data, kExpectedMetricsCollectionInterval,
       (kExpectedMetricsCollectionInterval * kTolerablePositiveDrift) +
           base::TimeDelta::FromSeconds(1),
-      PowerMetricsReporterAccess::BatteryDischargeMode::kDischarging, 2500);
+      PowerMetricsReporterAccess::BatteryDischargeMode::kDischarging, 2500,
+      PowerMetricsReporter::GetSuffixesForTesting(interval_data));
 
   histogram_tester_.ExpectTotalCount(kBatteryDischargeRateHistogramName, 0);
   histogram_tester_.ExpectUniqueSample(
@@ -437,15 +586,138 @@ TEST_F(PowerMetricsReporterUnitTest, BatteryDischargeCaptureIsTooLate) {
 }
 
 TEST_F(PowerMetricsReporterUnitTest, BatteryDischargeCaptureIsLate) {
-  PowerMetricsReporterAccess::ReportHistograms(
-      kExpectedMetricsCollectionInterval,
+  UsageScenarioDataStore::IntervalData interval_data;
+
+  PowerMetricsReporterAccess::ReportBatteryHistograms(
+      interval_data, kExpectedMetricsCollectionInterval,
       (kExpectedMetricsCollectionInterval * kTolerablePositiveDrift) -
           base::TimeDelta::FromSeconds(1),
-      PowerMetricsReporterAccess::BatteryDischargeMode::kDischarging, 2500);
+      PowerMetricsReporterAccess::BatteryDischargeMode::kDischarging, 2500,
+      PowerMetricsReporter::GetSuffixesForTesting(interval_data));
 
   histogram_tester_.ExpectUniqueSample(kBatteryDischargeRateHistogramName, 2500,
                                        1);
   histogram_tester_.ExpectUniqueSample(
       kBatteryDischargeModeHistogramName,
       PowerMetricsReporterAccess::BatteryDischargeMode::kDischarging, 1);
+}
+
+TEST_F(PowerMetricsReporterUnitTest, UKMsNoTab) {
+  UsageScenarioDataStore::IntervalData fake_interval_data;
+
+  fake_interval_data.max_tab_count = 0;
+  fake_interval_data.max_visible_window_count = 0;
+  fake_interval_data.source_id_for_longest_visible_origin =
+      ukm::kInvalidSourceId;
+
+  task_environment_.FastForwardBy(kExpectedMetricsCollectionInterval);
+  battery_states_.push(BatteryLevelProvider::BatteryState{
+      1, 1, 0.50, true, base::TimeTicks::Now()});
+
+  data_store_.SetIntervalDataToReturn(fake_interval_data);
+
+  performance_monitor::ProcessMonitor::Metrics fake_metrics = {};
+  fake_metrics.cpu_usage = 0.5;
+
+  WaitForNextSample(fake_metrics);
+
+  auto entries = test_ukm_recorder_.GetEntriesByName(
+      ukm::builders::PowerUsageScenariosIntervalData::kEntryName);
+  EXPECT_EQ(1u, entries.size());
+
+  EXPECT_EQ(entries[0]->source_id, ukm::kInvalidSourceId);
+  test_ukm_recorder_.ExpectEntryMetric(
+      entries[0], UkmEntry::kUptimeSecondsName,
+      ukm::GetExponentialBucketMinForUserTiming(
+          fake_interval_data.uptime_at_interval_end.InSeconds()));
+}
+
+TEST_F(PowerMetricsReporterUnitTest, DurationsLongerThanIntervalAreCapped) {
+  UsageScenarioDataStore::IntervalData fake_interval_data;
+
+  fake_interval_data.time_playing_video_full_screen_single_monitor =
+      kExpectedMetricsCollectionInterval * 100;
+
+  task_environment_.FastForwardBy(kExpectedMetricsCollectionInterval);
+  battery_states_.push(BatteryLevelProvider::BatteryState{
+      1, 1, 0.50, true, base::TimeTicks::Now()});
+  data_store_.SetIntervalDataToReturn(fake_interval_data);
+
+  performance_monitor::ProcessMonitor::Metrics fake_metrics = {};
+  fake_metrics.cpu_usage = 0.5;
+  WaitForNextSample(fake_metrics);
+
+  auto entries = test_ukm_recorder_.GetEntriesByName(
+      ukm::builders::PowerUsageScenariosIntervalData::kEntryName);
+  EXPECT_EQ(1u, entries.size());
+
+  EXPECT_EQ(entries[0]->source_id, ukm::kInvalidSourceId);
+  test_ukm_recorder_.ExpectEntryMetric(
+      entries[0], UkmEntry::kFullscreenVideoSingleMonitorSecondsName,
+      // Every value greater than |kExpectedMetricsCollectionInterval| should
+      // fall in the same overflow bucket.
+      PowerMetricsReporter::GetBucketForSampleForTesting(
+          kExpectedMetricsCollectionInterval * 2));
+}
+
+namespace {
+
+class TestPowerDetailsProvider : public PowerDetailsProvider {
+ public:
+  TestPowerDetailsProvider() = default;
+  TestPowerDetailsProvider(const TestPowerDetailsProvider& rhs) = delete;
+  TestPowerDetailsProvider& operator=(const TestPowerDetailsProvider& rhs) =
+      delete;
+  ~TestPowerDetailsProvider() override = default;
+
+  double GetMainScreenBrightnessLevel() override {
+    return brightness_to_return_;
+  }
+
+  void set_brightness_to_return(double brightness_to_return) {
+    brightness_to_return_ = brightness_to_return;
+  }
+
+ private:
+  double brightness_to_return_ = PowerDetailsProvider::kInvalidScreenBrightness;
+};
+
+}  // namespace
+
+TEST_F(PowerMetricsReporterUnitTest, MainScreenBrightnessHistogram) {
+  std::unique_ptr<PowerDetailsProvider> detail_provider =
+      std::make_unique<TestPowerDetailsProvider>();
+  TestPowerDetailsProvider* detail_provider_raw =
+      static_cast<TestPowerDetailsProvider*>(detail_provider.get());
+  power_metrics_reporter_->set_power_details_provider_for_testing(
+      std::move(detail_provider));
+
+  UsageScenarioDataStore::IntervalData fake_interval_data = {};
+
+  task_environment_.FastForwardBy(kExpectedMetricsCollectionInterval);
+  battery_states_.push(BatteryLevelProvider::BatteryState{
+      1, 1, 0.50, true, base::TimeTicks::Now()});
+  data_store_.SetIntervalDataToReturn(fake_interval_data);
+
+  performance_monitor::ProcessMonitor::Metrics fake_metrics = {};
+  fake_metrics.cpu_usage = 0.5;
+  WaitForNextSample(fake_metrics);
+
+  histogram_tester_.ExpectTotalCount(kMainScreenBrightnessHistogramName, 0);
+  histogram_tester_.ExpectBucketCount(
+      kMainScreenBrightnessAvailableHistogramName, false, 1);
+
+  double kBrightnessValue = 0.5;
+  detail_provider_raw->set_brightness_to_return(kBrightnessValue);
+
+  task_environment_.FastForwardBy(kExpectedMetricsCollectionInterval);
+  battery_states_.push(BatteryLevelProvider::BatteryState{
+      1, 1, 0.50, true, base::TimeTicks::Now()});
+  data_store_.SetIntervalDataToReturn(fake_interval_data);
+  WaitForNextSample(fake_metrics);
+
+  histogram_tester_.ExpectBucketCount(kMainScreenBrightnessHistogramName,
+                                      kBrightnessValue * 100, 1);
+  histogram_tester_.ExpectBucketCount(
+      kMainScreenBrightnessAvailableHistogramName, true, 1);
 }

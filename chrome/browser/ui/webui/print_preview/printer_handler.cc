@@ -14,7 +14,7 @@
 #include "chrome/browser/ui/webui/print_preview/privet_printer_handler.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if defined(OS_CHROMEOS)
 #include "chrome/browser/ui/webui/print_preview/local_printer_handler_chromeos.h"
 #else
 #include "chrome/browser/ui/webui/print_preview/local_printer_handler_default.h"
@@ -32,9 +32,8 @@ std::unique_ptr<PrinterHandler> PrinterHandler::CreateForExtensionPrinters(
 std::unique_ptr<PrinterHandler> PrinterHandler::CreateForLocalPrinters(
     content::WebContents* preview_web_contents,
     Profile* profile) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  return LocalPrinterHandlerChromeos::CreateDefault(profile,
-                                                    preview_web_contents);
+#if defined(OS_CHROMEOS)
+  return LocalPrinterHandlerChromeos::Create(preview_web_contents);
 #else
   return std::make_unique<LocalPrinterHandlerDefault>(preview_web_contents);
 #endif
@@ -66,7 +65,7 @@ void PrinterHandler::StartGrantPrinterAccess(const std::string& printer_id,
   NOTREACHED();
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if defined(OS_CHROMEOS)
 void PrinterHandler::StartGetEulaUrl(const std::string& destination_id,
                                      GetEulaUrlCallback callback) {
   NOTREACHED();

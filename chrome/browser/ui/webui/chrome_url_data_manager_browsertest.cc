@@ -2,31 +2,38 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/logging.h"
+#include <algorithm>
+#include <memory>
+
 #include "base/macros.h"
 #include "base/strings/string_piece.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/browser/ui/webui/welcome/helpers.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/enterprise/browser/controller/fake_browser_dm_token_storage.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/notification_types.h"
+#include "content/public/browser/url_data_source.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "media/base/media_switches.h"
 
 namespace {
 
 class NavigationObserver : public content::WebContentsObserver {
-public:
+ public:
   enum NavigationResult {
     NOT_FINISHED,
     ERROR_PAGE,
@@ -72,7 +79,14 @@ public:
 
 }  // namespace
 
-typedef InProcessBrowserTest ChromeURLDataManagerTest;
+class ChromeURLDataManagerTest : public InProcessBrowserTest {
+ protected:
+  void SetUpOnMainThread() override {
+    content::URLDataSource::Add(
+        browser()->profile(),
+        std::make_unique<ThemeSource>(browser()->profile()));
+  }
+};
 
 // Makes sure navigating to the new tab page results in a http status code
 // of 200.
@@ -134,6 +148,7 @@ class ChromeURLDataManagerWebUITrustedTypesTest
     if (GetParam() == std::string("chrome://welcome"))
       enabled_features.push_back(welcome::kForceEnabled);
 #endif
+    enabled_features.push_back(media::kUseMediaHistoryStore);
     feature_list_.InitWithFeatures(enabled_features, {});
   }
 
@@ -160,14 +175,22 @@ class ChromeURLDataManagerWebUITrustedTypesTest
     EXPECT_TRUE(console_observer.messages().empty());
   }
 
+  static std::string ParamInfoToString(
+      const ::testing::TestParamInfo<const char*>& info) {
+    std::string name(info.param);
+    std::replace_if(
+        name.begin(), name.end(), [](char c) { return !std::isalnum(c); }, '_');
+    return name;
+  }
+
  private:
   base::test::ScopedFeatureList feature_list_;
+  policy::FakeBrowserDMTokenStorage fake_dm_token_storage_;
 };
 
 // Verify that there's no Trusted Types violation in chrome://chrome-urls
 IN_PROC_BROWSER_TEST_P(ChromeURLDataManagerWebUITrustedTypesTest,
                        NoTrustedTypesViolation) {
-  LOG(INFO) << "Navigating to " << GetParam();
   CheckTrustedTypesViolation(GetParam());
 }
 
@@ -180,7 +203,6 @@ static constexpr const char* const kChromeUrls[] = {
     // "chrome://appcache-internals",
     "chrome://autofill-internals",
     "chrome://blob-internals",
-    "chrome://bluetooth-internals",
     "chrome://bookmarks",
     "chrome://chrome-urls",
     "chrome://components",
@@ -212,11 +234,11 @@ static constexpr const char* const kChromeUrls[] = {
     "chrome://local-state",
     "chrome://management",
     "chrome://media-engagement",
-    "chrome://media-feeds",
     "chrome://media-history",
     "chrome://media-internals",
     "chrome://media-router-internals",
-    "chrome://memory-internals",
+    // TODO(crbug.com/1217395): DCHECK failure
+    // "chrome://memory-internals",
     "chrome://net-export",
     "chrome://net-internals",
     "chrome://network-error",
@@ -241,7 +263,6 @@ static constexpr const char* const kChromeUrls[] = {
     // "chrome://signin-dice-web-intercept",
     "chrome://signin-internals",
     "chrome://site-engagement",
-    "chrome://suggestions",
     // TODO(crbug.com/1099564): Navigating to chrome://sync-confirmation and
     // quickly navigating away cause DCHECK failure.
     // "chrome://sync-confirmation",
@@ -289,7 +310,6 @@ static constexpr const char* const kChromeUrls[] = {
     "chrome://internet-config-dialog",
     "chrome://internet-detail-dialog",
     "chrome://linux-proxy-config",
-    "chrome://machine-learning-internals",
     "chrome://multidevice-setup",
     "chrome://network",
     "chrome://oobe",
@@ -313,12 +333,16 @@ static constexpr const char* const kChromeUrls[] = {
 #if !defined(OS_MAC)
     "chrome://sandbox",
     "chrome://nacl",
+    // TODO(https://crbug.com/1219651): this test is flaky on mac.
+    "chrome://bluetooth-internals",
 #endif
 #if defined(OS_WIN)
     "chrome://conflicts",
 #endif
 };
 
-INSTANTIATE_TEST_SUITE_P(,
-                         ChromeURLDataManagerWebUITrustedTypesTest,
-                         ::testing::ValuesIn(kChromeUrls));
+INSTANTIATE_TEST_SUITE_P(
+    ,
+    ChromeURLDataManagerWebUITrustedTypesTest,
+    ::testing::ValuesIn(kChromeUrls),
+    ChromeURLDataManagerWebUITrustedTypesTest::ParamInfoToString);

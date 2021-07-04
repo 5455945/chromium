@@ -18,7 +18,9 @@ namespace password_manager {
 
 // Simple password store implementation that delegates everything to
 // the LoginDatabase.
-class PasswordStoreImpl : public PasswordStore {
+// TODO(crbug.com/1217071): Currently, only implicitly inherits from protected
+// PasswordStoreSync but should be explicit.
+class PasswordStoreImpl : public PasswordStore, public PasswordStoreBackend {
  public:
   // The |login_db| must not have been Init()-ed yet. It will be initialized in
   // a deferred manner on the background sequence.
@@ -33,8 +35,7 @@ class PasswordStoreImpl : public PasswordStore {
   ~PasswordStoreImpl() override;
 
   // Opens |login_db_| on the background sequence.
-  bool InitOnBackgroundSequence(
-      bool upload_phished_credentials_to_sync) override;
+  bool InitOnBackgroundSequence() override;
 
   // Implements PasswordStore interface.
   void ReportMetricsImpl(const std::string& sync_username,
@@ -59,24 +60,19 @@ class PasswordStoreImpl : public PasswordStore {
       base::Time delete_begin,
       base::Time delete_end) override;
   std::vector<std::unique_ptr<PasswordForm>> FillMatchingLogins(
-      const FormDigest& form) override;
+      const PasswordFormDigest& form) override;
   std::vector<std::unique_ptr<PasswordForm>> FillMatchingLoginsByPassword(
-      const base::string16& plain_text_password) override;
-  bool FillAutofillableLogins(
-      std::vector<std::unique_ptr<PasswordForm>>* forms) override;
-  bool FillBlocklistLogins(
-      std::vector<std::unique_ptr<PasswordForm>>* forms) override;
+      const std::u16string& plain_text_password) override;
   DatabaseCleanupResult DeleteUndecryptableLogins() override;
   void AddSiteStatsImpl(const InteractionsStats& stats) override;
   void RemoveSiteStatsImpl(const GURL& origin_domain) override;
-  std::vector<InteractionsStats> GetAllSiteStatsImpl() override;
   std::vector<InteractionsStats> GetSiteStatsImpl(
       const GURL& origin_domain) override;
   PasswordStoreChangeList AddInsecureCredentialImpl(
       const InsecureCredential& insecure_credential) override;
   PasswordStoreChangeList RemoveInsecureCredentialsImpl(
       const std::string& signon_realm,
-      const base::string16& username,
+      const std::u16string& username,
       RemoveInsecureCredentialsReason reason) override;
   std::vector<InsecureCredential> GetAllInsecureCredentialsImpl() override;
   std::vector<InsecureCredential> GetMatchingInsecureCredentialsImpl(
@@ -104,8 +100,26 @@ class PasswordStoreImpl : public PasswordStore {
   bool DeleteAndRecreateDatabaseFile() override;
 
  private:
+  // Implements PasswordStoreBackend interface.
+
+  void GetAllLoginsAsync(LoginsReply callback) override;
+  void GetAutofillableLoginsAsync(LoginsReply callback) override;
+  void FillMatchingLoginsAsync(
+      LoginsReply callback,
+      const std::vector<PasswordFormDigest>& forms) override;
+
   // Resets |login_db_| on the background sequence.
   void ResetLoginDB();
+
+  // Synchronous implementation of GetAllLoginsAsync.
+  LoginsResult GetAllLoginsInternal();
+
+  // Synchronous implementation of GetAutofillableLoginsAsync.
+  LoginsResult GetAutofillableLoginsInternal();
+
+  // Synchronous implementation of FillMatchingLoginsAsync.
+  LoginsResult FillMatchingLoginsInternal(
+      const std::vector<PasswordFormDigest>& forms);
 
   // The login SQL database. The LoginDatabase instance is received via the
   // in an uninitialized state, so as to allow injecting mocks, then Init() is

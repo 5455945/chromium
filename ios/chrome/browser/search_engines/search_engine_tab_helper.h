@@ -6,7 +6,7 @@
 #define IOS_CHROME_BROWSER_SEARCH_ENGINES_SEARCH_ENGINE_TAB_HELPER_H_
 
 #include "base/macros.h"
-#include "base/scoped_observer.h"
+#include "base/scoped_observation.h"
 #include "components/favicon/ios/web_favicon_driver.h"
 #include "ios/web/public/web_state_observer.h"
 #import "ios/web/public/web_state_user_data.h"
@@ -58,7 +58,7 @@ class SearchEngineTabHelper
   // Handles messages from JavaScript. Messages can be:
   //   1. A OSDD <link> is found;
   //   2. A searchable URL is generated from <form> submission.
-  void OnJsMessage(const base::DictionaryValue& message,
+  void OnJsMessage(const base::Value& message,
                    const GURL& page_url,
                    bool user_is_interacting,
                    web::WebFrame* sender_frame);
@@ -71,8 +71,9 @@ class SearchEngineTabHelper
                         const gfx::Image& image) override;
 
   // Manages observation relationship between |this| and WebFaviconDriver.
-  ScopedObserver<favicon::FaviconDriver, favicon::FaviconDriverObserver>
-      favicon_driver_observer_{this};
+  base::ScopedObservation<favicon::FaviconDriver,
+                          favicon::FaviconDriverObserver>
+      favicon_driver_observation_{this};
 
   // WebState this tab helper is attached to.
   web::WebState* web_state_ = nullptr;

@@ -7,9 +7,9 @@
 import {flush} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import {MultiStorePasswordUiEntry, PasswordManagerImpl, Router, routes, SyncBrowserProxyImpl} from 'chrome://settings/settings.js';
 import {createMultiStorePasswordEntry, createPasswordEntry, PasswordDeviceSectionElementFactory} from 'chrome://test/settings/passwords_and_autofill_fake_data.js';
-import {simulateStoredAccounts, simulateSyncStatus} from 'chrome://test/settings/sync_test_util.m.js';
+import {simulateStoredAccounts, simulateSyncStatus} from 'chrome://test/settings/sync_test_util.js';
 import {TestPasswordManagerProxy} from 'chrome://test/settings/test_password_manager_proxy.js';
-import {TestSyncBrowserProxy} from 'chrome://test/settings/test_sync_browser_proxy.m.js';
+import {TestSyncBrowserProxy} from 'chrome://test/settings/test_sync_browser_proxy.js';
 import {eventToPromise} from 'chrome://test/test_util.m.js';
 import {assertEquals, assertTrue} from '../chai_assert.js';
 
@@ -258,8 +258,8 @@ suite('PasswordsDeviceSection', function() {
         syncBrowserProxy, passwordManager, [deviceCopy, accountCopy]);
 
     // At first the dialog is not shown.
-    assertFalse(!!passwordsDeviceSection.$.passwordsListHandler.$$(
-        '#passwordMoveToAccountDialog'));
+    assertFalse(!!passwordsDeviceSection.$.passwordsListHandler.shadowRoot
+                      .querySelector('#passwordMoveToAccountDialog'));
 
     // Click the option in the overflow menu to move the password. Verify the
     // dialog is now open.
@@ -270,7 +270,7 @@ suite('PasswordsDeviceSection', function() {
         .click();
     flush();
     const moveToAccountDialog =
-        passwordsDeviceSection.$.passwordsListHandler.$$(
+        passwordsDeviceSection.$.passwordsListHandler.shadowRoot.querySelector(
             '#passwordMoveToAccountDialog');
     assertTrue(!!moveToAccountDialog);
 
@@ -341,7 +341,8 @@ suite('PasswordsDeviceSection', function() {
     const moveMultipleDialog = elementFactory.createMoveMultiplePasswordsDialog(
         [deviceEntry1, deviceEntry2]);
     // Uncheck the first entry.
-    const firstPasswordItem = moveMultipleDialog.$$('password-list-item');
+    const firstPasswordItem =
+        moveMultipleDialog.shadowRoot.querySelector('password-list-item');
     firstPasswordItem.querySelector('cr-checkbox').click();
     // Press the Move button
     moveMultipleDialog.$.moveButton.click();
@@ -361,7 +362,8 @@ suite('PasswordsDeviceSection', function() {
         {url: 'goo.gl', username: 'bart', deviceId: 42});
     const moveMultipleDialog =
         elementFactory.createMoveMultiplePasswordsDialog([deviceEntry]);
-    const firstPasswordItem = moveMultipleDialog.$$('password-list-item');
+    const firstPasswordItem =
+        moveMultipleDialog.shadowRoot.querySelector('password-list-item');
     assertTrue(firstPasswordItem.$.moreActionsButton.hidden);
   });
 

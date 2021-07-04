@@ -29,6 +29,7 @@
 #include "third_party/blink/renderer/core/layout/bidi_run_for_line.h"
 #include "third_party/blink/renderer/core/layout/layout_list_item.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
+#include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
 #include "third_party/blink/renderer/core/layout/layout_ruby_run.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/layout/line/breaking_context_inline_headers.h"
@@ -59,7 +60,8 @@ class ExpansionOpportunities {
     unsigned opportunities_in_run;
     if (text.Is8Bit()) {
       opportunities_in_run = Character::ExpansionOpportunityCount(
-          {text.Characters8() + run.start_, run.stop_ - run.start_},
+          {text.Characters8() + run.start_,
+           static_cast<size_t>(run.stop_ - run.start_)},
           run.box_->Direction(), is_after_expansion, text_justify);
     } else if (run.line_layout_item_.IsCombineText()) {
       // Justfication applies to before and after the combined text as if
@@ -69,7 +71,8 @@ class ExpansionOpportunities {
       is_after_expansion = true;
     } else {
       opportunities_in_run = Character::ExpansionOpportunityCount(
-          {text.Characters16() + run.start_, run.stop_ - run.start_},
+          {text.Characters16() + run.start_,
+           static_cast<size_t>(run.stop_ - run.start_)},
           run.box_->Direction(), is_after_expansion, text_justify);
     }
     runs_with_expansions_.push_back(opportunities_in_run);
@@ -335,7 +338,7 @@ RootInlineBox* LayoutBlockFlow::ConstructLine(BidiRunList<BidiRun>& bidi_runs,
 
     if (box->IsInlineTextBox()) {
       if (AXObjectCache* cache = GetDocument().ExistingAXObjectCache())
-        cache->InlineTextBoxesUpdated(r->line_layout_item_);
+        cache->InlineTextBoxesUpdated(r->line_layout_item_.GetLayoutObject());
     }
   }
 
@@ -2197,6 +2200,10 @@ RootInlineBox* LayoutBlockFlow::DetermineStartPosition(
 
     // If we have no dirty lines, then last is just the last root box.
     last = curr ? curr->PrevRootBox() : LastRootBox();
+#if DCHECK_IS_ON()
+    if (last && last->LineBreakObj().GetLayoutObject())
+      last->LineBreakObj().GetLayoutObject()->CheckIsNotDestroyed();
+#endif
   }
 
   unsigned num_clean_floats = 0;
@@ -2428,6 +2435,7 @@ void LayoutBlockFlow::AddVisualOverflowFromInlineChildren() {
     // direction only for now.
     for (const NGPhysicalBoxFragment& fragment : PhysicalFragments()) {
       if (const NGFragmentItems* items = fragment.Items()) {
+        PhysicalRect children_rect;
         for (NGInlineCursor cursor(fragment, *items); cursor;
              cursor.MoveToNextSkippingChildren()) {
           const NGFragmentItem* child = cursor.CurrentItem();
@@ -2437,9 +2445,10 @@ void LayoutBlockFlow::AddVisualOverflowFromInlineChildren() {
           PhysicalRect child_rect = child->InkOverflow();
           if (!child_rect.IsEmpty()) {
             child_rect.offset += child->OffsetInContainerFragment();
-            AddContentsVisualOverflow(child_rect);
+            children_rect.Unite(child_rect);
           }
         }
+        AddContentsVisualOverflow(children_rect);
       } else if (fragment.HasFloatingDescendantsForPaint()) {
         AddVisualOverflowFromFloats(fragment);
       }

@@ -129,6 +129,16 @@ id<GREYMatcher> SearchIconButton() {
       assertWithMatcher:grey_nil()];
 }
 
+- (void)openBookmarksInWindowWithNumber:(int)windowNumber {
+  // Opens the bookmark manager.
+  [ChromeEarlGreyUI openToolsMenuInWindowWithNumber:windowNumber];
+  [ChromeEarlGreyUI tapToolsMenuButton:BookmarksMenuButton()];
+
+  // Assert the menu is gone.
+  [[EarlGrey selectElementWithMatcher:BookmarksMenuButton()]
+      assertWithMatcher:grey_nil()];
+}
+
 - (void)openMobileBookmarks {
   [[EarlGrey
       selectElementWithMatcher:grey_allOf(
@@ -440,33 +450,39 @@ id<GREYMatcher> SearchIconButton() {
 }
 
 - (void)verifyEmptyBackgroundAppears {
-  if ([ChromeEarlGrey isIllustratedEmptyStatesEnabled]) {
-    [[EarlGrey selectElementWithMatcher:grey_accessibilityID(
-                                            kTableViewIllustratedEmptyViewID)]
-        assertWithMatcher:grey_notNil()];
-    [[EarlGrey selectElementWithMatcher:grey_text(l10n_util::GetNSString(
-                                            IDS_IOS_BOOKMARK_EMPTY_MESSAGE))]
-        assertWithMatcher:grey_sufficientlyVisible()];
-  } else {
-    [[EarlGrey
-        selectElementWithMatcher:
-            grey_accessibilityID(kBookmarkEmptyStateExplanatoryLabelIdentifier)]
-        assertWithMatcher:grey_sufficientlyVisible()];
-  }
+  [[EarlGrey selectElementWithMatcher:grey_accessibilityID(
+                                          kTableViewIllustratedEmptyViewID)]
+      assertWithMatcher:grey_notNil()];
+
+  [[EarlGrey selectElementWithMatcher:grey_text(l10n_util::GetNSString(
+                                          IDS_IOS_BOOKMARK_EMPTY_TITLE))]
+      assertWithMatcher:grey_sufficientlyVisible()];
+
+  [[EarlGrey selectElementWithMatcher:grey_text(l10n_util::GetNSString(
+                                          IDS_IOS_BOOKMARK_EMPTY_MESSAGE))]
+      assertWithMatcher:grey_sufficientlyVisible()];
+}
+
+- (void)verifyEmptyBackgroundIsAbsent {
+  [[EarlGrey selectElementWithMatcher:grey_accessibilityID(
+                                          kTableViewIllustratedEmptyViewID)]
+      assertWithMatcher:grey_nil()];
+
+  [[EarlGrey selectElementWithMatcher:grey_text(l10n_util::GetNSString(
+                                          IDS_IOS_BOOKMARK_EMPTY_TITLE))]
+      assertWithMatcher:grey_nil()];
+
+  [[EarlGrey selectElementWithMatcher:grey_text(l10n_util::GetNSString(
+                                          IDS_IOS_BOOKMARK_EMPTY_MESSAGE))]
+      assertWithMatcher:grey_nil()];
 }
 
 - (void)verifyEmptyState {
   [self verifyEmptyBackgroundAppears];
 
-  id<GREYInteraction> searchBar =
-      [EarlGrey selectElementWithMatcher:grey_accessibilityTrait(
-                                             UIAccessibilityTraitSearchField)];
   // TODO(crbug.com/1126982): Fix the search bar issue on iOS 12.4.
   // The search bar should not be visible when the illustrated empty state is
   // shown.
-  if (![ChromeEarlGrey isIllustratedEmptyStatesEnabled]) {
-    [searchBar assertWithMatcher:grey_notNil()];
-  }
 }
 
 - (void)verifyBookmarkFolderIsSeen:(NSString*)bookmarkFolder {

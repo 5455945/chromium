@@ -9,6 +9,7 @@
 #include "base/run_loop.h"
 #include "base/values.h"
 #include "chrome/browser/net/system_network_context_manager.h"
+#include "chrome/browser/password_manager/password_store_factory.h"
 #include "chrome/browser/safe_browsing/safe_browsing_blocking_page.h"
 #include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
 #include "chrome/browser/safe_browsing/ui_manager.h"
@@ -16,8 +17,10 @@
 #include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/password_manager/core/browser/mock_password_store.h"
+#include "components/password_manager/core/browser/password_manager_test_utils.h"
+#include "components/safe_browsing/core/browser/db/util.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
-#include "components/safe_browsing/core/db/util.h"
 #include "components/security_interstitials/content/unsafe_resource_util.h"
 #include "components/security_interstitials/core/base_safe_browsing_error_ui.h"
 #include "components/security_interstitials/core/unsafe_resource.h"
@@ -113,6 +116,11 @@ class SafeBrowsingUIManagerTest : public ChromeRenderViewHostTestHarness {
         Profile::FromBrowserContext(web_contents()->GetBrowserContext()));
     content::BrowserThread::RunAllPendingTasksOnThreadForTesting(
         content::BrowserThread::IO);
+    PasswordStoreFactory::GetInstance()->SetTestingFactoryAndUse(
+        profile(),
+        base::BindRepeating(
+            &password_manager::BuildPasswordStore<
+                content::BrowserContext, password_manager::MockPasswordStore>));
   }
 
   void TearDown() override {
@@ -573,7 +581,8 @@ TEST_F(SafeBrowsingUIManagerTest, NoInterstitialInExtensions) {
   std::string error;
   scoped_refptr<extensions::Extension> app;
   app = extensions::Extension::Create(
-      base::FilePath(), extensions::Manifest::COMPONENT, manifest, 0, &error);
+      base::FilePath(), extensions::mojom::ManifestLocation::kComponent,
+      manifest, 0, &error);
   extensions::ProcessManager* extension_manager =
       extensions::ProcessManager::Get(web_contents()->GetBrowserContext());
   extension_manager->CreateBackgroundHost(app.get(), GURL("background.html"));

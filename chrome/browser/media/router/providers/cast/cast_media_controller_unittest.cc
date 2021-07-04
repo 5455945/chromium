@@ -4,6 +4,10 @@
 
 #include "chrome/browser/media/router/providers/cast/cast_media_controller.h"
 
+#include <memory>
+#include <utility>
+#include <vector>
+
 #include "base/json/json_reader.h"
 #include "chrome/browser/media/router/providers/cast/app_activity.h"
 #include "chrome/browser/media/router/providers/cast/mock_app_activity.h"
@@ -17,6 +21,7 @@
 using base::Value;
 using testing::_;
 using testing::Invoke;
+using testing::NiceMock;
 using testing::WithArg;
 
 namespace media_router {
@@ -125,7 +130,7 @@ mojom::MediaStatusPtr CreateSampleMediaStatus() {
 std::unique_ptr<CastSession> CreateSampleSession() {
   MediaSinkInternal sink(MediaSink("sinkId123", "name", SinkIconType::CAST),
                          CastSinkExtraData());
-  base::Optional<Value> receiver_status = base::JSONReader::Read(R"({
+  absl::optional<Value> receiver_status = base::JSONReader::Read(R"({
     "applications": [{
       "appId": "ABCD1234",
       "displayName": "My App",
@@ -154,7 +159,7 @@ class CastMediaControllerTest : public testing::Test {
     testing::Test::SetUp();
 
     mojo::PendingRemote<mojom::MediaStatusObserver> mojo_status_observer;
-    status_observer_ = std::make_unique<MockMediaStatusObserver>(
+    status_observer_ = std::make_unique<NiceMock<MockMediaStatusObserver>>(
         mojo_status_observer.InitWithNewPipeAndPassReceiver());
     controller_ = std::make_unique<CastMediaController>(
         &activity_, mojo_controller_.BindNewPipeAndPassReceiver(),
@@ -191,7 +196,7 @@ class CastMediaControllerTest : public testing::Test {
 
  protected:
   content::BrowserTaskEnvironment task_environment_;
-  MockAppActivity activity_;
+  NiceMock<MockAppActivity> activity_;
   std::unique_ptr<CastMediaController> controller_;
   mojo::Remote<mojom::MediaController> mojo_controller_;
   std::unique_ptr<MockMediaStatusObserver> status_observer_;
@@ -347,7 +352,7 @@ TEST_F(CastMediaControllerTest, UpdateMediaImages) {
         EXPECT_EQ(image1.size->width(), status->images.at(0)->size->width());
         EXPECT_EQ(image1.size->height(), status->images.at(0)->size->height());
         EXPECT_EQ(image2.url.spec(), status->images.at(1)->url.spec());
-        EXPECT_EQ(base::nullopt, status->images.at(1)->size);
+        EXPECT_EQ(absl::nullopt, status->images.at(1)->size);
       });
   SetMediaStatus(*expected_status);
   VerifyAndClearExpectations();

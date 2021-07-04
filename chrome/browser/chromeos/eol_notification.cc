@@ -9,9 +9,9 @@
 #include "base/i18n/time_formatting.h"
 #include "base/time/default_clock.h"
 #include "chrome/app/vector_icons/vector_icons.h"
+#include "chrome/browser/ash/policy/core/browser_policy_connector_chromeos.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
 #include "chrome/browser/notifications/notification_display_service.h"
 #include "chrome/browser/notifications/notification_display_service_factory.h"
 #include "chrome/browser/ui/browser_navigator.h"
@@ -54,7 +54,7 @@ bool EolNotification::ShouldShowEolNotification() {
   // enterprise user.
   if (g_browser_process->platform_part()
           ->browser_policy_connector_chromeos()
-          ->IsEnterpriseManaged()) {
+          ->IsDeviceEnterpriseManaged()) {
     return false;
   }
 
@@ -102,7 +102,7 @@ void EolNotification::OnEolInfo(UpdateEngineClient::EolInfo eol_info) {
     dismiss_pref_ = prefs::kFirstEolWarningDismissed;
   } else {
     // |now| < FirstWarningDate() so don't show anything.
-    dismiss_pref_ = base::nullopt;
+    dismiss_pref_ = absl::nullopt;
     return;
   }
 
@@ -133,7 +133,7 @@ void EolNotification::CreateNotification(base::Time eol_date, base::Time now) {
                                    /*time_zone=*/icu::TimeZone::getGMT())),
         l10n_util::GetStringFUTF16(IDS_PENDING_EOL_NOTIFICATION_MESSAGE,
                                    ui::GetChromeOSDeviceName()),
-        base::string16() /* display_source */, GURL(kEolNotificationId),
+        std::u16string() /* display_source */, GURL(kEolNotificationId),
         message_center::NotifierId(
             message_center::NotifierType::SYSTEM_COMPONENT, kEolNotificationId),
         data,
@@ -151,7 +151,7 @@ void EolNotification::CreateNotification(base::Time eol_date, base::Time now) {
         GetStringUTF16(IDS_EOL_NOTIFICATION_TITLE),
         l10n_util::GetStringFUTF16(IDS_EOL_NOTIFICATION_EOL,
                                    ui::GetChromeOSDeviceName()),
-        base::string16() /* display_source */, GURL(kEolNotificationId),
+        std::u16string() /* display_source */, GURL(kEolNotificationId),
         message_center::NotifierId(
             message_center::NotifierType::SYSTEM_COMPONENT, kEolNotificationId),
         data,
@@ -178,8 +178,8 @@ void EolNotification::Close(bool by_user) {
   profile_->GetPrefs()->SetBoolean(*dismiss_pref_, true);
 }
 
-void EolNotification::Click(const base::Optional<int>& button_index,
-                            const base::Optional<base::string16>& reply) {
+void EolNotification::Click(const absl::optional<int>& button_index,
+                            const absl::optional<std::u16string>& reply) {
   if (!button_index)
     return;
 

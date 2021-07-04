@@ -4,6 +4,8 @@
 
 #include "ui/ozone/platform/wayland/gpu/gbm_surfaceless_wayland.h"
 
+#include <sync/sync.h>
+#include <cmath>
 #include <memory>
 
 #include "base/bind.h"
@@ -186,6 +188,10 @@ bool GbmSurfacelessWayland::SupportsOverridePlatformSize() const {
   return true;
 }
 
+bool GbmSurfacelessWayland::SupportsViewporter() const {
+  return buffer_manager_->supports_viewporter();
+}
+
 gfx::SurfaceOrigin GbmSurfacelessWayland::GetOrigin() const {
   // GbmSurfacelessWayland's y-axis is flipped compare to GL - (0,0) is at top
   // left corner.
@@ -240,6 +246,10 @@ void GbmSurfacelessWayland::MaybeSubmitFrames() {
       overlay_configs.back()->buffer_id = plane.first;
       if (plane.second.z_order == 0)
         overlay_configs.back()->damage_region = submitted_frame->damage_region_;
+#if DCHECK_IS_ON()
+      if (plane.second.z_order == INT32_MIN)
+        background_buffer_id_ = plane.first;
+#endif
       plane.second.gpu_fence.reset();
     }
 
@@ -266,10 +276,11 @@ void GbmSurfacelessWayland::SetNoGLFlushForTests() {
 }
 
 void GbmSurfacelessWayland::OnSubmission(BufferId buffer_id,
-                                         const gfx::SwapResult& swap_result) {
+                                         const gfx::SwapResult& swap_result,
+                                         gfx::GpuFenceHandle release_fence) {
   // submitted_frames_ may temporarily have more than one buffer in it if
   // buffers are released out of order by the Wayland server.
-  DCHECK(!submitted_frames_.empty());
+  DCHECK(!submitted_frames_.empty() || background_buffer_id_ == buffer_id);
 
   size_t erased = 0;
   for (auto& submitted_frame : submitted_frames_) {
@@ -284,6 +295,19 @@ void GbmSurfacelessWayland::OnSubmission(BufferId buffer_id,
         submitted_frame->swap_result = swap_result;
       }
       submitted_frame->pending_presentation_buffers.insert(buffer_id);
+
+      // Accumulate release fences into a single fence.
+      if (!release_fence.is_null()) {
+        if (submitted_frame->merged_release_fence_fd.is_valid()) {
+          submitted_frame->merged_release_fence_fd.reset(
+              sync_merge("", submitted_frame->merged_release_fence_fd.get(),
+                         release_fence.owned_fd.get()));
+        } else {
+          submitted_frame->merged_release_fence_fd =
+              std::move(release_fence.owned_fd);
+        }
+        DCHECK(submitted_frame->merged_release_fence_fd.is_valid());
+      }
       break;
     }
   }
@@ -299,8 +323,13 @@ void GbmSurfacelessWayland::OnSubmission(BufferId buffer_id,
     submitted_frames_.erase(submitted_frames_.begin());
     submitted_frame->overlays.clear();
 
+    gfx::GpuFenceHandle release_fence;
+    if (submitted_frame->merged_release_fence_fd.is_valid())
+      release_fence.owned_fd =
+          std::move(submitted_frame->merged_release_fence_fd);
     std::move(submitted_frame->completion_callback)
-        .Run(gfx::SwapCompletionResult(submitted_frame->swap_result));
+        .Run(gfx::SwapCompletionResult(submitted_frame->swap_result,
+                                       std::move(release_fence)));
 
     pending_presentation_frames_.push_back(std::move(submitted_frame));
   }
@@ -316,7 +345,8 @@ void GbmSurfacelessWayland::OnSubmission(BufferId buffer_id,
 void GbmSurfacelessWayland::OnPresentation(
     BufferId buffer_id,
     const gfx::PresentationFeedback& feedback) {
-  DCHECK(!submitted_frames_.empty() || !pending_presentation_frames_.empty());
+  DCHECK(!submitted_frames_.empty() || !pending_presentation_frames_.empty() ||
+         background_buffer_id_ == buffer_id);
 
   size_t erased = 0;
   for (auto& frame : pending_presentation_frames_) {

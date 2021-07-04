@@ -23,7 +23,7 @@ import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.base.task.PostTask;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.IntentHandler;
-import org.chromium.chrome.browser.browserservices.BrowserServicesIntentDataProvider;
+import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
 import org.chromium.chrome.browser.customtabs.CloseButtonNavigator;
 import org.chromium.chrome.browser.customtabs.CustomTabObserver;
 import org.chromium.chrome.browser.customtabs.CustomTabsConnection;
@@ -41,6 +41,7 @@ import org.chromium.content_public.browser.RenderFrameHost;
 import org.chromium.content_public.browser.UiThreadTaskTraits;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.base.PageTransition;
+import org.chromium.url.GURL;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -182,28 +183,9 @@ public class CustomTabActivityNavigationController implements StartStopWithNativ
         params.setTransitionType(IntentHandler.getTransitionTypeFromIntent(
                 mIntentDataProvider.getIntent(), transition));
 
-        applyExperimentsToNewTab(tab, mIntentDataProvider);
+        IntentHandler.setAttributionParamsFromIntent(params, mIntentDataProvider.getIntent());
 
         tab.loadUrl(params);
-    }
-
-    /**
-     * Configures various experiments in tab based on provider. This is intended to be called when a
-     * new tab is created.
-     */
-    public static void applyExperimentsToNewTab(
-            Tab tab, BrowserServicesIntentDataProvider provider) {
-        if (provider.shouldHideOmniboxSuggestionsForCctVisits()) {
-            tab.setAddApi2TransitionToFutureNavigations(true);
-        }
-
-        if (provider.shouldHideCctVisits()) {
-            tab.setHideFutureNavigations(true);
-        }
-
-        if (provider.shouldBlockNewNotificationRequests()) {
-            tab.setShouldBlockNewNotificationRequests(true);
-        }
     }
 
     /**
@@ -258,10 +240,11 @@ public class CustomTabActivityNavigationController implements StartStopWithNativ
         Tab tab = mTabProvider.getTab();
         if (tab == null) return false;
 
-        String url = tab.getUrlString();
-        if (DomDistillerUrlUtils.isDistilledPage(url)) {
-            url = DomDistillerUrlUtils.getOriginalUrlFromDistillerUrl(url);
+        GURL gurl = tab.getUrl();
+        if (DomDistillerUrlUtils.isDistilledPage(gurl)) {
+            gurl = DomDistillerUrlUtils.getOriginalUrlFromDistillerUrl(gurl);
         }
+        String url = gurl.getSpec();
         if (TextUtils.isEmpty(url)) url = mIntentDataProvider.getUrlToLoad();
         Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
         intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -270,12 +253,18 @@ public class CustomTabActivityNavigationController implements StartStopWithNativ
         boolean willChromeHandleIntent =
                 mIntentDataProvider.isOpenedByChrome() || mIntentDataProvider.isIncognito();
 
+        // If the tab is opened by TWA or Webapp, do not reparent and finish the Custom Tab
+        // activity because we still want to keep the app alive.
+        boolean canFinishActivity = !mIntentDataProvider.isTrustedWebActivity()
+                && !mIntentDataProvider.isWebappOrWebApkActivity();
+
         willChromeHandleIntent |=
                 ExternalNavigationDelegateImpl.willChromeHandleIntent(intent, true);
 
         Bundle startActivityOptions = ActivityOptionsCompat.makeCustomAnimation(
                 mActivity, R.anim.abc_fade_in, R.anim.abc_fade_out).toBundle();
-        if (willChromeHandleIntent || forceReparenting) {
+
+        if (canFinishActivity && willChromeHandleIntent || forceReparenting) {
             // Remove observer to not trigger finishing in onAllTabsClosed() callback - we'll use
             // reparenting finish callback instead.
             mTabProvider.removeObserver(mTabObserver);

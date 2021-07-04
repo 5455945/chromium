@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// #import {loadTimeData} from 'chrome://resources/js/load_time_data.m.js';
-// #import {AsyncUtil} from '../../common/js/async_util.m.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.m.js';
+import {AsyncUtil} from '../../common/js/async_util.js';
 
 /**
  * FilesPasswordDialog template.
@@ -57,7 +57,7 @@ const filesPasswordDialogTemplate = `
  * FilesPasswordDialog.USER_CANCELLED.
  * @extends HTMLElement
  */
-/* #export */ class FilesPasswordDialog extends HTMLElement {
+export class FilesPasswordDialog extends HTMLElement {
   constructor() {
     /*
      * Create element content.
@@ -98,15 +98,20 @@ const filesPasswordDialogTemplate = `
 
     /**
      * Password dialog.
-     * @private {?CrDialogElement}
+     * @private {!CrDialogElement}
      */
-    this.dialog_ = null;
+    this.dialog_ = /** @type {!CrDialogElement} */
+        (this.shadowRoot.querySelector('#password-dialog'));
+    this.dialog_.consumeKeydownEvent = true;
 
     /**
      * Input field for password.
-     * @private {?CrInputElement}
+     * @private {!CrInputElement}
      */
-    this.input_ = null;
+    this.input_ = /** @type {!CrInputElement} */
+        (this.shadowRoot.querySelector('#input'));
+    this.input_.errorMessage =
+        loadTimeData.getString('PASSWORD_DIALOG_INVALID');
   }
 
   get mutex() {
@@ -122,19 +127,13 @@ const filesPasswordDialogTemplate = `
    * @private
    */
   connectedCallback() {
-    this.dialog_ = /** @type {!CrDialogElement} */ (
-        this.shadowRoot.querySelector('#password-dialog'));
-    this.input_ = /** @type {!CrInputElement} */ (
-        this.shadowRoot.querySelector('#input'));
-
     const cancelButton = this.shadowRoot.querySelector('#cancel');
     cancelButton.onclick = () => this.cancel_();
+
     const unlockButton = this.shadowRoot.querySelector('#unlock');
     unlockButton.onclick = () => this.unlock_();
 
     this.dialog_.addEventListener('close', () => this.onClose_());
-    this.input_.errorMessage =
-        loadTimeData.getString('PASSWORD_DIALOG_INVALID');
   }
 
   /**

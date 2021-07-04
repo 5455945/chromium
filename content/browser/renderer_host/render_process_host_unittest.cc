@@ -15,7 +15,6 @@
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "content/browser/child_process_security_policy_impl.h"
-#include "content/common/frame_messages.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/common/content_client.h"
@@ -39,9 +38,7 @@ namespace content {
 class RenderProcessHostUnitTest : public RenderViewHostImplTestHarness {
  public:
   scoped_refptr<SiteInstanceImpl> CreateForUrl(const GURL& url) {
-    return SiteInstanceImpl::CreateForUrlInfo(
-        browser_context(), UrlInfo::CreateForTesting(url),
-        CoopCoepCrossOriginIsolatedInfo::CreateNonIsolated());
+    return SiteInstanceImpl::CreateForTesting(browser_context(), url);
   }
 };
 
@@ -210,7 +207,7 @@ TEST_F(RenderProcessHostUnitTest, ReuseUnmatchedServiceWorkerProcess) {
   scoped_refptr<SiteInstanceImpl> sw_site_instance1 =
       SiteInstanceImpl::CreateForServiceWorker(
           browser_context(), kUrl,
-          CoopCoepCrossOriginIsolatedInfo::CreateNonIsolated());
+          WebExposedIsolationInfo::CreateNonIsolated());
   RenderProcessHost* sw_host1 = sw_site_instance1->GetProcess();
   EXPECT_EQ(SiteInstanceProcessAssignment::CREATED_NEW_PROCESS,
             sw_site_instance1->GetLastProcessAssignmentOutcome());
@@ -221,7 +218,7 @@ TEST_F(RenderProcessHostUnitTest, ReuseUnmatchedServiceWorkerProcess) {
   scoped_refptr<SiteInstanceImpl> sw_site_instance2 =
       SiteInstanceImpl::CreateForServiceWorker(
           browser_context(), kUrl,
-          CoopCoepCrossOriginIsolatedInfo::CreateNonIsolated());
+          WebExposedIsolationInfo::CreateNonIsolated());
   RenderProcessHost* sw_host2 = sw_site_instance2->GetProcess();
   EXPECT_NE(sw_host1, sw_host2);
   EXPECT_EQ(SiteInstanceProcessAssignment::CREATED_NEW_PROCESS,
@@ -274,7 +271,7 @@ TEST_F(RenderProcessHostUnitTest,
   scoped_refptr<SiteInstanceImpl> sw_site_instance =
       SiteInstanceImpl::CreateForServiceWorker(
           browser_context(), kUrl,
-          CoopCoepCrossOriginIsolatedInfo::CreateNonIsolated());
+          WebExposedIsolationInfo::CreateNonIsolated());
   RenderProcessHost* sw_host = sw_site_instance->GetProcess();
   EXPECT_EQ(SiteInstanceProcessAssignment::CREATED_NEW_PROCESS,
             sw_site_instance->GetLastProcessAssignmentOutcome());
@@ -309,8 +306,7 @@ TEST_F(RenderProcessHostUnitTest, ReuseServiceWorkerProcessForServiceWorker) {
   // Gets a RenderProcessHost for a service worker.
   scoped_refptr<SiteInstanceImpl> sw_site_instance1 =
       SiteInstanceImpl::CreateForServiceWorker(
-          browser_context(), kUrl,
-          CoopCoepCrossOriginIsolatedInfo::CreateNonIsolated(),
+          browser_context(), kUrl, WebExposedIsolationInfo::CreateNonIsolated(),
           /* can_reuse_process */ true);
   RenderProcessHost* sw_host1 = sw_site_instance1->GetProcess();
   EXPECT_EQ(SiteInstanceProcessAssignment::CREATED_NEW_PROCESS,
@@ -324,7 +320,7 @@ TEST_F(RenderProcessHostUnitTest, ReuseServiceWorkerProcessForServiceWorker) {
   scoped_refptr<SiteInstanceImpl> sw_site_instance2 =
       SiteInstanceImpl::CreateForServiceWorker(
           browser_context(), kUrl,
-          CoopCoepCrossOriginIsolatedInfo::CreateNonIsolated());
+          WebExposedIsolationInfo::CreateNonIsolated());
   RenderProcessHost* sw_host2 = sw_site_instance2->GetProcess();
   EXPECT_NE(sw_host1, sw_host2);
   EXPECT_EQ(SiteInstanceProcessAssignment::CREATED_NEW_PROCESS,
@@ -335,8 +331,7 @@ TEST_F(RenderProcessHostUnitTest, ReuseServiceWorkerProcessForServiceWorker) {
   // unmatched service worker's process (i.e., sw_host2).
   scoped_refptr<SiteInstanceImpl> sw_site_instance3 =
       SiteInstanceImpl::CreateForServiceWorker(
-          browser_context(), kUrl,
-          CoopCoepCrossOriginIsolatedInfo::CreateNonIsolated(),
+          browser_context(), kUrl, WebExposedIsolationInfo::CreateNonIsolated(),
           /* can_reuse_process */ true);
   RenderProcessHost* sw_host3 = sw_site_instance3->GetProcess();
   EXPECT_EQ(sw_host2, sw_host3);
@@ -350,8 +345,7 @@ TEST_F(RenderProcessHostUnitTest, ReuseServiceWorkerProcessForServiceWorker) {
   // workers in that process.
   scoped_refptr<SiteInstanceImpl> sw_site_instance4 =
       SiteInstanceImpl::CreateForServiceWorker(
-          browser_context(), kUrl,
-          CoopCoepCrossOriginIsolatedInfo::CreateNonIsolated(),
+          browser_context(), kUrl, WebExposedIsolationInfo::CreateNonIsolated(),
           /* can_reuse_process */ true);
   RenderProcessHost* sw_host4 = sw_site_instance4->GetProcess();
   EXPECT_EQ(sw_host2, sw_host4);
@@ -385,7 +379,7 @@ TEST_F(RenderProcessHostUnitTest,
   scoped_refptr<SiteInstanceImpl> sw_site_instance1 =
       SiteInstanceImpl::CreateForServiceWorker(
           browser_context(), kUrl,
-          CoopCoepCrossOriginIsolatedInfo::CreateNonIsolated());
+          WebExposedIsolationInfo::CreateNonIsolated());
   RenderProcessHost* sw_host1 = sw_site_instance1->GetProcess();
   EXPECT_EQ(SiteInstanceProcessAssignment::CREATED_NEW_PROCESS,
             sw_site_instance1->GetLastProcessAssignmentOutcome());
@@ -395,7 +389,7 @@ TEST_F(RenderProcessHostUnitTest,
   scoped_refptr<SiteInstanceImpl> sw_site_instance2 =
       SiteInstanceImpl::CreateForServiceWorker(
           browser_context(), kUrl,
-          CoopCoepCrossOriginIsolatedInfo::CreateNonIsolated());
+          WebExposedIsolationInfo::CreateNonIsolated());
   RenderProcessHost* sw_host2 = sw_site_instance2->GetProcess();
   EXPECT_EQ(sw_host1, sw_host2);
   EXPECT_EQ(SiteInstanceProcessAssignment::REUSED_EXISTING_PROCESS,
@@ -426,7 +420,7 @@ TEST_F(RenderProcessHostUnitTest, DoNotReuseOtherSiteServiceWorkerProcess) {
   scoped_refptr<SiteInstanceImpl> sw_site_instance1 =
       SiteInstanceImpl::CreateForServiceWorker(
           browser_context(), kUrl1,
-          CoopCoepCrossOriginIsolatedInfo::CreateNonIsolated());
+          WebExposedIsolationInfo::CreateNonIsolated());
   RenderProcessHost* sw_host1 = sw_site_instance1->GetProcess();
   EXPECT_EQ(SiteInstanceProcessAssignment::CREATED_NEW_PROCESS,
             sw_site_instance1->GetLastProcessAssignmentOutcome());
@@ -451,7 +445,7 @@ TEST_F(RenderProcessHostUnitTest, DoNotReuseError) {
   const GURL kUrl2("http://bar.com");
 
   // Isolate |kUrl1| so we can't get a default SiteInstance for it.
-  ChildProcessSecurityPolicyImpl::GetInstance()->AddIsolatedOrigins(
+  ChildProcessSecurityPolicyImpl::GetInstance()->AddFutureIsolatedOrigins(
       {url::Origin::Create(kUrl1)},
       ChildProcessSecurityPolicy::IsolatedOriginSource::TEST,
       browser_context());
@@ -851,11 +845,12 @@ class StoragePartitionContentBrowserClient : public ContentBrowserClient {
       BrowserContext* browser_context,
       const GURL& site) override {
     if (site == site_) {
-      return StoragePartitionConfig::Create(partition_domain_, partition_name_,
+      return StoragePartitionConfig::Create(browser_context, partition_domain_,
+                                            partition_name_,
                                             false /* in_memory */);
     }
 
-    return StoragePartitionConfig::CreateDefault();
+    return StoragePartitionConfig::CreateDefault(browser_context);
   }
 
   GURL site_;
@@ -898,7 +893,7 @@ TEST_F(RenderProcessHostUnitTest,
   scoped_refptr<SiteInstanceImpl> sw_site_instance =
       SiteInstanceImpl::CreateForServiceWorker(
           browser_context(), kUrl,
-          CoopCoepCrossOriginIsolatedInfo::CreateNonIsolated());
+          WebExposedIsolationInfo::CreateNonIsolated());
   RenderProcessHost* sw_process = sw_site_instance->GetProcess();
 
   // Change foo.com SiteInstances to use a different StoragePartition.
@@ -1115,9 +1110,8 @@ TEST_F(SpareRenderProcessHostUnitTest,
   // unnecessary resource contention when 2 processes try to launch at the same
   // time).
   scoped_refptr<SiteInstanceImpl> site_instance =
-      SiteInstanceImpl::CreateForUrlInfo(
-          browser_context(), UrlInfo::CreateForTesting(GURL("http://foo.com")),
-          CoopCoepCrossOriginIsolatedInfo::CreateNonIsolated());
+      SiteInstanceImpl::CreateForTesting(browser_context(),
+                                         GURL("http://foo.com"));
   RenderProcessHost* site_instance_process = site_instance->GetProcess();
 
   // The SiteInstance shouldn't get the old spare, because of BrowserContext

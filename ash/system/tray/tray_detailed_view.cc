@@ -15,6 +15,7 @@
 #include "ash/system/tray/tray_constants.h"
 #include "ash/system/tray/tray_popup_utils.h"
 #include "ash/system/tray/tri_view.h"
+#include "base/bind.h"
 #include "base/containers/adapters.h"
 #include "base/strings/string_number_conversions.h"
 #include "third_party/skia/include/core/SkDrawLooper.h"
@@ -316,7 +317,7 @@ void TrayDetailedView::AddScrollListChild(std::unique_ptr<views::View> child) {
 
 HoverHighlightView* TrayDetailedView::AddScrollListItem(
     const gfx::VectorIcon& icon,
-    const base::string16& text) {
+    const std::u16string& text) {
   HoverHighlightView* item = delegate_->CreateScrollListItem(this, icon, text);
   scroll_content_->AddChildView(item);
   return item;
@@ -324,7 +325,7 @@ HoverHighlightView* TrayDetailedView::AddScrollListItem(
 
 HoverHighlightView* TrayDetailedView::AddScrollListCheckableItem(
     const gfx::VectorIcon& icon,
-    const base::string16& text,
+    const std::u16string& text,
     bool checked,
     bool enterprise_managed) {
   HoverHighlightView* item = AddScrollListItem(icon, text);
@@ -337,7 +338,7 @@ HoverHighlightView* TrayDetailedView::AddScrollListCheckableItem(
 }
 
 HoverHighlightView* TrayDetailedView::AddScrollListCheckableItem(
-    const base::string16& text,
+    const std::u16string& text,
     bool checked,
     bool enterprise_managed) {
   return AddScrollListCheckableItem(gfx::kNoneIcon, text, checked,
@@ -345,15 +346,15 @@ HoverHighlightView* TrayDetailedView::AddScrollListCheckableItem(
 }
 
 void TrayDetailedView::SetupConnectedScrollListItem(HoverHighlightView* view) {
-  SetupConnectedScrollListItem(view, base::nullopt /* battery_percentage */);
+  SetupConnectedScrollListItem(view, absl::nullopt /* battery_percentage */);
 }
 
 void TrayDetailedView::SetupConnectedScrollListItem(
     HoverHighlightView* view,
-    base::Optional<uint8_t> battery_percentage) {
+    absl::optional<uint8_t> battery_percentage) {
   DCHECK(view->is_populated());
 
-  base::string16 status;
+  std::u16string status;
 
   if (battery_percentage) {
     view->SetSubText(l10n_util::GetStringFUTF16(

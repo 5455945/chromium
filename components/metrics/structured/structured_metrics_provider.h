@@ -6,13 +6,11 @@
 #define COMPONENTS_METRICS_STRUCTURED_STRUCTURED_METRICS_PROVIDER_H_
 
 #include <memory>
-#include <string>
 #include <vector>
 
 #include "base/files/file_path.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/values.h"
 #include "components/metrics/metrics_provider.h"
 #include "components/metrics/structured/event_base.h"
 #include "components/metrics/structured/key_data.h"
@@ -22,6 +20,7 @@ namespace metrics {
 namespace structured {
 
 class EventsProto;
+class ExternalMetrics;
 
 // StructuredMetricsProvider is responsible for filling out the
 // |structured_metrics_event| section of the UMA proto. This class should not be
@@ -85,6 +84,7 @@ class StructuredMetricsProvider : public metrics::MetricsProvider,
   void OnKeyDataInitialized();
   void OnRead(ReadStatus status);
   void OnWrite(WriteStatus status);
+  void OnExternalMetricsCollected(const EventsProto& events);
 
   // Recorder::Observer:
   void OnProfileAdded(const base::FilePath& profile_path) override;
@@ -101,6 +101,7 @@ class StructuredMetricsProvider : public metrics::MetricsProvider,
                                  base::HistogramSnapshotManager*) override;
 
   void WriteNowForTest();
+  void SetExternalMetricsDirForTest(const base::FilePath& dir);
 
   // Beyond this number of logging events between successive calls to
   // ProvideCurrentSessionData, we stop recording events.
@@ -127,13 +128,21 @@ class StructuredMetricsProvider : public metrics::MetricsProvider,
   InitState init_state_ = InitState::kUninitialized;
 
   // Tracks the recording state signalled to the metrics provider by
-  // OnRecordingEnabled and OnRecordingDisabled.
+  // OnRecordingEnabled and OnRecordingDisabled. This is false until
+  // OnRecordingEnabled is called, which sets it true if structured metrics'
+  // feature flag is enabled.
   bool recording_enabled_ = false;
 
   // Set by OnRecordingDisabled if |events_| hasn't been initialized yet to
   // indicate events should be deleted from disk when |events_| is initialized.
   // See OnRecordingDisabled for more information.
   bool wipe_events_on_init_ = false;
+
+  // The last time we provided independent metrics.
+  base::Time last_provided_independent_metrics_;
+
+  // Periodically reports metrics from cros.
+  std::unique_ptr<ExternalMetrics> external_metrics_;
 
   // On-device storage within the user's cryptohome for unsent logs.
   std::unique_ptr<PersistentProto<EventsProto>> events_;

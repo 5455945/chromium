@@ -16,6 +16,7 @@
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_param_associator.h"
 #include "base/rand_util.h"
+#include "base/stl_util.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -264,7 +265,7 @@ void CheckHPKPReport(
     const scoped_refptr<X509Certificate>& served_certificate_chain,
     const scoped_refptr<X509Certificate>& validated_certificate_chain,
     const HashValueVector& known_pins) {
-  base::Optional<base::Value> value = base::JSONReader::Read(report);
+  absl::optional<base::Value> value = base::JSONReader::Read(report);
   ASSERT_TRUE(value.has_value());
   const base::Value& report_dict = value.value();
   ASSERT_TRUE(report_dict.is_dict());
@@ -273,11 +274,11 @@ void CheckHPKPReport(
   ASSERT_TRUE(report_hostname);
   EXPECT_EQ(host_port_pair.host(), *report_hostname);
 
-  base::Optional<int> report_port = report_dict.FindIntKey("port");
+  absl::optional<int> report_port = report_dict.FindIntKey("port");
   ASSERT_TRUE(report_port.has_value());
   EXPECT_EQ(host_port_pair.port(), report_port.value());
 
-  base::Optional<bool> report_include_subdomains =
+  absl::optional<bool> report_include_subdomains =
       report_dict.FindBoolKey("include-subdomains");
   ASSERT_TRUE(report_include_subdomains.has_value());
   EXPECT_EQ(include_subdomains, report_include_subdomains.value());
@@ -1739,6 +1740,99 @@ TEST_F(TransportSecurityStateTest, RequireCTConsultsDelegate) {
   }
 }
 
+// Tests that the emergency disable flag causes CT to stop being required
+// regardless of host or delegate status.
+TEST_F(TransportSecurityStateTest, CTEmergencyDisable) {
+  using ::testing::_;
+  using ::testing::Return;
+  using CTRequirementLevel =
+      TransportSecurityState::RequireCTDelegate::CTRequirementLevel;
+
+  // Dummy cert to use as the validation chain. The contents do not matter.
+  scoped_refptr<X509Certificate> cert =
+      ImportCertFromFile(GetTestCertsDirectory(), "expired_cert.pem");
+  ASSERT_TRUE(cert);
+
+  HashValueVector hashes;
+  hashes.push_back(
+      HashValue(X509Certificate::CalculateFingerprint256(cert->cert_buffer())));
+
+  TransportSecurityState state;
+
+  // Set CT emergency disable flag.
+  state.SetCTEmergencyDisabled(true);
+
+  MockRequireCTDelegate always_require_delegate;
+  EXPECT_CALL(always_require_delegate, IsCTRequiredForHost(_, _, _))
+      .WillRepeatedly(Return(CTRequirementLevel::REQUIRED));
+  state.SetRequireCTDelegate(&always_require_delegate);
+  EXPECT_EQ(TransportSecurityState::CT_NOT_REQUIRED,
+            state.CheckCTRequirements(
+                HostPortPair("www.example.com", 443), true, hashes, cert.get(),
+                cert.get(), SignedCertificateTimestampAndStatusList(),
+                TransportSecurityState::ENABLE_EXPECT_CT_REPORTS,
+                ct::CTPolicyCompliance::CT_POLICY_NOT_ENOUGH_SCTS,
+                NetworkIsolationKey()));
+  EXPECT_EQ(TransportSecurityState::CT_NOT_REQUIRED,
+            state.CheckCTRequirements(
+                HostPortPair("www.example.com", 443), true, hashes, cert.get(),
+                cert.get(), SignedCertificateTimestampAndStatusList(),
+                TransportSecurityState::ENABLE_EXPECT_CT_REPORTS,
+                ct::CTPolicyCompliance::CT_POLICY_NOT_DIVERSE_SCTS,
+                NetworkIsolationKey()));
+  EXPECT_EQ(TransportSecurityState::CT_NOT_REQUIRED,
+            state.CheckCTRequirements(
+                HostPortPair("www.example.com", 443), true, hashes, cert.get(),
+                cert.get(), SignedCertificateTimestampAndStatusList(),
+                TransportSecurityState::ENABLE_EXPECT_CT_REPORTS,
+                ct::CTPolicyCompliance::CT_POLICY_COMPLIES_VIA_SCTS,
+                NetworkIsolationKey()));
+  EXPECT_EQ(TransportSecurityState::CT_NOT_REQUIRED,
+            state.CheckCTRequirements(
+                HostPortPair("www.example.com", 443), true, hashes, cert.get(),
+                cert.get(), SignedCertificateTimestampAndStatusList(),
+                TransportSecurityState::ENABLE_EXPECT_CT_REPORTS,
+                ct::CTPolicyCompliance::CT_POLICY_BUILD_NOT_TIMELY,
+                NetworkIsolationKey()));
+
+  state.SetRequireCTDelegate(nullptr);
+  EXPECT_EQ(TransportSecurityState::CT_NOT_REQUIRED,
+            state.CheckCTRequirements(
+                HostPortPair("www.example.com", 443), true, hashes, cert.get(),
+                cert.get(), SignedCertificateTimestampAndStatusList(),
+                TransportSecurityState::ENABLE_EXPECT_CT_REPORTS,
+                ct::CTPolicyCompliance::CT_POLICY_NOT_ENOUGH_SCTS,
+                NetworkIsolationKey()));
+}
+
+// Tests that the if the CT log list last update time is set, it is used for
+// enforcement decisions.
+TEST_F(TransportSecurityStateTest, CTTimestampUpdate) {
+  TransportSecurityState state;
+  TransportSecurityStateTest::EnableStaticExpectCT(&state);
+  TransportSecurityState::ExpectCTState expect_ct_state;
+  // Initially the preloaded host should require CT.
+  EXPECT_TRUE(
+      GetExpectCTState(&state, kExpectCTStaticHostname, &expect_ct_state));
+
+  // Change the last updated time to a value greater than 10 weeks.
+  // We use a close value (70 days + 1 hour ago) to ensure rounding behavior is
+  // working properly.
+  state.SetCTLogListUpdateTime(
+      base::Time::Now() -
+      (base::TimeDelta::FromDays(70) + base::TimeDelta::FromHours(1)));
+  // CT should no longer be required.
+  EXPECT_FALSE(
+      GetExpectCTState(&state, kExpectCTStaticHostname, &expect_ct_state));
+
+  // CT should once again be required after the log list is newer than 70 days.
+  state.SetCTLogListUpdateTime(
+      base::Time::Now() -
+      (base::TimeDelta::FromDays(70) - base::TimeDelta::FromHours(1)));
+  EXPECT_TRUE(
+      GetExpectCTState(&state, kExpectCTStaticHostname, &expect_ct_state));
+}
+
 // Tests that Certificate Transparency is required for Symantec-issued
 // certificates, unless the certificate was issued prior to 1 June 2016
 // or the issuing CA is permitted as independently operated.
@@ -1849,82 +1943,6 @@ TEST_F(TransportSecurityStateTest, RequireCTForSymantec) {
                 SignedCertificateTimestampAndStatusList(),
                 TransportSecurityState::ENABLE_EXPECT_CT_REPORTS,
                 ct::CTPolicyCompliance::CT_POLICY_NOT_ENOUGH_SCTS,
-                NetworkIsolationKey()));
-}
-
-// Tests that CAs can enable CT for testing their issuance practices, prior
-// to CT becoming mandatory.
-TEST_F(TransportSecurityStateTest, RequireCTViaFieldTrial) {
-  // Test certificates before and after the 1 June 2016 deadline.
-  scoped_refptr<X509Certificate> cert =
-      ImportCertFromFile(GetTestCertsDirectory(), "dec_2017.pem");
-  ASSERT_TRUE(cert);
-
-  // The hashes here do not matter, but add some dummy values to simulate
-  // a 'real' chain.
-  HashValueVector hashes;
-  const SHA256HashValue hash_a = {{0xAA, 0xAA}};
-  hashes.push_back(HashValue(hash_a));
-  const SHA256HashValue hash_b = {{0xBB, 0xBB}};
-  hashes.push_back(HashValue(hash_b));
-
-  TransportSecurityState state;
-
-  // CT should not be required for this pre-existing certificate.
-  EXPECT_EQ(TransportSecurityState::CT_NOT_REQUIRED,
-            state.CheckCTRequirements(
-                HostPortPair("www.example.com", 443), true, hashes, cert.get(),
-                cert.get(), SignedCertificateTimestampAndStatusList(),
-                TransportSecurityState::DISABLE_EXPECT_CT_REPORTS,
-                ct::CTPolicyCompliance::CT_POLICY_NOT_ENOUGH_SCTS,
-                NetworkIsolationKey()));
-
-  // However, simulating a Field Trial in which CT is required for certificates
-  // after 2017-12-01 should cause CT to be required for this certificate, as
-  // it was issued 2017-12-20.
-
-  base::FieldTrialParams params;
-  // Set the enforcement date to 2017-12-01 00:00:00;
-  params["date"] = "1512086400";
-
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeatureWithParameters(kEnforceCTForNewCerts,
-                                                         params);
-
-  // It should fail if it doesn't comply with policy.
-  EXPECT_EQ(TransportSecurityState::CT_REQUIREMENTS_NOT_MET,
-            state.CheckCTRequirements(
-                HostPortPair("www.example.com", 443), true, hashes, cert.get(),
-                cert.get(), SignedCertificateTimestampAndStatusList(),
-                TransportSecurityState::DISABLE_EXPECT_CT_REPORTS,
-                ct::CTPolicyCompliance::CT_POLICY_NOT_ENOUGH_SCTS,
-                NetworkIsolationKey()));
-
-  // It should succeed if it does comply with policy.
-  EXPECT_EQ(TransportSecurityState::CT_REQUIREMENTS_MET,
-            state.CheckCTRequirements(
-                HostPortPair("www.example.com", 443), true, hashes, cert.get(),
-                cert.get(), SignedCertificateTimestampAndStatusList(),
-                TransportSecurityState::DISABLE_EXPECT_CT_REPORTS,
-                ct::CTPolicyCompliance::CT_POLICY_COMPLIES_VIA_SCTS,
-                NetworkIsolationKey()));
-
-  // It should succeed if the build is outdated.
-  EXPECT_EQ(TransportSecurityState::CT_REQUIREMENTS_MET,
-            state.CheckCTRequirements(
-                HostPortPair("www.example.com", 443), true, hashes, cert.get(),
-                cert.get(), SignedCertificateTimestampAndStatusList(),
-                TransportSecurityState::DISABLE_EXPECT_CT_REPORTS,
-                ct::CTPolicyCompliance::CT_POLICY_BUILD_NOT_TIMELY,
-                NetworkIsolationKey()));
-
-  // It should succeed if it was a locally-trusted CA.
-  EXPECT_EQ(TransportSecurityState::CT_NOT_REQUIRED,
-            state.CheckCTRequirements(
-                HostPortPair("www.example.com", 443), false, hashes, cert.get(),
-                cert.get(), SignedCertificateTimestampAndStatusList(),
-                TransportSecurityState::DISABLE_EXPECT_CT_REPORTS,
-                ct::CTPolicyCompliance::CT_POLICY_BUILD_NOT_TIMELY,
                 NetworkIsolationKey()));
 }
 

@@ -4,8 +4,7 @@
 
 import {assertInstanceof} from './chrome_util.js';
 import * as dom from './dom.js';
-import * as localStorage from './models/local_storage.js';
-import {DeviceOperator} from './mojo/device_operator.js';
+import {toggleExpertMode} from './expert.js';
 import * as state from './state.js';
 import * as toast from './toast.js';
 // eslint-disable-next-line no-unused-vars
@@ -35,8 +34,6 @@ let topmostIndex = -1;
 export function setup(views) {
   allViews = views;
   // Manage all tabindex usages in for navigation.
-  dom.getAll('[tabindex]', HTMLElement)
-      .forEach((element) => util.makeUnfocusableByMouse(element));
   document.body.addEventListener('keydown', (event) => {
     const e = assertInstanceof(event, KeyboardEvent);
     if (e.key === 'Tab') {
@@ -56,6 +53,10 @@ function activate(index) {
   const view = allViews[index];
   view.root.setAttribute('aria-hidden', 'false');
   dom.getAllFrom(view.root, '[tabindex]', HTMLElement).forEach((element) => {
+    if (element.dataset['tabindex'] === undefined) {
+      // First activation, no need to restore tabindex from data-tabindex.
+      return;
+    }
     element.setAttribute('tabindex', element.dataset['tabindex']);
     element.removeAttribute('data-tabindex');
   });
@@ -202,15 +203,7 @@ export function onKeyPressed(event) {
       toast.showDebugMessage('SWA');
       break;
     case 'Ctrl-Shift-E':
-      (async () => {
-        if (!await DeviceOperator.isSupported()) {
-          toast.show('error_msg_expert_mode_not_supported');
-          return;
-        }
-        const newState = !state.get(state.State.EXPERT);
-        state.set(state.State.EXPERT, newState);
-        localStorage.set({expert: newState});
-      })();
+      toggleExpertMode();
       break;
     default:
       // Make the topmost visible view handle the pressed key.
@@ -221,10 +214,11 @@ export function onKeyPressed(event) {
 }
 
 /**
- * Handles resized window on current all visible views.
+ * Handles when the window state or size changed.
  */
-export function onWindowResized() {
-  // All visible views need being relayout after window is resized.
+export function onWindowStatusChanged() {
+  // All visible views need being relayout after window is resized or state
+  // changed.
   for (let i = allViews.length - 1; i >= 0; i--) {
     if (isShown(i)) {
       allViews[i].layout();

@@ -12,7 +12,9 @@
 #include "ash/public/cpp/toast_data.h"
 #include "ash/public/cpp/toast_manager.h"
 #include "base/bind.h"
+#include "base/callback_helpers.h"
 #include "base/check_op.h"
+#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/location.h"
 #include "base/metrics/histogram_functions.h"
@@ -21,8 +23,10 @@
 #include "base/system/sys_info.h"
 #include "base/task/current_thread.h"
 #include "base/threading/thread_task_runner_handle.h"
+#include "chrome/browser/apps/app_service/app_service_proxy.h"
+#include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
+#include "chrome/browser/ash/camera_mic/vm_camera_mic_manager.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/chromeos/camera_mic/vm_camera_mic_manager.h"
 #include "chrome/browser/chromeos/extensions/media_player_api.h"
 #include "chrome/browser/chromeos/extensions/media_player_event_router.h"
 #include "chrome/browser/media/webrtc/media_stream_capture_indicator.h"
@@ -36,6 +40,10 @@
 #include "chrome/browser/ui/tab_contents/tab_contents_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/account_id/account_id.h"
+#include "components/services/app_service/public/cpp/app_capability_access_cache.h"
+#include "components/services/app_service/public/cpp/app_capability_access_cache_wrapper.h"
+#include "components/services/app_service/public/cpp/app_registry_cache.h"
 #include "components/user_manager/user_manager.h"
 #include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/media_session.h"
@@ -195,13 +203,35 @@ MediaCaptureState GetMediaCaptureStateOfAllWebContents(
   return media_state;
 }
 
+// Relieves GetNameOfAppAccessingCamera() of the responsibility for gathering up
+// the AppRegistryCache and AppCapabilityAccessCache objects, which drastically
+// simplifies the unit tests of that function.
+std::u16string GetNameOfAppAccessingCameraInternal() {
+  auto* manager = user_manager::UserManager::Get();
+  const user_manager::User* active_user = manager->GetActiveUser();
+  if (!active_user)
+    return std::u16string();
+
+  auto account_id = active_user->GetAccountId();
+  Profile* profile =
+      chromeos::ProfileHelper::Get()->GetProfileByUser(active_user);
+  apps::AppServiceProxyChromeOs* proxy =
+      apps::AppServiceProxyFactory::GetForProfile(profile);
+  apps::AppRegistryCache& reg_cache = proxy->AppRegistryCache();
+  apps::AppCapabilityAccessCache* cap_cache =
+      apps::AppCapabilityAccessCacheWrapper::Get().GetAppCapabilityAccessCache(
+          account_id);
+  DCHECK(cap_cache);
+  return MediaClientImpl::GetNameOfAppAccessingCamera(cap_cache, &reg_cache);
+}
+
 }  // namespace
 
 MediaClientImpl::MediaClientImpl() {
   MediaCaptureDevicesDispatcher::GetInstance()->AddObserver(this);
   BrowserList::AddObserver(this);
 
-  chromeos::VmCameraMicManager::Get()->AddObserver(this);
+  ash::VmCameraMicManager::Get()->AddObserver(this);
 
   // Camera service does not behave in non ChromeOS environment (e.g. testing,
   // linux chromeos).
@@ -228,7 +258,7 @@ MediaClientImpl::~MediaClientImpl() {
   MediaCaptureDevicesDispatcher::GetInstance()->RemoveObserver(this);
   BrowserList::RemoveObserver(this);
 
-  chromeos::VmCameraMicManager::Get()->RemoveObserver(this);
+  ash::VmCameraMicManager::Get()->RemoveObserver(this);
   if (base::SysInfo::IsRunningOnChromeOS() &&
       base::FeatureList::IsEnabled(
           chromeos::features::kCameraPrivacySwitchNotifications) &&
@@ -332,8 +362,8 @@ void MediaClientImpl::OnBrowserSetLastActive(Browser* browser) {
 }
 
 void MediaClientImpl::OnVmCameraMicActiveChanged(
-    chromeos::VmCameraMicManager* manager) {
-  using DeviceType = chromeos::VmCameraMicManager::DeviceType;
+    ash::VmCameraMicManager* manager) {
+  using DeviceType = ash::VmCameraMicManager::DeviceType;
   vm_media_capture_state_ = MediaCaptureState::kNone;
   if (manager->IsDeviceActive(DeviceType::kCamera))
     vm_media_capture_state_ |= MediaCaptureState::kVideo;
@@ -342,11 +372,10 @@ void MediaClientImpl::OnVmCameraMicActiveChanged(
 
   media_controller_->NotifyVmMediaNotificationState(
       manager->IsNotificationActive(
-          chromeos::VmCameraMicManager::kCameraNotification),
+          ash::VmCameraMicManager::kCameraNotification),
+      manager->IsNotificationActive(ash::VmCameraMicManager::kMicNotification),
       manager->IsNotificationActive(
-          chromeos::VmCameraMicManager::kMicNotification),
-      manager->IsNotificationActive(
-          chromeos::VmCameraMicManager::kCameraAndMicNotification));
+          ash::VmCameraMicManager::kCameraAndMicNotification));
 }
 
 void MediaClientImpl::OnCameraPrivacySwitchStatusChanged(
@@ -377,7 +406,7 @@ void MediaClientImpl::OnCameraPrivacySwitchStatusChanged(
           kCameraPrivacySwitchOnToastId,
           l10n_util::GetStringUTF16(IDS_CAMERA_PRIVACY_SWITCH_ON_TOAST),
           kCameraPrivacySwitchToastDurationMs,
-          /*dismiss_text=*/base::nullopt,
+          /*dismiss_text=*/absl::nullopt,
           /*visible_on_lock_screen=*/true);
       ash::ToastManager::Get()->Show(toast);
       break;
@@ -413,7 +442,7 @@ void MediaClientImpl::OnCameraPrivacySwitchStatusChanged(
           kCameraPrivacySwitchOffToastId,
           l10n_util::GetStringUTF16(IDS_CAMERA_PRIVACY_SWITCH_OFF_TOAST),
           kCameraPrivacySwitchToastDurationMs,
-          /*dismiss_text=*/base::nullopt,
+          /*dismiss_text=*/absl::nullopt,
           /*visible_on_lock_screen=*/true);
       ash::ToastManager::Get()->Show(toast);
       break;
@@ -525,12 +554,39 @@ void MediaClientImpl::HandleMediaAction(ui::KeyboardCode keycode) {
   }
 }
 
+std::u16string MediaClientImpl::GetNameOfAppAccessingCamera(
+    apps::AppCapabilityAccessCache* capability_cache,
+    apps::AppRegistryCache* registry_cache) {
+  DCHECK(capability_cache);
+  DCHECK(registry_cache);
+
+  for (const std::string& app : capability_cache->GetAppsAccessingCamera()) {
+    std::u16string name;
+    registry_cache->ForOneApp(app, [&name](const apps::AppUpdate& update) {
+      name = base::UTF8ToUTF16(update.ShortName());
+    });
+    if (!name.empty())
+      return name;
+  }
+
+  return std::u16string();
+}
+
 void MediaClientImpl::ShowCameraOffNotification() {
   base::UmaHistogramEnumeration(
       kCameraPrivacySwitchEventsHistogramName,
       CameraPrivacySwitchEvent::kSwitchOnNotificationShown);
 
   camera_switch_notification_shown_timestamp_ = base::TimeTicks::Now();
+
+  std::u16string app_name = GetNameOfAppAccessingCameraInternal();
+  std::u16string message =
+      app_name.empty()
+          ? l10n_util::GetStringUTF16(
+                IDS_CAMERA_PRIVACY_SWITCH_ON_NOTIFICATION_MESSAGE)
+          : l10n_util::GetStringFUTF16(
+                IDS_CAMERA_PRIVACY_SWITCH_ON_NOTIFICATION_MESSAGE_WITH_APP_NAME,
+                app_name);
 
   SystemNotificationHelper::GetInstance()->Close(
       kCameraPrivacySwitchOnNotificationId);
@@ -541,9 +597,7 @@ void MediaClientImpl::ShowCameraOffNotification() {
           kCameraPrivacySwitchOnNotificationId,
           l10n_util::GetStringUTF16(
               IDS_CAMERA_PRIVACY_SWITCH_ON_NOTIFICATION_TITLE),
-          l10n_util::GetStringUTF16(
-              IDS_CAMERA_PRIVACY_SWITCH_ON_NOTIFICATION_MESSAGE),
-          base::string16(), GURL(),
+          message, std::u16string(), GURL(),
           message_center::NotifierId(
               message_center::NotifierType::SYSTEM_COMPONENT,
               kCameraPrivacySwitchNotifierId),

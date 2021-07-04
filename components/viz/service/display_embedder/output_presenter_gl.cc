@@ -8,8 +8,10 @@
 #include <utility>
 #include <vector>
 
+#include "base/feature_list.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
+#include "components/viz/common/features.h"
 #include "components/viz/common/resources/resource_format_utils.h"
 #include "components/viz/service/display_embedder/skia_output_surface_dependency.h"
 #include "gpu/command_buffer/service/shared_context_state.h"
@@ -54,7 +56,7 @@ class PresenterImageGL : public OutputPresenter::Image {
                   uint32_t shared_image_usage);
 
   void BeginPresent() final;
-  void EndPresent() final;
+  void EndPresent(gfx::GpuFenceHandle release_fence) final;
   int GetPresentCount() const final;
   void OnContextLost() final;
 
@@ -131,10 +133,16 @@ void PresenterImageGL::BeginPresent() {
   DCHECK(scoped_gl_read_access_);
 }
 
-void PresenterImageGL::EndPresent() {
+void PresenterImageGL::EndPresent(gfx::GpuFenceHandle release_fence) {
   DCHECK(present_count_);
   if (--present_count_)
     return;
+
+  // Check there is no release fence if we have a non-overlay read access.
+  DCHECK(!scoped_gl_read_access_ || release_fence.is_null());
+  if (scoped_overlay_read_access_)
+    scoped_overlay_read_access_->SetReleaseFence(std::move(release_fence));
+
   scoped_overlay_read_access_.reset();
   scoped_gl_read_access_.reset();
 }
@@ -192,6 +200,12 @@ std::unique_ptr<OutputPresenterGL> OutputPresenterGL::Create(
   ANativeWindow* window =
       gpu::GpuSurfaceLookup::GetInstance()->AcquireNativeWidget(
           deps->GetSurfaceHandle(), &can_be_used_with_surface_control);
+  base::ScopedClosureRunner release_runner(base::BindOnce(
+      [](gfx::AcceleratedWidget widget) {
+        if (widget)
+          ANativeWindow_release(widget);
+      },
+      window));
   if (!window || !can_be_used_with_surface_control)
     return nullptr;
   // TODO(https://crbug.com/1012401): don't depend on GL.
@@ -241,6 +255,7 @@ void OutputPresenterGL::InitializeCapabilities(
   capabilities->supports_post_sub_buffer = gl_surface_->SupportsPostSubBuffer();
   capabilities->supports_commit_overlay_planes =
       gl_surface_->SupportsCommitOverlayPlanes();
+  capabilities->supports_viewporter = gl_surface_->SupportsViewporter();
 
   // Set supports_surfaceless to enable overlays.
   capabilities->supports_surfaceless = true;
@@ -249,6 +264,8 @@ void OutputPresenterGL::InitializeCapabilities(
   // Set resize_based_on_root_surface to omit platform proposed size.
   capabilities->resize_based_on_root_surface =
       gl_surface_->SupportsOverridePlatformSize();
+  capabilities->use_dynamic_frame_buffer_allocation =
+      base::FeatureList::IsEnabled(features::kDynamicBufferQueueAllocation);
 
   // TODO(https://crbug.com/1108406): only add supported formats base on
   // platform, driver, etc.
@@ -358,11 +375,10 @@ void OutputPresenterGL::SchedulePrimaryPlane(
 
   // Output surface is also z-order 0.
   constexpr int kPlaneZOrder = 0;
-  // Output surface always uses the full texture.
-  constexpr gfx::RectF kUVRect(0.f, 0.f, 1.0f, 1.0f);
   gl_surface_->ScheduleOverlayPlane(kPlaneZOrder, plane.transform, gl_image,
-                                    ToNearestRect(plane.display_rect), kUVRect,
-                                    plane.enable_blending, std::move(fence));
+                                    ToNearestRect(plane.display_rect),
+                                    plane.uv_rect, plane.enable_blending,
+                                    std::move(fence));
 }
 
 void OutputPresenterGL::ScheduleBackground(Image* image) {
@@ -425,8 +441,8 @@ void OutputPresenterGL::ScheduleOverlays(
         overlay.shared_state->sorting_context_id,
         gfx::Transform(overlay.shared_state->transform), gl_image,
         overlay.contents_rect, gfx::ToEnclosingRect(overlay.bounds_rect),
-        overlay.background_color, overlay.edge_aa_mask, opacity,
-        overlay.filter));
+        overlay.background_color, overlay.edge_aa_mask, opacity, overlay.filter,
+        overlay.protected_video_type));
 #endif
   }
 #endif  //  defined(OS_ANDROID) || defined(OS_APPLE) || defined(USE_OZONE)

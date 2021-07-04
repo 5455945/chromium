@@ -84,7 +84,7 @@ void AutofillSaveCardInfoBarDelegateMobileTest::SetUp() {
   PersonalDataManagerFactory::GetInstance()->SetTestingFactory(
       profile(), BrowserContextKeyedServiceFactory::TestingFactory());
 
-  personal_data_.reset(new TestPersonalDataManager());
+  personal_data_ = std::make_unique<TestPersonalDataManager>();
   personal_data_->SetPrefService(profile()->GetPrefs());
 
   profile()->GetPrefs()->SetInteger(
@@ -137,7 +137,8 @@ AutofillSaveCardInfoBarDelegateMobileTest::CreateDelegateWithLegalMessage(
             base::BindOnce(&AutofillSaveCardInfoBarDelegateMobileTest::
                                UploadSaveCardPromptCallback,
                            base::Unretained(this)),
-            /*local_save_card_callback=*/{}, profile()->GetPrefs()));
+            /*local_save_card_callback=*/{}, profile()->GetPrefs(),
+            AccountInfo()));
     return delegate;
   }
   // Local save infobar delegate:
@@ -151,7 +152,7 @@ AutofillSaveCardInfoBarDelegateMobileTest::CreateDelegateWithLegalMessage(
           base::BindOnce(&AutofillSaveCardInfoBarDelegateMobileTest::
                              LocalSaveCardPromptCallback,
                          base::Unretained(this)),
-          profile()->GetPrefs()));
+          profile()->GetPrefs(), AccountInfo()));
   return delegate;
 }
 
@@ -396,7 +397,7 @@ TEST_F(AutofillSaveCardInfoBarDelegateMobileTest,
 
 TEST_F(AutofillSaveCardInfoBarDelegateMobileTest, LocalCardHasNickname) {
   CreditCard card = test::GetCreditCard();
-  card.SetNickname(base::ASCIIToUTF16("Nickname"));
+  card.SetNickname(u"Nickname");
   std::unique_ptr<AutofillSaveCardInfoBarDelegateMobile> delegate =
       CreateDelegate(/*is_uploading=*/true,
                      prefs::PREVIOUS_SAVE_CREDIT_CARD_PROMPT_USER_DECISION_NONE,

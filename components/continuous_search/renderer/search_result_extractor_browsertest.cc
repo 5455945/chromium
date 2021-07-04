@@ -19,8 +19,6 @@ class SearchResultExtractorImplRenderViewTest : public content::RenderViewTest {
   SearchResultExtractorImplRenderViewTest() = default;
   ~SearchResultExtractorImplRenderViewTest() override = default;
 
-  content::RenderFrame* GetFrame() { return view_->GetMainRenderFrame(); }
-
   // Loads the contents of `html` and attempts to extract data. Caller should
   // provide the `expected_status` and `expected_results` which are used to
   // verify the extraction behaved as intended. Note that
@@ -32,12 +30,12 @@ class SearchResultExtractorImplRenderViewTest : public content::RenderViewTest {
       mojom::CategoryResultsPtr expected_results) {
     LoadHTML(html.data());
     expected_results->document_url =
-        GURL(GetFrame()->GetWebFrame()->GetDocument().Url());
+        GURL(GetMainRenderFrame()->GetWebFrame()->GetDocument().Url());
     base::RunLoop loop;
     mojom::SearchResultExtractor::Status out_status;
     mojom::CategoryResultsPtr out_results;
     {
-      auto* extractor = SearchResultExtractorImpl::Create(GetFrame());
+      auto* extractor = SearchResultExtractorImpl::Create(GetMainRenderFrame());
       EXPECT_NE(extractor, nullptr);
       extractor->ExtractCurrentSearchResults(base::BindOnce(
           [](base::OnceClosure quit,
@@ -61,11 +59,11 @@ class SearchResultExtractorImplRenderViewTest : public content::RenderViewTest {
 TEST_F(SearchResultExtractorImplRenderViewTest, TestExtractAdsOnly) {
   auto result1 = mojom::SearchResult::New();
   result1->link = GURL("https://www.example.com/");
-  result1->title = "Hello";
+  result1->title = u"Hello";
 
   auto result2 = mojom::SearchResult::New();
   result2->link = GURL("https://www.example1.com/");
-  result2->title = "World";
+  result2->title = u"World";
 
   auto ad_group = mojom::ResultGroup::New();
   ad_group->label = "Ads";
@@ -111,7 +109,7 @@ TEST_F(SearchResultExtractorImplRenderViewTest, TestExtractAdsOnly) {
 TEST_F(SearchResultExtractorImplRenderViewTest, TestExtractAdsAndResults) {
   auto ad_result = mojom::SearchResult::New();
   ad_result->link = GURL("https://www.example.com/");
-  ad_result->title = "Hello";
+  ad_result->title = u"Hello";
 
   auto ad_group = mojom::ResultGroup::New();
   ad_group->label = "Ads";
@@ -120,11 +118,11 @@ TEST_F(SearchResultExtractorImplRenderViewTest, TestExtractAdsAndResults) {
 
   auto result1 = mojom::SearchResult::New();
   result1->link = GURL("https://www.foo.com/");
-  result1->title = "Foo";
+  result1->title = u"Foo";
 
   auto result2 = mojom::SearchResult::New();
   result2->link = GURL("https://www.bar.com/");
-  result2->title = "Bar";
+  result2->title = u"Bar";
 
   auto result_group = mojom::ResultGroup::New();
   result_group->label = "Search Results";

@@ -4,7 +4,6 @@
 
 #include "chrome/browser/performance_manager/mechanisms/page_discarder.h"
 
-#include "base/callback_forward.h"
 #include "base/run_loop.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -50,7 +49,7 @@ IN_PROC_BROWSER_TEST_F(PageDiscarderBrowserTest, DiscardPageNode) {
                     },
                     std::move(quit_closure)));
           },
-          PerformanceManager::GetPageNodeForWebContents(contents),
+          PerformanceManager::GetPrimaryPageNodeForWebContents(contents),
           std::move(quit_closure)));
   run_loop.Run();
 

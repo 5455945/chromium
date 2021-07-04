@@ -12,39 +12,17 @@
 #include "ui/accessibility/ax_role_properties.h"
 
 namespace ui {
+
 namespace {
-
-bool IsActiveLiveRegion(const AXTreeObserver::Change& change) {
-  return change.node->data().HasStringAttribute(
-             ax::mojom::StringAttribute::kLiveStatus) &&
-         change.node->data().GetStringAttribute(
-             ax::mojom::StringAttribute::kLiveStatus) != "off";
-}
-
-bool IsContainedInLiveRegion(const AXTreeObserver::Change& change) {
-  return change.node->data().HasStringAttribute(
-             ax::mojom::StringAttribute::kContainerLiveStatus) &&
-         change.node->data().HasStringAttribute(
-             ax::mojom::StringAttribute::kName);
-}
 
 bool HasEvent(const std::set<AXEventGenerator::EventParams>& node_events,
               AXEventGenerator::Event event) {
-  for (auto& iter : node_events) {
-    if (iter.event == event)
-      return true;
-  }
-  return false;
+  return node_events.count(AXEventGenerator::EventParams(event));
 }
 
 void RemoveEvent(std::set<AXEventGenerator::EventParams>* node_events,
                  AXEventGenerator::Event event) {
-  for (auto& iter : *node_events) {
-    if (iter.event == event) {
-      node_events->erase(iter);
-      return;
-    }
-  }
+  node_events->erase(AXEventGenerator::EventParams(event));
 }
 
 // If a node toggled its ignored state, don't also fire children-changed because
@@ -88,15 +66,28 @@ bool HasIgnoredChangedState(
 
 }  // namespace
 
+//
+// AXEventGenerator::EventParams
+//
+
+AXEventGenerator::EventParams::EventParams(const Event event) : event(event) {}
+
 AXEventGenerator::EventParams::EventParams(
     const Event event,
     const ax::mojom::EventFrom event_from,
+    const ax::mojom::Action event_from_action,
     const std::vector<AXEventIntent>& event_intents)
-    : event(event), event_from(event_from), event_intents(event_intents) {}
+    : event(event),
+      event_from(event_from),
+      event_from_action(event_from_action),
+      event_intents(event_intents) {}
 
 AXEventGenerator::EventParams::EventParams(const EventParams& other) = default;
 
 AXEventGenerator::EventParams::~EventParams() = default;
+
+AXEventGenerator::EventParams& AXEventGenerator::EventParams::operator=(
+    const EventParams& other) = default;
 
 bool AXEventGenerator::EventParams::operator==(const EventParams& rhs) const {
   return rhs.event == event;
@@ -106,17 +97,27 @@ bool AXEventGenerator::EventParams::operator<(const EventParams& rhs) const {
   return event < rhs.event;
 }
 
+//
+// AXEventGenerator::TargetedEvent
+//
+
 AXEventGenerator::TargetedEvent::TargetedEvent(AXNode* node,
                                                const EventParams& event_params)
     : node(node), event_params(event_params) {
   DCHECK(node);
 }
 
+AXEventGenerator::TargetedEvent::~TargetedEvent() = default;
+
+//
+// AXEventGenerator::Iterator
+//
+
 AXEventGenerator::Iterator::Iterator(
-    const std::map<AXNode*, std::set<EventParams>>& map,
-    const std::map<AXNode*, std::set<EventParams>>::const_iterator& head)
-    : map_(map), map_iter_(head) {
-  if (map_iter_ != map.end())
+    std::map<AXNode*, std::set<EventParams>>::const_iterator map_start_iter,
+    std::map<AXNode*, std::set<EventParams>>::const_iterator map_end_iter)
+    : map_iter_(map_start_iter), map_end_iter_(map_end_iter) {
+  if (map_iter_ != map_end_iter_)
     set_iter_ = map_iter_->second.begin();
 }
 
@@ -125,35 +126,76 @@ AXEventGenerator::Iterator::Iterator(const AXEventGenerator::Iterator& other) =
 
 AXEventGenerator::Iterator::~Iterator() = default;
 
-bool AXEventGenerator::Iterator::operator!=(
-    const AXEventGenerator::Iterator& rhs) const {
-  return map_iter_ != rhs.map_iter_ ||
-         (map_iter_ != map_.end() && set_iter_ != rhs.set_iter_);
-}
+AXEventGenerator::Iterator& AXEventGenerator::Iterator::operator=(
+    const Iterator& other) = default;
 
 AXEventGenerator::Iterator& AXEventGenerator::Iterator::operator++() {
-  if (map_iter_ == map_.end())
+  if (map_iter_ == map_end_iter_)
     return *this;
 
   DCHECK(set_iter_ != map_iter_->second.end());
   set_iter_++;
 
-  // |map_| may contain empty sets of events in its entries (i.e. |set_iter_| is
-  // at the iterator's end). In this case, we want to increment |map_iter_| to
-  // point to the next entry of |map_| that contains non-empty set of events.
-  while (map_iter_ != map_.end() && set_iter_ == map_iter_->second.end()) {
+  // The map pointed to by |map_end_iter_| may contain empty sets of events in
+  // its entries (i.e. |set_iter_| is at the iterator's end). In this case, we
+  // want to increment |map_iter_| to point to the next entry of the map that
+  // contains a non-empty set of events.
+  while (map_iter_ != map_end_iter_ && set_iter_ == map_iter_->second.end()) {
     map_iter_++;
-    if (map_iter_ != map_.end())
+    if (map_iter_ != map_end_iter_)
       set_iter_ = map_iter_->second.begin();
   }
 
   return *this;
 }
 
+AXEventGenerator::Iterator AXEventGenerator::Iterator::operator++(int) {
+  if (map_iter_ == map_end_iter_)
+    return *this;
+  Iterator iter = *this;
+  ++(*this);
+  return iter;
+}
+
 AXEventGenerator::TargetedEvent AXEventGenerator::Iterator::operator*() const {
-  DCHECK(map_iter_ != map_.end() && set_iter_ != map_iter_->second.end());
+  DCHECK(map_iter_ != map_end_iter_);
+  DCHECK(set_iter_ != map_iter_->second.end());
   return AXEventGenerator::TargetedEvent(map_iter_->first, *set_iter_);
 }
+
+bool operator==(const AXEventGenerator::Iterator& lhs,
+                const AXEventGenerator::Iterator& rhs) {
+  if (lhs.map_iter_ == lhs.map_end_iter_ && rhs.map_iter_ == rhs.map_end_iter_)
+    return true;
+  return lhs.map_iter_ == rhs.map_iter_ && lhs.set_iter_ == rhs.set_iter_;
+}
+
+bool operator!=(const AXEventGenerator::Iterator& lhs,
+                const AXEventGenerator::Iterator& rhs) {
+  return !(lhs == rhs);
+}
+
+void swap(AXEventGenerator::Iterator& lhs, AXEventGenerator::Iterator& rhs) {
+  if (lhs == rhs)
+    return;
+
+  std::map<AXNode*, std::set<AXEventGenerator::EventParams>>::const_iterator
+      map_iter = lhs.map_iter_;
+  lhs.map_iter_ = rhs.map_iter_;
+  rhs.map_iter_ = map_iter;
+  std::map<AXNode*, std::set<AXEventGenerator::EventParams>>::const_iterator
+      map_end_iter = lhs.map_end_iter_;
+  lhs.map_end_iter_ = rhs.map_end_iter_;
+  rhs.map_end_iter_ = map_end_iter;
+  std::set<AXEventGenerator::EventParams>::const_iterator set_iter =
+      lhs.set_iter_;
+  lhs.set_iter_ = rhs.set_iter_;
+  rhs.set_iter_ = set_iter;
+}
+
+//
+// AXEventGenerator
+//
 
 AXEventGenerator::AXEventGenerator() = default;
 
@@ -204,11 +246,11 @@ AXEventGenerator::Iterator AXEventGenerator::begin() const {
     }
   }
 
-  return AXEventGenerator::Iterator(tree_events_, map_iter);
+  return AXEventGenerator::Iterator(map_iter, tree_events_.end());
 }
 
 AXEventGenerator::Iterator AXEventGenerator::end() const {
-  return AXEventGenerator::Iterator(tree_events_, tree_events_.end());
+  return AXEventGenerator::Iterator(tree_events_.end(), tree_events_.end());
 }
 
 void AXEventGenerator::ClearEvents() {
@@ -223,7 +265,7 @@ void AXEventGenerator::AddEvent(AXNode* node, AXEventGenerator::Event event) {
 
   std::set<EventParams>& node_events = tree_events_[node];
   node_events.emplace(event, ax::mojom::EventFrom::kNone,
-                      tree_->event_intents());
+                      ax::mojom::Action::kNone, tree_->event_intents());
 }
 
 void AXEventGenerator::OnNodeDataChanged(AXTree* tree,
@@ -300,6 +342,10 @@ void AXEventGenerator::OnStateChanged(AXTree* tree,
       AddEvent(node, Event::IGNORED_CHANGED);
       if (!new_value)
         AddEvent(node, Event::SUBTREE_CREATED);
+      if (node->data().role == ax::mojom::Role::kMenu) {
+        new_value ? AddEvent(node, Event::MENU_POPUP_END)
+                  : AddEvent(node, Event::MENU_POPUP_START);
+      }
       break;
     }
     case ax::mojom::State::kMultiline:
@@ -333,6 +379,9 @@ void AXEventGenerator::OnStringAttributeChanged(AXTree* tree,
     case ax::mojom::StringAttribute::kAutoComplete:
       AddEvent(node, Event::AUTO_COMPLETE_CHANGED);
       break;
+    case ax::mojom::StringAttribute::kCheckedStateDescription:
+      AddEvent(node, Event::CHECKED_STATE_DESCRIPTION_CHANGED);
+      break;
     case ax::mojom::StringAttribute::kClassName:
       AddEvent(node, Event::CLASS_NAME_CHANGED);
       break;
@@ -359,11 +408,19 @@ void AXEventGenerator::OnStringAttributeChanged(AXTree* tree,
       AddEvent(node, Event::LIVE_STATUS_CHANGED);
 
       // Fire a LIVE_REGION_CREATED if the previous value was off, and the new
-      // value is not-off.
+      // value is not-off. According to the ARIA spec, "When the property is not
+      // set on an object that needs to send updates, the politeness level is
+      // the value of the nearest ancestor that sets the aria-live attribute."
+      // Example: A new chat message is added to the room with aria-live="off",
+      // then the author removes aria-live.
       if (!IsAlert(node->data().role)) {
-        bool old_state = !old_value.empty() && old_value != "off";
-        bool new_state = !new_value.empty() && new_value != "off";
-        if (!old_state && new_state)
+        bool was_off = !old_value.empty()
+                           ? old_value == "off"
+                           : !node->data().IsContainedInActiveLiveRegion();
+        bool is_off = !new_value.empty()
+                          ? new_value == "off"
+                          : !node->data().IsContainedInActiveLiveRegion();
+        if (was_off && !is_off)
           AddEvent(node, Event::LIVE_REGION_CREATED);
       }
       break;
@@ -374,7 +431,7 @@ void AXEventGenerator::OnStringAttributeChanged(AXTree* tree,
         AddEvent(node, Event::NAME_CHANGED);
 
       // If it's in a live region, fire live region events.
-      if (node->data().HasStringAttribute(
+      if (node->HasStringAttribute(
               ax::mojom::StringAttribute::kContainerLiveStatus)) {
         FireLiveRegionEvents(node);
       }
@@ -416,7 +473,7 @@ void AXEventGenerator::OnIntAttributeChanged(AXTree* tree,
     case ax::mojom::IntAttribute::kActivedescendantId:
       // Don't fire on invisible containers, as it confuses some screen readers,
       // such as NVDA.
-      if (!node->data().HasState(ax::mojom::State::kInvisible)) {
+      if (!node->data().IsInvisible()) {
         AddEvent(node, Event::ACTIVE_DESCENDANT_CHANGED);
         active_descendant_changed_.push_back(node);
       }
@@ -594,6 +651,9 @@ void AXEventGenerator::OnIntListAttributeChanged(
     case ax::mojom::IntListAttribute::kControlsIds:
       AddEvent(node, Event::CONTROLS_CHANGED);
       break;
+    case ax::mojom::IntListAttribute::kDetailsIds:
+      AddEvent(node, Event::DETAILS_CHANGED);
+      break;
     case ax::mojom::IntListAttribute::kDescribedbyIds:
       AddEvent(node, Event::DESCRIBED_BY_CHANGED);
       break;
@@ -718,9 +778,9 @@ void AXEventGenerator::OnAtomicUpdateFinished(
 
     if (IsAlert(change.node->data().role))
       AddEvent(change.node, Event::ALERT);
-    else if (IsActiveLiveRegion(change))
+    else if (change.node->data().IsActiveLiveRegionRoot())
       AddEvent(change.node, Event::LIVE_REGION_CREATED);
-    else if (IsContainedInLiveRegion(change))
+    else if (change.node->data().IsContainedInActiveLiveRegion())
       FireLiveRegionEvents(change.node);
   }
 
@@ -738,18 +798,16 @@ void AXEventGenerator::AddEventsForTesting(
 
 void AXEventGenerator::FireLiveRegionEvents(AXNode* node) {
   AXNode* live_root = node;
-  while (live_root && !live_root->data().HasStringAttribute(
+  while (live_root && !live_root->HasStringAttribute(
                           ax::mojom::StringAttribute::kLiveStatus))
     live_root = live_root->parent();
 
   if (live_root &&
-      !live_root->data().GetBoolAttribute(ax::mojom::BoolAttribute::kBusy) &&
-      live_root->data().GetStringAttribute(
-          ax::mojom::StringAttribute::kLiveStatus) != "off") {
+      !live_root->GetBoolAttribute(ax::mojom::BoolAttribute::kBusy) &&
+      live_root->GetStringAttribute(ax::mojom::StringAttribute::kLiveStatus) !=
+          "off") {
     // Fire LIVE_REGION_NODE_CHANGED on each node that changed.
-    if (!node->data()
-             .GetStringAttribute(ax::mojom::StringAttribute::kName)
-             .empty())
+    if (!node->GetStringAttribute(ax::mojom::StringAttribute::kName).empty())
       AddEvent(node, Event::LIVE_REGION_NODE_CHANGED);
     // Fire LIVE_REGION_NODE_CHANGED on the root of the live region.
     AddEvent(live_root, Event::LIVE_REGION_CHANGED);
@@ -758,8 +816,8 @@ void AXEventGenerator::FireLiveRegionEvents(AXNode* node) {
 
 void AXEventGenerator::FireActiveDescendantEvents() {
   for (AXNode* node : active_descendant_changed_) {
-    AXNode* descendant = tree_->GetFromId(node->data().GetIntAttribute(
-        ax::mojom::IntAttribute::kActivedescendantId));
+    AXNode* descendant = tree_->GetFromId(
+        node->GetIntAttribute(ax::mojom::IntAttribute::kActivedescendantId));
     if (!descendant)
       continue;
     switch (descendant->data().role) {
@@ -1087,6 +1145,8 @@ const char* ToString(AXEventGenerator::Event event) {
       return "busyChanged";
     case AXEventGenerator::Event::CHECKED_STATE_CHANGED:
       return "checkedStateChanged";
+    case AXEventGenerator::Event::CHECKED_STATE_DESCRIPTION_CHANGED:
+      return "checkedStateDescriptionChanged";
     case AXEventGenerator::Event::CHILDREN_CHANGED:
       return "childrenChanged";
     case AXEventGenerator::Event::CLASS_NAME_CHANGED:
@@ -1095,6 +1155,8 @@ const char* ToString(AXEventGenerator::Event event) {
       return "collapsed";
     case AXEventGenerator::Event::CONTROLS_CHANGED:
       return "controlsChanged";
+    case AXEventGenerator::Event::DETAILS_CHANGED:
+      return "detailsChanged";
     case AXEventGenerator::Event::DESCRIBED_BY_CHANGED:
       return "describedByChanged";
     case AXEventGenerator::Event::DESCRIPTION_CHANGED:
@@ -1153,6 +1215,10 @@ const char* ToString(AXEventGenerator::Event event) {
       return "loadStart";
     case AXEventGenerator::Event::MENU_ITEM_SELECTED:
       return "menuItemSelected";
+    case ui::AXEventGenerator::Event::MENU_POPUP_END:
+      return "menuPopupEnd";
+    case ui::AXEventGenerator::Event::MENU_POPUP_START:
+      return "menuPopupStart";
     case AXEventGenerator::Event::MULTILINE_STATE_CHANGED:
       return "multilineStateChanged";
     case AXEventGenerator::Event::MULTISELECTABLE_STATE_CHANGED:

@@ -5,6 +5,7 @@
 #ifndef CHROMEOS_SERVICES_SECURE_CHANNEL_NEARBY_CONNECTION_H_
 #define CHROMEOS_SERVICES_SECURE_CHANNEL_NEARBY_CONNECTION_H_
 
+#include "base/containers/queue.h"
 #include "base/memory/weak_ptr.h"
 #include "chromeos/services/secure_channel/connection.h"
 #include "chromeos/services/secure_channel/public/mojom/nearby_connector.mojom.h"
@@ -32,6 +33,7 @@ class NearbyConnection : public Connection,
    public:
     static std::unique_ptr<Connection> Create(
         multidevice::RemoteDeviceRef remote_device,
+        const std::vector<uint8_t>& eid,
         mojom::NearbyConnector* nearby_connector);
     static void SetFactoryForTesting(Factory* factory);
     virtual ~Factory() = default;
@@ -39,6 +41,7 @@ class NearbyConnection : public Connection,
    protected:
     virtual std::unique_ptr<Connection> CreateInstance(
         multidevice::RemoteDeviceRef remote_device,
+        const std::vector<uint8_t>& eid,
         mojom::NearbyConnector* nearby_connector) = 0;
 
    private:
@@ -49,6 +52,7 @@ class NearbyConnection : public Connection,
 
  private:
   NearbyConnection(multidevice::RemoteDeviceRef remote_device,
+                   const std::vector<uint8_t>& eid,
                    mojom::NearbyConnector* nearby_connector);
 
   // Connection:
@@ -72,6 +76,8 @@ class NearbyConnection : public Connection,
   mojom::NearbyConnector* nearby_connector_;
   mojo::Receiver<mojom::NearbyMessageReceiver> message_receiver_{this};
   mojo::Remote<mojom::NearbyMessageSender> message_sender_;
+
+  std::vector<uint8_t> eid_;
 
   base::queue<std::unique_ptr<WireMessage>> queued_messages_to_send_;
 

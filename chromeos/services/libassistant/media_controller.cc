@@ -8,6 +8,7 @@
 #include "base/threading/sequenced_task_runner_handle.h"
 #include "chromeos/assistant/internal/util_headers.h"
 #include "chromeos/services/assistant/public/shared/utils.h"
+#include "chromeos/services/libassistant/grpc/assistant_client.h"
 #include "libassistant/shared/internal_api/assistant_manager_internal.h"
 #include "libassistant/shared/public/assistant_manager.h"
 #include "libassistant/shared/public/media_manager.h"
@@ -115,7 +116,7 @@ std::string GetAndroidIntentUrlFromMediaArgs(
   return std::string();
 }
 
-base::Optional<AndroidAppInfo> GetAppInfoFromMediaArgs(
+absl::optional<AndroidAppInfo> GetAppInfoFromMediaArgs(
     const std::string& play_media_args_proto) {
   PlayMediaArgs play_media_args;
   if (play_media_args.ParseFromString(play_media_args_proto)) {
@@ -132,7 +133,7 @@ base::Optional<AndroidAppInfo> GetAppInfoFromMediaArgs(
       }
     }
   }
-  return base::nullopt;
+  return absl::nullopt;
 }
 
 std::string GetWebUrlFromMediaArgs(const std::string& play_media_args_proto) {
@@ -214,7 +215,7 @@ class MediaController::LibassistantMediaHandler {
   }
 
   void OnPlayMedia(const std::string& play_media_args_proto) {
-    base::Optional<AndroidAppInfo> app_info =
+    absl::optional<AndroidAppInfo> app_info =
         GetAppInfoFromMediaArgs(play_media_args_proto);
     if (app_info) {
       OnOpenMediaAndroidIntent(play_media_args_proto,
@@ -317,23 +318,21 @@ void MediaController::SetExternalPlaybackState(mojom::MediaStatePtr state) {
     media_manager()->SetExternalPlaybackState(ToMediaStatus(*state));
 }
 
-void MediaController::OnAssistantManagerRunning(
-    assistant_client::AssistantManager* assistant_manager,
-    assistant_client::AssistantManagerInternal* assistant_manager_internal) {
-  assistant_manager_ = assistant_manager;
+void MediaController::OnAssistantClientRunning(
+    AssistantClient* assistant_client) {
+  assistant_manager_ = assistant_client->assistant_manager();
 
   // Media manager should be created when Libassistant signals it is running.
   DCHECK(media_manager());
 
   handler_ = std::make_unique<LibassistantMediaHandler>(
-      this, assistant_manager_internal);
+      this, assistant_client->assistant_manager_internal());
 
   media_manager()->AddListener(listener_.get());
 }
 
-void MediaController::OnDestroyingAssistantManager(
-    assistant_client::AssistantManager* assistant_manager,
-    assistant_client::AssistantManagerInternal* assistant_manager_internal) {
+void MediaController::OnDestroyingAssistantClient(
+    AssistantClient* assistant_client) {
   assistant_manager_ = nullptr;
 }
 

@@ -20,9 +20,7 @@
 #include "base/timer/timer.h"
 #include "chrome/browser/optimization_guide/prediction/prediction_model_download_observer.h"
 #include "components/optimization_guide/core/optimization_guide_enums.h"
-#include "components/optimization_guide/core/optimization_guide_session_statistic.h"
 #include "components/optimization_guide/proto/models.pb.h"
-#include "services/network/public/cpp/network_quality_tracker.h"
 #include "url/origin.h"
 
 namespace base {
@@ -49,7 +47,6 @@ class PredictionModel;
 class PredictionModelDownloadManager;
 class PredictionModelFetcher;
 class PredictionModelFile;
-class TopHostProvider;
 
 using HostModelFeaturesMRUCache =
     base::HashingMRUCache<std::string, base::flat_map<std::string, float>>;
@@ -63,13 +60,10 @@ using PostModelLoadCallback =
 // A PredictionManager supported by the optimization guide that makes an
 // OptimizationTargetDecision by evaluating the corresponding prediction model
 // for an OptimizationTarget.
-class PredictionManager
-    : public network::NetworkQualityTracker::EffectiveConnectionTypeObserver,
-      public PredictionModelDownloadObserver {
+class PredictionManager : public PredictionModelDownloadObserver {
  public:
   PredictionManager(
       OptimizationGuideStore* model_and_features_store,
-      TopHostProvider* top_host_provider,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       PrefService* pref_service,
       Profile* profile);
@@ -80,7 +74,7 @@ class PredictionManager
   // requested by consumers of the Optimization Guide.
   void RegisterOptimizationTargets(
       const std::vector<
-          std::pair<proto::OptimizationTarget, base::Optional<proto::Any>>>&
+          std::pair<proto::OptimizationTarget, absl::optional<proto::Any>>>&
           optimization_targets_and_metadata);
 
   // Adds an observer for updates to the model for |optimization_target|.
@@ -89,7 +83,7 @@ class PredictionManager
   // Machine Learning Service for inference.
   void AddObserverForOptimizationTargetModel(
       proto::OptimizationTarget optimization_target,
-      const base::Optional<proto::Any>& model_metadata,
+      const absl::optional<proto::Any>& model_metadata,
       OptimizationTargetModelObserver* observer);
 
   // Removes an observer for updates to the model for |optimization_target|.
@@ -114,21 +108,7 @@ class PredictionManager
   // evaluation.
   OptimizationTargetDecision ShouldTargetNavigation(
       content::NavigationHandle* navigation_handle,
-      proto::OptimizationTarget optimization_target,
-      const base::flat_map<proto::ClientModelFeature, float>&
-          override_client_model_feature_values);
-
-  // Update |session_fcp_| and |previous_fcp_| with |fcp|.
-  void UpdateFCPSessionStatistics(base::TimeDelta fcp);
-
-  OptimizationGuideSessionStatistic* GetFCPSessionStatisticsForTesting() const {
-    return const_cast<OptimizationGuideSessionStatistic*>(&session_fcp_);
-  }
-
-  // network::NetworkQualityTracker::EffectiveConnectionTypeObserver
-  // implementation:
-  void OnEffectiveConnectionTypeChanged(
-      net::EffectiveConnectionType type) override;
+      proto::OptimizationTarget optimization_target);
 
   // Set the prediction model fetcher for testing.
   void SetPredictionModelFetcherForTesting(
@@ -162,17 +142,11 @@ class PredictionManager
   // from the models and features store.
   void ClearHostModelFeatures();
 
-  // Override the decision returned by |ShouldTargetNavigation|
-  // for |optimization_target|. For testing purposes only.
-  void OverrideTargetDecisionForTesting(
-      proto::OptimizationTarget optimization_target,
-      OptimizationGuideDecision optimization_guide_decision);
-
   // Override the model file returned to observers for |optimization_target|.
   // For testing purposes only.
   void OverrideTargetModelFileForTesting(
       proto::OptimizationTarget optimization_target,
-      const base::Optional<proto::Any>& model_metadata,
+      const absl::optional<proto::Any>& model_metadata,
       const base::FilePath& file_path);
 
   // PredictionModelDownloadObserver:
@@ -189,7 +163,7 @@ class PredictionManager
   const HostModelFeaturesMRUCache* GetHostModelFeaturesForTesting() const;
 
   // Returns the host model features for a host if available.
-  base::Optional<base::flat_map<std::string, float>>
+  absl::optional<base::flat_map<std::string, float>>
   GetHostModelFeaturesForHost(const std::string& host) const;
 
   // Return the set of features that each host in |host_model_features_map_|
@@ -224,37 +198,19 @@ class PredictionManager
   // based on if host model features were used.
   base::flat_map<std::string, float> BuildFeatureMap(
       content::NavigationHandle* navigation_handle,
-      const base::flat_set<std::string>& model_features,
-      const base::flat_map<proto::ClientModelFeature, float>&
-          override_client_model_feature_values);
+      const base::flat_set<std::string>& model_features);
 
-  // Calculate and return the current value for the client feature specified
-  // by |model_feature|. If |model_feature| is in
-  // |override_client_model_feature_values|, the value from
-  // |client_model_feature_values| will be used. Otherwise, the client will
-  // calculate the value or return nullopt if the client does not support the
-  // model feature.
-  base::Optional<float> GetValueForClientFeature(
-      const std::string& model_feature,
-      content::NavigationHandle* navigation_handle,
-      const base::flat_map<proto::ClientModelFeature, float>&
-          override_client_model_feature_values) const;
+  // Called to make a request to fetch models from the remote Optimization Guide
+  // Service. Used to fetch models for the registered optimization targets.
+  void FetchModels();
 
-  // Called to make a request to fetch models and host model features from the
-  // remote Optimization Guide Service. Used to fetch models for the registered
-  // optimization targets as well as the host model features for top hosts
-  // needed to evaluate these models.
-  void FetchModelsAndHostModelFeatures();
-
-  // Callback when the models and host model features have been fetched from the
-  // remote Optimization Guide Service and are ready for parsing. Processes the
-  // prediction models and the host model features in the response and stores
-  // them for use. The metadata entry containing the time that updates should be
-  // fetched from the remote Optimization Guide Service is updated, even when
-  // the response is empty.
-  void OnModelsAndHostFeaturesFetched(
-      base::Optional<std::unique_ptr<proto::GetModelsResponse>>
-          get_models_response_data);
+  // Callback when the models have been fetched from the remote Optimization
+  // Guide Service and are ready for parsing. Processes the prediction models in
+  // the response and stores them for use. The metadata entry containing the
+  // time that updates should be fetched from the remote Optimization Guide
+  // Service is updated, even when the response is empty.
+  void OnModelsFetched(absl::optional<std::unique_ptr<proto::GetModelsResponse>>
+                           get_models_response_data);
 
   // Callback run after the model and host model features store is fully
   // initialized. The prediction manager can load models from
@@ -329,28 +285,35 @@ class PredictionManager
   bool ProcessAndStoreHostModelFeatures(
       const proto::HostModelFeatures& host_model_features);
 
-  // Return the time when a prediction model and host model features fetch was
-  // last attempted.
+  // Return the time when a prediction model fetch was last attempted.
   base::Time GetLastFetchAttemptTime() const;
 
-  // Set the last time when a prediction model and host model features fetch
-  // was last attempted to |last_attempt_time|.
-  void SetLastModelAndFeaturesFetchAttemptTime(base::Time last_attempt_time);
+  // Set the last time when a prediction model fetch was last attempted to
+  // |last_attempt_time|.
+  void SetLastModelFetchAttemptTime(base::Time last_attempt_time);
 
-  // Determine whether to schedule fetching new prediction models and host model
-  // features or fetch immediately due to override.
-  void MaybeScheduleModelAndHostModelFeaturesFetch();
+  // Return the time when a prediction model fetch was last successfully
+  // completed.
+  base::Time GetLastFetchSuccessTime() const;
+
+  // Set the last time when a fetch for prediction models last succeeded to
+  // |last_success_time|.
+  void SetLastModelFetchSuccessTime(base::Time last_success_time);
+
+  // Determine whether to schedule fetching new prediction models or fetch
+  // immediately due to override.
+  void MaybeScheduleModelFetch();
 
   // Schedule |fetch_timer_| to fire based on:
-  // 1. The update time for host model features in the store and
+  // 1. The update time for models in the store and
   // 2. The last time a fetch attempt was made.
-  void ScheduleModelsAndHostModelFeaturesFetch();
+  void ScheduleModelsFetch();
 
   // Notifies observers of |optimization_target| that the model file has been
   // updated to |file_path|.
   void NotifyObserversOfNewModelPath(
       proto::OptimizationTarget optimization_target,
-      const base::Optional<proto::Any>& model_metadata,
+      const absl::optional<proto::Any>& model_metadata,
       const base::FilePath& file_path) const;
 
   // A map of optimization target to the prediction model capable of making
@@ -366,7 +329,7 @@ class PredictionManager
 
   // The map from optimization targets to feature-provided metadata that have
   // been registered with the prediction manager.
-  base::flat_map<proto::OptimizationTarget, base::Optional<proto::Any>>
+  base::flat_map<proto::OptimizationTarget, absl::optional<proto::Any>>
       registered_optimization_targets_and_metadata_;
 
   // The map from optimization target to observers that have been registered to
@@ -378,14 +341,6 @@ class PredictionManager
   // A MRU cache of host to host model features known to the prediction manager.
   HostModelFeaturesMRUCache host_model_features_cache_;
 
-  // The current session's FCP statistics for HTTP/HTTPS navigations.
-  OptimizationGuideSessionStatistic session_fcp_;
-
-  // A float representation of the time to FCP of the previous HTTP/HTTPS page
-  // load. This is nullopt when no previous page load exists (the first page
-  // load of a session).
-  base::Optional<float> previous_load_fcp_ms_;
-
   // The fetcher that handles making requests to update the models and host
   // model features from the remote Optimization Guide Service.
   std::unique_ptr<PredictionModelFetcher> prediction_model_fetcher_;
@@ -394,9 +349,6 @@ class PredictionManager
   // models. Can be null if model downloading is disabled.
   std::unique_ptr<PredictionModelDownloadManager>
       prediction_model_download_manager_;
-
-  // The top host provider that can be queried. Not owned.
-  TopHostProvider* top_host_provider_ = nullptr;
 
   // The optimization guide store that contains prediction models and host
   // model features from the remote Optimization Guide Service. Not owned and
@@ -410,10 +362,6 @@ class PredictionManager
   // The URL loader factory used for fetching model and host feature updates
   // from the remote Optimization Guide Service.
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
-
-  // The current estimate of the EffectiveConnectionType.
-  net::EffectiveConnectionType current_effective_connection_type_ =
-      net::EffectiveConnectionType::EFFECTIVE_CONNECTION_TYPE_UNKNOWN;
 
   // A reference to the PrefService for this profile. Not owned.
   PrefService* pref_service_ = nullptr;

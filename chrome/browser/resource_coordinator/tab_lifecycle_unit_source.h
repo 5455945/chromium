@@ -5,11 +5,8 @@
 #ifndef CHROME_BROWSER_RESOURCE_COORDINATOR_TAB_LIFECYCLE_UNIT_SOURCE_H_
 #define CHROME_BROWSER_RESOURCE_COORDINATOR_TAB_LIFECYCLE_UNIT_SOURCE_H_
 
-#include <memory>
-
 #include "base/macros.h"
 #include "base/observer_list.h"
-#include "base/scoped_observer.h"
 #include "chrome/browser/resource_coordinator/lifecycle_unit_source_base.h"
 #include "chrome/browser/ui/browser_list_observer.h"
 #include "chrome/browser/ui/browser_tab_strip_tracker.h"
@@ -114,6 +111,7 @@ class TabLifecycleUnitSource : public BrowserListObserver,
                     TabChangeType change_type) override;
 
   // BrowserListObserver:
+  void OnBrowserRemoved(Browser* browser) override;
   void OnBrowserSetLastActive(Browser* browser) override;
   void OnBrowserNoLongerActive(Browser* browser) override;
 

@@ -89,4 +89,19 @@ public interface ProcessScopeDependencyProvider {
     default boolean isXsurfaceUsageAndCrashReportingEnabled() {
         return false;
     }
+
+    @Deprecated
+    default boolean isStableChannel() {
+        return false;
+    }
+
+    /** Returns the reliability logging id. */
+    default long getReliabilityLoggingId() {
+        return 0L;
+    }
+
+    /** Returns the google API key. */
+    default String getGoogleApiKey() {
+        return null;
+    }
 }

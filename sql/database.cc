@@ -9,18 +9,19 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <memory>
+
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/format_macros.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
-#include "base/metrics/sparse_histogram.h"
 #include "base/no_destructor.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/single_thread_task_runner.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -220,7 +221,7 @@ void Database::StatementRef::Close(bool forced) {
     // allowing disk access.
     // TODO(paivanof@gmail.com): This should move to the beginning
     // of the function. http://crbug.com/136655.
-    base::Optional<base::ScopedBlockingCall> scoped_blocking_call;
+    absl::optional<base::ScopedBlockingCall> scoped_blocking_call;
     InitScopedBlockingCall(FROM_HERE, &scoped_blocking_call);
     sqlite3_finalize(stmt_);
     stmt_ = nullptr;
@@ -253,18 +254,6 @@ Database::~Database() {
 
 void Database::DisableMmapByDefault() {
   enable_mmap_by_default_ = false;
-}
-
-void Database::RecordEvent(Events event, size_t count) {
-  for (size_t i = 0; i < count; ++i) {
-    UMA_HISTOGRAM_ENUMERATION("Sqlite.Stats2", event, EVENT_MAX_VALUE);
-  }
-
-  if (stats_histogram_) {
-    for (size_t i = 0; i < count; ++i) {
-      stats_histogram_->Add(event);
-    }
-  }
 }
 
 bool Database::Open(const base::FilePath& path) {
@@ -313,7 +302,7 @@ void Database::CloseInternal(bool forced) {
     // will happen on thread not allowing disk access.
     // TODO(paivanof@gmail.com): This should move to the beginning
     // of the function. http://crbug.com/136655.
-    base::Optional<base::ScopedBlockingCall> scoped_blocking_call;
+    absl::optional<base::ScopedBlockingCall> scoped_blocking_call;
     InitScopedBlockingCall(FROM_HERE, &scoped_blocking_call);
 
     // Resetting acquires a lock to ensure no dump is happening on the database
@@ -328,10 +317,8 @@ void Database::CloseInternal(bool forced) {
     }
 
     int rc = sqlite3_close(db_);
-    if (rc != SQLITE_OK) {
-      base::UmaHistogramSparse("Sqlite.CloseFailure", rc);
+    if (rc != SQLITE_OK)
       DLOG(DCHECK) << "sqlite3_close failed: " << GetErrorMessage();
-    }
   }
   db_ = nullptr;
 }
@@ -357,7 +344,7 @@ void Database::Preload() {
     return;
   }
 
-  base::Optional<base::ScopedBlockingCall> scoped_blocking_call;
+  absl::optional<base::ScopedBlockingCall> scoped_blocking_call;
   InitScopedBlockingCall(FROM_HERE, &scoped_blocking_call);
 
   // Maximum number of bytes that will be prefetched from the database.
@@ -647,7 +634,7 @@ bool Database::SetMmapAltStatus(int64_t status) {
 size_t Database::GetAppropriateMmapSize() {
   TRACE_EVENT0("sql", "Database::GetAppropriateMmapSize");
 
-  base::Optional<base::ScopedBlockingCall> scoped_blocking_call;
+  absl::optional<base::ScopedBlockingCall> scoped_blocking_call;
   InitScopedBlockingCall(FROM_HERE, &scoped_blocking_call);
 
   // How much to map if no errors are found.  50MB encompasses the 99th
@@ -659,29 +646,21 @@ size_t Database::GetAppropriateMmapSize() {
   // TODO(shess): Move all cases to the view implementation.
   int64_t mmap_ofs = 0;
   if (mmap_alt_status_) {
-    if (!GetMmapAltStatus(&mmap_ofs)) {
-      RecordOneEvent(EVENT_MMAP_STATUS_FAILURE_READ);
+    if (!GetMmapAltStatus(&mmap_ofs))
       return 0;
-    }
   } else {
     // If [meta] doesn't exist, yet, it's a new database, assume the best.
     // sql::MetaTable::Init() will preload kMmapSuccess.
-    if (!MetaTable::DoesTableExist(this)) {
-      RecordOneEvent(EVENT_MMAP_META_MISSING);
+    if (!MetaTable::DoesTableExist(this))
       return kMmapEverything;
-    }
 
-    if (!MetaTable::GetMmapStatus(this, &mmap_ofs)) {
-      RecordOneEvent(EVENT_MMAP_META_FAILURE_READ);
+    if (!MetaTable::GetMmapStatus(this, &mmap_ofs))
       return 0;
-    }
   }
 
   // Database read failed in the past, don't memory map.
-  if (mmap_ofs == MetaTable::kMmapFailure) {
-    RecordOneEvent(EVENT_MMAP_FAILED);
+  if (mmap_ofs == MetaTable::kMmapFailure)
     return 0;
-  }
 
   if (mmap_ofs != MetaTable::kMmapSuccess) {
     // Continue reading from previous offset.
@@ -696,10 +675,8 @@ size_t Database::GetAppropriateMmapSize() {
     // to limit checking to 20MB per run of Chromium.
     sqlite3_file* file = nullptr;
     sqlite3_int64 db_size = 0;
-    if (SQLITE_OK != GetSqlite3FileAndSize(db_, &file, &db_size)) {
-      RecordOneEvent(EVENT_MMAP_VFS_FAILURE);
+    if (SQLITE_OK != GetSqlite3FileAndSize(db_, &file, &db_size))
       return 0;
-    }
 
     // Read the data left, or |g_reads_allowed|, whichever is smaller.
     // |g_reads_allowed| limits the total amount of I/O to spend verifying data
@@ -747,19 +724,12 @@ size_t Database::GetAppropriateMmapSize() {
       }
 
       if (mmap_alt_status_) {
-        if (!SetMmapAltStatus(mmap_ofs)) {
-          RecordOneEvent(EVENT_MMAP_STATUS_FAILURE_UPDATE);
+        if (!SetMmapAltStatus(mmap_ofs))
           return 0;
-        }
       } else {
-        if (!MetaTable::SetMmapStatus(this, mmap_ofs)) {
-          RecordOneEvent(EVENT_MMAP_META_FAILURE_UPDATE);
+        if (!MetaTable::SetMmapStatus(this, mmap_ofs))
           return 0;
-        }
       }
-
-      if (mmap_ofs == MetaTable::kMmapFailure)
-        RecordOneEvent(EVENT_MMAP_FAILED_NEW);
     }
   }
 
@@ -792,7 +762,7 @@ void Database::TrimMemory() {
 bool Database::Raze() {
   TRACE_EVENT0("sql", "Database::Raze");
 
-  base::Optional<base::ScopedBlockingCall> scoped_blocking_call;
+  absl::optional<base::ScopedBlockingCall> scoped_blocking_call;
   InitScopedBlockingCall(FROM_HERE, &scoped_blocking_call);
 
   if (!db_) {
@@ -805,16 +775,15 @@ bool Database::Raze() {
     return false;
   }
 
-  sql::Database null_db;
+  sql::Database null_db(sql::DatabaseOptions{
+      .exclusive_locking = true,
+      .page_size = options_.page_size,
+      .cache_size = 0,
+  });
   if (!null_db.OpenInMemory()) {
     DLOG(DCHECK) << "Unable to open in-memory database.";
     return false;
   }
-
-  const std::string page_size_sql =
-      base::StringPrintf("PRAGMA page_size=%d", options_.page_size);
-  if (!null_db.Execute(page_size_sql.c_str()))
-    return false;
 
 #if defined(OS_ANDROID)
   // Android compiles with SQLITE_DEFAULT_AUTOVACUUM.  Unfortunately,
@@ -859,7 +828,6 @@ bool Database::Raze() {
 
   const char* kMain = "main";
   int rc = BackupDatabase(null_db.db_, db_, kMain);
-  base::UmaHistogramSparse("Sqlite.RazeDatabase", rc);
 
   // The destination database was locked.
   if (rc == SQLITE_BUSY) {
@@ -882,13 +850,11 @@ bool Database::Raze() {
 
     rc = file->pMethods->xTruncate(file, 0);
     if (rc != SQLITE_OK) {
-      base::UmaHistogramSparse("Sqlite.RazeDatabaseTruncate", rc);
       DLOG(DCHECK) << "Failed to truncate file.";
       return false;
     }
 
     rc = BackupDatabase(null_db.db_, db_, kMain);
-    base::UmaHistogramSparse("Sqlite.RazeDatabase2", rc);
 
     DCHECK_EQ(rc, SQLITE_DONE) << "Failed retrying Raze().";
   }
@@ -899,6 +865,8 @@ bool Database::Raze() {
     // TODO(shuagga@microsoft.com): Need a guarantee here that there is no other
     // database connection open.
     ignore_result(Execute("PRAGMA journal_mode=TRUNCATE;"));
+    const std::string page_size_sql = base::StrCat(
+        {"PRAGMA page_size=", base::NumberToString(options_.page_size)});
     if (!Execute(page_size_sql.c_str())) {
       return false;
     }
@@ -910,7 +878,6 @@ bool Database::Raze() {
     }
 
     rc = BackupDatabase(null_db.db_, db_, kMain);
-    base::UmaHistogramSparse("Sqlite.RazeDatabase2", rc);
 
     DCHECK_EQ(rc, SQLITE_DONE) << "Failed retrying Raze().";
   }
@@ -1145,7 +1112,7 @@ int Database::ExecuteAndReturnErrorCode(const char* sql) {
     return SQLITE_ERROR;
   }
 
-  base::Optional<base::ScopedBlockingCall> scoped_blocking_call;
+  absl::optional<base::ScopedBlockingCall> scoped_blocking_call;
   InitScopedBlockingCall(FROM_HERE, &scoped_blocking_call);
 
   int rc = SQLITE_OK;
@@ -1268,7 +1235,7 @@ scoped_refptr<Database::StatementRef> Database::GetStatementImpl(
   if (!db_)
     return base::MakeRefCounted<StatementRef>(nullptr, nullptr, poisoned_);
 
-  base::Optional<base::ScopedBlockingCall> scoped_blocking_call;
+  absl::optional<base::ScopedBlockingCall> scoped_blocking_call;
   InitScopedBlockingCall(FROM_HERE, &scoped_blocking_call);
 
   // TODO(pwnall): Cached statements (but not unique statements) should be
@@ -1317,7 +1284,7 @@ std::string Database::GetSchema() const {
 }
 
 bool Database::IsSQLValid(const char* sql) {
-  base::Optional<base::ScopedBlockingCall> scoped_blocking_call;
+  absl::optional<base::ScopedBlockingCall> scoped_blocking_call;
   InitScopedBlockingCall(FROM_HERE, &scoped_blocking_call);
   if (!db_) {
     DCHECK(poisoned_) << "Illegal use of Database without a db";
@@ -1381,7 +1348,9 @@ int64_t Database::GetLastInsertRowId() const {
     DCHECK(poisoned_) << "Illegal use of Database without a db";
     return 0;
   }
-  return sqlite3_last_insert_rowid(db_);
+  int64_t last_rowid = sqlite3_last_insert_rowid(db_);
+  DCHECK(last_rowid != 0) << "No successful INSERT in a table with ROWID";
+  return last_rowid;
 }
 
 int Database::GetLastChangeCount() const {
@@ -1451,18 +1420,10 @@ bool Database::OpenInternal(const std::string& file_name,
     return false;
   }
 
-  base::Optional<base::ScopedBlockingCall> scoped_blocking_call;
+  absl::optional<base::ScopedBlockingCall> scoped_blocking_call;
   InitScopedBlockingCall(FROM_HERE, &scoped_blocking_call);
 
   EnsureSqliteInitialized();
-
-  // Setup the stats histograms immediately rather than allocating lazily.
-  // Databases which won't exercise all of these probably shouldn't exist.
-  if (!histogram_tag_.empty()) {
-    stats_histogram_ = base::LinearHistogram::FactoryGet(
-        "Sqlite.Stats2." + histogram_tag_, 1, EVENT_MAX_VALUE,
-        EVENT_MAX_VALUE + 1, base::HistogramBase::kUmaTargetedHistogramFlag);
-  }
 
   // If |poisoned_| is set, it means an error handler called
   // RazeAndClose().  Until regular Close() is called, the caller
@@ -1491,10 +1452,6 @@ bool Database::OpenInternal(const std::string& file_name,
     // Extended error codes cannot be enabled until a handle is
     // available, fetch manually.
     err = sqlite3_extended_errcode(db_);
-
-    // Histogram failures specific to initial open for debugging
-    // purposes.
-    base::UmaHistogramSparse("Sqlite.OpenFailure", err);
 
     OnSqliteError(err, nullptr, "-- sqlite3_open()");
     bool was_poisoned = poisoned_;
@@ -1533,7 +1490,6 @@ bool Database::OpenInternal(const std::string& file_name,
   // be razed.
   err = ExecuteAndReturnErrorCode("PRAGMA auto_vacuum");
   if (err != SQLITE_OK) {
-    base::UmaHistogramSparse("Sqlite.OpenProbeFailure", err);
     OnSqliteError(err, nullptr, "PRAGMA auto_vacuum");
 
     // Retry or bail out if the error handler poisoned the handle.
@@ -1631,8 +1587,8 @@ bool Database::OpenInternal(const std::string& file_name,
   }
 
   DCHECK(!memory_dump_provider_);
-  memory_dump_provider_.reset(
-      new DatabaseMemoryDumpProvider(db_, histogram_tag_));
+  memory_dump_provider_ =
+      std::make_unique<DatabaseMemoryDumpProvider>(db_, histogram_tag_);
   base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
       memory_dump_provider_.get(), "sql::Database", nullptr);
 
@@ -1672,28 +1628,10 @@ void Database::set_histogram_tag(const std::string& tag) {
   histogram_tag_ = tag;
 }
 
-void Database::AddTaggedHistogram(const std::string& name, int sample) const {
-  if (histogram_tag_.empty())
-    return;
-
-  // TODO(shess): The histogram macros create a bit of static storage
-  // for caching the histogram object.  This code shouldn't execute
-  // often enough for such caching to be crucial.  If it becomes an
-  // issue, the object could be cached alongside histogram_prefix_.
-  std::string full_histogram_name = name + "." + histogram_tag_;
-  base::HistogramBase* histogram = base::SparseHistogram::FactoryGet(
-      full_histogram_name, base::HistogramBase::kUmaTargetedHistogramFlag);
-  if (histogram)
-    histogram->Add(sample);
-}
-
 int Database::OnSqliteError(int err,
                             sql::Statement* stmt,
                             const char* sql) const {
   TRACE_EVENT0("sql", "Database::OnSqliteError");
-
-  base::UmaHistogramSparse("Sqlite.Error", err);
-  AddTaggedHistogram("Sqlite.Error", err);
 
   // Always log the error.
   if (!sql && stmt)
@@ -1820,7 +1758,7 @@ bool Database::UseWALMode() const {
 }
 
 bool Database::CheckpointDatabase() {
-  base::Optional<base::ScopedBlockingCall> scoped_blocking_call;
+  absl::optional<base::ScopedBlockingCall> scoped_blocking_call;
   InitScopedBlockingCall(FROM_HERE, &scoped_blocking_call);
 
   static const char* kMainDb = "main";

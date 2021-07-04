@@ -24,7 +24,9 @@
 #include "chrome/browser/ui/blocked_content/framebust_block_tab_helper.h"
 #include "chrome/browser/ui/content_settings/content_setting_image_model_states.h"
 #include "chrome/browser/ui/layout_constants.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/chrome_features.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/grit/chromium_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/content_settings/browser/page_specific_content_settings.h"
@@ -39,7 +41,6 @@
 #include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/web_contents.h"
 #include "services/device/public/cpp/device_features.h"
-#include "services/device/public/cpp/geolocation/geolocation_system_permission_mac.h"
 #include "services/device/public/cpp/geolocation/location_system_permission_status.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/pointer/touch_ui_controller.h"
@@ -52,6 +53,7 @@
 #if defined(OS_MAC)
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/media/webrtc/system_media_capture_permissions_mac.h"
+#include "services/device/public/cpp/geolocation/geolocation_manager.h"
 #endif
 
 using content::WebContents;
@@ -377,6 +379,21 @@ void ContentSettingImageModel::SetPromoWasShown(
                                                                   true);
 }
 
+bool ContentSettingImageModel::
+    IsMacRestoreLocationPermissionExperimentActive() {
+#if defined(OS_MAC)
+  return base::FeatureList::IsEnabled(
+             features::kLocationPermissionsExperiment) &&
+         g_browser_process->local_state()->GetInteger(
+             prefs::kMacRestoreLocationPermissionsExperimentCount) <
+             (features::GetLocationPermissionsExperimentBubblePromptLimit() +
+              features::GetLocationPermissionsExperimentLabelPromptLimit()) &&
+         explanatory_string_id() == IDS_GEOLOCATION_TURNED_OFF;
+#else
+  return false;
+#endif
+}
+
 bool ContentSettingImageModel::ShouldAutoOpenBubble(
     content::WebContents* contents) {
   return should_auto_open_bubble_ &&
@@ -386,6 +403,13 @@ bool ContentSettingImageModel::ShouldAutoOpenBubble(
 
 void ContentSettingImageModel::SetBubbleWasAutoOpened(
     content::WebContents* contents) {
+  // Do nothing if this is part of the Mac restore location permission
+  // experiment. In that case we do not want to restrict showing the bubble
+  // again.
+  if (image_type() == ImageType::GEOLOCATION &&
+      IsMacRestoreLocationPermissionExperimentActive()) {
+    return;
+  }
   ContentSettingImageModelStates::Get(contents)->SetBubbleWasAutoOpened(
       image_type(), true);
 }
@@ -496,8 +520,40 @@ bool ContentSettingGeolocationImageModel::UpdateAndGetVisibility(
         // has been allowed or blocked. Wait until the permission state is
         // determined before displaying this message since it triggers an
         // animation that cannot be cancelled
-        if (IsGeolocationPermissionDetermined())
-          set_explanatory_string_id(IDS_GEOLOCATION_TURNED_OFF);
+        if (IsGeolocationPermissionDetermined()) {
+          if (base::FeatureList::IsEnabled(
+                  features::kLocationPermissionsExperiment)) {
+            PrefService* prefs = g_browser_process->local_state();
+            int count = prefs->GetInteger(
+                prefs::kMacRestoreLocationPermissionsExperimentCount);
+            if (count <
+                features::GetLocationPermissionsExperimentBubblePromptLimit()) {
+              // Show the bubble when the location is denied.
+              set_should_auto_open_bubble(true);
+              prefs->SetInteger(
+                  prefs::kMacRestoreLocationPermissionsExperimentCount,
+                  ++count);
+              prefs->CommitPendingWrite();
+            } else if (
+                count <
+                (features::GetLocationPermissionsExperimentBubblePromptLimit() +
+                 features::
+                     GetLocationPermissionsExperimentLabelPromptLimit())) {
+              // Show a persistent label without a bubble when the location is
+              // denied.
+              set_explanatory_string_id(IDS_GEOLOCATION_TURNED_OFF);
+              prefs->SetInteger(
+                  prefs::kMacRestoreLocationPermissionsExperimentCount,
+                  ++count);
+              prefs->CommitPendingWrite();
+            } else {
+              // Return to normal behavior.
+              set_explanatory_string_id(IDS_GEOLOCATION_TURNED_OFF);
+            }
+          } else {
+            set_explanatory_string_id(IDS_GEOLOCATION_TURNED_OFF);
+          }
+        }
         return true;
       }
     }
@@ -514,19 +570,19 @@ bool ContentSettingGeolocationImageModel::UpdateAndGetVisibility(
 
 #if defined(OS_MAC)
 bool ContentSettingGeolocationImageModel::IsGeolocationAllowedOnASystemLevel() {
-  device::GeolocationSystemPermissionManager* permission_manager =
-      g_browser_process->platform_part()->location_permission_manager();
+  device::GeolocationManager* geolocation_manager =
+      g_browser_process->platform_part()->geolocation_manager();
   device::LocationSystemPermissionStatus permission =
-      permission_manager->GetSystemPermission();
+      geolocation_manager->GetSystemPermission();
 
   return permission == device::LocationSystemPermissionStatus::kAllowed;
 }
 
 bool ContentSettingGeolocationImageModel::IsGeolocationPermissionDetermined() {
-  device::GeolocationSystemPermissionManager* permission_manager =
-      g_browser_process->platform_part()->location_permission_manager();
+  device::GeolocationManager* geolocation_manager =
+      g_browser_process->platform_part()->geolocation_manager();
   device::LocationSystemPermissionStatus permission =
-      permission_manager->GetSystemPermission();
+      geolocation_manager->GetSystemPermission();
 
   return permission != device::LocationSystemPermissionStatus::kNotDetermined;
 }
@@ -927,7 +983,7 @@ bool ContentSettingNotificationsImageModel::UpdateAndGetVisibility(
   // Show promo the first time a quiet prompt is shown to the user.
   set_should_show_promo(
       QuietNotificationPermissionUiState::ShouldShowPromo(profile));
-  if (permissions::NotificationPermissionUiSelector::ShouldSuppressAnimation(
+  if (permissions::PermissionUiSelector::ShouldSuppressAnimation(
           manager->ReasonForUsingQuietUi())) {
     set_explanatory_string_id(0);
   } else {

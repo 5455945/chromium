@@ -71,6 +71,22 @@ struct SpatialLayer {
   uint8 num_of_temporal_layers;
 };
 
+// This defines a mojo transport format for media::Bitrate
+struct Bitrate {
+  // See media::Bitrate::Mode
+  [Extensible]
+  enum Mode {
+    [Default] kConstant,
+    kVariable
+  };
+
+  // The defaults here match those in media::Bitrate (CBR, which has no peak).
+  // Target must be set for all bitrates.
+  Mode mode = kConstant;
+  uint32 target;
+  uint32 peak = 0;
+};
+
 // This defines a mojo transport format for
 // media::VideoEncodeAccelerator::Config.
 struct VideoEncodeAcceleratorConfig {
@@ -78,6 +94,13 @@ struct VideoEncodeAcceleratorConfig {
   enum ContentType {
     kCamera,
     kDisplay
+  };
+
+  // See media::VideoEncodeAccelerator::Config::InterLayerPredMode
+  enum InterLayerPredMode {
+    kOff,
+    kOn,
+    kOnKeyPic
   };
 
   // See media::VideoEncodeAccelerator::Config::StorageType
@@ -89,7 +112,7 @@ struct VideoEncodeAcceleratorConfig {
   VideoPixelFormat input_format;
   gfx.mojom.Size input_visible_size;
   VideoCodecProfile output_profile;
-  uint32 initial_bitrate;
+  Bitrate bitrate;
   uint32 initial_framerate;
   bool has_initial_framerate;  // Whether or not config has initial framerate
   uint32 gop_length;
@@ -101,6 +124,8 @@ struct VideoEncodeAcceleratorConfig {
   bool has_storage_type;  // Whether or not config has storage type config
   ContentType content_type;
   array<SpatialLayer> spatial_layers;
+  InterLayerPredMode inter_layer_pred;
+  bool require_low_delay;
 };
 
 interface VideoEncodeAccelerator {
@@ -144,7 +169,12 @@ struct Vp8Metadata {
 struct Vp9Metadata {
   bool has_reference;
   bool temporal_up_switch;
+  bool referenced_by_upper_spatial_layers;
+  bool reference_lower_spatial_layers;
+  bool end_of_picture;
   uint8 temporal_idx;
+  uint8 spatial_idx;
+  array<gfx.mojom.Size> spatial_layer_resolutions;
   array<uint8> p_diffs;
 };
 

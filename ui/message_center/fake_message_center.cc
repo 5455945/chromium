@@ -44,6 +44,18 @@ bool FakeMessageCenter::IsSpokenFeedbackEnabled() const {
   return false;
 }
 
+Notification* FakeMessageCenter::FindOldestNotificationByNotiferId(
+    const NotifierId& notifier_id) {
+  // stub
+  return nullptr;
+}
+
+Notification* FakeMessageCenter::FindPopupNotificationById(
+    const std::string& id) {
+  // stub
+  return nullptr;
+}
+
 Notification* FakeMessageCenter::FindVisibleNotificationById(
     const std::string& id) {
   const auto& notifications = GetVisibleNotifications();
@@ -133,7 +145,7 @@ void FakeMessageCenter::ClickOnNotificationButton(const std::string& id,
 void FakeMessageCenter::ClickOnNotificationButtonWithReply(
     const std::string& id,
     int button_index,
-    const base::string16& reply) {}
+    const std::u16string& reply) {}
 
 void FakeMessageCenter::ClickOnSettingsButton(const std::string& id) {}
 
@@ -142,6 +154,8 @@ void FakeMessageCenter::DisableNotification(const std::string& id) {}
 void FakeMessageCenter::MarkSinglePopupAsShown(const std::string& id,
                                                bool mark_notification_as_read) {
 }
+
+void FakeMessageCenter::ResetSinglePopup(const std::string& id) {}
 
 void FakeMessageCenter::DisplayedNotification(const std::string& id,
                                               const DisplaySource source) {}
@@ -171,12 +185,12 @@ void FakeMessageCenter::RestartPopupTimers() {}
 
 void FakeMessageCenter::PausePopupTimers() {}
 
-const base::string16& FakeMessageCenter::GetSystemNotificationAppName() const {
+const std::u16string& FakeMessageCenter::GetSystemNotificationAppName() const {
   return base::EmptyString16();
 }
 
 void FakeMessageCenter::SetSystemNotificationAppName(
-    const base::string16& product_os_name) {}
+    const std::u16string& product_os_name) {}
 
 void FakeMessageCenter::DisableTimersForTest() {}
 

@@ -8,7 +8,7 @@
 #include "base/macros.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "ui/views/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/window/dialog_delegate.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -32,8 +32,8 @@ class ExternalProtocolDialog : public views::DialogDelegateView,
   // Show by calling ExternalProtocolHandler::RunExternalProtocolDialog().
   ExternalProtocolDialog(content::WebContents* web_contents,
                          const GURL& url,
-                         const base::string16& program_name,
-                         const base::Optional<url::Origin>& initiating_origin);
+                         const std::u16string& program_name,
+                         const absl::optional<url::Origin>& initiating_origin);
   ExternalProtocolDialog(const ExternalProtocolDialog&) = delete;
   ExternalProtocolDialog& operator=(const ExternalProtocolDialog&) = delete;
   ~ExternalProtocolDialog() override;
@@ -41,7 +41,7 @@ class ExternalProtocolDialog : public views::DialogDelegateView,
   // views::DialogDelegateView:
   gfx::Size CalculatePreferredSize() const override;
   bool ShouldShowCloseButton() const override;
-  base::string16 GetWindowTitle() const override;
+  std::u16string GetWindowTitle() const override;
   views::View* GetContentsView() override;
   views::Widget* GetWidget() override;
   const views::Widget* GetWidget() const override;
@@ -53,8 +53,8 @@ class ExternalProtocolDialog : public views::DialogDelegateView,
   void OnDialogAccepted();
 
   const GURL url_;
-  const base::string16 program_name_;
-  const base::Optional<url::Origin> initiating_origin_;
+  const std::u16string program_name_;
+  const absl::optional<url::Origin> initiating_origin_;
 
   // The message box whose commands we handle.
   views::MessageBoxView* message_box_view_ = nullptr;

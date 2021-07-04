@@ -10,7 +10,7 @@
 
 #include "base/callback_forward.h"
 #include "chrome/browser/chromeos/platform_keys/key_permissions/key_permissions_service.h"
-#include "chrome/browser/chromeos/platform_keys/platform_keys.h"
+#include "chrome/browser/platform_keys/platform_keys.h"
 #include "content/public/browser/browser_context.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
@@ -30,19 +30,19 @@ class MockKeyPermissionsService : public KeyPermissionsService {
               CanUserGrantPermissionForKey,
               (const std::string& public_key_spki_der,
                CanUserGrantPermissionForKeyCallback callback),
-              (const override));
+              (override));
 
   MOCK_METHOD(void,
               IsCorporateKey,
               (const std::string& public_key_spki_der_b64,
                IsCorporateKeyCallback callback),
-              (const override));
+              (override));
 
   MOCK_METHOD(void,
               SetCorporateKey,
               (const std::string& public_key_spki_der_b64,
                SetCorporateKeyCallback callback),
-              (const override));
+              (override));
 };
 
 std::unique_ptr<KeyedService> BuildMockKeyPermissionsService(

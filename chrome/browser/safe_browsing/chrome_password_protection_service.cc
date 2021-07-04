@@ -24,6 +24,7 @@
 #include "chrome/browser/extensions/api/safe_browsing_private/safe_browsing_private_event_router_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/password_manager/account_password_store_factory.h"
+#include "chrome/browser/password_manager/password_reuse_manager_factory.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/advanced_protection_status_manager.h"
@@ -31,12 +32,13 @@
 #include "chrome/browser/safe_browsing/safe_browsing_metrics_collector.h"
 #include "chrome/browser/safe_browsing/safe_browsing_metrics_collector_factory.h"
 #include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager.h"
+#include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager_factory.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/safe_browsing/ui_manager.h"
 #include "chrome/browser/safe_browsing/user_population.h"
 #include "chrome/browser/safe_browsing/verdict_cache_manager_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/sync/profile_sync_service_factory.h"
+#include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/sync/user_event_service_factory.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
@@ -50,17 +52,18 @@
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
-#include "components/safe_browsing/content/password_protection/password_protection_navigation_throttle.h"
-#include "components/safe_browsing/content/password_protection/password_protection_request_content.h"
-#include "components/safe_browsing/content/web_ui/safe_browsing_ui.h"
+#include "components/safe_browsing/content/browser/password_protection/password_protection_navigation_throttle.h"
+#include "components/safe_browsing/content/browser/password_protection/password_protection_request_content.h"
+#include "components/safe_browsing/content/browser/triggers/trigger_throttler.h"
+#include "components/safe_browsing/content/browser/web_ui/safe_browsing_ui.h"
+#include "components/safe_browsing/core/browser/db/database_manager.h"
+#include "components/safe_browsing/core/browser/sync/safe_browsing_primary_account_token_fetcher.h"
+#include "components/safe_browsing/core/browser/verdict_cache_manager.h"
+#include "components/safe_browsing/core/common/features.h"
+#include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/safe_browsing/core/common/safebrowsing_constants.h"
 #include "components/safe_browsing/core/common/utils.h"
-#include "components/safe_browsing/core/db/database_manager.h"
-#include "components/safe_browsing/core/features.h"
-#include "components/safe_browsing/core/proto/csd.pb.h"
-#include "components/safe_browsing/core/triggers/trigger_throttler.h"
-#include "components/safe_browsing/core/verdict_cache_manager.h"
 #include "components/security_interstitials/content/unsafe_resource_util.h"
 #include "components/security_interstitials/core/unsafe_resource.h"
 #include "components/signin/public/identity_manager/account_info.h"
@@ -230,26 +233,32 @@ std::unique_ptr<UserEventSpecifics> GetUserEventSpecifics(
 ChromePasswordProtectionService::ChromePasswordProtectionService(
     SafeBrowsingService* sb_service,
     Profile* profile)
-    : PasswordProtectionService(sb_service->database_manager(),
-                                sb_service->GetURLLoaderFactory(profile),
-                                HistoryServiceFactory::GetForProfile(
-                                    profile,
-                                    ServiceAccessType::EXPLICIT_ACCESS)),
+    : PasswordProtectionService(
+          sb_service->database_manager(),
+          sb_service->GetURLLoaderFactory(profile),
+          HistoryServiceFactory::GetForProfile(
+              profile,
+              ServiceAccessType::EXPLICIT_ACCESS),
+          profile->GetPrefs(),
+          std::make_unique<SafeBrowsingPrimaryAccountTokenFetcher>(
+              IdentityManagerFactory::GetForProfile(profile)),
+          profile->IsOffTheRecord(),
+          IdentityManagerFactory::GetForProfile(profile),
+          /*try_token_fetch=*/true),
       ui_manager_(sb_service->ui_manager()),
       trigger_manager_(sb_service->trigger_manager()),
       profile_(profile),
-      navigation_observer_manager_(sb_service->navigation_observer_manager()),
       pref_change_registrar_(new PrefChangeRegistrar),
       cache_manager_(VerdictCacheManagerFactory::GetForProfile(profile)) {
   pref_change_registrar_->Init(profile_->GetPrefs());
 
-  scoped_refptr<password_manager::PasswordStore> password_store =
-      GetProfilePasswordStore();
-  // Password store can be null in tests.
-  if (password_store) {
+  password_manager::PasswordReuseManager* reuse_manager =
+      PasswordReuseManagerFactory::GetForProfile(profile_);
+  // Reuse manager can be null in tests.
+  if (reuse_manager) {
     // Subscribe to gaia hash password changes change notifications.
     hash_password_manager_subscription_ =
-        password_store->RegisterStateCallbackOnHashPasswordManager(
+        reuse_manager->RegisterStateCallbackOnHashPasswordManager(
             base::BindRepeating(&ChromePasswordProtectionService::
                                     CheckGaiaPasswordChangeForAllSignedInUsers,
                                 base::Unretained(this)));
@@ -369,13 +378,6 @@ ChromePasswordProtectionService::GetUrlDisplayExperiment() const {
       base::FeatureList::IsEnabled(safe_browsing::kDelayedWarnings));
   experiment.set_delayed_warnings_mouse_clicks_enabled(
       safe_browsing::kDelayedWarningsEnableMouseClicks.Get());
-  // Actual URL display experiments:
-  experiment.set_reveal_on_hover(base::FeatureList::IsEnabled(
-      omnibox::kRevealSteadyStateUrlPathQueryAndRefOnHover));
-  experiment.set_hide_on_interaction(base::FeatureList::IsEnabled(
-      omnibox::kHideSteadyStateUrlPathQueryAndRefOnInteraction));
-  experiment.set_elide_to_registrable_domain(
-      base::FeatureList::IsEnabled(omnibox::kMaybeElideToRegistrableDomain));
   return experiment;
 }
 
@@ -390,9 +392,7 @@ void ChromePasswordProtectionService::ShowModalWarning(
          password_type.account_type() ==
              ReusedPasswordAccountType::NON_GAIA_ENTERPRISE ||
          (password_type.account_type() ==
-              ReusedPasswordAccountType::SAVED_PASSWORD &&
-          base::FeatureList::IsEnabled(
-              safe_browsing::kPasswordProtectionForSavedPasswords)));
+          ReusedPasswordAccountType::SAVED_PASSWORD));
   PasswordProtectionRequestContent* request_content =
       static_cast<PasswordProtectionRequestContent*>(request);
   content::WebContents* web_contents = request_content->web_contents();
@@ -587,7 +587,7 @@ void ChromePasswordProtectionService::MaybeStartThreatDetailsCollection(
       web_contents->GetMainFrame()->GetRoutingID());
   resource.token = token;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory =
-      content::BrowserContext::GetDefaultStoragePartition(profile_)
+      profile_->GetDefaultStoragePartition()
           ->GetURLLoaderFactoryForBrowserProcess();
   // Ignores the return of |StartCollectingThreatDetails()| here and
   // let TriggerManager decide whether it should start data
@@ -595,6 +595,8 @@ void ChromePasswordProtectionService::MaybeStartThreatDetailsCollection(
   trigger_manager_->StartCollectingThreatDetails(
       safe_browsing::TriggerType::GAIA_PASSWORD_REUSE, web_contents, resource,
       url_loader_factory, /*history_service=*/nullptr,
+      SafeBrowsingNavigationObserverManagerFactory::GetForBrowserContext(
+          profile_),
       TriggerManager::GetSBErrorDisplayOptions(*profile_->GetPrefs(),
                                                web_contents));
 }
@@ -737,7 +739,7 @@ void ChromePasswordProtectionService::
     if (identity_manager) {
       CoreAccountInfo unconsented_primary_account_info =
           identity_manager->GetPrimaryAccountInfo(
-              signin::ConsentLevel::kNotRequired);
+              signin::ConsentLevel::kSignin);
       // SecurityEventRecorder only supports unconsented primary accounts.
       if (gaia::AreEmailsSame(unconsented_primary_account_info.email,
                               username_for_last_shown_warning())) {
@@ -862,7 +864,7 @@ void ChromePasswordProtectionService::OnGaiaPasswordChanged(
   DictionaryPrefUpdate unhandled_gaia_password_reuses(
       profile_->GetPrefs(), prefs::kSafeBrowsingUnhandledGaiaPasswordReuses);
   LogNumberOfReuseBeforeSyncPasswordChange(
-      unhandled_gaia_password_reuses->size());
+      unhandled_gaia_password_reuses->DictSize());
   unhandled_gaia_password_reuses->Clear();
   if (!is_other_gaia_password)
     MaybeLogPasswordCapture(/*did_log_in=*/true);
@@ -1076,7 +1078,7 @@ void ChromePasswordProtectionService::HandleResetPasswordOnInterstitial(
           /*in_new_tab=*/false);
 }
 
-base::string16 ChromePasswordProtectionService::GetWarningDetailText(
+std::u16string ChromePasswordProtectionService::GetWarningDetailText(
     ReusedPasswordAccountType password_type,
     std::vector<size_t>* placeholder_offsets) const {
   DCHECK(password_type.account_type() == ReusedPasswordAccountType::GSUITE ||
@@ -1084,9 +1086,7 @@ base::string16 ChromePasswordProtectionService::GetWarningDetailText(
          password_type.account_type() ==
              ReusedPasswordAccountType::NON_GAIA_ENTERPRISE ||
          (password_type.account_type() ==
-              ReusedPasswordAccountType::SAVED_PASSWORD &&
-          base::FeatureList::IsEnabled(
-              safe_browsing::kPasswordProtectionForSavedPasswords)));
+          ReusedPasswordAccountType::SAVED_PASSWORD));
   if (password_type.account_type() ==
       ReusedPasswordAccountType::NON_GAIA_ENTERPRISE) {
     return l10n_util::GetStringUTF16(
@@ -1094,9 +1094,7 @@ base::string16 ChromePasswordProtectionService::GetWarningDetailText(
   }
 
   if (password_type.account_type() ==
-          ReusedPasswordAccountType::SAVED_PASSWORD &&
-      base::FeatureList::IsEnabled(
-          safe_browsing::kPasswordProtectionForSavedPasswords)) {
+      ReusedPasswordAccountType::SAVED_PASSWORD) {
     return GetWarningDetailTextForSavedPasswords(placeholder_offsets);
   }
 
@@ -1122,7 +1120,7 @@ base::string16 ChromePasswordProtectionService::GetWarningDetailText(
       IDS_PAGE_INFO_CHANGE_PASSWORD_DETAILS_ENTERPRISE);
 }
 
-std::vector<base::string16>
+std::vector<std::u16string>
 ChromePasswordProtectionService::GetPlaceholdersForSavedPasswordWarningText()
     const {
   const std::vector<std::string>& matching_domains =
@@ -1132,7 +1130,7 @@ ChromePasswordProtectionService::GetPlaceholdersForSavedPasswordWarningText()
   // Show most commonly spoofed domains first.
   // This looks through the top priority spoofed domains and then checks to see
   // if it's in the matching domains.
-  std::vector<base::string16> placeholders;
+  std::vector<std::u16string> placeholders;
   for (auto priority_domain_iter = spoofed_domains.begin();
        priority_domain_iter != spoofed_domains.end(); ++priority_domain_iter) {
     std::string matching_domain;
@@ -1178,10 +1176,10 @@ ChromePasswordProtectionService::GetPlaceholdersForSavedPasswordWarningText()
   return placeholders;
 }
 
-base::string16
+std::u16string
 ChromePasswordProtectionService::GetWarningDetailTextForSavedPasswords(
     std::vector<size_t>* placeholder_offsets) const {
-  std::vector<base::string16> placeholders =
+  std::vector<std::u16string> placeholders =
       GetPlaceholdersForSavedPasswordWarningText();
   // If showing the saved passwords domain experiment is not on or if there is
   // are no saved domains, default to original saved passwords reuse warning.
@@ -1191,10 +1189,10 @@ ChromePasswordProtectionService::GetWarningDetailTextForSavedPasswords(
              : GetWarningDetailTextToCheckSavedPasswords(placeholder_offsets);
 }
 
-base::string16
+std::u16string
 ChromePasswordProtectionService::GetWarningDetailTextToCheckSavedPasswords(
     std::vector<size_t>* placeholder_offsets) const {
-  std::vector<base::string16> placeholders =
+  std::vector<std::u16string> placeholders =
       GetPlaceholdersForSavedPasswordWarningText();
   if (placeholders.size() == 1) {
     return l10n_util::GetStringFUTF16(
@@ -1293,15 +1291,15 @@ void ChromePasswordProtectionService::OnWarningTriggerChanged() {
   }
 
   // Clears captured enterprise password hashes or GSuite sync password hashes.
-  scoped_refptr<password_manager::PasswordStore> password_store =
-      GetProfilePasswordStore();
+  password_manager::PasswordReuseManager* reuse_manager =
+      GetPasswordReuseManager();
 
-  password_store->ClearAllNonGmailPasswordHash();
-  password_store->ClearAllEnterprisePasswordHash();
+  reuse_manager->ClearAllNonGmailPasswordHash();
+  reuse_manager->ClearAllEnterprisePasswordHash();
 }
 
 void ChromePasswordProtectionService::OnEnterprisePasswordUrlChanged() {
-  GetProfilePasswordStore()->ScheduleEnterprisePasswordURLUpdate();
+  GetPasswordReuseManager()->ScheduleEnterprisePasswordURLUpdate();
 }
 
 bool ChromePasswordProtectionService::CanShowInterstitial(
@@ -1406,8 +1404,11 @@ void ChromePasswordProtectionService::FillReferrerChain(
     SessionID event_tab_id,
     LoginReputationClientRequest::Frame* frame) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  SafeBrowsingNavigationObserverManager* navigation_observer_manager =
+      SafeBrowsingNavigationObserverManagerFactory::GetForBrowserContext(
+          profile_);
   SafeBrowsingNavigationObserverManager::AttributionResult result =
-      navigation_observer_manager_->IdentifyReferrerChainByEventURL(
+      navigation_observer_manager->IdentifyReferrerChainByEventURL(
           event_url, event_tab_id, kPasswordEventAttributionUserGestureLimit,
           frame->mutable_referrer_chain());
   size_t referrer_chain_length = frame->referrer_chain().size();
@@ -1423,7 +1424,7 @@ void ChromePasswordProtectionService::FillReferrerChain(
       profile_ ? SafeBrowsingNavigationObserverManager::
                      CountOfRecentNavigationsToAppend(*profile_, result)
                : 0u;
-  navigation_observer_manager_->AppendRecentNavigations(
+  navigation_observer_manager->AppendRecentNavigations(
       recent_navigations_to_collect, frame->mutable_referrer_chain());
 }
 
@@ -1433,7 +1434,7 @@ std::string ChromePasswordProtectionService::GetSyncPasswordHashFromPrefs() {
 
   password_manager::HashPasswordManager hash_password_manager;
   hash_password_manager.set_prefs(profile_->GetPrefs());
-  base::Optional<password_manager::PasswordHashData> sync_hash_data =
+  absl::optional<password_manager::PasswordHashData> sync_hash_data =
       hash_password_manager.RetrievePasswordHash(GetAccountInfo().email,
                                                  /*is_gaia_password=*/true);
   return sync_hash_data ? base::NumberToString(sync_hash_data->hash)
@@ -1541,8 +1542,7 @@ void ChromePasswordProtectionService::FillUserPopulation(
 }
 
 bool ChromePasswordProtectionService::IsPrimaryAccountSyncing() const {
-  syncer::SyncService* sync =
-      ProfileSyncServiceFactory::GetForProfile(profile_);
+  syncer::SyncService* sync = SyncServiceFactory::GetForProfile(profile_);
   return sync && sync->IsSyncFeatureActive() && !sync->IsLocalSyncEnabled();
 }
 
@@ -1583,9 +1583,7 @@ AccountInfo ChromePasswordProtectionService::GetSignedInNonSyncAccount(
   if (account_iterator == signed_in_accounts.end())
     return AccountInfo();
 
-  return identity_manager
-      ->FindExtendedAccountInfoForAccountWithRefreshToken(*account_iterator)
-      .value_or(AccountInfo());
+  return identity_manager->FindExtendedAccountInfo(*account_iterator);
 }
 
 bool ChromePasswordProtectionService::IsInExcludedCountry() {
@@ -1658,11 +1656,8 @@ AccountInfo ChromePasswordProtectionService::GetAccountInfo() const {
   if (!identity_manager)
     return AccountInfo();
 
-  base::Optional<AccountInfo> primary_account_info =
-      identity_manager->FindExtendedAccountInfoForAccountWithRefreshToken(
-          identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSync));
-
-  return primary_account_info.value_or(AccountInfo());
+  return identity_manager->FindExtendedAccountInfo(
+      identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSync));
 }
 
 ChromePasswordProtectionService::ChromePasswordProtectionService(
@@ -1670,7 +1665,14 @@ ChromePasswordProtectionService::ChromePasswordProtectionService(
     scoped_refptr<SafeBrowsingUIManager> ui_manager,
     StringProvider sync_password_hash_provider,
     VerdictCacheManager* cache_manager)
-    : PasswordProtectionService(nullptr, nullptr, nullptr),
+    : PasswordProtectionService(nullptr,
+                                nullptr,
+                                nullptr,
+                                nullptr,
+                                nullptr,
+                                false,
+                                nullptr,
+                                /*try_token_fetch=*/false),
       ui_manager_(ui_manager),
       trigger_manager_(nullptr),
       profile_(profile),
@@ -1695,9 +1697,7 @@ ChromePasswordProtectionService::GetPasswordProtectionWarningTriggerPref(
     ReusedPasswordAccountType password_type) const {
   if (password_type.account_type() == ReusedPasswordAccountType::GMAIL ||
       (password_type.account_type() ==
-           ReusedPasswordAccountType::SAVED_PASSWORD &&
-       base::FeatureList::IsEnabled(
-           safe_browsing::kPasswordProtectionForSavedPasswords)))
+       ReusedPasswordAccountType::SAVED_PASSWORD))
     return PHISHING_REUSE;
 
   bool is_policy_managed = profile_->GetPrefs()->HasPrefPath(
@@ -1766,6 +1766,11 @@ ChromePasswordProtectionService::GetReferringAppInfo(
   return safe_browsing::GetReferringAppInfo(web_contents);
 }
 #endif
+
+password_manager::PasswordReuseManager*
+ChromePasswordProtectionService::GetPasswordReuseManager() const {
+  return PasswordReuseManagerFactory::GetForProfile(profile_);
+}
 
 password_manager::PasswordStore*
 ChromePasswordProtectionService::GetProfilePasswordStore() const {

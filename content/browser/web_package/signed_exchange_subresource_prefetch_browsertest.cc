@@ -5,12 +5,13 @@
 #include <string>
 #include <vector>
 
+#include "base/cxx17_backports.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/format_macros.h"
 #include "base/no_destructor.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
-#include "base/stl_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/task_runner.h"
@@ -180,12 +181,12 @@ class NavigationHandleSXGAttributeObserver : public WebContentsObserver {
         navigation_handle->HasPrefetchedAlternativeSubresourceSignedExchange();
   }
 
-  const base::Optional<bool>& had_prefetched_alt_sxg() const {
+  const absl::optional<bool>& had_prefetched_alt_sxg() const {
     return had_prefetched_alt_sxg_;
   }
 
  private:
-  base::Optional<bool> had_prefetched_alt_sxg_;
+  absl::optional<bool> had_prefetched_alt_sxg_;
 
   DISALLOW_COPY_AND_ASSIGN(NavigationHandleSXGAttributeObserver);
 };
@@ -425,8 +426,16 @@ class SignedExchangePrefetchBrowserTest
   DISALLOW_COPY_AND_ASSIGN(SignedExchangePrefetchBrowserTest);
 };
 
+// https://crbug.com/1219373 fails with BFCache field trial testing config.
+#if defined(OS_ANDROID)
+#define MAYBE_PrefetchMainResourceSXG_SameOrigin \
+  DISABLED_PrefetchMainResourceSXG_SameOrigin
+#else
+#define MAYBE_PrefetchMainResourceSXG_SameOrigin \
+  PrefetchMainResourceSXG_SameOrigin
+#endif
 IN_PROC_BROWSER_TEST_P(SignedExchangePrefetchBrowserTest,
-                       PrefetchMainResourceSXG_SameOrigin) {
+                       MAYBE_PrefetchMainResourceSXG_SameOrigin) {
   RunPrefetchMainResourceSXGTest("example.com" /* prefetch_page_hostname */,
                                  "/prefetch.html" /* prefetch_page_path */,
                                  "example.com" /* sxg_hostname */,
@@ -435,8 +444,16 @@ IN_PROC_BROWSER_TEST_P(SignedExchangePrefetchBrowserTest,
                                  "/target.html" /* inner_url_path */);
 }
 
+// https://crbug.com/1219373 fails with BFCache field trial testing config.
+#if defined(OS_ANDROID)
+#define MAYBE_PrefetchMainResourceSXG_CrossOrigin \
+  DISABLED_PrefetchMainResourceSXG_CrossOrigin
+#else
+#define MAYBE_PrefetchMainResourceSXG_CrossOrigin \
+  PrefetchMainResourceSXG_CrossOrigin
+#endif
 IN_PROC_BROWSER_TEST_P(SignedExchangePrefetchBrowserTest,
-                       PrefetchMainResourceSXG_CrossOrigin) {
+                       MAYBE_PrefetchMainResourceSXG_CrossOrigin) {
   RunPrefetchMainResourceSXGTest(
       "aggregator.example.com" /* prefetch_page_hostname */,
       "/prefetch.html" /* prefetch_page_path */,
@@ -446,8 +463,15 @@ IN_PROC_BROWSER_TEST_P(SignedExchangePrefetchBrowserTest,
       "/target.html" /* inner_url_path */);
 }
 
+// https://crbug.com/1219373 fails with BFCache field trial testing config.
+#if defined(OS_ANDROID)
+#define MAYBE_PrefetchMainResourceSXG_SameURL \
+  DISABLED_PrefetchMainResourceSXG_SameURL
+#else
+#define MAYBE_PrefetchMainResourceSXG_SameURL PrefetchMainResourceSXG_SameURL
+#endif
 IN_PROC_BROWSER_TEST_P(SignedExchangePrefetchBrowserTest,
-                       PrefetchMainResourceSXG_SameURL) {
+                       MAYBE_PrefetchMainResourceSXG_SameURL) {
   RunPrefetchMainResourceSXGTest("example.com" /* prefetch_page_hostname */,
                                  "/prefetch.html" /* prefetch_page_path */,
                                  "example.com" /* sxg_hostname */,
@@ -764,8 +788,16 @@ IN_PROC_BROWSER_TEST_P(SignedExchangePrefetchBrowserTest,
 // SignedExchangePrefetchCacheForNavigations when
 // |sxg_subresource_prefetch_enabled| is false to check the behavior of
 // SignedExchangePrefetchCacheForNavigations feature.
+// https://crbug.com/1219373 fails with BFCache field trial testing config.
+#if defined(OS_ANDROID)
+#define MAYBE_PrefetchAlternativeSubresourceSXG \
+  DISABLED_PrefetchAlternativeSubresourceSXG
+#else
+#define MAYBE_PrefetchAlternativeSubresourceSXG \
+  PrefetchAlternativeSubresourceSXG
+#endif
 IN_PROC_BROWSER_TEST_P(SignedExchangePrefetchBrowserTest,
-                       PrefetchAlternativeSubresourceSXG) {
+                       MAYBE_PrefetchAlternativeSubresourceSXG) {
   const char* prefetch_page_path = "/prefetch.html";
   const char* page_sxg_path = "/target.sxg";
   const char* page_inner_url_path = "/target.html";
@@ -969,8 +1001,8 @@ IN_PROC_BROWSER_TEST_P(SignedExchangePrefetchBrowserTest, ClearAll) {
   EXPECT_EQ(IsSignedExchangePrefetchCacheEnabled() ? 1u : 0u,
             GetCachedExchanges(shell()).size());
 
-  BrowsingDataRemover* remover = BrowserContext::GetBrowsingDataRemover(
-      shell()->web_contents()->GetBrowserContext());
+  BrowsingDataRemover* remover =
+      shell()->web_contents()->GetBrowserContext()->GetBrowsingDataRemover();
   BrowsingDataRemoverCompletionObserver completion_observer(remover);
   remover->RemoveAndReply(
       base::Time(), base::Time::Max(), BrowsingDataRemover::DATA_TYPE_CACHE,
@@ -2188,7 +2220,8 @@ IN_PROC_BROWSER_TEST_F(SignedExchangeSubresourcePrefetchBrowserTest, CORS) {
     requests_list_string += base::StringPrintf(
         "new Request('%s', {credentials: '%s'})", data_url.spec().c_str(),
         kTestCases[i].request_credentials);
-    const net::SHA256HashValue data_header_integrity = {{0x02 + i}};
+    const net::SHA256HashValue data_header_integrity = {
+        {static_cast<uint8_t>(0x02 + i)}};
 
     target_sxg_outer_link_header +=
         CreateAlternateLinkHeader(data_sxg_url, data_url);
@@ -2390,7 +2423,7 @@ IN_PROC_BROWSER_TEST_F(SignedExchangeSubresourcePrefetchBrowserTest,
   EXPECT_EQ(0, script_request_counter->GetRequestCount());
 
   // Clears the title.
-  EXPECT_TRUE(ExecuteScript(shell()->web_contents(), "document.title = '';"));
+  EXPECT_TRUE(ExecJs(shell()->web_contents(), "document.title = '';"));
 
   const char* next_page_path = "/next_page.html";
   const GURL next_page_url = embedded_test_server()->GetURL(next_page_path);
@@ -2400,7 +2433,7 @@ IN_PROC_BROWSER_TEST_F(SignedExchangeSubresourcePrefetchBrowserTest,
           "<head><title>Next page</title>"
           "<script src=\"./script.js\" async defer></script></head>"));
   // Triggers GC.
-  EXPECT_TRUE(ExecuteScript(shell()->web_contents(), "window.gc();"));
+  EXPECT_TRUE(ExecJs(shell()->web_contents(), "window.gc();"));
   // The script which was served via SXG must be kept in memory cache and must
   // be reused.
   NavigateToURLAndWaitTitle(next_page_url, "done");

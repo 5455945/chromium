@@ -4,6 +4,8 @@
 
 #include <windows.h>
 
+#include <memory>
+
 #include "base/base_paths_win.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/json/json_reader.h"
@@ -14,6 +16,7 @@
 #include "chrome/credential_provider/extension/app_inventory_manager.h"
 #include "chrome/credential_provider/extension/user_device_context.h"
 #include "chrome/credential_provider/gaiacp/gcpw_strings.h"
+#include "chrome/credential_provider/gaiacp/mdm_utils.h"
 #include "chrome/credential_provider/gaiacp/reg_utils.h"
 #include "chrome/credential_provider/test/gls_runner_test_base.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -34,7 +37,7 @@ void AppInventoryManagerBaseTest::SetUp() {
   FakesForTesting fakes;
   fakes.fake_win_http_url_fetcher_creator =
       fake_http_url_fetcher_factory()->GetCreatorCallback();
-  AppInventoryManager::Get()->SetFakesForTesting(&fakes);  // IN-TEST
+  AppInventoryManager::Get()->SetFakesForTesting(&fakes);
 }
 
 std::wstring AppInventoryManagerBaseTest::CreateUser() {
@@ -52,11 +55,13 @@ std::wstring AppInventoryManagerBaseTest::CreateUser() {
 // string : The specified device resource ID.
 // bool : Whether a valid user sid is present.
 // bool : Whether app data is present or not.
+// bool : Whether mdm enrollment url is set or not.
+// bool : Whether device is enrolld or not.
 // string : The specified DM token.
 class AppInventoryManagerTest
     : public AppInventoryManagerBaseTest,
       public ::testing::WithParamInterface<
-          std::tuple<const wchar_t*, bool, bool, const wchar_t*>> {
+          std::tuple<const wchar_t*, bool, bool, bool, bool, const wchar_t*>> {
  public:
   AppInventoryManagerTest();
 
@@ -73,11 +78,14 @@ TEST_P(AppInventoryManagerTest, uploadAppInventory) {
   const std::wstring device_resource_id(std::get<0>(GetParam()));
   bool has_valid_sid = std::get<1>(GetParam());
   bool has_app_data = std::get<2>(GetParam());
-  const std::wstring dm_token(std::get<3>(GetParam()));
+  bool has_mdm_url = std::get<3>(GetParam());
+  bool is_device_enrolled = std::get<4>(GetParam());
+  const std::wstring dm_token(std::get<5>(GetParam()));
 
   const char kAppDisplayName[] = "name";
   const char kAppDisplayVersion[] = "version";
   const char kAppPublisher[] = "publisher";
+  const char kAppType[] = "app_type";
 
   const wchar_t kApp1[] = L"app1";
   const wchar_t kAppDisplayName1[] = L"appName1";
@@ -99,6 +107,12 @@ TEST_P(AppInventoryManagerTest, uploadAppInventory) {
   const wchar_t kAppDisplayNameRegistryKey[] = L"DisplayName";
   const wchar_t kAppDisplayVersionRegistryKey[] = L"DisplayVersion";
   const wchar_t kAppPublisherRegistryKey[] = L"Publisher";
+
+  if (has_mdm_url) {
+    ASSERT_EQ(S_OK, SetGlobalFlagForTesting(kRegMdmUrl, L"https://mdm.com"));
+  }
+  GoogleMdmEnrolledStatusForTesting forced_enrollment_status(
+      is_device_enrolled);
 
   std::wstring user_sid = L"invalid-user-sid";
   if (has_valid_sid) {
@@ -166,7 +180,10 @@ TEST_P(AppInventoryManagerTest, uploadAppInventory) {
   ASSERT_TRUE(SUCCEEDED(task->SetContext({context})));
   HRESULT status = task->Execute();
 
-  if (!has_valid_sid || device_resource_id.empty() || dm_token.empty()) {
+  if (!has_mdm_url || !is_device_enrolled) {
+    ASSERT_TRUE(SUCCEEDED(status));
+    ASSERT_EQ(fake_http_url_fetcher_factory()->requests_created(), 0uLL);
+  } else if (!has_valid_sid || device_resource_id.empty() || dm_token.empty()) {
     ASSERT_TRUE(FAILED(status));
     ASSERT_EQ(fake_http_url_fetcher_factory()->requests_created(), 0uLL);
   } else {
@@ -175,7 +192,7 @@ TEST_P(AppInventoryManagerTest, uploadAppInventory) {
     FakeWinHttpUrlFetcherFactory::RequestData request_data =
         fake_http_url_fetcher_factory()->GetRequestData(0);
 
-    base::Optional<base::Value> body_value =
+    absl::optional<base::Value> body_value =
         base::JSONReader::Read(request_data.body);
 
     base::Value request(base::Value::Type::DICTIONARY);
@@ -188,22 +205,27 @@ TEST_P(AppInventoryManagerTest, uploadAppInventory) {
 
     if (has_app_data) {
       std::unique_ptr<base::Value> request_dict_1;
-      request_dict_1.reset(new base::Value(base::Value::Type::DICTIONARY));
+      request_dict_1 =
+          std::make_unique<base::Value>(base::Value::Type::DICTIONARY);
       request_dict_1->SetStringKey(kAppDisplayName,
                                    base::WideToUTF8(kAppDisplayName1));
       request_dict_1->SetStringKey(kAppDisplayVersion,
                                    base::WideToUTF8(kAppDisplayVersion1));
       request_dict_1->SetStringKey(kAppPublisher,
                                    base::WideToUTF8(kAppPublisher1));
+      // WIN_32
+      request_dict_1->SetIntKey(kAppType, 1);
       app_info_value_list.Append(
           base::Value::FromUniquePtrValue(std::move(request_dict_1)));
 
       std::unique_ptr<base::Value> request_dict_2;
-      request_dict_2.reset(new base::Value(base::Value::Type::DICTIONARY));
+      request_dict_2 =
+          std::make_unique<base::Value>(base::Value::Type::DICTIONARY);
       request_dict_2->SetStringKey(kAppDisplayName,
                                    base::WideToUTF8(kAppDisplayName2));
       request_dict_2->SetStringKey(kAppDisplayVersion,
                                    base::WideToUTF8(kAppDisplayVersion2));
+      request_dict_2->SetIntKey(kAppType, 1);
       app_info_value_list.Append(
           base::Value::FromUniquePtrValue(std::move(request_dict_2)));
     }
@@ -217,6 +239,8 @@ INSTANTIATE_TEST_SUITE_P(
     All,
     AppInventoryManagerTest,
     ::testing::Combine(::testing::Values(L"", L"valid-device-resource-id"),
+                       ::testing::Bool(),
+                       ::testing::Bool(),
                        ::testing::Bool(),
                        ::testing::Bool(),
                        ::testing::Values(L"", L"valid-dm-token")));

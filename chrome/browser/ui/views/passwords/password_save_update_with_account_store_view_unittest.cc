@@ -11,7 +11,7 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/password_manager/password_store_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/sync/profile_sync_service_factory.h"
+#include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/ui/views/passwords/password_bubble_view_test_base.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/password_manager/core/browser/mock_password_feature_manager.h"
@@ -93,7 +93,7 @@ PasswordSaveUpdateWithAccountStoreViewTest::
           &password_manager::BuildPasswordStore<
               content::BrowserContext,
               testing::NiceMock<password_manager::MockPasswordStore>>));
-  ProfileSyncServiceFactory::GetInstance()->SetTestingFactory(
+  SyncServiceFactory::GetInstance()->SetTestingFactory(
       profile(), base::BindRepeating(&BuildTestSyncService));
 }
 
@@ -109,8 +109,8 @@ void PasswordSaveUpdateWithAccountStoreViewTest::CreateViewAndShow() {
 void PasswordSaveUpdateWithAccountStoreViewTest::SimulateSignIn() {
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile());
-  AccountInfo info =
-      signin::MakePrimaryAccountAvailable(identity_manager, "test@email.com");
+  AccountInfo info = signin::MakePrimaryAccountAvailable(
+      identity_manager, "test@email.com", signin::ConsentLevel::kSync);
 }
 
 TEST_F(PasswordSaveUpdateWithAccountStoreViewTest, HasTitleAndTwoButtons) {

@@ -11,12 +11,12 @@
 #include <tuple>
 
 #include "base/base_paths.h"
+#include "base/cxx17_backports.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
-#include "base/stl_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_path_override.h"
@@ -230,16 +230,16 @@ class InstallShortcutTest : public testing::Test {
     ASSERT_TRUE(fake_user_quick_launch_.CreateUniqueTempDir());
     ASSERT_TRUE(fake_start_menu_.CreateUniqueTempDir());
     ASSERT_TRUE(fake_common_start_menu_.CreateUniqueTempDir());
-    user_desktop_override_.reset(new base::ScopedPathOverride(
-        base::DIR_USER_DESKTOP, fake_user_desktop_.GetPath()));
-    common_desktop_override_.reset(new base::ScopedPathOverride(
-        base::DIR_COMMON_DESKTOP, fake_common_desktop_.GetPath()));
-    user_quick_launch_override_.reset(new base::ScopedPathOverride(
-        base::DIR_USER_QUICK_LAUNCH, fake_user_quick_launch_.GetPath()));
-    start_menu_override_.reset(new base::ScopedPathOverride(
-        base::DIR_START_MENU, fake_start_menu_.GetPath()));
-    common_start_menu_override_.reset(new base::ScopedPathOverride(
-        base::DIR_COMMON_START_MENU, fake_common_start_menu_.GetPath()));
+    user_desktop_override_ = std::make_unique<base::ScopedPathOverride>(
+        base::DIR_USER_DESKTOP, fake_user_desktop_.GetPath());
+    common_desktop_override_ = std::make_unique<base::ScopedPathOverride>(
+        base::DIR_COMMON_DESKTOP, fake_common_desktop_.GetPath());
+    user_quick_launch_override_ = std::make_unique<base::ScopedPathOverride>(
+        base::DIR_USER_QUICK_LAUNCH, fake_user_quick_launch_.GetPath());
+    start_menu_override_ = std::make_unique<base::ScopedPathOverride>(
+        base::DIR_START_MENU, fake_start_menu_.GetPath());
+    common_start_menu_override_ = std::make_unique<base::ScopedPathOverride>(
+        base::DIR_COMMON_START_MENU, fake_common_start_menu_.GetPath());
 
     std::wstring shortcut_name(InstallUtil::GetShortcutName() +
                                installer::kLnkExt);

@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "base/callback.h"
-#include "base/files/file_path.h"
 #include "base/memory/ref_counted.h"
 #include "build/build_config.h"
 #include "chrome/browser/safe_browsing/download_protection/check_client_download_request_base.h"
@@ -47,12 +46,11 @@ class CheckFileSystemAccessWriteRequest
                                   bool upload_requested,
                                   const std::string& request_data,
                                   const std::string& response_body) override;
-  base::Optional<enterprise_connectors::AnalysisSettings> ShouldUploadBinary(
+  absl::optional<enterprise_connectors::AnalysisSettings> ShouldUploadBinary(
       DownloadCheckResultReason reason) override;
   void UploadBinary(DownloadCheckResultReason reason,
                     enterprise_connectors::AnalysisSettings settings) override;
-  bool ShouldPromptForDeepScanning(
-      DownloadCheckResultReason reason) const override;
+  bool ShouldPromptForDeepScanning(bool server_requests_prompt) const override;
   void NotifyRequestFinished(DownloadCheckResult result,
                              DownloadCheckResultReason reason) override;
   bool IsAllowlistedByPolicy() const override;

@@ -60,35 +60,7 @@
                 android:paddingEnd="12dp"
                 android:paddingBottom="12dp">
 
-                <ImageView
-                    android:id="@+id/account_image"
-                    android:layout_width="56dp"
-                    android:layout_height="40dp"
-                    android:scaleType="fitStart"
-                    tools:ignore="ContentDescription"
-                    tools:src="@drawable/logo_avatar_anonymous"/>
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-                    <TextView
-                        android:id="@+id/account_text_primary"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:gravity="center_vertical"
-                        android:minHeight="20dp"
-                        android:textAppearance="@style/TextAppearance.TextLarge.Primary"
-                        tools:text="John Doe"/>
-                    <TextView
-                        android:id="@+id/account_text_secondary"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:gravity="center_vertical"
-                        android:minHeight="20dp"
-                        android:textAppearance="@style/TextAppearance.TextMedium.Secondary"
-                        tools:text="john.doe@example.com"/>
-                </LinearLayout>
+                <include layout="@layout/account_row" />
                 <!-- For forced sign-in & consent bump this ImageView shows checkmark icon. -->
                 <ImageView
                     android:id="@+id/account_picker_end_image"
@@ -148,8 +120,6 @@
             style="@style/TextButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:paddingStart="@dimen/fre_button_padding"
-            android:paddingEnd="@dimen/fre_button_padding"
             tools:text="@string/no_thanks"/>
         <View
             android:layout_width="0dp"
@@ -161,8 +131,6 @@
             style="@style/FilledButton.Flat"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:paddingStart="@dimen/fre_button_padding"
-            android:paddingEnd="@dimen/fre_button_padding"
             tools:text="@string/signin_accept_button"/>
         <org.chromium.ui.widget.ButtonCompat
             android:id="@+id/more_button"

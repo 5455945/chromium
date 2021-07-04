@@ -4,17 +4,18 @@
 
 #include "chrome/browser/chromeos/policy/dlp/clipboard_bubble.h"
 
-#include "ash/public/cpp/ash_features.h"
+#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/style/color_provider.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_clipboard_bubble_constants.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/compositor/layer.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/gfx/text_utils.h"
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/controls/button/label_button.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 
 namespace policy {
 
@@ -66,7 +67,7 @@ constexpr int kButtonsSpacing = 8;
 class Button : public views::LabelButton {
  public:
   METADATA_HEADER(Button);
-  explicit Button(const base::string16& button_label) {
+  explicit Button(const std::u16string& button_label) {
     SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_CENTER);
 
     SetText(button_label);
@@ -101,7 +102,7 @@ BEGIN_METADATA(Button, views::LabelButton)
 ADD_READONLY_PROPERTY_METADATA(int, LabelWidth)
 END_METADATA
 
-ClipboardBubbleView::ClipboardBubbleView(const base::string16& text) {
+ClipboardBubbleView::ClipboardBubbleView(const std::u16string& text) {
   SetPaintToLayer(ui::LAYER_SOLID_COLOR);
   ash::ColorProvider* color_provider = ash::ColorProvider::Get();
   layer()->SetColor(color_provider->GetBaseLayerColor(
@@ -166,10 +167,10 @@ BEGIN_METADATA(ClipboardBubbleView, views::View)
 ADD_READONLY_PROPERTY_METADATA(gfx::Size, BubbleSize)
 END_METADATA
 
-ClipboardBlockBubble::ClipboardBlockBubble(const base::string16& text)
+ClipboardBlockBubble::ClipboardBlockBubble(const std::u16string& text)
     : ClipboardBubbleView(text) {
   // Add "Got it" button.
-  base::string16 button_label =
+  std::u16string button_label =
       l10n_util::GetStringUTF16(IDS_POLICY_DLP_CLIPBOARD_BLOCK_DISMISS_BUTTON);
   button_ = AddChildView(std::make_unique<Button>(button_label));
   button_->SetPaintToLayer();
@@ -199,10 +200,10 @@ void ClipboardBlockBubble::SetDismissCallback(
 BEGIN_METADATA(ClipboardBlockBubble, ClipboardBubbleView)
 END_METADATA
 
-ClipboardWarnBubble::ClipboardWarnBubble(const base::string16& text)
+ClipboardWarnBubble::ClipboardWarnBubble(const std::u16string& text)
     : ClipboardBubbleView(text) {
   // Add paste button.
-  base::string16 paste_label =
+  std::u16string paste_label =
       l10n_util::GetStringUTF16(IDS_POLICY_DLP_CLIPBOARD_WARN_PROCEED_BUTTON);
   paste_button_ = AddChildView(std::make_unique<Button>(paste_label));
   paste_button_->SetPaintToLayer();
@@ -212,7 +213,7 @@ ClipboardWarnBubble::ClipboardWarnBubble(const base::string16& text)
                  kBubblePadding + label_->height() + kButtonLabelSpacing));
 
   // Add cancel button.
-  base::string16 cancel_label =
+  std::u16string cancel_label =
       l10n_util::GetStringUTF16(IDS_POLICY_DLP_CLIPBOARD_WARN_DISMISS_BUTTON);
   cancel_button_ = AddChildView(std::make_unique<Button>(cancel_label));
   cancel_button_->SetPaintToLayer();

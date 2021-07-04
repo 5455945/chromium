@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "base/callback_helpers.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/threading/sequenced_task_runner_handle.h"
 #include "base/trace_event/trace_event.h"
@@ -41,9 +42,9 @@ VideoFrameSubmitter::VideoFrameSubmitter(
       roughness_reporter_(std::make_unique<cc::VideoPlaybackRoughnessReporter>(
           std::move(roughness_reporting_callback))),
       frame_trackers_(false, nullptr),
-      animation_power_mode_voter_(
+      power_mode_voter_(
           power_scheduler::PowerModeArbiter::GetInstance()->NewVoter(
-              "PowerModeVoter.Animation.Video")) {
+              "PowerModeVoter.VideoPlayback")) {
   DETACH_FROM_THREAD(thread_checker_);
 }
 
@@ -71,8 +72,7 @@ void VideoFrameSubmitter::StartRendering() {
 
   if (compositor_frame_sink_) {
     compositor_frame_sink_->SetNeedsBeginFrame(IsDrivingFrameUpdates());
-    animation_power_mode_voter_->VoteFor(
-        power_scheduler::PowerMode::kAnimation);
+    power_mode_voter_->VoteFor(power_scheduler::PowerMode::kVideoPlayback);
   }
 
   frame_trackers_.StartSequence(cc::FrameSequenceTrackerType::kVideo);
@@ -182,9 +182,9 @@ void VideoFrameSubmitter::OnContextLost() {
 }
 
 void VideoFrameSubmitter::DidReceiveCompositorFrameAck(
-    const WTF::Vector<viz::ReturnedResource>& resources) {
+    WTF::Vector<viz::ReturnedResource> resources) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  ReclaimResources(resources);
+  ReclaimResources(std::move(resources));
   waiting_for_compositor_ack_ = false;
 }
 
@@ -196,10 +196,16 @@ void VideoFrameSubmitter::OnBeginFrame(
 
   last_begin_frame_args_ = args;
 
-  for (const auto& pair : timing_details) {
-    if (viz::FrameTokenGT(pair.key, *next_frame_token_))
+  WTF::Vector<uint32_t> frame_tokens;
+  for (const auto& id : timing_details.Keys())
+    frame_tokens.push_back(id);
+  std::sort(frame_tokens.begin(), frame_tokens.end());
+
+  for (const auto& frame_token : frame_tokens) {
+    if (viz::FrameTokenGT(frame_token, *next_frame_token_))
       continue;
-    auto& feedback = pair.value.presentation_feedback;
+    auto& feedback =
+        timing_details.find(frame_token)->value.presentation_feedback;
 #if defined(OS_LINUX) || defined(OS_CHROMEOS)
     // TODO: On Linux failure flag is unreliable, and perfectly rendered frames
     // are reported as failures all the time.
@@ -209,10 +215,11 @@ void VideoFrameSubmitter::OnBeginFrame(
         feedback.flags & gfx::PresentationFeedback::kFailure;
 #endif
     if (!presentation_failure &&
-        !ignorable_submitted_frames_.contains(pair.key)) {
+        !ignorable_submitted_frames_.contains(frame_token)) {
       frame_trackers_.NotifyFramePresented(
-          pair.key, gfx::PresentationFeedback(
-                        feedback.timestamp, feedback.interval, feedback.flags));
+          frame_token,
+          gfx::PresentationFeedback(feedback.timestamp, feedback.interval,
+                                    feedback.flags));
 
       // We assume that presentation feedback is reliable if
       // 1. (kHWCompletion) OS told us that the frame was shown at that time
@@ -222,13 +229,13 @@ void VideoFrameSubmitter::OnBeginFrame(
           gfx::PresentationFeedback::kHWCompletion |
           gfx::PresentationFeedback::kVSync;
       bool reliable_timestamp = feedback.flags & reliable_feedback_mask;
-      roughness_reporter_->FramePresented(pair.key, feedback.timestamp,
+      roughness_reporter_->FramePresented(frame_token, feedback.timestamp,
                                           reliable_timestamp);
     }
 
-    ignorable_submitted_frames_.erase(pair.key);
+    ignorable_submitted_frames_.erase(frame_token);
     TRACE_EVENT_NESTABLE_ASYNC_END_WITH_TIMESTAMP0(
-        "media", "VideoFrameSubmitter", TRACE_ID_LOCAL(pair.key),
+        "media", "VideoFrameSubmitter", TRACE_ID_LOCAL(frame_token),
         feedback.timestamp);
   }
   frame_trackers_.NotifyBeginImplFrame(args);
@@ -280,9 +287,9 @@ void VideoFrameSubmitter::OnBeginFrame(
 }
 
 void VideoFrameSubmitter::ReclaimResources(
-    const WTF::Vector<viz::ReturnedResource>& resources) {
+    WTF::Vector<viz::ReturnedResource> resources) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  resource_provider_->ReceiveReturnsFromParent(resources);
+  resource_provider_->ReceiveReturnsFromParent(std::move(resources));
 }
 
 void VideoFrameSubmitter::DidAllocateSharedBitmap(
@@ -382,14 +389,14 @@ void VideoFrameSubmitter::UpdateSubmissionState() {
 
   const auto is_driving_frame_updates = IsDrivingFrameUpdates();
   compositor_frame_sink_->SetNeedsBeginFrame(is_driving_frame_updates);
-  animation_power_mode_voter_->VoteFor(power_scheduler::PowerMode::kAnimation);
+  power_mode_voter_->VoteFor(power_scheduler::PowerMode::kVideoPlayback);
   // If we're not driving frame updates, then we're paused / off-screen / etc.
   // Roughness reporting should stop until we resume.  Since the current frame
   // might be on-screen for a long time, we also discard the current window.
   if (!is_driving_frame_updates) {
     roughness_reporter_->Reset();
-    animation_power_mode_voter_->ResetVoteAfterTimeout(
-        power_scheduler::PowerModeVoter::kAnimationTimeout);
+    power_mode_voter_->ResetVoteAfterTimeout(
+        power_scheduler::PowerModeVoter::kVideoTimeout);
   }
 
   // These two calls are very important; they are responsible for significant
@@ -511,7 +518,7 @@ bool VideoFrameSubmitter::SubmitFrame(
   // contain any SurfaceDrawQuads.
   compositor_frame_sink_->SubmitCompositorFrame(
       child_local_surface_id_allocator_.GetCurrentLocalSurfaceId(),
-      std::move(compositor_frame), base::nullopt, 0);
+      std::move(compositor_frame), absl::nullopt, 0);
   frame_trackers_.NotifySubmitFrame(frame_token, false, begin_frame_ack,
                                     last_begin_frame_args_);
   resource_provider_->ReleaseFrameResources();
@@ -539,7 +546,7 @@ void VideoFrameSubmitter::SubmitEmptyFrame() {
 
   compositor_frame_sink_->SubmitCompositorFrame(
       child_local_surface_id_allocator_.GetCurrentLocalSurfaceId(),
-      std::move(compositor_frame), base::nullopt, 0);
+      std::move(compositor_frame), absl::nullopt, 0);
   frame_trackers_.NotifySubmitFrame(frame_token, false, begin_frame_ack,
                                     last_begin_frame_args_);
 

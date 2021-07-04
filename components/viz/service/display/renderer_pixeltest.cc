@@ -10,6 +10,7 @@
 
 #include "base/bind.h"
 #include "base/callback_helpers.h"
+#include "base/command_line.h"
 #include "base/memory/aligned_memory.h"
 #include "base/memory/read_only_shared_memory_region.h"
 #include "base/memory/shared_memory_mapping.h"
@@ -29,6 +30,7 @@
 #include "components/viz/common/quads/texture_draw_quad.h"
 #include "components/viz/common/resources/bitmap_allocation.h"
 #include "components/viz/common/resources/resource_format_utils.h"
+#include "components/viz/common/switches.h"
 #include "components/viz/service/display/delegated_ink_point_pixel_test_helper.h"
 #include "components/viz/service/display/gl_renderer.h"
 #include "components/viz/service/display/software_renderer.h"
@@ -112,8 +114,8 @@ ResourceId CreateGpuResource(scoped_refptr<ContextProvider> context_provider,
       false /* is_overlay_candidate */);
   gl_resource.format = format;
   gl_resource.color_space = std::move(color_space);
-  auto release_callback = SingleReleaseCallback::Create(
-      base::BindOnce(&DeleteSharedImage, std::move(context_provider), mailbox));
+  auto release_callback =
+      base::BindOnce(&DeleteSharedImage, std::move(context_provider), mailbox);
   return resource_provider->ImportResource(gl_resource,
                                            std::move(release_callback));
 }
@@ -147,8 +149,6 @@ SharedQuadState* CreateTestSharedQuadState(
     const gfx::RRectF& rrect) {
   const gfx::Rect layer_rect = rect;
   const gfx::Rect visible_layer_rect = rect;
-  const gfx::Rect clip_rect = rect;
-  const bool is_clipped = false;
   const bool are_contents_opaque = false;
   const float opacity = 1.0f;
   const gfx::MaskFilterInfo mask_filter_info(rrect);
@@ -156,7 +156,7 @@ SharedQuadState* CreateTestSharedQuadState(
   int sorting_context_id = 0;
   SharedQuadState* shared_state = render_pass->CreateAndAppendSharedQuadState();
   shared_state->SetAll(quad_to_target_transform, layer_rect, visible_layer_rect,
-                       mask_filter_info, clip_rect, is_clipped,
+                       mask_filter_info, /**clip_rect=*/absl::nullopt,
                        are_contents_opaque, opacity, blend_mode,
                        sorting_context_id);
   return shared_state;
@@ -169,7 +169,6 @@ SharedQuadState* CreateTestSharedQuadStateClipped(
     AggregatedRenderPass* render_pass) {
   const gfx::Rect layer_rect = rect;
   const gfx::Rect visible_layer_rect = clip_rect;
-  const bool is_clipped = true;
   const bool are_contents_opaque = false;
   const float opacity = 1.0f;
   const SkBlendMode blend_mode = SkBlendMode::kSrcOver;
@@ -177,8 +176,9 @@ SharedQuadState* CreateTestSharedQuadStateClipped(
   SharedQuadState* shared_state = render_pass->CreateAndAppendSharedQuadState();
   shared_state->SetAll(quad_to_target_transform, layer_rect, visible_layer_rect,
                        /*mask_filter_info=*/gfx::MaskFilterInfo(), clip_rect,
-                       is_clipped, are_contents_opaque, opacity, blend_mode,
+                       are_contents_opaque, opacity, blend_mode,
                        sorting_context_id);
+
   return shared_state;
 }
 
@@ -264,7 +264,7 @@ void CreateTestTwoColoredTextureDrawQuad(
     resource = child_resource_provider->ImportResource(
         TransferableResource::MakeSoftware(shared_bitmap_id, rect.size(),
                                            RGBA_8888),
-        SingleReleaseCallback::Create(base::DoNothing()));
+        base::DoNothing());
 
     auto span = mapping.GetMemoryAsSpan<uint32_t>(pixels.size());
     std::copy(pixels.begin(), pixels.end(), span.begin());
@@ -325,7 +325,7 @@ void CreateTestTextureDrawQuad(
     resource = child_resource_provider->ImportResource(
         TransferableResource::MakeSoftware(shared_bitmap_id, rect.size(),
                                            RGBA_8888),
-        SingleReleaseCallback::Create(base::DoNothing()));
+        base::DoNothing());
 
     auto span = mapping.GetMemoryAsSpan<uint32_t>(pixels.size());
     std::copy(pixels.begin(), pixels.end(), span.begin());
@@ -407,22 +407,18 @@ void CreateTestYUVVideoDrawQuad_FromVideoFrame(
 
   ResourceId resource_y = child_resource_provider->ImportResource(
       resources.resources[media::VideoFrame::kYPlane],
-      SingleReleaseCallback::Create(
-          std::move(resources.release_callbacks[media::VideoFrame::kYPlane])));
+      std::move(resources.release_callbacks[media::VideoFrame::kYPlane]));
   ResourceId resource_u = child_resource_provider->ImportResource(
       resources.resources[media::VideoFrame::kUPlane],
-      SingleReleaseCallback::Create(
-          std::move(resources.release_callbacks[media::VideoFrame::kUPlane])));
+      std::move(resources.release_callbacks[media::VideoFrame::kUPlane]));
   ResourceId resource_v = child_resource_provider->ImportResource(
       resources.resources[media::VideoFrame::kVPlane],
-      SingleReleaseCallback::Create(
-          std::move(resources.release_callbacks[media::VideoFrame::kVPlane])));
+      std::move(resources.release_callbacks[media::VideoFrame::kVPlane]));
   ResourceId resource_a = kInvalidResourceId;
   if (with_alpha) {
     resource_a = child_resource_provider->ImportResource(
         resources.resources[media::VideoFrame::kAPlane],
-        SingleReleaseCallback::Create(std::move(
-            resources.release_callbacks[media::VideoFrame::kAPlane])));
+        std::move(resources.release_callbacks[media::VideoFrame::kAPlane]));
   }
 
   std::vector<ResourceId> resource_ids_to_transfer;
@@ -444,14 +440,14 @@ void CreateTestYUVVideoDrawQuad_FromVideoFrame(
   if (with_alpha)
     mapped_resource_a = resource_map[resource_a];
   const gfx::Size ya_tex_size = video_frame->coded_size();
-  const gfx::Size uv_tex_size = media::VideoFrame::PlaneSize(
+  const gfx::Size uv_tex_size = media::VideoFrame::PlaneSizeInSamples(
       video_frame->format(), media::VideoFrame::kUPlane,
       video_frame->coded_size());
-  DCHECK(uv_tex_size == media::VideoFrame::PlaneSize(
+  DCHECK(uv_tex_size == media::VideoFrame::PlaneSizeInSamples(
                             video_frame->format(), media::VideoFrame::kVPlane,
                             video_frame->coded_size()));
   if (with_alpha) {
-    DCHECK(ya_tex_size == media::VideoFrame::PlaneSize(
+    DCHECK(ya_tex_size == media::VideoFrame::PlaneSizeInSamples(
                               video_frame->format(), media::VideoFrame::kAPlane,
                               video_frame->coded_size()));
   }
@@ -517,8 +513,7 @@ void CreateTestY16TextureDrawQuad_FromVideoFrame(
   EXPECT_EQ(1u, resources.release_callbacks.size());
 
   ResourceId resource_y = child_resource_provider->ImportResource(
-      resources.resources[0],
-      SingleReleaseCallback::Create(std::move(resources.release_callbacks[0])));
+      resources.resources[0], std::move(resources.release_callbacks[0]));
 
   // Transfer resources to the parent, and get the resource map.
   std::unordered_map<ResourceId, ResourceId, ResourceIdHasher> resource_map =
@@ -757,7 +752,7 @@ void CreateTestYUVVideoDrawQuad_NV12(
     scoped_refptr<ContextProvider> child_context_provider) {
   bool needs_blending = true;
   const gfx::Size ya_tex_size = rect.size();
-  const gfx::Size uv_tex_size = media::VideoFrame::PlaneSize(
+  const gfx::Size uv_tex_size = media::VideoFrame::PlaneSizeInSamples(
       media::PIXEL_FORMAT_NV12, media::VideoFrame::kUVPlane, rect.size());
 
   std::vector<uint8_t> y_pixels(ya_tex_size.GetArea(), y);
@@ -901,6 +896,9 @@ INSTANTIATE_TEST_SUITE_P(,
                          // SkiaRenderer Dawn once video is supported.
                          testing::ValuesIn(GetGpuRendererTypesNoDawn()),
                          testing::PrintToStringParamName());
+
+// GetGpuRendererTypesNoDawn() can return an empty list, e.g. on Fuchsia ARM64.
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(GPURendererPixelTest);
 
 // Provides an exact comparator for GLRenderer and fuzzy comparator for Skia
 // based (eg. SoftwareRenderer and SkiaRenderer).
@@ -1199,7 +1197,7 @@ TEST_P(GPURendererPixelTest, SolidColorWithTemperature) {
   AggregatedRenderPassList pass_list;
   pass_list.push_back(std::move(pass));
 
-  SkMatrix44 color_matrix(SkMatrix44::kIdentity_Constructor);
+  skia::Matrix44 color_matrix(skia::Matrix44::kIdentity_Constructor);
   color_matrix.set(0, 0, 0.7f);
   color_matrix.set(1, 1, 0.4f);
   color_matrix.set(2, 2, 0.5f);
@@ -1239,7 +1237,7 @@ TEST_P(GPURendererPixelTest, SolidColorWithTemperatureNonRootRenderPass) {
 
   // Set a non-identity output color matrix on the output surface, and expect
   // that the colors will be transformed.
-  SkMatrix44 color_matrix(SkMatrix44::kIdentity_Constructor);
+  skia::Matrix44 color_matrix(skia::Matrix44::kIdentity_Constructor);
   color_matrix.set(0, 0, 0.7f);
   color_matrix.set(1, 1, 0.4f);
   color_matrix.set(2, 2, 0.5f);
@@ -1311,7 +1309,6 @@ class IntersectingQuadPixelTest : public VizPixelTestWithParam {
     trans.RotateAboutYAxis(45.0);
     front_quad_state_ = CreateTestSharedQuadState(
         trans, viewport_rect_, render_pass_.get(), gfx::RRectF());
-    front_quad_state_->clip_rect = quad_rect_;
     // Make sure they end up in a 3d sorting context.
     front_quad_state_->sorting_context_id = 1;
 
@@ -1323,7 +1320,6 @@ class IntersectingQuadPixelTest : public VizPixelTestWithParam {
     back_quad_state_ = CreateTestSharedQuadState(
         trans, viewport_rect_, render_pass_.get(), gfx::RRectF());
     back_quad_state_->sorting_context_id = 1;
-    back_quad_state_->clip_rect = quad_rect_;
   }
   void AppendBackgroundAndRunTest(const cc::PixelComparator& comparator,
                                   const base::FilePath::CharType* ref_file) {
@@ -1387,6 +1383,9 @@ INSTANTIATE_TEST_SUITE_P(,
                          // SkiaRenderer Dawn once video is supported.
                          testing::ValuesIn(GetGpuRendererTypesNoDawn()),
                          testing::PrintToStringParamName());
+
+// GetGpuRendererTypesNoDawn() can return an empty list, e.g. on Fuchsia ARM64.
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(IntersectingVideoQuadPixelTest);
 
 class IntersectingQuadSoftwareTest : public IntersectingQuadPixelTest {};
 
@@ -1856,6 +1855,9 @@ INSTANTIATE_TEST_SUITE_P(,
                          testing::ValuesIn(GetGpuRendererTypesNoDawn()),
                          testing::PrintToStringParamName());
 
+// GetGpuRendererTypesNoDawn() can return an empty list, e.g. on Fuchsia ARM64.
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(VideoRendererPixelTest);
+
 TEST_P(VideoRendererPixelTest, OffsetYUVRect) {
   gfx::Rect rect(this->device_viewport_size_);
 
@@ -1935,6 +1937,37 @@ TEST_P(VideoRendererPixelTest, SimpleYUVJRect) {
   EXPECT_TRUE(this->RunPixelTest(&pass_list,
                                  base::FilePath(FILE_PATH_LITERAL("green.png")),
                                  cc::FuzzyPixelOffByOneComparator(true)));
+}
+
+TEST_P(VideoRendererPixelTest, SimpleYUVJRectWithTemperature) {
+  gfx::Rect rect(this->device_viewport_size_);
+
+  AggregatedRenderPassId id{1};
+  auto pass = CreateTestRootRenderPass(id, rect);
+
+  SharedQuadState* shared_state = CreateTestSharedQuadState(
+      gfx::Transform(), rect, pass.get(), gfx::RRectF());
+
+  // YUV of (225,0,148) should be yellow (255,255,0) in RGB.
+  CreateTestYUVVideoDrawQuad_Solid(
+      shared_state, media::PIXEL_FORMAT_I420, gfx::ColorSpace::CreateJpeg(),
+      false, gfx::RectF(0.0f, 0.0f, 1.0f, 1.0f), 225, 0, 148, pass.get(),
+      this->video_resource_updater_.get(), rect, rect,
+      this->resource_provider_.get(), this->child_resource_provider_.get(),
+      this->child_context_provider_.get());
+
+  AggregatedRenderPassList pass_list;
+  pass_list.push_back(std::move(pass));
+
+  skia::Matrix44 color_matrix(skia::Matrix44::kIdentity_Constructor);
+  color_matrix.set(0, 0, 0.7f);
+  color_matrix.set(1, 1, 0.4f);
+  color_matrix.set(2, 2, 0.5f);
+  this->output_surface_->set_color_matrix(color_matrix);
+
+  EXPECT_TRUE(this->RunPixelTest(
+      &pass_list, base::FilePath(FILE_PATH_LITERAL("temperature_brown.png")),
+      cc::FuzzyPixelOffByOneComparator(true)));
 }
 
 TEST_P(VideoRendererPixelTest, SimpleNV12JRect) {
@@ -2092,8 +2125,7 @@ TEST_P(VideoRendererPixelTest, TwoColorY16Rect) {
       cc::FuzzyPixelOffByOneComparator(true)));
 }
 
-// TODO(https://crbug.com/1044841): Flaky, especially on Linux/TSAN and Fuchsia.
-TEST_P(RendererPixelTest, DISABLED_FastPassColorFilterAlpha) {
+TEST_P(RendererPixelTest, FastPassColorFilterAlpha) {
   gfx::Rect viewport_rect(this->device_viewport_size_);
 
   AggregatedRenderPassId root_pass_id{1};
@@ -2170,8 +2202,7 @@ TEST_P(RendererPixelTest, DISABLED_FastPassColorFilterAlpha) {
       FuzzyForSkiaOnlyPixelComparator(renderer_type())));
 }
 
-// TODO(https://crbug.com/1044841): Flaky, especially on Linux/TSAN and Fuchsia.
-TEST_P(RendererPixelTest, DISABLED_FastPassSaturateFilter) {
+TEST_P(RendererPixelTest, FastPassSaturateFilter) {
   gfx::Rect viewport_rect(this->device_viewport_size_);
 
   AggregatedRenderPassId root_pass_id{1};
@@ -3007,7 +3038,7 @@ class RendererPixelTestWithBackdropFilter : public VizPixelTestWithParam {
 
   AggregatedRenderPassList pass_list_;
   cc::FilterOperations backdrop_filters_;
-  base::Optional<gfx::RRectF> backdrop_filter_bounds_;
+  absl::optional<gfx::RRectF> backdrop_filter_bounds_;
   bool include_backdrop_mask_ = false;
   gfx::Transform filter_pass_to_target_transform_;
   gfx::Rect filter_pass_layer_rect_;
@@ -3135,7 +3166,7 @@ class GLRendererPixelTestWithBackdropFilter : public VizPixelTest {
 
   AggregatedRenderPassList pass_list_;
   cc::FilterOperations backdrop_filters_;
-  base::Optional<gfx::RRectF> backdrop_filter_bounds_;
+  absl::optional<gfx::RRectF> backdrop_filter_bounds_;
   float backdrop_filter_quality_ = 1.0f;
   bool intersects_damage_under_ = true;
   gfx::Transform filter_pass_to_target_transform_;
@@ -4305,6 +4336,10 @@ INSTANTIATE_TEST_SUITE_P(,
                          testing::ValuesIn(GetGpuRendererTypes()),
                          testing::PrintToStringParamName());
 
+// GetGpuRendererTypes() can return an empty list, e.g. on Fuchsia ARM64.
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(
+    RendererPixelTestWithFlippedOutputSurface);
+
 TEST_P(RendererPixelTestWithFlippedOutputSurface, ExplicitFlipTest) {
   // This draws a blue rect above a yellow rect with an inverted output surface.
   gfx::Rect viewport_rect(this->device_viewport_size_);
@@ -4964,6 +4999,10 @@ INSTANTIATE_TEST_SUITE_P(,
                          testing::ValuesIn(GetGpuRendererTypes()),
                          testing::PrintToStringParamName());
 
+// GetGpuRendererTypes() can return an empty list, e.g. on Fuchsia ARM64.
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(
+    RendererPixelTestWithOverdrawFeedback);
+
 using PrimaryID = gfx::ColorSpace::PrimaryID;
 using TransferID = gfx::ColorSpace::TransferID;
 
@@ -5033,9 +5072,8 @@ class ColorTransformPixelTest
     }
 
     std::unique_ptr<gfx::ColorTransform> transform =
-        gfx::ColorTransform::NewColorTransform(
-            this->src_color_space_, this->dst_color_space_,
-            gfx::ColorTransform::Intent::INTENT_PERCEPTUAL);
+        gfx::ColorTransform::NewColorTransform(this->src_color_space_,
+                                               this->dst_color_space_);
 
     for (size_t i = 0; i < expected_output_colors.size(); ++i) {
       gfx::ColorTransform::TriStim color;
@@ -5169,6 +5207,9 @@ INSTANTIATE_TEST_SUITE_P(
                      testing::ValuesIn(dst_color_spaces),
                      testing::Bool()));
 
+// GetGpuRendererTypesNoDawn() can return an empty list, e.g. on Fuchsia ARM64.
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(ColorTransformPixelTest);
+
 class DelegatedInkTest : public VizPixelTestWithParam,
                          public DelegatedInkPointPixelTestHelper {
  public:
@@ -5181,6 +5222,11 @@ class DelegatedInkTest : public VizPixelTestWithParam,
     EXPECT_TRUE(VizPixelTestWithParam::renderer_->use_partial_swap());
 
     SetRendererAndCreateInkRenderer(VizPixelTestWithParam::renderer_.get());
+  }
+
+  void EnablePrediction() {
+    base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
+        switches::kDrawPredictedInkPoint, switches::kDraw1Point12Ms);
   }
 
   std::unique_ptr<AggregatedRenderPass> CreateTestRootRenderPass(
@@ -5224,9 +5270,13 @@ INSTANTIATE_TEST_SUITE_P(,
                          testing::ValuesIn(GetRendererTypesSkiaOnly()),
                          testing::PrintToStringParamName());
 
+// GetRendererTypesSkiaOnly() can return an empty list, e.g. on Fuchsia ARM64.
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(DelegatedInkTest);
+
 // Draw a single trail and erase it, making sure that no bits of trail are left
 // behind.
 TEST_P(DelegatedInkTest, DrawOneTrailAndErase) {
+  EnablePrediction();
   // Send some DelegatedInkPoints, numbers arbitrary. This will predict no
   // points, so a trail made of 3 points will be drawn.
   const gfx::PointF kFirstPoint(10, 10);
@@ -5251,6 +5301,7 @@ TEST_P(DelegatedInkTest, DrawOneTrailAndErase) {
 
 // Confirm that drawing a second trail completely removes the first trail.
 TEST_P(DelegatedInkTest, DrawTwoTrailsAndErase) {
+  EnablePrediction();
   // TODO(crbug.com/1021566): Enable this test for SkiaRenderer Dawn.
   if (renderer_type() == RendererType::kSkiaDawn)
     return;
@@ -5288,6 +5339,7 @@ TEST_P(DelegatedInkTest, DrawTwoTrailsAndErase) {
 
 // Confirm that the trail can't be drawn beyond the presentation area.
 TEST_P(DelegatedInkTest, TrailExtendsBeyondPresentationArea) {
+  EnablePrediction();
   // TODO(crbug.com/1021566): Enable this test for SkiaRenderer Dawn.
   if (renderer_type() == RendererType::kSkiaDawn)
     return;
@@ -5318,6 +5370,7 @@ TEST_P(DelegatedInkTest, TrailExtendsBeyondPresentationArea) {
 // Confirm that the trail appears on top of everything, including batched quads
 // that are drawn as part of the call to FinishDrawingQuadList.
 TEST_P(DelegatedInkTest, DelegatedInkTrailAfterBatchedQuads) {
+  EnablePrediction();
   gfx::Rect rect(this->device_viewport_size_);
 
   AggregatedRenderPassId id{1};
@@ -5360,6 +5413,7 @@ TEST_P(DelegatedInkTest, DelegatedInkTrailAfterBatchedQuads) {
 
 // Confirm that delegated ink trails are not drawn on non-root render passes.
 TEST_P(DelegatedInkTest, SimpleTrailNonRootRenderPass) {
+  EnablePrediction();
   gfx::Rect rect(this->device_viewport_size_);
 
   AggregatedRenderPassId child_id{2};
@@ -5408,6 +5462,7 @@ TEST_P(DelegatedInkTest, SimpleTrailNonRootRenderPass) {
 // Draw two different trails that are made up of sets of DelegatedInkPoints with
 // different pointer IDs. All numbers arbitrarily chosen.
 TEST_P(DelegatedInkTest, DrawTrailsWithDifferentPointerIds) {
+  EnablePrediction();
   const int32_t kPointerId1 = 2;
   const int32_t kPointerId2 = 100;
 
@@ -5455,6 +5510,32 @@ TEST_P(DelegatedInkTest, DrawTrailsWithDifferentPointerIds) {
                         kPointerId2StartTime, kPresentationArea);
   EXPECT_TRUE(
       DrawAndTestTrail(FILE_PATH_LITERAL("delegated_ink_pointer_id_2.png")));
+
+  // The metadata should have been cleared after drawing, so confirm that there
+  // is no trail after another draw.
+  EXPECT_TRUE(DrawAndTestTrail(FILE_PATH_LITERAL("white.png")));
+}
+
+// Test to confirm that predicted points are not drawn if prediction is not
+// enabled, since it is disabled by default.
+TEST_P(DelegatedInkTest, DrawTrailWithPredictionDisabled) {
+  // Send some DelegatedInkPoints, numbers arbitrary. Sending 4 points will
+  // cause prediction to be available.
+  const gfx::PointF kFirstPoint(20, 35);
+  const base::TimeTicks kFirstTimestamp = base::TimeTicks::Now();
+  CreateAndSendPoint(kFirstPoint, kFirstTimestamp);
+  CreateAndSendPointFromLastPoint(gfx::PointF(56, 92));
+  CreateAndSendPointFromLastPoint(gfx::PointF(101, 145));
+  CreateAndSendPointFromLastPoint(gfx::PointF(106, 170));
+
+  // Provide the metadata required to draw the trail, matching the first
+  // DelegatedInkPoint sent.
+  CreateAndSendMetadata(kFirstPoint, 3.5f, SK_ColorCYAN, kFirstTimestamp,
+                        gfx::RectF(0, 0, 200, 200));
+
+  // Confirm that the trail was drawn without prediction.
+  EXPECT_TRUE(DrawAndTestTrail(
+      FILE_PATH_LITERAL("delegated_ink_trail_no_prediction.png")));
 
   // The metadata should have been cleared after drawing, so confirm that there
   // is no trail after another draw.

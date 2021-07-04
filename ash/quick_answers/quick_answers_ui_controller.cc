@@ -4,23 +4,33 @@
 
 #include "ash/quick_answers/quick_answers_ui_controller.h"
 
+#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/assistant/controller/assistant_interaction_controller.h"
+#include "ash/public/cpp/new_window_delegate.h"
 #include "ash/quick_answers/quick_answers_controller_impl.h"
 #include "ash/quick_answers/ui/quick_answers_view.h"
+#include "ash/quick_answers/ui/user_consent_view.h"
 #include "ash/quick_answers/ui/user_notice_view.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "base/bind.h"
-#include "base/optional.h"
 #include "chromeos/components/quick_answers/quick_answers_model.h"
 #include "chromeos/services/assistant/public/cpp/assistant_service.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "net/base/escape.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/views/widget/widget.h"
 
 using chromeos::quick_answers::QuickAnswer;
 namespace ash {
+
+namespace {
+
+constexpr char kGoogleSearchUrlPrefix[] = "https://www.google.com/search?q=";
+
+}  // namespace
 
 QuickAnswersUiController::QuickAnswersUiController(
     QuickAnswersControllerImpl* controller)
@@ -29,6 +39,7 @@ QuickAnswersUiController::QuickAnswersUiController(
 QuickAnswersUiController::~QuickAnswersUiController() {
   quick_answers_view_ = nullptr;
   user_notice_view_ = nullptr;
+  user_consent_view_ = nullptr;
 }
 
 void QuickAnswersUiController::CreateQuickAnswersView(
@@ -44,6 +55,7 @@ void QuickAnswersUiController::CreateQuickAnswersView(
   }
 
   DCHECK(!user_notice_view_);
+  DCHECK(!user_consent_view_);
   SetActiveQuery(query);
   quick_answers_view_ = new QuickAnswersView(bounds, title, this);
   quick_answers_view_->GetWidget()->ShowInactive();
@@ -53,9 +65,16 @@ void QuickAnswersUiController::OnQuickAnswersViewPressed() {
   // Route dismissal through |controller_| for logging impressions.
   controller_->DismissQuickAnswers(/*is_active=*/true);
 
-  ash::AssistantInteractionController::Get()->StartTextInteraction(
-      query_, /*allow_tts=*/false,
-      chromeos::assistant::AssistantQuerySource::kQuickAnswers);
+  if (chromeos::features::IsQuickAnswersV2Enabled()) {
+    NewWindowDelegate::GetInstance()->NewTabWithUrl(
+        GURL(kGoogleSearchUrlPrefix +
+             net::EscapeUrlEncodedData(query_, /*use_plus=*/true)),
+        /*from_user_interaction=*/true);
+  } else {
+    ash::AssistantInteractionController::Get()->StartTextInteraction(
+        query_, /*allow_tts=*/false,
+        chromeos::assistant::AssistantQuerySource::kQuickAnswers);
+  }
   controller_->OnQuickAnswerClick();
 }
 
@@ -105,10 +124,11 @@ void QuickAnswersUiController::UpdateQuickAnswersBounds(
 
 void QuickAnswersUiController::CreateUserNoticeView(
     const gfx::Rect& anchor_bounds,
-    const base::string16& intent_type,
-    const base::string16& intent_text) {
+    const std::u16string& intent_type,
+    const std::u16string& intent_text) {
   DCHECK(!quick_answers_view_);
   DCHECK(!user_notice_view_);
+  DCHECK(!user_consent_view_);
   user_notice_view_ = new quick_answers::UserNoticeView(
       anchor_bounds, intent_type, intent_text, this);
   user_notice_view_->GetWidget()->ShowInactive();
@@ -118,6 +138,25 @@ void QuickAnswersUiController::CloseUserNoticeView() {
   if (user_notice_view_) {
     user_notice_view_->GetWidget()->Close();
     user_notice_view_ = nullptr;
+  }
+}
+
+void QuickAnswersUiController::CreateUserConsentView(
+    const gfx::Rect& anchor_bounds,
+    const std::u16string& intent_type,
+    const std::u16string& intent_text) {
+  DCHECK(!quick_answers_view_);
+  DCHECK(!user_notice_view_);
+  DCHECK(!user_consent_view_);
+  user_consent_view_ = new quick_answers::UserConsentView(
+      anchor_bounds, intent_type, intent_text, this);
+  user_consent_view_->GetWidget()->ShowInactive();
+}
+
+void QuickAnswersUiController::CloseUserConsentView() {
+  if (user_consent_view_) {
+    user_consent_view_->GetWidget()->Close();
+    user_consent_view_ = nullptr;
   }
 }
 
@@ -140,6 +179,21 @@ void QuickAnswersUiController::OnDogfoodButtonPressed() {
   controller_->DismissQuickAnswers(/*is_active=*/true);
 
   controller_->OpenQuickAnswersDogfoodLink();
+}
+
+void QuickAnswersUiController::OnSettingsButtonPressed() {
+  // Route dismissal through |controller_| for logging impressions.
+  controller_->DismissQuickAnswers(/*is_active=*/true);
+
+  controller_->OpenQuickAnswersSettings();
+}
+
+void QuickAnswersUiController::OnUserConsentResult(bool consented) {
+  DCHECK(user_consent_view_);
+  controller_->OnUserConsentResult(consented);
+
+  if (consented && quick_answers_view_)
+    quick_answers_view_->RequestFocus();
 }
 
 }  // namespace ash

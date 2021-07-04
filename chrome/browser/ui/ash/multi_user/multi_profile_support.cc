@@ -7,7 +7,6 @@
 #include <set>
 #include <vector>
 
-#include "ash/public/cpp/ash_features.h"
 #include "ash/public/cpp/multi_user_window_manager.h"
 #include "ash/public/cpp/multi_user_window_manager_observer.h"
 #include "base/metrics/histogram_macros.h"
@@ -15,14 +14,15 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/ash/launcher/chrome_launcher_controller.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
 #include "chrome/browser/ui/ash/session_controller_client_impl.h"
 #include "chrome/browser/ui/ash/session_util.h"
+#include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "components/full_restore/features.h"
 #include "components/full_restore/full_restore_utils.h"
 #include "extensions/browser/app_window/app_window.h"
 #include "extensions/browser/app_window/app_window_registry.h"
@@ -225,16 +225,16 @@ void MultiProfileSupport::OnWindowOwnerEntryChanged(aura::Window* window,
 }
 
 void MultiProfileSupport::OnTransitionUserShelfToNewAccount() {
-  if (ash::features::IsFullRestoreEnabled()) {
+  if (full_restore::features::IsFullRestoreEnabled()) {
     full_restore::SetActiveProfilePath(
         ProfileManager::GetActiveUserProfile()->GetPath());
   }
 
-  ChromeLauncherController* chrome_launcher_controller =
-      ChromeLauncherController::instance();
-  // Some unit tests have no ChromeLauncherController.
-  if (!chrome_launcher_controller)
+  ChromeShelfController* chrome_shelf_controller =
+      ChromeShelfController::instance();
+  // Some unit tests have no ChromeShelfController.
+  if (!chrome_shelf_controller)
     return;
-  chrome_launcher_controller->ActiveUserChanged(
+  chrome_shelf_controller->ActiveUserChanged(
       multi_user_window_manager_->CurrentAccountId());
 }

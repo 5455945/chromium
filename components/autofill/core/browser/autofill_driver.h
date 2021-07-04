@@ -7,22 +7,21 @@
 
 #include <vector>
 
+#include "base/containers/flat_map.h"
 #include "base/memory/scoped_refptr.h"
 #include "build/build_config.h"
+#include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/common/form_data.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "net/base/isolation_info.h"
+#include "url/origin.h"
 
 #if !defined(OS_IOS)
-#include "components/autofill/core/browser/payments/internal_authenticator.h"
+#include "components/webauthn/core/browser/internal_authenticator.h"
 #endif
 
 namespace network {
 class SharedURLLoaderFactory;
-}
-
-namespace gfx {
-class RectF;
 }
 
 namespace ui {
@@ -74,13 +73,19 @@ class AutofillDriver {
   GetOrCreateCreditCardInternalAuthenticator() = 0;
 #endif
 
-  // Forwards |data| to the renderer. |query_id| is the id of the renderer's
-  // original request for the data. |action| is the action the renderer should
-  // perform with the |data|. This method is a no-op if the renderer is not
-  // currently available.
-  virtual void SendFormDataToRenderer(int query_id,
-                                      RendererFormDataAction action,
-                                      const FormData& data) = 0;
+  // Forwards |data| to the renderer.
+  // |query_id| is the id of the renderer's original request for the data.
+  // |action| is the action the renderer should perform with the |data|.
+  // |triggered_origin| is the origin of the field on which Autofill was
+  // triggered, and |field_type_map| are the type predictions; these two
+  // parameters can be taken into account to decide which fields to fill across
+  // frames. This method is a no-op if the renderer is not currently available.
+  virtual void SendFormDataToRenderer(
+      int query_id,
+      RendererFormDataAction action,
+      const FormData& data,
+      const url::Origin& triggered_origin,
+      const base::flat_map<FieldGlobalId, ServerFieldType>& field_type_map) = 0;
 
   // Pass the form structures to the password manager to choose correct username
   // and to the password generation manager to detect account creation forms.
@@ -98,7 +103,8 @@ class AutofillDriver {
 
   // Tells the renderer to accept data list suggestions for |value|.
   virtual void RendererShouldAcceptDataListSuggestion(
-      const base::string16& value) = 0;
+      const FieldGlobalId& field_id,
+      const std::u16string& value) = 0;
 
   // Tells the renderer to clear the current section of the autofilled values.
   virtual void RendererShouldClearFilledSection() = 0;
@@ -108,27 +114,29 @@ class AutofillDriver {
 
   // Tells the renderer to set the node text.
   virtual void RendererShouldFillFieldWithValue(
-      const base::string16& value) = 0;
+      const FieldGlobalId& field_id,
+      const std::u16string& value) = 0;
 
   // Tells the renderer to preview the node with suggested text.
   virtual void RendererShouldPreviewFieldWithValue(
-      const base::string16& value) = 0;
+      const FieldGlobalId& field_id,
+      const std::u16string& value) = 0;
 
   // Tells the renderer to set the currently focused node's corresponding
   // accessibility node's autofill state to |state|.
   virtual void RendererShouldSetSuggestionAvailability(
+      const FieldGlobalId& field_id,
       const mojom::AutofillState state) = 0;
 
   // Informs the renderer that the popup has been hidden.
   virtual void PopupHidden() = 0;
 
-  // Transform bounding box coordinates to real viewport coordinates. In
-  // the case of a page spanning multiple renderer processes, subframe
-  // renderers cannot do this transformation themselves.
-  virtual gfx::RectF TransformBoundingBoxToViewportCoordinates(
-      const gfx::RectF& bounding_box) = 0;
-
   virtual net::IsolationInfo IsolationInfo() = 0;
+
+  // Tells the renderer about the form fields that are eligible for triggering
+  // manual filling on form interaction.
+  virtual void SendFieldsEligibleForManualFillingToRenderer(
+      const std::vector<FieldGlobalId>& fields) = 0;
 };
 
 }  // namespace autofill

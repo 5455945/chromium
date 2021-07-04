@@ -17,6 +17,7 @@
 #include "ui/aura/window_tree_host.h"
 #include "ui/base/hit_test.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/events/event_sink.h"
 #include "ui/gfx/animation/slide_animation.h"
@@ -27,7 +28,6 @@
 #include "ui/gfx/vector_icon_types.h"
 #include "ui/strings/grit/ui_strings.h"  // Accessibility names
 #include "ui/views/layout/box_layout.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/window/frame_caption_button.h"
@@ -99,19 +99,6 @@ double CapAnimationValue(double value) {
   return base::ClampToRange(value, 0.0, 1.0);
 }
 
-// Returns a |views::BoxLayout| layout manager with the settings needed by
-// FrameCaptionButtonContainerView.
-std::unique_ptr<views::BoxLayout> MakeBoxLayoutManager(
-    int minimum_cross_axis_size) {
-  std::unique_ptr<views::BoxLayout> layout = std::make_unique<views::BoxLayout>(
-      views::BoxLayout::Orientation::kHorizontal);
-  layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kCenter);
-  layout->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kEnd);
-  layout->set_minimum_cross_axis_size(minimum_cross_axis_size);
-  return layout;
-}
-
 // A default CaptionButtonModel that uses the widget delegate's state
 // to determine if each button should be visible and enabled.
 class DefaultCaptionButtonModel : public CaptionButtonModel {
@@ -140,6 +127,7 @@ class DefaultCaptionButtonModel : public CaptionButtonModel {
       case views::CAPTION_BUTTON_ICON_BACK:
       case views::CAPTION_BUTTON_ICON_MENU:
       case views::CAPTION_BUTTON_ICON_ZOOM:
+      case views::CAPTION_BUTTON_ICON_CENTER:
         return false;
       case views::CAPTION_BUTTON_ICON_LOCATION:
         // not used
@@ -164,8 +152,10 @@ FrameCaptionButtonContainerView::FrameCaptionButtonContainerView(
     : views::AnimationDelegateViews(frame->GetRootView()),
       frame_(frame),
       model_(std::make_unique<DefaultCaptionButtonModel>(frame)) {
-  SetLayoutManager(MakeBoxLayoutManager(/*minimum_cross_axis_size=*/0));
-  tablet_mode_animation_.reset(new gfx::SlideAnimation(this));
+  SetOrientation(views::BoxLayout::Orientation::kHorizontal);
+  SetCrossAxisAlignment(views::BoxLayout::CrossAxisAlignment::kCenter);
+  SetMainAxisAlignment(views::BoxLayout::MainAxisAlignment::kEnd);
+  tablet_mode_animation_ = std::make_unique<gfx::SlideAnimation>(this);
   tablet_mode_animation_->SetTweenType(gfx::Tween::LINEAR);
 
   // Ensure animation tracks visibility of size button.
@@ -225,16 +215,16 @@ void FrameCaptionButtonContainerView::SetButtonImage(
                                           size_button_, close_button_};
   for (size_t i = 0; i < base::size(buttons); ++i) {
     if (buttons[i]->GetIcon() == icon)
-      buttons[i]->SetImage(icon, views::FrameCaptionButton::ANIMATE_NO,
+      buttons[i]->SetImage(icon, views::FrameCaptionButton::Animate::kNo,
                            icon_definition);
   }
 }
 
 void FrameCaptionButtonContainerView::SetPaintAsActive(bool paint_as_active) {
-  menu_button_->set_paint_as_active(paint_as_active);
-  minimize_button_->set_paint_as_active(paint_as_active);
-  size_button_->set_paint_as_active(paint_as_active);
-  close_button_->set_paint_as_active(paint_as_active);
+  menu_button_->SetPaintAsActive(paint_as_active);
+  minimize_button_->SetPaintAsActive(paint_as_active);
+  size_button_->SetPaintAsActive(paint_as_active);
+  close_button_->SetPaintAsActive(paint_as_active);
   SchedulePaint();
 }
 
@@ -247,7 +237,7 @@ void FrameCaptionButtonContainerView::SetBackgroundColor(
 }
 
 void FrameCaptionButtonContainerView::ResetWindowControls() {
-  SetButtonsToNormal(ANIMATE_NO);
+  SetButtonsToNormal(Animate::kNo);
 }
 
 void FrameCaptionButtonContainerView::UpdateCaptionButtonState(bool animate) {
@@ -294,12 +284,21 @@ void FrameCaptionButtonContainerView::SetButtonSize(const gfx::Size& size) {
   size_button_->SetPreferredSize(size);
   close_button_->SetPreferredSize(size);
 
-  SetLayoutManager(MakeBoxLayoutManager(size.height()));
+  SetMinimumCrossAxisSize(size.height());
 }
 
 void FrameCaptionButtonContainerView::SetModel(
     std::unique_ptr<CaptionButtonModel> model) {
   model_ = std::move(model);
+}
+
+void FrameCaptionButtonContainerView::SetOnSizeButtonPressedCallback(
+    base::RepeatingCallback<bool()> callback) {
+  on_size_button_pressed_callback_ = std::move(callback);
+}
+
+void FrameCaptionButtonContainerView::ClearOnSizeButtonPressedCallback() {
+  on_size_button_pressed_callback_.Reset();
 }
 
 void FrameCaptionButtonContainerView::Layout() {
@@ -387,16 +386,16 @@ void FrameCaptionButtonContainerView::SetButtonIcon(
     views::CaptionButtonIcon icon,
     Animate animate) {
   // The early return is dependent on |animate| because callers use
-  // SetButtonIcon() with ANIMATE_NO to progress |button|'s crossfade animation
-  // to the end.
+  // SetButtonIcon() with Animate::kNo to progress |button|'s crossfade
+  // animation to the end.
   if (button->GetIcon() == icon &&
-      (animate == ANIMATE_YES || !button->IsAnimatingImageSwap())) {
+      (animate == Animate::kYes || !button->IsAnimatingImageSwap())) {
     return;
   }
 
   views::FrameCaptionButton::Animate fcb_animate =
-      (animate == ANIMATE_YES) ? views::FrameCaptionButton::ANIMATE_YES
-                               : views::FrameCaptionButton::ANIMATE_NO;
+      (animate == Animate::kYes) ? views::FrameCaptionButton::Animate::kYes
+                                 : views::FrameCaptionButton::Animate::kNo;
   auto it = button_icon_map_.find(icon);
   if (it != button_icon_map_.end())
     button->SetImage(icon, fcb_animate, *it->second);
@@ -404,7 +403,7 @@ void FrameCaptionButtonContainerView::SetButtonIcon(
 
 void FrameCaptionButtonContainerView::MinimizeButtonPressed() {
   // Abort any animations of the button icons.
-  SetButtonsToNormal(ANIMATE_NO);
+  SetButtonsToNormal(Animate::kNo);
 
   frame_->Minimize();
   base::RecordAction(base::UserMetricsAction("MinButton_Clk"));
@@ -412,9 +411,13 @@ void FrameCaptionButtonContainerView::MinimizeButtonPressed() {
 
 void FrameCaptionButtonContainerView::SizeButtonPressed() {
   // Abort any animations of the button icons.
-  SetButtonsToNormal(ANIMATE_NO);
+  SetButtonsToNormal(Animate::kNo);
 
-  if (frame_->IsFullscreen()) {  // Can be clicked in immersive fullscreen.
+  if (on_size_button_pressed_callback_ &&
+      on_size_button_pressed_callback_.Run()) {
+    // no-op if the override callback returned true.
+  } else if (frame_->IsFullscreen()) {
+    // Can be clicked in immersive fullscreen.
     frame_->Restore();
     base::RecordAction(base::UserMetricsAction("MaxButton_Clk_ExitFS"));
   } else if (frame_->IsMaximized()) {
@@ -428,7 +431,7 @@ void FrameCaptionButtonContainerView::SizeButtonPressed() {
 
 void FrameCaptionButtonContainerView::CloseButtonPressed() {
   // Abort any animations of the button icons.
-  SetButtonsToNormal(ANIMATE_NO);
+  SetButtonsToNormal(Animate::kNo);
 
   frame_->Close();
   if (chromeos::TabletState::Get()->InTabletMode()) {
@@ -441,7 +444,7 @@ void FrameCaptionButtonContainerView::CloseButtonPressed() {
 
 void FrameCaptionButtonContainerView::MenuButtonPressed() {
   // Abort any animations of the button icons.
-  SetButtonsToNormal(ANIMATE_NO);
+  SetButtonsToNormal(Animate::kNo);
 
   // Send up event as well as down event as ARC++ clients expect this sequence.
   aura::Window* root_window = GetWidget()->GetNativeWindow()->GetRootWindow();

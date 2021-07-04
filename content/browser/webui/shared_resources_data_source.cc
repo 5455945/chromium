@@ -24,8 +24,11 @@
 #include "ui/resources/grit/webui_resources_map.h"
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
+#include "ash/constants/ash_features.h"
+#include "base/feature_list.h"
 #include "chromeos/grit/chromeos_resources.h"
 #include "chromeos/grit/chromeos_resources_map.h"
+#include "ui/chromeos/colors/cros_colors.h"
 #endif
 
 namespace content {
@@ -37,7 +40,7 @@ const std::set<int> GetContentResourceIds() {
       IDR_ORIGIN_MOJO_HTML,
       IDR_ORIGIN_MOJO_JS,
       IDR_ORIGIN_MOJO_WEBUI_JS,
-      IDR_TOKEN_MOJO_JS,
+      IDR_TOKEN_MOJO_WEBUI_JS,
       IDR_UNGUESSABLE_TOKEN_MOJO_HTML,
       IDR_UNGUESSABLE_TOKEN_MOJO_JS,
       IDR_URL_MOJO_HTML,
@@ -115,9 +118,14 @@ WebUIDataSource* CreateSharedResourcesDataSource() {
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   AddResources(GetChromeosMojoResourceIds(), kChromeosResources,
                kChromeosResourcesSize, source);
+
+  source->AddString(
+      "crosColorsDebugOverrides",
+      base::FeatureList::IsEnabled(ash::features::kSemanticColorsDebugOverride)
+          ? cros_colors::kDebugOverrideCssString
+          : "");
 #endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
 
-  source->AddString("textDirection", webui::GetTextDirection());
   source->AddString("fontFamily", webui::GetFontFamily());
   source->AddString("fontSize", webui::GetFontSize());
 

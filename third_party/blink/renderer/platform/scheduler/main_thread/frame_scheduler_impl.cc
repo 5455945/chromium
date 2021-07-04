@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/memory/ptr_util.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
@@ -29,11 +30,11 @@
 #include "third_party/blink/renderer/platform/scheduler/main_thread/auto_advancing_virtual_time_domain.h"
 #include "third_party/blink/renderer/platform/scheduler/main_thread/find_in_page_budget_pool_controller.h"
 #include "third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.h"
+#include "third_party/blink/renderer/platform/scheduler/main_thread/main_thread_web_scheduling_task_queue_impl.h"
 #include "third_party/blink/renderer/platform/scheduler/main_thread/page_scheduler_impl.h"
 #include "third_party/blink/renderer/platform/scheduler/main_thread/page_visibility_state.h"
 #include "third_party/blink/renderer/platform/scheduler/main_thread/resource_loading_task_runner_handle_impl.h"
 #include "third_party/blink/renderer/platform/scheduler/main_thread/task_type_names.h"
-#include "third_party/blink/renderer/platform/scheduler/main_thread/web_scheduling_task_queue_impl.h"
 #include "third_party/blink/renderer/platform/scheduler/worker/worker_scheduler_proxy.h"
 #include "third_party/perfetto/include/perfetto/tracing/traced_value.h"
 
@@ -170,6 +171,11 @@ FrameSchedulerImpl::FrameSchedulerImpl(
           "FrameScheduler.OptedOutFromBackForwardCache",
           &tracing_controller_,
           YesNoStateToString),
+      is_freeze_while_keep_active_enabled_(
+          IsFreezeWhileKeepActiveBackForwardCacheSupportEnabled(),
+          "FrameScheduler.FreezeWhileKeepActive",
+          &tracing_controller_,
+          YesNoStateToString),
       page_frozen_for_tracing_(
           parent_page_scheduler_ ? parent_page_scheduler_->IsFrozen() : true,
           "FrameScheduler.PageFrozen",
@@ -187,6 +193,11 @@ FrameSchedulerImpl::FrameSchedulerImpl(
           "FrameScheduler.KeepActive",
           &tracing_controller_,
           KeepActiveStateToString),
+      waiting_for_dom_content_loaded_(
+          true,
+          "FrameScheduler.WaitingForDOMContentLoaded",
+          &tracing_controller_,
+          YesNoStateToString),
       waiting_for_contentful_paint_(true,
                                     "FrameScheduler.WaitingForContentfulPaint",
                                     &tracing_controller_,
@@ -195,10 +206,14 @@ FrameSchedulerImpl::FrameSchedulerImpl(
                                     "FrameScheduler.WaitingForMeaningfulPaint",
                                     &tracing_controller_,
                                     YesNoStateToString),
+      waiting_for_load_(true,
+                        "FrameScheduler.WaitingForLoad",
+                        &tracing_controller_,
+                        YesNoStateToString),
       loading_power_mode_voter_(
           power_scheduler::PowerModeArbiter::GetInstance()->NewVoter(
               "PowerModeVoter.Loading")) {
-  frame_task_queue_controller_.reset(
+  frame_task_queue_controller_ = base::WrapUnique(
       new FrameTaskQueueController(main_thread_scheduler_, this, this));
 }
 
@@ -335,8 +350,8 @@ void FrameSchedulerImpl::SetCrossOriginToMainFrame(bool cross_origin) {
   UpdatePolicy();
 }
 
-void FrameSchedulerImpl::SetIsAdFrame() {
-  is_ad_frame_ = true;
+void FrameSchedulerImpl::SetIsAdFrame(bool is_ad_frame) {
+  is_ad_frame_ = is_ad_frame;
   UpdatePolicy();
 }
 
@@ -380,12 +395,8 @@ QueueTraits FrameSchedulerImpl::CreateQueueTraitsForTaskType(TaskType type) {
       return ThrottleableTaskQueueTraits().SetPrioritisationType(
           QueueTraits::PrioritisationType::kBestEffort);
     case TaskType::kJavascriptTimerDelayedLowNesting:
-      return ThrottleableTaskQueueTraits()
-          .SetPrioritisationType(
-              QueueTraits::PrioritisationType::kJavaScriptTimer)
-          .SetCanBeIntensivelyThrottled(
-              IsIntensiveWakeUpThrottlingEnabled() &&
-              CanIntensivelyThrottleLowNestingLevel());
+      return ThrottleableTaskQueueTraits().SetPrioritisationType(
+          QueueTraits::PrioritisationType::kJavaScriptTimer);
     case TaskType::kJavascriptTimerDelayedHighNesting:
       return ThrottleableTaskQueueTraits()
           .SetPrioritisationType(
@@ -424,6 +435,7 @@ QueueTraits FrameSchedulerImpl::CreateQueueTraitsForTaskType(TaskType type) {
     case TaskType::kSensor:
     case TaskType::kPerformanceTimeline:
     case TaskType::kWebGL:
+    case TaskType::kWebGPU:
     case TaskType::kIdleTask:
     case TaskType::kInternalDefault:
     case TaskType::kMiscPlatformAPI:
@@ -467,6 +479,8 @@ QueueTraits FrameSchedulerImpl::CreateQueueTraitsForTaskType(TaskType type) {
       }
     case TaskType::kInternalNavigationAssociated:
       return FreezableTaskQueueTraits();
+    case TaskType::kInternalInputBlocking:
+      return InputBlockingQueueTraits();
     // Some tasks in the tests need to run when objects are paused e.g. to hook
     // when recovering from debugger JavaScript statetment.
     case TaskType::kInternalTest:
@@ -621,18 +635,26 @@ void FrameSchedulerImpl::DidCommitProvisionalLoad(
   if (!is_same_document) {
     loading_power_mode_voter_->VoteFor(power_scheduler::PowerMode::kLoading);
     loading_power_mode_voter_->ResetVoteAfterTimeout(
-        power_scheduler::PowerModeVoter::kLoadingTimeout);
+        power_scheduler::PowerModeVoter::kStuckLoadingTimeout);
 
+    waiting_for_dom_content_loaded_ = true;
     waiting_for_contentful_paint_ = true;
     waiting_for_meaningful_paint_ = true;
+    waiting_for_load_ = true;
+
+    // If DeprioritizeDOMTimersDuringPageLoading is enabled, UpdatePolicy()
+    // needs to be called to change JavaScript timer task queues to low priority
+    // during reload and other navigations.
+    //
+    // TODO(shaseley): Think about merging this with MainThreadSchedulerImpl's
+    // policy update.
+    if (base::FeatureList::IsEnabled(kDeprioritizeDOMTimersDuringPageLoading)) {
+      UpdatePolicy();
+    }
   }
 
   if (is_main_frame && !is_same_document) {
     task_time_ = base::TimeDelta();
-    // Ignore result here, based on the assumption that
-    // MTSI::DidCommitProvisionalLoad will trigger an update policy.
-    ignore_result(main_thread_scheduler_->agent_scheduling_strategy()
-                      .OnDocumentChangedInMainFrame(*this));
   }
 
   main_thread_scheduler_->DidCommitProvisionalLoad(
@@ -785,8 +807,7 @@ void FrameSchedulerImpl::OnRemovedBackForwardCacheOptOut(
       !back_forward_cache_opt_out_counts_.empty();
 }
 
-void FrameSchedulerImpl::WriteIntoTracedValue(
-    perfetto::TracedValue context) const {
+void FrameSchedulerImpl::WriteIntoTrace(perfetto::TracedValue context) const {
   auto dict = std::move(context).WriteDictionary();
   dict.Add("frame_visible", frame_visible_);
   dict.Add("page_visible", parent_page_scheduler_->IsPageVisible());
@@ -880,14 +901,28 @@ void FrameSchedulerImpl::UpdateQueuePolicy(
   // will be resumed when the page is visible.
   bool queue_frozen =
       parent_page_scheduler_->IsFrozen() && queue->CanBeFrozen();
-  // Override freezing if keep-active is true.
-  if (queue_frozen && !queue->FreezeWhenKeepActive())
-    queue_frozen = !parent_page_scheduler_->KeepActive();
+  // Check if we need to override freezing because of KeepActive.
+  if (queue_frozen && parent_page_scheduler_->KeepActive()) {
+    // When KeepActive is true, we can only freeze if the queue allows
+    // FreezeWhenKeepActive(), or the "FreezeWhileKeepActive" feature flag is
+    // enabled.
+    bool can_freeze =
+        queue->FreezeWhenKeepActive() || is_freeze_while_keep_active_enabled_;
+    if (!can_freeze)
+      queue_frozen = false;
+  }
   queue_disabled |= queue_frozen;
   // Per-frame freezable queues of tasks which are specified as getting frozen
   // immediately when their frame becomes invisible get frozen. They will be
   // resumed when the frame becomes visible again.
   queue_disabled |= !frame_visible_ && !queue->CanRunInBackground();
+  if (queue_disabled) {
+    TRACE_EVENT_INSTANT("renderer.scheduler",
+                        "FrameSchedulerImpl::UpdateQueuePolicy_QueueDisabled");
+  } else {
+    TRACE_EVENT_INSTANT("renderer.scheduler",
+                        "FrameSchedulerImpl::UpdateQueuePolicy_QueueEnabled");
+  }
   voter->SetVoteToEnable(!queue_disabled);
 }
 
@@ -916,10 +951,21 @@ SchedulingLifecycleState FrameSchedulerImpl::CalculateLifecycleState(
   return SchedulingLifecycleState::kNotThrottled;
 }
 
-void FrameSchedulerImpl::OnFirstContentfulPaint() {
+void FrameSchedulerImpl::OnFirstContentfulPaintInMainFrame() {
   waiting_for_contentful_paint_ = false;
-  if (GetFrameType() == FrameScheduler::FrameType::kMainFrame)
-    main_thread_scheduler_->OnMainFramePaint();
+  DCHECK_EQ(GetFrameType(), FrameScheduler::FrameType::kMainFrame);
+  parent_page_scheduler_->OnFirstContentfulPaintInMainFrame();
+  main_thread_scheduler_->OnMainFramePaint();
+}
+
+void FrameSchedulerImpl::OnDomContentLoaded() {
+  waiting_for_dom_content_loaded_ = false;
+
+  if (base::FeatureList::IsEnabled(kDeprioritizeDOMTimersDuringPageLoading) &&
+      kDeprioritizeDOMTimersPhase.Get() ==
+          DeprioritizeDOMTimersPhase::kOnDOMContentLoaded) {
+    UpdatePolicy();
+  }
 }
 
 void FrameSchedulerImpl::OnFirstMeaningfulPaint() {
@@ -929,23 +975,24 @@ void FrameSchedulerImpl::OnFirstMeaningfulPaint() {
     return;
 
   main_thread_scheduler_->OnMainFramePaint();
-
-  if (main_thread_scheduler_->agent_scheduling_strategy()
-          .OnMainFrameFirstMeaningfulPaint(*this) ==
-      AgentSchedulingStrategy::ShouldUpdatePolicy::kYes) {
-    main_thread_scheduler_->OnAgentStrategyUpdated();
-  }
 }
 
 void FrameSchedulerImpl::OnLoad() {
-  if (GetFrameType() == FrameScheduler::FrameType::kMainFrame) {
-    // TODO(talp): Once MTSI::UpdatePolicyLocked is refactored, this can notify
-    // the agent strategy directly and, if necessary, trigger the queue priority
-    // update.
-    main_thread_scheduler_->OnMainFrameLoad(*this);
+  waiting_for_load_ = false;
+
+  // FrameSchedulerImpl::OnFirstContentfulPaint() is NOT guaranteed to be called
+  // during the loading process, so we also try to do the recomputation in case
+  // of the DeprioritizeDOMTimersPhase::kFirstContentfulPaint option.
+  if (base::FeatureList::IsEnabled(kDeprioritizeDOMTimersDuringPageLoading) &&
+      (kDeprioritizeDOMTimersPhase.Get() ==
+           DeprioritizeDOMTimersPhase::kOnLoad ||
+       kDeprioritizeDOMTimersPhase.Get() ==
+           DeprioritizeDOMTimersPhase::kFirstContentfulPaint)) {
+    UpdatePolicy();
   }
 
-  loading_power_mode_voter_->VoteFor(power_scheduler::PowerMode::kIdle);
+  loading_power_mode_voter_->ResetVoteAfterTimeout(
+      power_scheduler::PowerModeVoter::kLoadingTimeout);
 }
 
 bool FrameSchedulerImpl::IsWaitingForContentfulPaint() const {
@@ -971,12 +1018,7 @@ bool FrameSchedulerImpl::ShouldThrottleTaskQueues() const {
     return false;
   if (!parent_page_scheduler_->IsPageVisible())
     return true;
-  if (base::FeatureList::IsEnabled(kThrottleVisibleNotFocusedTimers) &&
-      !parent_page_scheduler_->IsPageFocused()) {
-    return true;
-  }
-  return RuntimeEnabledFeatures::TimerThrottlingForHiddenFramesEnabled() &&
-         !frame_visible_ && IsCrossOriginToMainFrame();
+  return !frame_visible_ && IsCrossOriginToMainFrame();
 }
 
 bool FrameSchedulerImpl::IsExemptFromBudgetBasedThrottling() const {
@@ -1105,14 +1147,6 @@ TaskQueue::QueuePriority FrameSchedulerImpl::ComputePriority(
     }
   }
 
-  // Consult per-agent scheduling strategy to see if it wants to affect queue
-  // priority. Done here to avoid interfering with other policy decisions.
-  base::Optional<TaskQueue::QueuePriority> per_agent_priority =
-      main_thread_scheduler_->agent_scheduling_strategy().QueuePriority(
-          *task_queue);
-  if (per_agent_priority.has_value())
-    return per_agent_priority.value();
-
   if (task_queue->GetPrioritisationType() ==
       MainThreadTaskQueue::QueueTraits::PrioritisationType::kLoadingControl) {
     return main_thread_scheduler_->should_prioritize_loading_with_compositing()
@@ -1134,6 +1168,30 @@ TaskQueue::QueuePriority FrameSchedulerImpl::ComputePriority(
   if (task_queue->GetPrioritisationType() ==
       MainThreadTaskQueue::QueueTraits::PrioritisationType::
           kHighPriorityLocalFrame) {
+    return TaskQueue::QueuePriority::kHighestPriority;
+  }
+
+  // Deprioritize JS timer tasks to speed up the page loading process.
+  if (base::FeatureList::IsEnabled(kDeprioritizeDOMTimersDuringPageLoading) &&
+      task_queue->GetPrioritisationType() ==
+          MainThreadTaskQueue::QueueTraits::PrioritisationType::
+              kJavaScriptTimer &&
+      waiting_for_load_ &&
+      (kDeprioritizeDOMTimersPhase.Get() ==
+           DeprioritizeDOMTimersPhase::kOnLoad ||
+       (kDeprioritizeDOMTimersPhase.Get() ==
+            DeprioritizeDOMTimersPhase::kOnDOMContentLoaded &&
+        waiting_for_dom_content_loaded_) ||
+       (kDeprioritizeDOMTimersPhase.Get() ==
+            DeprioritizeDOMTimersPhase::kFirstContentfulPaint &&
+        parent_page_scheduler_->IsWaitingForMainFrameContentfulPaint()))) {
+    return TaskQueue::QueuePriority::kLowPriority;
+  }
+
+  if (task_queue->GetPrioritisationType() ==
+          MainThreadTaskQueue::QueueTraits::PrioritisationType::kInput &&
+      base::FeatureList::IsEnabled(
+          ::blink::features::kInputTargetClientHighPriority)) {
     return TaskQueue::QueuePriority::kHighestPriority;
   }
 
@@ -1312,12 +1370,17 @@ FrameSchedulerImpl::GetDocumentBoundWeakPtr() {
 std::unique_ptr<WebSchedulingTaskQueue>
 FrameSchedulerImpl::CreateWebSchedulingTaskQueue(
     WebSchedulingPriority priority) {
-  // Use QueueTraits here that are the same as postMessage, which is one current
-  // method for scheduling script.
-  scoped_refptr<MainThreadTaskQueue> task_queue =
+  scoped_refptr<MainThreadTaskQueue> immediate_task_queue =
       frame_task_queue_controller_->NewWebSchedulingTaskQueue(
-          PausableTaskQueueTraits(), priority);
-  return std::make_unique<WebSchedulingTaskQueueImpl>(task_queue->AsWeakPtr());
+          DeferrableTaskQueueTraits(), priority);
+  scoped_refptr<MainThreadTaskQueue> delayed_task_queue =
+      frame_task_queue_controller_->NewWebSchedulingTaskQueue(
+          DeferrableTaskQueueTraits()
+              .SetCanBeThrottled(true)
+              .SetCanBeIntensivelyThrottled(true),
+          priority);
+  return std::make_unique<MainThreadWebSchedulingTaskQueueImpl>(
+      immediate_task_queue->AsWeakPtr(), delayed_task_queue->AsWeakPtr());
 }
 
 void FrameSchedulerImpl::OnWebSchedulingTaskQueuePriorityChanged(
@@ -1423,6 +1486,12 @@ MainThreadTaskQueue::QueueTraits
 FrameSchedulerImpl::FindInPageTaskQueueTraits() {
   return PausableTaskQueueTraits().SetPrioritisationType(
       QueueTraits::PrioritisationType::kFindInPage);
+}
+
+MainThreadTaskQueue::QueueTraits
+FrameSchedulerImpl::InputBlockingQueueTraits() {
+  return QueueTraits().SetPrioritisationType(
+      QueueTraits::PrioritisationType::kInput);
 }
 }  // namespace scheduler
 }  // namespace blink

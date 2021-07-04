@@ -38,15 +38,15 @@ class CONTENT_EXPORT RawClipboardHostImpl
   // mojom::RawClipboardHost.
   void ReadAvailableFormatNames(
       ReadAvailableFormatNamesCallback callback) override;
-  void Read(const base::string16& format, ReadCallback callback) override;
-  void Write(const base::string16& format, mojo_base::BigBuffer data) override;
+  void Read(const std::u16string& format, ReadCallback callback) override;
+  void Write(const std::u16string& format, mojo_base::BigBuffer data) override;
   void CommitWrite() override;
 
   std::unique_ptr<ui::DataTransferEndpoint> CreateDataEndpoint();
   bool HasTransientUserActivation() const;
 
   // The render frame is not owned.
-  const GlobalFrameRoutingId render_frame_routing_id_;
+  const GlobalRenderFrameHostId render_frame_routing_id_;
 
   ui::Clipboard* const clipboard_;  // Not owned.
   std::unique_ptr<ui::ScopedClipboardWriter> clipboard_writer_;

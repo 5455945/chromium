@@ -968,11 +968,6 @@ TEST_F(HTMLPreloadScannerTest, testNonce) {
       {"http://example.test", "<script src='/script' nonce=''></script>", ""},
       {"http://example.test", "<script src='/script' nonce='abc'></script>",
        "abc"},
-      {"http://example.test", "<link rel='import' href='/import'>", ""},
-      {"http://example.test", "<link rel='import' href='/import' nonce=''>",
-       ""},
-      {"http://example.test", "<link rel='import' href='/import' nonce='abc'>",
-       "abc"},
       {"http://example.test", "<link rel='stylesheet' href='/style'>", ""},
       {"http://example.test", "<link rel='stylesheet' href='/style' nonce=''>",
        ""},
@@ -1486,6 +1481,47 @@ TEST_F(HTMLPreloadScannerTest, CSSImportWithSemicolonInUrl) {
 
   for (const auto& test : test_cases)
     Test(test);
+}
+
+// https://crbug.com/1181291
+TEST_F(HTMLPreloadScannerTest, TemplateInteractions) {
+  PreloadScannerTestCase test_cases[] = {
+      {"http://example.test", "<template><img src='bla.gif'></template>",
+       nullptr, "http://example.test/", ResourceType::kImage, 0},
+      {"http://example.test",
+       "<template><template><img src='bla.gif'></template></template>", nullptr,
+       "http://example.test/", ResourceType::kImage, 0},
+      {"http://example.test",
+       "<template><template></template><img src='bla.gif'></template>", nullptr,
+       "http://example.test/", ResourceType::kImage, 0},
+      {"http://example.test",
+       "<template><template></template><script "
+       "src='test.js'></script></template>",
+       nullptr, "http://example.test/", ResourceType::kScript, 0},
+      {"http://example.test",
+       "<template><template></template><link rel=preload as=fetch "
+       "href=bla></template>",
+       nullptr, "http://example.test/", ResourceType::kRaw, 0},
+      {"http://example.test",
+       "<template><template></template><link rel='stylesheet' href='sheet.css' "
+       "type='text/css'></template>",
+       nullptr, "http://example.test/", ResourceType::kCSSStyleSheet, 0},
+  };
+  for (const auto& test : test_cases)
+    Test(test);
+}
+
+// Regression test for https://crbug.com/1181291
+TEST_F(HTMLPreloadScannerTest, JavascriptBaseUrl) {
+  PreloadScannerTestCase test_cases[] = {
+      {"",
+       "<base href='javascript:'><base href='javascript:notallowed'><base "
+       "href='http://example.test/'><link rel=preload href=bla as=SCRIPT>",
+       "bla", "http://example.test/", ResourceType::kScript, 0},
+  };
+
+  for (const auto& test_case : test_cases)
+    Test(test_case);
 }
 
 }  // namespace blink

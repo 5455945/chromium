@@ -177,7 +177,7 @@ void InitializeCrashpadImpl(bool initial_client,
 #else
   // "platform" is used to determine device_model on the crash server.
   static crashpad::StringAnnotation<24> platform("platform");
-  platform.Set(base::SysInfo::OperatingSystemArchitecture());
+  platform.Set(base::SysInfo::HardwareModelName());
 #endif  // OS_IOS
 
   logging::SetLogMessageHandler(LogMessageHandler);
@@ -274,6 +274,13 @@ void SetUploadConsent(bool consent) {
 void DumpWithoutCrashing() {
   CRASHPAD_SIMULATE_CRASH();
 }
+
+#if defined(OS_IOS)
+void DumpWithoutCrashAndDeferProcessing() {
+  CRASHPAD_SIMULATE_CRASH_AND_DEFER_PROCESSING();
+}
+#endif
+
 #endif
 
 #if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_ANDROID)

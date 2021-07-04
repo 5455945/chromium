@@ -4,6 +4,7 @@
 
 #include "base/rand_util.h"
 #include "base/run_loop.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/lacros/browser_test_util.h"
 #include "chrome/browser/ui/browser.h"
@@ -35,8 +36,8 @@ class ClipboardLacrosBrowserTest : public InProcessBrowserTest {
           std::string read_text = "";
           {
             mojo::ScopedAllowSyncCallForTesting allow_sync_call;
-            lacros_chrome_service->clipboard_remote()->GetCopyPasteText(
-                &read_text);
+            lacros_chrome_service->GetRemote<crosapi::mojom::Clipboard>()
+                ->GetCopyPasteText(&read_text);
           }
           if (read_text == text)
             run_loop->Quit();
@@ -58,7 +59,7 @@ IN_PROC_BROWSER_TEST_F(ClipboardLacrosBrowserTest, GetCopyPasteText) {
   auto* lacros_chrome_service = chromeos::LacrosChromeServiceImpl::Get();
   ASSERT_TRUE(lacros_chrome_service);
 
-  if (!lacros_chrome_service->IsClipboardAvailable())
+  if (!lacros_chrome_service->IsAvailable<crosapi::mojom::Clipboard>())
     return;
 
   aura::Window* window = BrowserView::GetBrowserViewForBrowser(browser())

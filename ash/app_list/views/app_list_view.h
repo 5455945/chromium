@@ -9,17 +9,18 @@
 #include <string>
 #include <vector>
 
-#include "ash/app_list/app_list_export.h"
 #include "ash/app_list/app_list_metrics.h"
 #include "ash/app_list/app_list_view_delegate.h"
+#include "ash/ash_export.h"
 #include "ash/public/cpp/app_list/app_list_types.h"
 #include "ash/public/cpp/metrics_util.h"
 #include "ash/public/cpp/presentation_time_recorder.h"
 #include "base/callback.h"
 #include "base/macros.h"
-#include "base/optional.h"
 #include "build/build_config.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/aura/window_observer.h"
+#include "ui/events/event.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
@@ -37,6 +38,7 @@ class ImplicitAnimationObserver;
 }  // namespace ui
 
 namespace ash {
+class AppListA11yAnnouncer;
 class AppsContainerView;
 class ApplicationDragAndDropHost;
 class AppListBackgroundShieldView;
@@ -44,10 +46,11 @@ class AppListConfig;
 class AppListMainView;
 class AppListModel;
 class AppsGridView;
-class StateTransitionNotifier;
+class PagedAppsGridView;
 class PaginationModel;
 class SearchBoxView;
 class SearchModel;
+class StateTransitionNotifier;
 
 FORWARD_DECLARE_TEST(AppListControllerImplTest,
                      CheckAppListViewBoundsWhenVKeyboardEnabled);
@@ -64,8 +67,8 @@ constexpr int kAppListThresholdDenominator = 3;
 // and hosts a AppsGridView and passes AppListModel to it for display.
 // TODO(newcomer|weidongg): Organize the cc file to match the order of
 // definitions in this header.
-class APP_LIST_EXPORT AppListView : public views::WidgetDelegateView,
-                                    public aura::WindowObserver {
+class ASH_EXPORT AppListView : public views::WidgetDelegateView,
+                               public aura::WindowObserver {
  public:
   class TestApi {
    public:
@@ -77,6 +80,21 @@ class APP_LIST_EXPORT AppListView : public views::WidgetDelegateView,
    private:
     AppListView* const view_;
     DISALLOW_COPY_AND_ASSIGN(TestApi);
+  };
+
+  class ASH_EXPORT ScopedAccessibilityAnnouncementLock {
+   public:
+    explicit ScopedAccessibilityAnnouncementLock(AppListView* view)
+        : view_(view) {
+      ++view_->accessibility_event_disablers_;
+    }
+
+    ~ScopedAccessibilityAnnouncementLock() {
+      --view_->accessibility_event_disablers_;
+    }
+
+   private:
+    AppListView* const view_;
   };
 
   // Number of the size of shelf. Used to determine the opacity of items in the
@@ -116,6 +134,9 @@ class APP_LIST_EXPORT AppListView : public views::WidgetDelegateView,
   // The animation duration for app list movement.
   static constexpr int kAppListAnimationDurationMs = 200;
   static constexpr int kAppListAnimationDurationFromFullscreenMs = 250;
+
+  // The scroll offset in order to transition from PEEKING to FULLSCREEN
+  static constexpr int kAppListMinScrollToSwitchStates = 20;
 
   // Does not take ownership of |delegate|.
   explicit AppListView(AppListViewDelegate* delegate);
@@ -341,7 +362,7 @@ class APP_LIST_EXPORT AppListView : public views::WidgetDelegateView,
 
   AppListMainView* app_list_main_view() const { return app_list_main_view_; }
 
-  views::View* announcement_view() const { return announcement_view_; }
+  AppListA11yAnnouncer* a11y_announcer() { return a11y_announcer_.get(); }
 
   bool is_fullscreen() const {
     return app_list_state_ == AppListViewState::kFullscreenAllApps ||
@@ -462,10 +483,10 @@ class APP_LIST_EXPORT AppListView : public views::WidgetDelegateView,
   AppsContainerView* GetAppsContainerView();
 
   // Gets the root apps grid view owned by this view.
-  AppsGridView* GetRootAppsGridView();
+  PagedAppsGridView* GetRootAppsGridView();
 
   // Gets the apps grid view within the folder view owned by this view.
-  AppsGridView* GetFolderAppsGridView();
+  PagedAppsGridView* GetFolderAppsGridView();
 
   // Gets the AppListStateTransitionSource for |app_list_state_| to
   // |target_state|. If we are not interested in recording a state transition
@@ -490,6 +511,15 @@ class APP_LIST_EXPORT AppListView : public views::WidgetDelegateView,
   // Returns true if scroll events should be ignored.
   bool ShouldIgnoreScrollEvents();
 
+  // Returns true if we should dismiss app list. We use the |location|,
+  // |offset|, and |type| of the scroll event. |is_in_vertical_bounds| indicates
+  // whether the event took place within the vertical bounds of the apps grid,
+  // since this affects dismissal behavior.
+  bool ShouldScrollDismissAppList(const gfx::Point& location,
+                                  const gfx::Vector2d& offset,
+                                  ui::EventType type,
+                                  bool is_in_vertical_bounds);
+
   // Returns preferred y of fullscreen widget bounds in parent window for the
   // specified state.
   int GetPreferredWidgetYForState(AppListViewState state) const;
@@ -507,25 +537,25 @@ class APP_LIST_EXPORT AppListView : public views::WidgetDelegateView,
   // is snapped.
   void ResetSubpixelPositionOffset(ui::Layer* layer);
 
-  AppListViewDelegate* delegate_;    // Weak. Owned by AppListService.
+  AppListViewDelegate* const delegate_;
   AppListModel* const model_;        // Not Owned.
   SearchModel* const search_model_;  // Not Owned.
 
+  // Keeps track of the number of locks that prevent the app list view
+  // from creating app list transition accessibility events. This is used to
+  // prevent A11Y announcements when showing the assistant UI.
+  int accessibility_event_disablers_ = 0;
   AppListMainView* app_list_main_view_ = nullptr;
   gfx::NativeView parent_window_ = nullptr;
 
-  views::Widget* search_box_widget_ =
-      nullptr;                                // Owned by the app list's widget.
-  SearchBoxView* search_box_view_ = nullptr;  // Owned by |search_box_widget_|.
+  SearchBoxView* search_box_view_ = nullptr;  // Owned by views hierarchy.
   // Owned by the app list's widget. Used to show the darkened AppList
   // background.
   AppListBackgroundShieldView* app_list_background_shield_ = nullptr;
 
   // The time the AppListView was requested to be shown. Used for metrics.
-  base::Optional<base::Time> time_shown_;
+  absl::optional<base::Time> time_shown_;
 
-  // Whether tablet mode is active.
-  bool is_tablet_mode_ = false;
   // Whether the shelf is oriented on the side.
   bool is_side_shelf_ = false;
 
@@ -579,11 +609,8 @@ class APP_LIST_EXPORT AppListView : public views::WidgetDelegateView,
   // view header is visible when onscreen keyboard is shown.
   bool offset_to_show_folder_with_onscreen_keyboard_ = false;
 
-  // View used to announce:
-  // 1. state transition for peeking and fullscreen
-  // 2. folder opening and closing.
-  // 3. app dragging in AppsGridView.
-  views::View* announcement_view_ = nullptr;  // Owned by AppListView.
+  // Used for announcing accessibility alerts.
+  std::unique_ptr<AppListA11yAnnouncer> a11y_announcer_;
 
   // Records the presentation time for app launcher dragging.
   std::unique_ptr<PresentationTimeRecorder> presentation_time_recorder_;

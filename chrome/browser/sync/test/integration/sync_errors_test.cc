@@ -10,8 +10,8 @@
 #include "chrome/browser/sync/test/integration/bookmarks_helper.h"
 #include "chrome/browser/sync/test/integration/fake_server_match_status_checker.h"
 #include "chrome/browser/sync/test/integration/preferences_helper.h"
-#include "chrome/browser/sync/test/integration/profile_sync_service_harness.h"
 #include "chrome/browser/sync/test/integration/sync_disabled_checker.h"
+#include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/sync/test/integration/updated_progress_marker_checker.h"
 #include "chrome/browser/sync/test/integration/user_events_helper.h"
@@ -20,7 +20,7 @@
 #include "components/history/core/common/pref_names.h"
 #include "components/prefs/pref_member.h"
 #include "components/prefs/pref_service.h"
-#include "components/sync/driver/profile_sync_service.h"
+#include "components/sync/driver/sync_service_impl.h"
 #include "components/sync/protocol/sync_protocol_error.h"
 #include "components/sync/protocol/user_event_specifics.pb.h"
 #include "components/sync_user_events/user_event_service.h"
@@ -30,16 +30,29 @@
 using bookmarks::BookmarkNode;
 using bookmarks_helper::AddFolder;
 using bookmarks_helper::SetTitle;
-using syncer::ProfileSyncService;
+using syncer::SyncServiceImpl;
 using user_events_helper::CreateTestEvent;
 
 namespace {
 
 constexpr int64_t kUserEventTimeUsec = 123456;
 
+syncer::ModelTypeSet GetThrottledDataTypes(
+    syncer::SyncServiceImpl* sync_service) {
+  base::RunLoop loop;
+  syncer::ModelTypeSet throttled_types;
+  sync_service->GetThrottledDataTypesForTest(
+      base::BindLambdaForTesting([&](syncer::ModelTypeSet result) {
+        throttled_types = result;
+        loop.Quit();
+      }));
+  loop.Run();
+  return throttled_types;
+}
+
 class SyncEngineStoppedChecker : public SingleClientStatusChangeChecker {
  public:
-  explicit SyncEngineStoppedChecker(ProfileSyncService* service)
+  explicit SyncEngineStoppedChecker(SyncServiceImpl* service)
       : SingleClientStatusChangeChecker(service) {}
 
   // StatusChangeChecker implementation.
@@ -51,8 +64,7 @@ class SyncEngineStoppedChecker : public SingleClientStatusChangeChecker {
 
 class TypeDisabledChecker : public SingleClientStatusChangeChecker {
  public:
-  explicit TypeDisabledChecker(ProfileSyncService* service,
-                               syncer::ModelType type)
+  explicit TypeDisabledChecker(SyncServiceImpl* service, syncer::ModelType type)
       : SingleClientStatusChangeChecker(service), type_(type) {}
 
   // StatusChangeChecker implementation.
@@ -70,7 +82,7 @@ class TypeDisabledChecker : public SingleClientStatusChangeChecker {
 // commit request fails).
 class UserEventCommitChecker : public SingleClientStatusChangeChecker {
  public:
-  UserEventCommitChecker(ProfileSyncService* service,
+  UserEventCommitChecker(SyncServiceImpl* service,
                          fake_server::FakeServer* fake_server,
                          int64_t expected_event_time_usec)
       : SingleClientStatusChangeChecker(service),
@@ -108,7 +120,7 @@ class SyncErrorTest : public SyncTest {
 // Helper class that waits until the sync engine has hit an actionable error.
 class ActionableErrorChecker : public SingleClientStatusChangeChecker {
  public:
-  explicit ActionableErrorChecker(ProfileSyncService* service)
+  explicit ActionableErrorChecker(SyncServiceImpl* service)
       : SingleClientStatusChangeChecker(service) {}
 
   ~ActionableErrorChecker() override {}
@@ -250,7 +262,7 @@ IN_PROC_BROWSER_TEST_F(SyncErrorTest, ClientDataObsoleteTest) {
   // Remember cache_guid before actionable error.
   syncer::SyncStatus status;
   GetSyncService(0)->QueryDetailedSyncStatusForDebugging(&status);
-  std::string old_cache_guid = status.sync_id;
+  std::string old_cache_guid = status.cache_guid;
 
   GetFakeServer()->TriggerError(sync_pb::SyncEnums::CLIENT_DATA_OBSOLETE);
 
@@ -267,7 +279,7 @@ IN_PROC_BROWSER_TEST_F(SyncErrorTest, ClientDataObsoleteTest) {
 
   // Ensure cache_guid changed.
   GetSyncService(0)->QueryDetailedSyncStatusForDebugging(&status);
-  ASSERT_NE(old_cache_guid, status.sync_id);
+  ASSERT_NE(old_cache_guid, status.cache_guid);
 }
 
 IN_PROC_BROWSER_TEST_F(SyncErrorTest, EncryptionObsoleteErrorTest) {
@@ -344,14 +356,18 @@ IN_PROC_BROWSER_TEST_F(SyncErrorTest,
   }
 }
 
-IN_PROC_BROWSER_TEST_F(SyncErrorTest,
-                       ShouldResendUncommittedEntitiesAfterBrowserRestart) {
+#if defined(OS_MAC) && defined(ARCH_CPU_ARM64)
+// https://crbug.com/1223092
+#define MAYBE_ShouldResendUncommittedEntitiesAfterBrowserRestart \
+  DISABLED_ShouldResendUncommittedEntitiesAfterBrowserRestart
+#else
+#define MAYBE_ShouldResendUncommittedEntitiesAfterBrowserRestart \
+  ShouldResendUncommittedEntitiesAfterBrowserRestart
+#endif
+IN_PROC_BROWSER_TEST_F(
+    SyncErrorTest,
+    MAYBE_ShouldResendUncommittedEntitiesAfterBrowserRestart) {
   ASSERT_TRUE(SetupClients()) << "SetupClients() failed.";
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // signin::SetRefreshTokenForPrimaryAccount() is needed on ChromeOS in order
-  // to get a non-empty refresh token on startup.
-  GetClient(0)->SignInPrimaryAccount();
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
   ASSERT_TRUE(GetClient(0)->AwaitEngineInitialization());
 
   const sync_pb::UserEventSpecifics expected_specifics =
@@ -402,7 +418,7 @@ IN_PROC_BROWSER_TEST_F(SyncErrorTest, ShouldThrottleOneDatatypeButNotOthers) {
             "false");
 
   // PREFERENCES should now be throttled.
-  EXPECT_EQ(GetSyncService(0)->GetThrottledDataTypesForTest(),
+  EXPECT_EQ(GetThrottledDataTypes(GetSyncService(0)),
             syncer::ModelTypeSet{syncer::PREFERENCES});
 
   // Unthrottle PREFERENCES to verify that sync can resume.
@@ -413,8 +429,7 @@ IN_PROC_BROWSER_TEST_F(SyncErrorTest, ShouldThrottleOneDatatypeButNotOthers) {
   EXPECT_TRUE(
       FakeServerPrefMatchesValueChecker(prefs::kHomePageIsNewTabPage, "true")
           .Wait());
-  EXPECT_EQ(GetSyncService(0)->GetThrottledDataTypesForTest(),
-            syncer::ModelTypeSet());
+  EXPECT_EQ(GetThrottledDataTypes(GetSyncService(0)), syncer::ModelTypeSet());
 }
 
 }  // namespace

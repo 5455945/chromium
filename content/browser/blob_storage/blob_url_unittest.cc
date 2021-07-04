@@ -8,13 +8,13 @@
 #include <memory>
 
 #include "base/bind.h"
+#include "base/cxx17_backports.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/ref_counted.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/run_loop.h"
-#include "base/stl_util.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "content/public/test/browser_task_environment.h"
@@ -28,6 +28,7 @@
 #include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+#include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "services/network/test/test_url_loader_client.h"
 #include "storage/browser/blob/blob_data_builder.h"
 #include "storage/browser/blob/blob_data_handle.h"
@@ -39,6 +40,7 @@
 #include "storage/browser/file_system/file_system_context.h"
 #include "storage/browser/file_system/file_system_operation_context.h"
 #include "storage/browser/file_system/file_system_url.h"
+#include "storage/browser/quota/quota_manager_proxy.h"
 #include "storage/browser/test/async_file_test_helper.h"
 #include "storage/browser/test/fake_blob_data_handle.h"
 #include "storage/browser/test/mock_blob_registry_delegate.h"
@@ -108,7 +110,7 @@ class BlobURLTest : public testing::Test {
   void SetUpFileSystem() {
     // Prepare file system.
     file_system_context_ = storage::CreateFileSystemContextForTesting(
-        nullptr, temp_dir_.GetPath());
+        /*quota_manager_proxy=*/nullptr, temp_dir_.GetPath());
 
     file_system_context_->OpenFileSystem(
         url::Origin::Create(GURL(kFileSystemURLOrigin)), kFileSystemType,
@@ -208,7 +210,7 @@ class BlobURLTest : public testing::Test {
     mojo::PendingRemote<network::mojom::URLLoader> url_loader;
     network::TestURLLoaderClient url_loader_client;
     url_loader_factory->CreateLoaderAndStart(
-        url_loader.InitWithNewPipeAndPassReceiver(), 0, 0,
+        url_loader.InitWithNewPipeAndPassReceiver(), 0,
         network::mojom::kURLLoadOptionNone, request,
         url_loader_client.CreateRemote(),
         net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS));

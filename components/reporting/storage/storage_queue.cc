@@ -24,7 +24,6 @@
 #include "base/hash/hash.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/weak_ptr.h"
-#include "base/optional.h"
 #include "base/rand_util.h"
 #include "base/sequence_checker.h"
 #include "base/strings/strcat.h"
@@ -33,8 +32,10 @@
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/task/post_task.h"
+#include "base/task/thread_pool.h"
 #include "base/task_runner.h"
-#include "components/reporting/encryption/encryption_module.h"
+#include "components/reporting/compression/compression_module.h"
+#include "components/reporting/encryption/encryption_module_interface.h"
 #include "components/reporting/proto/record.pb.h"
 #include "components/reporting/storage/resources/resource_interface.h"
 #include "components/reporting/storage/storage_configuration.h"
@@ -45,6 +46,7 @@
 #include "components/reporting/util/task_runner_context.h"
 #include "crypto/random.h"
 #include "crypto/sha2.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/protobuf/src/google/protobuf/io/zero_copy_stream_impl_lite.h"
 
 namespace reporting {
@@ -75,8 +77,9 @@ struct RecordHeader {
 // static
 void StorageQueue::Create(
     const QueueOptions& options,
-    StartUploadCb start_upload_cb,
-    scoped_refptr<EncryptionModule> encryption_module,
+    AsyncStartUploaderCb async_start_upload_cb,
+    scoped_refptr<EncryptionModuleInterface> encryption_module,
+    scoped_refptr<CompressionModule> compression_module,
     base::OnceCallback<void(StatusOr<scoped_refptr<StorageQueue>>)>
         completion_cb) {
   // Initialize StorageQueue object loading the data.
@@ -110,32 +113,40 @@ void StorageQueue::Create(
     scoped_refptr<StorageQueue> storage_queue_;
   };
 
+  auto sequenced_task_runner = base::ThreadPool::CreateSequencedTaskRunner(
+      {base::TaskPriority::BEST_EFFORT, base::MayBlock()});
+
   // Create StorageQueue object.
   // Cannot use base::MakeRefCounted<StorageQueue>, because constructor is
   // private.
   scoped_refptr<StorageQueue> storage_queue = base::WrapRefCounted(
-      new StorageQueue(options, std::move(start_upload_cb), encryption_module));
+      new StorageQueue(std::move(sequenced_task_runner), options,
+                       std::move(async_start_upload_cb), encryption_module,
+                       compression_module));
 
   // Asynchronously run initialization.
   Start<StorageQueueInitContext>(std::move(storage_queue),
                                  std::move(completion_cb));
 }
 
-StorageQueue::StorageQueue(const QueueOptions& options,
-                           StartUploadCb start_upload_cb,
-                           scoped_refptr<EncryptionModule> encryption_module)
-    : options_(options),
-      start_upload_cb_(std::move(start_upload_cb)),
+StorageQueue::StorageQueue(
+    scoped_refptr<base::SequencedTaskRunner> sequenced_task_runner,
+    const QueueOptions& options,
+    AsyncStartUploaderCb async_start_upload_cb,
+    scoped_refptr<EncryptionModuleInterface> encryption_module,
+    scoped_refptr<CompressionModule> compression_module)
+    : base::RefCountedDeleteOnSequence<StorageQueue>(sequenced_task_runner),
+      options_(options),
+      async_start_upload_cb_(async_start_upload_cb),
       encryption_module_(encryption_module),
-      sequenced_task_runner_(base::ThreadPool::CreateSequencedTaskRunner(
-          {base::TaskPriority::BEST_EFFORT, base::MayBlock()})) {
+      compression_module_(compression_module),
+      sequenced_task_runner_(std::move(sequenced_task_runner)) {
   DETACH_FROM_SEQUENCE(storage_queue_sequence_checker_);
   DCHECK(write_contexts_queue_.empty());
 }
 
 StorageQueue::~StorageQueue() {
-  // TODO(b/153364303): Should be
-  // DCHECK_CALLED_ON_VALID_SEQUENCE(storage_queue_sequence_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(storage_queue_sequence_checker_);
 
   // Stop upload timer.
   upload_timer_.AbandonAndStop();
@@ -193,8 +204,8 @@ Status StorageQueue::Init() {
       // Some of them might have been changed earlier.
       next_sequencing_id_ = 0;
       first_sequencing_id_ = 0;
-      first_unconfirmed_sequencing_id_ = base::nullopt;
-      last_record_digest_ = base::nullopt;
+      first_unconfirmed_sequencing_id_ = absl::nullopt;
+      last_record_digest_ = absl::nullopt;
       ReleaseAllFileInstances();
       used_files_set.clear();
     }
@@ -209,24 +220,10 @@ Status StorageQueue::Init() {
   return Status::StatusOK();
 }
 
-void StorageQueue::UpdateRecordDigest(WrappedRecord* wrapped_record) {
+absl::optional<std::string> StorageQueue::GetLastRecordDigest() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(storage_queue_sequence_checker_);
   // Attach last record digest, if present.
-  if (last_record_digest_.has_value()) {
-    *wrapped_record->mutable_last_record_digest() = last_record_digest_.value();
-  }
-
-  // Calculate new record digest.
-  {
-    std::string serialized_record;
-    wrapped_record->record().SerializeToString(&serialized_record);
-    *wrapped_record->mutable_record_digest() =
-        crypto::SHA256HashString(serialized_record);
-    DCHECK_EQ(wrapped_record->record_digest().size(), crypto::kSHA256Length);
-  }
-
-  // Store it in the record (for self-verification by the server).
-  last_record_digest_ = wrapped_record->record_digest();
+  return last_record_digest_;
 }
 
 StatusOr<int64_t> StorageQueue::AddDataFile(
@@ -263,7 +260,7 @@ Status StorageQueue::EnumerateDataFiles(
   // We need to set first_sequencing_id_ to 0 if this is the initialization
   // of an empty StorageQueue, and to the lowest sequencing id among all
   // existing files, if it was already used.
-  base::Optional<int64_t> first_sequencing_id;
+  absl::optional<int64_t> first_sequencing_id;
   base::FileEnumerator dir_enum(
       options_.directory(),
       /*recursive=*/false, base::FileEnumerator::FILES,
@@ -317,7 +314,8 @@ Status StorageQueue::ScanLastFile() {
   for (;;) {
     // Read the header
     auto read_result =
-        last_file->Read(pos, sizeof(RecordHeader), max_buffer_size);
+        last_file->Read(pos, sizeof(RecordHeader), max_buffer_size,
+                        /*expect_readonly=*/false);
     if (read_result.status().error_code() == error::OUT_OF_RANGE) {
       // End of file detected.
       break;
@@ -339,7 +337,8 @@ Status StorageQueue::ScanLastFile() {
         *reinterpret_cast<const RecordHeader*>(read_result.ValueOrDie().data());
     // Read the data (rounded to frame size).
     const size_t data_size = RoundUpToFrameSize(header.record_size);
-    read_result = last_file->Read(pos, data_size, max_buffer_size);
+    read_result = last_file->Read(pos, data_size, max_buffer_size,
+                                  /*expect_readonly=*/false);
     if (!read_result.ok()) {
       // Error detected.
       LOG(ERROR) << "Error reading file " << last_file->name()
@@ -428,6 +427,7 @@ StorageQueue::OpenNewWriteableFile() {
 
 Status StorageQueue::WriteHeaderAndBlock(
     base::StringPiece data,
+    base::StringPiece current_record_digest,
     scoped_refptr<StorageQueue::SingleFile> file) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(storage_queue_sequence_checker_);
   // Prepare header.
@@ -438,6 +438,8 @@ Status StorageQueue::WriteHeaderAndBlock(
   header.record_sequencing_id = next_sequencing_id_++;
   header.record_hash = base::PersistentHash(data.data(), data.size());
   header.record_size = data.size();
+  // Store last record digest.
+  last_record_digest_.emplace(current_record_digest);
   // Write to the last file, update sequencing id.
   auto open_status = file->Open(/*read_only=*/false);
   if (!open_status.ok()) {
@@ -482,7 +484,7 @@ Status StorageQueue::WriteHeaderAndBlock(
   return Status::StatusOK();
 }
 
-Status StorageQueue::WriteMetadata() {
+Status StorageQueue::WriteMetadata(base::StringPiece current_record_digest) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(storage_queue_sequence_checker_);
   // Synchronously write the metafile.
   ASSIGN_OR_RETURN(
@@ -494,9 +496,8 @@ Status StorageQueue::WriteMetadata() {
           /*size=*/0));
   RETURN_IF_ERROR(meta_file->Open(/*read_only=*/false));
   // Account for the metadata file size.
-  DCHECK(last_record_digest_.has_value());  // Must be set by now.
   if (!GetDiskResource()->Reserve(sizeof(generation_id_) +
-                                  last_record_digest_.value().size())) {
+                                  current_record_digest.size())) {
     return Status(
         error::RESOURCE_EXHAUSTED,
         base::StrCat({"Not enough disk space available to write into file=",
@@ -512,14 +513,14 @@ Status StorageQueue::WriteMetadata() {
                       " status=", append_result.status().ToString()}));
   }
   // Write last record digest.
-  append_result = meta_file->Append(last_record_digest_.value());
+  append_result = meta_file->Append(current_record_digest);
   if (!append_result.ok()) {
     return Status(
         error::RESOURCE_EXHAUSTED,
         base::StrCat({"Cannot write metafile=", meta_file->name(),
                       " status=", append_result.status().ToString()}));
   }
-  if (append_result.ValueOrDie() != last_record_digest_.value().size()) {
+  if (append_result.ValueOrDie() != current_record_digest.size()) {
     return Status(error::DATA_LOSS, base::StrCat({"Failure writing metafile=",
                                                   meta_file->name()}));
   }
@@ -600,7 +601,7 @@ Status StorageQueue::RestoreMetadata(
   }
   // Everything read successfully, set the queue up.
   generation_id_ = generation_id;
-  last_record_digest_ = std::string(read_result.ValueOrDie());
+  last_record_digest_.emplace(read_result.ValueOrDie());
   meta_file_ = std::move(meta_file);
   // Store used metadata file.
   used_files_set->emplace(meta_file_path);
@@ -664,16 +665,18 @@ void StorageQueue::DeleteOutdatedMetadata(int64_t sequencing_id_to_keep) {
 // is zero, RemoveConfirmedData can delete the unused files).
 class StorageQueue::ReadContext : public TaskRunnerContext<Status> {
  public:
-  ReadContext(std::unique_ptr<UploaderInterface> uploader,
-              scoped_refptr<StorageQueue> storage_queue)
+  explicit ReadContext(scoped_refptr<StorageQueue> storage_queue)
       : TaskRunnerContext<Status>(
-            base::BindOnce(&UploaderInterface::Completed,
-                           base::Unretained(uploader.get())),
+            base::BindOnce(&ReadContext::UploadingCompleted,
+                           base::Unretained(this)),
             storage_queue->sequenced_task_runner_),
-        uploader_(std::move(uploader)),
+        async_start_upload_cb_(storage_queue->async_start_upload_cb_),
+        must_invoke_upload_(
+            EncryptionModuleInterface::is_enabled() &&
+            storage_queue->encryption_module_->need_encryption_key()),
         storage_queue_weakptr_factory_{storage_queue.get()} {
     DCHECK(storage_queue.get());
-    DCHECK(uploader_.get());
+    DCHECK(async_start_upload_cb_);
     DETACH_FROM_SEQUENCE(read_sequence_checker_);
   }
 
@@ -689,7 +692,23 @@ class StorageQueue::ReadContext : public TaskRunnerContext<Status> {
       Response(Status(error::UNAVAILABLE, "StorageQueue shut down"));
       return;
     }
+    if (!must_invoke_upload_) {
+      PrepareDataFiles();
+      return;
+    }
 
+    InstantiateUploader(
+        base::BindOnce(&ReadContext::PrepareDataFiles, base::Unretained(this)));
+  }
+
+  void PrepareDataFiles() {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(read_sequence_checker_);
+    base::WeakPtr<StorageQueue> storage_queue =
+        storage_queue_weakptr_factory_.GetWeakPtr();
+    if (!storage_queue) {
+      Response(Status(error::UNAVAILABLE, "StorageQueue shut down"));
+      return;
+    }
     // Fill in initial sequencing information to track progress:
     // use minimum of first_sequencing_id_ and first_unconfirmed_sequencing_id_
     // if the latter has been recorded.
@@ -700,6 +719,13 @@ class StorageQueue::ReadContext : public TaskRunnerContext<Status> {
                    storage_queue->first_sequencing_id_));
     } else {
       sequencing_info_.set_sequencing_id(storage_queue->first_sequencing_id_);
+    }
+
+    // If there are no files in the queue, do nothing and return success right
+    // away. This can happen in case of key delivery request.
+    if (storage_queue->files_.empty()) {
+      Response(Status::StatusOK());
+      return;
     }
 
     // If the last file is not empty (has at least one record),
@@ -723,6 +749,25 @@ class StorageQueue::ReadContext : public TaskRunnerContext<Status> {
 
     // Register with storage_queue, to make sure selected files are not removed.
     ++(storage_queue->active_read_operations_);
+
+    if (uploader_) {
+      // Uploader already created.
+      BeginUploading();
+      return;
+    }
+
+    InstantiateUploader(
+        base::BindOnce(&ReadContext::BeginUploading, base::Unretained(this)));
+  }
+
+  void BeginUploading() {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(read_sequence_checker_);
+    base::WeakPtr<StorageQueue> storage_queue =
+        storage_queue_weakptr_factory_.GetWeakPtr();
+    if (!storage_queue) {
+      Response(Status(error::UNAVAILABLE, "StorageQueue shut down"));
+      return;
+    }
 
     // The first <seq.file> pair is the current file now, and we are at its
     // start or ahead of it.
@@ -775,6 +820,25 @@ class StorageQueue::ReadContext : public TaskRunnerContext<Status> {
     // Read and upload sequencing_info_.sequencing_id().
     CallRecordOrGap(storage_queue, sequencing_info_.sequencing_id());
     // Resume at ScheduleNextRecord.
+  }
+
+  void UploadingCompleted(Status status) {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(read_sequence_checker_);
+    // If uploader was created, notify it about completion.
+    if (uploader_) {
+      uploader_->Completed(status);
+    }
+    // If upload failed, retry it after a delay (if any).
+    if (!status.ok()) {
+      base::WeakPtr<StorageQueue> storage_queue =
+          storage_queue_weakptr_factory_.GetWeakPtr();
+      if (storage_queue &&
+          !storage_queue->options_.upload_retry_delay().is_zero()) {
+        ScheduleAfter(
+            storage_queue->options_.upload_retry_delay(),
+            base::BindOnce(&StorageQueue::Flush, storage_queue.get()));
+      }
+    }
   }
 
   void OnCompletion() override {
@@ -995,12 +1059,51 @@ class StorageQueue::ReadContext : public TaskRunnerContext<Status> {
     // Resume at ScheduleNextRecord.
   }
 
+  void InstantiateUploader(base::OnceCallback<void()> continuation) {
+    base::ThreadPool::PostTask(
+        FROM_HERE, {base::TaskPriority::BEST_EFFORT},
+        base::BindOnce(
+            [](base::OnceCallback<void()> continuation, ReadContext* self) {
+              self->async_start_upload_cb_.Run(base::BindOnce(
+                  &ReadContext::ScheduleOnUploaderInstantiated,
+                  base::Unretained(self), std::move(continuation)));
+            },
+            std::move(continuation), base::Unretained(this)));
+  }
+
+  void ScheduleOnUploaderInstantiated(
+      base::OnceCallback<void()> continuation,
+      StatusOr<std::unique_ptr<UploaderInterface>> uploader_result) {
+    Schedule(base::BindOnce(&ReadContext::OnUploaderInstantiated,
+                            base::Unretained(this), std::move(continuation),
+                            std::move(uploader_result)));
+  }
+
+  void OnUploaderInstantiated(
+      base::OnceCallback<void()> continuation,
+      StatusOr<std::unique_ptr<UploaderInterface>> uploader_result) {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(read_sequence_checker_);
+    if (!uploader_result.ok()) {
+      Response(Status(error::FAILED_PRECONDITION,
+                      base::StrCat({"Failed to provide the Uploader, status=",
+                                    uploader_result.status().ToString()})));
+      return;
+    }
+    DCHECK(!uploader_)
+        << "Uploader instantiated more than once for single upload";
+    uploader_ = std::move(uploader_result.ValueOrDie());
+
+    std::move(continuation).Run();
+  }
+
   // Files that will be read (in order of sequencing ids).
   std::map<int64_t, scoped_refptr<SingleFile>> files_;
   SequencingInformation sequencing_info_;
   uint32_t current_pos_;
   std::map<int64_t, scoped_refptr<SingleFile>>::iterator current_file_;
-  const std::unique_ptr<UploaderInterface> uploader_;
+  const AsyncStartUploaderCb async_start_upload_cb_;
+  const bool must_invoke_upload_;
+  std::unique_ptr<UploaderInterface> uploader_;
   base::WeakPtrFactory<StorageQueue> storage_queue_weakptr_factory_;
 
   SEQUENCE_CHECKER(read_sequence_checker_);
@@ -1041,14 +1144,14 @@ class StorageQueue::WriteContext : public TaskRunnerContext<Status> {
     }
 
     // If no uploader is needed, we are done.
-    if (!uploader_) {
+    if (!async_start_upload_cb_) {
       return;
     }
 
     // Otherwise initiate Upload right after writing
     // finished and respond back when reading Upload is done.
     // Note: new uploader created synchronously before scheduling Upload.
-    Start<ReadContext>(std::move(uploader_), storage_queue_);
+    Start<ReadContext>(storage_queue_);
   }
 
   void OnStart() override {
@@ -1070,21 +1173,45 @@ class StorageQueue::WriteContext : public TaskRunnerContext<Status> {
     WrappedRecord wrapped_record;
     *wrapped_record.mutable_record() = std::move(record_);
 
-    // Calculate and attach record digest.
-    storage_queue_->UpdateRecordDigest(&wrapped_record);
+    // Calculate new record digest and store it in the record
+    // (for self-verification by the server). Do not store it in the queue yet,
+    // because the record might fail to write.
+    {
+      std::string serialized_record;
+      wrapped_record.record().SerializeToString(&serialized_record);
+      current_record_digest_ = crypto::SHA256HashString(serialized_record);
+      DCHECK_EQ(current_record_digest_.size(), crypto::kSHA256Length);
+      *wrapped_record.mutable_record_digest() = current_record_digest_;
+    }
+
+    // Attach last record digest.
+    if (storage_queue_->write_contexts_queue_.empty()) {
+      // Queue is empty, copy |storage_queue_|->|last_record_digest_|
+      // into the record, if it exists.
+      const auto last_record_digest = storage_queue_->GetLastRecordDigest();
+      if (last_record_digest.has_value()) {
+        *wrapped_record.mutable_last_record_digest() =
+            last_record_digest.value();
+      }
+    } else {
+      // Copy previous record digest in the queue into the record.
+      *wrapped_record.mutable_last_record_digest() =
+          (*storage_queue_->write_contexts_queue_.rbegin())
+              ->current_record_digest_;
+    }
 
     // Add context to the end of the queue.
     in_contexts_queue_ = storage_queue_->write_contexts_queue_.insert(
         storage_queue_->write_contexts_queue_.end(), this);
 
-    // Serialize and encrypt wrapped record on a thread pool.
+    // Serialize and compress wrapped record on a thread pool.
     base::ThreadPool::PostTask(
         FROM_HERE, {base::TaskPriority::BEST_EFFORT},
-        base::BindOnce(&WriteContext::SerializeAndEncryptWrappedRecord,
+        base::BindOnce(&WriteContext::ProcessWrappedRecord,
                        base::Unretained(this), std::move(wrapped_record)));
   }
 
-  void SerializeAndEncryptWrappedRecord(WrappedRecord wrapped_record) {
+  void ProcessWrappedRecord(WrappedRecord wrapped_record) {
     // Serialize wrapped record into a string.
     ScopedReservation scoped_reservation(wrapped_record.ByteSizeLong(),
                                          GetMemoryResource());
@@ -1103,20 +1230,45 @@ class StorageQueue::WriteContext : public TaskRunnerContext<Status> {
     }
     // Release wrapped record memory, so scoped reservation may act.
     wrapped_record.Clear();
+    CompressWrappedRecord(buffer);
+  }
 
-    // Encrypt the result.
+  void CompressWrappedRecord(std::string serialized_record) {
+    // Compress the string.
+    storage_queue_->compression_module_->CompressRecord(
+        serialized_record,
+        base::BindOnce(&WriteContext::OnCompressedRecordReady,
+                       base::Unretained(this))
+
+    );
+  }
+
+  void OnCompressedRecordReady(
+      std::string compressed_record_result,
+      absl::optional<CompressionInformation> compression_information) {
+    // Encrypt the result. The callback is partially bounded to include
+    // compression information.
     storage_queue_->encryption_module_->EncryptRecord(
-        buffer, base::BindOnce(&WriteContext::OnEncryptedRecordReady,
-                               base::Unretained(this)));
+        std::move(compressed_record_result),
+        base::BindOnce(&WriteContext::OnEncryptedRecordReady,
+                       base::Unretained(this),
+                       std::move(compression_information)));
   }
 
   void OnEncryptedRecordReady(
+      absl::optional<CompressionInformation> compression_information,
       StatusOr<EncryptedRecord> encrypted_record_result) {
     if (!encrypted_record_result.ok()) {
       // Failed to serialize or encrypt.
       Schedule(&ReadContext::Response, base::Unretained(this),
                encrypted_record_result.status());
       return;
+    }
+
+    // Add compression information to the encrypted record if it exists.
+    if (compression_information.has_value()) {
+      *encrypted_record_result.ValueOrDie().mutable_compression_information() =
+          compression_information.value();
     }
 
     // Serialize encrypted record.
@@ -1166,14 +1318,7 @@ class StorageQueue::WriteContext : public TaskRunnerContext<Status> {
 
     // Prepare uploader, if need to run it after Write.
     if (storage_queue_->options_.upload_period().is_zero()) {
-      StatusOr<std::unique_ptr<UploaderInterface>> uploader =
-          storage_queue_->start_upload_cb_.Run();
-      if (uploader.ok()) {
-        uploader_ = std::move(uploader.ValueOrDie());
-      } else {
-        LOG(ERROR) << "Failed to provide the Uploader, status="
-                   << uploader.status();
-      }
+      async_start_upload_cb_ = storage_queue_->async_start_upload_cb_;
     }
 
     DCHECK(!buffer_.empty());
@@ -1186,15 +1331,16 @@ class StorageQueue::WriteContext : public TaskRunnerContext<Status> {
     scoped_refptr<SingleFile> last_file = assign_result.ValueOrDie();
 
     // Writing metadata ahead of the data write.
-    Status write_result = storage_queue_->WriteMetadata();
+    Status write_result = storage_queue_->WriteMetadata(current_record_digest_);
     if (!write_result.ok()) {
       Response(write_result);
       return;
     }
 
-    // Write header and block.
-    write_result =
-        storage_queue_->WriteHeaderAndBlock(buffer_, std::move(last_file));
+    // Write header and block. Store current_record_digest_ with the queue,
+    // increment next_sequencing_id_
+    write_result = storage_queue_->WriteHeaderAndBlock(
+        buffer_, current_record_digest_, std::move(last_file));
     if (!write_result.ok()) {
       Response(write_result);
       return;
@@ -1212,12 +1358,15 @@ class StorageQueue::WriteContext : public TaskRunnerContext<Status> {
   // and to remove it from the queue, when the time comes.
   std::list<WriteContext*>::iterator in_contexts_queue_;
 
+  // Digest of the current record.
+  std::string current_record_digest_;
+
   // Write buffer. When filled in (after encryption), |WriteRecord| can be
   // executed. Empty until encryption is done.
   std::string buffer_;
 
-  // Upload provider (if any).
-  std::unique_ptr<UploaderInterface> uploader_;
+  // Upload provider.
+  AsyncStartUploaderCb async_start_upload_cb_;
 
   SEQUENCE_CHECKER(write_sequence_checker_);
 };
@@ -1266,7 +1415,7 @@ StorageQueue::CollectFilesForUpload(int64_t sequencing_id) const {
 
 class StorageQueue::ConfirmContext : public TaskRunnerContext<Status> {
  public:
-  ConfirmContext(base::Optional<int64_t> sequencing_id,
+  ConfirmContext(absl::optional<int64_t> sequencing_id,
                  bool force,
                  base::OnceCallback<void(Status)> end_callback,
                  scoped_refptr<StorageQueue> storage_queue)
@@ -1297,7 +1446,7 @@ class StorageQueue::ConfirmContext : public TaskRunnerContext<Status> {
   }
 
   // Confirmed sequencing id.
-  base::Optional<int64_t> sequencing_id_;
+  absl::optional<int64_t> sequencing_id_;
 
   bool force_;
 
@@ -1306,7 +1455,7 @@ class StorageQueue::ConfirmContext : public TaskRunnerContext<Status> {
   SEQUENCE_CHECKER(confirm_sequence_checker_);
 };
 
-void StorageQueue::Confirm(base::Optional<int64_t> sequencing_id,
+void StorageQueue::Confirm(absl::optional<int64_t> sequencing_id,
                            bool force,
                            base::OnceCallback<void(Status)> completion_cb) {
   Start<ConfirmContext>(sequencing_id, force, std::move(completion_cb), this);
@@ -1357,14 +1506,7 @@ Status StorageQueue::RemoveConfirmedData(int64_t sequencing_id) {
 
 void StorageQueue::Flush() {
   // Note: new uploader created every time Flush is called.
-  StatusOr<std::unique_ptr<UploaderInterface>> uploader =
-      start_upload_cb_.Run();
-  if (!uploader.ok()) {
-    LOG(ERROR) << "Failed to provide the Uploader, status="
-               << uploader.status();
-    return;
-  }
-  Start<ReadContext>(std::move(uploader.ValueOrDie()), this);
+  Start<ReadContext>(this);
 }
 
 void StorageQueue::ReleaseAllFileInstances() {
@@ -1402,7 +1544,6 @@ StorageQueue::SingleFile::SingleFile(const base::FilePath& filename,
 StorageQueue::SingleFile::~SingleFile() {
   GetDiskResource()->Discard(size_);
   Close();
-  handle_.reset();
 }
 
 Status StorageQueue::SingleFile::Open(bool read_only) {
@@ -1416,6 +1557,7 @@ Status StorageQueue::SingleFile::Open(bool read_only) {
                            : (base::File::FLAG_OPEN_ALWAYS |
                               base::File::FLAG_APPEND | base::File::FLAG_READ));
   if (!handle_ || !handle_->IsValid()) {
+    handle_.reset();
     return Status(error::DATA_LOSS,
                   base::StrCat({"Cannot open file=", name(), " for ",
                                 read_only ? "read" : "append"}));
@@ -1438,7 +1580,7 @@ void StorageQueue::SingleFile::Close() {
     return;
   }
   handle_.reset();
-  is_readonly_ = base::nullopt;
+  is_readonly_ = absl::nullopt;
   if (buffer_) {
     buffer_.reset();
     GetMemoryResource()->Discard(buffer_size_);
@@ -1459,9 +1601,16 @@ Status StorageQueue::SingleFile::Delete() {
 StatusOr<base::StringPiece> StorageQueue::SingleFile::Read(
     uint32_t pos,
     uint32_t size,
-    size_t max_buffer_size) {
+    size_t max_buffer_size,
+    bool expect_readonly) {
   if (!handle_) {
     return Status(error::UNAVAILABLE, base::StrCat({"File not open ", name()}));
+  }
+  if (expect_readonly != is_readonly()) {
+    return Status(error::INTERNAL,
+                  base::StrCat({"Attempt to read ",
+                                is_readonly() ? "readonly" : "writeable",
+                                " File ", name()}));
   }
   if (size > max_buffer_size) {
     return Status(error::RESOURCE_EXHAUSTED, "Too much data to read");
@@ -1539,9 +1688,13 @@ StatusOr<base::StringPiece> StorageQueue::SingleFile::Read(
 }
 
 StatusOr<uint32_t> StorageQueue::SingleFile::Append(base::StringPiece data) {
-  DCHECK(!is_readonly());
   if (!handle_) {
     return Status(error::UNAVAILABLE, base::StrCat({"File not open ", name()}));
+  }
+  if (is_readonly()) {
+    return Status(
+        error::INTERNAL,
+        base::StrCat({"Attempt to append to read-only File ", name()}));
   }
   size_t actual_size = 0;
   while (data.size() > 0) {

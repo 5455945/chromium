@@ -8,6 +8,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "build/build_config.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/notification_service.h"
@@ -39,8 +40,9 @@ std::unique_ptr<net::test_server::HttpResponse> HandleEchoTitleRequest(
     const std::string& echotitle_path,
     const net::test_server::HttpRequest& request) {
   if (!base::StartsWith(request.relative_url, echotitle_path,
-                        base::CompareCase::SENSITIVE))
-    return std::unique_ptr<net::test_server::HttpResponse>();
+                        base::CompareCase::SENSITIVE)) {
+    return nullptr;
+  }
 
   std::unique_ptr<net::test_server::BasicHttpResponse> http_response(
       new net::test_server::BasicHttpResponse);
@@ -109,7 +111,7 @@ class SessionHistoryTest : public ContentBrowserTest {
 
   void NavigateAndCheckTitle(const char* filename,
                              const std::string& expected_title) {
-    base::string16 expected_title16(base::ASCIIToUTF16(expected_title));
+    std::u16string expected_title16(base::ASCIIToUTF16(expected_title));
     TitleWatcher title_watcher(shell()->web_contents(), expected_title16);
     EXPECT_TRUE(NavigateToURL(shell(), GetURL(filename)));
     ASSERT_EQ(expected_title16, title_watcher.WaitAndGetTitle());
@@ -309,7 +311,13 @@ IN_PROC_BROWSER_TEST_F(SessionHistoryTest, FrameFormBackForward) {
 // Test that back/forward preserves POST data and document state when navigating
 // across frames (ie, from frame -> nonframe).
 // Hangs, see http://crbug.com/45058.
-IN_PROC_BROWSER_TEST_F(SessionHistoryTest, CrossFrameFormBackForward) {
+// https://crbug.com/1219373 fails with BFCache field trial testing config.
+#if defined(OS_ANDROID)
+#define MAYBE_CrossFrameFormBackForward DISABLED_CrossFrameFormBackForward
+#else
+#define MAYBE_CrossFrameFormBackForward CrossFrameFormBackForward
+#endif
+IN_PROC_BROWSER_TEST_F(SessionHistoryTest, MAYBE_CrossFrameFormBackForward) {
   ASSERT_FALSE(CanGoBack());
 
   GURL frames(GetURL("frames.html"));
@@ -459,7 +467,7 @@ IN_PROC_BROWSER_TEST_F(SessionHistoryTest, JavascriptHistory) {
 IN_PROC_BROWSER_TEST_F(SessionHistoryTest, LocationReplace) {
   // Test that using location.replace doesn't leave the title of the old page
   // visible.
-  base::string16 expected_title16(base::ASCIIToUTF16("bot1"));
+  std::u16string expected_title16(u"bot1");
   TitleWatcher title_watcher(shell()->web_contents(), expected_title16);
   EXPECT_TRUE(NavigateToURL(shell(), GetURL("replace.html?bot1.html"),
                             GetURL("bot1.html") /* expected_commit_url */));

@@ -50,6 +50,8 @@ namespace {
 class MockVideoFrameProvider : public cc::VideoFrameProvider {
  public:
   MockVideoFrameProvider() = default;
+  MockVideoFrameProvider(const MockVideoFrameProvider&) = delete;
+  MockVideoFrameProvider& operator=(const MockVideoFrameProvider&) = delete;
   ~MockVideoFrameProvider() override = default;
 
   MOCK_METHOD1(SetVideoFrameProviderClient, void(Client*));
@@ -63,9 +65,6 @@ class MockVideoFrameProvider : public cc::VideoFrameProvider {
   }
 
   base::TimeDelta preferred_interval;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MockVideoFrameProvider);
 };
 
 class VideoMockCompositorFrameSink
@@ -75,6 +74,9 @@ class VideoMockCompositorFrameSink
       mojo::PendingReceiver<viz::mojom::blink::CompositorFrameSink> receiver) {
     receiver_.Bind(std::move(receiver));
   }
+  VideoMockCompositorFrameSink(const VideoMockCompositorFrameSink&) = delete;
+  VideoMockCompositorFrameSink& operator=(const VideoMockCompositorFrameSink&) =
+      delete;
   ~VideoMockCompositorFrameSink() override = default;
 
   const viz::CompositorFrame& last_submitted_compositor_frame() const {
@@ -89,7 +91,7 @@ class VideoMockCompositorFrameSink
   void SubmitCompositorFrame(
       const viz::LocalSurfaceId& id,
       viz::CompositorFrame frame,
-      base::Optional<viz::HitTestRegionList> hit_test_region_list,
+      absl::optional<viz::HitTestRegionList> hit_test_region_list,
       uint64_t submit_time) override {
     last_submitted_compositor_frame_ = std::move(frame);
     DoSubmitCompositorFrame(id, &last_submitted_compositor_frame_);
@@ -97,7 +99,7 @@ class VideoMockCompositorFrameSink
   void SubmitCompositorFrameSync(
       const viz::LocalSurfaceId& id,
       viz::CompositorFrame frame,
-      base::Optional<viz::HitTestRegionList> hit_test_region_list,
+      absl::optional<viz::HitTestRegionList> hit_test_region_list,
       uint64_t submit_time,
       const SubmitCompositorFrameSyncCallback callback) override {
     last_submitted_compositor_frame_ = std::move(frame);
@@ -116,8 +118,6 @@ class VideoMockCompositorFrameSink
   mojo::Receiver<viz::mojom::blink::CompositorFrameSink> receiver_{this};
 
   viz::CompositorFrame last_submitted_compositor_frame_;
-
-  DISALLOW_COPY_AND_ASSIGN(VideoMockCompositorFrameSink);
 };
 
 class MockVideoFrameResourceProvider
@@ -130,6 +130,10 @@ class MockVideoFrameResourceProvider
     blink::VideoFrameResourceProvider::Initialize(context_provider,
                                                   shared_bitmap_reporter);
   }
+  MockVideoFrameResourceProvider(const MockVideoFrameResourceProvider&) =
+      delete;
+  MockVideoFrameResourceProvider& operator=(
+      const MockVideoFrameResourceProvider&) = delete;
   ~MockVideoFrameResourceProvider() override = default;
 
   MOCK_METHOD2(Initialize,
@@ -143,13 +147,9 @@ class MockVideoFrameResourceProvider
   MOCK_METHOD2(PrepareSendToParent,
                void(const WebVector<viz::ResourceId>&,
                     WebVector<viz::TransferableResource>*));
-  MOCK_METHOD1(
-      ReceiveReturnsFromParent,
-      void(const Vector<viz::ReturnedResource>& transferable_resources));
+  MOCK_METHOD1(ReceiveReturnsFromParent,
+               void(Vector<viz::ReturnedResource> transferable_resources));
   MOCK_METHOD0(ObtainContextProvider, void());
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MockVideoFrameResourceProvider);
 };
 }  // namespace
 
@@ -223,7 +223,7 @@ class VideoFrameSubmitterTest : public testing::Test {
   void AckSubmittedFrame() {
     WTF::Vector<viz::ReturnedResource> resources;
     EXPECT_CALL(*resource_provider_, ReceiveReturnsFromParent(_));
-    submitter_->DidReceiveCompositorFrameAck(resources);
+    submitter_->DidReceiveCompositorFrameAck(std::move(resources));
   }
 
  protected:

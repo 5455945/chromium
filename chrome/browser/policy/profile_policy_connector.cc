@@ -4,6 +4,7 @@
 
 #include "chrome/browser/policy/profile_policy_connector.h"
 
+#include <memory>
 #include <utility>
 
 #include "base/bind.h"
@@ -31,13 +32,13 @@
 #include "components/policy/policy_constants.h"
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
+#include "chrome/browser/ash/policy/active_directory/active_directory_policy_manager.h"
+#include "chrome/browser/ash/policy/core/browser_policy_connector_chromeos.h"
+#include "chrome/browser/ash/policy/core/device_cloud_policy_manager_chromeos.h"
+#include "chrome/browser/ash/policy/core/device_local_account.h"
+#include "chrome/browser/ash/policy/core/device_local_account_policy_provider.h"
 #include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/chromeos/policy/active_directory_policy_manager.h"
-#include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
-#include "chrome/browser/chromeos/policy/device_cloud_policy_manager_chromeos.h"
-#include "chrome/browser/chromeos/policy/device_local_account.h"
-#include "chrome/browser/chromeos/policy/device_local_account_policy_provider.h"
-#include "chrome/browser/chromeos/policy/login_profile_policy_provider.h"
+#include "chrome/browser/chromeos/policy/login/login_profile_policy_provider.h"
 #include "components/policy/core/common/proxy_policy_provider.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
@@ -198,8 +199,9 @@ void ProfilePolicyConnector::Init(
   if (!user) {
     DCHECK(schema_registry);
     // This case occurs for the signin and the lock screen app profiles.
-    special_user_policy_provider_.reset(new LoginProfilePolicyProvider(
-        browser_policy_connector->GetPolicyService()));
+    special_user_policy_provider_ =
+        std::make_unique<LoginProfilePolicyProvider>(
+            browser_policy_connector->GetPolicyService());
   } else {
     // |user| should never be nullptr except for the signin and the lock screen
     // app profile.
@@ -273,7 +275,7 @@ void ProfilePolicyConnector::InitForTesting(
 }
 
 void ProfilePolicyConnector::OverrideIsManagedForTesting(bool is_managed) {
-  is_managed_override_.reset(new bool(is_managed));
+  is_managed_override_ = std::make_unique<bool>(is_managed);
 }
 
 void ProfilePolicyConnector::SetPlatformPolicyProviderForTesting(
@@ -315,6 +317,15 @@ void ProfilePolicyConnector::TriggerProxiedPoliciesWaitTimeoutForTesting() {
   proxied_policies_propagated_watcher_->OnProviderUpdatePropagationTimedOut();
 }
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+
+base::flat_set<std::string> ProfilePolicyConnector::user_affiliation_ids()
+    const {
+  auto* store = GetActualPolicyStore();
+  if (!store || !store->has_policy())
+    return {};
+  const auto& ids = store->policy()->user_affiliation_ids();
+  return {ids.begin(), ids.end()};
+}
 
 const CloudPolicyStore* ProfilePolicyConnector::GetActualPolicyStore() const {
   if (policy_store_)

@@ -12,6 +12,8 @@
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
+#include "components/autofill/core/browser/autofill_metrics.h"
+#include "components/autofill/core/browser/data_model/autofill_offer_data.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/navigation_handle.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -45,11 +47,11 @@ OfferNotificationBubbleControllerImpl::OfferNotificationBubbleControllerImpl(
     content::WebContents* web_contents)
     : AutofillBubbleControllerBase(web_contents) {}
 
-base::string16 OfferNotificationBubbleControllerImpl::GetWindowTitle() const {
+std::u16string OfferNotificationBubbleControllerImpl::GetWindowTitle() const {
   return l10n_util::GetStringUTF16(IDS_AUTOFILL_OFFERS_REMINDER_TITLE);
 }
 
-base::string16 OfferNotificationBubbleControllerImpl::GetOkButtonLabel() const {
+std::u16string OfferNotificationBubbleControllerImpl::GetOkButtonLabel() const {
   return l10n_util::GetStringUTF16(
       IDS_AUTOFILL_OFFERS_REMINDER_POSITIVE_BUTTON_LABEL);
 }
@@ -74,22 +76,49 @@ void OfferNotificationBubbleControllerImpl::OnBubbleClosed(
     PaymentsBubbleClosedReason closed_reason) {
   set_bubble_view(nullptr);
   UpdatePageActionIcon();
-  // TODO(crbug.com/1093057): Add logging metrics.
+
+  // Log bubble result according to the closed reason.
+  AutofillMetrics::OfferNotificationBubbleResultMetric metric;
+  switch (closed_reason) {
+    case PaymentsBubbleClosedReason::kAccepted:
+      metric = AutofillMetrics::OfferNotificationBubbleResultMetric::
+          OFFER_NOTIFICATION_BUBBLE_ACKNOWLEDGED;
+      break;
+    case PaymentsBubbleClosedReason::kClosed:
+      metric = AutofillMetrics::OfferNotificationBubbleResultMetric::
+          OFFER_NOTIFICATION_BUBBLE_CLOSED;
+      break;
+    case PaymentsBubbleClosedReason::kNotInteracted:
+      metric = AutofillMetrics::OfferNotificationBubbleResultMetric::
+          OFFER_NOTIFICATION_BUBBLE_NOT_INTERACTED;
+      break;
+    case PaymentsBubbleClosedReason::kLostFocus:
+      metric = AutofillMetrics::OfferNotificationBubbleResultMetric::
+          OFFER_NOTIFICATION_BUBBLE_LOST_FOCUS;
+      break;
+    default:
+      NOTREACHED();
+      return;
+  }
+  AutofillMetrics::LogOfferNotificationBubbleResultMetric(metric,
+                                                          is_user_gesture_);
 }
 
 void OfferNotificationBubbleControllerImpl::ShowOfferNotificationIfApplicable(
-    const std::vector<GURL>& origins_to_display_bubble,
+    const AutofillOfferData* offer,
     const CreditCard* card) {
+  DCHECK(offer);
   // If icon/bubble is already visible, that means we have already shown a
   // notification for this page.
   if (IsIconVisible() || bubble_view())
     return;
 
   origins_to_display_bubble_.clear();
-  for (auto origin : origins_to_display_bubble)
-    origins_to_display_bubble_.emplace_back(origin);
+  for (auto merchant_origin : offer->merchant_origins)
+    origins_to_display_bubble_.emplace_back(merchant_origin);
 
-  card_ = *card;
+  if (card)
+    card_ = *card;
 
   is_user_gesture_ = false;
   Show();
@@ -106,7 +135,11 @@ void OfferNotificationBubbleControllerImpl::ReshowBubble() {
 
 void OfferNotificationBubbleControllerImpl::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
-  if (!navigation_handle->IsInMainFrame() || !navigation_handle->HasCommitted())
+  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
+  // frames. This caller was converted automatically to the primary main frame
+  // to preserve its semantics. Follow up to confirm correctness.
+  if (!navigation_handle->IsInPrimaryMainFrame() ||
+      !navigation_handle->HasCommitted())
     return;
 
   // Don't react to same-document (fragment) navigations.
@@ -133,6 +166,11 @@ OfferNotificationBubbleControllerImpl::GetPageActionIconType() {
 }
 
 void OfferNotificationBubbleControllerImpl::DoShowBubble() {
+  // TODO(crbug.com/1187190): Add cross-tab status tracking for bubble so we
+  // show bubble only once per merchant.
+  if (!IsWebContentsActive())
+    return;
+
   Browser* browser = chrome::FindBrowserWithWebContents(web_contents());
   set_bubble_view(browser->window()
                       ->GetAutofillBubbleHandler()
@@ -143,7 +181,16 @@ void OfferNotificationBubbleControllerImpl::DoShowBubble() {
   if (observer_for_testing_)
     observer_for_testing_->OnBubbleShown();
 
-  // TODO(crbug.com/1093057): Add logging metrics.
+  AutofillMetrics::LogOfferNotificationBubbleOfferMetric(is_user_gesture_);
+}
+
+bool OfferNotificationBubbleControllerImpl::IsWebContentsActive() {
+  Browser* active_browser = chrome::FindBrowserWithActiveWindow();
+  if (!active_browser)
+    return false;
+
+  return active_browser->tab_strip_model()->GetActiveWebContents() ==
+         web_contents();
 }
 
 WEB_CONTENTS_USER_DATA_KEY_IMPL(OfferNotificationBubbleControllerImpl)

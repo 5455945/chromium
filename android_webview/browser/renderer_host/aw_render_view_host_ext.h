@@ -37,7 +37,6 @@ class AwRenderViewHostExtClient {
 class AwRenderViewHostExt : public content::WebContentsObserver,
                             mojom::FrameHost {
  public:
-
   // To send receive messages to a RenderView we take the WebContents instance,
   // as it internally handles RenderViewHost instances changing underneath us.
   AwRenderViewHostExt(
@@ -71,7 +70,6 @@ class AwRenderViewHostExt : public content::WebContentsObserver,
   // Sets the initial page scale. This overrides initial scale set by
   // the meta viewport tag.
   void SetInitialPageScale(double page_scale_factor);
-  void SetBackgroundColor(SkColor c);
   void SetWillSuppressErrorPage(bool suppress);
 
   void SmoothScroll(int target_x, int target_y, base::TimeDelta duration);
@@ -79,6 +77,8 @@ class AwRenderViewHostExt : public content::WebContentsObserver,
  private:
   // content::WebContentsObserver implementation.
   void RenderFrameCreated(content::RenderFrameHost* frame_host) override;
+  void RenderFrameHostChanged(content::RenderFrameHost* old_host,
+                              content::RenderFrameHost* new_host) override;
   void DidStartNavigation(
       content::NavigationHandle* navigation_handle) override;
   void DidFinishNavigation(
@@ -90,7 +90,7 @@ class AwRenderViewHostExt : public content::WebContentsObserver,
       android_webview::mojom::HitTestDataPtr hit_test_data) override;
   void ContentsSizeChanged(const gfx::Size& contents_size) override;
   void ShouldOverrideUrlLoading(
-      const base::string16& url,
+      const std::u16string& url,
       bool has_user_gesture,
       bool is_redirect,
       bool is_main_frame,
@@ -98,9 +98,9 @@ class AwRenderViewHostExt : public content::WebContentsObserver,
 
   bool IsRenderViewReady() const;
 
-  AwRenderViewHostExtClient* client_;
+  void ResetLocalMainFrameRemote(content::RenderFrameHost* frame_host);
 
-  SkColor background_color_;
+  AwRenderViewHostExtClient* client_;
 
   // Authoritative copy of hit test data on the browser side. This is updated
   // as a result of DoHitTest called explicitly or when the FocusedNodeChanged

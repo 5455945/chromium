@@ -10,6 +10,7 @@ Starting worker: resources/global-interface-listing-worker.js
 [Worker]     method abort
 [Worker]     method constructor
 [Worker] interface AbortSignal : EventTarget
+[Worker]     static method abort
 [Worker]     attribute @@toStringTag
 [Worker]     getter aborted
 [Worker]     getter onabort
@@ -123,6 +124,7 @@ Starting worker: resources/global-interface-listing-worker.js
 [Worker]     getter subtle
 [Worker]     method constructor
 [Worker]     method getRandomValues
+[Worker]     method randomUUID
 [Worker] interface CryptoKey
 [Worker]     attribute @@toStringTag
 [Worker]     getter algorithm
@@ -481,6 +483,7 @@ Starting worker: resources/global-interface-listing-worker.js
 [Worker]     getter featureSettings
 [Worker]     getter lineGapOverride
 [Worker]     getter loaded
+[Worker]     getter sizeAdjust
 [Worker]     getter status
 [Worker]     getter stretch
 [Worker]     getter style
@@ -495,6 +498,7 @@ Starting worker: resources/global-interface-listing-worker.js
 [Worker]     setter family
 [Worker]     setter featureSettings
 [Worker]     setter lineGapOverride
+[Worker]     setter sizeAdjust
 [Worker]     setter stretch
 [Worker]     setter style
 [Worker]     setter unicodeRange
@@ -676,6 +680,7 @@ Starting worker: resources/global-interface-listing-worker.js
 [Worker]     method transferFromImageBitmap
 [Worker] interface ImageData
 [Worker]     attribute @@toStringTag
+[Worker]     getter colorSpace
 [Worker]     getter data
 [Worker]     getter height
 [Worker]     getter width
@@ -730,8 +735,10 @@ Starting worker: resources/global-interface-listing-worker.js
 [Worker]     attribute @@toStringTag
 [Worker]     getter brands
 [Worker]     getter mobile
+[Worker]     getter platform
 [Worker]     method constructor
 [Worker]     method getHighEntropyValues
+[Worker]     method toJSON
 [Worker] interface NetworkInformation : EventTarget
 [Worker]     attribute @@toStringTag
 [Worker]     getter downlink

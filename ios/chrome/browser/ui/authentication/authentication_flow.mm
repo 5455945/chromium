@@ -11,12 +11,13 @@
 #include "ios/chrome/browser/main/browser.h"
 #include "ios/chrome/browser/signin/authentication_service.h"
 #include "ios/chrome/browser/signin/authentication_service_factory.h"
+#import "ios/chrome/browser/signin/chrome_account_manager_service.h"
+#import "ios/chrome/browser/signin/chrome_account_manager_service_factory.h"
 #include "ios/chrome/browser/signin/constants.h"
 #import "ios/chrome/browser/ui/authentication/authentication_flow_performer.h"
 #include "ios/chrome/grit/ios_strings.h"
 #import "ios/public/provider/chrome/browser/chrome_browser_provider.h"
 #import "ios/public/provider/chrome/browser/signin/chrome_identity.h"
-#include "ios/public/provider/chrome/browser/signin/chrome_identity_service.h"
 #include "ios/public/provider/chrome/browser/signin/signin_error_provider.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -321,7 +322,7 @@ NSError* IdentityMissingError() {
       // the flow is running.
       DCHECK([NSThread isMainThread]);
       dispatch_async(dispatch_get_main_queue(), ^{
-        _selfRetainer = nil;
+        self->_selfRetainer = nil;
       });
       [self continueSignin];
       return;
@@ -344,12 +345,14 @@ NSError* IdentityMissingError() {
 }
 
 - (void)signInIdentity:(ChromeIdentity*)identity {
-  if (ios::GetChromeBrowserProvider()
-          ->GetChromeIdentityService()
-          ->IsValidIdentity(identity)) {
+  ChromeBrowserState* browserState = _browser->GetBrowserState();
+  ChromeAccountManagerService* accountManagerService =
+      ChromeAccountManagerServiceFactory::GetForBrowserState(browserState);
+
+  if (accountManagerService->IsValidIdentity(identity)) {
     [_performer signInIdentity:identity
               withHostedDomain:_identityToSignInHostedDomain
-                toBrowserState:_browser->GetBrowserState()];
+                toBrowserState:browserState];
     _didSignIn = YES;
     [self continueSignin];
   } else {
@@ -448,22 +451,25 @@ NSError* IdentityMissingError() {
 
 - (void)dismissPresentingViewControllerAnimated:(BOOL)animated
                                      completion:(ProceduralBlock)completion {
-  [_presentingViewController dismissViewControllerAnimated:animated
-                                                completion:^() {
-                                                  [_delegate didDismissDialog];
-                                                  if (completion) {
-                                                    completion();
-                                                  }
-                                                }];
+  __weak __typeof(_delegate) weakDelegate = _delegate;
+  [_presentingViewController
+      dismissViewControllerAnimated:animated
+                         completion:^() {
+                           [weakDelegate didDismissDialog];
+                           if (completion) {
+                             completion();
+                           }
+                         }];
 }
 
 - (void)presentViewController:(UIViewController*)viewController
                      animated:(BOOL)animated
                    completion:(ProceduralBlock)completion {
+  __weak __typeof(_delegate) weakDelegate = _delegate;
   [_presentingViewController presentViewController:viewController
                                           animated:animated
                                         completion:^() {
-                                          [_delegate didPresentDialog];
+                                          [weakDelegate didPresentDialog];
                                           if (completion) {
                                             completion();
                                           }

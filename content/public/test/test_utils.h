@@ -16,6 +16,7 @@
 #include "content/public/browser/browser_child_process_observer.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
@@ -90,6 +91,12 @@ base::Value ExecuteScriptAndGetValue(RenderFrameHost* render_frame_host,
 // Returns true if all sites are isolated. Typically used to bail from a test
 // that is incompatible with --site-per-process.
 bool AreAllSitesIsolatedForTesting();
+
+// Returns true if |origin| is currently isolated with respect to the
+// BrowsingInstance of |site_instance|. This is only relevant for
+// OriginAgentCluster isolation, and not other types of origin isolation.
+bool ShouldOriginGetOptInIsolation(SiteInstance* site_instance,
+                                   const url::Origin& origin);
 
 // Returns true if default SiteInstances are enabled. Typically used in a test
 // to mark expectations specific to default SiteInstances.
@@ -172,7 +179,7 @@ class MessageLoopRunner : public base::RefCountedThreadSafe<MessageLoopRunner> {
     DEFERRED,
   };
 
-  MessageLoopRunner(QuitMode mode = QuitMode::DEFERRED);
+  explicit MessageLoopRunner(QuitMode mode = QuitMode::DEFERRED);
 
   // Run the current MessageLoop unless the quit closure
   // has already been called.
@@ -323,31 +330,68 @@ class InProcessUtilityThreadHelper : public BrowserChildProcessObserver {
   void BrowserChildProcessHostDisconnected(
       const ChildProcessData& data) override;
 
-  base::Optional<base::RunLoop> run_loop_;
+  absl::optional<base::RunLoop> run_loop_;
 
   DISALLOW_COPY_AND_ASSIGN(InProcessUtilityThreadHelper);
 };
 
-// This observer keeps tracks of whether a given RenderFrameHost is deleted or
-// not to avoid accessing it and causing use-after-free condition.
+// This observer keeps tracks of whether a given RenderFrameHost has received
+// WebContentsObserver::RenderFrameDeleted.
 class RenderFrameDeletedObserver : public WebContentsObserver {
  public:
-  RenderFrameDeletedObserver(RenderFrameHost* rfh);
+  // |rfh| should not already be deleted.
+  explicit RenderFrameDeletedObserver(RenderFrameHost* rfh);
   ~RenderFrameDeletedObserver() override;
 
   // Overridden WebContentsObserver methods.
   void RenderFrameDeleted(RenderFrameHost* render_frame_host) override;
 
   void WaitUntilDeleted();
-  bool deleted();
+  bool deleted() const;
 
  private:
-  int process_id_;
-  int routing_id_;
-  bool deleted_;
+  // We cannot keep a pointer because if the RenderFrameHost is not in the
+  // created state when this class is initialized, then RenderFrameDeleted might
+  // not be called when it is destroyed.
+  GlobalRenderFrameHostId routing_id_;
   std::unique_ptr<base::RunLoop> runner_;
 
   DISALLOW_COPY_AND_ASSIGN(RenderFrameDeletedObserver);
+};
+
+// This class holds a RenderFrameHost*, providing safe access to it for testing.
+// If the RFH is destroyed, it can no longer be accessed.
+//
+// For convenience, it also wraps a RenderFrameDeletedObserver and provides
+// access to |deleted| and |WaitForDeleted|. Note, deletion of the RenderFrame
+// does not always correspond to destruction of the RenderFrameHost, see
+// the comments on |RenderFrameDeletedObserver|).
+class RenderFrameHostWrapper {
+ public:
+  explicit RenderFrameHostWrapper(RenderFrameHost* rfh);
+  ~RenderFrameHostWrapper();
+  RenderFrameHostWrapper(RenderFrameHostWrapper&&);
+
+  // Returns the pointer or nullptr if the RFH has already been destroyed.
+  RenderFrameHost* get() const;
+  // Returns true if RenderFrameHost has been destroyed.
+  bool IsDestroyed() const;
+
+  // See RenderFrameDeletedObserver for notes on the difference between
+  // RenderFrame being deleted and RenderFrameHost being destroyed.
+  void WaitUntilRenderFrameDeleted();
+  bool IsRenderFrameDeleted() const;
+
+  // Pointerish operators. Feel free to add more if you need them.
+  RenderFrameHost& operator*() const;
+  RenderFrameHost* operator->() const;
+
+ private:
+  const GlobalRenderFrameHostId routing_id_;
+
+  // It's tempting to just inherit but RenderFrameDeletedObserver is not
+  // movable because it is a WebContentsObserver.
+  std::unique_ptr<RenderFrameDeletedObserver> deleted_observer_;
 };
 
 // Watches a WebContents. Can be used to block until it is destroyed or just

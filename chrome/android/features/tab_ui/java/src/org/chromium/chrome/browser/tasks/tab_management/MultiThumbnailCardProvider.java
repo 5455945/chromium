@@ -28,6 +28,7 @@ import org.chromium.chrome.browser.tabmodel.TabModelSelectorObserver;
 import org.chromium.chrome.browser.tasks.pseudotab.PseudoTab;
 import org.chromium.chrome.tab_ui.R;
 import org.chromium.content_public.browser.UiThreadTaskTraits;
+import org.chromium.url.GURL;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -44,7 +45,7 @@ public class MultiThumbnailCardProvider implements TabListMediator.ThumbnailProv
     private final TabModelSelectorObserver mTabModelSelectorObserver;
 
     private final float mRadius;
-    private final float mFaviconCirclePadding;
+    private final float mFaviconFrameCornerRadius;
     private final int mThumbnailWidth;
     private final int mThumbnailHeight;
     private final Paint mEmptyThumbnailPaint;
@@ -56,6 +57,7 @@ public class MultiThumbnailCardProvider implements TabListMediator.ThumbnailProv
     private final List<RectF> mThumbnailRects = new ArrayList<>(4);
     private final List<RectF> mFaviconBackgroundRects = new ArrayList<>(4);
     private TabListFaviconProvider mTabListFaviconProvider;
+    private Context mContext;
 
     private class MultiThumbnailFetcher {
         private final PseudoTab mInitialTab;
@@ -89,7 +91,8 @@ public class MultiThumbnailCardProvider implements TabListMediator.ThumbnailProv
             mCanvas.drawColor(Color.TRANSPARENT);
 
             // Initialize Tabs.
-            List<PseudoTab> relatedTabList = PseudoTab.getRelatedTabs(tab, mTabModelSelector);
+            List<PseudoTab> relatedTabList =
+                    PseudoTab.getRelatedTabs(mContext, tab, mTabModelSelector);
             if (relatedTabList.size() <= 4) {
                 mThumbnailsToFetch.set(relatedTabList.size());
 
@@ -115,7 +118,7 @@ public class MultiThumbnailCardProvider implements TabListMediator.ThumbnailProv
             for (int i = 0; i < 4; i++) {
                 if (mTabs.get(i) != null) {
                     final int index = i;
-                    final String url = mTabs.get(i).getUrl();
+                    final GURL url = mTabs.get(i).getUrl();
                     final boolean isIncognito = mTabs.get(i).isIncognito();
                     // getTabThumbnailWithCallback() might call the callback up to twice,
                     // so use |lastFavicon| to avoid fetching the favicon the second time.
@@ -173,9 +176,8 @@ public class MultiThumbnailCardProvider implements TabListMediator.ThumbnailProv
         }
 
         private void drawFaviconDrawableOnCanvasWithFrame(Drawable favicon, int index) {
-            RectF rectF = mFaviconBackgroundRects.get(index);
-            mCanvas.drawCircle((rectF.left + rectF.right) / 2, (rectF.bottom + rectF.top) / 2,
-                    rectF.width() / 2 - mFaviconCirclePadding, mFaviconBackgroundPaint);
+            mCanvas.drawRoundRect(mFaviconBackgroundRects.get(index), mFaviconFrameCornerRadius,
+                    mFaviconFrameCornerRadius, mFaviconBackgroundPaint);
             favicon.setBounds(mFaviconRects.get(index));
             favicon.draw(mCanvas);
         }
@@ -195,6 +197,7 @@ public class MultiThumbnailCardProvider implements TabListMediator.ThumbnailProv
 
     MultiThumbnailCardProvider(Context context, TabContentManager tabContentManager,
             TabModelSelector tabModelSelector) {
+        mContext = context;
         Resources resource = context.getResources();
         float expectedThumbnailAspectRatio =
                 (float) TabUiFeatureUtilities.THUMBNAIL_ASPECT_RATIO.getValue();
@@ -206,8 +209,8 @@ public class MultiThumbnailCardProvider implements TabListMediator.ThumbnailProv
         mTabContentManager = tabContentManager;
         mTabModelSelector = tabModelSelector;
         mRadius = resource.getDimension(R.dimen.tab_list_mini_card_radius);
-        mFaviconCirclePadding =
-                resource.getDimension(R.dimen.tab_grid_thumbnail_favicon_background_padding);
+        mFaviconFrameCornerRadius =
+                resource.getDimension(R.dimen.tab_grid_thumbnail_favicon_frame_corner_radius);
 
         mTabListFaviconProvider = new TabListFaviconProvider(context, false);
 
@@ -249,8 +252,6 @@ public class MultiThumbnailCardProvider implements TabListMediator.ThumbnailProv
         // Initialize Rects for thumbnails.
         float thumbnailHorizontalPadding = resource.getDimension(R.dimen.tab_list_card_padding);
         float thumbnailVerticalPadding = thumbnailHorizontalPadding / expectedThumbnailAspectRatio;
-        float thumbnailFaviconBackgroundPadding =
-                resource.getDimension(R.dimen.tab_grid_thumbnail_favicon_frame_padding);
         float thumbnailFaviconPaddingFromBackground =
                 resource.getDimension(R.dimen.tab_grid_thumbnail_favicon_padding_from_frame);
         float centerX = mThumbnailWidth * 0.5f;
@@ -271,9 +272,9 @@ public class MultiThumbnailCardProvider implements TabListMediator.ThumbnailProv
                 mThumbnailWidth - thumbnailHorizontalPadding,
                 mThumbnailHeight - thumbnailVerticalPadding));
 
-        // Initialize Rects for favicons and favicon backgrounds.
-        final float faviconBackgroundRadius =
-                mThumbnailRects.get(0).width() / 2f - thumbnailFaviconBackgroundPadding;
+        // Initialize Rects for favicons and favicon frame.
+        final float halfFaviconFrameSize =
+                resource.getDimension(R.dimen.tab_grid_thumbnail_favicon_frame_size) / 2f;
         for (int i = 0; i < 4; i++) {
             RectF thumbnailRect = mThumbnailRects.get(i);
 
@@ -281,7 +282,7 @@ public class MultiThumbnailCardProvider implements TabListMediator.ThumbnailProv
             float thumbnailRectCenterY = thumbnailRect.centerY();
             RectF faviconBackgroundRect = new RectF(thumbnailRectCenterX, thumbnailRectCenterY,
                     thumbnailRectCenterX, thumbnailRectCenterY);
-            faviconBackgroundRect.inset(-faviconBackgroundRadius, -faviconBackgroundRadius);
+            faviconBackgroundRect.inset(-halfFaviconFrameSize, -halfFaviconFrameSize);
             mFaviconBackgroundRects.add(faviconBackgroundRect);
 
             RectF faviconRectF = new RectF(faviconBackgroundRect);
@@ -300,7 +301,8 @@ public class MultiThumbnailCardProvider implements TabListMediator.ThumbnailProv
                         TabUiColorProvider.getMiniThumbnailPlaceHolderColor(context, isIncognito));
                 mThumbnailFramePaint.setColor(
                         TabUiColorProvider.getMiniThumbnailFrameColor(context, isIncognito));
-                mTextPaint.setColor(TabUiColorProvider.getTitleTextColor(context, isIncognito));
+                mTextPaint.setColor(
+                        TabUiColorProvider.getTabGroupNumberTextColor(context, isIncognito));
                 mFaviconBackgroundPaint.setColor(
                         TabUiColorProvider.getFaviconBackgroundColor(context, isIncognito));
             }
@@ -309,8 +311,10 @@ public class MultiThumbnailCardProvider implements TabListMediator.ThumbnailProv
     }
 
     public void initWithNative() {
-        Profile profile = mTabModelSelector.getCurrentModel().getProfile();
-        mTabListFaviconProvider.initWithNative(profile);
+        // TODO (https://crbug.com/1048632): Use the current profile (i.e., regular profile or
+        // incognito profile) instead of always using regular profile. It works correctly now, but
+        // it is not safe.
+        mTabListFaviconProvider.initWithNative(Profile.getLastUsedRegularProfile());
     }
 
     /**
@@ -324,7 +328,7 @@ public class MultiThumbnailCardProvider implements TabListMediator.ThumbnailProv
     public void getTabThumbnailWithCallback(
             int tabId, Callback<Bitmap> finalCallback, boolean forceUpdate, boolean writeToCache) {
         PseudoTab tab = PseudoTab.fromTabId(tabId);
-        if (tab == null || PseudoTab.getRelatedTabs(tab, mTabModelSelector).size() == 1) {
+        if (tab == null || PseudoTab.getRelatedTabs(mContext, tab, mTabModelSelector).size() == 1) {
             mTabContentManager.getTabThumbnailWithCallback(
                     tabId, finalCallback, forceUpdate, writeToCache);
             return;

@@ -11,7 +11,6 @@ android_library("java") {
   deps = [
     ":java_resources",
     "//base:base_java",
-    "//base:jni_java",
     "//chrome/android:chrome_java",
     "//chrome/browser/flags:java",
     "//chrome/browser/profiles/android:java",
@@ -25,6 +24,7 @@ android_library("java") {
     "//third_party/androidx:androidx_annotation_annotation_java",
     "//third_party/androidx:androidx_recyclerview_recyclerview_java",
     "//ui/android:ui_java",
+    "//url:gurl_java",
   ]
 
   sources = [
@@ -49,8 +49,10 @@ android_resources("java_resources") {
   ]
   sources = [
     "java/res/drawable-night/touch_to_fill_header_image.xml",
+    "java/res/drawable-night/touch_to_fill_new_header_image.xml",
     "java/res/drawable/touch_to_fill_credential_background.xml",
     "java/res/drawable/touch_to_fill_header_image.xml",
+    "java/res/drawable/touch_to_fill_new_header_image.xml",
     "java/res/layout/touch_to_fill_credential_item.xml",
     "java/res/layout/touch_to_fill_fill_button.xml",
     "java/res/layout/touch_to_fill_header_item.xml",

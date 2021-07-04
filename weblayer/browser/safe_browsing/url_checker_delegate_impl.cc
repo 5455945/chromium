@@ -6,12 +6,12 @@
 
 #include "base/bind.h"
 #include "components/no_state_prefetch/browser/no_state_prefetch_manager.h"
-#include "components/safe_browsing/core/db/database_manager.h"
+#include "components/safe_browsing/core/browser/db/database_manager.h"
 #include "components/security_interstitials/core/unsafe_resource.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "weblayer/browser/no_state_prefetch/no_state_prefetch_manager_factory.h"
-#include "weblayer/browser/no_state_prefetch/prerender_utils.h"
+#include "weblayer/browser/no_state_prefetch/no_state_prefetch_utils.h"
 #include "weblayer/browser/safe_browsing/safe_browsing_ui_manager.h"
 
 namespace weblayer {
@@ -90,6 +90,12 @@ void UrlCheckerDelegateImpl::StartDisplayingDefaultBlockingPage(
 bool UrlCheckerDelegateImpl::IsUrlAllowlisted(const GURL& url) {
   // TODO(timvolodine): false for now, we may want allowlisting support later.
   return false;
+}
+
+void UrlCheckerDelegateImpl::SetPolicyAllowlistDomains(
+    const std::vector<std::string>& allowlist_domains) {
+  // The SafeBrowsingAllowlistDomains policy is not supported on WebLayer.
+  return;
 }
 
 bool UrlCheckerDelegateImpl::ShouldSkipRequestCheck(

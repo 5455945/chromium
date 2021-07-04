@@ -4,10 +4,10 @@
 
 #include <stddef.h>
 
+#include "base/cxx17_backports.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
-#include "base/stl_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
@@ -96,8 +96,7 @@ class BrowserEncodingTest
     scoped_refptr<content::MessageLoopRunner> loop_runner(
         new content::MessageLoopRunner);
     content::SavePackageFinishedObserver observer(
-        content::BrowserContext::GetDownloadManager(browser()->profile()),
-        loop_runner->QuitClosure());
+        browser()->profile()->GetDownloadManager(), loop_runner->QuitClosure());
     browser()->tab_strip_model()->GetActiveWebContents()->SavePage(
         full_file_name, temp_sub_resource_dir_,
         content::SAVE_PAGE_TYPE_AS_COMPLETE_HTML);

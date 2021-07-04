@@ -80,7 +80,7 @@ def SmokeTestGenerator(benchmark_class, num_pages=1):
       self.assertEqual(
           return_code, 0,
           msg='Benchmark run failed: %s' % benchmark_class.Name())
-      return_code = results_processor.ProcessResults(options)
+      return_code = results_processor.ProcessResults(options, is_unittest=True)
       self.assertEqual(
           return_code, 0,
           msg='Result processing failed: %s' % benchmark_class.Name())
@@ -106,6 +106,7 @@ _BLACK_LIST_TEST_NAMES = [
     'UNSCHEDULED_oortonline_tbmv2',
     'webrtc',  # crbug.com/932036
     'v8.runtime_stats.top_25',  # Fails in Windows, crbug.com/1043048
+    'wasmpspdfkit',  # Fails in Chrome OS, crbug.com/1191938
 ]
 
 

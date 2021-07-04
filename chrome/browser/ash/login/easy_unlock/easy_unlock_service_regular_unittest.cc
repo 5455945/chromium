@@ -21,9 +21,9 @@
 #include "chrome/browser/ash/login/easy_unlock/easy_unlock_notification_controller.h"
 #include "chrome/browser/ash/login/easy_unlock/easy_unlock_service_factory.h"
 #include "chrome/browser/ash/login/easy_unlock/easy_unlock_service_regular.h"
-#include "chrome/browser/chromeos/login/session/chrome_session_manager.h"
-#include "chrome/browser/chromeos/login/users/fake_chrome_user_manager.h"
-#include "chrome/browser/chromeos/login/users/mock_user_manager.h"
+#include "chrome/browser/ash/login/session/chrome_session_manager.h"
+#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
+#include "chrome/browser/ash/login/users/mock_user_manager.h"
 #include "chrome/browser/prefs/browser_prefs.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/browser/ui/webui/chromeos/multidevice_setup/multidevice_setup_dialog.h"
@@ -52,14 +52,11 @@
 #include "ui/display/test/test_screen.h"
 #include "ui/views/test/test_views_delegate.h"
 
-using device::MockBluetoothAdapter;
-using testing::_;
-using testing::AnyNumber;
-using testing::Return;
-
-namespace chromeos {
-
+namespace ash {
 namespace {
+
+using ::device::MockBluetoothAdapter;
+using ::testing::Return;
 
 class MockEasyUnlockNotificationController
     : public EasyUnlockNotificationController {
@@ -148,8 +145,7 @@ class EasyUnlockServiceRegularTest : public testing::Test {
 
     account_id_ = AccountId::FromUserEmail(profile_->GetProfileUserName());
 
-    auto fake_chrome_user_manager =
-        std::make_unique<chromeos::FakeChromeUserManager>();
+    auto fake_chrome_user_manager = std::make_unique<FakeChromeUserManager>();
     fake_chrome_user_manager_ = fake_chrome_user_manager.get();
     scoped_user_manager_ = std::make_unique<user_manager::ScopedUserManager>(
         std::move(fake_chrome_user_manager));
@@ -189,7 +185,7 @@ class EasyUnlockServiceRegularTest : public testing::Test {
   }
 
   void SetLocalDevice(
-      const base::Optional<multidevice::RemoteDeviceRef>& local_device) {
+      const absl::optional<multidevice::RemoteDeviceRef>& local_device) {
     fake_device_sync_client_->set_local_device_metadata(test_local_device_);
     fake_device_sync_client_->NotifyEnrollmentFinished();
   }
@@ -249,7 +245,7 @@ class EasyUnlockServiceRegularTest : public testing::Test {
 
   std::unique_ptr<TestingProfile> profile_;
   AccountId account_id_;
-  chromeos::FakeChromeUserManager* fake_chrome_user_manager_;
+  FakeChromeUserManager* fake_chrome_user_manager_;
   std::unique_ptr<user_manager::ScopedUserManager> scoped_user_manager_;
 
   const multidevice::RemoteDeviceRef test_local_device_;
@@ -449,10 +445,11 @@ TEST_F(EasyUnlockServiceRegularTest, AuthenticateWithEasyUnlock) {
   InitializeService(true /* should_initialize_all_dependencies */);
   SetScreenLockState(true /* is_locked */);
 
-  static_cast<EasyUnlockService*>(easy_unlock_service_regular_.get())
-      ->AttemptAuth(account_id_);
-  static_cast<EasyUnlockService*>(easy_unlock_service_regular_.get())
-      ->FinalizeUnlock(true);
+  auto* service =
+      static_cast<EasyUnlockService*>(easy_unlock_service_regular_.get());
+
+  EXPECT_TRUE(service->AttemptAuth(account_id_));
+  service->FinalizeUnlock(true);
 
   histogram_tester_.ExpectBucketCount("SmartLock.AuthResult.Unlock", 1, 0);
 
@@ -461,4 +458,26 @@ TEST_F(EasyUnlockServiceRegularTest, AuthenticateWithEasyUnlock) {
   histogram_tester_.ExpectBucketCount("SmartLock.AuthResult.Unlock", 1, 1);
 }
 
-}  // namespace chromeos
+// Regression test for crbug.com/974410.
+TEST_F(EasyUnlockServiceRegularTest, AuthenticateWithEasyUnlockMultipleTimes) {
+  InitializeService(true /* should_initialize_all_dependencies */);
+  SetScreenLockState(true /* is_locked */);
+
+  auto* service =
+      static_cast<EasyUnlockService*>(easy_unlock_service_regular_.get());
+
+  EXPECT_TRUE(service->AttemptAuth(account_id_));
+  service->FinalizeUnlock(true);
+
+  // The first auth attempt is still ongoing. A second auth attempt request
+  // should be rejected.
+  EXPECT_FALSE(service->AttemptAuth(account_id_));
+
+  histogram_tester_.ExpectBucketCount("SmartLock.AuthResult.Unlock", 1, 0);
+
+  SetScreenLockState(false /* is_locked */);
+
+  histogram_tester_.ExpectBucketCount("SmartLock.AuthResult.Unlock", 1, 1);
+}
+
+}  // namespace ash

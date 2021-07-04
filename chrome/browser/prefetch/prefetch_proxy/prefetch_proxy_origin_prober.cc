@@ -6,7 +6,6 @@
 
 #include "base/bind.h"
 #include "base/feature_list.h"
-#include "base/no_destructor.h"
 #include "base/strings/string_util.h"
 #include "base/task/post_task.h"
 #include "chrome/browser/availability/availability_prober.h"
@@ -22,7 +21,9 @@
 #include "net/base/network_isolation_key.h"
 #include "services/network/public/mojom/host_resolver.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
+#include "services/network/public/mojom/tcp_socket.mojom.h"
 #include "services/network/public/mojom/tls_socket.mojom.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "url/origin.h"
 
 namespace {
@@ -59,7 +60,7 @@ net::NetworkTrafficAnnotationTag GetProbingTrafficAnnotation() {
 class DNSProber : public network::mojom::ResolveHostClient {
  public:
   using OnDNSResultsCallback = base::OnceCallback<
-      void(int, const base::Optional<net::AddressList>& resolved_addresses)>;
+      void(int, const absl::optional<net::AddressList>& resolved_addresses)>;
 
   explicit DNSProber(OnDNSResultsCallback callback)
       : callback_(std::move(callback)) {
@@ -69,7 +70,7 @@ class DNSProber : public network::mojom::ResolveHostClient {
   ~DNSProber() override {
     if (callback_) {
       // Indicates some kind of mojo error. Play it safe and return no success.
-      std::move(callback_).Run(net::ERR_FAILED, base::nullopt);
+      std::move(callback_).Run(net::ERR_FAILED, absl::nullopt);
     }
   }
 
@@ -79,7 +80,7 @@ class DNSProber : public network::mojom::ResolveHostClient {
   void OnComplete(
       int32_t error,
       const net::ResolveErrorInfo& resolve_error_info,
-      const base::Optional<net::AddressList>& resolved_addresses) override {
+      const absl::optional<net::AddressList>& resolved_addresses) override {
     if (callback_) {
       std::move(callback_).Run(error, resolved_addresses);
     }
@@ -118,8 +119,8 @@ class TLSProber {
 
  private:
   void OnTCPConnected(int result,
-                      const base::Optional<net::IPEndPoint>& local_addr,
-                      const base::Optional<net::IPEndPoint>& peer_addr,
+                      const absl::optional<net::IPEndPoint>& local_addr,
+                      const absl::optional<net::IPEndPoint>& peer_addr,
                       mojo::ScopedDataPipeConsumerHandle receive_stream,
                       mojo::ScopedDataPipeProducerHandle send_stream) {
     if (result != net::OK) {
@@ -142,7 +143,7 @@ class TLSProber {
   void OnUpgradeToTLS(int result,
                       mojo::ScopedDataPipeConsumerHandle receive_stream,
                       mojo::ScopedDataPipeProducerHandle send_stream,
-                      const base::Optional<net::SSLInfo>& ssl_info) {
+                      const absl::optional<net::SSLInfo>& ssl_info) {
     std::move(callback_).Run(result == net::OK
                                  ? PrefetchProxyProbeResult::kTLSProbeSuccess
                                  : PrefetchProxyProbeResult::kTLSProbeFailure);
@@ -222,13 +223,13 @@ class OriginProbeDelegate : public AvailabilityProber::Delegate {
 };
 
 CanaryCheckDelegate* GetCanaryCheckDelegate() {
-  static base::NoDestructor<CanaryCheckDelegate> delegate;
-  return delegate.get();
+  static CanaryCheckDelegate delegate;
+  return &delegate;
 }
 
 OriginProbeDelegate* GetOriginProbeDelegate() {
-  static base::NoDestructor<OriginProbeDelegate> delegate;
-  return delegate.get();
+  static OriginProbeDelegate delegate;
+  return &delegate;
 }
 
 // Allows probing to start after a delay so that browser start isn't slowed.
@@ -282,7 +283,7 @@ PrefetchProxyOriginProber::PrefetchProxyOriginProber(Profile* profile)
 
   tls_canary_check_ = std::make_unique<AvailabilityProber>(
       GetCanaryCheckDelegate(),
-      content::BrowserContext::GetDefaultStoragePartition(profile_)
+      profile_->GetDefaultStoragePartition()
           ->GetURLLoaderFactoryForBrowserProcess(),
       profile_->GetPrefs(),
       AvailabilityProber::ClientName::kIsolatedPrerenderTLSCanaryCheck,
@@ -296,7 +297,7 @@ PrefetchProxyOriginProber::PrefetchProxyOriginProber(Profile* profile)
 
   dns_canary_check_ = std::make_unique<AvailabilityProber>(
       GetCanaryCheckDelegate(),
-      content::BrowserContext::GetDefaultStoragePartition(profile_)
+      profile_->GetDefaultStoragePartition()
           ->GetURLLoaderFactoryForBrowserProcess(),
       profile_->GetPrefs(),
       AvailabilityProber::ClientName::kIsolatedPrerenderDNSCanaryCheck,
@@ -414,11 +415,9 @@ void PrefetchProxyOriginProber::StartDNSResolution(
           url, std::move(callback), also_do_tls_connect)),
       client_remote.InitWithNewPipeAndPassReceiver());
 
-  content::BrowserContext::GetDefaultStoragePartition(profile_)
-      ->GetNetworkContext()
-      ->ResolveHost(net::HostPortPair::FromURL(url), nik,
-                    std::move(resolve_host_parameters),
-                    std::move(client_remote));
+  profile_->GetDefaultStoragePartition()->GetNetworkContext()->ResolveHost(
+      net::HostPortPair::FromURL(url), nik, std::move(resolve_host_parameters),
+      std::move(client_remote));
 }
 
 void PrefetchProxyOriginProber::HTTPProbe(const GURL& url,
@@ -431,7 +430,7 @@ void PrefetchProxyOriginProber::HTTPProbe(const GURL& url,
   std::unique_ptr<AvailabilityProber> prober =
       std::make_unique<AvailabilityProber>(
           GetOriginProbeDelegate(),
-          content::BrowserContext::GetDefaultStoragePartition(profile_)
+          profile_->GetDefaultStoragePartition()
               ->GetURLLoaderFactoryForBrowserProcess(),
           nullptr /* pref_service */,
           AvailabilityProber::ClientName::kIsolatedPrerenderOriginCheck, url,
@@ -455,7 +454,7 @@ void PrefetchProxyOriginProber::OnDNSResolved(
     OnProbeResultCallback callback,
     bool also_do_tls_connect,
     int net_error,
-    const base::Optional<net::AddressList>& resolved_addresses) {
+    const absl::optional<net::AddressList>& resolved_addresses) {
   bool successful = net_error == net::OK && resolved_addresses &&
                     !resolved_addresses->empty();
 
@@ -482,10 +481,10 @@ void PrefetchProxyOriginProber::DoTLSProbeAfterDNSResolution(
   std::unique_ptr<TLSProber> prober =
       std::make_unique<TLSProber>(url, std::move(callback));
 
-  content::BrowserContext::GetDefaultStoragePartition(profile_)
+  profile_->GetDefaultStoragePartition()
       ->GetNetworkContext()
       ->CreateTCPConnectedSocket(
-          /*local_addr=*/base::nullopt, addresses,
+          /*local_addr=*/absl::nullopt, addresses,
           /*tcp_connected_socket_options=*/nullptr,
           net::MutableNetworkTrafficAnnotationTag(
               GetProbingTrafficAnnotation()),

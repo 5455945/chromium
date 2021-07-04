@@ -6,6 +6,7 @@
 
 #include "base/base_switches.h"
 #include "base/bind.h"
+#include "base/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/task/current_thread.h"
 #include "base/task/task_traits.h"
@@ -15,6 +16,8 @@
 #include "build/chromeos_buildflags.h"
 #include "cc/base/switches.h"
 #include "components/captive_portal/core/buildflags.h"
+#include "components/performance_manager/embedder/performance_manager_lifetime.h"
+#include "components/performance_manager/embedder/performance_manager_registry.h"
 #include "components/prefs/pref_service.h"
 #include "components/startup_metric_utils/browser/startup_metric_utils.h"
 #include "components/subresource_filter/content/browser/ruleset_service.h"
@@ -31,6 +34,7 @@
 #include "weblayer/browser/browser_process.h"
 #include "weblayer/browser/cookie_settings_factory.h"
 #include "weblayer/browser/feature_list_creator.h"
+#include "weblayer/browser/heavy_ad_service_factory.h"
 #include "weblayer/browser/host_content_settings_map_factory.h"
 #include "weblayer/browser/i18n_util.h"
 #include "weblayer/browser/no_state_prefetch/no_state_prefetch_link_manager_factory.h"
@@ -40,6 +44,7 @@
 #include "weblayer/browser/subresource_filter_profile_context_factory.h"
 #include "weblayer/browser/translate_accept_languages_factory.h"
 #include "weblayer/browser/translate_ranker_factory.h"
+#include "weblayer/browser/web_data_service_factory.h"
 #include "weblayer/browser/webui/web_ui_controller_factory.h"
 #include "weblayer/grit/weblayer_resources.h"
 #include "weblayer/public/main.h"
@@ -113,6 +118,7 @@ void EnsureBrowserContextKeyedServiceFactoriesBuilt() {
 #if BUILDFLAG(ENABLE_CAPTIVE_PORTAL_DETECTION)
   CaptivePortalServiceFactory::GetInstance();
 #endif
+  HeavyAdServiceFactory::GetInstance();
   HostContentSettingsMapFactory::GetInstance();
   StatefulSSLHostStateDelegateFactory::GetInstance();
   CookieSettingsFactory::GetInstance();
@@ -127,6 +133,7 @@ void EnsureBrowserContextKeyedServiceFactoriesBuilt() {
     MediaRouterFactory::GetInstance();
   }
 #endif
+  WebDataServiceFactory::GetInstance();
 }
 
 void StopMessageLoop(base::OnceClosure quit_closure) {
@@ -178,7 +185,7 @@ int BrowserMainPartsImpl::PreCreateThreads() {
   return content::RESULT_CODE_NORMAL_EXIT;
 }
 
-void BrowserMainPartsImpl::PreMainMessageLoopStart() {
+void BrowserMainPartsImpl::PreCreateMainMessageLoop() {
 #if defined(USE_AURA) && defined(USE_X11)
   if (!features::IsUsingOzonePlatform())
     ui::TouchFactory::SetTouchDeviceListFromCommandLine();
@@ -200,16 +207,22 @@ int BrowserMainPartsImpl::PreEarlyInitialization() {
   WebLayerWebappsClient::Create();
 #endif
 
+  return content::RESULT_CODE_NORMAL_EXIT;
+}
+
+void BrowserMainPartsImpl::PostCreateThreads() {
+  performance_manager_lifetime_ =
+      std::make_unique<performance_manager::PerformanceManagerLifetime>(
+          performance_manager::Decorators::kMinimal, base::DoNothing());
+
   translate::TranslateDownloadManager* download_manager =
       translate::TranslateDownloadManager::GetInstance();
   download_manager->set_url_loader_factory(
       BrowserProcess::GetInstance()->GetSharedURLLoaderFactory());
   download_manager->set_application_locale(i18n::GetApplicationLocale());
-
-  return content::RESULT_CODE_NORMAL_EXIT;
 }
 
-void BrowserMainPartsImpl::PreMainMessageLoopRun() {
+int BrowserMainPartsImpl::PreMainMessageLoopRun() {
   FeatureListCreator::GetInstance()->PerformPreMainMessageLoopStartup();
 
   // It's necessary to have a complete dependency graph of
@@ -270,23 +283,31 @@ void BrowserMainPartsImpl::PreMainMessageLoopRun() {
   Java_MojoInterfaceRegistrar_registerMojoInterfaces(
       base::android::AttachCurrentThread());
 #endif
+
+  return content::RESULT_CODE_NORMAL_EXIT;
 }
 
-bool BrowserMainPartsImpl::MainMessageLoopRun(int* result_code) {
-  return !run_message_loop_;
+void BrowserMainPartsImpl::WillRunMainMessageLoop(
+    std::unique_ptr<base::RunLoop>& run_loop) {
+  if (run_message_loop_) {
+    // Wrap the method that stops the message loop so we can do other shutdown
+    // cleanup inside content.
+    params_->delegate->SetMainMessageLoopQuitClosure(
+        base::BindOnce(StopMessageLoop, run_loop->QuitClosure()));
+  } else {
+    run_loop.reset();
+  }
+}
+
+void BrowserMainPartsImpl::OnFirstIdle() {
+  startup_metric_utils::RecordBrowserMainLoopFirstIdle(base::TimeTicks::Now());
 }
 
 void BrowserMainPartsImpl::PostMainMessageLoopRun() {
   params_->delegate->PostMainMessageLoopRun();
   browser_process_->StartTearDown();
-}
 
-void BrowserMainPartsImpl::PreDefaultMainMessageLoopRun(
-    base::OnceClosure quit_closure) {
-  // Wrap the method that stops the message loop so we can do other shutdown
-  // cleanup inside content.
-  params_->delegate->SetMainMessageLoopQuitClosure(
-      base::BindOnce(StopMessageLoop, std::move(quit_closure)));
+  performance_manager_lifetime_.reset();
 }
 
 }  // namespace weblayer

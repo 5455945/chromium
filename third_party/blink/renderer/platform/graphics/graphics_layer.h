@@ -29,7 +29,7 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/dcheck_is_on.h"
 #include "cc/input/scroll_snap_data.h"
 #include "cc/layers/content_layer_client.h"
 #include "cc/layers/layer.h"
@@ -80,6 +80,8 @@ class PLATFORM_EXPORT GraphicsLayer : public DisplayItemClient,
 
  public:
   explicit GraphicsLayer(GraphicsLayerClient&);
+  GraphicsLayer(const GraphicsLayer&) = delete;
+  GraphicsLayer& operator=(const GraphicsLayer&) = delete;
   ~GraphicsLayer() override;
 
   GraphicsLayerClient& Client() const { return client_; }
@@ -160,6 +162,7 @@ class PLATFORM_EXPORT GraphicsLayer : public DisplayItemClient,
   // For hosting this GraphicsLayer in a native layer hierarchy.
   cc::PictureLayer& CcLayer() const { return *layer_; }
 
+  bool IsTrackingRasterInvalidations() const;
   void UpdateTrackingRasterInvalidations();
   void ResetTrackedRasterInvalidations();
   bool HasTrackedRasterInvalidations() const;
@@ -311,8 +314,6 @@ class PLATFORM_EXPORT GraphicsLayer : public DisplayItemClient,
 
   DOMNodeId owner_node_id_ = kInvalidDOMNodeId;
   CompositingReasons compositing_reasons_ = CompositingReason::kNone;
-
-  DISALLOW_COPY_AND_ASSIGN(GraphicsLayer);
 };
 
 // Iterates all graphics layers that should be seen by the compositor in

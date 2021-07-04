@@ -75,15 +75,23 @@ cast_source_set("web_preferences") {
   ]
 }
 
+cast_source_set("named_message_port_connector_cast") {
+  sources = [
+    "named_message_port_connector_cast.cc",
+    "named_message_port_connector_cast.h",
+  ]
+
+  deps = [
+    "//base",
+    "//chromecast/browser:public",
+    "//components/cast/message_port:message_port_cast",
+    "//components/cast/named_message_port_connector",
+    "//components/on_load_script_injector/browser",
+  ]
+}
+
 group("browser") {
   public_deps = [ ":browser_base" ]
-
-  if (chromecast_branding == "public") {
-    public_deps += [
-      ":simple_client",
-      ":simple_main_parts",
-    ]
-  }
 }
 
 cast_source_set("browser_base") {
@@ -188,6 +196,7 @@ cast_source_set("browser_base") {
 
   deps = [
     ":browser_buildflags",
+    ":named_message_port_connector_cast",
     ":web_preferences",
     "//base",
     "//base:i18n",
@@ -201,6 +210,7 @@ cast_source_set("browser_base") {
     "//chromecast/base",
     "//chromecast/base:cast_sys_info_util",
     "//chromecast/base:cast_version",
+    "//chromecast/bindings/public/mojom",
     "//chromecast/browser/bluetooth/public/mojom",
     "//chromecast/browser/general_audience_browsing/mojom",
     "//chromecast/browser/mojom",
@@ -212,6 +222,7 @@ cast_source_set("browser_base") {
     "//chromecast/graphics",
     "//chromecast/media",
     "//chromecast/media:libcast_media",
+    "//chromecast/media/audio",
     "//chromecast/media/base:media_codec_support",
     "//chromecast/media/base:video_plane_controller",
     "//chromecast/media/cdm:cdm_origin_provider",
@@ -221,6 +232,7 @@ cast_source_set("browser_base") {
     "//chromecast/net",
     "//chromecast/net:connectivity_checker",
     "//chromecast/service",
+    "//components/cast/message_port:message_port_cast",
     "//components/cdm/browser",
     "//components/download/public/common:public",
     "//components/media_control/browser",
@@ -228,6 +240,7 @@ cast_source_set("browser_base") {
     "//components/metrics:content",
     "//components/metrics:net",
     "//components/on_load_script_injector/browser",
+    "//components/profile_metrics",
     "//components/variations/net",
 
     # TODO(gfhuang): Eliminate this dependency if ScreenInfoMetricsProvider
@@ -258,7 +271,7 @@ cast_source_set("browser_base") {
     "//services/network/public/mojom",
     "//services/service_manager",
     "//services/service_manager/public/cpp",
-    "//third_party/blink/public/common:headers",
+    "//third_party/blink/public/common",
     "//ui/base",
     "//ui/compositor",
     "//ui/display",
@@ -308,6 +321,8 @@ cast_source_set("browser_base") {
       "cast_content_window_aura.cc",
       "cast_content_window_aura.h",
       "cast_web_service_aura.cc",
+      "display_configurator_observer.cc",
+      "display_configurator_observer.h",
     ]
 
     deps += [
@@ -355,14 +370,10 @@ cast_source_set("browser_base") {
 
   if (enable_chromecast_extensions) {
     sources += [
-      "cast_extension_host.cc",
-      "cast_extension_host.h",
       "cast_extension_message_filter.cc",
       "cast_extension_message_filter.h",
       "cast_extension_url_loader_factory.cc",
       "cast_extension_url_loader_factory.h",
-      "extension_page.cc",
-      "extension_page.h",
       "extensions/api/accessibility_private/accessibility_extension_api.cc",
       "extensions/api/accessibility_private/accessibility_extension_api.h",
       "extensions/api/automation_internal/chromecast_automation_internal_api_delegate.cc",
@@ -416,8 +427,9 @@ cast_source_set("browser_base") {
     ]
     if (use_aura) {
       sources += [
-        "accessibility/accessibility_manager.cc",
         "accessibility/accessibility_manager.h",
+        "accessibility/accessibility_manager_impl.cc",
+        "accessibility/accessibility_manager_impl.h",
         "accessibility/accessibility_sound_player.h",
         "accessibility/accessibility_sound_proxy.cc",
         "accessibility/accessibility_sound_proxy.h",
@@ -448,6 +460,7 @@ cast_source_set("browser_base") {
       "//extensions/browser/api/messaging",
       "//extensions/browser/updater",
       "//extensions/common",
+      "//extensions/common:mojom",
       "//extensions/common/api",
       "//google_apis:google_apis",
       "//ui/events:gesture_detection",
@@ -553,6 +566,7 @@ cast_source_set("public") {
 
   deps = [
     "//base",
+    "//chromecast/bindings/public/mojom",
     "//chromecast/graphics",
     "//chromecast/ui:back_gesture_router",
     "//chromecast/ui/mojom",
@@ -616,6 +630,7 @@ cast_source_set("browsertests") {
     "//chromecast/base",
     "//chromecast/base:chromecast_switches",
     "//chromecast/base/metrics",
+    "//chromecast/graphics:graphics",
     "//components/keyed_service/content",
     "//components/prefs",
     "//content/public/browser",
@@ -625,6 +640,10 @@ cast_source_set("browsertests") {
     "//services/service_manager/public/cpp",
     "//services/service_manager/public/mojom",
   ]
+
+  if (use_aura) {
+    deps += [ "//ui/aura" ]
+  }
 
   data = [
     "//chromecast/browser/test/data/",
@@ -647,15 +666,19 @@ cast_source_set("unittests") {
 
   deps = [
     ":browser",
+    ":test_support",
     "//base",
     "//base/test:test_support",
     "//chromecast/base",
+    "//chromecast/bindings/public/mojom",
+    "//components/on_load_script_injector/browser",
     "//content/public/browser",
     "//content/test:test_support",
     "//net:test_support",
     "//services/network:test_support",
     "//testing/gmock",
     "//testing/gtest",
+    "//third_party/blink/public/common",
     "//ui/base",
     "//ui/base:test_support",
     "//ui/events/devices:devices",
@@ -687,10 +710,6 @@ if (is_android) {
       "android/apk/src/org/chromium/chromecast/shell/CastMetricsHelper.java",
       "android/apk/src/org/chromium/chromecast/shell/CastSysInfoAndroid.java",
     ]
-
-    if (is_android_things_non_public) {
-      sources += [ "android/apk/src/org/chromium/chromecast/shell/CastSysInfoAndroidThings.java" ]
-    }
   }
 
   java_cpp_enum("java_enums") {

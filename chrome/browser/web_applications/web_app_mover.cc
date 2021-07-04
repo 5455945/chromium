@@ -13,7 +13,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/sync/profile_sync_service_factory.h"
+#include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/web_applications/components/app_registrar.h"
 #include "chrome/browser/web_applications/components/app_registry_controller.h"
 #include "chrome/browser/web_applications/components/install_finalizer.h"
@@ -44,7 +44,6 @@ std::unique_ptr<WebAppMover> WebAppMover::CreateIfNeeded(
     InstallFinalizer* install_finalizer,
     InstallManager* install_manager,
     AppRegistryController* controller) {
-  DCHECK(base::FeatureList::IsEnabled(features::kDesktopPWAsWithoutExtensions));
   if (g_disabled_for_testing)
     return nullptr;
 
@@ -143,7 +142,7 @@ WebAppMover::~WebAppMover() = default;
 void WebAppMover::Start() {
   // We cannot grab the SyncService in the constructor without creating a
   // circular KeyedService dependency.
-  sync_service_ = ProfileSyncServiceFactory::GetForProfile(profile_);
+  sync_service_ = SyncServiceFactory::GetForProfile(profile_);
   // This can be a nullptr if the --disable-sync switch is specified.
   if (sync_service_)
     sync_observer_.Observe(sync_service_);
@@ -244,7 +243,7 @@ void WebAppMover::OnInstallManifestFetched(
     base::ScopedClosureRunner complete_callback_runner,
     std::unique_ptr<content::WebContents> web_contents,
     InstallManager::InstallableCheckResult result,
-    base::Optional<AppId> app_id) {
+    absl::optional<AppId> app_id) {
   switch (result) {
     case InstallManager::InstallableCheckResult::kAlreadyInstalled:
       LOG(WARNING) << "App already installed.";
@@ -272,8 +271,8 @@ void WebAppMover::OnInstallManifestFetched(
                      std::move(complete_callback_runner),
                      std::move(web_contents), success_accumulator));
   for (const AppId& id : apps_to_uninstall_) {
-    install_finalizer_->UninstallExternalAppByUser(
-        id,
+    install_finalizer_->UninstallWebApp(
+        id, webapps::WebappUninstallSource::kMigration,
         base::BindOnce(
             [](base::OnceClosure done,
                scoped_refptr<base::RefCountedData<bool>> success_accumulator,

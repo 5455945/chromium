@@ -6,9 +6,11 @@
  * @fileoverview 'settings-languages-page' is the settings page
  * for language and input method settings.
  */
+
+// TODO(crbug.com/1097328): Remove all chromeos references here.
 import 'chrome://resources/cr_elements/cr_button/cr_button.m.js';
 import 'chrome://resources/cr_elements/cr_expand_button/cr_expand_button.m.js';
-import 'chrome://resources/cr_elements/cr_link_row/cr_link_row.m.js';
+import 'chrome://resources/cr_elements/cr_link_row/cr_link_row.js';
 import 'chrome://resources/cr_elements/cr_toggle/cr_toggle.m.js';
 import 'chrome://resources/cr_elements/icons.m.js';
 import 'chrome://resources/cr_elements/policy/cr_policy_pref_indicator.m.js';
@@ -19,16 +21,16 @@ import 'chrome://resources/cr_elements/action_link_css.m.js';
 import 'chrome://resources/polymer/v3_0/iron-collapse/iron-collapse.js';
 import 'chrome://resources/polymer/v3_0/iron-flex-layout/iron-flex-layout-classes.js';
 import 'chrome://resources/polymer/v3_0/iron-icon/iron-icon.js';
-import './languages.m.js';
+import './languages.js';
 import './languages_subpage.js';
-import '../controls/controlled_radio_button.m.js';
-import '../controls/settings_radio_group.m.js';
-import '../controls/settings_toggle_button.m.js';
-import '../icons.m.js';
-import '../settings_page/settings_animated_pages.m.js';
-import '../settings_page/settings_subpage.m.js';
-import '../settings_shared_css.m.js';
-import '../settings_vars_css.m.js';
+import '../controls/controlled_radio_button.js';
+import '../controls/settings_radio_group.js';
+import '../controls/settings_toggle_button.js';
+import '../icons.js';
+import '../settings_page/settings_animated_pages.js';
+import '../settings_page/settings_subpage.js';
+import '../settings_shared_css.js';
+import '../settings_vars_css.js';
 
 // <if expr="not is_macosx">
 import './edit_dictionary_page.js';
@@ -37,142 +39,178 @@ import './edit_dictionary_page.js';
 import {assert} from 'chrome://resources/js/assert.m.js';
 import {isChromeOS, isWindows} from 'chrome://resources/js/cr.m.js';
 import {focusWithoutInk} from 'chrome://resources/js/cr/ui/focus_without_ink.m.js';
-import {I18nBehavior} from 'chrome://resources/js/i18n_behavior.m.js';
-import {flush, html, Polymer} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {I18nBehavior, I18nBehaviorInterface} from 'chrome://resources/js/i18n_behavior.m.js';
+import {flush, html, mixinBehaviors, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {loadTimeData} from '../i18n_setup.js';
-import {LifetimeBrowserProxyImpl} from '../lifetime_browser_proxy.m.js';
-import {PrefsBehavior} from '../prefs/prefs_behavior.m.js';
+import {LifetimeBrowserProxyImpl} from '../lifetime_browser_proxy.js';
+import {PrefsBehavior, PrefsBehaviorInterface} from '../prefs/prefs_behavior.js';
 import {routes} from '../route.js';
-import {Route, Router} from '../router.m.js';
+import {Route, Router} from '../router.js';
 
 // <if expr="chromeos">
 import {LanguagesMetricsProxy, LanguagesMetricsProxyImpl, LanguagesPageInteraction} from './languages_metrics_proxy.js';
 // </if>
 
-import {LanguageSettingsActionType, LanguageSettingsMetricsProxy, LanguageSettingsMetricsProxyImpl} from './languages_settings_metrics_proxy.js';
+import {LanguageSettingsActionType, LanguageSettingsMetricsProxy, LanguageSettingsMetricsProxyImpl, LanguageSettingsPageImpressionType} from './languages_settings_metrics_proxy.js';
 
 /**
- * Name of the language setting is shown uma histogram.
- * @type {string}
+ * @constructor
+ * @extends {PolymerElement}
+ * @implements {I18nBehaviorInterface}
+ * @implements {PrefsBehaviorInterface}
  */
-const LANGUAGE_SETTING_IS_SHOWN_UMA_NAME = 'Translate.LanguageSettingsIsShown';
+const SettingsLanguagesPageElementBase =
+    mixinBehaviors([I18nBehavior, PrefsBehavior], PolymerElement);
 
-Polymer({
-  is: 'settings-languages-page',
+/** @polymer */
+class SettingsLanguagesPageElement extends SettingsLanguagesPageElementBase {
+  static get is() {
+    return 'settings-languages-page';
+  }
 
-  _template: html`{__html_template__}`,
+  static get template() {
+    return html`{__html_template__}`;
+  }
 
-  behaviors: [
-    I18nBehavior,
-    PrefsBehavior,
-  ],
-
-  properties: {
-    /**
-     * Preferences state.
-     */
-    prefs: {
-      type: Object,
-      notify: true,
-    },
-
-    /**
-     * Read-only reference to the languages model provided by the
-     * 'settings-languages' instance.
-     * @type {!LanguagesModel|undefined}
-     */
-    languages: {
-      type: Object,
-      notify: true,
-    },
-
-    /** @type {!LanguageHelper} */
-    languageHelper: Object,
-
-    // <if expr="not is_macosx">
-    /** @private */
-    spellCheckLanguages_: {
-      type: Array,
-      value() {
-        return [];
+  static get properties() {
+    return {
+      /**
+       * Preferences state.
+       */
+      prefs: {
+        type: Object,
+        notify: true,
       },
-    },
-    // </if>
 
-    /**
-     * The language to display the details for.
-     * @type {!LanguageState|undefined}
-     * @private
-     */
-    detailLanguage_: Object,
-
-    /** @private */
-    hideSpellCheckLanguages_: {
-      type: Boolean,
-      value: false,
-    },
-
-    /**
-     * Whether the language settings list is opened.
-     * @private
-     */
-    languagesOpened_: {
-      type: Boolean,
-      observer: 'onLanguagesOpenedChanged_',
-    },
-
-    /** @private */
-    showAddLanguagesDialog_: Boolean,
-
-    /** @private {!Map<string, string>} */
-    focusConfig_: {
-      type: Object,
-      value() {
-        const map = new Map();
-        // <if expr="not is_macosx">
-        if (routes.EDIT_DICTIONARY) {
-          map.set(routes.EDIT_DICTIONARY.path, '#spellCheckSubpageTrigger');
-        }
-        // </if>
-        return map;
+      /**
+       * Read-only reference to the languages model provided by the
+       * 'settings-languages' instance.
+       * @type {!LanguagesModel|undefined}
+       */
+      languages: {
+        type: Object,
+        notify: true,
       },
-    },
 
-    // <if expr="chromeos">
-    /** @private */
-    isGuest_: {
-      type: Boolean,
-      value() {
-        return loadTimeData.getBoolean('isGuest');
+      /** @type {!LanguageHelper} */
+      languageHelper: Object,
+
+      // <if expr="not is_macosx">
+      /** @private */
+      spellCheckLanguages_: {
+        type: Array,
+        value() {
+          return [];
+        },
       },
-    },
+      // </if>
 
-    /** @private */
-    isChromeOSLanguagesSettingsUpdate_: {
-      type: Boolean,
-      value() {
-        return loadTimeData.getBoolean('isChromeOSLanguagesSettingsUpdate');
+      /**
+       * The language to display the details for.
+       * @type {!LanguageState|undefined}
+       * @private
+       */
+      detailLanguage_: Object,
+
+      /** @private */
+      enableDesktopRestructuredLanguageSettings_: {
+        type: Boolean,
+        value() {
+          let enabled = false;
+          // <if expr="not chromeos and not lacros">
+          enabled = loadTimeData.getBoolean(
+              'enableDesktopRestructuredLanguageSettings');
+          // </if>
+          return enabled;
+        },
       },
-    },
-    // </if>
-  },
 
-  // <if expr="chromeos">
-  /** @private {?LanguagesMetricsProxy} */
-  languagesMetricsProxy_: null,
+      /** @private */
+      hideSpellCheckLanguages_: {
+        type: Boolean,
+        value: false,
+      },
+
+      /**
+       * Whether the language settings list is opened.
+       * @private
+       */
+      languagesOpened_: {
+        type: Boolean,
+        observer: 'onLanguagesOpenedChanged_',
+      },
+
+      /** @private */
+      showAddLanguagesDialog_: Boolean,
+
+      /** @private {!Map<string, string>} */
+      focusConfig_: {
+        type: Object,
+        value() {
+          const map = new Map();
+          // <if expr="not is_macosx">
+          if (routes.EDIT_DICTIONARY) {
+            map.set(routes.EDIT_DICTIONARY.path, '#spellCheckSubpageTrigger');
+          }
+          // </if>
+          // <if expr="not chromeos and not lacros">
+          if (loadTimeData.getBoolean(
+                  'enableDesktopRestructuredLanguageSettings')) {
+            if (routes.LANGUAGE_SETTINGS) {
+              map.set(
+                  routes.LANGUAGE_SETTINGS.path, '#languagesSubpageTrigger');
+            }
+          }
+          // </if>
+          return map;
+        },
+      },
+
+      // <if expr="chromeos">
+      /** @private */
+      isGuest_: {
+        type: Boolean,
+        value() {
+          return loadTimeData.getBoolean('isGuest');
+        },
+      },
+
+      // TODO(crbug.com/1097328): Delete this.
+      /** @private */
+      isChromeOSLanguagesSettingsUpdate_: {
+        type: Boolean,
+        value() {
+          return true;
+        },
+      },
+      // </if>
+    };
+  }
+
+  // <if expr="not is_macosx">
+  static get observers() {
+    return [
+      'updateSpellcheckLanguages_(languages.enabled.*, ' +
+          'languages.spellCheckOnLanguages.*)',
+      'updateSpellcheckEnabled_(prefs.browser.enable_spellchecking.*)',
+
+    ];
+  }
   // </if>
-  /** @private {?LanguageSettingsMetricsProxy} */
-  languageSettingsMetricsProxy_: null,
 
   /** @override */
-  created() {
+  constructor() {
+    super();
+
     // <if expr="chromeos">
+    /** @private {!LanguagesMetricsProxy} */
     this.languagesMetricsProxy_ = LanguagesMetricsProxyImpl.getInstance();
     // </if>
+    /** @private {!LanguageSettingsMetricsProxy} */
     this.languageSettingsMetricsProxy_ =
         LanguageSettingsMetricsProxyImpl.getInstance();
-  },
+  }
 
   // <if expr="chromeos">
   /** @private */
@@ -181,20 +219,7 @@ Polymer({
         loadTimeData.getString('chromeOSLanguagesSettingsPath');
     window.location.href =
         `chrome://os-settings/${chromeOSLanguagesSettingsPath}`;
-  },
-  // </if>
-
-  // <if expr="not is_macosx">
-  observers: [
-    'updateSpellcheckLanguages_(languages.enabled.*, ' +
-        'languages.forcedSpellCheckLanguages.*)',
-    'updateSpellcheckEnabled_(prefs.browser.enable_spellchecking.*)',
-  ],
-  // </if>
-
-  // <if expr="chromeos or is_win">
-  /** @private {boolean} */
-  isChangeInProgress_: false,
+  }
   // </if>
 
   // <if expr="not is_macosx">
@@ -209,7 +234,7 @@ Polymer({
    */
   errorsGreaterThan_(downloadDictionaryFailureCount, threshold) {
     return downloadDictionaryFailureCount > threshold;
-  },
+  }
   // </if>
 
   // <if expr="not is_macosx">
@@ -221,30 +246,30 @@ Polymer({
   getIndicatorPrefForManagedSpellcheckLanguage_(isEnabled) {
     return isEnabled ? this.get('spellcheck.forced_dictionaries', this.prefs) :
                        this.get('spellcheck.blocked_dictionaries', this.prefs);
-  },
+  }
 
   /**
    * Returns an array of enabled languages, plus spellcheck languages that are
    * force-enabled by policy.
-   * @return {!Array<!LanguageState|!ForcedLanguageState>}
+   * @return {!Array<!LanguageState|!SpellCheckLanguageState>}
    * @private
    */
   getSpellCheckLanguages_() {
     const supportedSpellcheckLanguages =
-        /** @type {!Array<!LanguageState|!ForcedLanguageState>} */ (
+        /** @type {!Array<!LanguageState|!SpellCheckLanguageState>} */ (
             this.languages.enabled.filter(
                 (item) => item.language.supportsSpellcheck));
     const supportedSpellcheckLanguagesSet =
         new Set(supportedSpellcheckLanguages.map(x => x.language.code));
 
-    this.languages.forcedSpellCheckLanguages.forEach(forcedLanguage => {
-      if (!supportedSpellcheckLanguagesSet.has(forcedLanguage.language.code)) {
-        supportedSpellcheckLanguages.push(forcedLanguage);
+    this.languages.spellCheckOnLanguages.forEach(spellCheckLang => {
+      if (!supportedSpellcheckLanguagesSet.has(spellCheckLang.language.code)) {
+        supportedSpellcheckLanguages.push(spellCheckLang);
       }
     });
 
     return supportedSpellcheckLanguages;
-  },
+  }
 
   /** @private */
   updateSpellcheckLanguages_() {
@@ -287,7 +312,7 @@ Polymer({
     } else {
       this.hideSpellCheckLanguages_ = false;
     }
-  },
+  }
 
   /** @private */
   updateSpellcheckEnabled_() {
@@ -305,7 +330,7 @@ Polymer({
           this.spellCheckLanguages_[0].language.code,
           !!this.getPref('browser.enable_spellchecking').value);
     }
-  },
+  }
 
   /**
    * Opens the Custom Dictionary page.
@@ -318,7 +343,7 @@ Polymer({
     // </if>
     Router.getInstance().navigateTo(
         /** @type {!Route} */ (routes.EDIT_DICTIONARY));
-  },
+  }
 
   /**
    * Handler for enabling or disabling spell check for a specific language.
@@ -332,7 +357,7 @@ Polymer({
 
     this.languageHelper.toggleSpellCheck(
         item.language.code, !item.spellCheckEnabled);
-  },
+  }
 
   // <if expr="chromeos">
   /**
@@ -342,7 +367,7 @@ Polymer({
    */
   getProspectiveUILanguageName_(prospectiveUILanguage) {
     return this.languageHelper.getLanguage(prospectiveUILanguage).displayName;
-  },
+  }
 
   /**
    * @param {!Event} e
@@ -350,7 +375,7 @@ Polymer({
    */
   onSpellcheckToggleChange_(e) {
     this.languagesMetricsProxy_.recordToggleSpellCheck(e.target.checked);
-  },
+  }
   // </if>
 
   /**
@@ -362,7 +387,7 @@ Polymer({
     assert(this.errorsGreaterThan_(
         e.model.item.downloadDictionaryFailureCount, 0));
     this.languageHelper.retryDownloadDictionary(e.model.item.language.code);
-  },
+  }
 
   /**
    * Handler for clicking on the name of the language. The action taken must
@@ -372,20 +397,20 @@ Polymer({
   onSpellCheckNameClick_(e) {
     assert(!this.isSpellCheckNameClickDisabled_(e.model.item));
     this.onSpellCheckLanguageChange_(e);
-  },
+  }
 
   /**
    * Name only supports clicking when language is not managed, supports
    * spellcheck, and the dictionary has been downloaded with no errors.
-   * @param {!LanguageState|!ForcedLanguageState} item
+   * @param {!LanguageState|!SpellCheckLanguageState} item
    * @return {boolean}
    * @private
    */
   isSpellCheckNameClickDisabled_(item) {
     return item.isManaged || !item.language.supportsSpellcheck ||
         item.downloadDictionaryFailureCount > 0;
-  },
-  // </if>
+  }
+  // </if> expr="not is_macosx"
 
   /**
    * @return {string|undefined}
@@ -399,7 +424,7 @@ Polymer({
     // </if>
 
     return undefined;
-  },
+  }
 
   /**
    * @param {boolean} newVal The new value of languagesOpened_.
@@ -408,11 +433,23 @@ Polymer({
    */
   onLanguagesOpenedChanged_(newVal, oldVal) {
     if (!oldVal && newVal) {
-      chrome.send(
-          'metricsHandler:recordBooleanHistogram',
-          [LANGUAGE_SETTING_IS_SHOWN_UMA_NAME, true]);
+      this.languageSettingsMetricsProxy_.recordPageImpressionMetric(
+          LanguageSettingsPageImpressionType.MAIN);
     }
-  },
+  }
+
+  // <if expr="not chromeos and not lacros">
+  /**
+   * Opens the Language Settings page.
+   * @private
+   */
+  onLanguagesSubpageClick_() {
+    if (this.enableDesktopRestructuredLanguageSettings_) {
+      Router.getInstance().navigateTo(
+          /** @type {!Route} */ (routes.LANGUAGE_SETTINGS));
+    }
+  }
+  // </if>
 
   /**
    * Toggles the expand button within the element being listened to.
@@ -435,5 +472,8 @@ Polymer({
     assert(expandButton);
     expandButton.expanded = !expandButton.expanded;
     focusWithoutInk(expandButton);
-  },
-});
+  }
+}
+
+customElements.define(
+    SettingsLanguagesPageElement.is, SettingsLanguagesPageElement);

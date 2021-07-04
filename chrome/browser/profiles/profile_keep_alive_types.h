@@ -41,8 +41,8 @@ enum class ProfileKeepAliveOrigin {
   // "launches" Chrome again.
   kAppControllerMac = 5,
 
-  // In the middle of clearing browsing data during browsing exit, for the
-  // ClearBrowsingDataOnExistList policy.
+  // In the middle of clearing browsing data, e.g. when the user deletes it via
+  // the Profile menu, or during ephemeral profile teardown.
   kClearingBrowsingData = 6,
 
   // An app (Chrome app, web app, etc.) has a window open.
@@ -71,7 +71,22 @@ enum class ProfileKeepAliveOrigin {
   // A DevTools window is open.
   kDevToolsWindow = 14,
 
-  kMaxValue = kDevToolsWindow,
+  // A web app permission dialog window is open.
+  kWebAppPermissionDialogWindow = 15,
+
+  // Data for Clear on Exit is being deleted.
+  kSessionDataDeleter = 16,
+
+  // Waiting for the provider to be ready in protocol handler web app launch.
+  kWebAppProtocolHandlerLaunch = 17,
+
+  // An extension is being updated.
+  kExtensionUpdater = 18,
+
+  // This profile is being created (and is used to render GAIA sign-in flow).
+  kProfileCreationFlow = 19,
+
+  kMaxValue = kProfileCreationFlow,
 };
 
 std::ostream& operator<<(std::ostream& out,

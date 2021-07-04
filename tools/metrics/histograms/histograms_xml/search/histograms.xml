@@ -42,6 +42,23 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
   </summary>
 </histogram>
 
+<histogram name="Search.ContextualSearch.All.Searches"
+    enum="BooleanBottomSearchKind" expires_after="M95">
+<!-- TODO(donnd): change expires_after to never once established and
+       approved. -->
+
+  <owner>donnd@chromium.org</owner>
+  <owner>contextual-search-eng@google.com</owner>
+  <owner>related-searches-vteam@google.com</owner>
+  <summary>
+    Records that a Search Result page was shown in a bottom sheet for either
+    Contextual Search or Related Searches. Each entry corresponds to exactly one
+    search of the indicated kind. Related Searches are recorded when the SERP is
+    shown to the user, and Contextual Searches are recorded when the panel is
+    closed. Implemented for Android.
+  </summary>
+</histogram>
+
 <histogram name="Search.ContextualSearch.CardTag"
     enum="ContextualSearchCardTag" expires_after="never">
 <!-- expires-never: tracks key server results returned to the user. -->
@@ -225,7 +242,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Search.ContextualSearch.SelectionExpanded"
-    enum="ContextualSearchGestureIsTap" expires_after="2021-08-09">
+    enum="ContextualSearchGestureIsTap" expires_after="2021-10-10">
   <owner>donnd@chromium.org</owner>
   <owner>twellington@chromium.org</owner>
   <summary>
@@ -260,7 +277,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Search.ContextualSearch.TranslationNeeded"
-    enum="ContextualSearchGestureIsTap" expires_after="2021-08-22">
+    enum="ContextualSearchGestureIsTap" expires_after="2021-10-25">
   <owner>donnd@chromium.org</owner>
   <owner>twellington@chromium.org</owner>
   <summary>
@@ -273,7 +290,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Search.ContextualSearch.TranslationsOptInIPHShown"
-    enum="BooleanPreviouslyShown" expires_after="2021-08-22">
+    enum="BooleanPreviouslyShown" expires_after="2021-12-26">
   <owner>donnd@chromium.org</owner>
   <owner>contextual-search-eng@google.com</owner>
   <summary>
@@ -284,7 +301,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Search.ContextualSearch.TranslationsOptInIPHWorked"
-    enum="BooleanOptedIn" expires_after="2021-08-22">
+    enum="BooleanOptedIn" expires_after="2021-10-25">
   <owner>donnd@chromium.org</owner>
   <owner>contextual-search-eng@google.com</owner>
   <summary>
@@ -791,7 +808,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Search.ContextualSearchQuickActions.Category"
-    enum="ContextualSearchQuickActionCategory" expires_after="2021-07-27">
+    enum="ContextualSearchQuickActionCategory" expires_after="2021-10-04">
   <owner>donnd@chromium.org</owner>
   <owner>twellington@chromium.org</owner>
   <summary>
@@ -1146,7 +1163,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Search.DefaultSearchProviderType"
-    enum="OmniboxSearchEngineType" expires_after="2021-06-30">
+    enum="OmniboxSearchEngineType" expires_after="2021-10-31">
   <owner>mpearson@chromium.org</owner>
   <owner>csharp@chromium.org</owner>
   <summary>
@@ -1240,7 +1257,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram base="true" name="Search.QueryTiles.Bitmap.Available"
-    enum="BooleanAvailable" expires_after="M91">
+    enum="BooleanAvailable" expires_after="M94">
 <!-- Name completed by histogram_suffixes name="TileUiSurface" -->
 
   <owner>shaktisahu@chromium.org</owner>
@@ -1251,7 +1268,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram base="true" name="Search.QueryTiles.Bitmap.FetchDuration" units="ms"
-    expires_after="M91">
+    expires_after="M94">
 <!-- Name completed by histogram_suffixes name="TileUiSurface" -->
 
   <owner>shaktisahu@chromium.org</owner>
@@ -1264,8 +1281,8 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Search.QueryTiles.Fetcher.FirstFlowDuration" units="hours"
-    expires_after="M91">
-  <owner>hesen@chromium.org</owner>
+    expires_after="M94">
+  <owner>qinmin@chromium.org</owner>
   <owner>chrome-upboarding-eng@google.com</owner>
   <summary>
     Records duration from time when first task scheduled to time the fetch task
@@ -1274,29 +1291,29 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Search.QueryTiles.Fetcher.Start" units="hours"
-    expires_after="M91">
-  <owner>hesen@chromium.org</owner>
+    expires_after="M94">
+  <owner>qinmin@chromium.org</owner>
   <owner>chrome-upboarding-eng@google.com</owner>
   <summary>Records the hour (0-23) when the TileFetcher task starts.</summary>
 </histogram>
 
 <histogram name="Search.QueryTiles.FetcherHttpResponseCode"
-    enum="HttpResponseCode" expires_after="2021-08-22">
-  <owner>hesen@chromium.org</owner>
+    enum="HttpResponseCode" expires_after="2021-12-31">
+  <owner>qinmin@chromium.org</owner>
   <owner>chrome-upboarding-eng@google.com</owner>
   <summary>Records the HTTP response code get from TileFetcher.</summary>
 </histogram>
 
 <histogram name="Search.QueryTiles.FetcherNetErrorCode" enum="NetErrorCodes"
-    expires_after="2021-08-09">
-  <owner>hesen@chromium.org</owner>
+    expires_after="2021-12-31">
+  <owner>qinmin@chromium.org</owner>
   <owner>chrome-upboarding-eng@google.com</owner>
   <summary>Records the net error code get from TileFetcher.</summary>
 </histogram>
 
 <histogram name="Search.QueryTiles.Group.PruneReason"
-    enum="QueryTilesGroupPruneReason" expires_after="M91">
-  <owner>hesen@chromium.org</owner>
+    enum="QueryTilesGroupPruneReason" expires_after="M94">
+  <owner>qinmin@chromium.org</owner>
   <owner>chrome-upboarding-eng@google.com</owner>
   <summary>
     Records the reasons caused the tile group pruned in TileManager.
@@ -1305,7 +1322,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram name="Search.QueryTiles.GroupStatus" enum="QueryTilesGroupStatus"
     expires_after="2021-08-22">
-  <owner>hesen@chromium.org</owner>
+  <owner>qinmin@chromium.org</owner>
   <owner>chrome-upboarding-eng@google.com</owner>
   <summary>
     Records the TileManager status after initialized and loaded completed.
@@ -1313,7 +1330,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Search.QueryTiles.ImagePreloadingEvent"
-    enum="QueryTilesImageLoadingEvent" expires_after="M91">
+    enum="QueryTilesImageLoadingEvent" expires_after="2022-04-01">
   <owner>xingliu@chromium.org</owner>
   <owner>chrome-upboarding-eng@google.com</owner>
   <summary>
@@ -1323,7 +1340,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram base="true" name="Search.QueryTiles.NoBitmap.FetchDuration"
-    units="ms" expires_after="M91">
+    units="ms" expires_after="M94">
 <!-- Name completed by histogram_suffixes name="TileUiSurface" -->
 
   <owner>shaktisahu@chromium.org</owner>
@@ -1336,7 +1353,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Search.QueryTiles.NTP.Chip.SearchClicked" units="index"
-    expires_after="2021-06-20">
+    expires_after="2021-12-31">
   <owner>shaktisahu@chromium.org</owner>
   <owner>chrome-upboarding-eng@google.com</owner>
   <summary>
@@ -1346,8 +1363,8 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Search.QueryTiles.RequestStatus"
-    enum="QueryTilesRequestStatus" expires_after="M91">
-  <owner>hesen@chromium.org</owner>
+    enum="QueryTilesRequestStatus" expires_after="M94">
+  <owner>qinmin@chromium.org</owner>
   <owner>chrome-upboarding-eng@google.com</owner>
   <summary>
     Records the TileFetcher status after request send to server and response
@@ -1356,7 +1373,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram base="true" name="Search.QueryTiles.Tile.Clicked" units="index"
-    expires_after="M91">
+    expires_after="M95">
 <!-- Name completed by histogram_suffixes name="TileUiSurface" -->
 
   <owner>shaktisahu@chromium.org</owner>
@@ -1368,7 +1385,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram base="true" name="Search.QueryTiles.Tile.Clicked.IsTopLevel"
-    enum="BooleanIsTopLevel" expires_after="M91">
+    enum="BooleanIsTopLevel" expires_after="M95">
 <!-- Name completed by histogram_suffixes name="TileUiSurface" -->
 
   <owner>shaktisahu@chromium.org</owner>
@@ -1377,7 +1394,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram base="true" name="Search.QueryTiles.TileCount" units="tiles"
-    expires_after="M91">
+    expires_after="M94">
 <!-- Name completed by histogram_suffixes name="TileUiSurface" -->
 
   <owner>shaktisahu@chromium.org</owner>
@@ -1389,7 +1406,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Search.QueryTiles.TilesFitPerRow" units="tiles"
-    expires_after="M91">
+    expires_after="M94">
   <owner>shaktisahu@chromium.org</owner>
   <owner>chrome-upboarding-eng@google.com</owner>
   <summary>
@@ -1398,7 +1415,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
   </summary>
 </histogram>
 
-<histogram name="Search.QueryTiles.TileWidth" units="dp" expires_after="M91">
+<histogram name="Search.QueryTiles.TileWidth" units="dp" expires_after="M94">
   <owner>shaktisahu@chromium.org</owner>
   <owner>chrome-upboarding-eng@google.com</owner>
   <summary>
@@ -1407,7 +1424,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Search.QueryTiles.TrendingTileEvent" enum="TrendingTileEvent"
-    expires_after="M91">
+    expires_after="M94">
   <owner>qinmin@chromium.org</owner>
   <owner>chrome-upboarding-eng@google.com</owner>
   <summary>
@@ -1417,7 +1434,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Search.RelatedSearches.AllUserPermissions"
-    enum="ContextualSearchPermissions" expires_after="2021-08-15">
+    enum="ContextualSearchPermissions" expires_after="2021-12-19">
   <owner>donnd@chromium.org</owner>
   <owner>related-searches-vteam@google.com</owner>
   <summary>
@@ -1430,8 +1447,33 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
   </summary>
 </histogram>
 
+<histogram name="Search.RelatedSearches.CTR" enum="BooleanClicked"
+    expires_after="M95">
+  <owner>donnd@chromium.org</owner>
+  <owner>related-searches-vteam@google.com</owner>
+  <summary>
+    Records the click through rate for Related Searches. This is the rate that
+    at least one suggestion was chosen by the user when any were shown. Records
+    false whenever Related Searches suggestions were shown to the user but none
+    were selected, and true whenever the user has clicked on any suggestion to
+    view the suggested query. Only records one entry per botton-sheet session.
+    Recorded when the presentation UI is dismissed. Implemented for Android.
+  </summary>
+</histogram>
+
+<histogram name="Search.RelatedSearches.NumberOfSuggestionsClicked"
+    units="selected" expires_after="M95">
+  <owner>donnd@chromium.org</owner>
+  <owner>related-searches-vteam@google.com</owner>
+  <summary>
+    The number of suggestions that were chosen by the user in a bottom-sheet
+    session that showed any Related Searches. Written when the suggestions UI is
+    closed. Implemented for Android.
+  </summary>
+</histogram>
+
 <histogram name="Search.RelatedSearches.QualifiedUsers" enum="Boolean"
-    expires_after="2021-08-15">
+    expires_after="2021-12-19">
   <owner>donnd@chromium.org</owner>
   <owner>related-searches-vteam@google.com</owner>
   <summary>
@@ -1442,6 +1484,30 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
     Contextual Search in way that could activate Related Searches (i.e. sends
     context). NOTE: Use the Count unique clients option to count users since
     multiple events are logged for each user. Implemented for Android.
+  </summary>
+</histogram>
+
+<histogram name="Search.RelatedSearches.SelectedCarouselIndex" units="position"
+    expires_after="M95">
+  <owner>donnd@chromium.org</owner>
+  <owner>related-searches-vteam@google.com</owner>
+  <summary>
+    The display position index for a chip in the carousel when it was selected
+    by the user. Written when a Related Searches suggestion chip is clicked.
+    Implemented for Android.
+  </summary>
+</histogram>
+
+<histogram name="Search.RelatedSearches.SelectedSuggestionIndex"
+    units="position" expires_after="M95">
+  <owner>donnd@chromium.org</owner>
+  <owner>related-searches-vteam@google.com</owner>
+  <summary>
+    The display position index for a suggestion when it was selected by the
+    user. The suggestion at location 0 is always the default selection search,
+    which may not be a possible position in some implementations. All indecies
+    from 1 on are true Related Searches suggestions. Written when a Related
+    Searches suggestion in the UI is selected. Implemented for Android.
   </summary>
 </histogram>
 
@@ -1480,7 +1546,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Search.TemplateURL.Events" enum="SearchTemplateURLEvent"
-    expires_after="2021-10-01">
+    expires_after="2021-12-05">
   <owner>tommycli@chromium.org</owner>
   <owner>chrome-omnibox-team@google.com</owner>
   <summary>

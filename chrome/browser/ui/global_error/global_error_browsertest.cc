@@ -9,6 +9,7 @@
 #include "base/files/file_util.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
+#include "base/scoped_observation.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
@@ -85,7 +86,7 @@ class GlobalErrorWaiter : public GlobalErrorObserver {
  public:
   explicit GlobalErrorWaiter(Profile* profile)
       : service_(GlobalErrorServiceFactory::GetForProfile(profile)) {
-    scoped_observer_.Add(service_);
+    scoped_observation_.Observe(service_);
   }
 
   ~GlobalErrorWaiter() override = default;
@@ -101,8 +102,8 @@ class GlobalErrorWaiter : public GlobalErrorObserver {
  private:
   base::RunLoop run_loop_;
   GlobalErrorService* service_;
-  ScopedObserver<GlobalErrorService, GlobalErrorObserver> scoped_observer_{
-      this};
+  base::ScopedObservation<GlobalErrorService, GlobalErrorObserver>
+      scoped_observation_{this};
 
   DISALLOW_COPY_AND_ASSIGN(GlobalErrorWaiter);
 };
@@ -131,7 +132,7 @@ void GlobalErrorBubbleTest::ShowUi(const std::string& name) {
 
   extensions::ExtensionBuilder builder("Browser Action");
   builder.SetAction(extensions::ExtensionBuilder::ActionType::BROWSER_ACTION);
-  builder.SetLocation(extensions::Manifest::INTERNAL);
+  builder.SetLocation(extensions::mojom::ManifestLocation::kInternal);
   scoped_refptr<const extensions::Extension> test_extension = builder.Build();
   extension_service->AddExtension(test_extension.get());
 
@@ -186,7 +187,7 @@ void GlobalErrorBubbleTest::ShowUi(const std::string& name) {
 
     GlobalErrorWaiter waiter(profile);
     auto provider = std::make_unique<extensions::MockExternalProvider>(
-        extension_service, extensions::Manifest::EXTERNAL_PREF);
+        extension_service, extensions::mojom::ManifestLocation::kExternalPref);
     extensions::MockExternalProvider* provider_ptr = provider.get();
     extension_service->AddProviderForTesting(std::move(provider));
     provider_ptr->UpdateOrAddExtension(kExtensionWithUpdateUrl, "1.0.0.0",

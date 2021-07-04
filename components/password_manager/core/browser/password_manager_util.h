@@ -6,10 +6,10 @@
 #define COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_PASSWORD_MANAGER_UTIL_H_
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "base/callback.h"
-#include "base/strings/string16.h"
 #include "base/time/time.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_manager_client.h"
@@ -43,10 +43,6 @@ void UpdateMetadataForUsage(password_manager::PasswordForm* credential);
 // null |sync_service| returns NOT_SYNCING.
 password_manager::SyncState GetPasswordSyncState(
     const syncer::SyncService* sync_service);
-
-// Reports whether passwords are synced with normal encryption, i.e. without a
-// custom passphrase.
-bool IsSyncingWithNormalEncryption(const syncer::SyncService* sync_service);
 
 // Removes Android username-only credentials from |android_credentials|.
 // Transforms federated credentials into non zero-click ones.
@@ -123,7 +119,7 @@ void FindBestMatches(
 // none exists. If multiple matches exist, returns the first one.
 const password_manager::PasswordForm* FindFormByUsername(
     const std::vector<const password_manager::PasswordForm*>& forms,
-    const base::string16& username_value);
+    const std::u16string& username_value);
 
 // If the user submits a form, they may have used existing credentials, new
 // credentials, or modified existing credentials that should be updated.
@@ -143,7 +139,7 @@ const password_manager::PasswordForm* GetMatchForUpdating(
 // components. In case this fails (e.g. for non-standard origins like Android
 // credentials), the original origin is kept.
 password_manager::PasswordForm MakeNormalizedBlocklistedForm(
-    password_manager::PasswordStore::FormDigest digest);
+    password_manager::PasswordFormDigest digest);
 
 }  // namespace password_manager_util
 

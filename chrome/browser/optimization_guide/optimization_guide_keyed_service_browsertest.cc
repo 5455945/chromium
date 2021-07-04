@@ -2,8 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <memory>
+
 #include "base/base64.h"
 #include "base/run_loop.h"
+#include "base/strings/stringprintf.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
@@ -13,7 +16,6 @@
 #include "chrome/browser/optimization_guide/optimization_guide_hints_manager.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
-#include "chrome/browser/optimization_guide/optimization_guide_top_host_provider.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -28,8 +30,6 @@
 #include "components/optimization_guide/core/test_hints_component_creator.h"
 #include "components/optimization_guide/proto/hints.pb.h"
 #include "components/prefs/pref_service.h"
-#include "components/previews/core/previews_switches.h"
-#include "components/site_engagement/content/site_engagement_service.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "components/variations/active_field_trials.h"
 #include "components/variations/hashing.h"
@@ -162,8 +162,8 @@ class OptimizationGuideKeyedServiceBrowserTest
   void SetUpOnMainThread() override {
     OptimizationGuideKeyedServiceDisabledBrowserTest::SetUpOnMainThread();
 
-    https_server_.reset(
-        new net::EmbeddedTestServer(net::EmbeddedTestServer::TYPE_HTTPS));
+    https_server_ = std::make_unique<net::EmbeddedTestServer>(
+        net::EmbeddedTestServer::TYPE_HTTPS);
     https_server_->ServeFilesFromSourceDirectory(GetChromeTestDataDir());
     https_server_->RegisterRequestHandler(base::BindRepeating(
         &OptimizationGuideKeyedServiceBrowserTest::HandleRequest,
@@ -194,15 +194,8 @@ class OptimizationGuideKeyedServiceBrowserTest
             {optimization_guide::proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD});
 
     // Set up an OptimizationGuideKeyedService consumer.
-    consumer_.reset(new OptimizationGuideConsumerWebContentsObserver(
-        browser()->tab_strip_model()->GetActiveWebContents()));
-  }
-
-  optimization_guide::TopHostProvider* top_host_provider() {
-    auto* optimization_guide_keyed_service =
-        OptimizationGuideKeyedServiceFactory::GetForProfile(
-            browser()->profile());
-    return optimization_guide_keyed_service->GetTopHostProvider();
+    consumer_ = std::make_unique<OptimizationGuideConsumerWebContentsObserver>(
+        browser()->tab_strip_model()->GetActiveWebContents());
   }
 
   optimization_guide::PredictionManager* prediction_manager() {
@@ -280,7 +273,7 @@ class OptimizationGuideKeyedServiceBrowserTest
   std::unique_ptr<net::test_server::HttpResponse> HandleRequest(
       const net::test_server::HttpRequest& request) {
     if (request.GetURL().spec().find("redirect") == std::string::npos) {
-      return std::unique_ptr<net::test_server::HttpResponse>();
+      return nullptr;
     }
 
     GURL request_url = request.GetURL();
@@ -310,9 +303,7 @@ class OptimizationGuideKeyedServiceBrowserTest
 };
 
 IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceBrowserTest,
-                       TopHostProviderNotSetIfNotAllowed) {
-  ASSERT_FALSE(top_host_provider());
-
+                       RemoteFetchingDisabled) {
   // ChromeOS has multiple profiles and optimization guide currently does not
   // run on non-Android.
 #if !BUILDFLAG(IS_CHROMEOS_ASH)
@@ -600,68 +591,22 @@ class OptimizationGuideKeyedServiceDataSaverUserWithInfobarShownTest
     scoped_feature_list_.Reset();
   }
 
-  void SetUpOnMainThread() override {
-    OptimizationGuideKeyedServiceBrowserTest::SetUpOnMainThread();
-
-    SeedSiteEngagementService();
-    // Set the blocklist state to initialized so the sites in the engagement
-    // service will be used and not blocklisted on the first GetTopHosts
-    // request.
-    InitializeTopHostBlocklist();
-  }
-
   void SetUpCommandLine(base::CommandLine* cmd) override {
     OptimizationGuideKeyedServiceBrowserTest::SetUpCommandLine(cmd);
 
     cmd->AppendSwitch("enable-spdy-proxy-auth");
-    // Add switch to avoid having to see the infobar in the test.
-    cmd->AppendSwitch(previews::switches::kDoNotRequireLitePageRedirectInfoBar);
     // Add switch to avoid racing navigations in the test.
     cmd->AppendSwitch(optimization_guide::switches::
                           kDisableFetchingHintsAtNavigationStartForTesting);
   }
 
  private:
-  // Seeds the Site Engagement Service with two HTTP and two HTTPS sites for the
-  // current profile.
-  void SeedSiteEngagementService() {
-    auto* service = site_engagement::SiteEngagementService::Get(
-        Profile::FromBrowserContext(browser()
-                                        ->tab_strip_model()
-                                        ->GetActiveWebContents()
-                                        ->GetBrowserContext()));
-    GURL https_url1("https://myfavoritesite.com/");
-    service->AddPointsForTesting(https_url1, 15);
-
-    GURL https_url2("https://myotherfavoritesite.com/");
-    service->AddPointsForTesting(https_url2, 3);
-  }
-
-  void InitializeTopHostBlocklist() {
-    Profile::FromBrowserContext(browser()
-                                    ->tab_strip_model()
-                                    ->GetActiveWebContents()
-                                    ->GetBrowserContext())
-        ->GetPrefs()
-        ->SetInteger(
-            optimization_guide::prefs::kHintsFetcherTopHostBlocklistState,
-            static_cast<int>(
-                optimization_guide::prefs::HintsFetcherTopHostBlocklistState::
-                    kInitialized));
-  }
-
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(
     OptimizationGuideKeyedServiceDataSaverUserWithInfobarShownTest,
-    TopHostProviderIsSentDown) {
-  ASSERT_TRUE(top_host_provider());
-  std::vector<std::string> top_hosts = top_host_provider()->GetTopHosts();
-  EXPECT_EQ(2ul, top_hosts.size());
-  EXPECT_EQ("myfavoritesite.com", top_hosts[0]);
-  EXPECT_EQ("myotherfavoritesite.com", top_hosts[1]);
-
+    RemoteFetchingAllowed) {
   // ChromeOS has multiple profiles and optimization guide currently does not
   // run on non-Android.
 #if !BUILDFLAG(IS_CHROMEOS_ASH)
@@ -686,7 +631,8 @@ IN_PROC_BROWSER_TEST_F(
   // Instantiate off the record Optimization Guide Service.
   OptimizationGuideKeyedService* otr_ogks =
       OptimizationGuideKeyedServiceFactory::GetForProfile(
-          browser()->profile()->GetPrimaryOTRProfile());
+          browser()->profile()->GetPrimaryOTRProfile(
+              /*create_if_needed=*/true));
   otr_ogks->RegisterOptimizationTypes({optimization_guide::proto::NOSCRIPT});
 
   // Navigate to a URL that has a hint from a component and wait for that hint
@@ -712,7 +658,8 @@ IN_PROC_BROWSER_TEST_F(
   // Instantiate off the record Optimization Guide Service.
   OptimizationGuideKeyedService* otr_ogks =
       OptimizationGuideKeyedServiceFactory::GetForProfile(
-          browser()->profile()->GetPrimaryOTRProfile());
+          browser()->profile()->GetPrimaryOTRProfile(
+              /*create_if_needed=*/true));
 
   base::HistogramTester histogram_tester;
 
@@ -734,38 +681,4 @@ IN_PROC_BROWSER_TEST_F(
       static_cast<int>(optimization_guide::OptimizationTypeDecision::
                            kNotAllowedByOptimizationFilter),
       1);
-}
-
-class OptimizationGuideKeyedServiceCommandLineOverridesTest
-    : public OptimizationGuideKeyedServiceDataSaverUserWithInfobarShownTest {
- public:
-  OptimizationGuideKeyedServiceCommandLineOverridesTest() = default;
-  ~OptimizationGuideKeyedServiceCommandLineOverridesTest() override = default;
-
-  void SetUpCommandLine(base::CommandLine* cmd) override {
-    OptimizationGuideKeyedServiceDataSaverUserWithInfobarShownTest::
-        SetUpCommandLine(cmd);
-
-    cmd->AppendSwitchASCII(optimization_guide::switches::kFetchHintsOverride,
-                           "whatever.com,somehost.com");
-  }
-};
-
-IN_PROC_BROWSER_TEST_F(OptimizationGuideKeyedServiceCommandLineOverridesTest,
-                       TopHostProviderIsSentDown) {
-  ASSERT_TRUE(top_host_provider());
-
-  std::vector<std::string> top_hosts = top_host_provider()->GetTopHosts();
-  EXPECT_EQ(2ul, top_hosts.size());
-  EXPECT_EQ("whatever.com", top_hosts[0]);
-  EXPECT_EQ("somehost.com", top_hosts[1]);
-
-  // ChromeOS has multiple profiles and optimization guide currently does not
-  // run on non-Android.
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
-  histogram_tester()->ExpectUniqueSample(
-      "OptimizationGuide.RemoteFetchingEnabled", true, 1);
-  EXPECT_TRUE(IsInSyntheticTrialGroup(
-      "SyntheticOptimizationGuideRemoteFetching", "Enabled"));
-#endif
 }

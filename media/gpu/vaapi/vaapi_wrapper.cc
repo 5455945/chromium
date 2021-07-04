@@ -23,7 +23,10 @@
 #include "base/bind.h"
 #include "base/bits.h"
 #include "base/callback_helpers.h"
+#include "base/containers/contains.h"
+#include "base/containers/cxx20_erase.h"
 #include "base/cpu.h"
+#include "base/cxx17_backports.h"
 #include "base/environment.h"
 #include "base/files/scoped_file.h"
 #include "base/logging.h"
@@ -33,7 +36,6 @@
 #include "base/numerics/checked_math.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/posix/eintr_wrapper.h"
-#include "base/stl_util.h"
 #include "base/strings/pattern.h"
 #include "base/strings/string_util.h"
 #include "base/system/sys_info.h"
@@ -51,7 +53,6 @@
 // Auto-generated for dlopen libva libraries
 #include "media/gpu/vaapi/va_stubs.h"
 
-#include "gpu/config/gpu_driver_bug_workarounds.h"
 #include "third_party/libva_protected_content/va_protected_content.h"
 #include "third_party/libyuv/include/libyuv.h"
 #include "third_party/minigbm/src/external/i915_drm.h"
@@ -586,7 +587,8 @@ bool VADisplayState::InitializeVaDisplay_Locked() {
 
     default:
       LOG(WARNING) << "VAAPI video acceleration not available for "
-                   << gl::GetGLImplementationName(gl::GetGLImplementation());
+                   << gl::GetGLImplementationGLName(
+                          gl::GetGLImplementationParts());
       return false;
   }
 
@@ -832,10 +834,14 @@ bool GetRequiredAttribs(const base::Lock* va_lock,
       return false;
     }
 
-    if (attrib.value != VA_ENC_PACKED_HEADER_NONE) {
+    const uint32_t packed_header_attributes =
+        (VA_ENC_PACKED_HEADER_SEQUENCE | VA_ENC_PACKED_HEADER_PICTURE);
+    if ((packed_header_attributes & attrib.value) == packed_header_attributes) {
       required_attribs->push_back(
-          {VAConfigAttribEncPackedHeaders,
-           VA_ENC_PACKED_HEADER_SEQUENCE | VA_ENC_PACKED_HEADER_PICTURE});
+          {VAConfigAttribEncPackedHeaders, packed_header_attributes});
+    } else {
+      required_attribs->push_back(
+          {VAConfigAttribEncPackedHeaders, VA_ENC_PACKED_HEADER_NONE});
     }
   }
   return true;
@@ -1107,37 +1113,28 @@ bool VASupportedProfiles::FillProfileInfo_Locked(
   }
 
   if (va_profile != VAProfileJPEGBaseline) {
-    // Deny unreasonably small resolutions (e.g. 0x0) for VA-API hardware video
-    // decode and encode acceleration.
+    // Set a reasonable minimum value for both encoding and decoding.
     profile_info->min_resolution.SetToMax(gfx::Size(16, 16));
-    if (entrypoint == VAEntrypointEncSliceLP ||
-        entrypoint == VAEntrypointEncSlice) {
-      // Using VA-API for accelerated encoding frames smaller than a certain
-      // size is less efficient than using a software encoder.
-      constexpr gfx::Size kMinEncodeResolution(320 + 1, 240 + 1);
-      if (!gfx::Rect(profile_info->min_resolution)
-               .Contains(gfx::Rect(kMinEncodeResolution))) {
-        profile_info->min_resolution.SetToMax(kMinEncodeResolution);
-        DVLOG(2) << "Setting the minimum supported encoding resolution to "
-                 << profile_info->min_resolution.ToString() << " for "
-                 << vaProfileStr(va_profile);
-      }
-    } else if (entrypoint == VAEntrypointVLD &&
-               IsUsingHybridDriverForDecoding(va_profile)) {
-      // Using the hybrid driver for accelerated decoding of frames smaller than
-      // a certain size is less efficient than using a software decoder. This
-      // minimum resolution is selected from the fact that the resolutions of
-      // videos in tile layout in Google Meet are QVGA.
-      constexpr gfx::Size kMinDecodeResolutionForHybridDecoder(320 + 1,
-                                                               240 + 1);
-      if (!gfx::Rect(profile_info->min_resolution)
-               .Contains(gfx::Rect(kMinDecodeResolutionForHybridDecoder))) {
-        profile_info->min_resolution.SetToMax(
-            kMinDecodeResolutionForHybridDecoder);
-        DVLOG(2) << "Setting the minimum supported decoding resolution to "
-                 << profile_info->min_resolution.ToString() << " for "
-                 << vaProfileStr(va_profile);
-      }
+
+    const bool is_encoding = entrypoint == VAEntrypointEncSliceLP ||
+                             entrypoint == VAEntrypointEncSlice;
+    const bool is_hybrid_decoding = entrypoint == VAEntrypointVLD &&
+                                    IsUsingHybridDriverForDecoding(va_profile);
+
+    // Using HW encoding for small resolutions is less efficient than using a SW
+    // encoder. Similarly, using the intel-hybrid-driver for decoding is less
+    // efficient than using a SW decoder. In both cases, increase
+    // |min_resolution| to QVGA + 1 which is an experimental lower threshold.
+    // This can be turned off with kVaapiVideoMinResolutionForPerformance for
+    // testing.
+    if ((is_encoding || is_hybrid_decoding) &&
+        base::FeatureList::IsEnabled(kVaapiVideoMinResolutionForPerformance)) {
+      constexpr gfx::Size kMinVideoResolution(320 + 1, 240 + 1);
+      profile_info->min_resolution.SetToMax(kMinVideoResolution);
+      DVLOG(2) << "Setting the minimum supported resolution for "
+               << vaProfileStr(va_profile)
+               << (is_encoding ? " encoding" : " decoding") << " to "
+               << profile_info->min_resolution.ToString();
     }
   }
 
@@ -1392,7 +1389,7 @@ scoped_refptr<VaapiWrapper> VaapiWrapper::Create(
 
   scoped_refptr<VaapiWrapper> vaapi_wrapper(new VaapiWrapper(mode));
   if (vaapi_wrapper->VaInitialize(report_error_to_uma_cb)) {
-    if (vaapi_wrapper->Initialize(mode, va_profile, encryption_scheme))
+    if (vaapi_wrapper->Initialize(va_profile, encryption_scheme))
       return vaapi_wrapper;
   }
   LOG(ERROR) << "Failed to create VaapiWrapper for va_profile: "
@@ -1441,23 +1438,13 @@ VaapiWrapper::GetSupportedEncodeProfiles() {
 
 // static
 VideoDecodeAccelerator::SupportedProfiles
-VaapiWrapper::GetSupportedDecodeProfiles(
-    const gpu::GpuDriverBugWorkarounds& workarounds) {
+VaapiWrapper::GetSupportedDecodeProfiles() {
   VideoDecodeAccelerator::SupportedProfiles profiles;
 
   for (const auto& media_to_va_profile_map_entry : GetProfileCodecMap()) {
     const VideoCodecProfile media_profile = media_to_va_profile_map_entry.first;
     const VAProfile va_profile = media_to_va_profile_map_entry.second;
     DCHECK(va_profile != VAProfileNone);
-
-    if (media_profile == VP8PROFILE_ANY &&
-        workarounds.disable_accelerated_vp8_decode) {
-      continue;
-    }
-    if (media_profile == VP9PROFILE_PROFILE2 &&
-        workarounds.disable_accelerated_vp9_profile2_decode) {
-      continue;
-    }
 
     const VASupportedProfiles::ProfileInfo* profile_info =
         VASupportedProfiles::Get().IsProfileSupported(kDecode, va_profile);
@@ -1492,18 +1479,17 @@ VaapiWrapper::InternalFormats VaapiWrapper::GetDecodeSupportedInternalFormats(
 bool VaapiWrapper::IsDecodingSupportedForInternalFormat(
     VAProfile va_profile,
     unsigned int rt_format) {
-  static const base::NoDestructor<VaapiWrapper::InternalFormats>
-      supported_internal_formats(
-          VaapiWrapper::GetDecodeSupportedInternalFormats(va_profile));
+  static const VaapiWrapper::InternalFormats supported_internal_formats(
+      VaapiWrapper::GetDecodeSupportedInternalFormats(va_profile));
   switch (rt_format) {
     case VA_RT_FORMAT_YUV420:
-      return supported_internal_formats->yuv420;
+      return supported_internal_formats.yuv420;
     case VA_RT_FORMAT_YUV420_10:
-      return supported_internal_formats->yuv420_10;
+      return supported_internal_formats.yuv420_10;
     case VA_RT_FORMAT_YUV422:
-      return supported_internal_formats->yuv422;
+      return supported_internal_formats.yuv422;
     case VA_RT_FORMAT_YUV444:
-      return supported_internal_formats->yuv444;
+      return supported_internal_formats.yuv444;
   }
   return false;
 }
@@ -1609,11 +1595,11 @@ bool VaapiWrapper::IsVppResolutionAllowed(const gfx::Size& size) {
                                                     VAProfileNone);
   if (!profile_info)
     return false;
-  return gfx::Rect(profile_info->min_resolution.width(),
-                   profile_info->min_resolution.height(),
-                   profile_info->max_resolution.width(),
-                   profile_info->max_resolution.height())
-      .Contains(size.width(), size.height());
+
+  return size.width() >= profile_info->min_resolution.width() &&
+         size.width() <= profile_info->max_resolution.width() &&
+         size.height() >= profile_info->min_resolution.height() &&
+         size.height() <= profile_info->max_resolution.height();
 }
 
 // static
@@ -1773,7 +1759,7 @@ bool VaapiWrapper::CreateContextAndSurfaces(
 std::unique_ptr<ScopedVASurface> VaapiWrapper::CreateContextAndScopedVASurface(
     unsigned int va_format,
     const gfx::Size& size,
-    const base::Optional<gfx::Size>& visible_size) {
+    const absl::optional<gfx::Size>& visible_size) {
   if (va_context_id_ != VA_INVALID_ID) {
     LOG(ERROR) << "The current context should be destroyed before creating a "
                   "new one";
@@ -2057,7 +2043,8 @@ bool VaapiWrapper::CreateContext(const gfx::Size& size) {
 }
 
 scoped_refptr<VASurface> VaapiWrapper::CreateVASurfaceForPixmap(
-    scoped_refptr<gfx::NativePixmap> pixmap) {
+    scoped_refptr<gfx::NativePixmap> pixmap,
+    bool protected_content) {
   const gfx::BufferFormat buffer_format = pixmap->GetBufferFormat();
 
   // Create a VASurface for a NativePixmap by importing the underlying dmabufs.
@@ -2115,7 +2102,12 @@ scoped_refptr<VASurface> VaapiWrapper::CreateVASurfaceForPixmap(
   va_attribs[1].value.type = VAGenericValueTypePointer;
   va_attribs[1].value.value.p = &va_attrib_extbuf;
 
-  const unsigned int va_format = BufferFormatToVARTFormat(buffer_format);
+  unsigned int va_format = BufferFormatToVARTFormat(buffer_format);
+
+  if (protected_content) {
+    DCHECK_EQ(GetImplementationType(), VAImplementation::kMesaGallium);
+    va_format |= VA_RT_FORMAT_PROTECTED;
+  }
 
   VASurfaceID va_surface_id = VA_INVALID_ID;
   {
@@ -2557,7 +2549,10 @@ bool VaapiWrapper::DownloadFromVABuffer(VABufferID buffer_id,
   base::AutoLock auto_lock(*va_lock_);
   TRACE_EVENT0("media,gpu", "VaapiWrapper::DownloadFromVABufferLocked");
 
-  {
+  // vaSyncSurface() is not necessary on Intel platforms as long as there is a
+  // vaMapBuffer() like in ScopedVABufferMapping below, see b/184312032.
+  if (GetImplementationType() != VAImplementation::kIntelI965 &&
+      GetImplementationType() != VAImplementation::kIntelIHD) {
     TRACE_EVENT0("media,gpu", "VaapiWrapper::DownloadFromVABuffer_SyncSurface");
     const VAStatus va_res = vaSyncSurface(va_display_, sync_surface_id);
     VA_SUCCESS_OR_RETURN(va_res, VaapiFunctions::kVASyncSurface, false);
@@ -2630,8 +2625,8 @@ bool VaapiWrapper::IsRotationSupported() {
 
 bool VaapiWrapper::BlitSurface(const VASurface& va_surface_src,
                                const VASurface& va_surface_dest,
-                               base::Optional<gfx::Rect> src_rect,
-                               base::Optional<gfx::Rect> dest_rect,
+                               absl::optional<gfx::Rect> src_rect,
+                               absl::optional<gfx::Rect> dest_rect,
                                VideoRotation rotation) {
   DCHECK_EQ(mode_, kVideoProcess);
   base::AutoLock auto_lock(*va_lock_);
@@ -2738,7 +2733,7 @@ void VaapiWrapper::PreSandboxInitialization() {
   static bool result = InitializeStubs(paths);
   if (!result) {
     static const char kErrorMsg[] = "Failed to initialize VAAPI libs";
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if defined(OS_CHROMEOS)
     // When Chrome runs on Linux with target_os="chromeos", do not log error
     // message without VAAPI libraries.
     LOG_IF(ERROR, base::SysInfo::IsRunningOnChromeOS()) << kErrorMsg;
@@ -2771,11 +2766,10 @@ VaapiWrapper::~VaapiWrapper() {
   Deinitialize();
 }
 
-bool VaapiWrapper::Initialize(CodecMode mode,
-                              VAProfile va_profile,
+bool VaapiWrapper::Initialize(VAProfile va_profile,
                               EncryptionScheme encryption_scheme) {
 #if DCHECK_IS_ON()
-  if (mode == kEncodeConstantQuantizationParameter) {
+  if (mode_ == kEncodeConstantQuantizationParameter) {
     DCHECK_NE(va_profile, VAProfileJPEGBaseline)
         << "JPEG Encoding doesn't support CQP bitrate control";
   }
@@ -2783,15 +2777,16 @@ bool VaapiWrapper::Initialize(CodecMode mode,
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   if (encryption_scheme != EncryptionScheme::kUnencrypted &&
-      mode != kDecodeProtected)
+      mode_ != kDecodeProtected) {
     return false;
+  }
 #endif
 
-  const VAEntrypoint entrypoint = GetDefaultVaEntryPoint(mode, va_profile);
+  const VAEntrypoint entrypoint = GetDefaultVaEntryPoint(mode_, va_profile);
 
   base::AutoLock auto_lock(*va_lock_);
   std::vector<VAConfigAttrib> required_attribs;
-  if (!GetRequiredAttribs(va_lock_, va_display_, mode, va_profile, entrypoint,
+  if (!GetRequiredAttribs(va_lock_, va_display_, mode_, va_profile, entrypoint,
                           &required_attribs)) {
     return false;
   }
@@ -2927,7 +2922,7 @@ bool VaapiWrapper::CreateSurfaces(unsigned int va_format,
 std::unique_ptr<ScopedVASurface> VaapiWrapper::CreateScopedVASurface(
     unsigned int va_rt_format,
     const gfx::Size& size,
-    const base::Optional<gfx::Size>& visible_size,
+    const absl::optional<gfx::Size>& visible_size,
     uint32_t va_fourcc) {
   if (kInvalidVaRtFormat == va_rt_format) {
     LOG(ERROR) << "Invalid VA RT format to CreateScopedVASurface";

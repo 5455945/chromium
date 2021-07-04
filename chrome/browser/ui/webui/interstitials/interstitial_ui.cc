@@ -27,7 +27,7 @@
 #include "components/captive_portal/core/buildflags.h"
 #include "components/grit/dev_ui_components_resources.h"
 #include "components/lookalikes/core/lookalike_url_util.h"
-#include "components/safe_browsing/core/db/database_manager.h"
+#include "components/safe_browsing/core/browser/db/database_manager.h"
 #include "components/security_interstitials/content/bad_clock_blocking_page.h"
 #include "components/security_interstitials/content/blocked_interception_blocking_page.h"
 #include "components/security_interstitials/content/insecure_form_blocking_page.h"
@@ -87,8 +87,8 @@ scoped_refptr<net::X509Certificate> CreateFakeCert() {
     return nullptr;
   }
 
-  return net::X509Certificate::CreateFromBytes(cert_der.data(),
-                                               cert_der.size());
+  return net::X509Certificate::CreateFromBytes(
+      base::as_bytes(base::make_span(cert_der)));
 }
 
 // Implementation of chrome://interstitials demonstration pages. This code is
@@ -273,7 +273,7 @@ std::unique_ptr<LookalikeUrlBlockingPage> CreateLookalikeInterstitialPage(
   }
   return std::make_unique<LookalikeUrlBlockingPage>(
       web_contents, safe_url, request_url, ukm::kInvalidSourceId,
-      LookalikeUrlMatchType::kNone, false,
+      LookalikeUrlMatchType::kNone, false, /*triggered_by_initial_url=*/false,
       std::make_unique<LookalikeUrlControllerClient>(web_contents, request_url,
                                                      safe_url));
 }

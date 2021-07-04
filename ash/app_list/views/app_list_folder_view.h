@@ -13,33 +13,36 @@
 #include "ash/app_list/views/apps_grid_view_folder_delegate.h"
 #include "ash/app_list/views/folder_header_view.h"
 #include "ash/app_list/views/folder_header_view_delegate.h"
-#include "base/optional.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/compositor/throughput_tracker.h"
 #include "ui/views/controls/button/button.h"
-#include "ui/views/metadata/metadata_header_macros.h"
 #include "ui/views/view.h"
 #include "ui/views/view_model.h"
 
 namespace ash {
 
+class AppListA11yAnnouncer;
 class AppsContainerView;
-class AppsGridView;
 class AppListFolderItem;
 class AppListItemView;
 class AppListModel;
+class AppListViewDelegate;
 class FolderHeaderView;
+class PagedAppsGridView;
 class PageSwitcher;
 
-class APP_LIST_EXPORT AppListFolderView : public views::View,
-                                          public FolderHeaderViewDelegate,
-                                          public AppListModelObserver,
-                                          public AppsGridViewFolderDelegate {
+class ASH_EXPORT AppListFolderView : public views::View,
+                                     public FolderHeaderViewDelegate,
+                                     public AppListModelObserver,
+                                     public AppsGridViewFolderDelegate {
  public:
   METADATA_HEADER(AppListFolderView);
 
   AppListFolderView(AppsContainerView* container_view,
                     AppListModel* model,
-                    ContentsView* contents_view);
+                    ContentsView* contents_view,
+                    AppListA11yAnnouncer* a11y_announcer,
+                    AppListViewDelegate* view_delegate);
   AppListFolderView(const AppListFolderView&) = delete;
   AppListFolderView& operator=(const AppListFolderView&) = delete;
   ~AppListFolderView() override;
@@ -89,11 +92,11 @@ class APP_LIST_EXPORT AppListFolderView : public views::View,
   // closing the folder.
   bool IsAnimationRunning() const;
 
-  // Helper for getting current app list config from the parents in the app list
-  // view hierarchy.
-  const AppListConfig& GetAppListConfig() const;
+  // Sets the bounding box for the folder view bounds. The bounds are expected
+  // to be in the parent view's coordinate system.
+  void SetBoundingBox(const gfx::Rect& bounding_box);
 
-  AppsGridView* items_grid_view() { return items_grid_view_; }
+  PagedAppsGridView* items_grid_view() { return items_grid_view_; }
 
   FolderHeaderView* folder_header_view() { return folder_header_view_; }
 
@@ -119,24 +122,10 @@ class APP_LIST_EXPORT AppListFolderView : public views::View,
   // Called when tablet mode starts and ends.
   void OnTabletModeChanged(bool started);
 
- private:
-  void CalculateIdealBounds();
-
-  // Starts setting up drag in root level apps grid view for re-parenting a
-  // folder item.
-  // |drag_point_in_root_grid| is in the coordinates of root level AppsGridView.
-  void StartSetupDragInRootLevelAppsGridView(
-      AppListItemView* original_drag_view,
-      const gfx::Point& drag_point_in_root_grid,
-      bool has_native_drag);
-
   // Overridden from views::View:
   void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
 
   // Overridden from FolderHeaderViewDelegate:
-  void NavigateBack(AppListFolderItem* item,
-                    const ui::Event& event_flags) override;
-  void GiveBackFocusToSearchBox() override;
   void SetItemName(AppListFolderItem* item, const std::string& name) override;
 
   // Overridden from AppsGridViewFolderDelegate:
@@ -153,18 +142,30 @@ class APP_LIST_EXPORT AppListFolderView : public views::View,
   void SetRootLevelDragViewVisible(bool visible) override;
   void HandleKeyboardReparent(AppListItemView* reparented_view,
                               ui::KeyboardCode key_code) override;
+  void UpdateFolderBounds() override;
+
+  const AppListConfig& GetAppListConfig() const;
+
+ private:
+  void CalculateIdealBounds();
+
+  // Starts setting up drag in root level apps grid view for re-parenting a
+  // folder item. `drag_point_in_root_grid` is in the coordinates of root
+  // level AppsGridView.
+  void StartSetupDragInRootLevelAppsGridView(
+      AppListItemView* original_drag_view,
+      const gfx::Point& drag_point_in_root_grid,
+      bool has_native_drag);
 
   // Returns the compositor associated to the widget containing this view.
   // Returns nullptr if there isn't one associated with this widget.
   ui::Compositor* GetCompositor();
 
-  // Creates accessibility event for opening folder if |open| is true.
-  // Otherwise, creates the event for closing folder.
-  void CreateOpenOrCloseFolderAccessibilityEvent(bool open);
-
   // Views below are not owned by views hierarchy.
   AppsContainerView* container_view_;
-  ContentsView* contents_view_;
+
+  // Used to send accessibility alerts. Owned by the parent apps container.
+  AppListA11yAnnouncer* const a11y_announcer_;
 
   // The view is used to draw a background with corner radius.
   views::View* background_view_;  // Owned by views hierarchy.
@@ -173,7 +174,7 @@ class APP_LIST_EXPORT AppListFolderView : public views::View,
   views::View* contents_container_;  // Owned by views hierarchy.
 
   FolderHeaderView* folder_header_view_;  // Owned by views hierarchy.
-  AppsGridView* items_grid_view_;         // Owned by views hierarchy.
+  PagedAppsGridView* items_grid_view_;    // Owned by views hierarchy.
   PageSwitcher* page_switcher_;           // Owned by views hierarchy.
 
   std::unique_ptr<views::ViewModel> view_model_;
@@ -187,6 +188,10 @@ class APP_LIST_EXPORT AppListFolderView : public views::View,
   // The preferred bounds of this view relative to AppsContainerView.
   gfx::Rect preferred_bounds_;
 
+  // The bounds of the box within which the folder view can be shown. The bounds
+  // are relative the the parent view's coordinate system.
+  gfx::Rect bounding_box_;
+
   bool hide_for_reparent_ = false;
 
   std::unique_ptr<Animation> background_animation_;
@@ -195,7 +200,7 @@ class APP_LIST_EXPORT AppListFolderView : public views::View,
   std::unique_ptr<Animation> contents_container_animation_;
 
   // Records smoothness of the folder show/hide animation.
-  base::Optional<ui::ThroughputTracker> show_hide_metrics_tracker_;
+  absl::optional<ui::ThroughputTracker> show_hide_metrics_tracker_;
 };
 
 }  // namespace ash

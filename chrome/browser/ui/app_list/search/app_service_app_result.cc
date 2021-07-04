@@ -21,9 +21,9 @@
 #include "chrome/browser/ui/app_list/app_service/app_service_app_item.h"
 #include "chrome/browser/ui/app_list/app_service/app_service_context_menu.h"
 #include "chrome/browser/ui/app_list/internal_app/internal_app_metadata.h"
-#include "chrome/browser/ui/ash/launcher/chrome_launcher_controller.h"
+#include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/web_applications/system_web_app_ui_utils.h"
-#include "chrome/browser/web_applications/system_web_app_manager.h"
+#include "chrome/browser/web_applications/system_web_apps/system_web_app_manager.h"
 #include "chrome/common/chrome_features.h"
 #include "components/favicon/core/large_icon_service.h"
 #include "components/services/app_service/public/cpp/app_update.h"
@@ -43,11 +43,9 @@ AppServiceAppResult::AppServiceAppResult(Profile* profile,
       app_type_(apps::mojom::AppType::kUnknown),
       is_platform_app_(false),
       show_in_launcher_(false) {
-  apps::AppServiceProxy* proxy =
-      apps::AppServiceProxyFactory::GetForProfile(profile);
-
-  proxy->AppRegistryCache().ForOneApp(
-      app_id, [this](const apps::AppUpdate& update) {
+  apps::AppServiceProxyFactory::GetForProfile(profile)
+      ->AppRegistryCache()
+      .ForOneApp(app_id, [this](const apps::AppUpdate& update) {
         app_type_ = update.AppType();
         is_platform_app_ =
             update.IsPlatformApp() == apps::mojom::OptionalBool::kTrue;
@@ -130,8 +128,9 @@ ash::SearchResultType AppServiceAppResult::GetSearchResultType() const {
       return ash::CROSTINI_APP;
     case apps::mojom::AppType::kExtension:
     case apps::mojom::AppType::kWeb:
+    case apps::mojom::AppType::kSystemWeb:
       return ash::EXTENSION_APP;
-    case apps::mojom::AppType::kLacros:
+    case apps::mojom::AppType::kStandaloneBrowser:
       return ash::LACROS;
     case apps::mojom::AppType::kRemote:
       return ash::REMOTE_APP;
@@ -163,12 +162,12 @@ void AppServiceAppResult::Launch(int event_flags,
     return;
   }
 
-  apps::AppServiceProxy* proxy =
+  apps::AppServiceProxyChromeOs* proxy =
       apps::AppServiceProxyFactory::GetForProfile(profile());
 
   // For Chrome apps or Web apps, if it is non-platform app, it could be
   // selecting an existing delegate for the app, so call
-  // ChromeLauncherController's ActivateApp interface. Platform apps or ARC
+  // ChromeShelfController's ActivateApp interface. Platform apps or ARC
   // apps, Crostini apps treat activations as a launch. The app can decide
   // whether to show a new window or focus an existing window as it sees fit.
   //
@@ -185,7 +184,7 @@ void AppServiceAppResult::Launch(int event_flags,
         }
       });
   if (is_active_app) {
-    ChromeLauncherController::instance()->ActivateApp(
+    ChromeShelfController::instance()->ActivateApp(
         app_id(), ash::LAUNCH_FROM_APP_LIST_SEARCH, event_flags,
         controller()->GetAppListDisplayId());
   } else {
@@ -205,8 +204,9 @@ void AppServiceAppResult::CallLoadIcon(bool chip, bool allow_placeholder_icon) {
             : apps::mojom::IconType::kUncompressed;
     icon_loader_releaser_ = icon_loader_->LoadIcon(
         app_type_, app_id(), icon_type,
-        chip ? ash::AppListConfig::instance().suggestion_chip_icon_dimension()
-             : ash::AppListConfig::instance().GetPreferredIconDimension(
+        chip ? ash::SharedAppListConfig::instance()
+                   .suggestion_chip_icon_dimension()
+             : ash::SharedAppListConfig::instance().GetPreferredIconDimension(
                    display_type()),
         allow_placeholder_icon,
         base::BindOnce(&AppServiceAppResult::OnLoadIcon,
@@ -251,7 +251,7 @@ void AppServiceAppResult::HandleSuggestionChip(Profile* profile) {
 
 void AppServiceAppResult::UpdateContinueReadingFavicon(
     bool continue_to_google_server) {
-  base::string16 title;
+  std::u16string title;
   GURL url;
   if (app_list::HasRecommendableForeignTab(profile(), &title, &url,
                                            /*test_delegate=*/nullptr)) {

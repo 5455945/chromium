@@ -29,7 +29,6 @@
 
 namespace media {
 
-class CameraAppDeviceBridgeImpl;
 class CameraBufferFactory;
 class VideoCaptureDeviceChromeOSDelegate;
 
@@ -66,8 +65,7 @@ class CAPTURE_EXPORT CameraHalDelegate final
   std::unique_ptr<VideoCaptureDevice> CreateDevice(
       scoped_refptr<base::SingleThreadTaskRunner>
           task_runner_for_screen_observer,
-      const VideoCaptureDeviceDescriptor& device_descriptor,
-      CameraAppDeviceBridgeImpl* app_device_bridge);
+      const VideoCaptureDeviceDescriptor& device_descriptor);
   void GetDevicesInfo(
       VideoCaptureDeviceFactory::GetDevicesInfoCallback callback);
 
@@ -95,6 +93,8 @@ class CAPTURE_EXPORT CameraHalDelegate final
 
   void EnableVirtualDevice(const std::string& device_id, bool enable);
 
+  void DisableAllVirtualDevices();
+
  private:
   friend class base::RefCountedThreadSafe<CameraHalDelegate>;
 
@@ -108,8 +108,7 @@ class CAPTURE_EXPORT CameraHalDelegate final
   VideoCaptureDeviceChromeOSDelegate* GetVCDDelegate(
       scoped_refptr<base::SingleThreadTaskRunner>
           task_runner_for_screen_observer,
-      const VideoCaptureDeviceDescriptor& device_descriptor,
-      CameraAppDeviceBridgeImpl* camera_app_device_bridge);
+      const VideoCaptureDeviceDescriptor& device_descriptor);
 
   void SetCameraModuleOnIpcThread(
       mojo::PendingRemote<cros::mojom::CameraModule> camera_module);

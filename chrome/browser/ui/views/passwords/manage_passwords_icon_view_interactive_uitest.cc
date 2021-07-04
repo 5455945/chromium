@@ -58,13 +58,11 @@ class ManagePasswordsIconViewTest : public ManagePasswordsTest,
     return static_cast<ManagePasswordsIconViews*>(view);
   }
 
-  base::string16 GetTooltipText() {
+  std::u16string GetTooltipText() {
     return GetView()->GetTooltipText(gfx::Point());
   }
 
-  const gfx::ImageSkia& GetImage() {
-    return GetView()->GetImageView()->GetImage();
-  }
+  gfx::ImageSkia GetImage() { return GetView()->GetImageView()->GetImage(); }
 
   void WaitForAnimationToEnd() {
     auto* const animating_layout = GetAnimatingLayoutManager();
@@ -107,7 +105,7 @@ IN_PROC_BROWSER_TEST_P(ManagePasswordsIconViewTest, PendingState) {
   WaitForAnimationToEnd();
   EXPECT_TRUE(GetView()->GetVisible());
   // No tooltip because the bubble is showing.
-  EXPECT_EQ(base::string16(), GetTooltipText());
+  EXPECT_EQ(std::u16string(), GetTooltipText());
   const gfx::ImageSkia active_image = GetImage();
 }
 

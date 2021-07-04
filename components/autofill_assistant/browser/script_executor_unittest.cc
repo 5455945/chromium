@@ -57,13 +57,15 @@ class ScriptExecutorTest : public testing::Test,
     delegate_.SetWebController(&mock_web_controller_);
     delegate_.SetCurrentURL(GURL("http://example.com/"));
 
+    TriggerContext::Options options;
+    options.experiment_ids = "additional_exp";
     executor_ = std::make_unique<ScriptExecutor>(
         kScriptPath,
         std::make_unique<TriggerContext>(
             std::make_unique<ScriptParameters>(
                 std::map<std::string, std::string>{
                     {"additional_param", "additional_param_value"}}),
-            TriggerContext::Options{.experiment_ids = "additional_exp"}),
+            options),
         /* global_payload= */ "initial global payload",
         /* script_payload= */ "initial payload",
         /* listener= */ this, &scripts_state_, &ordered_interrupts_,
@@ -71,17 +73,9 @@ class ScriptExecutorTest : public testing::Test,
 
     test_util::MockFindAnyElement(mock_web_controller_);
 
-    // In this test, "tell" actions always succeed and "click" actions,
-    // always fail. The following makes a click action fail.
-    ON_CALL(mock_web_controller_, OnWaitForDocumentReadyState(_, _, _))
-        .WillByDefault(RunOnceCallback<2>(OkClientStatus(), DOCUMENT_COMPLETE,
-                                          base::TimeDelta::FromSeconds(0)));
-    ON_CALL(mock_web_controller_, ScrollIntoView(_, _))
-        .WillByDefault(RunOnceCallback<1>(OkClientStatus()));
-    ON_CALL(mock_web_controller_, WaitUntilElementIsStable(_, _, _, _))
-        .WillByDefault(RunOnceCallback<3>(OkClientStatus(),
-                                          base::TimeDelta::FromSeconds(0)));
-    ON_CALL(mock_web_controller_, OnClickOrTapElement(_, _))
+    // In this test, "tell" actions always succeed and "highlight element"
+    // actions always fail.
+    ON_CALL(mock_web_controller_, HighlightElement(_, _))
         .WillByDefault(RunOnceCallback<1>(ClientStatus(UNEXPECTED_JS_ERROR)));
   }
 
@@ -191,10 +185,12 @@ TEST_F(ScriptExecutorTest, GetActionsFails) {
 }
 
 TEST_F(ScriptExecutorTest, ForwardParameters) {
+  TriggerContext::Options options;
+  options.experiment_ids = "exp";
   delegate_.SetTriggerContext(std::make_unique<TriggerContext>(
       std::make_unique<ScriptParameters>(
           std::map<std::string, std::string>{{"param", "value"}}),
-      TriggerContext::Options{.experiment_ids = "exp"}));
+      options));
   EXPECT_CALL(mock_service_, OnGetActions(StrEq(kScriptPath), _, _, _, _, _))
       .WillOnce(Invoke([](const std::string& script_path, const GURL& url,
                           const TriggerContext& trigger_context,
@@ -223,8 +219,9 @@ TEST_F(ScriptExecutorTest, ForwardParameters) {
 
 TEST_F(ScriptExecutorTest, RunOneActionReportAndReturn) {
   ActionsResponseProto actions_response;
-  *actions_response.add_actions()->mutable_click()->mutable_element_to_click() =
-      ToSelectorProto("will fail");
+  *actions_response.add_actions()
+       ->mutable_highlight_element()
+       ->mutable_element() = ToSelectorProto("will fail");
 
   EXPECT_CALL(mock_service_, OnGetActions(_, _, _, _, _, _))
       .WillOnce(RunOnceCallback<5>(net::HTTP_OK, Serialize(actions_response)));
@@ -769,8 +766,8 @@ TEST_F(ScriptExecutorTest, InterruptActionListOnError) {
   initial_actions_response.add_actions()->mutable_tell()->set_message(
       "will pass");
   *initial_actions_response.add_actions()
-       ->mutable_click()
-       ->mutable_element_to_click() = ToSelectorProto("will fail");
+       ->mutable_highlight_element()
+       ->mutable_element() = ToSelectorProto("will fail");
   initial_actions_response.add_actions()->mutable_tell()->set_message(
       "never run");
 
@@ -2005,13 +2002,10 @@ TEST_F(ScriptExecutorTest, ReportDirectActionsChoices) {
 
   ASSERT_NE(nullptr, delegate_.GetUserActions());
   ASSERT_THAT(*delegate_.GetUserActions(), SizeIs(1));
+  TriggerContext::Options options;
+  options.is_direct_action = true;
   (*delegate_.GetUserActions())[0].Call(std::make_unique<TriggerContext>(
-      /* parameters = */ std::make_unique<ScriptParameters>(),
-      /* experiment_ids = */ std::string(),
-      /* is_cct = */ false,
-      /* onboarding_shown = */ false,
-      /* is_direct_action = */ true,
-      /* caller_account_hash = */ std::string()));
+      std::make_unique<ScriptParameters>(), options));
 
   ASSERT_THAT(processed_actions_capture, SizeIs(1));
   EXPECT_TRUE(processed_actions_capture[0].direct_action());
@@ -2131,6 +2125,24 @@ TEST_F(ScriptExecutorTest, RoundtripTimingStats) {
 
   EXPECT_EQ(200, timing_stats.roundtrip_time_ms());
   EXPECT_EQ(1000, timing_stats.client_time_ms());
+}
+
+TEST_F(ScriptExecutorTest, ClearPersistentUiOnError) {
+  ActionsResponseProto actions_response;
+  actions_response.add_actions()->mutable_tell()->set_message("1");
+  EXPECT_CALL(mock_service_, OnGetActions(_, _, _, _, _, _))
+      .WillOnce(RunOnceCallback<5>(net::HTTP_OK, Serialize(actions_response)));
+  EXPECT_CALL(mock_service_, OnGetNextActions(_, _, _, _, _, _))
+      .WillOnce(RunOnceCallback<5>(net::HTTP_UNAUTHORIZED, ""));
+  EXPECT_CALL(executor_callback_,
+              Run(Field(&ScriptExecutor::Result::success, false)));
+
+  // empty, but not null
+  delegate_.SetPersistentGenericUi(
+      std::make_unique<GenericUserInterfaceProto>(), base::DoNothing());
+  ASSERT_NE(nullptr, delegate_.GetPersistentGenericUi());
+  executor_->Run(&user_data_, executor_callback_.Get());
+  ASSERT_EQ(nullptr, delegate_.GetPersistentGenericUi());
 }
 
 }  // namespace

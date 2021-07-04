@@ -11,16 +11,15 @@
 #include "base/notreached.h"
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
-#include "chrome/browser/chromeos/login/error_screens_histogram_helper.h"
-#include "chrome/browser/chromeos/login/screen_manager.h"
-#include "chrome/browser/chromeos/login/screens/error_screen.h"
-#include "chrome/browser/chromeos/login/screens/network_error.h"
-#include "chrome/browser/chromeos/login/wizard_controller.h"
+#include "chrome/browser/ash/login/error_screens_histogram_helper.h"
+#include "chrome/browser/ash/login/screen_manager.h"
+#include "chrome/browser/ash/login/screens/error_screen.h"
+#include "chrome/browser/ash/login/screens/network_error.h"
+#include "chrome/browser/ash/login/wizard_controller.h"
 #include "chromeos/network/network_state.h"
 #include "chromeos/network/network_state_handler.h"
 
-namespace chromeos {
-
+namespace ash {
 namespace {
 
 NetworkPortalDetector::CaptivePortalStatus GetCaptivePortalStatus() {
@@ -306,4 +305,4 @@ bool AutoEnrollmentCheckScreen::ShouldBlockOnServerError() const {
   }
 }
 
-}  // namespace chromeos
+}  // namespace ash

@@ -58,7 +58,7 @@ ASH_PUBLIC_EXPORT extern const char
 ASH_PUBLIC_EXPORT extern const char
     kAccessibilityTabletModeShelfNavigationButtonsEnabled[];
 ASH_PUBLIC_EXPORT extern const char kAccessibilityDictationEnabled[];
-ASH_PUBLIC_EXPORT extern const char kLiveCaptionEnabled[];
+ASH_PUBLIC_EXPORT extern const char kAccessibilityDictationLocale[];
 ASH_PUBLIC_EXPORT extern const char kShouldAlwaysShowAccessibilityMenu[];
 
 ASH_PUBLIC_EXPORT extern const char kAltTabPerDesk[];
@@ -66,6 +66,8 @@ ASH_PUBLIC_EXPORT extern const char kAltTabPerDesk[];
 ASH_PUBLIC_EXPORT extern const char kContextualTooltips[];
 
 ASH_PUBLIC_EXPORT extern const char kDesksNamesList[];
+ASH_PUBLIC_EXPORT extern const char kDesksMetricsList[];
+ASH_PUBLIC_EXPORT extern const char kDesksWeeklyActiveDesksMetrics[];
 ASH_PUBLIC_EXPORT extern const char kDesksActiveDesk[];
 
 ASH_PUBLIC_EXPORT extern const char kDockedMagnifierEnabled[];
@@ -102,6 +104,8 @@ ASH_PUBLIC_EXPORT extern const char kHasSeenStylus[];
 ASH_PUBLIC_EXPORT extern const char kShownPaletteWelcomeBubble[];
 ASH_PUBLIC_EXPORT extern const char kEnableStylusTools[];
 ASH_PUBLIC_EXPORT extern const char kLaunchPaletteOnEjectEvent[];
+ASH_PUBLIC_EXPORT extern const char
+    kLocalStateDevicePeripheralDataAccessEnabled[];
 
 ASH_PUBLIC_EXPORT extern const char kCanCellularSetupNotificationBeShown[];
 
@@ -116,6 +120,8 @@ ASH_PUBLIC_EXPORT extern const char kMessageCenterLockScreenModeHide[];
 ASH_PUBLIC_EXPORT extern const char kMessageCenterLockScreenModeHideSensitive[];
 
 ASH_PUBLIC_EXPORT extern const char kAmbientColorEnabled[];
+ASH_PUBLIC_EXPORT extern const char kColorModeThemed[];
+ASH_PUBLIC_EXPORT extern const char kDarkModeEnabled[];
 ASH_PUBLIC_EXPORT extern const char kNightLightEnabled[];
 ASH_PUBLIC_EXPORT extern const char kNightLightTemperature[];
 ASH_PUBLIC_EXPORT extern const char kNightLightScheduleType[];
@@ -167,9 +173,12 @@ ASH_PUBLIC_EXPORT extern const char kShelfPreferences[];
 
 ASH_PUBLIC_EXPORT extern const char kShowLogoutButtonInTray[];
 ASH_PUBLIC_EXPORT extern const char kLogoutDialogDurationMs[];
+ASH_PUBLIC_EXPORT extern const char kSuggestLogoutAfterClosingLastWindow[];
 
 ASH_PUBLIC_EXPORT extern const char kUserWallpaperInfo[];
 ASH_PUBLIC_EXPORT extern const char kWallpaperColors[];
+ASH_PUBLIC_EXPORT extern const char kSyncableWallpaperInfo[];
+ASH_PUBLIC_EXPORT extern const char kWallpaperCollectionId[];
 
 ASH_PUBLIC_EXPORT extern const char kUserBluetoothAdapterEnabled[];
 ASH_PUBLIC_EXPORT extern const char kSystemBluetoothAdapterEnabled[];
@@ -218,9 +227,6 @@ ASH_PUBLIC_EXPORT extern const char kMouseReverseScroll[];
 
 ASH_PUBLIC_EXPORT extern const char kMultipasteNudges[];
 
-ASH_PUBLIC_EXPORT extern const char kDarkModeEnabled[];
-ASH_PUBLIC_EXPORT extern const char kColorModeThemed[];
-
 ASH_PUBLIC_EXPORT extern const char kAppNotificationBadgingEnabled[];
 
 ASH_PUBLIC_EXPORT extern const char kGlobalMediaControlsPinned[];
@@ -228,6 +234,10 @@ ASH_PUBLIC_EXPORT extern const char kGlobalMediaControlsPinned[];
 ASH_PUBLIC_EXPORT extern const char
     kPciePeripheralDisplayNotificationRemaining[];
 
+ASH_PUBLIC_EXPORT extern const char kLastUsedImeShortcutReminderDismissed[];
+ASH_PUBLIC_EXPORT extern const char kNextImeShortcutReminderDismissed[];
+
+ASH_PUBLIC_EXPORT extern const char kImprovedShortcutsNotificationShownCount[];
 }  // namespace prefs
 
 }  // namespace ash

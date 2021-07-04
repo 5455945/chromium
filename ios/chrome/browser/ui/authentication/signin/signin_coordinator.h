@@ -9,6 +9,7 @@
 
 #import "base/ios/block_types.h"
 #import "components/signin/public/base/signin_metrics.h"
+#import "ios/chrome/browser/ui/authentication/signin/signin_completion_info.h"
 #import "ios/chrome/browser/ui/authentication/signin/signin_constants.h"
 #import "ios/chrome/browser/ui/coordinators/chrome_coordinator.h"
 
@@ -17,6 +18,9 @@ class Browser;
 namespace syncer {
 enum class KeyRetrievalTriggerForUMA;
 }  // namespace syncer
+namespace user_prefs {
+class PrefRegistrySyncable;
+}  // namespace user_prefs
 
 // Main class for sign-in coordinator. This class should not be instantiated
 // directly, this should be done using the class methods.
@@ -30,6 +34,9 @@ enum class KeyRetrievalTriggerForUMA;
 // Google services settings.
 @property(nonatomic, assign, readonly, getter=isSettingsViewPresented)
     BOOL settingsViewPresented;
+
+// Registers preferences related to sign-in coordinator.
++ (void)registerBrowserStatePrefs:(user_prefs::PrefRegistrySyncable*)registry;
 
 // Returns a coordinator for user sign-in workflow.
 // |viewController| presents the sign-in.
@@ -100,21 +107,26 @@ enum class KeyRetrievalTriggerForUMA;
 // Vault for the primary identity. This is done with ChromeTrustedVaultService.
 // Related to IOSTrustedVaultClient.
 // |viewController| presents the sign-in.
-// |retrievalTrigger| UI elements where the trusted vault reauth has been
-// triggered.
+// |intent| Dialog to present.
+// |trigger| UI elements where the trusted vault reauth has been triggered.
 + (instancetype)
-    trustedVaultReAuthenticationCoordiantorWithBaseViewController:
+    trustedVaultReAuthenticationCoordinatorWithBaseViewController:
         (UIViewController*)viewController
                                                           browser:
                                                               (Browser*)browser
-                                                 retrievalTrigger:
-                                                     (syncer::
-                                                          KeyRetrievalTriggerForUMA)
-                                                         retrievalTrigger;
+                                                           intent:
+                                                (SigninTrustedVaultDialogIntent)
+                                                                   intent
+                                                          trigger:
+                                                              (syncer::
+                                                      KeyRetrievalTriggerForUMA)
+                                                                  trigger;
 
 // Returns a coordinator to display the account consistency promo with a list
 // of accounts available on the device for sign-in.
 // |viewController| presents the promo.
+// This method can return nil if sign-in is not authorized or if there is no
+// account on the device.
 + (instancetype)
     consistencyPromoSigninCoordinatorWithBaseViewController:
         (UIViewController*)viewController

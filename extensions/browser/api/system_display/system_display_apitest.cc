@@ -4,13 +4,14 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <set>
 #include <utility>
 
 #include "base/bind.h"
+#include "base/containers/contains.h"
 #include "base/debug/leak_annotations.h"
 #include "base/macros.h"
-#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
@@ -101,7 +102,7 @@ class MockDisplayInfoProvider : public DisplayInfoProvider {
     set_info_value_ = properties.ToValue();
     set_info_display_id_ = display_id;
     base::ThreadTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, base::BindOnce(std::move(callback), base::nullopt));
+        FROM_HERE, base::BindOnce(std::move(callback), absl::nullopt));
   }
 
   void EnableUnifiedDesktop(bool enable) override {
@@ -167,15 +168,15 @@ class MockDisplayInfoProvider : public DisplayInfoProvider {
     base::ThreadTaskRunnerHandle::Get()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback),
                                   native_touch_calibration_success_
-                                      ? base::nullopt
-                                      : base::Optional<std::string>("failed")));
+                                      ? absl::nullopt
+                                      : absl::optional<std::string>("failed")));
   }
 
   void SetMirrorMode(const api::system_display::MirrorModeInfo& info,
                      ErrorCallback callback) override {
     mirror_mode_ = info.mode;
     base::ThreadTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, base::BindOnce(std::move(callback), base::nullopt));
+        FROM_HERE, base::BindOnce(std::move(callback), absl::nullopt));
   }
 
  private:
@@ -221,14 +222,19 @@ class SystemDisplayApiTest : public ShellApiTest {
   SystemDisplayApiTest()
       : provider_(new MockDisplayInfoProvider), screen_(new MockScreen) {}
 
-  ~SystemDisplayApiTest() override {}
+  ~SystemDisplayApiTest() override = default;
 
   void SetUpOnMainThread() override {
     ShellApiTest::SetUpOnMainThread();
-    ANNOTATE_LEAKING_OBJECT_PTR(display::Screen::GetScreen());
+    ANNOTATE_LEAKING_OBJECT_PTR(Screen::GetScreen());
     scoped_screen_override_ =
         std::make_unique<ScopedScreenOverride>(screen_.get());
     DisplayInfoProvider::InitializeForTesting(provider_.get());
+  }
+
+  void TearDownOnMainThread() override {
+    ShellApiTest::TearDownOnMainThread();
+    scoped_screen_override_.reset();
   }
 
  protected:
@@ -236,10 +242,10 @@ class SystemDisplayApiTest : public ShellApiTest {
                const api::system_display::DisplayProperties& properties) {
     provider_->SetDisplayProperties(
         display_id, properties,
-        base::BindOnce([](base::Optional<std::string>) {}));
+        base::BindOnce([](absl::optional<std::string>) {}));
   }
   std::unique_ptr<MockDisplayInfoProvider> provider_;
-  std::unique_ptr<display::Screen> screen_;
+  std::unique_ptr<Screen> screen_;
   std::unique_ptr<ScopedScreenOverride> scoped_screen_override_;
 
  private:
@@ -475,9 +481,8 @@ IN_PROC_BROWSER_TEST_F(SystemDisplayApiTest, ShowNativeTouchCalibration) {
           show_native_calibration.get(), "[\"" + id + "\"]",
           browser_context()));
 
-  bool callback_result;
-  ASSERT_TRUE(result->GetAsBoolean(&callback_result));
-  ASSERT_TRUE(callback_result);
+  ASSERT_TRUE(result->is_bool());
+  EXPECT_TRUE(result->GetBool());
 }
 
 IN_PROC_BROWSER_TEST_F(SystemDisplayApiTest, SetMirrorMode) {

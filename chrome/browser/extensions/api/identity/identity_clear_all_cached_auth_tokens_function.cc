@@ -5,8 +5,8 @@
 #include "chrome/browser/extensions/api/identity/identity_clear_all_cached_auth_tokens_function.h"
 
 #include "base/bind.h"
+#include "base/cxx17_backports.h"
 #include "base/location.h"
-#include "base/stl_util.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/extensions/api/identity/identity_api.h"
 #include "chrome/browser/extensions/api/identity/identity_constants.h"
@@ -40,8 +40,9 @@ IdentityClearAllCachedAuthTokensFunction::Run() {
   id_api->token_cache()->EraseAllTokensForExtension(extension()->id());
 
   for (WebAuthFlow::Partition partition : kPartitionsToClean) {
-    content::BrowserContext::GetStoragePartition(
-        profile, WebAuthFlow::GetWebViewPartitionConfig(partition, profile))
+    profile
+        ->GetStoragePartition(
+            WebAuthFlow::GetWebViewPartitionConfig(partition, profile))
         ->GetCookieManagerForBrowserProcess()
         ->DeleteCookies(
             network::mojom::CookieDeletionFilter::New(),

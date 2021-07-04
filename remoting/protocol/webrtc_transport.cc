@@ -5,6 +5,7 @@
 #include "remoting/protocol/webrtc_transport.h"
 
 #include <algorithm>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -14,7 +15,6 @@
 #include "base/command_line.h"
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
@@ -33,7 +33,6 @@
 #include "remoting/protocol/transport.h"
 #include "remoting/protocol/transport_context.h"
 #include "remoting/protocol/webrtc_audio_module.h"
-#include "remoting/protocol/webrtc_dummy_video_encoder.h"
 #include "third_party/libjingle_xmpp/xmllite/xmlelement.h"
 #include "third_party/webrtc/api/audio_codecs/audio_decoder_factory_template.h"
 #include "third_party/webrtc/api/audio_codecs/audio_encoder_factory_template.h"
@@ -174,25 +173,25 @@ std::string GetTransportProtocol(
 // Returns true if the RTC stats report indicates a relay connection. If the
 // connection type cannot be determined (which should never happen with a valid
 // RTCStatsReport), nullopt is returned.
-base::Optional<bool> IsConnectionRelayed(
+absl::optional<bool> IsConnectionRelayed(
     const rtc::scoped_refptr<const webrtc::RTCStatsReport>& report) {
   const webrtc::RTCIceCandidatePairStats* selected_candidate_pair =
       GetSelectedCandidatePair(report);
   if (!selected_candidate_pair) {
-    return base::nullopt;
+    return absl::nullopt;
   }
   const auto* local_candidate =
       GetIceCandidate<webrtc::RTCLocalIceCandidateStats>(
           report, *selected_candidate_pair->local_candidate_id);
   if (!local_candidate) {
-    return base::nullopt;
+    return absl::nullopt;
   }
   std::string local_candidate_type = *local_candidate->candidate_type;
   const auto* remote_candidate =
       GetIceCandidate<webrtc::RTCRemoteIceCandidateStats>(
           report, *selected_candidate_pair->remote_candidate_id);
   if (!remote_candidate) {
-    return base::nullopt;
+    return absl::nullopt;
   }
   std::string remote_candidate_type = *remote_candidate->candidate_type;
 
@@ -407,9 +406,14 @@ class WebrtcTransport::PeerConnectionWrapper
 
     webrtc::PeerConnectionDependencies dependencies(this);
     dependencies.allocator = std::move(port_allocator);
-    peer_connection_ = peer_connection_factory_->CreatePeerConnection(
+    auto result = peer_connection_factory_->CreatePeerConnectionOrError(
         rtc_config, std::move(dependencies));
-
+    if (!result.ok()) {
+      LOG(ERROR) << "CreatePeerConnection() failed: "
+                 << result.error().message();
+      return;
+    }
+    peer_connection_ = result.MoveValue();
     thread_join_watchdog_ = std::make_unique<ThreadJoinWatchdog>();
   }
 
@@ -511,19 +515,18 @@ class WebrtcTransport::PeerConnectionWrapper
 WebrtcTransport::WebrtcTransport(
     rtc::Thread* worker_thread,
     scoped_refptr<TransportContext> transport_context,
+    std::unique_ptr<webrtc::VideoEncoderFactory> video_encoder_factory,
     EventHandler* event_handler)
     : transport_context_(transport_context),
       event_handler_(event_handler),
       handshake_hmac_(crypto::HMAC::SHA256) {
-  video_encoder_factory_ = new WebrtcDummyVideoEncoderFactory();
   std::unique_ptr<cricket::PortAllocator> port_allocator =
       transport_context_->port_allocator_factory()->CreatePortAllocator(
           transport_context_, weak_factory_.GetWeakPtr());
 
-  // Takes ownership of video_encoder_factory_.
-  peer_connection_wrapper_.reset(new PeerConnectionWrapper(
-      worker_thread, base::WrapUnique(video_encoder_factory_),
-      std::move(port_allocator), weak_factory_.GetWeakPtr()));
+  peer_connection_wrapper_ = std::make_unique<PeerConnectionWrapper>(
+      worker_thread, std::move(video_encoder_factory),
+      std::move(port_allocator), weak_factory_.GetWeakPtr());
 
   StartRtcEventLogging();
 }
@@ -555,7 +558,12 @@ std::unique_ptr<MessagePipe> WebrtcTransport::CreateOutgoingChannel(
     const std::string& name) {
   webrtc::DataChannelInit config;
   config.reliable = true;
-  auto data_channel = peer_connection()->CreateDataChannel(name, &config);
+  auto result = peer_connection()->CreateDataChannelOrError(name, &config);
+  if (!result.ok()) {
+    LOG(ERROR) << "CreateDataChannel() failed: " << result.error().message();
+    return nullptr;
+  }
+  auto data_channel = result.MoveValue();
   if (name == kControlChannelName) {
     DCHECK(!control_data_channel_);
     control_data_channel_ = data_channel;
@@ -710,8 +718,8 @@ const SessionOptions& WebrtcTransport::session_options() const {
 }
 
 void WebrtcTransport::SetPreferredBitrates(
-    base::Optional<int> min_bitrate_bps,
-    base::Optional<int> max_bitrate_bps) {
+    absl::optional<int> min_bitrate_bps,
+    absl::optional<int> max_bitrate_bps) {
   preferred_min_bitrate_bps_ = min_bitrate_bps;
   preferred_max_bitrate_bps_ = max_bitrate_bps;
   if (connected_) {
@@ -832,7 +840,7 @@ void WebrtcTransport::Close(ErrorCode error) {
 void WebrtcTransport::ApplySessionOptions(const SessionOptions& options) {
   DCHECK(thread_checker_.CalledOnValidThread());
   session_options_ = options;
-  base::Optional<std::string> video_codec = options.Get("Video-Codec");
+  absl::optional<std::string> video_codec = options.Get("Video-Codec");
   if (video_codec) {
     preferred_video_codec_ = *video_codec;
   }
@@ -1111,7 +1119,7 @@ void WebrtcTransport::OnStatsDelivered(
     event_handler_->OnWebrtcTransportProtocolChanged();
   }
 
-  base::Optional<bool> connection_relayed = IsConnectionRelayed(report);
+  absl::optional<bool> connection_relayed = IsConnectionRelayed(report);
   if (connection_relayed == connection_relayed_) {
     // No change in connection type. Unknown -> direct/relayed is treated as a
     // change, so the correct initial bitrate caps are set.
@@ -1272,8 +1280,8 @@ void WebrtcTransport::EnsurePendingTransportInfoMessage() {
             transport_info_timer_.IsRunning());
 
   if (!pending_transport_info_message_) {
-    pending_transport_info_message_.reset(
-        new XmlElement(QName(kTransportNamespace, "transport"), true));
+    pending_transport_info_message_ = std::make_unique<XmlElement>(
+        QName(kTransportNamespace, "transport"), true);
 
     // Delay sending the new candidates in case we get more candidates
     // that we can send in one message.

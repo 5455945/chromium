@@ -4,14 +4,14 @@
 
 #include "ash/shelf/shelf_widget.h"
 
+#include <memory>
 #include <utility>
 
 #include "ash/animation/animation_change_type.h"
 #include "ash/app_list/app_list_controller_impl.h"
+#include "ash/constants/ash_features.h"
 #include "ash/focus_cycler.h"
 #include "ash/keyboard/ui/keyboard_ui_controller.h"
-#include "ash/public/cpp/ash_features.h"
-#include "ash/public/cpp/ash_switches.h"
 #include "ash/public/cpp/shelf_config.h"
 #include "ash/public/cpp/shelf_model.h"
 #include "ash/public/cpp/window_properties.h"
@@ -35,6 +35,7 @@
 #include "ash/system/status_area_widget.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "ash/wm/work_area_insets.h"
+#include "base/bind.h"
 #include "base/command_line.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_owner.h"
@@ -217,7 +218,6 @@ ShelfWidget::DelegateView::DelegateView(ShelfWidget* shelf_widget, Shelf* shelf)
   animating_background_.Add(&animating_drag_handle_);
 
   DCHECK(shelf_widget_);
-  set_owned_by_client();
   SetOwnedByWidget(true);
 
   set_allow_deactivate_on_esc(true);
@@ -333,7 +333,7 @@ void ShelfWidget::DelegateView::UpdateOpaqueBackground() {
   // when dragged away.
   // To achieve this, we extend the layer in the same direction where the shelf
   // is aligned (downwards for a bottom shelf, etc.).
-  const int radius = ShelfConfig::Get()->shelf_size() / 2;
+  const float radius = ShelfConfig::Get()->shelf_size() / 2.0f;
   // We can easily round only 2 corners out of 4 which means we don't need as
   // much extra shelf height.
   const int safety_margin = kShelfMaxOvershootHeight;
@@ -350,10 +350,10 @@ void ShelfWidget::DelegateView::UpdateOpaqueBackground() {
     opaque_background()->SetRoundedCornerRadius({0, 0, 0, 0});
   } else {
     opaque_background()->SetRoundedCornerRadius({
-        shelf->SelectValueForShelfAlignment(radius, 0, radius),
-        shelf->SelectValueForShelfAlignment(radius, radius, 0),
-        shelf->SelectValueForShelfAlignment(0, radius, 0),
-        shelf->SelectValueForShelfAlignment(0, 0, radius),
+        shelf->SelectValueForShelfAlignment(radius, 0.0f, radius),
+        shelf->SelectValueForShelfAlignment(radius, radius, 0.0f),
+        shelf->SelectValueForShelfAlignment(0.0f, radius, 0.0f),
+        shelf->SelectValueForShelfAlignment(0.0f, 0.0f, radius),
     });
   }
   opaque_background()->SetBounds(opaque_background_bounds);
@@ -503,7 +503,7 @@ bool ShelfWidget::IsHotseatForcedShowInTabletMode() const {
 }
 
 bool ShelfWidget::SetLoginShelfSwipeHandler(
-    const base::string16& nudge_text,
+    const std::u16string& nudge_text,
     const base::RepeatingClosure& fling_callback,
     base::OnceClosure exit_callback) {
   if (!login_shelf_view_->GetVisible())
@@ -641,7 +641,8 @@ int ShelfWidget::GetBackgroundAlphaValue(
 void ShelfWidget::RegisterHotseatWidget(HotseatWidget* hotseat_widget) {
   // Show a context menu for right clicks anywhere on the shelf widget.
   delegate_view_->set_context_menu_controller(hotseat_widget->GetShelfView());
-  hotseat_transition_animator_.reset(new HotseatTransitionAnimator(this));
+  hotseat_transition_animator_ =
+      std::make_unique<HotseatTransitionAnimator>(this);
   hotseat_transition_animator_->AddObserver(delegate_view_);
   shelf_->hotseat_widget()->OnHotseatTransitionAnimatorCreated(
       hotseat_transition_animator());
@@ -796,7 +797,7 @@ void ShelfWidget::UpdateLayout(bool animate) {
   hide_animation_observer_.reset();
   const float target_opacity = layout_manager->GetOpacity();
   if (GetLayer()->opacity() != target_opacity) {
-    if (target_opacity == 0) {
+    if (target_opacity == 0 && animate) {
       // On hide, set the opacity after the animation completes.
       hide_animation_observer_ =
           std::make_unique<HideAnimationObserver>(GetLayer());
@@ -945,7 +946,7 @@ bool ShelfWidget::HandleLoginShelfGestureEvent(
 void ShelfWidget::OnMouseEvent(ui::MouseEvent* event) {
   if (event->IsMouseWheelEvent()) {
     ui::MouseWheelEvent* mouse_wheel_event = event->AsMouseWheelEvent();
-    shelf_->ProcessMouseWheelEvent(mouse_wheel_event, /*from_touchpad=*/false);
+    shelf_->ProcessMouseWheelEvent(mouse_wheel_event);
     return;
   }
 

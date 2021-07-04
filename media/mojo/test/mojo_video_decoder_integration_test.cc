@@ -8,13 +8,12 @@
 #include <stdint.h>
 
 #include "base/bind.h"
-#include "base/callback_forward.h"
 #include "base/callback_helpers.h"
+#include "base/cxx17_backports.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/single_thread_task_runner.h"
-#include "base/stl_util.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
@@ -67,10 +66,8 @@ class MockVideoDecoder : public VideoDecoder {
  public:
   MockVideoDecoder() {
     // Treat const getters like a NiceMock.
-    EXPECT_CALL(*this, GetDisplayName())
-        .WillRepeatedly(Return("MockVideoDecoder"));
     EXPECT_CALL(*this, GetDecoderType())
-        .WillRepeatedly(Return(VideoDecoderType::kUnknown));
+        .WillRepeatedly(Return(VideoDecoderType::kTesting));
     EXPECT_CALL(*this, NeedsBitstreamConversion())
         .WillRepeatedly(Return(false));
     EXPECT_CALL(*this, CanReadWithoutStalling()).WillRepeatedly(Return(true));
@@ -88,7 +85,6 @@ class MockVideoDecoder : public VideoDecoder {
   ~MockVideoDecoder() override {}
 
   // media::VideoDecoder implementation
-  MOCK_CONST_METHOD0(GetDisplayName, std::string());
   MOCK_CONST_METHOD0(GetDecoderType, VideoDecoderType());
 
   // Initialize() records values before delegating to the mock method.
@@ -189,7 +185,6 @@ class FakeMojoMediaClient : public MojoMediaClient {
       scoped_refptr<base::SingleThreadTaskRunner> task_runner,
       MediaLog* media_log,
       mojom::CommandBufferIdPtr command_buffer_id,
-      VideoDecoderImplementation implementation,
       RequestOverlayInfoCB request_overlay_info_cb,
       const gfx::ColorSpace& target_color_space) override {
     return create_video_decoder_cb_.Run(media_log);
@@ -237,8 +232,7 @@ class MojoVideoDecoderIntegrationTest : public ::testing::Test {
     // be tested.
     client_ = std::make_unique<MojoVideoDecoder>(
         base::ThreadTaskRunnerHandle::Get(), nullptr, &client_media_log_,
-        CreateRemoteVideoDecoder(), VideoDecoderImplementation::kDefault,
-        RequestOverlayInfoCB(), gfx::ColorSpace());
+        CreateRemoteVideoDecoder(), RequestOverlayInfoCB(), gfx::ColorSpace());
     if (writer_capacity_)
       client_->set_writer_capacity_for_testing(writer_capacity_);
   }
@@ -253,6 +247,7 @@ class MojoVideoDecoderIntegrationTest : public ::testing::Test {
     StrictMock<base::MockCallback<VideoDecoder::InitCB>> init_cb;
     EXPECT_CALL(init_cb, Run(_)).WillOnce(SaveArg<0>(&result));
 
+    EXPECT_EQ(client_->GetDecoderType(), VideoDecoderType::kUnknown);
     client_->Initialize(TestVideoConfig::NormalH264(), false, nullptr,
                         init_cb.Get(), output_cb_.Get(), waiting_cb_.Get());
     RunUntilIdle();
@@ -385,7 +380,7 @@ TEST_F(MojoVideoDecoderIntegrationTest, GetSupportedConfigs) {
 
 TEST_F(MojoVideoDecoderIntegrationTest, Initialize) {
   ASSERT_TRUE(Initialize());
-  EXPECT_EQ(client_->GetDisplayName(), "MojoVideoDecoder");
+  EXPECT_EQ(client_->GetDecoderType(), VideoDecoderType::kTesting);
   EXPECT_EQ(client_->NeedsBitstreamConversion(), false);
   EXPECT_EQ(client_->CanReadWithoutStalling(), true);
   EXPECT_EQ(client_->GetMaxDecodeRequests(), kMaxDecodeRequests);

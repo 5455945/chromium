@@ -7,13 +7,12 @@
 #include <stdint.h>
 
 #include <algorithm>  // std::find
-#include <cstdint>
 #include <memory>
 #include <set>
 #include <sstream>
 #include <utility>
 
-#include "ash/public/cpp/ash_features.h"
+#include "ash/constants/ash_features.h"
 #include "base/bind.h"
 #include "base/containers/contains.h"
 #include "base/feature_list.h"
@@ -23,9 +22,11 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/system/sys_info.h"
 #include "base/time/time.h"
+#include "chrome/browser/ash/login/session/user_session_manager.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part_chromeos.h"
 #include "chrome/browser/chrome_notification_types.h"
@@ -35,7 +36,6 @@
 #include "chrome/browser/chromeos/input_method/ui/input_method_menu_item.h"
 #include "chrome/browser/chromeos/input_method/ui/input_method_menu_manager.h"
 #include "chrome/browser/chromeos/language_preferences.h"
-#include "chrome/browser/chromeos/login/session/user_session_manager.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/keyboard/chrome_keyboard_controller_client.h"
 #include "chrome/common/chrome_features.h"
@@ -53,12 +53,20 @@
 #include "ui/base/ime/chromeos/ime_keyboard.h"
 #include "ui/base/ime/chromeos/ime_keyboard_impl.h"
 #include "ui/base/ime/chromeos/input_method_delegate.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/ozone/public/ozone_platform.h"
 
 namespace chromeos {
 namespace input_method {
 
 namespace {
+
+const char* const kNonPositionalLayouts[] = {
+    "de(neo)",    "gb(dvorak)", "tr(f)",       "us(colemak)",
+    "us(dvorak)", "us(dvp)",    "us(workman)", "us(workman-intl)",
+};
+
+const size_t kNonPositionalLayoutsLength = base::size(kNonPositionalLayouts);
 
 enum InputMethodCategory {
   INPUT_METHOD_CATEGORY_UNKNOWN = 0,
@@ -961,6 +969,14 @@ InputMethodManagerImpl::InputMethodManagerImpl(
       util_(delegate_.get()),
       enable_extension_loading_(enable_extension_loading),
       features_enabled_state_(InputMethodManager::FEATURE_ALL) {
+  if (::features::IsImprovedKeyboardShortcutsEnabled()) {
+    // Create a set of layouts that do not use positional shortcuts.
+    non_positional_layouts_.reserve(kNonPositionalLayoutsLength);
+    for (size_t i = 0; i < kNonPositionalLayoutsLength; i++) {
+      non_positional_layouts_.emplace(kNonPositionalLayouts[i]);
+    }
+  }
+
   if (IsRunningAsSystemCompositor()) {
     keyboard_ = std::make_unique<ImeKeyboardImpl>(
         ui::OzonePlatform::GetInstance()->GetInputController());
@@ -1200,6 +1216,15 @@ bool InputMethodManagerImpl::IsISOLevel5ShiftUsedByCurrentInputMethod() const {
 
 bool InputMethodManagerImpl::IsAltGrUsedByCurrentInputMethod() const {
   return keyboard_->IsAltGrAvailable();
+}
+
+bool InputMethodManagerImpl::ArePositionalShortcutsUsedByCurrentInputMethod()
+    const {
+  if (!state_ || !::features::IsImprovedKeyboardShortcutsEnabled())
+    return false;
+
+  return !non_positional_layouts_.contains(
+      state_.get()->GetCurrentInputMethod().keyboard_layout());
 }
 
 ImeKeyboard* InputMethodManagerImpl::GetImeKeyboard() {

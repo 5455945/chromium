@@ -9,7 +9,6 @@
 #include "base/android/jni_string.h"
 #include "base/check.h"
 #include "base/notreached.h"
-#include "base/optional.h"
 #include "cc/layers/layer.h"
 #include "content/browser/accessibility/browser_accessibility_manager_android.h"
 #include "content/browser/android/content_ui_event_handler.h"
@@ -27,6 +26,7 @@
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/drop_data.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/android/overscroll_refresh_handler.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/clipboard_constants.h"
@@ -151,7 +151,7 @@ gfx::Rect WebContentsViewAndroid::GetContainerBounds() const {
   return GetViewBounds();
 }
 
-void WebContentsViewAndroid::SetPageTitle(const base::string16& title) {
+void WebContentsViewAndroid::SetPageTitle(const std::u16string& title) {
   // Do nothing.
 }
 
@@ -356,7 +356,7 @@ bool WebContentsViewAndroid::OnDragEvent(const ui::DragEventAndroid& event) {
   switch (event.action()) {
     case JNI_DragEvent::ACTION_DRAG_ENTERED: {
       std::vector<DropData::Metadata> metadata;
-      for (const base::string16& mime_type : event.mime_types()) {
+      for (const std::u16string& mime_type : event.mime_types()) {
         metadata.push_back(DropData::Metadata::CreateForMimeType(
             DropData::Kind::STRING, mime_type));
       }
@@ -370,9 +370,9 @@ bool WebContentsViewAndroid::OnDragEvent(const ui::DragEventAndroid& event) {
       DropData drop_data;
       drop_data.did_originate_from_renderer = false;
       JNIEnv* env = AttachCurrentThread();
-      base::string16 drop_content =
+      std::u16string drop_content =
           ConvertJavaStringToUTF16(env, event.GetJavaContent());
-      for (const base::string16& mime_type : event.mime_types()) {
+      for (const std::u16string& mime_type : event.mime_types()) {
         if (base::EqualsASCII(mime_type, ui::kMimeTypeURIList)) {
           drop_data.url = GURL(drop_content);
         } else if (base::EqualsASCII(mime_type, ui::kMimeTypeText)) {
@@ -409,9 +409,10 @@ void WebContentsViewAndroid::OnDragEntered(
   blink::DragOperationsMask allowed_ops =
       static_cast<blink::DragOperationsMask>(blink::kDragOperationCopy |
                                              blink::kDragOperationMove);
-  web_contents_->GetRenderViewHost()->GetWidget()->
-      DragTargetDragEnterWithMetaData(metadata, location, screen_location,
-                                      allowed_ops, 0);
+  web_contents_->GetRenderViewHost()
+      ->GetWidget()
+      ->DragTargetDragEnterWithMetaData(metadata, location, screen_location,
+                                        allowed_ops, 0, base::DoNothing());
 }
 
 void WebContentsViewAndroid::OnDragUpdated(const gfx::PointF& location,
@@ -423,7 +424,7 @@ void WebContentsViewAndroid::OnDragUpdated(const gfx::PointF& location,
       static_cast<blink::DragOperationsMask>(blink::kDragOperationCopy |
                                              blink::kDragOperationMove);
   web_contents_->GetRenderViewHost()->GetWidget()->DragTargetDragOver(
-      location, screen_location, allowed_ops, 0);
+      location, screen_location, allowed_ops, 0, base::DoNothing());
 }
 
 void WebContentsViewAndroid::OnDragExited() {
@@ -437,7 +438,7 @@ void WebContentsViewAndroid::OnPerformDrop(DropData* drop_data,
   web_contents_->Focus();
   web_contents_->GetRenderViewHost()->GetWidget()->FilterDropData(drop_data);
   web_contents_->GetRenderViewHost()->GetWidget()->DragTargetDrop(
-      *drop_data, location, screen_location, 0);
+      *drop_data, location, screen_location, 0, base::DoNothing());
 }
 
 void WebContentsViewAndroid::OnSystemDragEnded() {
@@ -454,7 +455,8 @@ void WebContentsViewAndroid::OnSystemDragEnded() {
 
 void WebContentsViewAndroid::OnDragEnded() {
   web_contents_->GetRenderViewHost()->GetWidget()->DragSourceEndedAt(
-      drag_location_, drag_screen_location_, ui::mojom::DragOperation::kNone);
+      drag_location_, drag_screen_location_, ui::mojom::DragOperation::kNone,
+      base::DoNothing());
   OnSystemDragEnded();
 
   drag_location_ = gfx::PointF();
@@ -574,12 +576,12 @@ void WebContentsViewAndroid::OnSizeChanged() {
   if (rwhv) {
     web_contents_->SendScreenRects();
     rwhv->SynchronizeVisualProperties(cc::DeadlinePolicy::UseDefaultDeadline(),
-                                      base::nullopt);
+                                      absl::nullopt);
   }
 }
 
 void WebContentsViewAndroid::OnPhysicalBackingSizeChanged(
-    base::Optional<base::TimeDelta> deadline_override) {
+    absl::optional<base::TimeDelta> deadline_override) {
   if (web_contents_->GetRenderWidgetHostView())
     web_contents_->SendScreenRects();
 }
@@ -588,14 +590,14 @@ void WebContentsViewAndroid::OnBrowserControlsHeightChanged() {
   auto* rwhv = GetRenderWidgetHostViewAndroid();
   if (rwhv)
     rwhv->SynchronizeVisualProperties(cc::DeadlinePolicy::UseDefaultDeadline(),
-                                      base::nullopt);
+                                      absl::nullopt);
 }
 
 void WebContentsViewAndroid::OnControlsResizeViewChanged() {
   auto* rwhv = GetRenderWidgetHostViewAndroid();
   if (rwhv)
     rwhv->SynchronizeVisualProperties(cc::DeadlinePolicy::UseDefaultDeadline(),
-                                      base::nullopt);
+                                      absl::nullopt);
 }
 
 void WebContentsViewAndroid::NotifyVirtualKeyboardOverlayRect(

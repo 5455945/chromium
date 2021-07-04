@@ -15,14 +15,20 @@ class PrefRegistrySimple;
 
 namespace enterprise_connectors {
 
+// The unique key for the Box service provider.  This is used to generate the
+// correct network annotation tag as well as possible parameters in the
+// access token consent URL.
+constexpr char kBoxProviderName[] = "box";
+
 // Helper class to retrieve an access token for a file system service provider.
 class AccessTokenFetcher : public OAuth2AccessTokenFetcherImpl,
                            public OAuth2AccessTokenConsumer {
  public:
   // Used in OnGetTokenSuccess/Failure; arguments are access_token and
   // refresh_token.
-  using TokenCallback =
-      base::OnceCallback<void(bool, const std::string&, const std::string&)>;
+  using TokenCallback = base::OnceCallback<void(const GoogleServiceAuthError&,
+                                                const std::string&,
+                                                const std::string&)>;
 
   AccessTokenFetcher(
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
@@ -30,6 +36,7 @@ class AccessTokenFetcher : public OAuth2AccessTokenFetcherImpl,
       const GURL& token_endpoint,
       const std::string& refresh_token,
       const std::string& auth_code,
+      const std::string& consumer_name,
       TokenCallback callback);
   ~AccessTokenFetcher() override;
 
@@ -42,10 +49,12 @@ class AccessTokenFetcher : public OAuth2AccessTokenFetcherImpl,
   // OAuth2AccessTokenConsumer interface.
   void OnGetTokenSuccess(const TokenResponse& token_response) override;
   void OnGetTokenFailure(const GoogleServiceAuthError& error) override;
+  std::string GetConsumerName() const override;
 
  private:
   GURL token_endpoint_;
   net::NetworkTrafficAnnotationTag annotation_;
+  const std::string consumer_name_;
   TokenCallback callback_;
 };
 
@@ -61,6 +70,14 @@ bool SetFileSystemOAuth2Tokens(PrefService* prefs,
                                const std::string& service_provider,
                                const std::string& access_token,
                                const std::string& refresh_token);
+
+// Clears the OAuth2 tokens for the given service provider.
+bool ClearFileSystemAccessToken(PrefService* prefs,
+                                const std::string& service_provider);
+bool ClearFileSystemRefreshToken(PrefService* prefs,
+                                 const std::string& service_provider);
+bool ClearFileSystemOAuth2Tokens(PrefService* prefs,
+                                 const std::string& service_provider);
 
 // Retrieves the OAuth2 tokens for the given service provider.  If a token
 // argument is null that token is not retrieved.  Returns true if all requested

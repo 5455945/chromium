@@ -8,11 +8,13 @@
 #include <utility>
 
 #include "base/bind.h"
-#include "base/scoped_observer.h"
+#include "base/containers/contains.h"
+#include "base/scoped_observation.h"
 #include "base/strings/strcat.h"
+#include "components/back_forward_cache/back_forward_cache_disable.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/navigation_handle.h"
-#include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_document_host_user_data.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -32,6 +34,61 @@ std::string PortIdToString(const extensions::PortId& port_id) {
                        base::NumberToString(port_id.GetChannelId().second)});
 }
 
+// This class is created per RenderDocument. It stores the set of
+// ExtensionMessagePort objects that have the associated `RenderFrameHost` in
+// the `ExtensionMessagePort::frames_` set.
+class MessagePortStatePerRenderDocument
+    : public content::RenderDocumentHostUserData<
+          MessagePortStatePerRenderDocument> {
+ public:
+  ~MessagePortStatePerRenderDocument() override {
+    if (!ports_opened_.empty()) {
+      // Clear the disable reason as the new document may reuse the
+      // RenderFrameHost.
+      content::BackForwardCache::ClearDisableReasonForRenderFrameHost(
+          rfh_id_, back_forward_cache::DisabledReason(
+                       back_forward_cache::DisabledReasonId::
+                           kExtensionMessagingForOpenPort));
+    }
+  }
+
+  void PortOpened(extensions::ExtensionMessagePort* port) {
+    ports_opened_.insert(port);
+    if (ports_opened_.size() != 1)
+      return;
+    content::BackForwardCache::DisableForRenderFrameHost(
+        rfh_id_, back_forward_cache::DisabledReason(
+                     back_forward_cache::DisabledReasonId::
+                         kExtensionMessagingForOpenPort));
+  }
+
+  void PortClosed(extensions::ExtensionMessagePort* port) {
+    if (ports_opened_.erase(port) == 0)
+      return;
+
+    if (!ports_opened_.empty())
+      return;
+
+    content::BackForwardCache::ClearDisableReasonForRenderFrameHost(
+        rfh_id_, back_forward_cache::DisabledReason(
+                     back_forward_cache::DisabledReasonId::
+                         kExtensionMessagingForOpenPort));
+  }
+
+ private:
+  explicit MessagePortStatePerRenderDocument(content::RenderFrameHost* rfh)
+      : rfh_id_(rfh->GetGlobalId()) {}
+  friend class content::RenderDocumentHostUserData<
+      MessagePortStatePerRenderDocument>;
+
+  std::set<extensions::ExtensionMessagePort*> ports_opened_;
+  const content::GlobalRenderFrameHostId rfh_id_;
+
+  RENDER_DOCUMENT_HOST_USER_DATA_KEY_DECL();
+};
+
+RENDER_DOCUMENT_HOST_USER_DATA_KEY_IMPL(MessagePortStatePerRenderDocument)
+
 }  // namespace
 
 namespace extensions {
@@ -44,12 +101,11 @@ const char kReceivingEndDoesntExistError[] =
 class ExtensionMessagePort::FrameTracker : public content::WebContentsObserver,
                                            public ProcessManagerObserver {
  public:
-  explicit FrameTracker(ExtensionMessagePort* port)
-      : pm_observer_(this), port_(port) {}
+  explicit FrameTracker(ExtensionMessagePort* port) : port_(port) {}
   ~FrameTracker() override {}
 
   void TrackExtensionProcessFrames() {
-    pm_observer_.Add(ProcessManager::Get(port_->browser_context_));
+    pm_observation_.Observe(ProcessManager::Get(port_->browser_context_));
   }
 
   void TrackTabFrames(content::WebContents* tab) {
@@ -83,7 +139,8 @@ class ExtensionMessagePort::FrameTracker : public content::WebContentsObserver,
     port_->UnregisterWorker(worker_id);
   }
 
-  ScopedObserver<ProcessManager, ProcessManagerObserver> pm_observer_;
+  base::ScopedObservation<ProcessManager, ProcessManagerObserver>
+      pm_observation_{this};
   ExtensionMessagePort* port_;  // Owns this FrameTracker.
 
   DISALLOW_COPY_AND_ASSIGN(FrameTracker);
@@ -151,9 +208,11 @@ ExtensionMessagePort::ExtensionMessagePort(
 ExtensionMessagePort::ExtensionMessagePort(
     base::WeakPtr<ChannelDelegate> channel_delegate,
     const PortId& port_id,
+    const ExtensionId& extension_id,
     content::BrowserContext* browser_context)
     : weak_channel_delegate_(channel_delegate),
       port_id_(port_id),
+      extension_id_(extension_id),
       browser_context_(browser_context) {}
 
 // static
@@ -172,18 +231,36 @@ std::unique_ptr<ExtensionMessagePort> ExtensionMessagePort::CreateForEndpoint(
   // NOTE: We don't want all the workers within the extension, so we cannot
   // reuse other constructor from above.
   std::unique_ptr<ExtensionMessagePort> port(new ExtensionMessagePort(
-      channel_delegate, port_id, endpoint.browser_context()));
+      channel_delegate, port_id, extension_id, endpoint.browser_context()));
+  port->frame_tracker_ = std::make_unique<FrameTracker>(port.get());
+  port->frame_tracker_->TrackExtensionProcessFrames();
   port->RegisterWorker(endpoint.GetWorkerId());
   return port;
 }
 
-ExtensionMessagePort::~ExtensionMessagePort() {}
+ExtensionMessagePort::~ExtensionMessagePort() {
+  ClearFrames();
+}
+
+void ExtensionMessagePort::ClearFrames() {
+  for (auto* rfh : frames_) {
+    auto* message_port_state =
+        MessagePortStatePerRenderDocument::GetForCurrentDocument(rfh);
+    if (message_port_state)
+      message_port_state->PortClosed(this);
+  }
+  frames_.clear();
+}
 
 void ExtensionMessagePort::RemoveCommonFrames(const MessagePort& port) {
   // Avoid overlap in the set of frames to make sure that it does not matter
   // when UnregisterFrame is called.
   for (auto it = frames_.begin(); it != frames_.end();) {
     if (port.HasFrame(*it)) {
+      auto* message_port_state =
+          MessagePortStatePerRenderDocument::GetForCurrentDocument(*it);
+      if (message_port_state)
+        message_port_state->PortClosed(this);
       frames_.erase(it++);
     } else {
       ++it;
@@ -241,7 +318,7 @@ void ExtensionMessagePort::DispatchOnConnect(
     const MessagingEndpoint& source_endpoint,
     const std::string& target_extension_id,
     const GURL& source_url,
-    base::Optional<url::Origin> source_origin) {
+    absl::optional<url::Origin> source_origin) {
   SendToPort(base::BindRepeating(
       &ExtensionMessagePort::BuildDispatchOnConnectIPC,
       // Called synchronously.
@@ -322,7 +399,7 @@ void ExtensionMessagePort::ClosePort(int process_id,
     // The only non-frame-specific message is the response to an unhandled
     // onConnect event in the extension process.
     DCHECK(extension_process_);
-    frames_.clear();
+    ClearFrames();
     if (!HasReceivers())
       CloseChannel();
     return;
@@ -349,12 +426,23 @@ void ExtensionMessagePort::RegisterFrame(content::RenderFrameHost* rfh) {
   // ensure that we are notified of frame destruction. Without this check,
   // |frames_| can eventually contain a stale pointer because RenderFrameDeleted
   // is not triggered for |rfh|.
-  if (rfh->IsRenderFrameLive())
+  if (rfh->IsRenderFrameLive()) {
+    auto* message_port_state =
+        MessagePortStatePerRenderDocument::GetOrCreateForCurrentDocument(rfh);
+    message_port_state->PortOpened(this);
     frames_.insert(rfh);
+  }
 }
 
 void ExtensionMessagePort::UnregisterFrame(content::RenderFrameHost* rfh) {
-  if (frames_.erase(rfh) != 0 && !HasReceivers())
+  if (frames_.erase(rfh) == 0)
+    return;
+  auto* message_port_state =
+      MessagePortStatePerRenderDocument::GetForCurrentDocument(rfh);
+  if (message_port_state)
+    message_port_state->PortClosed(this);
+
+  if (!HasReceivers())
     CloseChannel();
 }
 
@@ -455,7 +543,7 @@ std::unique_ptr<IPC::Message> ExtensionMessagePort::BuildDispatchOnConnectIPC(
     const MessagingEndpoint& source_endpoint,
     const std::string& target_extension_id,
     const GURL& source_url,
-    base::Optional<url::Origin> source_origin,
+    absl::optional<url::Origin> source_origin,
     const IPCTarget& target) {
   ExtensionMsg_TabConnectionInfo source;
   if (source_tab) {

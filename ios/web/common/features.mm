@@ -4,6 +4,8 @@
 
 #include "ios/web/common/features.h"
 
+#include "base/metrics/field_trial_params.h"
+
 #if !defined(__has_feature) || !__has_feature(objc_arc)
 #error "This file requires ARC support."
 #endif
@@ -41,8 +43,6 @@ const base::Feature kUseDefaultUserAgentInWebClient{
 const base::Feature kPreserveScrollViewProperties{
     "PreserveScrollViewProperties", base::FEATURE_ENABLED_BY_DEFAULT};
 
-const base::Feature kScrollToTextIOS{"ScrollToTextIOS",
-                                     base::FEATURE_ENABLED_BY_DEFAULT};
 const base::Feature kIOSLegacyTLSInterstitial{"IOSLegacyTLSInterstitial",
                                               base::FEATURE_ENABLED_BY_DEFAULT};
 
@@ -87,6 +87,10 @@ bool UseWebViewNativeContextMenuSystem() {
 
 const base::Feature kIOSSharedHighlightingColorChange{
     "IOSSharedHighlightingColorChange", base::FEATURE_DISABLED_BY_DEFAULT};
+
+const base::Feature kCreatePendingItemForPostFormSubmission{
+    "CreatePendingItemForPostFormSubmission",
+    base::FEATURE_DISABLED_BY_DEFAULT};
 
 }  // namespace features
 }  // namespace web

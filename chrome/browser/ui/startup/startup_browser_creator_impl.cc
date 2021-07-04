@@ -20,12 +20,13 @@
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/apps/platform_apps/install_chrome_app.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/buildflags.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry_factory.h"
 #include "chrome/browser/defaults.h"
 #include "chrome/browser/extensions/extension_checkup.h"
-#include "chrome/browser/infobars/infobar_service.h"
+#include "chrome/browser/infobars/simple_alert_infobar_creator.h"
 #include "chrome/browser/obsolete_system/obsolete_system.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/profiles/profile.h"
@@ -52,9 +53,12 @@
 #include "chrome/browser/ui/startup/startup_tab_provider.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/welcome/helpers.h"
+#include "chrome/browser/web_applications/web_app_provider.h"
+#include "chrome/browser/web_applications/web_app_provider_factory.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
+#include "components/infobars/content/content_infobar_manager.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/child_process_security_policy.h"
 #include "content/public/browser/dom_storage_context.h"
@@ -78,16 +82,50 @@
 #include "components/rlz/rlz_tracker.h"  // nogncheck
 #endif
 
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+#include "chrome/browser/ash/crosapi/browser_util.h"
+#include "components/full_restore/features.h"
+#include "components/full_restore/full_restore_utils.h"
+#endif
+
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
+#include "chrome/browser/lacros/account_manager_util.h"
 #include "chrome/browser/lacros/lacros_prefs.h"
-#include "chrome/grit/generated_resources.h"
-#include "components/infobars/core/simple_alert_infobar_delegate.h"
-#include "ui/base/l10n/l10n_util.h"
+#include "chrome/browser/lacros/lacros_startup_infobar_delegate.h"
+#include "chromeos/lacros/lacros_service.h"
+#endif
+
+#if BUILDFLAG(ENABLE_APP_SESSION_SERVICE)
+#include "chrome/browser/sessions/app_session_service.h"
+#include "chrome/browser/sessions/app_session_service_factory.h"
 #endif
 
 namespace {
 
 // Utility functions ----------------------------------------------------------
+
+#if BUILDFLAG(ENABLE_APP_SESSION_SERVICE)
+// In ChromeOS, if the full restore feature is disabled, always restores apps
+// unconditionally. If the full restore feature is enabled, check the previous
+// apps launching history info to decide whether restore apps.
+//
+// In other platforms, restore apps only when the browser is automatically
+// restarted.
+bool ShouldRestoreApps(bool is_post_restart, Profile* profile) {
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+  // If the full restore feature is enabled, check the full restore file.
+  // Restore apps only when there are apps launched before reboot.
+  if (full_restore::features::IsFullRestoreEnabled())
+    return full_restore::HasAppTypeBrowser(profile->GetPath());
+
+  // If the full restore feature is disabled, always restores apps
+  // unconditionally.
+  return true;
+#else
+  return is_post_restart;
+#endif
+}
+#endif
 
 void UrlsToTabs(const std::vector<GURL>& urls, StartupTabs* tabs) {
   for (const GURL& url : urls) {
@@ -229,12 +267,21 @@ Browser* StartupBrowserCreatorImpl::OpenTabsInBrowser(Browser* browser,
     profile_ = browser->profile();
 
   if (!browser || !browser->is_type_normal()) {
+    // In some conditions a new browser object cannot be created. The most
+    // common reason for not being able to create browser is having this call
+    // when the browser process is shutting down. This can also fail if the
+    // passed profile is of a type that is not suitable for browser creation.
+    if (Browser::GetCreationStatusForProfile(profile_) !=
+        Browser::CreationStatus::kOk) {
+      return nullptr;
+    }
     // Startup browsers are not counted as being created by a user_gesture
     // because of historical accident, even though the startup browser was
     // created in response to the user clicking on chrome. There was an
     // incomplete check on whether a user gesture created a window which looked
     // at the state of the MessageLoop.
     Browser::CreateParams params = Browser::CreateParams(profile_, false);
+    params.creation_source = Browser::CreationSource::kStartupCreator;
     browser = Browser::Create(params);
   }
 
@@ -290,8 +337,7 @@ Browser* StartupBrowserCreatorImpl::OpenTabsInBrowser(Browser* browser,
 void StartupBrowserCreatorImpl::DetermineURLsAndLaunch(
     bool process_startup,
     const std::vector<GURL>& cmd_line_urls) {
-  // Don't open any browser windows if starting up in "background mode".
-  if (command_line_.HasSwitch(switches::kNoStartupWindow))
+  if (!ShouldLaunch(command_line_))
     return;
 
   StartupTabs cmd_line_tabs;
@@ -339,6 +385,11 @@ void StartupBrowserCreatorImpl::DetermineURLsAndLaunch(
   welcome_enabled =
       welcome::IsEnabled(profile_) && welcome::HasModulesToShow(profile_);
 #endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+  if (IsAccountManagerAvailable(profile_))
+    welcome_enabled = false;
+#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
 
   bool serve_extensions_page =
       extensions::ShouldShowExtensionsCheckupOnStartup(profile_);
@@ -436,6 +487,7 @@ StartupTabs StartupBrowserCreatorImpl::DetermineStartupTabs(
 
     StartupTabs onboarding_tabs;
     if (promotional_tabs_enabled) {
+#if defined(OS_WIN)
       // This is a launch from a prompt presented to an inactive user who chose
       // to open Chrome and is being brought to a specific URL for this one
       // launch. Launch the browser with the desired welcome back URL in the
@@ -444,6 +496,7 @@ StartupTabs StartupBrowserCreatorImpl::DetermineStartupTabs(
       StartupTabs welcome_back_tabs = provider.GetWelcomeBackTabs(
           profile_, browser_creator_, process_startup);
       AppendTabs(welcome_back_tabs, &tabs);
+#endif  // defined(OS_WIN)
 
       if (welcome_enabled) {
         // Policies for welcome (e.g., first run) may show promotional and
@@ -490,10 +543,19 @@ bool StartupBrowserCreatorImpl::MaybeAsyncRestore(const StartupTabs& tabs,
     return false;
 
   // Note: there's no session service in incognito or guest mode.
+  if (!SessionServiceFactory::GetForProfileForSessionRestore(profile_))
+    return false;
+
+  bool restore_apps = false;
+#if BUILDFLAG(ENABLE_APP_SESSION_SERVICE)
+  restore_apps =
+      ShouldRestoreApps(StartupBrowserCreator::WasRestarted(), profile_);
+#endif  // BUILDFLAG(ENABLE_APP_SESSION_SERVICE)
+  // Note: there's no session service in incognito or guest mode.
   SessionService* service =
       SessionServiceFactory::GetForProfileForSessionRestore(profile_);
 
-  return service && service->RestoreIfNecessary(TabsToUrls(tabs));
+  return service && service->RestoreIfNecessary(TabsToUrls(tabs), restore_apps);
 }
 
 Browser* StartupBrowserCreatorImpl::RestoreOrCreateBrowser(
@@ -504,6 +566,15 @@ Browser* StartupBrowserCreatorImpl::RestoreOrCreateBrowser(
     bool is_post_crash_launch) {
   Browser* browser = nullptr;
   if (behavior == BrowserOpenBehavior::SYNCHRONOUS_RESTORE) {
+#if BUILDFLAG(ENABLE_APP_SESSION_SERVICE)
+    // It's worth noting that this codepath is not hit by crash restore
+    // because we want to avoid a crash restore loop, so we don't
+    // automatically restore after a crash.
+    // Crash restores are triggered via session_crashed_bubble_view.cc
+    if (ShouldRestoreApps(StartupBrowserCreator::WasRestarted(), profile_))
+      restore_options |= SessionRestore::RESTORE_APPS;
+#endif  //  BUILDFLAG(ENABLE_APP_SESSION_SERVICE)
+
     browser = SessionRestore::RestoreSession(profile_, nullptr, restore_options,
                                              TabsToUrls(tabs));
     if (browser)
@@ -527,7 +598,7 @@ Browser* StartupBrowserCreatorImpl::RestoreOrCreateBrowser(
   // Now that a restore is no longer possible, it is safe to clear DOM storage,
   // unless this is a crash recovery.
   if (!is_post_crash_launch) {
-    content::BrowserContext::GetDefaultStoragePartition(profile_)
+    profile_->GetDefaultStoragePartition()
         ->GetDOMStorageContext()
         ->StartScavengingUnusedSessionStorage();
   }
@@ -573,25 +644,23 @@ void StartupBrowserCreatorImpl::AddInfoBarsIfNecessary(
     if (show_bad_flags_security_warnings)
       chrome::ShowBadFlagsPrompt(web_contents);
 
-    InfoBarService* infobar_service =
-        InfoBarService::FromWebContents(web_contents);
+    infobars::ContentInfoBarManager* infobar_manager =
+        infobars::ContentInfoBarManager::FromWebContents(web_contents);
 
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
     PrefService* local_state = g_browser_process->local_state();
     if (local_state) {
-      if (!local_state->GetBoolean(
-              lacros_prefs::kShowedExperimentalBannerPref)) {
-        // Show the experimental lacros info bar. auto_expire must be set to
-        // false, since otherwise an automated navigation [which can happen at
-        // launch] will cause the info bar to disappear.
-        SimpleAlertInfoBarDelegate::Create(
-            infobar_service,
-            infobars::InfoBarDelegate::EXPERIMENTAL_INFOBAR_DELEGATE_LACROS,
-            /*vector_icon=*/nullptr,
-            l10n_util::GetStringUTF16(IDS_EXPERIMENTAL_LACROS_WARNING_MESSAGE),
-            /*auto_expire=*/false, /*should_animate=*/false);
+      // We show the banner if it's never shown before.
+      bool should_show_banner =
+          !local_state->GetBoolean(lacros_prefs::kShowedExperimentalBannerPref);
+      // If Lacros is not the primary browser, we always show the banner.
+      should_show_banner |= !chromeos::LacrosService::Get()
+                                 ->init_params()
+                                 ->standalone_browser_is_primary;
 
-        // Mark the pref as shown, so that we don't show the banner again.
+      if (should_show_banner) {
+        LacrosStartupInfoBarDelegate::Create(infobar_manager);
+
         local_state->SetBoolean(lacros_prefs::kShowedExperimentalBannerPref,
                                 true);
       }
@@ -599,13 +668,13 @@ void StartupBrowserCreatorImpl::AddInfoBarsIfNecessary(
 #endif
 
     if (!google_apis::HasAPIKeyConfigured())
-      GoogleApiKeysInfoBarDelegate::Create(infobar_service);
+      GoogleApiKeysInfoBarDelegate::Create(infobar_manager);
 
     if (ObsoleteSystem::IsObsoleteNowOrSoon()) {
       PrefService* local_state = g_browser_process->local_state();
       if (!local_state ||
           !local_state->GetBoolean(prefs::kSuppressUnsupportedOSWarning))
-        ObsoleteSystemInfoBarDelegate::Create(infobar_service);
+        ObsoleteSystemInfoBarDelegate::Create(infobar_manager);
     }
 
 #if !BUILDFLAG(IS_CHROMEOS_ASH)
@@ -659,4 +728,32 @@ StartupBrowserCreatorImpl::DetermineSynchronousRestoreOptions(
     options |= SessionRestore::ALWAYS_CREATE_TABBED_BROWSER;
 
   return options;
+}
+
+// static
+bool StartupBrowserCreatorImpl::ShouldLaunch(
+    const base::CommandLine& command_line) {
+  // Don't open any browser windows if starting up in "background mode".
+  if (command_line.HasSwitch(switches::kNoStartupWindow))
+    return false;
+
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+  // Don't open any browser windows if Ash requested that Lacros not do so. The
+  // implicit assumption is that some other code is responsible for keeping
+  // Lacros running in the background
+  if (chromeos::LacrosService::Get() &&
+      chromeos::LacrosService::Get()->init_params()->initial_browser_action ==
+          crosapi::mojom::InitialBrowserAction::kDoNotOpenWindow) {
+    return false;
+  }
+#endif
+
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+  // If Lacros is the primary web browser, do not open the browser window
+  // on Chrome OS session login.
+  if (crosapi::browser_util::IsLacrosPrimaryBrowser())
+    return false;
+#endif
+
+  return true;
 }

@@ -18,7 +18,7 @@
 #include "chrome/services/mac_notifications/public/cpp/notification_constants_mac.h"
 #include "chrome/services/mac_notifications/public/cpp/notification_operation.h"
 #include "chrome/services/mac_notifications/public/cpp/notification_utils_mac.h"
-#include "mojo/public/cpp/bindings/remote.h"
+#include "mojo/public/cpp/bindings/shared_remote.h"
 #include "ui/gfx/image/image.h"
 
 // This uses a private API so that updated banners do not keep reappearing on
@@ -240,6 +240,35 @@ void MacNotificationServiceUN::CloseNotification(
       removeDeliveredNotificationsWithIdentifiers:@[ notification_id ]];
 }
 
+void MacNotificationServiceUN::CloseNotificationsForProfile(
+    mojom::ProfileIdentifierPtr profile) {
+  NSString* profile_id = base::SysUTF8ToNSString(profile->id);
+  bool incognito = profile->incognito;
+
+  [notification_center_ getDeliveredNotificationsWithCompletionHandler:^(
+                            NSArray<UNNotification*>* _Nonnull toasts) {
+    base::scoped_nsobject<NSMutableArray> identifiers(
+        [[NSMutableArray alloc] init]);
+
+    for (UNNotification* toast in toasts) {
+      NSDictionary* user_info = [[[toast request] content] userInfo];
+      NSString* toast_profile_id = [user_info
+          objectForKey:notification_constants::kNotificationProfileId];
+      bool toast_incognito = [[user_info
+          objectForKey:notification_constants::kNotificationIncognito]
+          boolValue];
+
+      if ([profile_id isEqualToString:toast_profile_id] &&
+          incognito == toast_incognito) {
+        [identifiers addObject:[[toast request] identifier]];
+      }
+    }
+
+    [notification_center_
+        removeDeliveredNotificationsWithIdentifiers:identifiers];
+  }];
+}
+
 void MacNotificationServiceUN::CloseAllNotifications() {
   [notification_center_ removeAllDeliveredNotifications];
 }
@@ -263,14 +292,17 @@ void MacNotificationServiceUN::RequestPermission() {
 }  // namespace mac_notifications
 
 @implementation AlertUNNotificationCenterDelegate {
-  mojo::Remote<mac_notifications::mojom::MacNotificationActionHandler> _handler;
+  // We're using a SharedRemote here as we need to reply on the same sequence
+  // that created the mojo connection and the methods below get called by macOS.
+  mojo::SharedRemote<mac_notifications::mojom::MacNotificationActionHandler>
+      _handler;
 }
 
 - (instancetype)initWithActionHandler:
     (mojo::PendingRemote<
         mac_notifications::mojom::MacNotificationActionHandler>)handler {
   if ((self = [super init])) {
-    _handler.Bind(std::move(handler));
+    _handler.Bind(std::move(handler), /*bind_task_runner=*/nullptr);
   }
   return self;
 }
@@ -298,7 +330,7 @@ void MacNotificationServiceUN::RequestPermission() {
       GetNotificationOperationFromAction([response actionIdentifier]);
   int buttonIndex = GetActionButtonIndexFromAction([response actionIdentifier]);
   auto actionInfo = mac_notifications::mojom::NotificationActionInfo::New(
-      std::move(meta), operation, buttonIndex, /*reply=*/base::nullopt);
+      std::move(meta), operation, buttonIndex, /*reply=*/absl::nullopt);
   _handler->OnNotificationAction(std::move(actionInfo));
   completionHandler();
 }

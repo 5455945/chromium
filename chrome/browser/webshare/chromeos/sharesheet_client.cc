@@ -10,6 +10,7 @@
 #include "base/callback_helpers.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
+#include "base/no_destructor.h"
 #include "base/rand_util.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/stringprintf.h"
@@ -60,6 +61,7 @@ blink::mojom::ShareError SharesheetResultToShareError(
     case sharesheet::SharesheetResult::kSuccess:
       return blink::mojom::ShareError::OK;
     case sharesheet::SharesheetResult::kCancel:
+    case sharesheet::SharesheetResult::kErrorAlreadyOpen:
       return blink::mojom::ShareError::CANCELED;
   }
 }
@@ -163,7 +165,7 @@ void SharesheetClient::OnPrepareDirectory(blink::mojom::ShareError error) {
 
   if (!web_contents() || error != blink::mojom::ShareError::OK) {
     std::move(current_share_->callback).Run(error);
-    current_share_ = base::nullopt;
+    current_share_ = absl::nullopt;
     return;
   }
 
@@ -193,7 +195,7 @@ void SharesheetClient::OnStoreFiles(blink::mojom::ShareError error) {
     std::move(current_share_->callback).Run(error);
     PrepareDirectoryTask::ScheduleSharedFileDeletion(
         std::move(current_share_->file_paths), base::TimeDelta::FromMinutes(0));
-    current_share_ = base::nullopt;
+    current_share_ = absl::nullopt;
     return;
   }
 
@@ -212,7 +214,7 @@ void SharesheetClient::OnShowSharesheet(sharesheet::SharesheetResult result) {
   PrepareDirectoryTask::ScheduleSharedFileDeletion(
       std::move(current_share_->file_paths),
       PrepareDirectoryTask::kSharedFileLifetime);
-  current_share_ = base::nullopt;
+  current_share_ = absl::nullopt;
 }
 
 // static
@@ -222,9 +224,9 @@ void SharesheetClient::ShowSharesheet(
     const std::vector<std::string>& content_types,
     const std::string& text,
     const std::string& title,
-    CloseCallback close_callback) {
+    DeliveredCallback delivered_callback) {
   if (!base::FeatureList::IsEnabled(features::kSharesheet)) {
-    std::move(close_callback).Run(sharesheet::SharesheetResult::kCancel);
+    std::move(delivered_callback).Run(sharesheet::SharesheetResult::kCancel);
     return;
   }
 
@@ -242,7 +244,7 @@ void SharesheetClient::ShowSharesheet(
   sharesheet_service->ShowBubble(
       web_contents, std::move(intent),
       sharesheet::SharesheetMetrics::LaunchSource::kWebShare,
-      std::move(close_callback));
+      std::move(delivered_callback));
 }
 
 SharesheetClient::SharesheetCallback&
@@ -254,7 +256,7 @@ SharesheetClient::GetSharesheetCallback() {
 }
 
 void SharesheetClient::WebContentsDestroyed() {
-  current_share_ = base::nullopt;
+  current_share_ = absl::nullopt;
 }
 
 }  // namespace webshare

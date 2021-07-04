@@ -11,7 +11,7 @@
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/callback_helpers.h"
-#include "base/stl_util.h"
+#include "base/containers/contains.h"
 #include "base/strings/string_util.h"
 #include "base/threading/sequenced_task_runner_handle.h"
 #include "build/build_config.h"
@@ -22,6 +22,7 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/manifest_icon_downloader.h"
 #include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/page.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/common/content_features.h"
@@ -47,6 +48,10 @@ const int kMinimumScreenshotSizeInPx = 320;
 
 // Maximum dimension size in pixels for screenshots.
 const int kMaximumScreenshotSizeInPx = 3840;
+
+// Maximum dimension can't be more than 2.3 times as long as the minimum
+// dimension for screenshots.
+const double kMaximumScreenshotRatio = 2.3;
 
 // Maximum dimension size in pixels for icons.
 const int kMaximumIconSizeInPx = std::numeric_limits<int>::max();
@@ -178,7 +183,9 @@ bool ShouldRejectDisplayMode(blink::mojom::DisplayMode display_mode) {
       display_mode == blink::mojom::DisplayMode::kFullscreen ||
       display_mode == blink::mojom::DisplayMode::kMinimalUi ||
       (display_mode == blink::mojom::DisplayMode::kWindowControlsOverlay &&
-       base::FeatureList::IsEnabled(features::kWebAppWindowControlsOverlay)));
+       base::FeatureList::IsEnabled(features::kWebAppWindowControlsOverlay)) ||
+      (display_mode == blink::mojom::DisplayMode::kTabbed &&
+       base::FeatureList::IsEnabled(features::kDesktopPWAsTabStrip)));
 }
 
 void OnDidCompleteGetAllErrors(
@@ -235,8 +242,8 @@ InstallableManager::InstallableManager(content::WebContents* web_contents)
   // This is null in unit tests.
   if (web_contents) {
     content::StoragePartition* storage_partition =
-        content::BrowserContext::GetStoragePartition(
-            web_contents->GetBrowserContext(), web_contents->GetSiteInstance());
+        web_contents->GetBrowserContext()->GetStoragePartition(
+            web_contents->GetSiteInstance());
     DCHECK(storage_partition);
 
     service_worker_context_ = storage_partition->GetServiceWorkerContext();
@@ -389,12 +396,17 @@ std::vector<InstallableStatusCode> InstallableManager::GetErrors(
   if (params.valid_splash_icon) {
     IconProperty& icon = icons_[IconUsage::kSplash];
 
+    // If the icon is MASKABLE, ignore any error since we want to fallback to
+    // fetch IconPurpose::ANY.
     // If the error is NO_ACCEPTABLE_ICON, there is no icon suitable as a splash
     // icon in the manifest. Ignore this case since we only want to fail the
     // check if there was a suitable splash icon specified and we couldn't fetch
     // it.
-    if (icon.error != NO_ERROR_DETECTED && icon.error != NO_ACCEPTABLE_ICON)
+    if (icon.error != NO_ERROR_DETECTED &&
+        icon.purpose != IconPurpose::MASKABLE &&
+        icon.error != NO_ACCEPTABLE_ICON) {
       errors.push_back(icon.error);
+    }
   }
 
   return errors;
@@ -457,7 +469,7 @@ bool InstallableManager::IsComplete(const InstallableParams& params) const {
          (!params.valid_splash_icon || IsIconFetchComplete(IconUsage::kSplash));
 }
 
-void InstallableManager::Reset(base::Optional<InstallableStatusCode> error) {
+void InstallableManager::Reset(absl::optional<InstallableStatusCode> error) {
   DCHECK(!error || error.value() != NO_ERROR_DETECTED);
   // Prevent any outstanding callbacks to or from this object from being called.
   weak_factory_.InvalidateWeakPtrs();
@@ -507,14 +519,17 @@ void InstallableManager::RunCallback(
   IconProperty* primary_icon = &null_icon;
   bool has_maskable_primary_icon = false;
   IconProperty* splash_icon = &null_icon;
+  bool has_maskable_splash_icon = false;
 
   if (params.valid_primary_icon && IsIconFetchComplete(IconUsage::kPrimary)) {
     primary_icon = &icons_[IconUsage::kPrimary];
     has_maskable_primary_icon =
         (primary_icon->purpose == IconPurpose::MASKABLE);
   }
-  if (params.valid_splash_icon && IsIconFetchComplete(IconUsage::kSplash))
+  if (params.valid_splash_icon && IsIconFetchComplete(IconUsage::kSplash)) {
     splash_icon = &icons_[IconUsage::kSplash];
+    has_maskable_splash_icon = (splash_icon->purpose == IconPurpose::MASKABLE);
+  }
 
   InstallableData data = {
       std::move(errors),
@@ -525,6 +540,7 @@ void InstallableManager::RunCallback(
       has_maskable_primary_icon,
       splash_icon->url,
       splash_icon->icon.get(),
+      has_maskable_splash_icon,
       screenshots_,
       valid_manifest_->is_valid,
       worker_->has_worker,
@@ -574,6 +590,11 @@ void InstallableManager::WorkOnTask() {
     CheckAndFetchScreenshots();
   } else if (params.has_worker && !worker_->fetched) {
     CheckServiceWorker();
+  } else if (params.valid_splash_icon && params.prefer_maskable_icon &&
+             !IsMaskableIconFetched(IconUsage::kSplash)) {
+    CheckAndFetchBestIcon(GetIdealSplashIconSizeInPx(),
+                          GetMinimumSplashIconSizeInPx(), IconPurpose::MASKABLE,
+                          IconUsage::kSplash);
   } else if (params.valid_splash_icon &&
              !IsIconFetchComplete(IconUsage::kSplash)) {
     CheckAndFetchBestIcon(GetIdealSplashIconSizeInPx(),
@@ -604,7 +625,9 @@ void InstallableManager::FetchManifest() {
   content::WebContents* web_contents = GetWebContents();
   DCHECK(web_contents);
 
-  web_contents->GetManifest(base::BindOnce(
+  // This uses DidFinishNavigation to abort when the primary page changes.
+  // Therefore this should always be the correct page.
+  web_contents->GetPrimaryPage().GetManifest(base::BindOnce(
       &InstallableManager::OnDidGetManifest, weak_factory_.GetWeakPtr()));
 }
 
@@ -662,16 +685,13 @@ bool InstallableManager::IsManifestValidForWebApp(
     blink::mojom::DisplayMode display_mode_to_evaluate = manifest.display;
     InstallableStatusCode manifest_error = MANIFEST_DISPLAY_NOT_SUPPORTED;
 
-    if (base::FeatureList::IsEnabled(
-            features::kWebAppManifestDisplayOverride)) {
-      // Unsupported values are ignored when we parse the manifest, and
-      // consequently aren't in the manifest.display_override array.
-      // If this array is not empty, the first value will "win", so validate
-      // this value is installable.
-      if (!manifest.display_override.empty()) {
-        display_mode_to_evaluate = manifest.display_override[0];
-        manifest_error = MANIFEST_DISPLAY_OVERRIDE_NOT_SUPPORTED;
-      }
+    // Unsupported values are ignored when we parse the manifest, and
+    // consequently aren't in the manifest.display_override array.
+    // If this array is not empty, the first value will "win", so validate
+    // this value is installable.
+    if (!manifest.display_override.empty()) {
+      display_mode_to_evaluate = manifest.display_override[0];
+      manifest_error = MANIFEST_DISPLAY_OVERRIDE_NOT_SUPPORTED;
     }
 
     if (ShouldRejectDisplayMode(display_mode_to_evaluate)) {
@@ -915,9 +935,8 @@ void InstallableManager::OnScreenshotFetched(const GURL screenshot_url,
         continue;
       }
 
-      // Max dimension can't be twice larger than min dimension.
       auto dimensions = std::minmax(screenshot.width(), screenshot.height());
-      if (dimensions.second > dimensions.first * 2)
+      if (dimensions.second > dimensions.first * kMaximumScreenshotRatio)
         continue;
 
       screenshots_.push_back(screenshot);
@@ -957,15 +976,14 @@ void InstallableManager::OnDestruct(content::ServiceWorkerContext* context) {
 
 void InstallableManager::DidFinishNavigation(
     content::NavigationHandle* handle) {
-  if (handle->IsInMainFrame() && handle->HasCommitted() &&
+  if (handle->IsInPrimaryMainFrame() && handle->HasCommitted() &&
       !handle->IsSameDocument()) {
     Reset(USER_NAVIGATED);
   }
 }
 
-void InstallableManager::DidUpdateWebManifestURL(
-    content::RenderFrameHost* rfh,
-    const base::Optional<GURL>& manifest_url) {
+void InstallableManager::DidUpdateWebManifestURL(content::RenderFrameHost* rfh,
+                                                 const GURL& manifest_url) {
   // A change in the manifest URL invalidates our entire internal state.
   Reset(MANIFEST_URL_CHANGED);
 }

@@ -14,6 +14,7 @@
 #include "base/memory/memory_pressure_listener.h"
 #include "base/memory/memory_pressure_monitor.h"
 #include "components/paint_preview/browser/file_manager.h"
+#include "content/public/browser/global_routing_id.h"
 
 #include "chrome/browser/share/android/jni_headers/LongScreenshotsTabService_jni.h"
 
@@ -23,8 +24,9 @@ using paint_preview::DirectoryKey;
 using paint_preview::FileManager;
 
 namespace {
-// TODO(tgupta): Evaluate whether this is the right size.
-constexpr size_t kMaxPerCaptureSizeBytes = 5 * 1000L * 1000L;  // 5 MB.
+// TODO(skare): Evaluate what to send, if anything; paint_preview team is changing
+// the logic around capture discarding.
+constexpr size_t kMaxPerCaptureSizeBytes = 20 * 1000L * 1000L;  // 20 MB.
 
 }  // namespace
 
@@ -70,7 +72,9 @@ void LongScreenshotsTabService::CaptureTab(int tab_id,
   // Mark |contents| as being captured so that the renderer doesn't go away
   // until the capture is finished. This is done even before a file is created
   // to ensure the renderer doesn't go away while that happens.
-  contents->IncrementCapturerCount(gfx::Size(), true);
+  capture_handle_ =
+      contents->IncrementCapturerCount(gfx::Size(), /*stay_hidden=*/true,
+                                       /*stay_awake=*/true);
 
   auto file_manager = GetFileMixin()->GetFileManager();
   auto key = file_manager->CreateKey(tab_id);
@@ -82,20 +86,20 @@ void LongScreenshotsTabService::CaptureTab(int tab_id,
       base::BindOnce(&LongScreenshotsTabService::CaptureTabInternal,
                      weak_ptr_factory_.GetWeakPtr(), tab_id, key,
                      contents->GetMainFrame()->GetFrameTreeNodeId(),
-                     contents->GetMainFrame()->GetGlobalFrameRoutingId(), clipX,
-                     clipY, clipWidth, clipHeight));
+                     contents->GetMainFrame()->GetGlobalId(), clipX, clipY,
+                     clipWidth, clipHeight));
 }
 
 void LongScreenshotsTabService::CaptureTabInternal(
     int tab_id,
     const paint_preview::DirectoryKey& key,
     int frame_tree_node_id,
-    content::GlobalFrameRoutingId frame_routing_id,
+    content::GlobalRenderFrameHostId frame_routing_id,
     int clipX,
     int clipY,
     int clipWidth,
     int clipHeight,
-    const base::Optional<base::FilePath>& file_path) {
+    const absl::optional<base::FilePath>& file_path) {
   if (!file_path.has_value()) {
     JNIEnv* env = base::android::AttachCurrentThread();
     Java_LongScreenshotsTabService_processCaptureTabStatus(
@@ -112,7 +116,7 @@ void LongScreenshotsTabService::CaptureTabInternal(
   // defunct pointer.
   auto* rfh = content::RenderFrameHost::FromID(frame_routing_id);
   if (!contents || !rfh || contents->IsBeingDestroyed() ||
-      contents->GetMainFrame() != rfh || !rfh->IsCurrent()) {
+      contents->GetMainFrame() != rfh || !rfh->IsActive()) {
     JNIEnv* env = base::android::AttachCurrentThread();
     Java_LongScreenshotsTabService_processCaptureTabStatus(
         env, java_ref_, Status::kWebContentsGone);
@@ -128,20 +132,13 @@ void LongScreenshotsTabService::CaptureTabInternal(
   capture_params.max_per_capture_size = kMaxPerCaptureSizeBytes;
   CapturePaintPreview(capture_params,
                       base::BindOnce(&LongScreenshotsTabService::OnCaptured,
-                                     weak_ptr_factory_.GetWeakPtr(), tab_id,
-                                     key, frame_tree_node_id));
+                                     weak_ptr_factory_.GetWeakPtr()));
 }
 
 void LongScreenshotsTabService::OnCaptured(
-    int tab_id,
-    const paint_preview::DirectoryKey& key,
-    int frame_tree_node_id,
     paint_preview::PaintPreviewBaseService::CaptureStatus status,
     std::unique_ptr<paint_preview::CaptureResult> result) {
-  auto* web_contents =
-      content::WebContents::FromFrameTreeNodeId(frame_tree_node_id);
-  if (web_contents)
-    web_contents->DecrementCapturerCount(true);
+  capture_handle_.RunAndReset();
 
   JNIEnv* env = base::android::AttachCurrentThread();
 

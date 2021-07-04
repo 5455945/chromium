@@ -21,7 +21,7 @@ class XrIntegrationClientImpl : public content::XrIntegrationClient {
   // Returns whether XR should be enabled.
   static bool IsEnabled();
 
-  // XrIntegrationClient
+  // content::XrIntegrationClient:
   std::unique_ptr<content::XrInstallHelper> GetInstallHelper(
       device::mojom::XRDeviceId device_id) override;
   content::XRProviderList GetAdditionalProviders() override;

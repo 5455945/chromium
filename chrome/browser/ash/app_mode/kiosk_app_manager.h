@@ -13,18 +13,15 @@
 #include "base/callback_forward.h"
 #include "base/lazy_instance.h"
 #include "base/macros.h"
-#include "base/optional.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/app_mode/kiosk_app_manager_base.h"
 #include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/chromeos/extensions/external_cache.h"
 #include "chrome/browser/chromeos/extensions/external_cache_delegate.h"
-// TODO(https://crbug.com/1164001): use forward declaration when moved to
-// chrome/browser/ash/.
-#include "chrome/browser/chromeos/ownership/owner_settings_service_chromeos.h"
 #include "chromeos/tpm/install_attributes.h"
 #include "components/account_id/account_id.h"
 #include "extensions/common/extension_id.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class GURL;
 class PrefRegistrySimple;
@@ -47,6 +44,7 @@ namespace ash {
 
 class KioskAppData;
 class KioskExternalUpdater;
+class OwnerSettingsServiceAsh;
 
 // KioskAppManager manages cached app data.
 class KioskAppManager : public KioskAppManagerBase,
@@ -129,7 +127,7 @@ class KioskAppManager : public KioskAppManagerBase,
 
   // Sets |app_id| as the app to auto launch at start up.
   void SetAutoLaunchApp(const std::string& app_id,
-                        OwnerSettingsServiceChromeOS* service);
+                        OwnerSettingsServiceAsh* service);
 
   // Returns true if there is a pending auto-launch request.
   bool IsAutoLaunchRequested() const;
@@ -146,9 +144,8 @@ class KioskAppManager : public KioskAppManagerBase,
 
   // Adds/removes a kiosk app by id. When removed, all locally cached data
   // will be removed as well.
-  void AddApp(const std::string& app_id, OwnerSettingsServiceChromeOS* service);
-  void RemoveApp(const std::string& app_id,
-                 OwnerSettingsServiceChromeOS* service);
+  void AddApp(const std::string& app_id, OwnerSettingsServiceAsh* service);
+  void RemoveApp(const std::string& app_id, OwnerSettingsServiceAsh* service);
 
   // KioskAppManagerBase:
   // Gets info of all apps that have no meta data load error.
@@ -335,13 +332,13 @@ class KioskAppManager : public KioskAppManagerBase,
   std::unique_ptr<KioskExternalUpdater> usb_stick_updater_;
 
   // Last app id set by UpdatePrimaryAppLoaderPrefs().
-  base::Optional<std::string> primary_app_id_;
+  absl::optional<std::string> primary_app_id_;
 
   // Callback registered using SetPrimaryAppLoaderPrefsChangedHandler().
   base::RepeatingClosure primary_app_changed_handler_;
 
   // Extensions id set by UpdateSecondatyAppsLoaderPrefs().
-  base::Optional<std::vector<std::string>> secondary_app_ids_;
+  absl::optional<std::vector<std::string>> secondary_app_ids_;
 
   // Callback registered using SetSecondaryAppsLoaderPrefsChangedHandler().
   base::RepeatingClosure secondary_apps_changed_handler_;

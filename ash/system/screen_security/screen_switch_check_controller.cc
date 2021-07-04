@@ -7,6 +7,7 @@
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/system/tray/system_tray_notifier.h"
+#include "base/bind.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/strings/grit/ui_strings.h"
 #include "ui/views/controls/message_box_view.h"
@@ -86,7 +87,7 @@ void ScreenSwitchCheckController::CanSwitchAwayFromActiveUser(
 void ScreenSwitchCheckController::OnScreenCaptureStart(
     const base::RepeatingClosure& stop_callback,
     const base::RepeatingClosure& source_callback,
-    const base::string16& screen_capture_status) {
+    const std::u16string& screen_capture_status) {
   has_capture_ = true;
 }
 
@@ -98,7 +99,7 @@ void ScreenSwitchCheckController::OnScreenCaptureStop() {
 
 void ScreenSwitchCheckController::OnScreenShareStart(
     const base::RepeatingClosure& stop_callback,
-    const base::string16& helper_name) {
+    const std::u16string& helper_name) {
   has_share_ = true;
 }
 

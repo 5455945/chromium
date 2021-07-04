@@ -11,18 +11,17 @@
 #include <vector>
 
 #include "base/memory/weak_ptr.h"
-#include "base/observer_list.h"
 #include "chrome/browser/ui/media_router/cast_dialog_controller.h"
 #include "chrome/browser/ui/send_tab_to_self/send_tab_to_self_bubble_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_bubble_delegate_view.h"
 
-namespace gfx {
-class Canvas;
-}  // namespace gfx
-
 namespace content {
 class WebContents;
 }  // namespace content
+
+namespace views {
+class GridLayout;
+}  // namespace views
 
 namespace send_tab_to_self {
 
@@ -47,14 +46,8 @@ class SendTabToSelfBubbleViewImpl : public SendTabToSelfBubbleView,
 
   // views::WidgetDelegateView:
   bool ShouldShowCloseButton() const override;
-  base::string16 GetWindowTitle() const override;
+  std::u16string GetWindowTitle() const override;
   void WindowClosing() override;
-
-  // LocationBarBubbleDelegateView:
-  void OnPaint(gfx::Canvas* canvas) override;
-
-  // Shows the bubble view.
-  void Show(DisplayReason reason);
 
   void DeviceButtonPressed(SendTabToSelfBubbleDeviceButton* device_button);
 
@@ -65,7 +58,10 @@ class SendTabToSelfBubbleViewImpl : public SendTabToSelfBubbleView,
   void Init() override;
 
   // Creates the scroll view.
-  void CreateScrollView();
+  void CreateScrollView(views::GridLayout* layout);
+
+  // Creates the subtitle / hint text used in V2.
+  void CreateHintTextLabel(views::GridLayout* layout);
 
   // Populates the scroll view containing valid devices.
   void PopulateScrollView(const std::vector<TargetDeviceInfo>& devices);
@@ -77,13 +73,13 @@ class SendTabToSelfBubbleViewImpl : public SendTabToSelfBubbleView,
   SendTabToSelfBubbleController* controller_;  // Weak reference.
 
   // Title shown at the top of the bubble.
-  base::string16 bubble_title_;
+  std::u16string bubble_title_;
 
   // ScrollView containing the list of device buttons.
   views::ScrollView* scroll_view_ = nullptr;
 
   // The device that the user has selected to share tab to.
-  base::Optional<size_t> selected_device_index_;
+  absl::optional<size_t> selected_device_index_;
 
   base::WeakPtrFactory<SendTabToSelfBubbleViewImpl> weak_factory_{this};
 

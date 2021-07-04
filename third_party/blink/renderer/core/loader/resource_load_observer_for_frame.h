@@ -8,6 +8,7 @@
 #include <inttypes.h>
 
 #include "base/containers/span.h"
+#include "components/power_scheduler/power_mode_voter.h"
 #include "third_party/blink/public/mojom/frame/back_forward_cache_controller.mojom-blink-forward.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/frame/web_feature_forward.h"
@@ -31,11 +32,10 @@ class CORE_EXPORT ResourceLoadObserverForFrame final
 
   // ResourceLoadObserver implementation.
   void DidStartRequest(const FetchParameters&, ResourceType) override;
-  void WillSendRequest(uint64_t identifier,
-                       const ResourceRequest&,
+  void WillSendRequest(const ResourceRequest&,
                        const ResourceResponse& redirect_response,
                        ResourceType,
-                       const FetchInitiatorInfo&,
+                       const ResourceLoaderOptions&,
                        RenderBlockingBehavior) override;
   void DidChangePriority(uint64_t identifier,
                          ResourceLoadPriority,
@@ -66,11 +66,16 @@ class CORE_EXPORT ResourceLoadObserverForFrame final
   CoreProbeSink* GetProbe();
   void CountUsage(WebFeature);
 
+  void UpdatePowerModeVote();
+
   // There are some overlap between |document_loader_|, |document_| and
   // |fetcher_properties_|. Use |fetcher_properties_| whenever possible.
   const Member<DocumentLoader> document_loader_;
   const Member<Document> document_;
   const Member<const ResourceFetcherProperties> fetcher_properties_;
+
+  std::unique_ptr<power_scheduler::PowerModeVoter> power_mode_voter_;
+  bool power_mode_vote_is_loading_ = false;
 };
 
 }  // namespace blink

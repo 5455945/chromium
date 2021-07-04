@@ -6,6 +6,7 @@ import * as animate from '../animation.js';
 import {
   assert,
   assertInstanceof,
+  assertString,
 } from '../chrome_util.js';
 import {
   PhotoConstraintsPreferrer,  // eslint-disable-line no-unused-vars
@@ -14,7 +15,10 @@ import {
 // eslint-disable-next-line no-unused-vars
 import {DeviceInfoUpdater} from '../device/device_info_updater.js';
 import * as dom from '../dom.js';
+import * as error from '../error.js';
+import {I18nString} from '../i18n_string.js';
 import * as metrics from '../metrics.js';
+import * as loadTimeData from '../models/load_time_data.js';
 import * as localStorage from '../models/local_storage.js';
 // eslint-disable-next-line no-unused-vars
 import {ResultSaver} from '../models/result_saver.js';
@@ -28,9 +32,11 @@ import * as state from '../state.js';
 import * as toast from '../toast.js';
 import {
   CanceledError,
+  ErrorLevel,
+  ErrorType,
   Facing,
   Mode,
-  Resolution,  // eslint-disable-line no-unused-vars
+  Resolution,
   ViewName,
 } from '../type.js';
 import * as util from '../util.js';
@@ -130,6 +136,14 @@ export class Camera extends View {
         new VideoEncoderOptions((parameters) => setAvc1Parameters(parameters));
 
     /**
+     * Clock-wise rotation that needs to be applied to the recorded video in
+     * order for the video to be replayed in upright orientation.
+     * @type {number}
+     * @private
+     */
+    this.outputVideoRotation_ = 0;
+
+    /**
      * @type {!ResultSaver}
      * @protected
      */
@@ -142,6 +156,14 @@ export class Camera extends View {
      * @private
      */
     this.activeDeviceId_ = null;
+
+    /**
+     * The last time of all screen state turning from OFF to ON during the app
+     * execution. Sets to -Infinity for no such time since app is opened.
+     * @type {number}
+     * @private
+     */
+    this.lastScreenOnTime_ = -Infinity;
 
     /**
      * Modes for the camera.
@@ -200,7 +222,18 @@ export class Camera extends View {
     this.banner_ = dom.get('#banner', HTMLElement);
 
     /**
-     * @const {!Set<function(): void>}
+     * @type {!HTMLElement}
+     * @private
+     */
+    this.ptzToast_ = dom.get('#ptz-toast', HTMLElement);
+
+    /**
+     * @type {!HTMLButtonElement}
+     */
+    this.openPTZPanel_ = dom.get('#open-ptz-panel', HTMLButtonElement);
+
+    /**
+     * @const {!Set<function(): *>}
      * @private
      */
     this.configureCompleteListener_ = new Set();
@@ -254,14 +287,14 @@ export class Camera extends View {
     util.bindElementAriaLabelWithState({
       element: videoShutter,
       state: state.State.TAKING,
-      onLabel: 'record_video_stop_button',
-      offLabel: 'record_video_start_button',
+      onLabel: I18nString.RECORD_VIDEO_STOP_BUTTON,
+      offLabel: I18nString.RECORD_VIDEO_START_BUTTON,
     });
     util.bindElementAriaLabelWithState({
       element: pauseShutter,
       state: state.State.RECORDING_PAUSED,
-      onLabel: 'record_video_resume_button',
-      offLabel: 'record_video_pause_button',
+      onLabel: I18nString.RECORD_VIDEO_RESUME_BUTTON,
+      offLabel: I18nString.RECORD_VIDEO_PAUSE_BUTTON,
     });
 
     dom.get('#banner-close', HTMLButtonElement)
@@ -269,12 +302,20 @@ export class Camera extends View {
           animate.cancel(this.banner_);
         });
 
+    this.initOpenPTZPanel_();
+
     // Monitor the states to stop camera when locked/minimized.
-    ChromeHelper.getInstance().addOnLockListener((isLocked) => {
-      this.locked_ = isLocked;
+    const idleDetector = new window.IdleDetector();
+    idleDetector.addEventListener('change', () => {
+      this.locked_ = idleDetector.screenState === 'locked';
       if (this.locked_) {
         this.start();
       }
+    });
+    idleDetector.start().catch((e) => {
+      error.reportError(
+          ErrorType.IDLE_DETECTOR_FAILURE, ErrorLevel.ERROR,
+          assertInstanceof(e, Error));
     });
 
     document.addEventListener('visibilitychange', () => {
@@ -310,16 +351,59 @@ export class Camera extends View {
         await helper.initExternalScreenMonitor(updateExternalScreen);
     updateExternalScreen(hasExternalScreen);
 
-    const checkScreenOff = () => {
+    const handleScreenStateChange = () => {
       if (this.screenOff_) {
         this.start();
+      } else {
+        this.lastScreenOnTime_ = performance.now();
       }
     };
 
-    state.addObserver(state.State.SCREEN_OFF_AUTO, checkScreenOff);
-    state.addObserver(state.State.HAS_EXTERNAL_SCREEN, checkScreenOff);
+    state.addObserver(state.State.SCREEN_OFF_AUTO, handleScreenStateChange);
+    state.addObserver(state.State.HAS_EXTERNAL_SCREEN, handleScreenStateChange);
 
     this.initVideoEncoderOptions_();
+  }
+
+  /**
+   * @private
+   */
+  initOpenPTZPanel_() {
+    this.openPTZPanel_.addEventListener('click', () => {
+      nav.open(
+          ViewName.PTZ_PANEL,
+          {stream: this.preview_.stream, vidPid: this.preview_.getVidPid()});
+      highlight(false);
+    });
+
+    // Highlight effect for PTZ button.
+    const highlight = (enabled) => {
+      this.ptzToast_.classList.toggle('hidden', !enabled);
+      this.openPTZPanel_.classList.toggle('rippling', enabled);
+      if (enabled) {
+        this.ptzToast_.focus();
+        setTimeout(() => highlight(false), 10000);
+      }
+    };
+
+    this.addConfigureCompleteListener_(async () => {
+      if (!state.get(state.State.ENABLE_PTZ)) {
+        highlight(false);
+        return;
+      }
+
+      const ptzToastKey = 'isPTZToastShown';
+      if (localStorage.getBool(ptzToastKey)) {
+        return;
+      }
+      localStorage.set(ptzToastKey, true);
+
+      const {bottom, right} =
+          dom.get('#open-ptz-panel', HTMLButtonElement).getBoundingClientRect();
+      this.ptzToast_.style.bottom = `${window.innerHeight - bottom}px`;
+      this.ptzToast_.style.left = `${right + 20}px`;
+      highlight(true);
+    });
   }
 
   /**
@@ -338,7 +422,7 @@ export class Camera extends View {
   }
 
   /**
-   * @param {function(): void} listener
+   * @param {function(): *} listener
    * @private
    */
   addConfigureCompleteListener_(listener) {
@@ -392,10 +476,10 @@ export class Camera extends View {
           .forEach((btn) => btn.offsetParent && btn.focus());
     };
     (async () => {
-      const values = await localStorage.get({isFolderChangeMsgShown: false});
+      const shown = localStorage.getBool('isFolderChangeMsgShown');
       await this.configuring_;
-      if (!values['isFolderChangeMsgShown']) {
-        localStorage.set({isFolderChangeMsgShown: true});
+      if (!shown) {
+        localStorage.set('isFolderChangeMsgShown', true);
         await animate.play(this.banner_);
       }
       focusOnShutterButton();
@@ -422,6 +506,20 @@ export class Camera extends View {
     this.take_ = (async () => {
       let hasError = false;
       try {
+        // Record and keep the rotation only at the instance the user starts the
+        // capture. Users may change the device orientation while taking video.
+        const cameraFrameRotation = await (async () => {
+          const deviceOperator = await DeviceOperator.getInstance();
+          if (deviceOperator === null) {
+            return 0;
+          }
+          assert(this.activeDeviceId_ !== null);
+          return await deviceOperator.getCameraFrameRotation(
+              this.activeDeviceId_);
+        })();
+        // Translate the camera frame rotation back to the UI rotation, which is
+        // what we need to rotate the captured video with.
+        this.outputVideoRotation_ = (360 - cameraFrameRotation) % 360;
         await timertick.start();
         await this.modes_.current.startCapture();
       } catch (e) {
@@ -429,7 +527,9 @@ export class Camera extends View {
         if (e instanceof CanceledError) {
           return;
         }
-        console.error(e);
+        error.reportError(
+            ErrorType.START_CAPTURE_FAILURE, ErrorLevel.ERROR,
+            assertInstanceof(e, Error));
       } finally {
         this.take_ = null;
         state.set(
@@ -472,7 +572,7 @@ export class Camera extends View {
     try {
       await this.resultSaver_.savePhoto(blob, name);
     } catch (e) {
-      toast.show('error_msg_save_file_failed');
+      toast.show(I18nString.ERROR_MSG_SAVE_FILE_FAILED);
       throw e;
     }
   }
@@ -481,7 +581,7 @@ export class Camera extends View {
    * @override
    */
   createVideoSaver() {
-    return this.resultSaver_.startSaveVideo();
+    return this.resultSaver_.startSaveVideo(this.outputVideoRotation_);
   }
 
   /**
@@ -513,7 +613,7 @@ export class Camera extends View {
     try {
       await this.resultSaver_.finishSaveVideo(videoSaver);
     } catch (e) {
-      toast.show('error_msg_save_file_failed');
+      toast.show(I18nString.ERROR_MSG_SAVE_FILE_FAILED);
       throw e;
     }
   }
@@ -566,7 +666,7 @@ export class Camera extends View {
           await this.endTake_();
         }
       } finally {
-        await this.preview_.close();
+        await this.stopStreams_();
       }
       return this.start_();
     })();
@@ -575,24 +675,20 @@ export class Camera extends View {
 
   /**
    * Try start stream reconfiguration with specified mode and device id.
-   * @param {?string} deviceId
+   * @param {?string} deviceId Null if the default camera should be started.
    * @param {!Mode} mode
    * @return {!Promise<boolean>} If found suitable stream and reconfigure
    *     successfully.
    */
   async startWithMode_(deviceId, mode) {
     const deviceOperator = await DeviceOperator.getInstance();
-    let resolCandidates = null;
-    if (deviceOperator !== null) {
-      if (deviceId !== null) {
-        resolCandidates = this.modes_.getResolutionCandidates(mode, deviceId);
-      } else {
-        console.error(
-            'Null device id present on HALv3 device. Fallback to v1.');
-      }
-    }
-    if (resolCandidates === null) {
-      resolCandidates = this.modes_.getResolutionCandidatesV1(mode, deviceId);
+    state.set(state.State.USE_FAKE_CAMERA, deviceOperator === null);
+    let resolCandidates;
+    if (deviceOperator) {
+      resolCandidates =
+          this.modes_.getResolutionCandidates(mode, assertString(deviceId));
+    } else {
+      resolCandidates = this.modes_.getFakeResolutionCandidates(mode, deviceId);
     }
     for (const {resolution: captureR, previewCandidates} of resolCandidates) {
       for (const constraints of previewCandidates) {
@@ -601,14 +697,46 @@ export class Camera extends View {
         }
         const factory = this.modes_.getModeFactory(mode);
         try {
-          factory.setCaptureResolution(captureR);
-          if (deviceOperator !== null) {
-            factory.prepareDevice(deviceOperator, constraints);
+          await factory.prepareDevice(constraints, captureR);
+
+          // Sets 2500 ms delay between screen resumed and open camera preview.
+          // TODO(b/173679752): Removes this workaround after fix delay on
+          // kernel side.
+          if (loadTimeData.getBoard() === 'zork') {
+            const screenOnTime = performance.now() - this.lastScreenOnTime_;
+            const delay = 2500 - screenOnTime;
+            if (delay > 0) {
+              await util.sleep(delay);
+            }
           }
           const stream = await this.preview_.open(constraints);
-          this.facingMode_ = await this.options_.updateValues(stream);
+          this.facingMode_ = this.preview_.getFacing();
+
+          const enablePTZ = (() => {
+            if (!this.preview_.isSupportPTZ()) {
+              return false;
+            }
+            if (deviceOperator === null) {
+              // All fake VCD support PTZ controls.
+              return true;
+            }
+            if (this.facingMode_ !== Facing.EXTERNAL) {
+              // PTZ function is excluded from builtin camera until we set up
+              // its AVL calibration standard.
+              return false;
+            }
+            return this.modes_.isSupportPTZ(
+                mode,
+                captureR,
+                this.preview_.getResolution(),
+            );
+          })();
+          state.set(state.State.ENABLE_PTZ, enablePTZ);
+
+          this.options_.updateValues(stream, this.facingMode_);
           factory.setPreviewStream(stream);
           factory.setFacing(this.facingMode_);
+
           await this.modes_.updateModeSelectionUI(deviceId);
           await this.modes_.updateMode(
               mode, factory, stream, this.facingMode_, deviceId, captureR);
@@ -618,9 +746,19 @@ export class Camera extends View {
           nav.close(ViewName.WARNING, WarningType.NO_CAMERA);
           return true;
         } catch (e) {
-          factory.clear();
-          this.preview_.close();
-          console.error(e);
+          await factory.clear();
+          await this.stopStreams_();
+
+          let errorToReport = e;
+          // Since OverconstrainedError is not an Error instance.
+          if (e instanceof OverconstrainedError) {
+            errorToReport =
+                new Error(`${e.message} (constraint = ${e.constraint})`);
+            errorToReport.name = 'OverconstrainedError';
+          }
+          error.reportError(
+              ErrorType.START_CAMERA_FAILURE, ErrorLevel.ERROR,
+              assertInstanceof(errorToReport, Error));
         }
       }
     }
@@ -667,7 +805,7 @@ export class Camera extends View {
               this.activeDeviceId_ = currentId;
               const info = await this.infoUpdater_.getDeviceInfo(currentId);
               if (info !== null) {
-                toast.speak('status_msg_camera_switched', info.label);
+                toast.speak(I18nString.STATUS_MSG_CAMERA_SWITCHED, info.label);
               }
               return;
             }
@@ -679,10 +817,12 @@ export class Camera extends View {
       state.set(state.State.CAMERA_CONFIGURING, false);
 
       return true;
-    } catch (error) {
+    } catch (e) {
       this.activeDeviceId_ = null;
-      if (!(error instanceof CameraSuspendedError)) {
-        console.error(error);
+      if (!(e instanceof CameraSuspendedError)) {
+        error.reportError(
+            ErrorType.START_CAMERA_FAILURE, ErrorLevel.ERROR,
+            assertInstanceof(e, Error));
         nav.open(ViewName.WARNING, WarningType.NO_CAMERA);
       }
       // Schedule to retry.
@@ -697,5 +837,16 @@ export class Camera extends View {
       this.perfLogger_.interrupt();
       return false;
     }
+  }
+
+  /**
+   * Stop extra stream and preview stream.
+   * @private
+   */
+  async stopStreams_() {
+    // Stopping preview will wait device close. Therefore, we clear
+    // mode before stopping preview to close extra stream first.
+    await this.modes_.clear();
+    await this.preview_.close();
   }
 }

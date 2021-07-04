@@ -40,13 +40,19 @@ class ExceptionState;
 class FormAssociated;
 class HTMLFormElement;
 class KeyboardEvent;
-class StringOrTrustedScript;
-class StringTreatNullAsEmptyStringOrTrustedScript;
+class V8UnionStringTreatNullAsEmptyStringOrTrustedScript;
 
 enum TranslateAttributeMode {
   kTranslateAttributeYes,
   kTranslateAttributeNo,
   kTranslateAttributeInherit
+};
+
+enum class ContentEditableType {
+  kInherit,
+  kContentEditable,
+  kNotContentEditable,
+  kPlaintextOnly,
 };
 
 class CORE_EXPORT HTMLElement : public Element {
@@ -62,17 +68,18 @@ class CORE_EXPORT HTMLElement : public Element {
 
   String title() const final;
 
-  void setInnerText(const String&, ExceptionState&);
-  virtual void setInnerText(const StringOrTrustedScript&, ExceptionState&);
-  virtual void setInnerText(const StringTreatNullAsEmptyStringOrTrustedScript&,
-                            ExceptionState&);
   String innerText();
-  void innerText(StringOrTrustedScript& result);
-  void innerText(StringTreatNullAsEmptyStringOrTrustedScript& result);
+  void setInnerText(const String&, ExceptionState&);
+  V8UnionStringTreatNullAsEmptyStringOrTrustedScript* innerTextForBinding();
+  virtual void setInnerTextForBinding(
+      const V8UnionStringTreatNullAsEmptyStringOrTrustedScript*
+          string_or_trusted_script,
+      ExceptionState& exception_state);
   void setOuterText(const String&, ExceptionState&);
 
   virtual bool HasCustomFocusLogic() const;
 
+  ContentEditableType contentEditableNormalized() const;
   String contentEditable() const;
   void setContentEditable(const String&, ExceptionState&);
   // For HTMLElement.prototype.isContentEditable. This matches to neither
@@ -108,6 +115,9 @@ class CORE_EXPORT HTMLElement : public Element {
   bool HasDirectionAuto() const;
 
   virtual bool IsHTMLBodyElement() const { return false; }
+  // TODO(crbug.com/1123606): Remove this virtual method once the fenced frame
+  // origin trial is over.
+  virtual bool IsHTMLFencedFrameElement() const { return false; }
   virtual bool IsHTMLFrameSetElement() const { return false; }
   virtual bool IsHTMLPortalElement() const { return false; }
   virtual bool IsHTMLUnknownElement() const { return false; }
@@ -153,12 +163,12 @@ class CORE_EXPORT HTMLElement : public Element {
   virtual FormAssociated* ToFormAssociatedOrNull() { return nullptr; }
   bool IsFormAssociatedCustomElement() const;
 
-  void AddCandidateDirectionalityForSlot();
   static void AdjustCandidateDirectionalityForSlot(
-      HeapHashSet<Member<HTMLElement>> candidate_set);
+      HeapHashSet<Member<Node>> candidate_set);
   void UpdateDescendantHasDirAutoAttribute(bool has_dir_auto);
   void UpdateDirectionalityAndDescendant(TextDirection direction);
   void UpdateDescendantDirectionality(TextDirection direction);
+  void AdjustDirectionalityIfNeededAfterShadowRootChanged();
   void BeginParsingChildren() override;
 
  protected:

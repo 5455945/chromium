@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <memory>
 #include <queue>
 #include <string>
 #include <utility>
@@ -20,7 +21,6 @@
 #include "base/containers/stack.h"
 #include "base/guid.h"
 #include "base/i18n/string_compare.h"
-#include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/android/chrome_jni_headers/BookmarkBridge_jni.h"
 #include "chrome/browser/android/bookmarks/partner_bookmarks_reader.h"
@@ -111,7 +111,7 @@ BookmarkBridge::BookmarkBridge(JNIEnv* env,
       partner_bookmarks_shim_(nullptr) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   profile_ = ProfileAndroid::FromProfileAndroid(j_profile);
-  profile_observer_.Add(profile_);
+  profile_observation_.Observe(profile_);
   bookmark_model_ = BookmarkModelFactory::GetForBrowserContext(profile_);
   managed_bookmark_service_ =
       ManagedBookmarkServiceFactory::GetForProfile(profile_);
@@ -144,8 +144,10 @@ BookmarkBridge::BookmarkBridge(JNIEnv* env,
 }
 
 BookmarkBridge::~BookmarkBridge() {
-  if (profile_)
-    profile_observer_.Remove(profile_);
+  if (profile_) {
+    DCHECK(profile_observation_.IsObservingSource(profile_));
+    profile_observation_.Reset();
+  }
   bookmark_model_->RemoveObserver(this);
   if (partner_bookmarks_shim_)
     partner_bookmarks_shim_->RemoveObserver(this);
@@ -241,11 +243,11 @@ void BookmarkBridge::LoadFakePartnerBookmarkShimForTesting(
   BookmarkNode* partner_bookmark_a =
       root_partner_node->Add(std::make_unique<BookmarkNode>(
           1, base::GUID::GenerateRandomV4(), GURL("http://www.a.com")));
-  partner_bookmark_a->SetTitle(base::ASCIIToUTF16("Partner Bookmark A"));
+  partner_bookmark_a->SetTitle(u"Partner Bookmark A");
   BookmarkNode* partner_bookmark_b =
       root_partner_node->Add(std::make_unique<BookmarkNode>(
           2, base::GUID::GenerateRandomV4(), GURL("http://www.b.com")));
-  partner_bookmark_b->SetTitle(base::ASCIIToUTF16("Partner Bookmark B"));
+  partner_bookmark_b->SetTitle(u"Partner Bookmark B");
   partner_bookmarks_shim_->SetPartnerBookmarksRoot(
       std::move(root_partner_node));
   PartnerBookmarksShim::DisablePartnerBookmarksEditing();
@@ -448,7 +450,7 @@ jint BookmarkBridge::GetChildCount(JNIEnv* env,
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK(IsLoaded());
   const BookmarkNode* node = GetNodeByID(id, type);
-  return jint{node->children().size()};
+  return static_cast<jint>(node->children().size());
 }
 
 void BookmarkBridge::GetChildIDs(JNIEnv* env,
@@ -494,7 +496,8 @@ ScopedJavaLocalRef<jobject> BookmarkBridge::GetChildAt(
 
   const BookmarkNode* parent = GetNodeByID(id, type);
   DCHECK(parent);
-  const BookmarkNode* child = parent->children()[size_t{index}].get();
+  const BookmarkNode* child =
+      parent->children()[static_cast<size_t>(index)].get();
   return JavaBookmarkIdCreateBookmarkId(
       env, child->id(), GetBookmarkType(child));
 }
@@ -549,7 +552,7 @@ void BookmarkBridge::SetBookmarkTitle(JNIEnv* env,
   DCHECK(IsLoaded());
 
   const BookmarkNode* bookmark = GetNodeByID(id, type);
-  const base::string16 title =
+  const std::u16string title =
       base::android::ConvertJavaStringToUTF16(env, j_title);
 
   if (partner_bookmarks_shim_->IsPartnerBookmark(bookmark)) {
@@ -690,8 +693,8 @@ void BookmarkBridge::SearchBookmarks(JNIEnv* env,
   std::vector<const BookmarkNode*> results;
 
   bookmarks::QueryFields query;
-  query.word_phrase_query.reset(new base::string16(
-      base::android::ConvertJavaStringToUTF16(env, j_query)));
+  query.word_phrase_query = std::make_unique<std::u16string>(
+      base::android::ConvertJavaStringToUTF16(env, j_query));
 
   GetBookmarksMatchingProperties(bookmark_model_, query, max_results, &results);
 
@@ -724,7 +727,7 @@ ScopedJavaLocalRef<jobject> BookmarkBridge::AddFolder(
   const BookmarkNode* parent = GetNodeByID(bookmark_id, type);
 
   const BookmarkNode* new_node = bookmark_model_->AddFolder(
-      parent, size_t{index},
+      parent, static_cast<size_t>(index),
       base::android::ConvertJavaStringToUTF16(env, j_title));
   DCHECK(new_node);
   ScopedJavaLocalRef<jobject> new_java_obj =
@@ -793,7 +796,7 @@ void BookmarkBridge::MoveBookmark(
   const BookmarkNode* new_parent_node = GetNodeByID(bookmark_id, type);
   // Bookmark should not be moved to its own parent folder
   if (node->parent() != new_parent_node) {
-    bookmark_model_->Move(node, new_parent_node, size_t{index});
+    bookmark_model_->Move(node, new_parent_node, static_cast<size_t>(index));
   }
 }
 
@@ -811,7 +814,7 @@ ScopedJavaLocalRef<jobject> BookmarkBridge::AddBookmark(
   const BookmarkNode* parent = GetNodeByID(bookmark_id, type);
 
   const BookmarkNode* new_node = bookmark_model_->AddURL(
-      parent, size_t{index},
+      parent, static_cast<size_t>(index),
       base::android::ConvertJavaStringToUTF16(env, j_title),
       *url::GURLAndroid::ToNativeGURL(env, j_url));
   DCHECK(new_node);
@@ -874,8 +877,8 @@ void BookmarkBridge::StartGroupingUndos(JNIEnv* env,
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK(IsLoaded());
   DCHECK(!grouped_bookmark_actions_.get());  // shouldn't have started already
-  grouped_bookmark_actions_.reset(
-      new bookmarks::ScopedGroupBookmarkActions(bookmark_model_));
+  grouped_bookmark_actions_ =
+      std::make_unique<bookmarks::ScopedGroupBookmarkActions>(bookmark_model_);
 }
 
 void BookmarkBridge::EndGroupingUndos(JNIEnv* env,
@@ -893,7 +896,7 @@ bool BookmarkBridge::IsBookmarked(JNIEnv* env,
       *url::GURLAndroid::ToNativeGURL(env, gurl));
 }
 
-base::string16 BookmarkBridge::GetTitle(const BookmarkNode* node) const {
+std::u16string BookmarkBridge::GetTitle(const BookmarkNode* node) const {
   if (partner_bookmarks_shim_->IsPartnerBookmark(node))
     return partner_bookmarks_shim_->GetTitle(node);
 
@@ -1096,8 +1099,8 @@ void BookmarkBridge::BookmarkNodeMoved(BookmarkModel* model,
   if (obj.is_null())
     return;
   Java_BookmarkBridge_bookmarkNodeMoved(
-      env, obj, CreateJavaBookmark(old_parent), int{old_index},
-      CreateJavaBookmark(new_parent), int{new_index});
+      env, obj, CreateJavaBookmark(old_parent), static_cast<int>(old_index),
+      CreateJavaBookmark(new_parent), static_cast<int>(new_index));
 }
 
 void BookmarkBridge::BookmarkNodeAdded(BookmarkModel* model,
@@ -1111,7 +1114,7 @@ void BookmarkBridge::BookmarkNodeAdded(BookmarkModel* model,
   if (obj.is_null())
     return;
   Java_BookmarkBridge_bookmarkNodeAdded(env, obj, CreateJavaBookmark(parent),
-                                        int{index});
+                                        static_cast<int>(index));
 }
 
 void BookmarkBridge::BookmarkNodeRemoved(BookmarkModel* model,
@@ -1127,7 +1130,7 @@ void BookmarkBridge::BookmarkNodeRemoved(BookmarkModel* model,
   if (obj.is_null())
     return;
   Java_BookmarkBridge_bookmarkNodeRemoved(env, obj, CreateJavaBookmark(parent),
-                                          int{old_index},
+                                          static_cast<int>(old_index),
                                           CreateJavaBookmark(node));
 }
 

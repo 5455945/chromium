@@ -11,6 +11,8 @@
 #include "base/base64.h"
 #include "base/bind.h"
 #include "base/callback_helpers.h"
+#include "base/containers/contains.h"
+#include "base/containers/cxx20_erase.h"
 #include "base/guid.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
@@ -18,6 +20,7 @@
 #include "base/macros.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_piece.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/post_task.h"
@@ -69,16 +72,16 @@ base::DictionaryValue BuildObjectForResponse(const net::HttpResponseHeaders* rh,
   response.SetInteger("netError", net_error);
   response.SetString("netErrorName", net::ErrorToString(net_error));
 
-  auto headers = std::make_unique<base::DictionaryValue>();
+  base::DictionaryValue headers;
   size_t iterator = 0;
   std::string name;
   std::string value;
   // TODO(caseq): this probably needs to handle duplicate header names
   // correctly by folding them.
   while (rh && rh->EnumerateHeaderLines(&iterator, &name, &value))
-    headers->SetString(name, value);
+    headers.SetString(name, value);
 
-  response.Set("headers", std::move(headers));
+  response.SetKey("headers", std::move(headers));
   return response;
 }
 
@@ -199,7 +202,10 @@ void ShellDevToolsBindings::ReadyToCommitNavigation(
     NavigationHandle* navigation_handle) {
 #if !defined(OS_ANDROID)
   content::RenderFrameHost* frame = navigation_handle->GetRenderFrameHost();
-  if (navigation_handle->IsInMainFrame()) {
+  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
+  // frames. This caller was converted automatically to the primary main frame
+  // to preserve its semantics. Follow up to confirm correctness.
+  if (navigation_handle->IsInPrimaryMainFrame()) {
     frontend_host_ = DevToolsFrontendHost::Create(
         frame, base::BindRepeating(
                    &ShellDevToolsBindings::HandleMessageFromDevToolsFrontend,
@@ -255,14 +261,11 @@ void ShellDevToolsBindings::WebContentsDestroyed() {
 }
 
 void ShellDevToolsBindings::HandleMessageFromDevToolsFrontend(
-    const std::string& message) {
+    base::Value message) {
   std::string method;
   base::ListValue* params = nullptr;
   base::DictionaryValue* dict = nullptr;
-  std::unique_ptr<base::Value> parsed_message =
-      base::JSONReader::ReadDeprecated(message);
-  if (!parsed_message || !parsed_message->GetAsDictionary(&dict) ||
-      !dict->GetString("method", &method)) {
+  if (!message.GetAsDictionary(&dict) || !dict->GetString("method", &method)) {
     return;
   }
   int request_id = 0;
@@ -329,8 +332,8 @@ void ShellDevToolsBindings::HandleMessageFromDevToolsFrontend(
     resource_request->site_for_cookies = net::SiteForCookies::FromUrl(gurl);
     resource_request->headers.AddHeadersFromString(headers);
 
-    auto* partition = content::BrowserContext::GetStoragePartitionForSite(
-        web_contents()->GetBrowserContext(), gurl);
+    auto* partition =
+        web_contents()->GetBrowserContext()->GetStoragePartitionForUrl(gurl);
     auto factory = partition->GetURLLoaderFactoryForBrowserProcess();
 
     auto simple_url_loader = network::SimpleURLLoader::Create(
@@ -384,7 +387,7 @@ void ShellDevToolsBindings::DispatchProtocolMessage(
                                 message.size());
   if (str_message.length() < kShellMaxMessageChunkSize) {
     CallClientFunction("DevToolsAPI", "dispatchMessage",
-                       base::Value(str_message.as_string()));
+                       base::Value(std::string(str_message)));
   } else {
     size_t total_size = str_message.length();
     for (size_t pos = 0; pos < str_message.length();
@@ -394,7 +397,7 @@ void ShellDevToolsBindings::DispatchProtocolMessage(
 
       CallClientFunction(
           "DevToolsAPI", "dispatchMessageChunk",
-          base::Value(str_message_chunk.as_string()),
+          base::Value(std::string(str_message_chunk)),
           base::Value(base::NumberToString(pos ? 0 : total_size)));
     }
   }

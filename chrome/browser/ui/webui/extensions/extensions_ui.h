@@ -31,7 +31,7 @@ class ExtensionsUI : public content::WebContentsObserver,
   ~ExtensionsUI() override;
 
   static base::RefCountedMemory* GetFaviconResourceBytes(
-      ui::ScaleFactor scale_factor);
+      ui::ResourceScaleFactor scale_factor);
 
   static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
@@ -48,7 +48,7 @@ class ExtensionsUI : public content::WebContentsObserver,
   WebuiLoadTimer webui_load_timer_;
 
   // Time the chrome://extensions page has been open.
-  base::Optional<base::ElapsedTimer> timer_;
+  absl::optional<base::ElapsedTimer> timer_;
 };
 
 }  // namespace extensions

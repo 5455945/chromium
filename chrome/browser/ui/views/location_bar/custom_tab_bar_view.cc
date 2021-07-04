@@ -28,6 +28,9 @@
 #include "content/public/browser/navigation_entry.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/gfx/canvas.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/geometry/rect.h"
@@ -42,8 +45,6 @@
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/layout/flex_layout_types.h"
-#include "ui/views/metadata/metadata_header_macros.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/style/typography_provider.h"
 #include "ui/views/view_class_properties.h"
@@ -103,7 +104,7 @@ class CustomTabBarTitleOriginView : public views::View {
   CustomTabBarTitleOriginView(SkColor background_color,
                               bool should_show_title) {
     auto location_label = std::make_unique<views::Label>(
-        base::string16(), views::style::CONTEXT_LABEL,
+        std::u16string(), views::style::CONTEXT_LABEL,
         views::style::STYLE_SECONDARY,
         gfx::DirectionalityMode::DIRECTIONALITY_AS_URL);
 
@@ -118,7 +119,7 @@ class CustomTabBarTitleOriginView : public views::View {
 
     if (should_show_title) {
       auto title_label = std::make_unique<views::Label>(
-          base::string16(), views::style::CONTEXT_LABEL);
+          std::u16string(), views::style::CONTEXT_LABEL);
 
       title_label->SetElideBehavior(gfx::ElideBehavior::ELIDE_TAIL);
       title_label->SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_LEFT);
@@ -135,7 +136,7 @@ class CustomTabBarTitleOriginView : public views::View {
         .SetCrossAxisAlignment(views::LayoutAlignment::kStart);
   }
 
-  void Update(const base::string16 title, const base::string16 location) {
+  void Update(const std::u16string title, const std::u16string location) {
     if (title_label_)
       title_label_->SetText(title);
     location_label_->SetText(location);
@@ -197,7 +198,7 @@ BEGIN_METADATA(CustomTabBarTitleOriginView, views::View)
 ADD_READONLY_PROPERTY_METADATA(int, MinimumWidth)
 ADD_READONLY_PROPERTY_METADATA(SkColor,
                                LocationColor,
-                               views::metadata::SkColorConverter)
+                               ui::metadata::SkColorConverter)
 END_METADATA
 
 CustomTabBarView::CustomTabBarView(BrowserView* browser_view,
@@ -218,8 +219,8 @@ CustomTabBarView::CustomTabBarView(BrowserView* browser_view,
   close_button_->SetFocusBehavior(views::View::FocusBehavior::ACCESSIBLE_ONLY);
   views::InstallCircleHighlightPathGenerator(close_button_);
 
-  location_icon_view_ =
-      AddChildView(std::make_unique<LocationIconView>(font_list, this, this));
+  location_icon_view_ = AddChildView(std::make_unique<LocationIconView>(
+      font_list, this, this, browser_->profile()));
 
   auto title_origin_view = std::make_unique<CustomTabBarTitleOriginView>(
       background_color_, GetShowTitle());
@@ -321,7 +322,7 @@ void CustomTabBarView::ChildPreferredSizeChanged(views::View* child) {
 
 void CustomTabBarView::OnThemeChanged() {
   views::AccessiblePaneView::OnThemeChanged();
-  base::Optional<SkColor> optional_theme_color = GetThemeColor();
+  absl::optional<SkColor> optional_theme_color = GetThemeColor();
 
   title_bar_color_ = optional_theme_color.value_or(GetDefaultFrameColor());
 
@@ -362,7 +363,7 @@ void CustomTabBarView::UpdateContents() {
     return;
 
   content::NavigationEntry* entry = contents->GetController().GetVisibleEntry();
-  base::string16 title, location;
+  std::u16string title, location;
   if (entry) {
     title = Browser::FormatTitleForDisplay(entry->GetTitleForDisplay());
     if (ShouldDisplayUrl(contents)) {
@@ -533,10 +534,10 @@ void CustomTabBarView::ShowContextMenuForViewImpl(
       views::MenuAnchorPosition::kTopLeft, source_type);
 }
 
-base::Optional<SkColor> CustomTabBarView::GetThemeColor() const {
+absl::optional<SkColor> CustomTabBarView::GetThemeColor() const {
   web_app::AppBrowserController* application_controller = app_controller();
   return application_controller ? application_controller->GetThemeColor()
-                                : base::nullopt;
+                                : absl::nullopt;
 }
 
 bool CustomTabBarView::GetShowTitle() const {
@@ -546,7 +547,7 @@ bool CustomTabBarView::GetShowTitle() const {
 BEGIN_METADATA(CustomTabBarView, views::AccessiblePaneView)
 ADD_READONLY_PROPERTY_METADATA(SkColor,
                                DefaultFrameColor,
-                               views::metadata::SkColorConverter)
-ADD_READONLY_PROPERTY_METADATA(base::Optional<SkColor>, ThemeColor)
+                               ui::metadata::SkColorConverter)
+ADD_READONLY_PROPERTY_METADATA(absl::optional<SkColor>, ThemeColor)
 ADD_READONLY_PROPERTY_METADATA(bool, ShowTitle)
 END_METADATA

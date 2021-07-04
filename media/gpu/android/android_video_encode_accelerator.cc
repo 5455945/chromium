@@ -145,10 +145,9 @@ bool AndroidVideoEncodeAccelerator::Initialize(const Config& config,
   DCHECK(thread_checker_.CalledOnValidThread());
   DCHECK(client);
 
-  client_ptr_factory_.reset(new base::WeakPtrFactory<Client>(client));
+  client_ptr_factory_ = std::make_unique<base::WeakPtrFactory<Client>>(client);
 
-  if (!(MediaCodecUtil::SupportsSetParameters() &&
-        config.input_format == PIXEL_FORMAT_I420)) {
+  if (config.input_format != PIXEL_FORMAT_I420) {
     DLOG(ERROR) << "Unexpected combo: " << config.input_format << ", "
                 << GetProfileName(config.output_profile);
     return false;
@@ -177,7 +176,7 @@ bool AndroidVideoEncodeAccelerator::Initialize(const Config& config,
   }
 
   frame_size_ = config.input_visible_size;
-  last_set_bitrate_ = config.initial_bitrate;
+  last_set_bitrate_ = config.bitrate.target();
 
   // Only consider using MediaCodec if it's likely backed by hardware.
   if (MediaCodecUtil::IsKnownUnaccelerated(codec,
@@ -192,7 +191,7 @@ bool AndroidVideoEncodeAccelerator::Initialize(const Config& config,
     return false;
   }
   media_codec_ = MediaCodecBridgeImpl::CreateVideoEncoder(
-      codec, config.input_visible_size, config.initial_bitrate,
+      codec, config.input_visible_size, config.bitrate.target(),
       INITIAL_FRAMERATE, i_frame_interval, pixel_format);
 
   if (!media_codec_) {

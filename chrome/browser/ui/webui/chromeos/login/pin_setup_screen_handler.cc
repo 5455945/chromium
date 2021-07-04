@@ -6,7 +6,7 @@
 
 #include "base/i18n/number_formatting.h"
 #include "base/strings/string_number_conversions.h"
-#include "chrome/browser/chromeos/login/screens/pin_setup_screen.h"
+#include "chrome/browser/ash/login/screens/pin_setup_screen.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/login/localized_values_builder.h"
 
@@ -59,6 +59,8 @@ void PinSetupScreenHandler::DeclareLocalizedValues(
                IDS_SETTINGS_PEOPLE_CONFIGURE_PIN_TOO_LONG);
   builder->Add("configurePinWeakPin",
                IDS_SETTINGS_PEOPLE_CONFIGURE_PIN_WEAK_PIN);
+  builder->Add("internalError",
+               IDS_SETTINGS_PEOPLE_CONFIGURE_PIN_INTERNAL_ERROR);
 }
 
 void PinSetupScreenHandler::RegisterMessages() {
@@ -85,6 +87,13 @@ void PinSetupScreenHandler::Show(const std::string& token) {
 }
 
 void PinSetupScreenHandler::SetLoginSupportAvailable(bool available) {
+  // TODO(crbug.com/1180291) - Remove once OOBE JS calls are fixed.
+  if (!IsSafeToCallJavascript()) {
+    LOG(ERROR)
+        << "Silently dropping login.PinSetupScreen.setHasLoginSupport request.";
+    return;
+  }
+
   CallJS("login.PinSetupScreen.setHasLoginSupport", available);
 }
 

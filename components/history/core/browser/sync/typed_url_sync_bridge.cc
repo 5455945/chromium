@@ -8,7 +8,8 @@
 
 #include "base/auto_reset.h"
 #include "base/big_endian.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/logging.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/sync/model/mutable_data_batch.h"
 #include "components/sync/model/sync_metadata_store_change_list.h"
@@ -46,6 +47,21 @@ static const int kTypedUrlVisitThrottleThreshold = 10;
 // N, we sync up every Nth update (i.e. when typed_count % N == 0).
 static const int kTypedUrlVisitThrottleMultiple = 10;
 
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class SyncTypedUrlDatabaseError {
+  kMergeSyncDataRead = 0,
+  kMergeSyncDataWriteData = 1,
+  kMergeSyncDataWriteMetadata = 2,
+  kApplySyncChangesWriteData = 3,
+  kApplySyncChangesWriteMetadata = 4,
+  kOnURLsDeletedReadMetadata = 5,
+  kOnDatabaseError = 6,
+  kLoadMetadataOpen = 7,
+  kLoadMetadataRead = 8,
+  kMaxValue = kLoadMetadataRead
+};
+
 // Enforce oldest to newest visit order.
 static bool CheckVisitOrdering(const VisitVector& visits) {
   int64_t previous_visit_time = 0;
@@ -75,6 +91,10 @@ bool HasTypedUrl(const VisitVector& visits) {
   return typed_url_visit != visits.end();
 }
 
+void RecordDatabaseError(SyncTypedUrlDatabaseError error) {
+  base::UmaHistogramEnumeration("Sync.TypedURLDatabaseError", error);
+}
+
 }  // namespace
 
 TypedURLSyncBridge::TypedURLSyncBridge(
@@ -98,7 +118,7 @@ TypedURLSyncBridge::CreateMetadataChangeList() {
       sync_metadata_database_, syncer::TYPED_URLS);
 }
 
-base::Optional<ModelError> TypedURLSyncBridge::MergeSyncData(
+absl::optional<ModelError> TypedURLSyncBridge::MergeSyncData(
     std::unique_ptr<MetadataChangeList> metadata_change_list,
     EntityChangeList entity_data) {
   DCHECK(sequence_checker_.CalledOnValidSequence());
@@ -112,6 +132,7 @@ base::Optional<ModelError> TypedURLSyncBridge::MergeSyncData(
   URLVisitVectorMap local_visit_vectors;
 
   if (!GetValidURLsAndVisits(&local_visit_vectors, &new_db_urls)) {
+    RecordDatabaseError(SyncTypedUrlDatabaseError::kMergeSyncDataRead);
     return ModelError(
         FROM_HERE, "Could not get the typed_url entries from HistoryBackend.");
   }
@@ -123,7 +144,7 @@ base::Optional<ModelError> TypedURLSyncBridge::MergeSyncData(
 
   // Iterate through entity_data and check for all the urls that
   // sync already knows about. MergeURLWithSync() will remove urls that
-  // are the same as the synced ones from |new_db_urls|.
+  // are the same as the synced ones from `new_db_urls`.
   for (const std::unique_ptr<EntityChange>& entity_change : entity_data) {
     DCHECK(entity_change->data().specifics.has_typed_url());
     const TypedUrlSpecifics& specifics =
@@ -147,11 +168,13 @@ base::Optional<ModelError> TypedURLSyncBridge::MergeSyncData(
                      &updated_synced_urls);
   }
 
-  base::Optional<ModelError> error =
+  absl::optional<ModelError> error =
       WriteToHistoryBackend(&new_synced_urls, &updated_synced_urls, nullptr,
                             &new_synced_visits, nullptr);
-  if (error)
+  if (error) {
+    RecordDatabaseError(SyncTypedUrlDatabaseError::kMergeSyncDataWriteData);
     return error;
+  }
 
   // Update storage key here first, and then send updated typed URL to sync
   // below, otherwise processor will have duplicate entries.
@@ -175,12 +198,17 @@ base::Optional<ModelError> TypedURLSyncBridge::MergeSyncData(
                             metadata_change_list.get());
   }
 
-  return static_cast<syncer::SyncMetadataStoreChangeList*>(
-             metadata_change_list.get())
-      ->TakeError();
+  absl::optional<ModelError> metadata_error =
+      static_cast<syncer::SyncMetadataStoreChangeList*>(
+          metadata_change_list.get())
+          ->TakeError();
+  if (metadata_error) {
+    RecordDatabaseError(SyncTypedUrlDatabaseError::kMergeSyncDataWriteMetadata);
+  }
+  return metadata_error;
 }
 
-base::Optional<ModelError> TypedURLSyncBridge::ApplySyncChanges(
+absl::optional<ModelError> TypedURLSyncBridge::ApplySyncChanges(
     std::unique_ptr<MetadataChangeList> metadata_change_list,
     EntityChangeList entity_changes) {
   DCHECK(sequence_checker_.CalledOnValidSequence());
@@ -198,7 +226,7 @@ base::Optional<ModelError> TypedURLSyncBridge::ApplySyncChanges(
           entity_change->storage_key());
       if (!history_backend_->GetURLByID(url_id, &url_row)) {
         // Ignoring the case that there is no matching URLRow with URLID
-        // |url_id|.
+        // `url_id`.
         continue;
       }
 
@@ -224,11 +252,13 @@ base::Optional<ModelError> TypedURLSyncBridge::ApplySyncChanges(
                    &updated_synced_urls, &new_synced_urls);
   }
 
-  base::Optional<ModelError> error = WriteToHistoryBackend(
+  absl::optional<ModelError> error = WriteToHistoryBackend(
       &new_synced_urls, &updated_synced_urls, &pending_deleted_urls,
       &new_synced_visits, &deleted_visits);
-  if (error)
+  if (error) {
+    RecordDatabaseError(SyncTypedUrlDatabaseError::kApplySyncChangesWriteData);
     return error;
+  }
 
   // New entities were either ignored or written to history DB and assigned a
   // storage key. Notify processor about updated storage keys.
@@ -247,9 +277,15 @@ base::Optional<ModelError> TypedURLSyncBridge::ApplySyncChanges(
     }
   }
 
-  return static_cast<syncer::SyncMetadataStoreChangeList*>(
-             metadata_change_list.get())
-      ->TakeError();
+  absl::optional<ModelError> metadata_error =
+      static_cast<syncer::SyncMetadataStoreChangeList*>(
+          metadata_change_list.get())
+          ->TakeError();
+  if (metadata_error) {
+    RecordDatabaseError(
+        SyncTypedUrlDatabaseError::kApplySyncChangesWriteMetadata);
+  }
+  return metadata_error;
 }
 
 void TypedURLSyncBridge::GetData(StorageKeyList storage_keys,
@@ -262,7 +298,7 @@ void TypedURLSyncBridge::GetData(StorageKeyList storage_keys,
     URLID url_id = TypedURLSyncMetadataDatabase::StorageKeyToURLID(key);
 
     if (!history_backend_->GetURLByID(url_id, &url_row)) {
-      // Ignoring the case which no matching URLRow with URLID |url_id|.
+      // Ignoring the case which no matching URLRow with URLID `url_id`.
       DLOG(ERROR) << "Could not find URL for id: " << url_id;
       continue;
     }
@@ -414,6 +450,8 @@ void TypedURLSyncBridge::OnURLsDeleted(HistoryBackend* history_backend,
   if (all_history) {
     auto batch = std::make_unique<syncer::MetadataBatch>();
     if (!sync_metadata_database_->GetAllSyncMetadata(batch.get())) {
+      RecordDatabaseError(
+          SyncTypedUrlDatabaseError::kOnURLsDeletedReadMetadata);
       change_processor()->ReportError({FROM_HERE,
                                        "Failed reading typed url metadata from "
                                        "TypedURLSyncMetadataDatabase."});
@@ -442,6 +480,7 @@ void TypedURLSyncBridge::Init() {
 
 void TypedURLSyncBridge::OnDatabaseError() {
   sync_metadata_database_ = nullptr;
+  RecordDatabaseError(SyncTypedUrlDatabaseError::kOnDatabaseError);
   change_processor()->ReportError(
       {FROM_HERE, "HistoryDatabase encountered error"});
 }
@@ -548,7 +587,7 @@ TypedURLSyncBridge::MergeResult TypedURLSyncBridge::MergeUrls(
   CHECK_EQ(sync_url.visits_size(), sync_url.visit_transitions_size());
 
   // Convert these values only once.
-  base::string16 sync_url_title(base::UTF8ToUTF16(sync_url.title()));
+  std::u16string sync_url_title(base::UTF8ToUTF16(sync_url.title()));
   base::Time sync_url_last_visit = base::Time::FromInternalValue(
       sync_url.visits(sync_url.visits_size() - 1));
 
@@ -723,6 +762,7 @@ void TypedURLSyncBridge::UpdateURLRowFromTypedUrlSpecifics(
 
 void TypedURLSyncBridge::LoadMetadata() {
   if (!history_backend_ || !sync_metadata_database_) {
+    RecordDatabaseError(SyncTypedUrlDatabaseError::kLoadMetadataOpen);
     change_processor()->ReportError(
         {FROM_HERE, "Failed to load TypedURLSyncMetadataDatabase."});
     return;
@@ -730,6 +770,7 @@ void TypedURLSyncBridge::LoadMetadata() {
 
   auto batch = std::make_unique<syncer::MetadataBatch>();
   if (!sync_metadata_database_->GetAllSyncMetadata(batch.get())) {
+    RecordDatabaseError(SyncTypedUrlDatabaseError::kLoadMetadataRead);
     change_processor()->ReportError({FROM_HERE,
                                      "Failed reading typed url metadata from "
                                      "TypedURLSyncMetadataDatabase."});
@@ -775,7 +816,7 @@ void TypedURLSyncBridge::MergeURLWithSync(
     bool is_existing_url =
         history_backend_->GetURL(untyped_url.url(), &untyped_url);
     if (is_existing_url) {
-      // Add a new entry to |local_typed_urls|, and set the iterator to it.
+      // Add a new entry to `local_typed_urls`, and set the iterator to it.
       VisitVector untyped_visits;
       if (!FixupURLAndGetVisits(&untyped_url, &untyped_visits)) {
         return;
@@ -785,7 +826,7 @@ void TypedURLSyncBridge::MergeURLWithSync(
       // Store row info that will be used to update sync's visits.
       (*local_typed_urls)[untyped_url.url()] = untyped_url;
 
-      // Set iterator |it| to point to this entry.
+      // Set iterator `it` to point to this entry.
       it = local_typed_urls->find(untyped_url.url());
       DCHECK(it != local_typed_urls->end());
       // Continue with merge below.
@@ -821,7 +862,7 @@ void TypedURLSyncBridge::MergeURLWithSync(
   // Empty URLs should be filtered out by ShouldIgnoreUrl() previously.
   DCHECK(!it->second.url().spec().empty());
 
-  // Initialize fields in |new_url| to the same values as the fields in
+  // Initialize fields in `new_url` to the same values as the fields in
   // the existing URLRow in the history DB. This is needed because we
   // overwrite the existing value in WriteToHistoryBackend(), but some of
   // the values in that structure are not synced (like typed_count).
@@ -926,7 +967,7 @@ void TypedURLSyncBridge::UpdateSyncFromLocal(
     // If the URL has no typed visits any more we should get rid of it. It is
     // possible that this URL never had typed visits and thus it has no sync
     // entity and no sync metadata. We do not need to check for this case
-    // as all the code below is no-op if there is no sync metadata for |row|.
+    // as all the code below is no-op if there is no sync metadata for `row`.
     if (is_from_expiration) {
       // Only remove its metadata as we do not sync up deletions for expired
       // entities (see the comment in OnURLsDeleted()).
@@ -942,13 +983,13 @@ void TypedURLSyncBridge::UpdateSyncFromLocal(
 void TypedURLSyncBridge::ExpireMetadataForURL(const URLRow& row) {
   std::string storage_key = GetStorageKeyFromURLRow(row);
   // The following functions need to tolerate if there exists no metadata
-  // for |storage_key| as we might call this function multiple times for a given
+  // for `storage_key` as we might call this function multiple times for a given
   // url.
   sync_metadata_database_->ClearSyncMetadata(syncer::TYPED_URLS, storage_key);
   change_processor()->UntrackEntityForStorageKey(storage_key);
 }
 
-base::Optional<ModelError> TypedURLSyncBridge::WriteToHistoryBackend(
+absl::optional<ModelError> TypedURLSyncBridge::WriteToHistoryBackend(
     const URLRows* new_urls,
     const URLRows* updated_urls,
     const std::vector<GURL>* deleted_urls,

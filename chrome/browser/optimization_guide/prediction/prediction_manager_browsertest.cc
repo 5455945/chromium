@@ -6,8 +6,10 @@
 
 #include "base/base64.h"
 #include "base/callback_helpers.h"
+#include "base/files/file_util.h"
 #include "base/run_loop.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
+#include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/scoped_run_loop_timeout.h"
@@ -19,6 +21,7 @@
 #include "chrome/browser/optimization_guide/prediction/prediction_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -26,20 +29,21 @@
 #include "components/metrics/content/subprocess_metrics_provider.h"
 #include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
-#include "components/optimization_guide/core/optimization_guide_session_statistic.h"
 #include "components/optimization_guide/core/optimization_guide_store.h"
 #include "components/optimization_guide/core/optimization_guide_switches.h"
 #include "components/optimization_guide/core/optimization_guide_test_util.h"
 #include "components/optimization_guide/core/store_update_data.h"
 #include "components/optimization_guide/proto/models.pb.h"
-#include "components/page_load_metrics/browser/page_load_metrics_test_waiter.h"
-#include "components/previews/core/previews_features.h"
 #include "components/variations/hashing.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/network_connection_change_simulator.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
+
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+#include "ash/constants/ash_switches.h"
+#endif
 
 namespace {
 
@@ -139,9 +143,6 @@ CreatePredictionModel() {
   optimization_guide::proto::ModelInfo* model_info =
       prediction_model->mutable_model_info();
   model_info->set_version(1);
-  model_info->add_supported_model_features(
-      optimization_guide::proto::
-          CLIENT_MODEL_FEATURE_EFFECTIVE_CONNECTION_TYPE);
   model_info->add_supported_host_model_features("agg1");
   model_info->set_optimization_target(
       optimization_guide::proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD);
@@ -151,30 +152,13 @@ CreatePredictionModel() {
 }
 
 std::unique_ptr<optimization_guide::proto::GetModelsResponse>
-BuildGetModelsResponse(
-    const std::vector<std::string>& hosts,
-    const std::vector<optimization_guide::proto::ClientModelFeature>&
-        client_model_features) {
+BuildGetModelsResponse() {
   std::unique_ptr<optimization_guide::proto::GetModelsResponse>
       get_models_response =
           std::make_unique<optimization_guide::proto::GetModelsResponse>();
 
-  for (const auto& host : hosts) {
-    optimization_guide::proto::HostModelFeatures* host_model_features =
-        get_models_response->add_host_model_features();
-    host_model_features->set_host(host);
-    optimization_guide::proto::ModelFeature* model_feature =
-        host_model_features->add_model_features();
-    model_feature->set_feature_name("agg1");
-    model_feature->set_double_value(2.0);
-  }
-
   std::unique_ptr<optimization_guide::proto::PredictionModel> prediction_model =
       CreatePredictionModel();
-  for (const auto& client_model_feature : client_model_features) {
-    prediction_model->mutable_model_info()->add_supported_model_features(
-        client_model_feature);
-  }
   prediction_model->mutable_model_info()->set_version(2);
   *get_models_response->add_models() = *prediction_model.get();
 
@@ -211,7 +195,7 @@ class OptimizationGuideConsumerWebContentsObserver
       // make sure decisions are the same in both sync and async variants.
       service->ShouldTargetNavigationAsync(
           navigation_handle,
-          optimization_guide::proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD, {},
+          optimization_guide::proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD,
           std::move(callback_));
     }
   }
@@ -333,21 +317,9 @@ class PredictionManagerBrowserTestBase : public InProcessBrowserTest {
     return optimization_guide_keyed_service->GetPredictionManager();
   }
 
-  std::unique_ptr<page_load_metrics::PageLoadMetricsTestWaiter>
-  CreatePageLoadMetricsTestWaiter() {
-    content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
-    return std::make_unique<page_load_metrics::PageLoadMetricsTestWaiter>(
-        web_contents);
-  }
-
   void SetExpectedFieldTrialNames(
       const base::flat_set<uint32_t>& expected_field_trial_name_hashes) {
     expected_field_trial_name_hashes_ = expected_field_trial_name_hashes;
-  }
-
-  void SetExpectedHostsSentInRequest(bool expected_hosts_sent_in_request) {
-    expected_hosts_sent_in_request_ = expected_hosts_sent_in_request;
   }
 
   GURL https_url_with_content() { return https_url_with_content_; }
@@ -359,16 +331,11 @@ class PredictionManagerBrowserTestBase : public InProcessBrowserTest {
 
   base::test::ScopedFeatureList scoped_feature_list_;
 
-  // Feature that the model server should return in response to
-  // GetModelsRequest.
-  proto::ClientModelFeature client_model_feature_ =
-      optimization_guide::proto::CLIENT_MODEL_FEATURE_SITE_ENGAGEMENT_SCORE;
-
  private:
   std::unique_ptr<net::test_server::HttpResponse> HandleGetModelsRequest(
       const net::test_server::HttpRequest& request) {
     if (request.GetURL() == model_file_url_)
-      return std::unique_ptr<net::test_server::HttpResponse>();
+      return nullptr;
 
     std::unique_ptr<net::test_server::BasicHttpResponse> response;
 
@@ -392,15 +359,9 @@ class PredictionManagerBrowserTestBase : public InProcessBrowserTest {
     EXPECT_EQ(seen_field_trial_name_hashes.size(),
               expected_field_trial_name_hashes_.size());
 
-    EXPECT_EQ(expected_hosts_sent_in_request_, !models_request.hosts().empty());
-    std::vector<std::string> hosts;
-    if (expected_hosts_sent_in_request_) {
-      hosts = {"example1.com", https_server_->GetURL("/").host()};
-    }
     response->set_code(net::HTTP_OK);
     std::unique_ptr<optimization_guide::proto::GetModelsResponse>
-        get_models_response =
-            BuildGetModelsResponse(hosts, {client_model_feature_});
+        get_models_response = BuildGetModelsResponse();
     if (response_type_ == PredictionModelsFetcherRemoteResponseType::
                               kSuccessfulWithFeaturesAndNoModels) {
       get_models_response->clear_models();
@@ -435,7 +396,6 @@ class PredictionManagerBrowserTestBase : public InProcessBrowserTest {
           kSuccessfulWithModelsAndFeatures;
   std::unique_ptr<OptimizationGuideConsumerWebContentsObserver> consumer_;
   base::flat_set<uint32_t> expected_field_trial_name_hashes_;
-  bool expected_hosts_sent_in_request_ = true;
 };
 
 class PredictionManagerBrowserTest : public PredictionManagerBrowserTestBase {
@@ -453,46 +413,9 @@ class PredictionManagerBrowserTest : public PredictionManagerBrowserTestBase {
         {optimization_guide::features::kOptimizationHints,
          optimization_guide::features::kRemoteOptimizationGuideFetching,
          optimization_guide::features::kOptimizationTargetPrediction},
-        {previews::features::kPreviews});
+        {});
   }
 };
-
-IN_PROC_BROWSER_TEST_F(PredictionManagerBrowserTest,
-                       FCPReachedSessionStatisticsUpdated) {
-  RegisterWithKeyedService();
-  auto waiter = CreatePageLoadMetricsTestWaiter();
-  waiter->AddPageExpectation(
-      page_load_metrics::PageLoadMetricsTestWaiter::TimingField::kFirstPaint);
-  ui_test_utils::NavigateToURL(browser(), https_url_with_content());
-  waiter->Wait();
-
-  const OptimizationGuideSessionStatistic* session_fcp =
-      GetPredictionManager()->GetFCPSessionStatisticsForTesting();
-  EXPECT_TRUE(session_fcp);
-  EXPECT_EQ(1u, session_fcp->GetNumberOfSamples());
-}
-
-IN_PROC_BROWSER_TEST_F(PredictionManagerBrowserTest,
-                       NoFCPSessionStatisticsUnchanged) {
-  RegisterWithKeyedService();
-  auto waiter = CreatePageLoadMetricsTestWaiter();
-  waiter->AddPageExpectation(
-      page_load_metrics::PageLoadMetricsTestWaiter::TimingField::kFirstPaint);
-  ui_test_utils::NavigateToURL(browser(), https_url_with_content());
-  waiter->Wait();
-
-  const OptimizationGuideSessionStatistic* session_fcp =
-      GetPredictionManager()->GetFCPSessionStatisticsForTesting();
-  float current_mean = session_fcp->GetMean();
-
-  waiter = CreatePageLoadMetricsTestWaiter();
-  waiter->AddPageExpectation(
-      page_load_metrics::PageLoadMetricsTestWaiter::TimingField::kLoadEvent);
-  ui_test_utils::NavigateToURL(browser(), https_url_without_content());
-  waiter->Wait();
-  EXPECT_EQ(1u, session_fcp->GetNumberOfSamples());
-  EXPECT_EQ(current_mean, session_fcp->GetMean());
-}
 
 IN_PROC_BROWSER_TEST_F(PredictionManagerBrowserTest,
                        ModelsAndFeaturesStoreInitialized) {
@@ -591,49 +514,6 @@ IN_PROC_BROWSER_TEST_F(PredictionManagerBrowserTest,
       "OptimizationGuide.PredictionModelLoadedVersion.PainfulPageLoad", 0);
 }
 
-IN_PROC_BROWSER_TEST_F(PredictionManagerBrowserTest,
-                       HostModelFeaturesClearedOnHistoryClear) {
-  base::HistogramTester histogram_tester;
-
-  RegisterWithKeyedService();
-
-  // Wait until histograms have been updated before performing checks for
-  // correct behavior based on the response.
-  RetryForHistogramUntilCountReached(
-      &histogram_tester,
-      "OptimizationGuide.PredictionModelFetcher.GetModelsResponse.Status", 1);
-
-  RetryForHistogramUntilCountReached(
-      &histogram_tester,
-      "OptimizationGuide.PredictionManager.HostModelFeaturesStored", 1);
-
-  RetryForHistogramUntilCountReached(
-      &histogram_tester,
-      "OptimizationGuide.PredictionManager.PredictionModelsStored", 1);
-
-  RetryForHistogramUntilCountReached(
-      &histogram_tester,
-      "OptimizationGuide.PredictionModelLoadedVersion.PainfulPageLoad", 1);
-
-  SetCallbackOnConsumer(base::DoNothing());
-  ui_test_utils::NavigateToURL(browser(), https_url_with_content());
-
-  histogram_tester.ExpectUniqueSample(
-      "OptimizationGuide.PredictionManager.HasHostModelFeaturesForHost", true,
-      1);
-
-  // Wipe the browser history - clears all the host model features.
-  browser()->profile()->Wipe();
-  histogram_tester.ExpectBucketCount(
-      "OptimizationGuide.ClearHostModelFeatures.StoreAvailable", true, 1);
-
-  SetCallbackOnConsumer(base::DoNothing());
-  ui_test_utils::NavigateToURL(browser(), https_url_with_content());
-  histogram_tester.ExpectBucketCount(
-      "OptimizationGuide.PredictionManager.HasHostModelFeaturesForHost", false,
-      1);
-}
-
 IN_PROC_BROWSER_TEST_F(PredictionManagerBrowserTest, IncognitoCanStillRead) {
   SetResponseType(PredictionModelsFetcherRemoteResponseType::
                       kSuccessfulWithModelsAndFeatures);
@@ -655,46 +535,21 @@ IN_PROC_BROWSER_TEST_F(PredictionManagerBrowserTest, IncognitoCanStillRead) {
       &histogram_tester,
       "OptimizationGuide.PredictionModelLoadedVersion.PainfulPageLoad", 1);
 
-  // Set up incognito browser.
-  Browser* otr_browser = CreateIncognitoBrowser(browser()->profile());
-
   // Register with off the record profile and wait until model is loaded.
   {
+    // Set up incognito browser.
+    CreateIncognitoBrowser(browser()->profile());
+
     base::HistogramTester otr_histogram_tester;
 
     OptimizationGuideKeyedServiceFactory::GetForProfile(
-        browser()->profile()->GetPrimaryOTRProfile())
+        browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true))
         ->RegisterOptimizationTargets(
             {proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD});
     RetryForHistogramUntilCountReached(
         &otr_histogram_tester,
         "OptimizationGuide.PredictionModelLoadedVersion.PainfulPageLoad", 1);
   }
-
-  // Set up an OptimizationGuideKeyedService consumer.
-  auto otr_consumer =
-      std::make_unique<OptimizationGuideConsumerWebContentsObserver>(
-          otr_browser->tab_strip_model()->GetActiveWebContents());
-  std::unique_ptr<base::RunLoop> run_loop = std::make_unique<base::RunLoop>();
-  otr_consumer->set_callback(base::BindOnce(
-      [](base::RunLoop* run_loop,
-         optimization_guide::OptimizationGuideDecision decision) {
-        // We should have the model on the client so we have everything to make
-        // a decision.
-        EXPECT_NE(decision,
-                  optimization_guide::OptimizationGuideDecision::kUnknown);
-        run_loop->Quit();
-      },
-      run_loop.get()));
-
-  // Navigate to a URL with a host model feature in incognito.
-  ui_test_utils::NavigateToURL(otr_browser, https_url_with_content());
-  run_loop->Run();
-
-  // The store should still be able to be read.
-  histogram_tester.ExpectUniqueSample(
-      "OptimizationGuide.PredictionManager.HasHostModelFeaturesForHost", true,
-      1);
 }
 
 IN_PROC_BROWSER_TEST_F(PredictionManagerBrowserTest,
@@ -708,15 +563,11 @@ IN_PROC_BROWSER_TEST_F(PredictionManagerBrowserTest,
 
   // Register with off the record profile.
   OptimizationGuideKeyedServiceFactory::GetForProfile(
-      browser()->profile()->GetPrimaryOTRProfile())
+      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true))
       ->RegisterOptimizationTargets(
           {proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD});
   // Wait until logic finishes running.
   base::RunLoop().RunUntilIdle();
-
-  // Ensure that GetModelsRequest did not go out.
-  histogram_tester.ExpectTotalCount(
-      "OptimizationGuide.PredictionModelFetcher.GetModelsRequest.HostCount", 0);
 
   // Set up an OptimizationGuideKeyedService consumer.
   auto otr_consumer =
@@ -741,122 +592,11 @@ IN_PROC_BROWSER_TEST_F(PredictionManagerBrowserTest,
       OptimizationTargetDecision::kModelNotAvailableOnClient, 1);
 }
 
-class PredictionManagerBrowserSameOriginTest
-    : public PredictionManagerBrowserTest {
- public:
-  PredictionManagerBrowserSameOriginTest() = default;
-  ~PredictionManagerBrowserSameOriginTest() override = default;
-
-  void SetUp() override {
-    client_model_feature_ =
-        optimization_guide::proto::CLIENT_MODEL_FEATURE_SAME_ORIGIN_NAVIGATION;
-    PredictionManagerBrowserTest::SetUp();
-  }
-};
-
-// Regression test for https://crbug.com/1037945. Tests that the origin of the
-// previous navigation is computed correctly.
-IN_PROC_BROWSER_TEST_F(PredictionManagerBrowserSameOriginTest,
-                       IsSameOriginNavigation) {
-  base::HistogramTester histogram_tester;
-
-  RegisterWithKeyedService();
-
-  // Wait until histograms have been updated before performing checks for
-  // correct behavior based on the response.
-  RetryForHistogramUntilCountReached(
-      &histogram_tester,
-      "OptimizationGuide.PredictionModelFetcher.GetModelsResponse.Status", 1);
-
-  RetryForHistogramUntilCountReached(
-      &histogram_tester,
-      "OptimizationGuide.PredictionManager.HostModelFeaturesStored", 1);
-
-  RetryForHistogramUntilCountReached(
-      &histogram_tester,
-      "OptimizationGuide.PredictionManager.PredictionModelsStored", 1);
-
-  RetryForHistogramUntilCountReached(
-      &histogram_tester,
-      "OptimizationGuide.PredictionModelLoadedVersion.PainfulPageLoad", 1);
-
-  SetCallbackOnConsumer(base::DoNothing());
-  ui_test_utils::NavigateToURL(browser(), https_url_with_content());
-  RetryForHistogramUntilCountReached(
-      &histogram_tester, "OptimizationGuide.PredictionManager.IsSameOrigin", 1);
-  histogram_tester.ExpectUniqueSample(
-      "OptimizationGuide.PredictionManager.IsSameOrigin", false, 1);
-
-  // Navigate to the same URL in the same tab. This should count as a
-  // same-origin navigation.
-  SetCallbackOnConsumer(base::DoNothing());
-  ui_test_utils::NavigateToURL(browser(), https_url_with_content());
-  RetryForHistogramUntilCountReached(
-      &histogram_tester, "OptimizationGuide.PredictionManager.IsSameOrigin", 2);
-  histogram_tester.ExpectBucketCount(
-      "OptimizationGuide.PredictionManager.IsSameOrigin", false, 1);
-  histogram_tester.ExpectBucketCount(
-      "OptimizationGuide.PredictionManager.IsSameOrigin", true, 1);
-
-  // Navigate to a cross-origin URL. This should count as a cross-origin
-  // navigation.
-  SetCallbackOnConsumer(base::DoNothing());
-  ui_test_utils::NavigateToURL(browser(), GURL("https://www.google.com/"));
-  RetryForHistogramUntilCountReached(
-      &histogram_tester, "OptimizationGuide.PredictionManager.IsSameOrigin", 3);
-  histogram_tester.ExpectBucketCount(
-      "OptimizationGuide.PredictionManager.IsSameOrigin", false, 2);
-  histogram_tester.ExpectBucketCount(
-      "OptimizationGuide.PredictionManager.IsSameOrigin", true, 1);
-}
-
-IN_PROC_BROWSER_TEST_F(PredictionManagerBrowserSameOriginTest,
-                       ShouldTargetNavigationAsync) {
-  base::HistogramTester histogram_tester;
-
-  RegisterWithKeyedService();
-
-  // Wait until histograms have been updated before performing checks for
-  // correct behavior based on the response.
-  RetryForHistogramUntilCountReached(
-      &histogram_tester,
-      "OptimizationGuide.PredictionModelFetcher.GetModelsResponse.Status", 1);
-
-  RetryForHistogramUntilCountReached(
-      &histogram_tester,
-      "OptimizationGuide.PredictionManager.HostModelFeaturesStored", 1);
-
-  RetryForHistogramUntilCountReached(
-      &histogram_tester,
-      "OptimizationGuide.PredictionManager.PredictionModelsStored", 1);
-
-  RetryForHistogramUntilCountReached(
-      &histogram_tester,
-      "OptimizationGuide.PredictionModelLoadedVersion.PainfulPageLoad", 1);
-
-  std::unique_ptr<base::RunLoop> run_loop = std::make_unique<base::RunLoop>();
-  SetCallbackOnConsumer(base::BindOnce(
-      [](base::RunLoop* run_loop,
-         OptimizationGuideConsumerWebContentsObserver* consumer,
-         optimization_guide::OptimizationGuideDecision decision) {
-        // The model should be evaluated with an actual decision since the model
-        // and all features provided are valid.
-        EXPECT_NE(decision,
-                  optimization_guide::OptimizationGuideDecision::kUnknown);
-        run_loop->Quit();
-      },
-      run_loop.get(), consumer()));
-
-  ui_test_utils::NavigateToURL(browser(), https_url_with_content());
-  run_loop->Run();
-}
-
 class PredictionManagerNoUserPermissionsTest
     : public PredictionManagerBrowserTest {
  public:
   PredictionManagerNoUserPermissionsTest() {
-    // Hosts and field trials should not be sent.
-    SetExpectedHostsSentInRequest(false);
+    // Field trials should not be sent.
     SetExpectedFieldTrialNames({});
   }
 
@@ -882,12 +622,12 @@ class PredictionManagerNoUserPermissionsTest
                "scoped_feature_list_trial_for_OptimizationHints,scoped_feature_"
                "list_trial_for_OptimizationHintsFetching"}}},
         },
-        {previews::features::kPreviews});
+        {});
   }
 };
 
 IN_PROC_BROWSER_TEST_F(PredictionManagerNoUserPermissionsTest,
-                       HostsAndFieldTrialsNotPassedWhenNoUserPermissions) {
+                       FieldTrialsNotPassedWhenNoUserPermissions) {
   base::HistogramTester histogram_tester;
 
   SetResponseType(PredictionModelsFetcherRemoteResponseType::
@@ -896,24 +636,11 @@ IN_PROC_BROWSER_TEST_F(PredictionManagerNoUserPermissionsTest,
 
   RetryForHistogramUntilCountReached(
       &histogram_tester,
-      "OptimizationGuide.PredictionManager.HostModelFeaturesStored", 1);
-
-  RetryForHistogramUntilCountReached(
-      &histogram_tester,
       "OptimizationGuide.PredictionManager.PredictionModelsStored", 1);
 
   RetryForHistogramUntilCountReached(
       &histogram_tester,
       "OptimizationGuide.PredictionModelLoadedVersion.PainfulPageLoad", 1);
-
-  SetCallbackOnConsumer(base::DoNothing());
-  ui_test_utils::NavigateToURL(browser(), https_url_with_content());
-
-  // Expect that we did not fetch for host and that we did not get any host
-  // model features.
-  histogram_tester.ExpectBucketCount(
-      "OptimizationGuide.PredictionManager.HasHostModelFeaturesForHost", false,
-      1);
 }
 
 class ModelFileObserver : public OptimizationTargetModelObserver {
@@ -930,7 +657,7 @@ class ModelFileObserver : public OptimizationTargetModelObserver {
   }
 
   void OnModelFileUpdated(proto::OptimizationTarget optimization_target,
-                          const base::Optional<proto::Any>& model_metadata,
+                          const absl::optional<proto::Any>& model_metadata,
                           const base::FilePath& file_path) override {
     if (file_received_callback_)
       std::move(file_received_callback_).Run(optimization_target, file_path);
@@ -952,6 +679,14 @@ class PredictionManagerModelDownloadingBrowserTest
     PredictionManagerBrowserTest::SetUpOnMainThread();
   }
 
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    PredictionManagerBrowserTest::SetUpCommandLine(command_line);
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+    command_line->AppendSwitch(
+        chromeos::switches::kIgnoreUserProfileMappingForTests);
+#endif
+  }
+
   void TearDownOnMainThread() override {
     PredictionManagerBrowserTest::TearDownOnMainThread();
   }
@@ -964,7 +699,7 @@ class PredictionManagerModelDownloadingBrowserTest
     OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
         ->AddObserverForOptimizationTargetModel(
             proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD,
-            /*model_metadata=*/base::nullopt, model_file_observer_.get());
+            /*model_metadata=*/absl::nullopt, model_file_observer_.get());
   }
 
  private:
@@ -981,7 +716,7 @@ class PredictionManagerModelDownloadingBrowserTest
                "scoped_feature_list_trial_for_OptimizationHints,scoped_feature_"
                "list_trial_for_OptimizationHintsFetching"}}},
         },
-        {previews::features::kPreviews});
+        {});
     SetExpectedFieldTrialNames(base::flat_set<uint32_t>(
         {variations::HashName(
              "scoped_feature_list_trial_for_OptimizationHints"),
@@ -1047,10 +782,38 @@ IN_PROC_BROWSER_TEST_F(PredictionManagerModelDownloadingBrowserTest,
   histogram_tester.ExpectUniqueSample(
       "OptimizationGuide.PredictionModelDownloadManager.DownloadStatus",
       PredictionModelDownloadStatus::kSuccess, 1);
+
+  // No error when moving the file so there will be no record.
+  histogram_tester.ExpectTotalCount(
+      "OptimizationGuide.PredictionModelDownloadManager.ReplaceFileError", 0);
   histogram_tester.ExpectUniqueSample(
       "OptimizationGuide.PredictionModelUpdateVersion.PainfulPageLoad", 123, 1);
   histogram_tester.ExpectUniqueSample(
       "OptimizationGuide.PredictionModelLoadedVersion.PainfulPageLoad", 123, 1);
+}
+
+IN_PROC_BROWSER_TEST_F(PredictionManagerModelDownloadingBrowserTest,
+                       TestSwitchProfileDoesntCrash) {
+  ProfileManager* profile_manager = g_browser_process->profile_manager();
+  base::FilePath other_path =
+      profile_manager->GenerateNextProfileDirectoryPath();
+
+  base::RunLoop run_loop;
+
+  // Create an additional profile.
+  profile_manager->CreateProfileAsync(
+      other_path,
+      base::BindLambdaForTesting(
+          [&run_loop](Profile* profile, Profile::CreateStatus status) {
+            if (status == Profile::CREATE_STATUS_INITIALIZED)
+              run_loop.Quit();
+          }));
+
+  run_loop.Run();
+
+  Profile* profile = profile_manager->GetProfileByPath(other_path);
+  ASSERT_TRUE(profile);
+  CreateBrowser(profile);
 }
 
 }  // namespace optimization_guide

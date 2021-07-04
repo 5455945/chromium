@@ -2,16 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <string>
 #include <utility>
 
 #include "chrome/browser/web_applications/components/web_app_protocol_handler_registration.h"
 
+#include "base/bind.h"
+#include "base/callback_helpers.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
-#include "base/optional.h"
 #include "base/path_service.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/post_task.h"
@@ -31,6 +32,7 @@
 #include "components/prefs/scoped_user_pref_update.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 namespace {
@@ -47,7 +49,7 @@ void RegisterProtocolHandlersWithOSInBackground(
       web_app::GetOsIntegrationResourcesDirectoryForApp(profile_path, app_id,
                                                         GURL());
 
-  base::Optional<base::FilePath> app_specific_launcher_path =
+  absl::optional<base::FilePath> app_specific_launcher_path =
       web_app::CreateAppLauncherFile(app_name, app_name_extension,
                                      web_app_path);
   if (!app_specific_launcher_path.has_value())
@@ -63,22 +65,20 @@ void RegisterProtocolHandlersWithOSInBackground(
   base::FilePath icon_path = web_app::internals::GetIconFilePath(
       web_app_path, base::AsString16(app_name));
 
-  ShellUtil::AddApplicationClass(web_app::GetProgIdForApp(profile_path, app_id),
-                                 app_specific_launcher_command,
+  std::wstring prog_id = web_app::GetProgIdForApp(profile_path, app_id);
+  ShellUtil::AddApplicationClass(prog_id, app_specific_launcher_command,
                                  user_visible_app_name, user_visible_app_name,
                                  icon_path);
 
-  // Post to UI thread to access ProtocolHandlerRegistry.
-  // TODO(crbug.com/1174805): We should move this to ProtocolHandlerManager and
-  // use a callback instead.
-  content::GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE,
-      base::BindOnce(
-          [](Profile* profile, const web_app::AppId& app_id,
-             std::vector<apps::ProtocolHandlerInfo> protocol_handlers) {
-            // TODO(crbug.com/1019239): call into ProtocolHandlerRegistry
-          },
-          profile, app_id, std::move(protocol_handlers)));
+  std::vector<std::wstring> wstring_protocols;
+  wstring_protocols.reserve(protocol_handlers.size());
+
+  for (const auto& protocol_handler : protocol_handlers) {
+    wstring_protocols.push_back(base::UTF8ToWide(protocol_handler.protocol));
+  }
+
+  // Add protocol associations to the Windows registry.
+  ShellUtil::AddAppProtocolAssociations(wstring_protocols, prog_id);
 }
 
 void UnregisterProtocolHandlersWithOsInBackground(
@@ -97,9 +97,15 @@ void UnregisterProtocolHandlersWithOsInBackground(
   // by default doesn't remove the web application directory.
   base::DeleteFile(app_specific_launcher_path);
 
-  // Clean up application class registry key.
+  // Remove application class registry key.
   ShellUtil::DeleteApplicationClass(prog_id);
+
+  // Remove protocol associations from the Windows registry.
+  ShellUtil::RemoveAppProtocolAssociations(
+      web_app::GetProgIdForApp(profile_path, app_id),
+      /*elevate_if_not_admin=*/true);
 }
+
 }  // namespace
 
 namespace web_app {
@@ -108,7 +114,8 @@ void RegisterProtocolHandlersWithOs(
     const AppId& app_id,
     const std::string& app_name,
     Profile* profile,
-    std::vector<apps::ProtocolHandlerInfo> protocol_handlers) {
+    std::vector<apps::ProtocolHandlerInfo> protocol_handlers,
+    base::OnceCallback<void(bool)> callback) {
   if (protocol_handlers.empty())
     return;
 
@@ -122,22 +129,19 @@ void RegisterProtocolHandlersWithOs(
                      base::UTF8ToWide(app_name), profile, profile->GetPath(),
                      std::move(protocol_handlers), app_name_extension),
       base::BindOnce(&CheckAndUpdateExternalInstallations, profile->GetPath(),
-                     app_id));
+                     app_id, std::move(callback)));
 }
 
-void UnregisterProtocolHandlersWithOs(
-    const AppId& app_id,
-    Profile* profile,
-    std::vector<apps::ProtocolHandlerInfo> protocol_handlers) {
-  // TODO(crbug.com/1019239): call into ProtocolHandlerRegistry
-
+void UnregisterProtocolHandlersWithOs(const AppId& app_id,
+                                      Profile* profile,
+                                      base::OnceCallback<void(bool)> callback) {
   base::ThreadPool::PostTaskAndReply(
       FROM_HERE,
       {base::MayBlock(), base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
       base::BindOnce(&UnregisterProtocolHandlersWithOsInBackground, app_id,
                      profile->GetPath()),
       base::BindOnce(&CheckAndUpdateExternalInstallations, profile->GetPath(),
-                     app_id));
+                     app_id, std::move(callback)));
 }
 
 }  // namespace web_app

@@ -7,12 +7,12 @@
 
 #include <memory>
 
+#include "ash/accessibility/magnifier/magnifier_glass.h"
 #include "ash/ash_export.h"
 #include "ash/capture_mode/capture_mode_types.h"
-#include "ash/magnifier/magnifier_glass.h"
 #include "ash/public/cpp/tablet_mode_observer.h"
 #include "base/containers/flat_set.h"
-#include "base/optional.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_observer.h"
 #include "ui/compositor/layer_delegate.h"
@@ -65,11 +65,23 @@ class ASH_EXPORT CaptureModeSession : public ui::LayerOwner,
   static constexpr int kCaptureButtonDistanceFromRegionDp = 24;
 
   aura::Window* current_root() const { return current_root_; }
+  views::Widget* capture_mode_bar_widget() {
+    return capture_mode_bar_widget_.get();
+  }
   bool is_selecting_region() const { return is_selecting_region_; }
   bool is_drag_in_progress() const { return is_drag_in_progress_; }
   void set_a11y_alert_on_session_exit(bool value) {
     a11y_alert_on_session_exit_ = value;
   }
+  bool is_shutting_down() const { return is_shutting_down_; }
+
+  // Initializes the capture mode session. This should be called right after the
+  // object is created.
+  void Initialize();
+
+  // Shuts down the capture mode session. This should be called right before the
+  // object is destroyed.
+  void Shutdown();
 
   // Gets the current window selected for |kWindow| capture source. Returns
   // nullptr if no window is available for selection.
@@ -92,6 +104,9 @@ class ASH_EXPORT CaptureModeSession : public ui::LayerOwner,
   // Called when starting 3-seconds count down before recording video.
   void StartCountDown(base::OnceClosure countdown_finished_callback);
 
+  // Returns true if we are currently in video recording countdown animation.
+  bool IsInCountDownAnimation() const;
+
   // ui::LayerDelegate:
   void OnPaintLayer(const ui::PaintContext& context) override;
   void OnDeviceScaleFactorChanged(float old_device_scale_factor,
@@ -113,11 +128,28 @@ class ASH_EXPORT CaptureModeSession : public ui::LayerOwner,
   void OnDisplayMetricsChanged(const display::Display& display,
                                uint32_t metrics) override;
 
+  // Updates the current cursor depending on current |location_in_screen| and
+  // current capture type and source. |is_touch| is used when calculating fine
+  // tune position in region capture mode. We'll have a larger hit test region
+  // for the touch events than the mouse events.
+  void UpdateCursor(const gfx::Point& location_in_screen, bool is_touch);
+
  private:
   friend class CaptureModeSessionFocusCycler;
   friend class CaptureModeSessionTestApi;
   class CursorSetter;
   class ScopedA11yOverrideWindowSetter;
+
+  enum class CaptureLabelAnimation {
+    // No animation on the capture label.
+    kNone,
+    // The animation on the capture label when the user has finished selecting a
+    // region and is moving to the fine tune phase.
+    kRegionPhaseChange,
+    // The animation on the capture label when the user has clicked record and
+    // the capture label animates into a countdown label.
+    kCountdownStart,
+  };
 
   // Gets the bounds of current window selected for |kWindow| capture source.
   gfx::Rect GetSelectedWindowBounds() const;
@@ -183,11 +215,14 @@ class ASH_EXPORT CaptureModeSession : public ui::LayerOwner,
   // anchor points if |position| is an edge.
   std::vector<gfx::Point> GetAnchorPointsForPosition(FineTunePosition position);
 
-  // Updates the capture label widget's icon/text and bounds.
-  void UpdateCaptureLabelWidget();
-  // Updates the capture label widget's bounds. If |animate| is true, do bounds
-  // animation.
-  void UpdateCaptureLabelWidgetBounds(bool animate);
+  // Updates the capture label widget's icon/text and bounds. The capture label
+  // widget may be animated depending on |animation_type|.
+  void UpdateCaptureLabelWidget(CaptureLabelAnimation animation_type);
+
+  // Updates the capture label widget's bounds. The capture label
+  // widget may be animated depending on |animation_type|.
+  void UpdateCaptureLabelWidgetBounds(CaptureLabelAnimation animation_type);
+
   // Calculates the targeted capture label widget bounds in screen coordinates.
   gfx::Rect CalculateCaptureLabelWidgetBounds();
 
@@ -205,15 +240,6 @@ class ASH_EXPORT CaptureModeSession : public ui::LayerOwner,
 
   // Updates |root_window_dimmers_| to dim the correct root windows.
   void UpdateRootWindowDimmers();
-
-  // Returns true if we are currently in video recording countdown animation.
-  bool IsInCountDownAnimation() const;
-
-  // Updates the current cursor depending on current |location_in_screen| and
-  // current capture type and source. |is_touch| is used when calculating fine
-  // tune position in region capture mode. We'll have a larger hit test region
-  // for the touch events than the mouse events.
-  void UpdateCursor(const gfx::Point& location_in_screen, bool is_touch);
 
   // Returns true if we're using custom image capture icon when |type| is
   // kImage or using custom video capture icon when |type| is kVideo.
@@ -302,7 +328,7 @@ class ASH_EXPORT CaptureModeSession : public ui::LayerOwner,
 
   // Caches the old status of mouse warping while dragging or resizing a
   // captured region.
-  base::Optional<bool> old_mouse_warp_status_;
+  absl::optional<bool> old_mouse_warp_status_;
 
   // Observer to observe the current selected to-be-captured window.
   std::unique_ptr<CaptureWindowObserver> capture_window_observer_;
@@ -332,6 +358,12 @@ class ASH_EXPORT CaptureModeSession : public ui::LayerOwner,
 
   // False only when we end the session to start recording.
   bool a11y_alert_on_session_exit_ = true;
+
+  // The display observer between init/shutdown.
+  absl::optional<display::ScopedDisplayObserver> display_observer_;
+
+  // True once Shutdown() is called.
+  bool is_shutting_down_ = false;
 
   // The object which handles tab focus while in a capture session.
   std::unique_ptr<CaptureModeSessionFocusCycler> focus_cycler_;

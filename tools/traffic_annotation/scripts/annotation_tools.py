@@ -19,7 +19,8 @@ sys.path.insert(0, tool_dir)
 # made to run in addition to the preexisting C++ auditor executable.
 PYTHON_AUDITOR = False
 
-from clang import compile_db
+from clang import compile_db  # type: ignore
+
 
 class NetworkTrafficAnnotationTools():
   def __init__(self, build_path=None):
@@ -39,17 +40,18 @@ class NetworkTrafficAnnotationTools():
 
     self.auditor_path = None
 
-    # For each platform, map the returned platform name from python sys, to
-    # directory name of traffic_annotation_auditor executable.
-    platform = {
-      'linux2': 'linux64',
-      'darwin': 'mac',
-      'win32': 'win32',
-    }[sys.platform]
-
     if PYTHON_AUDITOR:
       path = os.path.join(self.this_dir, "../scripts/auditor.py")
     else:
+      # For each platform, map the returned platform name from python sys, to
+      # directory name of traffic_annotation_auditor executable.
+      platform = {
+          'linux': 'linux64',
+          'linux2': 'linux64',
+          'darwin': 'mac',
+          'win32': 'win32',
+      }[sys.platform]
+
       path = os.path.join(self.this_dir, '..', 'bin', platform,
                         'traffic_annotation_auditor')
       if sys.platform == 'win32':
@@ -153,7 +155,8 @@ class NetworkTrafficAnnotationTools():
 
     if PYTHON_AUDITOR:
       command_line = [
-        "vpython", self.auditor_path, "--build-path=" + self.build_path] + args
+          "vpython3", self.auditor_path, "--build-path=" + self.build_path
+      ] + args
     else:
       command_line = [self.auditor_path, "--build-path=" + self.build_path] + \
       args

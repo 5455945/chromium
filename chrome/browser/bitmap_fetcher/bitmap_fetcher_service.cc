@@ -5,6 +5,8 @@
 #include "chrome/browser/bitmap_fetcher/bitmap_fetcher_service.h"
 
 #include <stddef.h>
+
+#include <memory>
 #include <utility>
 
 #include "base/macros.h"
@@ -77,19 +79,6 @@ constexpr net::NetworkTrafficAnnotationTag traffic_annotation =
           }
         })");
 
-std::unique_ptr<data_decoder::DataDecoder> CreateSharedDataDecoder() {
-  if (!base::FeatureList::IsEnabled(omnibox::kEntitySuggestionsReduceLatency))
-    return nullptr;
-
-  int idle_timeout = base::GetFieldTrialParamByFeatureAsInt(
-      omnibox::kEntitySuggestionsReduceLatency,
-      OmniboxFieldTrial::kEntitySuggestionsReduceLatencyDecoderTimeoutParam, 0);
-
-  return idle_timeout > 0 ? std::make_unique<data_decoder::DataDecoder>(
-                                base::TimeDelta::FromSeconds(idle_timeout))
-                          : std::make_unique<data_decoder::DataDecoder>();
-}
-
 }  // namespace.
 
 class BitmapFetcherRequest {
@@ -133,7 +122,8 @@ BitmapFetcherService::CacheEntry::~CacheEntry() {
 }
 
 BitmapFetcherService::BitmapFetcherService(content::BrowserContext* context)
-    : shared_data_decoder_(CreateSharedDataDecoder()),
+    : shared_data_decoder_(std::make_unique<data_decoder::DataDecoder>(
+          base::TimeDelta::FromSeconds(405))),
       cache_(kMaxCacheEntries),
       current_request_id_(1),
       context_(context) {}
@@ -209,18 +199,6 @@ void BitmapFetcherService::Prefetch(const GURL& url) {
     EnsureFetcherForUrl(url, traffic_annotation);
 }
 
-void BitmapFetcherService::WakeupDecoder() {
-  // base::Unretained() is safe here because |shared_data_decoder_| is freed
-  // only when |this| is destructured and in the same IO thread used here.
-  if (shared_data_decoder_) {
-    content::GetIOThreadTaskRunner({})->PostTask(
-        FROM_HERE,
-        base::BindOnce(
-            base::IgnoreResult(&data_decoder::DataDecoder::GetService),
-            base::Unretained(shared_data_decoder_.get())));
-  }
-}
-
 bool BitmapFetcherService::IsCached(const GURL& url) {
   return cache_.Get(url) != cache_.end();
 }
@@ -235,10 +213,9 @@ std::unique_ptr<BitmapFetcher> BitmapFetcherService::CreateFetcher(
       std::string(),
       net::ReferrerPolicy::REDUCE_GRANULARITY_ON_TRANSITION_CROSS_ORIGIN,
       network::mojom::CredentialsMode::kInclude);
-  new_fetcher->Start(
-      content::BrowserContext::GetDefaultStoragePartition(context_)
-          ->GetURLLoaderFactoryForBrowserProcess()
-          .get());
+  new_fetcher->Start(context_->GetDefaultStoragePartition()
+                         ->GetURLLoaderFactoryForBrowserProcess()
+                         .get());
   return new_fetcher;
 }
 
@@ -298,7 +275,7 @@ void BitmapFetcherService::OnFetchComplete(const GURL& url,
 
   if (bitmap && !bitmap->isNull()) {
     std::unique_ptr<CacheEntry> entry(new CacheEntry);
-    entry->bitmap.reset(new SkBitmap(*bitmap));
+    entry->bitmap = std::make_unique<SkBitmap>(*bitmap);
     cache_.Put(fetcher->url(), std::move(entry));
   }
 

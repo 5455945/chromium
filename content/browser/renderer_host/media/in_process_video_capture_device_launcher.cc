@@ -11,7 +11,6 @@
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/strings/stringprintf.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "content/browser/renderer_host/media/in_process_launched_video_capture_device.h"
@@ -45,6 +44,7 @@
 #endif  // defined(OS_ANDROID)
 #if defined(OS_MAC)
 #include "content/browser/media/capture/desktop_capture_device_mac.h"
+#include "content/browser/media/capture/views_widget_video_capture_device_mac.h"
 #endif
 #endif  // BUILDFLAG(ENABLE_SCREEN_CAPTURE)
 
@@ -74,7 +74,7 @@ std::unique_ptr<media::VideoCaptureJpegDecoder> CreateGpuJpegDecoder(
 // The maximum number of video frame buffers in-flight at any one time. This
 // value should be based on the logical capacity of the capture pipeline, and
 // not on hardware performance.
-const int kMaxNumberOfBuffers = 3;
+const int kMaxNumberOfBuffers = 4;
 
 }  // anonymous namespace
 
@@ -199,16 +199,16 @@ void InProcessVideoCaptureDeviceLauncher::LaunchDeviceAsync(
         break;
       }
 
-#if defined(USE_AURA)
+#if defined(USE_AURA) || defined(OS_MAC)
       if (desktop_id.window_id != DesktopMediaID::kNullId) {
         start_capture_closure = base::BindOnce(
             &InProcessVideoCaptureDeviceLauncher::
-                DoStartAuraWindowCaptureOnDeviceThread,
+                DoStartVizFrameSinkWindowCaptureOnDeviceThread,
             base::Unretained(this), desktop_id, params, std::move(receiver),
             std::move(after_start_capture_callback));
         break;
       }
-#endif  // defined(USE_AURA)
+#endif  // defined(USE_AURA) || defined(OS_MAC)
 
       // All cases other than tab capture or Aura desktop/window capture.
       start_capture_closure = base::BindOnce(
@@ -347,9 +347,9 @@ void InProcessVideoCaptureDeviceLauncher::DoStartTabCaptureOnDeviceThread(
   std::move(result_callback).Run(std::move(video_capture_device));
 }
 
-#if defined(USE_AURA)
+#if defined(USE_AURA) || defined(OS_MAC)
 void InProcessVideoCaptureDeviceLauncher::
-    DoStartAuraWindowCaptureOnDeviceThread(
+    DoStartVizFrameSinkWindowCaptureOnDeviceThread(
         const DesktopMediaID& device_id,
         const media::VideoCaptureParams& params,
         std::unique_ptr<media::VideoFrameReceiver> receiver,
@@ -357,8 +357,14 @@ void InProcessVideoCaptureDeviceLauncher::
   SCOPED_UMA_HISTOGRAM_TIMER("Media.VideoCaptureManager.StartDeviceTime");
   DCHECK(device_task_runner_->BelongsToCurrentThread());
 
-  auto video_capture_device =
+  std::unique_ptr<content::FrameSinkVideoCaptureDevice> video_capture_device;
+#if defined(USE_AURA)
+  video_capture_device =
       std::make_unique<AuraWindowVideoCaptureDevice>(device_id);
+#elif defined(OS_MAC)
+  video_capture_device =
+      std::make_unique<ViewsWidgetVideoCaptureDeviceMac>(device_id);
+#endif
   if (video_capture_device) {
     video_capture_device->AllocateAndStartWithReceiver(params,
                                                        std::move(receiver));
@@ -380,7 +386,7 @@ void InProcessVideoCaptureDeviceLauncher::
   }
   std::move(result_callback).Run(std::move(video_capture_device));
 }
-#endif  // defined(USE_AURA)
+#endif  // defined(USE_AURA) || defined(OS_MAC)
 
 void InProcessVideoCaptureDeviceLauncher::DoStartDesktopCaptureOnDeviceThread(
     const DesktopMediaID& desktop_id,

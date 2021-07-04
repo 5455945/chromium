@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ash/login/easy_unlock/easy_unlock_service.h"
 
+#include <memory>
 #include <utility>
 
 #include "base/bind.h"
@@ -24,9 +25,9 @@
 #include "chrome/browser/ash/login/easy_unlock/easy_unlock_service_factory.h"
 #include "chrome/browser/ash/login/easy_unlock/easy_unlock_tpm_key_manager.h"
 #include "chrome/browser/ash/login/easy_unlock/easy_unlock_tpm_key_manager_factory.h"
+#include "chrome/browser/ash/login/session/user_session_manager.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chromeos/login/session/user_session_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension_constants.h"
@@ -47,12 +48,12 @@
 #include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/user.h"
 #include "components/version_info/version_info.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
-using proximity_auth::ScreenlockState;
-
-namespace chromeos {
-
+namespace ash {
 namespace {
+
+using ::proximity_auth::ScreenlockState;
 
 PrefService* GetLocalState() {
   return g_browser_process ? g_browser_process->local_state() : NULL;
@@ -216,15 +217,16 @@ bool EasyUnlockService::GetPersistedHardlockState(
 
   const base::DictionaryValue* dict =
       local_state->GetDictionary(prefs::kEasyUnlockHardlockState);
-  int state_int;
-  if (dict && dict->GetIntegerWithoutPathExpansion(account_id.GetUserEmail(),
-                                                   &state_int)) {
-    *state =
-        static_cast<EasyUnlockScreenlockStateHandler::HardlockState>(state_int);
-    return true;
-  }
+  if (!dict)
+    return false;
 
-  return false;
+  absl::optional<int> state_int = dict->FindIntKey(account_id.GetUserEmail());
+  if (!state_int.has_value())
+    return false;
+
+  *state = static_cast<EasyUnlockScreenlockStateHandler::HardlockState>(
+      state_int.value());
+  return true;
 }
 
 EasyUnlockScreenlockStateHandler*
@@ -232,10 +234,11 @@ EasyUnlockService::GetScreenlockStateHandler() {
   if (!IsAllowed())
     return NULL;
   if (!screenlock_state_handler_) {
-    screenlock_state_handler_.reset(new EasyUnlockScreenlockStateHandler(
-        GetAccountId(), GetHardlockState(),
-        proximity_auth::ScreenlockBridge::Get(),
-        GetProximityAuthPrefManager()));
+    screenlock_state_handler_ =
+        std::make_unique<EasyUnlockScreenlockStateHandler>(
+            GetAccountId(), GetHardlockState(),
+            proximity_auth::ScreenlockBridge::Get(),
+            GetProximityAuthPrefManager());
   }
   return screenlock_state_handler_.get();
 }
@@ -264,7 +267,7 @@ void EasyUnlockService::OnUserEnteredPassword() {
     proximity_auth_system_->CancelConnectionAttempt();
 }
 
-void EasyUnlockService::AttemptAuth(const AccountId& account_id) {
+bool EasyUnlockService::AttemptAuth(const AccountId& account_id) {
   const EasyUnlockAuthAttempt::Type auth_attempt_type =
       GetType() == TYPE_REGULAR ? EasyUnlockAuthAttempt::TYPE_UNLOCK
                                 : EasyUnlockAuthAttempt::TYPE_SIGNIN;
@@ -272,7 +275,7 @@ void EasyUnlockService::AttemptAuth(const AccountId& account_id) {
 
   if (auth_attempt_) {
     PA_LOG(VERBOSE) << "Already attempting auth, skipping this request.";
-    return;
+    return false;
   }
 
   if (!GetAccountId().is_valid()) {
@@ -281,7 +284,7 @@ void EasyUnlockService::AttemptAuth(const AccountId& account_id) {
         auth_attempt_type,
         SmartLockMetricsRecorder::SmartLockAuthResultFailureReason::
             kEmptyUserAccount);
-    return;
+    return false;
   }
 
   if (GetAccountId() != account_id) {
@@ -292,24 +295,30 @@ void EasyUnlockService::AttemptAuth(const AccountId& account_id) {
 
     PA_LOG(ERROR) << "Check failed: " << GetAccountId().Serialize() << " vs "
                   << account_id.Serialize();
-    return;
+    return false;
   }
 
-  auth_attempt_.reset(new EasyUnlockAuthAttempt(account_id, auth_attempt_type));
+  auth_attempt_ =
+      std::make_unique<EasyUnlockAuthAttempt>(account_id, auth_attempt_type);
   if (!auth_attempt_->Start()) {
     RecordAuthResultFailure(
         auth_attempt_type,
         SmartLockMetricsRecorder::SmartLockAuthResultFailureReason::
             kAuthAttemptCannotStart);
     auth_attempt_.reset();
-    return;
+    return false;
   }
 
   // TODO(tengs): We notify ProximityAuthSystem whenever unlock attempts are
   // attempted. However, we ideally should refactor the auth attempt logic to
   // the proximity_auth component.
-  if (proximity_auth_system_)
-    proximity_auth_system_->OnAuthAttempted();
+  if (!proximity_auth_system_) {
+    PA_LOG(ERROR) << "No ProximityAuthSystem present.";
+    return false;
+  }
+
+  proximity_auth_system_->OnAuthAttempted();
+  return true;
 }
 
 void EasyUnlockService::FinalizeUnlock(bool success) {
@@ -318,13 +327,13 @@ void EasyUnlockService::FinalizeUnlock(bool success) {
 
   set_will_authenticate_using_easy_unlock(true);
   auth_attempt_->FinalizeUnlock(GetAccountId(), success);
-  auth_attempt_.reset();
-  // TODO(isherman): If observing screen unlock events, is there a race
-  // condition in terms of reading the service's state vs. the app setting the
-  // state?
+
+  // If successful, allow |auth_attempt_| to continue until
+  // UpdateScreenlockState() is called (indicating screen unlock).
 
   // Make sure that the lock screen is updated on failure.
   if (!success) {
+    auth_attempt_.reset();
     RecordEasyUnlockScreenUnlockEvent(EASY_UNLOCK_FAILURE);
     HandleAuthFailure(GetAccountId());
   }
@@ -337,12 +346,15 @@ void EasyUnlockService::FinalizeSignin(const std::string& key) {
   std::string wrapped_secret = GetWrappedSecret();
   if (!wrapped_secret.empty())
     auth_attempt_->FinalizeSignin(GetAccountId(), wrapped_secret, key);
-  auth_attempt_.reset();
+
+  // If successful, allow |auth_attempt_| to continue until
+  // UpdateScreenlockState() is called (indicating sign in).
 
   // Processing empty key is equivalent to auth cancellation. In this case the
   // signin request will not actually be processed by login stack, so the lock
   // screen state should be set from here.
   if (key.empty()) {
+    auth_attempt_.reset();
     HandleAuthFailure(GetAccountId());
     return;
   }
@@ -422,7 +434,7 @@ void EasyUnlockService::UpdateAppState() {
       proximity_auth_system_->Start();
 
     if (!power_monitor_)
-      power_monitor_.reset(new PowerMonitor(this));
+      power_monitor_ = std::make_unique<PowerMonitor>(this);
   }
 }
 
@@ -607,7 +619,7 @@ EasyUnlockAuthEvent EasyUnlockService::GetPasswordAuthEvent() const {
 void EasyUnlockService::SetProximityAuthDevices(
     const AccountId& account_id,
     const multidevice::RemoteDeviceRefList& remote_devices,
-    base::Optional<multidevice::RemoteDeviceRef> local_device) {
+    absl::optional<multidevice::RemoteDeviceRef> local_device) {
   UMA_HISTOGRAM_COUNTS_100("SmartLock.EnabledDevicesCount",
                            remote_devices.size());
 
@@ -618,11 +630,12 @@ void EasyUnlockService::SetProximityAuthDevices(
 
   if (!proximity_auth_system_) {
     PA_LOG(VERBOSE) << "Creating ProximityAuthSystem.";
-    proximity_auth_system_.reset(new proximity_auth::ProximityAuthSystem(
-        GetType() == TYPE_SIGNIN
-            ? proximity_auth::ProximityAuthSystem::SIGN_IN
-            : proximity_auth::ProximityAuthSystem::SESSION_LOCK,
-        proximity_auth_client(), secure_channel_client_));
+    proximity_auth_system_ =
+        std::make_unique<proximity_auth::ProximityAuthSystem>(
+            GetType() == TYPE_SIGNIN
+                ? proximity_auth::ProximityAuthSystem::SIGN_IN
+                : proximity_auth::ProximityAuthSystem::SESSION_LOCK,
+            proximity_auth_client(), secure_channel_client_);
   }
 
   proximity_auth_system_->SetRemoteDevicesForUser(account_id, remote_devices,
@@ -689,4 +702,4 @@ void EasyUnlockService::EnsureTpmKeyPresentIfNeeded() {
   tpm_key_checked_ = true;
 }
 
-}  // namespace chromeos
+}  // namespace ash

@@ -17,9 +17,9 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
-#include "base/strings/string16.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile_attributes_entry.h"
+#include "chrome/browser/profiles/profile_attributes_init_params.h"
 #include "chrome/browser/profiles/profile_info_cache_observer.h"
 
 namespace base {
@@ -45,15 +45,10 @@ class ProfileAttributesStorage
   ProfileAttributesStorage& operator=(const ProfileAttributesStorage&) = delete;
   virtual ~ProfileAttributesStorage();
 
-  // Adds a new profile at |profile_path| to the attributes storage.
-  virtual void AddProfile(const base::FilePath& profile_path,
-                          const base::string16& name,
-                          const std::string& gaia_id,
-                          const base::string16& user_name,
-                          bool is_consented_primary_account,
-                          size_t icon_index,
-                          const std::string& supervised_user_id,
-                          const AccountId& account_id) = 0;
+  // Adds a new profile with `params` to the attributes storage.
+  // `params.profile_path` must be a valid path within the user data directory
+  // that hasn't been registered with this `ProfileAttributesStorage` before.
+  virtual void AddProfile(ProfileAttributesInitParams params) = 0;
 
   // Removes the profile matching given |account_id| from this storage.
   // Calculates profile path and calls RemoveProfile() on it.
@@ -66,28 +61,28 @@ class ProfileAttributesStorage
   // Returns a vector containing one attributes entry per known profile. They
   // are not sorted in any particular order.
   std::vector<ProfileAttributesEntry*> GetAllProfilesAttributes(
-      bool include_guest_profile = false);
+      bool include_guest_profile = false) const;
 
   // Returns all non-Guest profile attributes sorted by name.
-  std::vector<ProfileAttributesEntry*> GetAllProfilesAttributesSortedByName();
+  std::vector<ProfileAttributesEntry*> GetAllProfilesAttributesSortedByName()
+      const;
 
   // Returns all non-Guest profile attributes sorted by local profile name.
   std::vector<ProfileAttributesEntry*>
-  GetAllProfilesAttributesSortedByLocalProfilName();
+  GetAllProfilesAttributesSortedByLocalProfilName() const;
 
   // Returns a ProfileAttributesEntry with the data for the profile at |path|
   // if the operation is successful. Returns |nullptr| otherwise.
   // Returned value should not be cached because the profile entry may be
   // deleted at any time, an then using this value would cause use-after-free.
   virtual ProfileAttributesEntry* GetProfileAttributesWithPath(
-      const base::FilePath& path) = 0;
+      const base::FilePath& path);
 
   // Returns the count of known profiles.
-  virtual size_t GetNumberOfProfiles(
-      bool include_guest_profile = false) const = 0;
+  virtual size_t GetNumberOfProfiles(bool include_guest_profile = false) const;
 
   // Returns a unique name that can be assigned to a newly created profile.
-  base::string16 ChooseNameForNewProfile(size_t icon_index) const;
+  std::u16string ChooseNameForNewProfile(size_t icon_index) const;
 
   // Determines whether |name| is one of the default assigned names.
   // On Desktop, if |include_check_for_legacy_profile_name| is false,
@@ -97,7 +92,7 @@ class ProfileAttributesStorage
   // is one of the legacy profile names (e.g. Saratoga, Default user, ..).
   // For other platforms, so far |include_check_for_legacy_profile_name|
   // is not used.
-  bool IsDefaultProfileName(const base::string16& name,
+  bool IsDefaultProfileName(const std::u16string& name,
                             bool include_check_for_legacy_profile_name) const;
 
 #if !defined(OS_ANDROID)
@@ -123,6 +118,21 @@ class ProfileAttributesStorage
       const std::string& key,
       const base::FilePath& image_path) const;
 
+  // Returns true if a GAIA picture has been loaded or has failed to load for
+  // profile with `key`.
+  bool IsGAIAPictureLoaded(const std::string& key) const;
+
+  // Saves the GAIA `image` at `image_path`.
+  void SaveGAIAImageAtPath(const base::FilePath& profile_path,
+                           const std::string& key,
+                           gfx::Image image,
+                           const base::FilePath& image_path,
+                           const std::string& image_url_with_size);
+  // Deletes a GAIA picture at `image_path`.
+  void DeleteGAIAImageAtPath(const base::FilePath& profile_path,
+                             const std::string& key,
+                             const base::FilePath& image_path);
+
   // Checks whether the high res avatar at index |icon_index| exists, and if it
   // does not, calls |DownloadHighResAvatar|.
   void DownloadHighResAvatarIfNeeded(size_t icon_index,
@@ -143,6 +153,16 @@ class ProfileAttributesStorage
   // Notifies observers. The following methods are accessed by
   // ProfileAttributesEntry.
   void NotifyOnProfileAvatarChanged(const base::FilePath& profile_path) const;
+  void NotifyIsSigninRequiredChanged(const base::FilePath& profile_path) const;
+  void NotifyProfileAuthInfoChanged(const base::FilePath& profile_path) const;
+  void NotifyIfProfileNamesHaveChanged() const;
+  void NotifyProfileSupervisedUserIdChanged(
+      const base::FilePath& profile_path) const;
+  void NotifyProfileIsOmittedChanged(const base::FilePath& profile_path) const;
+  void NotifyProfileThemeColorsChanged(
+      const base::FilePath& profile_path) const;
+  void NotifyProfileHostedDomainChanged(
+      const base::FilePath& profile_path) const;
 
   // Disables the periodic reporting of profile metrics, as this is causing
   // tests to time out.
@@ -170,8 +190,7 @@ class ProfileAttributesStorage
                              base::OnceClosure callback);
 
   PrefService* const prefs_;
-  mutable std::unordered_map<base::FilePath::StringType,
-                             std::unique_ptr<ProfileAttributesEntry>>
+  mutable std::unordered_map<base::FilePath::StringType, ProfileAttributesEntry>
       profile_attributes_entries_;
 
   mutable base::ObserverList<Observer>::Unchecked observer_list_;
@@ -201,7 +220,7 @@ class ProfileAttributesStorage
 
  private:
   std::vector<ProfileAttributesEntry*> GetAllProfilesAttributesSorted(
-      bool use_local_profile_name);
+      bool use_local_profile_name) const;
 
   // Called when the picture given by |key| has been loaded from disk and
   // decoded into |image|.
@@ -215,6 +234,11 @@ class ProfileAttributesStorage
                             const base::FilePath& profile_path,
                             base::OnceClosure callback,
                             bool success) const;
+
+  // Called when the GAIA picture given by `image_url_with_size` has been saved
+  // to disk.
+  void OnGAIAPictureSaved(const std::string& image_url_with_size,
+                          const base::FilePath& profile_path);
 
   // Helper function that calls SaveAvatarImageAtPath without a callback.
   void SaveAvatarImageAtPathNoCallback(const base::FilePath& profile_path,

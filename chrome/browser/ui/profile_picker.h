@@ -5,11 +5,10 @@
 #ifndef CHROME_BROWSER_UI_PROFILE_PICKER_H_
 #define CHROME_BROWSER_UI_PROFILE_PICKER_H_
 
-#include <vector>
-
 #include "base/callback_forward.h"
 #include "base/feature_list.h"
 #include "base/time/time.h"
+#include "chrome/browser/ui/webui/signin/enterprise_profile_welcome_ui.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "url/gurl.h"
 
@@ -27,10 +26,6 @@ namespace views {
 class View;
 class WebView;
 }  // namespace views
-
-// Kill switch to disable showing the picker on startup. Has no effect if
-// features::kNewProfilePicker is disabled.
-extern const base::Feature kEnableProfilePickerOnStartupFeature;
 
 class ProfilePicker {
  public:
@@ -86,10 +81,6 @@ class ProfilePicker {
   // for the sign-in flow.
   static void CancelSignIn();
 
-  // Finishes the sign-in flow by moving to the sync confirmation screen. It
-  // uses the same new profile created by `SwitchToSignIn()`.
-  static void SwitchToSyncConfirmation();
-
   // Shows a dialog where the user can auth the profile or see the
   // auth error message. If a dialog is already shown, this destroys the current
   // dialog and creates a new one.
@@ -107,6 +98,10 @@ class ProfilePicker {
   // Getter of the target page  url. If not empty and is valid, it opens on
   // profile selection instead of the new tab page.
   static GURL GetOnSelectProfileTargetUrl();
+
+  // Getter of the path of profile which is displayed on the profile switch
+  // screen.
+  static base::FilePath GetSwitchProfilePath();
 
   // Hides the profile picker.
   static void Hide();
@@ -133,6 +128,10 @@ class ProfilePicker {
   // Overrides the timeout delay for waiting for extended account info.
   static void SetExtendedAccountInfoTimeoutForTesting(base::TimeDelta timeout);
 
+  // Returns a pref value indicating whether the profile picker has ever been
+  // shown to the user.
+  static bool Shown();
+
   // Returns whether to show profile picker at launch. This can be called on
   // startup or when Chrome is re-opened, e.g. when clicking on the dock icon on
   // MacOS when there are no windows, or from Windows tray icon.
@@ -152,18 +151,11 @@ class ProfilePickerForceSigninDialog {
   static constexpr int kDialogHeight = 512;
   static constexpr int kDialogWidth = 448;
 
-  // Shows a dialog where the user can re-authenticate the profile with the
-  // given |email|. This is called from the profile picker when a profile is
-  // locked and the user's password is detected to have been changed.
-  static void ShowUnlockDialog(content::BrowserContext* browser_context,
-                               const std::string& email);
-
-  // Shows a reauth dialog with profile path so that the sign in error message
-  // can be displayed without browser window.
-  static void ShowUnlockDialogWithProfilePath(
-      content::BrowserContext* browser_context,
-      const std::string& email,
-      const base::FilePath& profile_path);
+  // Shows a dialog where the user reauthenticates their primary account that
+  // has invalid credentials, when force signin is enabled.
+  static void ShowReauthDialog(content::BrowserContext* browser_context,
+                               const std::string& email,
+                               const base::FilePath& profile_path);
 
   // Shows a dialog where the user logs into their profile for the first time
   // via the profile picker, when force signin is enabled.

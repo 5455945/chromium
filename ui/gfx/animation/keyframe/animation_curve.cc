@@ -16,6 +16,10 @@ bool AnimationCurve::MaximumScale(float* max_scale) const {
   return false;
 }
 
+base::TimeDelta AnimationCurve::TickInterval() const {
+  return base::TimeDelta();
+}
+
 #define DEFINE_ANIMATION_CURVE(Name, CurveType)                                \
   void Name##AnimationCurve::Tick(base::TimeDelta t, int property_id,          \
                                   KeyframeModel* keyframe_model) const {       \
@@ -40,5 +44,6 @@ DEFINE_ANIMATION_CURVE(Transform, TRANSFORM)
 DEFINE_ANIMATION_CURVE(Float, FLOAT)
 DEFINE_ANIMATION_CURVE(Size, SIZE)
 DEFINE_ANIMATION_CURVE(Color, COLOR)
+DEFINE_ANIMATION_CURVE(Rect, RECT)
 
 }  // namespace gfx

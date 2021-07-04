@@ -7,13 +7,9 @@
 
 #include <string>
 
-#include "base/optional.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class PrefService;
-
-namespace content {
-class WebUIDataSource;
-}
 
 // A delegate which exposes browser functionality from //chrome to the help app
 // ui page handler.
@@ -24,17 +20,23 @@ class HelpAppUIDelegate {
   // Opens the native chrome feedback dialog scoped to chrome://help-app.
   // Returns an optional error message if unable to open the dialog or nothing
   // if the dialog was determined to have opened successfully.
-  virtual base::Optional<std::string> OpenFeedbackDialog() = 0;
-
-  // Takes a WebUIDataSource, and adds device flags (e.g. board name) and
-  // feature flags (e.g. Google Assistant).
-  virtual void PopulateLoadTimeData(content::WebUIDataSource* source) = 0;
+  virtual absl::optional<std::string> OpenFeedbackDialog() = 0;
 
   // Opens OS Settings at the parental controls section.
   virtual void ShowParentalControls() = 0;
 
   // Gets locally stored users preferences and state.
   virtual PrefService* GetLocalState() = 0;
+
+  // Asks the help app notification controller to show the discover notification
+  // if the required heuristics are present and if a notification for the help
+  // app has not yet been shown in the current milestone.
+  virtual void MaybeShowDiscoverNotification() = 0;
+
+  // Asks the help app notification controller to show the release notes
+  // notification if a notification for the help app has not yet been shown in
+  // the current milestone.
+  virtual void MaybeShowReleaseNotesNotification() = 0;
 };
 
 #endif  // CHROMEOS_COMPONENTS_HELP_APP_UI_HELP_APP_UI_DELEGATE_H_

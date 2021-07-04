@@ -352,8 +352,7 @@ UIViewController* TopPresentedViewControllerFrom(
 
 UIViewController* TopPresentedViewController() {
   UIViewController* rootViewController =
-      [[GREY_REMOTE_CLASS_IN_APP(UIApplication) sharedApplication] keyWindow]
-          .rootViewController;
+      chrome_test_util::GetAnyKeyWindow().rootViewController;
   return TopPresentedViewControllerFrom(rootViewController);
 }
 
@@ -578,7 +577,7 @@ UIViewController* TopPresentedViewController() {
   [[EarlGrey
       selectElementWithMatcher:chrome_test_util::TabGridNewIncognitoTabButton()]
       performAction:grey_tap()];
-  [[GREYUIThreadExecutor sharedInstance] drainUntilIdleWithTimeout:2];
+  GREYWaitForAppToIdleWithTimeout(2.0, @"App failed to idle");
 
   [[self class] closeAllTabs];
   [ChromeEarlGrey openNewTab];

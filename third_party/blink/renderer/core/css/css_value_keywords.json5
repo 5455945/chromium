@@ -1445,7 +1445,7 @@
     "single-fold-vertical",
     "single-fold-horizontal",
 
-    // (screen-fold-posture) media feature
+    // (device-posture) media feature
     "no-fold",
     "laptop",
     // flat,
@@ -1456,9 +1456,7 @@
     // scrollbar-gutter
     // auto
     "stable",
-    // always
-    // both
-    "force",
+    "mirror",
 
     // (prefers-contrast:) media feature
     // no-preference

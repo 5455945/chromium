@@ -7,7 +7,7 @@
 #include <memory>
 
 #include "base/memory/scoped_refptr.h"
-#include "base/optional.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_response.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/dictionary.h"
 #include "third_party/blink/renderer/bindings/core/v8/idl_types.h"
@@ -390,6 +390,8 @@ FetchResponseData* Response::CreateUnfilteredFetchResponseDataWithoutBody(
       WTF::AtomicString(fetch_api_response.alpn_negotiated_protocol));
   response->SetWasFetchedViaSpdy(fetch_api_response.was_fetched_via_spdy);
   response->SetHasRangeRequested(fetch_api_response.has_range_requested);
+  response->SetRequestIncludeCredentials(
+      fetch_api_response.request_include_credentials);
 
   for (const auto& header : fetch_api_response.headers)
     response->HeaderList()->Append(header.key, header.value);

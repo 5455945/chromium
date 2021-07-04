@@ -6,7 +6,6 @@
 
 #include "ash/accelerators/debug_commands.h"
 #include "ash/display/screen_ash.h"
-#include "ash/public/cpp/ash_features.h"
 #include "ash/public/cpp/ash_pref_names.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
@@ -81,7 +80,7 @@ void WindowCycleEventFilter::OnMouseEvent(ui::MouseEvent* event) {
   if (!has_user_used_mouse_)
     SetHasUserUsedMouse(event);
 
-  if (features::IsInteractiveWindowCycleListEnabled() && has_user_used_mouse_) {
+  if (has_user_used_mouse_) {
     WindowCycleController* window_cycle_controller =
         Shell::Get()->window_cycle_controller();
     const bool cycle_list_is_visible =
@@ -127,25 +126,7 @@ void WindowCycleEventFilter::OnScrollEvent(ui::ScrollEvent* event) {
 }
 
 void WindowCycleEventFilter::OnGestureEvent(ui::GestureEvent* event) {
-  if (features::IsInteractiveWindowCycleListEnabled()) {
-    if (ProcessGestureEvent(event)) {
-      event->SetHandled();
-      event->StopPropagation();
-    }
-  } else {
-    // Prevent any form of tap from doing anything while the Alt+Tab UI is
-    // active.
-    if (event->type() == ui::ET_GESTURE_TAP ||
-        event->type() == ui::ET_GESTURE_DOUBLE_TAP ||
-        event->type() == ui::ET_GESTURE_TAP_CANCEL ||
-        event->type() == ui::ET_GESTURE_TAP_DOWN ||
-        event->type() == ui::ET_GESTURE_TAP_UNCONFIRMED ||
-        event->type() == ui::ET_GESTURE_TWO_FINGER_TAP ||
-        event->type() == ui::ET_GESTURE_LONG_PRESS ||
-        event->type() == ui::ET_GESTURE_LONG_TAP) {
-      event->StopPropagation();
-    }
-  }
+  ProcessGestureEvent(event);
 }
 
 void WindowCycleEventFilter::HandleTriggerKey(ui::KeyEvent* event) {
@@ -169,7 +150,6 @@ void WindowCycleEventFilter::HandleTriggerKey(ui::KeyEvent* event) {
 bool WindowCycleEventFilter::IsTriggerKey(ui::KeyEvent* event) const {
   const ui::KeyboardCode key_code = event->key_code();
   const bool interactive_trigger_key =
-      features::IsInteractiveWindowCycleListEnabled() &&
       (key_code == ui::VKEY_LEFT || key_code == ui::VKEY_RIGHT);
 
   const bool nav_trigger_key =
@@ -185,9 +165,8 @@ bool WindowCycleEventFilter::IsTriggerKey(ui::KeyEvent* event) const {
 }
 
 bool WindowCycleEventFilter::IsExitKey(ui::KeyEvent* event) const {
-  return features::IsInteractiveWindowCycleListEnabled() &&
-         (event->key_code() == ui::VKEY_RETURN ||
-          event->key_code() == ui::VKEY_SPACE);
+  return event->key_code() == ui::VKEY_RETURN ||
+         event->key_code() == ui::VKEY_SPACE;
 }
 
 bool WindowCycleEventFilter::ShouldRepeatKey(ui::KeyEvent* event) const {
@@ -240,8 +219,8 @@ void WindowCycleEventFilter::ProcessMouseEvent(ui::MouseEvent* event) {
   }
 }
 
-bool WindowCycleEventFilter::ProcessGestureEvent(ui::GestureEvent* event) {
-  // TODO(chinsenj): Implement handling for ui::ET_SCROLL_FLING_START events.
+void WindowCycleEventFilter::ProcessGestureEvent(ui::GestureEvent* event) {
+  bool should_complete_cycling = false;
   switch (event->type()) {
     case ui::ET_GESTURE_TAP:
     case ui::ET_GESTURE_TAP_DOWN:
@@ -253,55 +232,71 @@ bool WindowCycleEventFilter::ProcessGestureEvent(ui::GestureEvent* event) {
       tapped_window_ =
           Shell::Get()->window_cycle_controller()->GetWindowAtPoint(
               event->AsLocatedEvent());
-      return true;
+      break;
     }
     case ui::ET_GESTURE_TAP_CANCEL:
       // Do nothing because the event after this one determines whether we
       // scrolled or tapped.
-      return true;
+      break;
     case ui::ET_GESTURE_SCROLL_BEGIN: {
       tapped_window_ = nullptr;
-      auto* window_cycle_controller = Shell::Get()->window_cycle_controller();
-      if (!window_cycle_controller->IsEventInCycleView(event))
-        return false;
+      if (!Shell::Get()->window_cycle_controller()->IsEventInCycleView(event))
+        return;
 
       touch_scrolling_ = true;
-      return true;
+      break;
     }
     case ui::ET_GESTURE_SCROLL_UPDATE: {
       if (!touch_scrolling_)
-        return false;
+        return;
 
       Shell::Get()->window_cycle_controller()->Drag(
           event->details().scroll_x());
-      return true;
+      break;
+    }
+    case ui::ET_SCROLL_FLING_START: {
+      tapped_window_ = nullptr;
+      auto* window_cycle_controller = Shell::Get()->window_cycle_controller();
+      if (!window_cycle_controller->IsEventInCycleView(event))
+        return;
+
+      // Only start a fling if the x-velocity is non-zero to avoid crashing when
+      // creating a fling curve. See crbug.com/1224969.
+      float velocity_x = event->details().velocity_x();
+      if (velocity_x != 0.f)
+        window_cycle_controller->StartFling(velocity_x);
+      break;
     }
     case ui::ET_GESTURE_END: {
       if (tapped_window_) {
-        // |this| will be destroyed after this line.
-        Shell::Get()->window_cycle_controller()->CompleteCycling();
-      } else {
-        tapped_window_ = nullptr;
-        touch_scrolling_ = false;
+        // Defer calling WindowCycleController::CompleteCycling() until we've
+        // set |event| to handled and stop its propagation.
+        should_complete_cycling = true;
       }
-      return true;
+      tapped_window_ = nullptr;
+      touch_scrolling_ = false;
+      break;
     }
     default:
       if (tapped_window_) {
         Shell::Get()->window_cycle_controller()->SetFocusedWindow(
             tapped_window_);
-        return true;
+        break;
       }
-      break;
+      return;
   }
 
-  return false;
+  event->SetHandled();
+  event->StopPropagation();
+
+  if (should_complete_cycling)
+    Shell::Get()->window_cycle_controller()->CompleteCycling();
 }
 
 bool WindowCycleEventFilter::ProcessEventImpl(int finger_count,
                                               float delta_x,
                                               float delta_y) {
-  if (!scroll_data_ || !features::IsInteractiveWindowCycleListEnabled())
+  if (!scroll_data_)
     return false;
 
   if (finger_count != 2 && finger_count != 3) {
@@ -336,10 +331,8 @@ bool WindowCycleEventFilter::ProcessEventImpl(int finger_count,
 bool WindowCycleEventFilter::CycleWindowCycleList(int finger_count,
                                                   float scroll_x,
                                                   float scroll_y) {
-  if (!features::IsInteractiveWindowCycleListEnabled() ||
-      (finger_count != 2 && finger_count != 3)) {
+  if (finger_count != 2 && finger_count != 3)
     return false;
-  }
 
   auto* window_cycle_controller = Shell::Get()->window_cycle_controller();
   if (!window_cycle_controller->IsCycling() ||

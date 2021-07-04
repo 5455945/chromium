@@ -4,7 +4,6 @@
 
 #include "ash/system/unified/unified_system_tray_bubble.h"
 
-#include "ash/public/cpp/ash_features.h"
 #include "ash/shelf/shelf.h"
 #include "ash/shell.h"
 #include "ash/system/message_center/unified_message_center_bubble.h"
@@ -20,6 +19,7 @@
 #include "ash/wm/work_area_insets.h"
 #include "base/metrics/histogram_macros.h"
 #include "ui/aura/window.h"
+#include "ui/compositor/layer.h"
 #include "ui/wm/core/window_util.h"
 #include "ui/wm/public/activation_client.h"
 
@@ -65,14 +65,12 @@ class ContainerView : public views::View {
 
 }  // namespace
 
-UnifiedSystemTrayBubble::UnifiedSystemTrayBubble(UnifiedSystemTray* tray,
-                                                 bool show_by_click)
+UnifiedSystemTrayBubble::UnifiedSystemTrayBubble(UnifiedSystemTray* tray)
     : controller_(std::make_unique<UnifiedSystemTrayController>(tray->model(),
                                                                 this,
                                                                 tray)),
       tray_(tray) {
-  if (show_by_click)
-    time_shown_by_click_ = base::TimeTicks::Now();
+  time_opened_ = base::TimeTicks::Now();
 
   TrayBubbleView::InitParams init_params;
   init_params.shelf_alignment = tray_->shelf()->alignment();
@@ -85,8 +83,8 @@ UnifiedSystemTrayBubble::UnifiedSystemTrayBubble(UnifiedSystemTray* tray,
   init_params.insets = GetTrayBubbleInsets();
   init_params.corner_radius = kUnifiedTrayCornerRadius;
   init_params.has_shadow = false;
-  init_params.show_by_click = show_by_click;
   init_params.close_on_deactivate = false;
+  init_params.reroute_event_handler = true;
   init_params.translucent = true;
 
   bubble_view_ = new TrayBubbleView(init_params);
@@ -121,10 +119,18 @@ UnifiedSystemTrayBubble::~UnifiedSystemTrayBubble() {
     Shell::Get()->tablet_mode_controller()->RemoveObserver(this);
   tray_->tray_event_filter()->RemoveBubble(this);
   tray_->shelf()->RemoveObserver(this);
+
+  // Unified view children depend on `controller_` which is about to go away.
+  // Remove child views synchronously to ensure they don't try to access
+  // `controller_` after `this` goes out of scope.
+  bubble_view_->RemoveAllChildViews(true);
+  bubble_view_->ResetDelegate();
+
   if (bubble_widget_) {
     bubble_widget_->RemoveObserver(this);
     bubble_widget_->Close();
   }
+
   CHECK(!IsInObserverList());
 }
 
@@ -135,25 +141,6 @@ gfx::Rect UnifiedSystemTrayBubble::GetBoundsInScreen() const {
 
 bool UnifiedSystemTrayBubble::IsBubbleActive() const {
   return bubble_widget_ && bubble_widget_->IsActive();
-}
-
-void UnifiedSystemTrayBubble::ActivateBubble() {
-  DCHECK(unified_view_);
-  DCHECK(bubble_widget_);
-
-  if (bubble_widget_->IsClosed())
-    return;
-  bubble_widget_->widget_delegate()->SetCanActivate(true);
-  bubble_widget_->Activate();
-}
-
-void UnifiedSystemTrayBubble::CloseNow() {
-  if (!bubble_widget_)
-    return;
-
-  bubble_widget_->RemoveObserver(this);
-  bubble_widget_->CloseNow();
-  bubble_widget_ = nullptr;
 }
 
 void UnifiedSystemTrayBubble::EnsureCollapsed() {
@@ -271,6 +258,8 @@ void UnifiedSystemTrayBubble::OnWidgetDestroying(views::Widget* widget) {
   CHECK_EQ(bubble_widget_, widget);
   bubble_widget_->RemoveObserver(this);
   bubble_widget_ = nullptr;
+
+  // `tray_->CloseBubble()` will delete `this`.
   tray_->CloseBubble();
 }
 
@@ -310,17 +299,16 @@ void UnifiedSystemTrayBubble::OnWindowActivated(ActivationReason reason,
 }
 
 void UnifiedSystemTrayBubble::RecordTimeToClick() {
+  if (!time_opened_)
+    return;
+
   tray_->MaybeRecordFirstInteraction(
       UnifiedSystemTray::FirstInteractionType::kQuickSettings);
 
-  // Ignore if the tray bubble is not opened by click.
-  if (!time_shown_by_click_)
-    return;
+  UMA_HISTOGRAM_TIMES("ChromeOS.SystemTray.TimeToClick2",
+                      base::TimeTicks::Now() - time_opened_.value());
 
-  UMA_HISTOGRAM_TIMES("ChromeOS.SystemTray.TimeToClick",
-                      base::TimeTicks::Now() - time_shown_by_click_.value());
-
-  time_shown_by_click_.reset();
+  time_opened_.reset();
 }
 
 void UnifiedSystemTrayBubble::OnTabletModeStarted() {
@@ -359,6 +347,10 @@ void UnifiedSystemTrayBubble::SetFrameVisible(bool visible) {
 void UnifiedSystemTrayBubble::NotifyAccessibilityEvent(ax::mojom::Event event,
                                                        bool send_native_event) {
   bubble_view_->NotifyAccessibilityEvent(event, send_native_event);
+}
+
+bool UnifiedSystemTrayBubble::ShowingAudioDetailedView() const {
+  return bubble_widget_ && controller_->showing_audio_detailed_view();
 }
 
 }  // namespace ash

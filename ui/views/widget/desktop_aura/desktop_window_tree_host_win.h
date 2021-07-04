@@ -104,7 +104,7 @@ class VIEWS_EXPORT DesktopWindowTreeHostWin
   ui::ZOrderLevel GetZOrderLevel() const override;
   void SetVisibleOnAllWorkspaces(bool always_visible) override;
   bool IsVisibleOnAllWorkspaces() const override;
-  bool SetWindowTitle(const base::string16& title) override;
+  bool SetWindowTitle(const std::u16string& title) override;
   void ClearNativeFocus() override;
   Widget::MoveLoopResult RunMoveLoop(
       const gfx::Vector2d& drag_offset,
@@ -142,7 +142,7 @@ class VIEWS_EXPORT DesktopWindowTreeHostWin
   void SetCapture() override;
   void ReleaseCapture() override;
   bool CaptureSystemKeyEventsImpl(
-      base::Optional<base::flat_set<ui::DomCode>> dom_codes) override;
+      absl::optional<base::flat_set<ui::DomCode>> dom_codes) override;
   void ReleaseSystemKeyEventCapture() override;
   bool IsKeyLocked(ui::DomCode dom_code) override;
   base::flat_map<std::string, std::string> GetKeyboardLayoutMap() override;
@@ -152,6 +152,8 @@ class VIEWS_EXPORT DesktopWindowTreeHostWin
       const gfx::Point& location_in_pixels) override;
   std::unique_ptr<aura::ScopedEnableUnadjustedMouseEvents>
   RequestUnadjustedMovement() override;
+  void LockMouse(aura::Window* window) override;
+  void UnlockMouse(aura::Window* window) override;
 
   // Overridden from aura::client::AnimationHost
   void SetHostTransitionOffsets(

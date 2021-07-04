@@ -50,7 +50,7 @@ class PasswordBaseDialogController;
 class ManagePasswordsUIController
     : public content::WebContentsObserver,
       public content::WebContentsUserData<ManagePasswordsUIController>,
-      public password_manager::PasswordStore::Observer,
+      public password_manager::PasswordStoreInterface::Observer,
       public PasswordsLeakDialogDelegate,
       public PasswordsModelDelegate,
       public PasswordsClientUIDelegate {
@@ -101,9 +101,13 @@ class ManagePasswordsUIController
   virtual void NotifyUnsyncedCredentialsWillBeDeleted(
       std::vector<password_manager::PasswordForm> unsynced_credentials);
 
-  // PasswordStore::Observer:
+  // PasswordStoreInterface::Observer:
   void OnLoginsChanged(
+      password_manager::PasswordStoreInterface* store,
       const password_manager::PasswordStoreChangeList& changes) override;
+  void OnLoginsRetained(password_manager::PasswordStoreInterface* store,
+                        const std::vector<password_manager::PasswordForm>&
+                            retained_passwords) override;
 
   // Set the state of the Omnibox icon, and possibly show the associated bubble
   // without user interaction.
@@ -143,8 +147,8 @@ class ManagePasswordsUIController
   void OnNopeUpdateClicked() override;
   void NeverSavePassword() override;
   void OnPasswordsRevealed() override;
-  void SavePassword(const base::string16& username,
-                    const base::string16& password) override;
+  void SavePassword(const std::u16string& username,
+                    const std::u16string& password) override;
   void SaveUnsyncedCredentialsInProfileStore(
       const std::vector<password_manager::PasswordForm>& selected_credentials)
       override;
@@ -162,8 +166,8 @@ class ManagePasswordsUIController
   void OnDialogHidden() override;
   bool AuthenticateUser() override;
   void AuthenticateUserForAccountStoreOptInAndSavePassword(
-      const base::string16& username,
-      const base::string16& password) override;
+      const std::u16string& username,
+      const std::u16string& password) override;
   void AuthenticateUserForAccountStoreOptInAndMovePassword() override;
   bool ArePasswordsRevealedWhenBubbleIsOpened() const override;
 
@@ -275,8 +279,8 @@ class ManagePasswordsUIController
   void FinishSavingPasswordAfterAccountStoreOptInAuth(
       const url::Origin& origin,
       password_manager::PasswordFormManagerForUI* form_manager,
-      const base::string16& username,
-      const base::string16& password,
+      const std::u16string& username,
+      const std::u16string& password,
       password_manager::PasswordManagerClient::ReauthSucceeded
           reauth_succeeded);
 

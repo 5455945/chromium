@@ -6,11 +6,14 @@
 
 #include "base/mac/foundation_util.h"
 #import "base/metrics/user_metrics.h"
+#import "components/signin/public/identity_manager/identity_manager.h"
+#import "components/signin/public/identity_manager/primary_account_mutator.h"
 #import "ios/chrome/browser/browser_state/chrome_browser_state.h"
 #import "ios/chrome/browser/main/browser.h"
 #import "ios/chrome/browser/signin/authentication_service.h"
 #import "ios/chrome/browser/signin/authentication_service_factory.h"
-#import "ios/chrome/browser/sync/profile_sync_service_factory.h"
+#import "ios/chrome/browser/signin/identity_manager_factory.h"
+#import "ios/chrome/browser/sync/sync_service_factory.h"
 #import "ios/chrome/browser/sync/sync_setup_service.h"
 #import "ios/chrome/browser/sync/sync_setup_service_factory.h"
 #import "ios/chrome/browser/ui/alert_coordinator/action_sheet_coordinator.h"
@@ -49,6 +52,8 @@ using l10n_util::GetNSString;
 // Confirm cancel sign-in/sync dialog.
 @property(nonatomic, strong)
     ActionSheetCoordinator* cancelConfirmationAlertCoordinator;
+// Manager for user's Google identities.
+@property(nonatomic, assign) signin::IdentityManager* identityManager;
 
 @end
 
@@ -62,6 +67,8 @@ using l10n_util::GetNSString;
       AuthenticationServiceFactory::GetForBrowserState(
           self.browser->GetBrowserState());
   DCHECK(authenticationService->IsAuthenticated());
+  self.identityManager = IdentityManagerFactory::GetForBrowserState(
+      self.browser->GetBrowserState());
   self.advancedSettingsSigninNavigationController =
       [[AdvancedSettingsSigninNavigationController alloc] init];
   self.advancedSettingsSigninNavigationController.modalPresentationStyle =
@@ -75,8 +82,7 @@ using l10n_util::GetNSString;
       SyncSetupServiceFactory::GetForBrowserState(
           self.browser->GetBrowserState());
   syncer::SyncService* syncService =
-      ProfileSyncServiceFactory::GetForBrowserState(
-          self.browser->GetBrowserState());
+      SyncServiceFactory::GetForBrowserState(self.browser->GetBrowserState());
   self.advancedSettingsSigninMediator = [[AdvancedSettingsSigninMediator alloc]
       initWithSyncSetupService:syncSetupService
          authenticationService:authenticationService
@@ -98,6 +104,13 @@ using l10n_util::GetNSString;
   DCHECK(self.advancedSettingsSigninNavigationController);
   [self.syncSettingsCoordinator stop];
   self.syncSettingsCoordinator = nil;
+
+  if (base::FeatureList::IsEnabled(signin::kMobileIdentityConsistency)) {
+    // Revokes all refresh tokens and alerts services of the signed-out state.
+    self.identityManager->GetPrimaryAccountMutator()->ClearPrimaryAccount(
+        signin_metrics::ABORT_SIGNIN,
+        signin_metrics::SignoutDelete::kIgnoreMetric);
+  }
 
   switch (action) {
     case SigninCoordinatorInterruptActionNoDismiss:
@@ -192,7 +205,7 @@ using l10n_util::GetNSString;
 }
 
 // Does the cleanup once the view has been dismissed, calls the metrics and
-// calls |runCompletionCallbackWithSigninResult:identity:| to finish the
+// calls |runCompletionCallbackWithSigninResult:completionInfo:| to finish the
 // sign-in.
 - (void)finishedWithSigninResult:(SigninCoordinatorResult)signinResult {
   DCHECK(self.advancedSettingsSigninNavigationController);
@@ -212,10 +225,13 @@ using l10n_util::GetNSString;
   AuthenticationService* authService =
       AuthenticationServiceFactory::GetForBrowserState(
           self.browser->GetBrowserState());
-  ChromeIdentity* identity = authService->GetAuthenticatedIdentity();
+  ChromeIdentity* identity = (signinResult == SigninCoordinatorResultSuccess)
+                                 ? authService->GetAuthenticatedIdentity()
+                                 : nil;
+  SigninCompletionInfo* completionInfo =
+      [SigninCompletionInfo signinCompletionInfoWithIdentity:identity];
   [self runCompletionCallbackWithSigninResult:signinResult
-                                     identity:identity
-                   showAdvancedSettingsSignin:NO];
+                               completionInfo:completionInfo];
 }
 
 - (void)showCancelConfirmationAlert {
@@ -285,6 +301,10 @@ using l10n_util::GetNSString;
   DCHECK_EQ(self.syncSettingsCoordinator, coordinator);
   [self.syncSettingsCoordinator stop];
   self.syncSettingsCoordinator = nil;
+}
+
+- (NSString*)manageSyncSettingsCoordinatorTitle {
+  return l10n_util::GetNSString(IDS_IOS_MANAGE_SYNC_SETTINGS_TITLE);
 }
 
 @end

@@ -69,9 +69,11 @@ template("webapk_java") {
       "src/org/chromium/webapk/shell_apk/h2o/H2OMainActivity.java",
       "src/org/chromium/webapk/shell_apk/h2o/H2OOpaqueMainActivity.java",
       "src/org/chromium/webapk/shell_apk/h2o/H2OTransparentLauncherActivity.java",
+      "src/org/chromium/webapk/shell_apk/h2o/LaunchTrigger.java",
       "src/org/chromium/webapk/shell_apk/h2o/SplashActivity.java",
       "src/org/chromium/webapk/shell_apk/h2o/SplashContentProvider.java",
       "src/org/chromium/webapk/shell_apk/h2o/SplashUtils.java",
+      "src/org/chromium/webapk/shell_apk/h2o/SplashUtilsForS.java",
     ]
     deps += [
       "//chrome/android/webapk/libs/common:common_java",
@@ -263,7 +265,7 @@ template("webapk_tmpl") {
 
     android_manifest = _manifest_output
     android_manifest_dep = ":$_manifest_target_name"
-    target_sdk_version = 29
+    target_sdk_version = 31
     never_incremental = true
 
     # Force 32 bit mode on 64 bit devices.

@@ -19,6 +19,7 @@
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/password_manager/password_store_factory.h"
+#include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/ui/passwords/passwords_model_delegate_mock.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/password_manager/core/browser/mock_password_store.h"
@@ -51,11 +52,11 @@ namespace {
 constexpr ukm::SourceId kTestSourceId = 0x1234;
 
 constexpr char kSiteOrigin[] = "http://example.com/login";
-constexpr char kUsername[] = "Admin";
-constexpr char kUsernameExisting[] = "User";
-constexpr char kUsernameNew[] = "User585";
-constexpr char kPassword[] = "AdminPass";
-constexpr char kPasswordEdited[] = "asDfjkl;";
+constexpr char16_t kUsername[] = u"Admin";
+constexpr char16_t kUsernameExisting[] = u"User";
+constexpr char16_t kUsernameNew[] = u"User585";
+constexpr char16_t kPassword[] = u"AdminPass";
+constexpr char16_t kPasswordEdited[] = u"asDfjkl;";
 constexpr char kUIDismissalReasonGeneralMetric[] =
     "PasswordManager.UIDismissalReason";
 constexpr char kUIDismissalReasonSaveMetric[] =
@@ -82,6 +83,8 @@ class SaveUpdateBubbleControllerTest : public ::testing::Test {
         std::make_unique<testing::NiceMock<PasswordsModelDelegateMock>>();
     ON_CALL(*mock_delegate_, GetPasswordFormMetricsRecorder())
         .WillByDefault(Return(nullptr));
+    SyncServiceFactory::GetInstance()->SetTestingFactory(
+        profile(), SyncServiceFactory::GetDefaultFactory());
     PasswordStoreFactory::GetInstance()->SetTestingFactoryAndUse(
         profile(),
         base::BindRepeating(
@@ -90,8 +93,8 @@ class SaveUpdateBubbleControllerTest : public ::testing::Test {
                 testing::StrictMock<password_manager::MockPasswordStore>>));
     pending_password_.url = GURL(kSiteOrigin);
     pending_password_.signon_realm = kSiteOrigin;
-    pending_password_.username_value = base::ASCIIToUTF16(kUsername);
-    pending_password_.password_value = base::ASCIIToUTF16(kPassword);
+    pending_password_.username_value = kUsername;
+    pending_password_.password_value = kPassword;
   }
 
   void TearDown() override {
@@ -156,8 +159,8 @@ void SaveUpdateBubbleControllerTest::SetUpWithState(
   EXPECT_CALL(*delegate(), GetState()).WillRepeatedly(Return(state));
   EXPECT_CALL(*delegate(), GetWebContents())
       .WillRepeatedly(Return(test_web_contents_.get()));
-  controller_.reset(
-      new SaveUpdateBubbleController(mock_delegate_->AsWeakPtr(), reason));
+  controller_ = std::make_unique<SaveUpdateBubbleController>(
+      mock_delegate_->AsWeakPtr(), reason);
   ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(delegate()));
   EXPECT_CALL(*delegate(), GetWebContents())
       .WillRepeatedly(Return(test_web_contents_.get()));
@@ -183,7 +186,7 @@ void SaveUpdateBubbleControllerTest::PretendUpdatePasswordWaiting() {
       GetCurrentForms();
   auto current_form =
       std::make_unique<password_manager::PasswordForm>(pending_password());
-  current_form->password_value = base::ASCIIToUTF16("old_password");
+  current_form->password_value = u"old_password";
   forms.push_back(std::move(current_form));
   EXPECT_CALL(*delegate(), GetCurrentForms()).WillOnce(ReturnRef(forms));
   SetUpWithState(password_manager::ui::PENDING_PASSWORD_UPDATE_STATE,
@@ -216,7 +219,7 @@ password_manager::InteractionsStats
 SaveUpdateBubbleControllerTest::GetTestStats() {
   password_manager::InteractionsStats result;
   result.origin_domain = GURL(kSiteOrigin).GetOrigin();
-  result.username_value = base::ASCIIToUTF16(kUsername);
+  result.username_value = kUsername;
   result.dismissal_count = 5;
   result.update_time = base::Time::FromTimeT(1);
   return result;
@@ -225,12 +228,12 @@ SaveUpdateBubbleControllerTest::GetTestStats() {
 std::vector<std::unique_ptr<password_manager::PasswordForm>>
 SaveUpdateBubbleControllerTest::GetCurrentForms() const {
   password_manager::PasswordForm form(pending_password());
-  form.username_value = base::ASCIIToUTF16(kUsernameExisting);
-  form.password_value = base::ASCIIToUTF16("123456");
+  form.username_value = kUsernameExisting;
+  form.password_value = u"123456";
 
   password_manager::PasswordForm preferred_form(pending_password());
-  preferred_form.username_value = base::ASCIIToUTF16("preferred_username");
-  preferred_form.password_value = base::ASCIIToUTF16("654321");
+  preferred_form.username_value = u"preferred_username";
+  preferred_form.password_value = u"654321";
 
   std::vector<std::unique_ptr<password_manager::PasswordForm>> forms;
   forms.push_back(std::make_unique<password_manager::PasswordForm>(form));
@@ -292,13 +295,12 @@ TEST_F(SaveUpdateBubbleControllerTest, ClickSaveInUpdateState) {
   PretendUpdatePasswordWaiting();
 
   // Edit username, now it's a new credential.
-  controller()->OnCredentialEdited(base::ASCIIToUTF16(kUsernameNew),
-                                   base::ASCIIToUTF16(kPasswordEdited));
+  controller()->OnCredentialEdited(kUsernameNew, kPasswordEdited);
   EXPECT_FALSE(controller()->IsCurrentStateUpdate());
 
   EXPECT_CALL(*GetStore(), RemoveSiteStatsImpl(GURL(kSiteOrigin).GetOrigin()));
-  EXPECT_CALL(*delegate(), SavePassword(base::ASCIIToUTF16(kUsernameNew),
-                                        base::ASCIIToUTF16(kPasswordEdited)));
+  EXPECT_CALL(*delegate(), SavePassword(std::u16string(kUsernameNew),
+                                        std::u16string(kPasswordEdited)));
   EXPECT_CALL(*delegate(), NeverSavePassword()).Times(0);
   EXPECT_CALL(*delegate(), OnNopeUpdateClicked()).Times(0);
   controller()->OnSaveClicked();
@@ -337,13 +339,12 @@ TEST_F(SaveUpdateBubbleControllerTest, ClickUpdateInSaveState) {
   PretendPasswordWaiting();
 
   // Edit username, now it's an existing credential.
-  controller()->OnCredentialEdited(base::ASCIIToUTF16(kUsernameExisting),
-                                   base::ASCIIToUTF16(kPasswordEdited));
+  controller()->OnCredentialEdited(kUsernameExisting, kPasswordEdited);
   EXPECT_TRUE(controller()->IsCurrentStateUpdate());
 
   EXPECT_CALL(*GetStore(), RemoveSiteStatsImpl(GURL(kSiteOrigin).GetOrigin()));
-  EXPECT_CALL(*delegate(), SavePassword(base::ASCIIToUTF16(kUsernameExisting),
-                                        base::ASCIIToUTF16(kPasswordEdited)));
+  EXPECT_CALL(*delegate(), SavePassword(std::u16string(kUsernameExisting),
+                                        std::u16string(kPasswordEdited)));
   EXPECT_CALL(*delegate(), NeverSavePassword()).Times(0);
   EXPECT_CALL(*delegate(), OnNopeUpdateClicked()).Times(0);
   controller()->OnSaveClicked();
@@ -352,16 +353,15 @@ TEST_F(SaveUpdateBubbleControllerTest, ClickUpdateInSaveState) {
 
 TEST_F(SaveUpdateBubbleControllerTest, GetInitialUsername_MatchedUsername) {
   PretendUpdatePasswordWaiting();
-  EXPECT_EQ(base::UTF8ToUTF16(kUsername),
-            controller()->pending_password().username_value);
+  EXPECT_EQ(kUsername, controller()->pending_password().username_value);
 }
 
 TEST_F(SaveUpdateBubbleControllerTest, EditCredential) {
   PretendPasswordWaiting();
   EXPECT_CALL(*GetStore(), RemoveSiteStatsImpl(GURL(kSiteOrigin).GetOrigin()));
 
-  const base::string16 kExpectedUsername = base::UTF8ToUTF16("new_username");
-  const base::string16 kExpectedPassword = base::UTF8ToUTF16("new_password");
+  const std::u16string kExpectedUsername = u"new_username";
+  const std::u16string kExpectedPassword = u"new_password";
 
   controller()->OnCredentialEdited(kExpectedUsername, kExpectedPassword);
   EXPECT_EQ(kExpectedUsername, controller()->pending_password().username_value);
@@ -586,24 +586,21 @@ TEST_P(SaveUpdateBubbleControllerPasswordRevealingTest,
       .WillRepeatedly(Return(is_manual_fallback_for_saving));
 
   PretendPasswordWaiting(display_reason);
-  bool reauth_expected = form_has_autofilled_value;
-  if (!reauth_expected) {
+  bool reauth_expected = false;
+  if (display_reason ==
+      PasswordBubbleControllerBase::DisplayReason::kUserAction) {
     reauth_expected =
-        !is_manual_fallback_for_saving &&
-        display_reason ==
-            PasswordBubbleControllerBase::DisplayReason::kUserAction;
+        form_has_autofilled_value || !is_manual_fallback_for_saving;
   }
   EXPECT_EQ(reauth_expected,
             controller()->password_revealing_requires_reauth());
 
-  // delegate()->AuthenticateUser() is called only when reauth is expected.
-  EXPECT_CALL(*delegate(), AuthenticateUser())
-      .Times(reauth_expected)
-      .WillOnce(Return(!does_os_support_user_auth));
-
   if (reauth_expected) {
+    EXPECT_CALL(*delegate(), AuthenticateUser())
+        .WillOnce(Return(!does_os_support_user_auth));
     EXPECT_EQ(controller()->RevealPasswords(), !does_os_support_user_auth);
   } else {
+    EXPECT_CALL(*delegate(), AuthenticateUser()).Times(0);
     EXPECT_TRUE(controller()->RevealPasswords());
   }
 }

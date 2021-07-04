@@ -6,6 +6,7 @@
 
 #include <algorithm>
 
+#include "ash/constants/ash_features.h"
 #include "ash/metrics/user_metrics_recorder.h"
 #include "ash/public/cpp/system_tray_client.h"
 #include "ash/session/session_controller_impl.h"
@@ -16,6 +17,7 @@
 #include "ash/system/network/tray_network_state_model.h"
 #include "ash/system/tray/system_menu_button.h"
 #include "ash/system/tray/tri_view.h"
+#include "base/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
@@ -32,6 +34,7 @@
 #include "ui/views/layout/layout_manager.h"
 #include "ui/views/widget/widget.h"
 
+using chromeos::network_config::mojom::ActivationStateType;
 using chromeos::network_config::mojom::ConnectionStateType;
 using chromeos::network_config::mojom::DeviceStateProperties;
 using chromeos::network_config::mojom::DeviceStateType;
@@ -45,6 +48,9 @@ namespace {
 
 // Delay between scan requests.
 constexpr int kRequestScanDelaySeconds = 10;
+
+// 00:00:00:00:00:00 is provided when a device MAC address cannot be retrieved.
+constexpr char kMissingMacAddress[] = "00:00:00:00:00:00";
 
 // This margin value is used throughout the bubble:
 // - margins inside the border
@@ -92,13 +98,26 @@ void LogUserNetworkEvent(const NetworkStateProperties& network) {
 bool CanNetworkConnect(
     chromeos::network_config::mojom::ConnectionStateType connection_state,
     chromeos::network_config::mojom::NetworkType type,
+    chromeos::network_config::mojom::ActivationStateType activation_state,
     bool connectable) {
   // Network can be connected to if the network is not connected and:
   // * The network is connectable or
-  // * The active user is primary and the network is configurable
-  return connection_state == ConnectionStateType::kNotConnected &&
-         (connectable ||
-          (!IsSecondaryUser() && NetworkTypeIsConfigurable(type)));
+  // * The active user is primary and the network is configurable or
+  // * The network is cellular and activated
+  if (connection_state != ConnectionStateType::kNotConnected) {
+    return false;
+  }
+  if (connectable) {
+    return true;
+  }
+  if (!IsSecondaryUser() && NetworkTypeIsConfigurable(type)) {
+    return true;
+  }
+  if (type == NetworkType::kCellular &&
+      activation_state == ActivationStateType::kActivated) {
+    return true;
+  }
+  return false;
 }
 
 // A bubble which displays network info.
@@ -114,7 +133,6 @@ class NetworkStateListDetailedView::InfoBubble
     set_margins(gfx::Insets(kBubbleMargin));
     SetArrow(views::BubbleBorder::NONE);
     set_shadow(views::BubbleBorder::NO_SHADOW);
-    set_anchor_view_insets(gfx::Insets(0, 0, kBubbleMargin, 0));
     SetNotifyEnterExitOnChild(true);
     SetLayoutManager(std::make_unique<views::FillLayout>());
     AddChildView(content);
@@ -278,8 +296,25 @@ void NetworkStateListDetailedView::HandleViewClicked(views::View* view) {
 
 void NetworkStateListDetailedView::HandleViewClickedImpl(
     NetworkStatePropertiesPtr network) {
-  if (network && CanNetworkConnect(network->connection_state, network->type,
-                                   network->connectable)) {
+  // If the network is locked and is cellular show SIM unlock dialog in OS
+  // Settings.
+  if (network->type == NetworkType::kCellular &&
+      base::FeatureList::IsEnabled(
+          chromeos::features::kUpdatedCellularActivationUi) &&
+      network->type_state->get_cellular()->sim_locked) {
+    if (!Shell::Get()->session_controller()->ShouldEnableSettings()) {
+      return;
+    }
+    Shell::Get()->system_tray_model()->client()->ShowSettingsSimUnlock();
+    return;
+  }
+
+  if (network && CanNetworkConnect(
+                     network->connection_state, network->type,
+                     network->type == NetworkType::kCellular
+                         ? network->type_state->get_cellular()->activation_state
+                         : ActivationStateType::kUnknown,
+                     network->connectable)) {
     Shell::Get()->metrics()->RecordUserMetricsAction(
         list_type_ == LIST_TYPE_VPN
             ? UMA_STATUS_AREA_CONNECT_TO_VPN
@@ -426,14 +461,14 @@ views::View* NetworkStateListDetailedView::CreateNetworkInfoView() {
       cellular_address = *cellular->mac_address;
   }
 
-  base::string16 bubble_text;
+  std::u16string bubble_text;
   auto maybe_add_mac_address = [&bubble_text](const std::string& address,
                                               int ids) {
-    if (address.empty())
+    if (address.empty() || address == kMissingMacAddress)
       return;
 
     if (!bubble_text.empty())
-      bubble_text += base::ASCIIToUTF16("\n");
+      bubble_text += u"\n";
 
     bubble_text += l10n_util::GetStringFUTF16(ids, base::UTF8ToUTF16(address));
   };

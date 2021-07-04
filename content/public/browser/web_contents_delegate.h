@@ -14,7 +14,6 @@
 
 #include "base/callback.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/strings/string16.h"
 #include "build/build_config.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/eye_dropper.h"
@@ -112,7 +111,11 @@ enum class PictureInPictureResult {
 };
 
 // Objects implement this interface to get notified about changes in the
-// WebContents and to provide necessary functionality.
+// WebContents and to provide necessary functionality. If a method doesn't
+// change state, e.g. has no return value, then it can move to
+// WebContentsObserver if many places want to observe the change. If the
+// implementation of one of the methods below would be shared by many or all of
+// WebContentsDelegate implementations then it can go on ContentBrowserClient.
 class CONTENT_EXPORT WebContentsDelegate {
  public:
   WebContentsDelegate();
@@ -132,7 +135,8 @@ class CONTENT_EXPORT WebContentsDelegate {
   // Allows the delegate to optionally cancel navigations that attempt to
   // transfer to a different process between the start of the network load and
   // commit.  Defaults to true.
-  virtual bool ShouldTransferNavigation(bool is_main_frame_navigation);
+  virtual bool ShouldAllowRendererInitiatedCrossProcessNavigation(
+      bool is_main_frame_navigation);
 
   // Called to inform the delegate that the WebContents's navigation state
   // changed. The |changed_flags| indicates the parts of the navigation state
@@ -218,9 +222,9 @@ class CONTENT_EXPORT WebContentsDelegate {
   virtual bool DidAddMessageToConsole(
       WebContents* source,
       blink::mojom::ConsoleMessageLevel log_level,
-      const base::string16& message,
+      const std::u16string& message,
       int32_t line_no,
-      const base::string16& source_id);
+      const std::u16string& source_id);
 
   // Tells us that we've finished firing this tab's beforeunload event.
   // The proceed bool tells us whether the user chose to proceed closing the
@@ -256,9 +260,6 @@ class CONTENT_EXPORT WebContentsDelegate {
   // this. Returns true if the delegate successfully handled it.
   virtual bool TakeFocus(WebContents* source,
                          bool reverse);
-
-  // Invoked when the page loses mouse capture.
-  virtual void LostCapture() {}
 
   // Asks the delegate if the given tab can download.
   // Invoking the |callback| synchronously is OK.
@@ -334,7 +335,7 @@ class CONTENT_EXPORT WebContentsDelegate {
       const GURL& opener_url,
       const std::string& frame_name,
       const GURL& target_url,
-      const std::string& partition_id,
+      const StoragePartitionId& partition_id,
       SessionStorageNamespace* session_storage_namespace);
 
   // Notifies the delegate about the creation of a new WebContents. This
@@ -397,9 +398,8 @@ class CONTENT_EXPORT WebContentsDelegate {
 
   // Called when color chooser should open. Returns the opened color chooser.
   // Returns nullptr if we failed to open the color chooser (e.g. when there is
-  // a ColorChooserDialog already open on Windows). Ownership of the returned
-  // pointer is transferred to the caller.
-  virtual ColorChooser* OpenColorChooser(
+  // a ColorChooserDialog already open on Windows).
+  virtual std::unique_ptr<ColorChooser> OpenColorChooser(
       WebContents* web_contents,
       SkColor color,
       const std::vector<blink::mojom::ColorSuggestionPtr>& suggestions);
@@ -575,7 +575,9 @@ class CONTENT_EXPORT WebContentsDelegate {
 
   // Called in response to a request to save a frame. If this returns true, the
   // default behavior is suppressed.
-  virtual bool SaveFrame(const GURL& url, const Referrer& referrer);
+  virtual bool SaveFrame(const GURL& url,
+                         const Referrer& referrer,
+                         content::RenderFrameHost* rfh);
 
   // Can be overridden by a delegate to return the security style of the
   // given |web_contents|, populating |security_style_explanations| to
@@ -680,6 +682,13 @@ class CONTENT_EXPORT WebContentsDelegate {
 
   // Returns true if lazy loading of images and frames should be enabled.
   virtual bool ShouldAllowLazyLoad();
+
+  // Return true if the back forward cache is supported. This is not an
+  // indication that the cache will be used.
+  virtual bool IsBackForwardCacheSupported();
+
+  // Returns true is prerender2 is supported.
+  virtual bool IsPrerender2Supported();
 
   // Requests the delegate to replace |predecessor_contents| with
   // |portal_contents| in the container that holds |predecessor_contents|. If

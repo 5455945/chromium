@@ -9,8 +9,9 @@
 
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/components/web_app_constants.h"
-#include "chrome/browser/web_applications/external_web_app_manager.h"
+#include "chrome/browser/web_applications/preinstalled_web_app_manager.h"
 #include "chrome/browser/web_applications/web_app.h"
+#include "chrome/browser/web_applications/web_app_icon_manager.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/common/chrome_features.h"
@@ -42,12 +43,6 @@ void WebAppInternalsPageHandlerImpl::AddPageResources(
                           IDR_WEB_APP_INTERNALS_MOJOM_LITE_JS);
   source->AddResourcePath("web_app_internals.js", IDR_WEB_APP_INTERNALS_JS);
   source->AddResourcePath("web-app", IDR_WEB_APP_INTERNALS_HTML);
-}
-
-void WebAppInternalsPageHandlerImpl::IsBmoEnabled(
-    IsBmoEnabledCallback callback) {
-  std::move(callback).Run(
-      base::FeatureList::IsEnabled(features::kDesktopPWAsWithoutExtensions));
 }
 
 void WebAppInternalsPageHandlerImpl::GetWebApps(GetWebAppsCallback callback) {
@@ -84,8 +79,8 @@ void WebAppInternalsPageHandlerImpl::GetPreinstalledWebAppDebugInfo(
     return;
   }
 
-  const web_app::ExternalWebAppManager::DebugInfo* debug_info =
-      provider->external_web_app_manager().debug_info();
+  const web_app::PreinstalledWebAppManager::DebugInfo* debug_info =
+      provider->preinstalled_web_app_manager().debug_info();
   if (!debug_info) {
     std::move(callback).Run({});
     return;
@@ -110,7 +105,8 @@ void WebAppInternalsPageHandlerImpl::GetPreinstalledWebAppDebugInfo(
     info->disabled_configs.push_back(std::move(disabled_config_info));
   }
 
-  for (std::pair<const GURL&, const web_app::PendingAppManager::InstallResult&>
+  for (std::pair<const GURL&,
+                 const web_app::ExternallyManagedAppManager::InstallResult&>
            install_result : debug_info->install_results) {
     auto install_result_info = mojom::web_app_internals::InstallResult::New();
     install_result_info->install_url = install_result.first.spec();
@@ -137,4 +133,22 @@ void WebAppInternalsPageHandlerImpl::GetExternallyInstalledWebAppPrefs(
     GetExternallyInstalledWebAppPrefsCallback callback) {
   std::move(callback).Run(ConvertToString(
       *profile_->GetPrefs()->GetDictionary(prefs::kWebAppsExtensionIDs)));
+}
+
+void WebAppInternalsPageHandlerImpl::GetIconErrorLog(
+    GetIconErrorLogCallback callback) {
+  auto* provider = web_app::WebAppProvider::Get(profile_);
+  if (!provider) {
+    std::move(callback).Run({});
+    return;
+  }
+
+  const std::vector<std::string>* icon_error_log =
+      provider->icon_manager().AsWebAppIconManager()->error_log();
+  if (!icon_error_log) {
+    std::move(callback).Run({});
+    return;
+  }
+
+  std::move(callback).Run(*icon_error_log);
 }

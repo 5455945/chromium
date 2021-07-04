@@ -26,7 +26,7 @@
 #include "chrome/browser/sharing/vapid_key_manager.h"
 #include "chrome/browser/sharing/web_push/web_push_sender.h"
 #include "chrome/browser/sync/device_info_sync_service_factory.h"
-#include "chrome/browser/sync/profile_sync_service_factory.h"
+#include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/common/buildflags.h"
 #include "components/gcm_driver/crypto/gcm_encryption_provider.h"
 #include "components/gcm_driver/gcm_driver.h"
@@ -77,7 +77,7 @@ SharingServiceFactory::SharingServiceFactory()
   DependsOn(gcm::GCMProfileServiceFactory::GetInstance());
   DependsOn(instance_id::InstanceIDProfileServiceFactory::GetInstance());
   DependsOn(DeviceInfoSyncServiceFactory::GetInstance());
-  DependsOn(ProfileSyncServiceFactory::GetInstance());
+  DependsOn(SyncServiceFactory::GetInstance());
   DependsOn(SharingMessageBridgeFactory::GetInstance());
 }
 
@@ -87,7 +87,7 @@ KeyedService* SharingServiceFactory::BuildServiceInstanceFor(
     content::BrowserContext* context) const {
   Profile* profile = Profile::FromBrowserContext(context);
   syncer::SyncService* sync_service =
-      ProfileSyncServiceFactory::GetForProfile(profile);
+      SyncServiceFactory::GetForProfile(profile);
 
   if (!sync_service)
     return nullptr;
@@ -113,7 +113,7 @@ KeyedService* SharingServiceFactory::BuildServiceInstanceFor(
           instance_id_service->driver(), sync_service);
 
   auto web_push_sender = std::make_unique<WebPushSender>(
-      content::BrowserContext::GetDefaultStoragePartition(profile)
+      profile->GetDefaultStoragePartition()
           ->GetURLLoaderFactoryForBrowserProcess());
   SharingMessageBridge* message_bridge =
       SharingMessageBridgeFactory::GetForBrowserContext(profile);

@@ -29,6 +29,7 @@
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/font_list.h"
 #include "ui/gfx/scoped_canvas.h"
+#include "ui/gfx/skia_util.h"
 #include "ui/views/style/platform_style.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/widget/widget.h"
@@ -130,12 +131,12 @@ class GM2TabStyle : public TabStyleViews {
   void PaintInactiveTabBackground(gfx::Canvas* canvas) const;
   void PaintTabBackground(gfx::Canvas* canvas,
                           TabActive active,
-                          base::Optional<int> fill_id,
+                          absl::optional<int> fill_id,
                           int y_inset) const;
   void PaintTabBackgroundFill(gfx::Canvas* canvas,
                               TabActive active,
                               bool paint_hover_effect,
-                              base::Optional<int> fill_id,
+                              absl::optional<int> fill_id,
                               int y_inset) const;
   void PaintBackgroundStroke(gfx::Canvas* canvas,
                              TabActive active,
@@ -477,7 +478,7 @@ const gfx::FontList& GM2TabStyle::GetFontList() const {
 }
 
 void GM2TabStyle::PaintTab(gfx::Canvas* canvas) const {
-  base::Optional<int> active_tab_fill_id;
+  absl::optional<int> active_tab_fill_id;
   int active_tab_y_inset = 0;
   if (tab_->GetThemeProvider()->HasCustomImage(IDR_THEME_TOOLBAR)) {
     active_tab_fill_id = IDR_THEME_TOOLBAR;
@@ -609,15 +610,6 @@ float GM2TabStyle::GetSeparatorOpacity(bool for_layout, bool leading) const {
   // animation. Only hide the separator if it's in the first slot, or in
   // certain cases if the tab has a visible background (see below).
 
-  // Do not show the separator if it is to the right of a group header.
-  // Otherwise, show the separator since the following group header takes up a
-  // slot.
-  if (adjacent_to_header) {
-    if (leading)
-      return 0.0f;
-    return GetHoverInterpolatedSeparatorOpacity(for_layout, nullptr);
-  }
-
   // If the tab has a visible background even when not selected or active, there
   // are additional cases where the separators can be hidden.
   if (tab_->controller()->HasVisibleBackgroundTabShapes()) {
@@ -628,6 +620,13 @@ float GM2TabStyle::GetSeparatorOpacity(bool for_layout, bool leading) const {
     // an end slot, then the tab was probably next to a selected dragging tab
     // (see the condition below).
     if (!adjacent_tab)
+      return 0.0f;
+
+    // With visible tab background shapes, a tab next to a group header doesn't
+    // need the additional contrast of a separator, because it's the tab
+    // background on top of the tab strip background directly, same as if the
+    // tab were in an end slot.
+    if (adjacent_to_header)
       return 0.0f;
 
     // If the adjacent tab is selected, any separator on the current tab will be
@@ -643,6 +642,15 @@ float GM2TabStyle::GetSeparatorOpacity(bool for_layout, bool leading) const {
     // GetBoundsInterpolatedSeparatorOpacity(), but not just for the end slots.
     if (adjacent_tab->IsSelected())
       return 0.0f;
+  }
+
+  // Do not show the separator if it is to the right of a group header.
+  // Otherwise, show the separator since the following group header takes up a
+  // slot.
+  if (adjacent_to_header) {
+    if (leading)
+      return 0.0f;
+    return GetHoverInterpolatedSeparatorOpacity(for_layout, nullptr);
   }
 
   // If the tab does not have a visible background and is in the first slot,
@@ -667,7 +675,7 @@ float GM2TabStyle::GetHoverInterpolatedSeparatorOpacity(
     if (for_layout || !other_tab || other_tab->IsActive())
       return 0.0f;
     auto* tab_style = static_cast<const GM2TabStyle*>(other_tab->tab_style());
-    return float{tab_style->GetHoverAnimationValue()};
+    return static_cast<float>(tab_style->GetHoverAnimationValue());
   };
   const float hover_value = GetHoverAnimationValue();
   return 1.0f - std::max(hover_value, adjacent_hover_value(other_tab));
@@ -684,7 +692,8 @@ float GM2TabStyle::GetBoundsInterpolatedSeparatorOpacity() const {
   const gfx::Rect target_bounds =
       tab_->controller()->GetTabAnimationTargetBounds(tab_);
   const int tab_width = std::max(tab_->width(), target_bounds.width());
-  return float{std::min(std::abs(tab_->x() - target_bounds.x()), tab_width)} /
+  return static_cast<float>(
+             std::min(std::abs(tab_->x() - target_bounds.x()), tab_width)) /
          tab_width;
 }
 
@@ -709,9 +718,9 @@ float GM2TabStyle::GetHoverOpacity() const {
   // Opacity boost varies on tab width.  The interpolation is nonlinear so
   // that most tabs will fall on the low end of the opacity range, but very
   // narrow tabs will still stand out on the high end.
-  const float range_start = float{GetStandardWidth()};
-  const float range_end = float{GetMinimumInactiveWidth()};
-  const float value_in_range = float{tab_->width()};
+  const float range_start = static_cast<float>(GetStandardWidth());
+  const float range_end = static_cast<float>(GetMinimumInactiveWidth());
+  const float value_in_range = static_cast<float>(tab_->width());
   const float t = base::ClampToRange(
       (value_in_range - range_start) / (range_end - range_start), 0.0f, 1.0f);
   return tab_->controller()->GetHoverOpacityForTab(t * t);
@@ -733,7 +742,7 @@ float GM2TabStyle::GetThrobValue() const {
 }
 
 int GM2TabStyle::GetStrokeThickness(bool should_paint_as_active) const {
-  base::Optional<tab_groups::TabGroupId> group = tab_->group();
+  absl::optional<tab_groups::TabGroupId> group = tab_->group();
   if (group.has_value() && tab_->IsActive())
     return TabGroupUnderline::kStrokeThickness;
 
@@ -794,12 +803,12 @@ void GM2TabStyle::PaintInactiveTabBackground(gfx::Canvas* canvas) const {
 
 void GM2TabStyle::PaintTabBackground(gfx::Canvas* canvas,
                                      TabActive active,
-                                     base::Optional<int> fill_id,
+                                     absl::optional<int> fill_id,
                                      int y_inset) const {
   // |y_inset| is only set when |fill_id| is being used.
   DCHECK(!y_inset || fill_id.has_value());
 
-  base::Optional<SkColor> group_color = tab_->GetGroupColor();
+  absl::optional<SkColor> group_color = tab_->GetGroupColor();
 
   PaintTabBackgroundFill(canvas, active,
                          active == TabActive::kInactive && IsHoverActive(),
@@ -813,7 +822,7 @@ void GM2TabStyle::PaintTabBackground(gfx::Canvas* canvas,
 void GM2TabStyle::PaintTabBackgroundFill(gfx::Canvas* canvas,
                                          TabActive active,
                                          bool paint_hover_effect,
-                                         base::Optional<int> fill_id,
+                                         absl::optional<int> fill_id,
                                          int y_inset) const {
   const SkPath fill_path = GetPath(PathType::kFill, canvas->image_scale(),
                                    active == TabActive::kActive);
@@ -947,8 +956,8 @@ gfx::RectF GM2TabStyle::ScaleAndAlignBounds(const gfx::Rect& bounds,
 }  // namespace
 
 // static
-base::string16 views::metadata::TypeConverter<TabStyle::TabColors>::ToString(
-    views::metadata::ArgType<TabStyle::TabColors> source_value) {
+std::u16string ui::metadata::TypeConverter<TabStyle::TabColors>::ToString(
+    ui::metadata::ArgType<TabStyle::TabColors> source_value) {
   return base::ASCIIToUTF16(base::StringPrintf(
       "{%s,%s}",
       color_utils::SkColorToRgbaString(source_value.foreground_color).c_str(),
@@ -956,24 +965,24 @@ base::string16 views::metadata::TypeConverter<TabStyle::TabColors>::ToString(
 }
 
 // static
-base::Optional<TabStyle::TabColors> views::metadata::TypeConverter<
-    TabStyle::TabColors>::FromString(const base::string16& source_value) {
-  base::string16 trimmed_string;
-  base::TrimString(source_value, base::ASCIIToUTF16("{ }"), &trimmed_string);
-  base::string16::const_iterator color_pos = trimmed_string.cbegin();
+absl::optional<TabStyle::TabColors> ui::metadata::TypeConverter<
+    TabStyle::TabColors>::FromString(const std::u16string& source_value) {
+  std::u16string trimmed_string;
+  base::TrimString(source_value, u"{ }", &trimmed_string);
+  std::u16string::const_iterator color_pos = trimmed_string.cbegin();
   const auto foreground_color = SkColorConverter::GetNextColor(
       color_pos, trimmed_string.cend(), color_pos);
   const auto background_color =
       SkColorConverter::GetNextColor(color_pos, trimmed_string.cend());
   return (foreground_color && background_color)
-             ? base::make_optional<TabStyle::TabColors>(
+             ? absl::make_optional<TabStyle::TabColors>(
                    foreground_color.value(), background_color.value())
-             : base::nullopt;
+             : absl::nullopt;
 }
 
 // static
-views::metadata::ValidStrings
-views::metadata::TypeConverter<TabStyle::TabColors>::GetValidStrings() {
+ui::metadata::ValidStrings
+ui::metadata::TypeConverter<TabStyle::TabColors>::GetValidStrings() {
   return ValidStrings();
 }
 
@@ -991,10 +1000,11 @@ int TabStyleViews::GetMinimumActiveWidth() {
   int min_active_width =
       TabCloseButton::GetGlyphSize() + GetContentsHorizontalInsetSize() * 2;
   if (base::FeatureList::IsEnabled(features::kScrollableTabStrip)) {
-    return std::max(min_active_width,
-                    base::GetFieldTrialParamByFeatureAsInt(
-                        features::kScrollableTabStrip,
-                        features::kMinimumTabWidthFeatureParameterName, 72));
+    return std::max(
+        min_active_width,
+        base::GetFieldTrialParamByFeatureAsInt(
+            features::kScrollableTabStrip,
+            features::kMinimumTabWidthFeatureParameterName, min_active_width));
   }
   return min_active_width;
 }
@@ -1013,7 +1023,8 @@ int TabStyleViews::GetMinimumInactiveWidth() {
     return std::max(min_inactive_width,
                     base::GetFieldTrialParamByFeatureAsInt(
                         features::kScrollableTabStrip,
-                        features::kMinimumTabWidthFeatureParameterName, 72));
+                        features::kMinimumTabWidthFeatureParameterName,
+                        min_inactive_width));
   }
 
   return min_inactive_width;

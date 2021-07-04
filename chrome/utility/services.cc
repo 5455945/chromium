@@ -11,8 +11,6 @@
 #include "base/no_destructor.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
-#include "chrome/services/machine_learning/machine_learning_service.h"  // nogncheck
-#include "chrome/services/machine_learning/public/mojom/machine_learning_service.mojom.h"  // nogncheck
 #include "chrome/services/qrcode_generator/public/mojom/qrcode_generator.mojom.h"  // nogncheck
 #include "chrome/services/qrcode_generator/qrcode_generator_service_impl.h"  // nogncheck
 #include "components/paint_preview/buildflags/buildflags.h"
@@ -31,9 +29,9 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/service_factory.h"
 #include "printing/buildflags/buildflags.h"
-#include "third_party/blink/public/common/features.h"
 
 #if defined(OS_WIN)
+#include "chrome/services/util_win/processor_metrics.h"
 #include "chrome/services/util_win/public/mojom/util_read_icon.mojom.h"
 #include "chrome/services/util_win/public/mojom/util_win.mojom.h"
 #include "chrome/services/util_win/util_read_icon.h"
@@ -41,7 +39,6 @@
 #include "components/services/quarantine/public/cpp/quarantine_features_win.h"  // nogncheck
 #include "components/services/quarantine/public/mojom/quarantine.mojom.h"  // nogncheck
 #include "components/services/quarantine/quarantine_impl.h"  // nogncheck
-#include "media/mojo/services/media_service_factory.h"       // nogncheck
 #endif  // defined(OS_WIN)
 
 #if defined(OS_MAC)
@@ -111,6 +108,7 @@
 
 #if BUILDFLAG(ENABLE_CROS_LIBASSISTANT)
 #include "chromeos/services/assistant/audio_decoder/assistant_audio_decoder_factory.h"  // nogncheck
+#include "chromeos/services/libassistant/libassistant_service.h"  // nogncheck
 #endif  // BUILDFLAG(ENABLE_CROS_LIBASSISTANT)
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
@@ -138,13 +136,6 @@ auto RunQRCodeGeneratorService(
       std::move(receiver));
 }
 
-auto RunMachineLearningService(
-    mojo::PendingReceiver<machine_learning::mojom::MachineLearningService>
-        receiver) {
-  return std::make_unique<machine_learning::MachineLearningService>(
-      std::move(receiver));
-}
-
 auto RunWebAppOriginAssociationParser(
     mojo::PendingReceiver<webapps::mojom::WebAppOriginAssociationParser>
         receiver) {
@@ -153,6 +144,11 @@ auto RunWebAppOriginAssociationParser(
 }
 
 #if defined(OS_WIN)
+auto RunProcessorMetrics(
+    mojo::PendingReceiver<chrome::mojom::ProcessorMetrics> receiver) {
+  return std::make_unique<ProcessorMetricsImpl>(std::move(receiver));
+}
+
 auto RunQuarantineService(
     mojo::PendingReceiver<quarantine::mojom::Quarantine> receiver) {
   DCHECK(base::FeatureList::IsEnabled(quarantine::kOutOfProcessQuarantine));
@@ -303,15 +299,15 @@ auto RunAssistantAudioDecoder(
   return std::make_unique<chromeos::assistant::AssistantAudioDecoderFactory>(
       std::move(receiver));
 }
-#endif
-#endif
 
-#if defined(OS_WIN)
-auto RunMediaService(
-    mojo::PendingReceiver<media::mojom::MediaService> receiver) {
-  return media::CreateMediaService(std::move(receiver));
+auto RunLibassistantService(
+    mojo::PendingReceiver<chromeos::libassistant::mojom::LibassistantService>
+        receiver) {
+  return std::make_unique<chromeos::libassistant::LibassistantService>(
+      std::move(receiver));
 }
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(ENABLE_CROS_LIBASSISTANT)
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 }  // namespace
 
@@ -329,10 +325,7 @@ void RegisterMainThreadServices(mojo::ServiceFactory& services) {
   services.Add(RunUnzipper);
   services.Add(RunLanguageDetectionService);
   services.Add(RunQRCodeGeneratorService);
-  services.Add(RunMachineLearningService);
-
-  if (base::FeatureList::IsEnabled(blink::features::kWebAppEnableUrlHandlers))
-    services.Add(RunWebAppOriginAssociationParser);
+  services.Add(RunWebAppOriginAssociationParser);
 
 #if !defined(OS_ANDROID)
   services.Add(RunProfileImporter);
@@ -341,10 +334,10 @@ void RegisterMainThreadServices(mojo::ServiceFactory& services) {
 #endif
 
 #if defined(OS_WIN)
+  services.Add(RunProcessorMetrics);
   services.Add(RunQuarantineService);
   services.Add(RunWindowsUtility);
   services.Add(RunWindowsIconReader);
-  services.Add(RunMediaService);
 #endif  // defined(OS_WIN)
 
 #if BUILDFLAG(ENABLE_PRINTING) && BUILDFLAG(IS_CHROMEOS_ASH)
@@ -393,8 +386,9 @@ void RegisterMainThreadServices(mojo::ServiceFactory& services) {
   services.Add(RunLocalSearchService);
 #if BUILDFLAG(ENABLE_CROS_LIBASSISTANT)
   services.Add(RunAssistantAudioDecoder);
-#endif
-#endif
+  services.Add(RunLibassistantService);
+#endif  // BUILDFLAG(ENABLE_CROS_LIBASSISTANT)
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 }
 
 void RegisterIOThreadServices(mojo::ServiceFactory& services) {

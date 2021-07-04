@@ -5,6 +5,7 @@
 #include "chrome/updater/win/net/network_winhttp.h"
 
 #include <limits>
+#include <string>
 #include <utility>
 
 #include "base/bind.h"
@@ -15,7 +16,6 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/numerics/safe_math.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/stringprintf.h"
@@ -29,7 +29,7 @@
 #include "chrome/updater/win/net/proxy_info.h"
 #include "chrome/updater/win/net/scoped_hinternet.h"
 #include "chrome/updater/win/net/scoped_winttp_proxy_info.h"
-#include "chrome/updater/win/util.h"
+#include "chrome/updater/win/win_util.h"
 #include "url/url_constants.h"
 
 namespace updater {
@@ -187,7 +187,7 @@ HRESULT NetworkFetcherWinHTTP::BeginFetch(
   if (!connect_handle_.get())
     return HRESULTFromLastError();
 
-  base::Optional<ScopedWinHttpProxyInfo> winhttp_proxy_info =
+  absl::optional<ScopedWinHttpProxyInfo> winhttp_proxy_info =
       proxy_configuration_->GetProxyForUrl(session_handle_, url_);
 
   request_handle_ = OpenRequest();

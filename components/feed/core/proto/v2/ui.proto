@@ -38,6 +38,9 @@ message StreamUpdate {
 
 // A horizontal slice of UI to be presented in the vertical-scrolling feed.
 message Slice {
+  // Deprecated slice metadata
+  reserved 5;
+
   oneof SliceData {
     XSurfaceSlice xsurface_slice = 1;
     ZeroStateSlice zero_state_slice = 3;

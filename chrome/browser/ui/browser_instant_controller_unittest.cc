@@ -8,10 +8,10 @@
 
 #include <vector>
 
+#include "base/cxx17_backports.h"
 #include "base/gtest_prod_util.h"
 #include "base/metrics/field_trial.h"
 #include "base/run_loop.h"
-#include "base/stl_util.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/search/instant_service.h"
 #include "chrome/browser/search/instant_unittest_base.h"
@@ -44,7 +44,6 @@ struct TabReloadTestCase {
 
 // Test cases for when Google is the initial, but not final provider.
 const TabReloadTestCase kTabReloadTestCasesFinalProviderNotGoogle[] = {
-    {"Local NTP", chrome::kChromeSearchLocalNtpUrl, true, true},
     {"NTP", chrome::kChromeUINewTabPageURL, false, true},
     {"Remote SERP", "https://www.google.com/url?bar=search+terms", false,
      false},

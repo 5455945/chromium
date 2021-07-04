@@ -122,6 +122,8 @@ typedef struct _SP_DEVINFO_DATA SP_DEVINFO_DATA;
 
 typedef PVOID PSID;
 
+typedef HANDLE HLOCAL;
+
 // Declare Chrome versions of some Windows structures. These are needed for
 // when we need a concrete type but don't want to pull in Windows.h. We can't
 // declare the Windows types so we declare our types and cast to the Windows
@@ -206,6 +208,11 @@ struct CHROME_CONDITION_VARIABLE {
                                   &                           \
                                  (~SYNCHRONIZE))
 
+// The trailing white-spaces after this macro are required, for compatibility
+// with the definition in winnt.h.
+#define RTL_SRWLOCK_INIT {0}                            // NOLINT
+#define SRWLOCK_INIT RTL_SRWLOCK_INIT
+
 // clang-format on
 
 // Define some macros needed when prototyping Windows functions.
@@ -230,6 +237,9 @@ WINUSERAPI BOOL WINAPI GetMessageW(_Out_ LPMSG lpMsg,
 // Needed for thread_local_storage.h
 WINBASEAPI LPVOID WINAPI TlsGetValue(_In_ DWORD dwTlsIndex);
 
+WINBASEAPI BOOL WINAPI TlsSetValue(_In_ DWORD dwTlsIndex,
+                                   _In_opt_ LPVOID lpTlsValue);
+
 // Needed for scoped_handle.h
 WINBASEAPI _Check_return_ _Post_equals_last_error_ DWORD WINAPI
     GetLastError(VOID);
@@ -238,6 +248,9 @@ WINBASEAPI VOID WINAPI SetLastError(_In_ DWORD dwErrCode);
 
 WINBASEAPI BOOL WINAPI TerminateProcess(_In_ HANDLE hProcess,
                                         _In_ UINT uExitCode);
+
+// Support for a deleter for LocalAlloc memory.
+WINBASEAPI HLOCAL WINAPI LocalFree(_In_ HLOCAL hMem);
 
 #ifdef __cplusplus
 }
@@ -259,6 +272,7 @@ WINBASEAPI BOOL WINAPI TerminateProcess(_In_ HANDLE hProcess,
 #define DrawText DrawTextW
 #define FindFirstFile FindFirstFileW
 #define FindNextFile FindNextFileW
+#define GetClassName GetClassNameW
 #define GetComputerName GetComputerNameW
 #define GetCurrentDirectory GetCurrentDirectoryW
 #define GetCurrentTime() GetTickCount()

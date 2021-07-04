@@ -6,7 +6,6 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/search/instant_service.h"
 #include "chrome/browser/ui/webui/new_tab_page/new_tab_page.mojom.h"
-#include "chrome/common/search/omnibox.mojom.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/browser_task_environment.h"
@@ -41,14 +40,8 @@ class MockPage : public new_tab_page::mojom::Page {
     return receiver_.BindNewPipeAndPassRemote();
   }
 
-  MOCK_METHOD1(SetMostVisitedInfo,
-               void(new_tab_page::mojom::MostVisitedInfoPtr));
   MOCK_METHOD1(SetTheme, void(new_tab_page::mojom::ThemePtr));
-  MOCK_METHOD1(SetModulesVisible, void(bool));
-  MOCK_METHOD1(AutocompleteResultChanged,
-               void(search::mojom::AutocompleteResultPtr));
-  MOCK_METHOD3(AutocompleteMatchImageAvailable,
-               void(uint32_t, const GURL&, const std::string&));
+  MOCK_METHOD2(SetDisabledModules, void(bool, const std::vector<std::string>&));
 
   mojo::Receiver<new_tab_page::mojom::Page> receiver_{this};
 };
@@ -88,12 +81,6 @@ class NewTabPageHandlerTest : public testing::Test {
   std::unique_ptr<NewTabPageHandler> handler_;
   InstantServiceObserver* instant_service_observer_;
 };
-
-TEST_F(NewTabPageHandlerTest, SetMostVisitedInfo) {
-  EXPECT_CALL(mock_page_, SetMostVisitedInfo(testing::_));
-  InstantMostVisitedInfo info;
-  instant_service_observer_->MostVisitedInfoChanged(info);
-}
 
 TEST_F(NewTabPageHandlerTest, SetTheme) {
   EXPECT_CALL(mock_page_, SetTheme(testing::_));

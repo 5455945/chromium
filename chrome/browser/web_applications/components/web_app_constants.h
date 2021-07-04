@@ -34,6 +34,8 @@ enum Type {
 };
 }  // namespace Source
 
+std::ostream& operator<<(std::ostream& os, Source::Type type);
+
 // Type of OS hook.
 //
 // This enum should be zero based. It is not strongly typed enum class to
@@ -93,7 +95,7 @@ enum class InstallResultCode {
   kExpectedAppIdCheckFailed = 15,
   // The network request for the install URL timed out.
   kInstallURLLoadTimeOut = 16,
-  // Placeholder uninstall fails (in PendingAppManager).
+  // Placeholder uninstall fails (in ExternallyManagedAppManager).
   kFailedPlaceholderUninstall = 17,
   // Web App is not considered installable, i.e. missing manifest fields, no
   // service worker, etc.
@@ -124,8 +126,8 @@ bool IsNewInstall(InstallResultCode code);
 
 std::ostream& operator<<(std::ostream& os, InstallResultCode code);
 
-// PendingAppManager: Where an app was installed from. This affects what flags
-// will be used when installing the app.
+// ExternallyManagedAppManager: Where an app was installed from. This affects
+// what flags will be used when installing the app.
 //
 // Internal means that the set of apps to install is defined statically, and
 // can be determined solely by 'first party' data: the Chromium binary,
@@ -151,7 +153,7 @@ std::ostream& operator<<(std::ostream& os, InstallResultCode code);
 //
 // In practice, every kExternalXxx enum definition should correspond to
 // exactly one place in the code where
-// PendingAppManager::SynchronizeInstalledApps is called.
+// ExternallyManagedAppManager::SynchronizeInstalledApps is called.
 enum class ExternalInstallSource {
   // Do not remove or re-order the names, only append to the end. Their
   // integer values are persisted in the preferences.
@@ -162,24 +164,27 @@ enum class ExternalInstallSource {
 
   // Installed by default on the system, such as "all such-and-such make and
   // model Chromebooks should have this app installed".
-  // The corresponding PendingAppManager::SynchronizeInstalledApps call site is
+  // The corresponding ExternallyManagedAppManager::SynchronizeInstalledApps
+  // call site is
   // in WebAppProvider::OnScanForExternalWebApps.
   kExternalDefault = 1,
 
   // Installed by sys-admin policy, such as "all example.com employees should
   // have this app installed".
-  // The corresponding PendingAppManager::SynchronizeInstalledApps call site is
+  // The corresponding ExternallyManagedAppManager::SynchronizeInstalledApps
+  // call site is
   // in WebAppPolicyManager::RefreshPolicyInstalledApps.
   kExternalPolicy = 2,
 
   // Installed as a Chrome component, such as a help app, or a settings app.
-  // The corresponding PendingAppManager::SynchronizeInstalledApps call site is
+  // The corresponding ExternallyManagedAppManager::SynchronizeInstalledApps
+  // call site is
   // in SystemWebAppManager::RefreshPolicyInstalledApps.
   kSystemInstalled = 3,
 
   // Installed from ARC.
   // There is no call to SynchronizeInstalledApps for this type, as these apps
-  // are not installed via PendingAppManager. This is used in
+  // are not installed via ExternallyManagedAppManager. This is used in
   // ExternallyInstalledWebAppPrefs to track navigation url to app_id entries.
   kArc = 4,
 };
@@ -215,6 +220,9 @@ enum class RunOnOsLoginMode {
   // minimized window.
   kMinimized = 2,
 };
+
+// Command line parameter representing RunOnOsLoginMode::kWindowed.
+extern const char kRunOnOsLoginModeWindowed[];
 
 enum class RunOnOsLoginPolicy {
   // kAllowed: User can configure an app to run on OS Login.
@@ -253,6 +261,20 @@ constexpr int kIphAppAgnosticMuteTimeSpanDays = 14;
 // Default threshold for site engagement score if it's not set by field trial
 // param.
 constexpr int kIphFieldTrialParamDefaultSiteEngagementThreshold = 10;
+// Maximum number of file handlers that a single web application may install.
+// chrome:// web applications are exempt from this limit.
+constexpr size_t kMaxFileHandlers = 10;
+
+// Expected file handler update actions to be taken by OsIntegrationManager
+// during UpdateOsHooks.
+enum class FileHandlerUpdateAction {
+  // Perform update, removing and re-adding all file handlers.
+  kUpdate = 0,
+  // Remove all file handlers.
+  kRemove = 1,
+  // Do not perform update.
+  kNoUpdate = 2,
+};
 
 }  // namespace web_app
 

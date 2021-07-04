@@ -17,6 +17,10 @@ base::FilePath TestStoragePartition::GetPath() {
   return file_path_;
 }
 
+base::FilePath TestStoragePartition::GetBucketBasePath() {
+  return file_path_.Append(storage::kWebStorageDirectory);
+}
+
 network::mojom::NetworkContext* TestStoragePartition::GetNetworkContext() {
   return network_context_;
 }
@@ -47,14 +51,14 @@ void TestStoragePartition::CreateHasTrustTokensAnswerer(
   NOTREACHED() << "Not implemented.";
 }
 
-mojo::PendingRemote<network::mojom::AuthenticationAndCertificateObserver>
-TestStoragePartition::CreateAuthAndCertObserverForFrame(int process_id,
-                                                        int routing_id) {
+mojo::PendingRemote<network::mojom::URLLoaderNetworkServiceObserver>
+TestStoragePartition::CreateURLLoaderNetworkObserverForFrame(int process_id,
+                                                             int routing_id) {
   return mojo::NullRemote();
 }
 
-mojo::PendingRemote<network::mojom::AuthenticationAndCertificateObserver>
-TestStoragePartition::CreateAuthAndCertObserverForNavigationRequest(
+mojo::PendingRemote<network::mojom::URLLoaderNetworkServiceObserver>
+TestStoragePartition::CreateURLLoaderNetworkObserverForNavigationRequest(
     int frame_tree_id) {
   return mojo::NullRemote();
 }
@@ -81,6 +85,15 @@ storage::DatabaseTracker* TestStoragePartition::GetDatabaseTracker() {
 
 DOMStorageContext* TestStoragePartition::GetDOMStorageContext() {
   return dom_storage_context_;
+}
+
+storage::mojom::LocalStorageControl*
+TestStoragePartition::GetLocalStorageControl() {
+  // Bind and throw away the receiver. If testing is required, then add a method
+  // to set the remote.
+  if (!local_storage_control_.is_bound())
+    ignore_result(local_storage_control_.BindNewPipeAndPassReceiver());
+  return local_storage_control_.get();
 }
 
 storage::mojom::IndexedDBControl& TestStoragePartition::GetIndexedDBControl() {
@@ -138,6 +151,10 @@ TestStoragePartition::GetDevToolsBackgroundServicesContext() {
 
 ContentIndexContext* TestStoragePartition::GetContentIndexContext() {
   return content_index_context_;
+}
+
+NativeIOContext* TestStoragePartition::GetNativeIOContext() {
+  return native_io_context_;
 }
 
 leveldb_proto::ProtoDatabaseProvider*

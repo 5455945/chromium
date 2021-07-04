@@ -5,11 +5,11 @@
 #include "chrome/browser/ui/views/web_apps/web_app_confirmation_view.h"
 
 #include <memory>
+#include <string>
 #include <utility>
 
 #include "base/callback_helpers.h"
 #include "base/feature_list.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
@@ -20,8 +20,10 @@
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/content_features.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/views/controls/button/checkbox.h"
@@ -29,7 +31,6 @@
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/layout/grid_layout.h"
 #include "ui/views/layout/layout_provider.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/widget/widget.h"
 
 namespace {
@@ -39,9 +40,10 @@ bool g_auto_check_open_in_window_for_testing = false;
 
 bool ShowRadioButtons() {
   // This UI is only for prototyping and is not intended for shipping.
-  DCHECK_EQ(features::kDesktopPWAsTabStrip.default_state,
+  DCHECK_EQ(features::kDesktopPWAsTabStripSettings.default_state,
             base::FEATURE_DISABLED_BY_DEFAULT);
-  return base::FeatureList::IsEnabled(features::kDesktopPWAsTabStrip);
+  return base::FeatureList::IsEnabled(features::kDesktopPWAsTabStrip) &&
+         base::FeatureList::IsEnabled(features::kDesktopPWAsTabStripSettings);
 }
 
 }  // namespace
@@ -58,8 +60,8 @@ WebAppConfirmationView::WebAppConfirmationView(
   SetModalType(ui::MODAL_TYPE_CHILD);
   SetTitle(IDS_ADD_TO_OS_LAUNCH_SURFACE_BUBBLE_TITLE);
   const ChromeLayoutProvider* layout_provider = ChromeLayoutProvider::Get();
-  set_margins(layout_provider->GetDialogInsetsForContentType(views::CONTROL,
-                                                             views::TEXT));
+  set_margins(layout_provider->GetDialogInsetsForContentType(
+      views::DialogContentType::kControl, views::DialogContentType::kText));
   views::GridLayout* layout =
       SetLayoutManager(std::make_unique<views::GridLayout>());
   constexpr int kColumnSetId = 0;
@@ -81,7 +83,7 @@ WebAppConfirmationView::WebAppConfirmationView(
   gfx::Size image_size(web_app::kWebAppIconSmall, web_app::kWebAppIconSmall);
   gfx::ImageSkia image(
       std::make_unique<WebAppInfoImageSource>(web_app::kWebAppIconSmall,
-                                              web_app_info_->icon_bitmaps_any),
+                                              web_app_info_->icon_bitmaps.any),
       image_size);
   icon_image_view->SetImageSize(image_size);
   icon_image_view->SetImage(image);
@@ -192,19 +194,19 @@ bool WebAppConfirmationView::IsDialogButtonEnabled(
 
 void WebAppConfirmationView::ContentsChanged(
     views::Textfield* sender,
-    const base::string16& new_contents) {
+    const std::u16string& new_contents) {
   DCHECK_EQ(title_tf_, sender);
   DialogModelChanged();
 }
 
-base::string16 WebAppConfirmationView::GetTrimmedTitle() const {
-  base::string16 title(title_tf_->GetText());
+std::u16string WebAppConfirmationView::GetTrimmedTitle() const {
+  std::u16string title(title_tf_->GetText());
   base::TrimWhitespace(title, base::TRIM_ALL, &title);
   return title;
 }
 
 BEGIN_METADATA(WebAppConfirmationView, views::DialogDelegateView)
-ADD_READONLY_PROPERTY_METADATA(base::string16, TrimmedTitle)
+ADD_READONLY_PROPERTY_METADATA(std::u16string, TrimmedTitle)
 END_METADATA
 
 namespace chrome {

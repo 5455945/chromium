@@ -8,6 +8,7 @@
 
 #include <memory>
 
+#include "base/allocator/buildflags.h"
 #include "base/allocator/partition_allocator/address_pool_manager.h"
 #include "base/allocator/partition_allocator/memory_reclaimer.h"
 #include "base/allocator/partition_allocator/page_allocator_internal.h"
@@ -19,8 +20,7 @@
 #include "base/allocator/partition_allocator/partition_page.h"
 #include "base/allocator/partition_allocator/partition_root.h"
 #include "base/allocator/partition_allocator/partition_stats.h"
-#include "base/allocator/partition_allocator/pcscan.h"
-#include "base/partition_alloc_buildflags.h"
+#include "base/allocator/partition_allocator/starscan/pcscan.h"
 
 namespace base {
 
@@ -52,12 +52,12 @@ void PartitionAllocGlobalInit(OomFunction on_out_of_memory) {
 
   // Limit to prevent callers accidentally overflowing an int size.
   STATIC_ASSERT_OR_PA_CHECK(
-      MaxDirectMapped() <= (1UL << 31) + PageAllocationGranularity(),
+      MaxDirectMapped() <= (1UL << 31) + DirectMapAllocationGranularity(),
       "maximum direct mapped allocation");
 
   // Check that some of our zanier calculations worked out as expected.
   static_assert(kSmallestBucket == kAlignment, "generic smallest bucket");
-  static_assert(kMaxBucketed == 983040, "generic max bucketed");
+  static_assert(kMaxBucketed == 917504, "generic max bucketed");
   STATIC_ASSERT_OR_PA_CHECK(
       MaxSystemPagesPerSlotSpan() < (1 << 8),
       "System pages per slot span must be less than 128.");
@@ -67,17 +67,14 @@ void PartitionAllocGlobalInit(OomFunction on_out_of_memory) {
 }
 
 void PartitionAllocGlobalUninitForTesting() {
+  internal::PCScan::UninitForTesting();  // IN-TEST
 #if !BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
-  if (features::IsPartitionAllocGigaCageEnabled()) {
 #if defined(PA_HAS_64_BITS_POINTERS)
-    internal::PartitionAddressSpace::UninitForTesting();
+  internal::PartitionAddressSpace::UninitForTesting();
 #else
-    internal::AddressPoolManager::GetInstance()->ResetForTesting();
+  internal::AddressPoolManager::GetInstance()->ResetForTesting();
 #endif  // defined(PA_HAS_64_BITS_POINTERS)
-  }
 #endif  // !BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
-  internal::PCScan<internal::ThreadSafe>::Instance()
-      .ClearRootsForTesting();  // IN-TEST
   internal::g_oom_handling_function = nullptr;
 }
 

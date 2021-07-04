@@ -25,7 +25,6 @@ class ChromeShellDelegate : public ash::ShellDelegate {
   CreateBackGestureContextualNudgeDelegate(
       ash::BackGestureContextualNudgeController* controller) override;
   void OpenKeyboardShortcutHelpPage() const override;
-  void DesksStateChanged(int num_desks) const override;
   bool CanGoBack(gfx::NativeWindow window) const override;
   void SetTabScrubberEnabled(bool enabled) override;
   bool AllowDefaultTouchActions(gfx::NativeWindow window) override;
@@ -51,6 +50,14 @@ class ChromeShellDelegate : public ash::ShellDelegate {
   void StartUiDevTools() override;
   void StopUiDevTools() override;
   int GetUiDevToolsPort() const override;
+  bool IsLoggingRedirectDisabled() const override;
+  base::FilePath GetPrimaryUserDownloadsFolder() const override;
+  void OpenFeedbackPageForPersistentDesksBar() override;
+  std::unique_ptr<full_restore::AppLaunchInfo> GetAppLaunchDataForDeskTemplate(
+      aura::Window* window) const override;
+
+  static void SetDisableLoggingRedirectForTesting(bool value);
+  static void ResetDisableLoggingRedirectForTesting();
 
  private:
   DISALLOW_COPY_AND_ASSIGN(ChromeShellDelegate);

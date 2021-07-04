@@ -8,9 +8,9 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "chromeos/services/assistant/public/cpp/features.h"
-#include "chromeos/services/assistant/public/cpp/migration/fake_platform_delegate.h"
 #include "chromeos/services/libassistant/audio/audio_input_impl.h"
 #include "chromeos/services/libassistant/public/mojom/audio_input_controller.mojom.h"
+#include "chromeos/services/libassistant/test_support/fake_platform_delegate.h"
 #include "media/audio/audio_device_description.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -103,12 +103,12 @@ class AssistantAudioInputControllerTest : public testing::Test {
     client().FlushForTesting();
   }
 
-  void SetDeviceId(const base::Optional<std::string>& value) {
+  void SetDeviceId(const absl::optional<std::string>& value) {
     client()->SetDeviceId(value);
     client().FlushForTesting();
   }
 
-  void SetHotwordDeviceId(const base::Optional<std::string>& value) {
+  void SetHotwordDeviceId(const absl::optional<std::string>& value) {
     client()->SetHotwordDeviceId(value);
     client().FlushForTesting();
   }
@@ -134,7 +134,7 @@ class AssistantAudioInputControllerTest : public testing::Test {
   }
 
  private:
-  base::test::SingleThreadTaskEnvironment environment_;
+  base::test::TaskEnvironment environment_;
   base::test::ScopedFeatureList scoped_feature_list_;
   mojo::Remote<mojom::AudioInputController> client_;
   AudioInputController controller_;
@@ -166,7 +166,7 @@ TEST_F(AssistantAudioInputControllerTest, ShouldOnlyRecordWhenDeviceIdIsSet) {
   SetDeviceId("device-id");
   EXPECT_TRUE(IsRecordingAudio());
 
-  SetDeviceId(base::nullopt);
+  SetDeviceId(absl::nullopt);
   EXPECT_FALSE(IsRecordingAudio());
 }
 
@@ -239,8 +239,8 @@ TEST_F(AssistantAudioInputControllerTest,
   // Mic must be open, otherwise we will not start recording audio if the
   // device id is not set.
   SetMicOpen(true);
-  SetDeviceId(base::nullopt);
-  SetHotwordDeviceId(base::nullopt);
+  SetDeviceId(absl::nullopt);
+  SetHotwordDeviceId(absl::nullopt);
 
   EXPECT_TRUE(IsRecordingAudio());
   EXPECT_EQ(media::AudioDeviceDescription::kDefaultDeviceId, GetOpenDeviceId());
@@ -250,7 +250,7 @@ TEST_F(AssistantAudioInputControllerTest,
        DeadStreamDetectionShouldBeDisabledWhenUsingHotwordDevice) {
   InitializeForTestOfType(kHotwordDeviceIdTest);
 
-  SetHotwordDeviceId(base::nullopt);
+  SetHotwordDeviceId(absl::nullopt);
   EXPECT_TRUE(IsUsingDeadStreamDetection());
 
   SetHotwordDeviceId("fake-hotword-device");

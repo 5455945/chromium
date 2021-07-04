@@ -35,6 +35,11 @@
 #endif
 #endif
 
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+#include "chromeos/lacros/lacros_test_helper.h"
+#include "chromeos/ui/base/tablet_state.h"
+#endif
+
 using content::NavigationController;
 using content::RenderFrameHost;
 using content::RenderFrameHostTester;
@@ -49,6 +54,10 @@ void BrowserWithTestWindowTest::SetUp() {
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
+  if (!chromeos::LacrosChromeServiceImpl::Get()) {
+    lacros_service_test_helper_ =
+        std::make_unique<chromeos::ScopedLacrosServiceTestHelper>();
+  }
   tablet_state_ = std::make_unique<chromeos::TabletState>();
 #endif
 
@@ -102,6 +111,7 @@ void BrowserWithTestWindowTest::TearDown() {
 
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
   tablet_state_.reset();
+  lacros_service_test_helper_.reset();
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
@@ -166,7 +176,7 @@ void BrowserWithTestWindowTest::NavigateAndCommitActiveTab(const GURL& url) {
 void BrowserWithTestWindowTest::NavigateAndCommitActiveTabWithTitle(
     Browser* navigating_browser,
     const GURL& url,
-    const base::string16& title) {
+    const std::u16string& title) {
   WebContents* contents =
       navigating_browser->tab_strip_model()->GetActiveWebContents();
   NavigationController* controller = &contents->GetController();
@@ -176,7 +186,7 @@ void BrowserWithTestWindowTest::NavigateAndCommitActiveTabWithTitle(
 
 TestingProfile* BrowserWithTestWindowTest::CreateProfile() {
   return profile_manager_->CreateTestingProfile(
-      "testing_profile", nullptr, base::string16(), 0, std::string(),
+      "testing_profile", nullptr, std::u16string(), 0, std::string(),
       GetTestingFactories());
 }
 
@@ -209,7 +219,7 @@ std::unique_ptr<Browser> BrowserWithTestWindowTest::CreateBrowser(
 }
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-chromeos::ScopedCrosSettingsTestHelper*
+ash::ScopedCrosSettingsTestHelper*
 BrowserWithTestWindowTest::GetCrosSettingsHelper() {
   return &cros_settings_test_helper_;
 }

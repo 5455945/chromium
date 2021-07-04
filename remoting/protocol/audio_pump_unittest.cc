@@ -10,9 +10,9 @@
 #include <utility>
 #include <vector>
 
+#include "base/cxx17_backports.h"
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
-#include "base/stl_util.h"
 #include "base/test/task_environment.h"
 #include "remoting/codec/audio_encoder.h"
 #include "remoting/proto/audio.pb.h"
@@ -89,9 +89,9 @@ class AudioPumpTest : public testing::Test, public protocol::AudioStub {
 void AudioPumpTest::SetUp() {
   source_ = new FakeAudioSource();
   encoder_ = new FakeAudioEncoder();
-  pump_.reset(new AudioPump(task_environment_.GetMainThreadTaskRunner(),
-                            base::WrapUnique(source_),
-                            base::WrapUnique(encoder_), this));
+  pump_ = std::make_unique<AudioPump>(
+      task_environment_.GetMainThreadTaskRunner(), base::WrapUnique(source_),
+      base::WrapUnique(encoder_), this);
 }
 
 void AudioPumpTest::TearDown() {

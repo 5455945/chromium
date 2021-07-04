@@ -13,7 +13,7 @@
 #include "base/memory/ptr_util.h"
 #include "base/notreached.h"
 #include "base/strings/sys_string_conversions.h"
-#include "components/safe_browsing/core/features.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "ios/web/common/features.h"
 #import "ios/web/js_messaging/crw_wk_script_message_router.h"
 #import "ios/web/js_messaging/java_script_feature_manager.h"
@@ -43,16 +43,6 @@ WKUserScript* InternalGetDocumentStartScriptForMainFrame(
   return [[WKUserScript alloc]
         initWithSource:GetDocumentStartScriptForMainFrame(browser_state)
          injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-      forMainFrameOnly:YES];
-}
-
-// Returns a WKUserScript for JavsScript injected into the main frame at the
-// end of the document load.
-WKUserScript* InternalGetDocumentEndScriptForMainFrame(
-    BrowserState* browser_state) {
-  return [[WKUserScript alloc]
-        initWithSource:GetDocumentEndScriptForMainFrame(browser_state)
-         injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
       forMainFrameOnly:YES];
 }
 
@@ -234,8 +224,6 @@ void WKWebViewConfigurationProvider::UpdateScripts() {
       addUserScript:InternalGetDocumentStartScriptForMainFrame(browser_state_)];
   [configuration_.userContentController
       addUserScript:InternalGetDocumentEndScriptForAllFrames(browser_state_)];
-  [configuration_.userContentController
-      addUserScript:InternalGetDocumentEndScriptForMainFrame(browser_state_)];
 }
 
 void WKWebViewConfigurationProvider::Purge() {

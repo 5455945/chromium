@@ -8,6 +8,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "content/public/browser/google_streaming_api.pb.h"
 #include "google_apis/google_api_keys.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
@@ -114,7 +115,8 @@ void CloudSpeechRecognitionClient::OnDownstreamDataReceived(
       result = previous_result_;
 
     previous_result_ = result;
-    recognition_event_callback().Run(result, is_final);
+    recognition_event_callback().Run(
+        media::SpeechRecognitionResult(result, is_final));
   }
 }
 

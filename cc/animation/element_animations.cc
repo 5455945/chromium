@@ -491,6 +491,11 @@ void ElementAnimations::OnCustomPropertyAnimated(
     int target_property_id) {
   DCHECK(animation_host_);
   DCHECK(animation_host_->mutator_host_client());
+  // No-op background-color animations can have no unique_id. See
+  // CompositorAnimations::IsNoOpBackgroundColorAnimation for details.
+  if (!ElementId::IsValid(keyframe_model->element_id().GetStableId())) {
+    return;
+  }
   ElementId id = CalculateTargetElementId(this, keyframe_model);
   PaintWorkletInput::PropertyKey property_key =
       target_property_id == TargetProperty::NATIVE_PROPERTY
@@ -570,7 +575,8 @@ PropertyToElementIdMap ElementAnimations::GetPropertyToElementIdMap() const {
         static_cast<TargetProperty::Type>(property_index);
     ElementId element_id_for_property;
     for (auto& keyframe_effect : keyframe_effects_list_) {
-      KeyframeModel* model = keyframe_effect.GetKeyframeModel(property);
+      KeyframeModel* model = KeyframeModel::ToCcKeyframeModel(
+          keyframe_effect.GetKeyframeModel(property));
       if (model) {
         // We deliberately use two branches here so that the DCHECK can
         // differentiate between models with different element ids, and the case

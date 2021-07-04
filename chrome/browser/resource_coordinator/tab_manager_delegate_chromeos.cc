@@ -9,19 +9,20 @@
 
 #include <algorithm>
 #include <map>
+#include <string>
 #include <vector>
 
-#include "ash/public/cpp/app_types.h"
+#include "ash/public/cpp/app_types_util.h"
 #include "ash/shell.h"
 #include "base/bind.h"
 #include "base/command_line.h"
+#include "base/containers/cxx20_erase.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/process/memory.h"
 #include "base/process/process_handle.h"  // kNullProcessHandle.
 #include "base/process/process_metrics.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -37,7 +38,6 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
-#include "chromeos/memory/pressure/pressure.h"
 #include "chromeos/memory/pressure/system_memory_pressure_evaluator.h"
 #include "components/arc/arc_service_manager.h"
 #include "components/arc/arc_util.h"
@@ -220,12 +220,9 @@ class TabManagerDelegate::FocusedProcess {
 // Target memory to free is the amount which brings available
 // memory back to the margin.
 int TabManagerDelegate::MemoryStat::TargetMemoryToFreeKB() {
-  if (chromeos::memory::SystemMemoryPressureEvaluator::Get()) {
-    // The first output of GetMemoryMarginsKB() is the critical memory
-    // threshold. Low memory condition is reported if available memory is under
-    // the number.
-    return chromeos::memory::pressure::GetMemoryMarginsKB().first -
-           chromeos::memory::pressure::GetAvailableMemoryKB();
+  auto* monitor = chromeos::memory::SystemMemoryPressureEvaluator::Get();
+  if (monitor) {
+    return monitor->GetCachedReclaimTargetKB();
   } else {
     // When TabManager::DiscardTab(LifecycleUnitDiscardReason::EXTERNAL) is
     // called by an integration test, TabManagerDelegate might be used without
@@ -343,7 +340,7 @@ void TabManagerDelegate::LowMemoryKill(
         &TabManagerDelegate::LowMemoryKillImpl, weak_ptr_factory_.GetWeakPtr(),
         now, reason, std::move(tab_discard_done)));
   } else {
-    LowMemoryKillImpl(now, reason, std::move(tab_discard_done), base::nullopt);
+    LowMemoryKillImpl(now, reason, std::move(tab_discard_done), absl::nullopt);
   }
 }
 
@@ -421,20 +418,6 @@ void TabManagerDelegate::Observe(int type,
       content::RenderProcessHost* host =
           content::Source<content::RenderProcessHost>(source).ptr();
       oom_score_map_.erase(host->GetProcess().Handle());
-      // Coming here we know that a renderer was just killed and memory should
-      // come back into the pool. However - the memory pressure observer did
-      // not yet update its status and therefore we ask it to redo the
-      // measurement, calling us again if we have to release more.
-      // Note: We do not only accelerate the discarding speed by doing another
-      // check in short succession - we also accelerate it because the timer
-      // driven MemoryPressureMonitor will continue to produce timed events
-      // on top. So the longer the cleanup phase takes, the more tabs will
-      // get discarded in parallel.
-
-      auto* monitor = chromeos::memory::SystemMemoryPressureEvaluator::Get();
-      if (monitor) {
-        monitor->ScheduleEarlyCheck();
-      }
       break;
     }
     case content::NOTIFICATION_RENDER_WIDGET_VISIBILITY_CHANGED: {
@@ -486,7 +469,7 @@ void TabManagerDelegate::AdjustOomPriorities() {
                        weak_ptr_factory_.GetWeakPtr()));
   } else {
     // Pass in nullopt if unable to get ARC processes.
-    AdjustOomPrioritiesImpl(base::nullopt);
+    AdjustOomPrioritiesImpl(absl::nullopt);
   }
 }
 

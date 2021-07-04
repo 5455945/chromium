@@ -248,9 +248,9 @@ Polymer({
 
     this.spinnerActive = true;
 
-    // The C++ layer uses base::string16, which use 16 bit characters. JS
+    // The C++ layer uses std::u16string, which use 16 bit characters. JS
     // strings support either 8 or 16 bit characters, and must be converted to
-    // an array of 16 bit character codes that match base::string16.
+    // an array of 16 bit character codes that match std::u16string.
     const queryMojoString16 = {data: Array.from(query, c => c.charCodeAt())};
     const timeOfSearchRequest = Date.now();
     settings.getSearchHandler()
@@ -410,6 +410,11 @@ Polymer({
 
   /** @private */
   onSearchResultsChanged_() {
+    // Select the first search result if it exists.
+    if (this.searchResultsExist_) {
+      this.selectedItem_ = this.searchResults_[0];
+    }
+
     // Only show dropdown if focus is on search field with a non empty query.
     this.shouldShowDropdown_ =
         this.$.search.isSearchFocused() && !!this.getCurrentQuery_();
@@ -422,9 +427,6 @@ Polymer({
       this.fire('iron-announce', {text: this.i18n('searchNoResults')});
       return;
     }
-
-    // Select the first search result.
-    this.selectedItem_ = this.searchResults_[0];
   },
 
   /**

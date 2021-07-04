@@ -28,10 +28,11 @@
 
 #include <memory>
 
-#include "base/optional.h"
+#include "base/logging.h"
 #include "build/build_config.h"
 #include "components/paint_preview/common/paint_preview_tracker.h"
 #include "skia/ext/platform_canvas.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/frame/color_scheme.mojom-blink.h"
 #include "third_party/blink/renderer/platform/fonts/text_run_paint_info.h"
 #include "third_party/blink/renderer/platform/geometry/float_rect.h"
@@ -48,7 +49,6 @@
 #include "third_party/blink/renderer/platform/graphics/path.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
-#include "third_party/blink/renderer/platform/wtf/assertions.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "third_party/skia/include/core/SkAnnotation.h"
 #include "third_party/skia/include/core/SkColorFilter.h"
@@ -61,6 +61,9 @@
 #include "third_party/skia/include/pathops/SkPathOps.h"
 #include "third_party/skia/include/utils/SkNullCanvas.h"
 #include "ui/base/ui_base_features.h"
+
+// To avoid conflicts with the DrawText macro from the Windows SDK...
+#undef DrawText
 
 namespace blink {
 
@@ -110,11 +113,13 @@ class GraphicsContext::DarkModeFlags final {
     flags_ = &flags;
   }
 
+  bool applied_dark_mode() const { return !!dark_mode_flags_; }
+
   operator const PaintFlags&() const { return *flags_; }
 
  private:
   const PaintFlags* flags_;
-  base::Optional<PaintFlags> dark_mode_flags_;
+  absl::optional<PaintFlags> dark_mode_flags_;
 };
 
 GraphicsContext::GraphicsContext(PaintController& paint_controller)
@@ -313,9 +318,9 @@ void GraphicsContext::CompositeRecord(sk_sp<PaintRecord> record,
 
   PaintFlags flags;
   flags.setBlendMode(op);
-  SkSamplingOptions sampling(
-      static_cast<SkFilterQuality>(ImageInterpolationQuality()),
-      SkSamplingOptions::kMedium_asMipmapLinear);
+
+  SkSamplingOptions sampling(cc::PaintFlags::FilterQualityToSkSamplingOptions(
+      static_cast<SkFilterQuality>(ImageInterpolationQuality())));
   canvas_->save();
   canvas_->concat(SkMatrix::RectToRect(src, dest));
   canvas_->drawImage(PaintImageBuilder::WithDefault()
@@ -327,32 +332,11 @@ void GraphicsContext::CompositeRecord(sk_sp<PaintRecord> record,
   canvas_->restore();
 }
 
-namespace {
-
-int AdjustedFocusRingOffset(int offset) {
-  // For FormControlsRefresh we just use the value of outline-offset so we don't
-  // need to call this method.
-  DCHECK(!::features::IsFormControlsRefreshEnabled());
-
-#if defined(OS_MAC)
-  return offset + 2;
-#else
-  return 0;
-#endif
-}
-
-}  // namespace
-
 int GraphicsContext::FocusRingOutsetExtent(int offset, int width) {
   // Unlike normal outlines (whole width is outside of the offset), focus
   // rings can be drawn with the center of the path aligned with the offset, so
-  // only half of the width is outside of the offset.
-  if (::features::IsFormControlsRefreshEnabled()) {
-    // For FormControlsRefresh 2/3 of the width is outside of the offset.
-    return offset + std::ceil(width / 3.f) * 2;
-  }
-
-  return AdjustedFocusRingOffset(offset) + (width + 1) / 2;
+  // only 2/3 of the width is outside of the offset.
+  return offset + std::ceil(width / 3.f) * 2;
 }
 
 void GraphicsContext::DrawFocusRingPath(const SkPath& path,
@@ -396,10 +380,6 @@ void GraphicsContext::DrawFocusRingInternal(const Vector<IntRect>& rects,
     return;
 
   SkRegion focus_ring_region;
-  if (!::features::IsFormControlsRefreshEnabled()) {
-    // For FormControlsRefresh we don't need to adjust the offset.
-    offset = AdjustedFocusRingOffset(offset);
-  }
   for (unsigned i = 0; i < rect_count; i++) {
     SkIRect r = rects[i];
     if (r.isEmpty())
@@ -434,29 +414,25 @@ void GraphicsContext::DrawFocusRing(const Vector<IntRect>& rects,
   const Color& inner_color =
       color_scheme == mojom::blink::ColorScheme::kDark ? SK_ColorWHITE : color;
 #endif
-  if (::features::IsFormControlsRefreshEnabled()) {
-    // The focus ring is made of two borders which have a 2:1 ratio.
-    const float first_border_width = (width / 3) * 2;
-    const float second_border_width = width - first_border_width;
+  // The focus ring is made of two borders which have a 2:1 ratio.
+  const float first_border_width = (width / 3) * 2;
+  const float second_border_width = width - first_border_width;
 
-    // How much space the focus ring would like to take from the actual border.
-    const float inside_border_width = 1;
-    if (min_border_width >= inside_border_width) {
-      offset -= inside_border_width;
-    }
-    const Color& outer_color = color_scheme == mojom::blink::ColorScheme::kDark
-                                   ? SkColorSetRGB(0x10, 0x10, 0x10)
-                                   : SK_ColorWHITE;
-    // The outer ring is drawn first, and we overdraw to ensure no gaps or AA
-    // artifacts.
-    DrawFocusRingInternal(rects, first_border_width,
-                          offset + std::ceil(second_border_width),
-                          border_radius, outer_color);
-    DrawFocusRingInternal(rects, first_border_width, offset, border_radius,
-                          inner_color);
-  } else {
-    DrawFocusRingInternal(rects, width, offset, border_radius, inner_color);
+  // How much space the focus ring would like to take from the actual border.
+  const float inside_border_width = 1;
+  if (min_border_width >= inside_border_width) {
+    offset -= inside_border_width;
   }
+  const Color& outer_color = color_scheme == mojom::blink::ColorScheme::kDark
+                                 ? SkColorSetRGB(0x10, 0x10, 0x10)
+                                 : SK_ColorWHITE;
+  // The outer ring is drawn first, and we overdraw to ensure no gaps or AA
+  // artifacts.
+  DrawFocusRingInternal(rects, first_border_width,
+                        offset + std::ceil(second_border_width), border_radius,
+                        outer_color);
+  DrawFocusRingInternal(rects, first_border_width, offset, border_radius,
+                        inner_color);
 }
 
 static void EnforceDotsAtEndpoints(GraphicsContext& context,
@@ -659,7 +635,20 @@ void GraphicsContext::DrawText(const Font& font,
                                const PaintFlags& flags,
                                DOMNodeId node_id) {
   font.DrawText(canvas_, text_info, point, device_scale_factor_, node_id,
-                DarkModeFlags(this, flags, DarkModeFilter::ElementRole::kText));
+                DarkModeFlags(this, flags, DarkModeFilter::ElementRole::kText),
+                printing_ ? Font::DrawType::kGlyphsAndClusters
+                          : Font::DrawType::kGlyphsOnly);
+}
+
+void GraphicsContext::DrawText(const Font& font,
+                               const NGTextFragmentPaintInfo& text_info,
+                               const FloatPoint& point,
+                               const PaintFlags& flags,
+                               DOMNodeId node_id) {
+  font.DrawText(canvas_, text_info, point, device_scale_factor_, node_id,
+                DarkModeFlags(this, flags, DarkModeFilter::ElementRole::kText),
+                printing_ ? Font::DrawType::kGlyphsAndClusters
+                          : Font::DrawType::kGlyphsOnly);
 }
 
 template <typename DrawTextFunc>
@@ -667,17 +656,25 @@ void GraphicsContext::DrawTextPasses(const DrawTextFunc& draw_text) {
   TextDrawingModeFlags mode_flags = TextDrawingMode();
 
   if (mode_flags & kTextModeFill) {
-    draw_text(ImmutableState()->FillFlags());
+    const PaintFlags& flags = ImmutableState()->FillFlags();
+    DarkModeFlags dark_flags(this, flags, DarkModeFilter::ElementRole::kText);
+    if (UNLIKELY(ShouldDrawDarkModeTextContrastOutline(flags, dark_flags))) {
+      PaintFlags outline_flags(flags);
+      outline_flags.setStyle(PaintFlags::kStroke_Style);
+      outline_flags.setStrokeWidth(1);
+      draw_text(outline_flags);
+    }
+    draw_text(dark_flags);
   }
 
   if ((mode_flags & kTextModeStroke) && GetStrokeStyle() != kNoStroke &&
       StrokeThickness() > 0) {
-    PaintFlags stroke_flags(ImmutableState()->StrokeFlags());
+    PaintFlags flags(ImmutableState()->StrokeFlags());
     if (mode_flags & kTextModeFill) {
       // shadow was already applied during fill pass
-      stroke_flags.setLooper(nullptr);
+      flags.setLooper(nullptr);
     }
-    draw_text(stroke_flags);
+    draw_text(DarkModeFlags(this, flags, DarkModeFilter::ElementRole::kText));
   }
 }
 
@@ -687,10 +684,29 @@ void GraphicsContext::DrawTextInternal(const Font& font,
                                        const FloatPoint& point,
                                        DOMNodeId node_id) {
   DrawTextPasses([&](const PaintFlags& flags) {
-    font.DrawText(
-        canvas_, text_info, point, device_scale_factor_, node_id,
-        DarkModeFlags(this, flags, DarkModeFilter::ElementRole::kText));
+    font.DrawText(canvas_, text_info, point, device_scale_factor_, node_id,
+                  flags,
+                  printing_ ? Font::DrawType::kGlyphsAndClusters
+                            : Font::DrawType::kGlyphsOnly);
   });
+}
+
+bool GraphicsContext::ShouldDrawDarkModeTextContrastOutline(
+    const PaintFlags& original_flags,
+    const DarkModeFlags& dark_flags) const {
+  if (!dark_flags.applied_dark_mode())
+    return false;
+  if (!GetCurrentDarkModeSettings().increase_text_contrast)
+    return false;
+
+  // To avoid outlining all text, only draw an outline that improves contrast.
+  // 90000 represents a difference of roughly 175 in all three channels.
+  // TODO(pdr): Calculate a contrast ratio using luminance (see:
+  // https://www.w3.org/WAI/WCAG21/Understanding/contrast-minimum.html).
+  constexpr int kMinimumDifferenceSq = 90000;
+  Color dark_color(static_cast<const PaintFlags&>(dark_flags).getColor());
+  Color original_color(original_flags.getColor());
+  return DifferenceSquared(dark_color, original_color) > kMinimumDifferenceSq;
 }
 
 void GraphicsContext::DrawText(const Font& font,
@@ -745,7 +761,9 @@ void GraphicsContext::DrawBidiText(
     if (font.DrawBidiText(
             canvas_, run_info, point, custom_font_not_ready_action,
             device_scale_factor_,
-            DarkModeFlags(this, flags, DarkModeFilter::ElementRole::kText))) {
+            DarkModeFlags(this, flags, DarkModeFilter::ElementRole::kText),
+            printing_ ? Font::DrawType::kGlyphsAndClusters
+                      : Font::DrawType::kGlyphsOnly)) {
       paint_controller_.SetTextPainted();
     }
   });
@@ -767,7 +785,7 @@ void GraphicsContext::DrawImage(
     Image::ImageDecodingMode decode_mode,
     const FloatRect& dest,
     const FloatRect* src_ptr,
-    bool has_filter_property,
+    bool has_disable_dark_mode_style,
     SkBlendMode op,
     RespectImageOrientationEnum should_respect_image_orientation) {
   if (!image)
@@ -779,8 +797,7 @@ void GraphicsContext::DrawImage(
   image_flags.setBlendMode(op);
   image_flags.setColor(SK_ColorBLACK);
 
-  // Do not classify the image if the element has any CSS filters.
-  if (!has_filter_property) {
+  if (!has_disable_dark_mode_style) {
     DarkModeFilterHelper::ApplyToImageIfNeeded(this, image, &image_flags, src,
                                                dest);
   }
@@ -797,15 +814,15 @@ void GraphicsContext::DrawImageRRect(
     Image::ImageDecodingMode decode_mode,
     const FloatRoundedRect& dest,
     const FloatRect& src_rect,
-    bool has_filter_property,
+    bool has_disable_dark_mode_style,
     SkBlendMode op,
     RespectImageOrientationEnum respect_orientation) {
   if (!image)
     return;
 
   if (!dest.IsRounded()) {
-    DrawImage(image, decode_mode, dest.Rect(), &src_rect, has_filter_property,
-              op, respect_orientation);
+    DrawImage(image, decode_mode, dest.Rect(), &src_rect,
+              has_disable_dark_mode_style, op, respect_orientation);
     return;
   }
 
@@ -883,16 +900,23 @@ SkFilterQuality GraphicsContext::ComputeFilterQuality(
 void GraphicsContext::DrawImageTiled(
     Image* image,
     const FloatRect& dest_rect,
-    const FloatRect& src_rect,
-    const FloatSize& scale_src_to_dest,
-    const FloatPoint& phase,
-    const FloatSize& repeat_spacing,
+    const ImageTilingInfo& tiling_info,
+    bool has_disable_dark_mode_style,
     SkBlendMode op,
     RespectImageOrientationEnum respect_orientation) {
   if (!image)
     return;
-  image->DrawPattern(*this, src_rect, scale_src_to_dest, phase, op, dest_rect,
-                     repeat_spacing, respect_orientation);
+
+  PaintFlags image_flags = ImmutableState()->FillFlags();
+  image_flags.setBlendMode(op);
+
+  if (!has_disable_dark_mode_style) {
+    DarkModeFilterHelper::ApplyToImageIfNeeded(
+        this, image, &image_flags, tiling_info.image_rect, dest_rect);
+  }
+
+  image->DrawPattern(*this, image_flags, dest_rect, tiling_info,
+                     respect_orientation);
   paint_controller_.SetImagePainted();
 }
 

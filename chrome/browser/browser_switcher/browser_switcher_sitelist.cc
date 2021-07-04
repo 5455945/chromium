@@ -14,6 +14,7 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
 #include "chrome/browser/browser_switcher/browser_switcher_prefs.h"
@@ -35,8 +36,21 @@ struct NoCopyUrl {
   base::StringPiece spec_without_port;
 };
 
+// Returns true if |input| contains |token|, ignoring case for ASCII
+// characters.
+bool StringContainsInsensitiveASCII(base::StringPiece input,
+                                    base::StringPiece token) {
+  const char* found =
+      std::search(input.begin(), input.end(), token.begin(), token.end(),
+                  [](char a, char b) {
+                    return base::ToLowerASCII(a) == base::ToLowerASCII(b);
+                  });
+  return found != input.end();
+}
+
 // Case-insensitively compare the hostname of |host_and_port| with the hostname
-// pattern |pattern|.
+// pattern |pattern|. Only matches if |pattern| is at the end of the string AND
+// at a domain name boundary.
 bool MatchesHostNameAtEnd(base::StringPiece host_and_port,
                           base::StringPiece pattern) {
   // Use reverse_iterator to search from the *end* of the string.
@@ -78,7 +92,9 @@ bool IsInverted(base::StringPiece pattern) {
   return (!pattern.empty() && pattern[0] == '!');
 }
 
-bool UrlMatchesPattern(const NoCopyUrl& url, base::StringPiece pattern) {
+bool UrlMatchesPattern(const NoCopyUrl& url,
+                       base::StringPiece pattern,
+                       ParsingMode parsing_mode) {
   if (pattern == "*") {
     // Wildcard, always match.
     return true;
@@ -99,8 +115,22 @@ bool UrlMatchesPattern(const NoCopyUrl& url, base::StringPiece pattern) {
     }
     return false;
   }
+
   // Compare hosts and ports, case-insensitive.
-  return MatchesHostNameAtEnd(url.host_and_port, pattern);
+  switch (parsing_mode) {
+    case ParsingMode::kStrict:
+      return MatchesHostNameAtEnd(url.host_and_port, pattern);
+
+    case ParsingMode::kDefault:
+      // Simple substring search.
+      return StringContainsInsensitiveASCII(url.host_and_port, pattern);
+
+    default:
+      // This should've been caught in
+      // BrowserSwitcherPrefs::ParsingModeChanged().
+      NOTREACHED();
+      return false;
+  }
 }
 
 // Checks whether |patterns| contains a pattern that matches |url|, and returns
@@ -111,7 +141,8 @@ bool UrlMatchesPattern(const NoCopyUrl& url, base::StringPiece pattern) {
 // inverted matches.
 base::StringPiece MatchUrlToList(const NoCopyUrl& url,
                                  const std::vector<std::string>& patterns,
-                                 bool contains_inverted_matches) {
+                                 bool contains_inverted_matches,
+                                 ParsingMode parsing_mode) {
   base::StringPiece reason;
   for (const std::string& pattern : patterns) {
     if (pattern.size() <= reason.size())
@@ -119,7 +150,8 @@ base::StringPiece MatchUrlToList(const NoCopyUrl& url,
     bool inverted = IsInverted(pattern);
     if (inverted && !contains_inverted_matches)
       continue;
-    if (UrlMatchesPattern(url, (inverted ? pattern.substr(1) : pattern))) {
+    if (UrlMatchesPattern(url, (inverted ? pattern.substr(1) : pattern),
+                          parsing_mode)) {
       reason = pattern;
     }
   }
@@ -186,7 +218,7 @@ void CanonicalizeRule(std::string* pattern) {
                        base::CompareCase::INSENSITIVE_ASCII))
     spec = spec.substr(strlen(placeholder_scheme));
 
-  *pattern = base::StrCat({prefix, spec.as_string()});
+  *pattern = base::StrCat({prefix, spec});
 }
 
 Decision::Decision(Action action_,
@@ -244,11 +276,16 @@ Decision BrowserSwitcherSitelistImpl::GetDecisionImpl(const GURL& url) const {
   std::string host_and_port = base::StrCat({url.host(), port});
   NoCopyUrl no_copy_url = {host_and_port, url.spec(), spec_without_port};
 
+  ParsingMode parsing_mode = prefs_->GetParsingMode();
+
   base::StringPiece reason_to_go = std::max(
       {
-          MatchUrlToList(no_copy_url, prefs_->GetRules().sitelist, true),
-          MatchUrlToList(no_copy_url, ieem_sitelist_.sitelist, true),
-          MatchUrlToList(no_copy_url, external_sitelist_.sitelist, true),
+          MatchUrlToList(no_copy_url, prefs_->GetRules().sitelist, true,
+                         parsing_mode),
+          MatchUrlToList(no_copy_url, ieem_sitelist_.sitelist, true,
+                         parsing_mode),
+          MatchUrlToList(no_copy_url, external_sitelist_.sitelist, true,
+                         parsing_mode),
       },
       StringSizeCompare);
 
@@ -260,9 +297,12 @@ Decision BrowserSwitcherSitelistImpl::GetDecisionImpl(const GURL& url) const {
 
   base::StringPiece reason_to_stay = std::max(
       {
-          MatchUrlToList(no_copy_url, prefs_->GetRules().greylist, false),
-          MatchUrlToList(no_copy_url, ieem_sitelist_.greylist, false),
-          MatchUrlToList(no_copy_url, external_sitelist_.greylist, false),
+          MatchUrlToList(no_copy_url, prefs_->GetRules().greylist, false,
+                         parsing_mode),
+          MatchUrlToList(no_copy_url, ieem_sitelist_.greylist, false,
+                         parsing_mode),
+          MatchUrlToList(no_copy_url, external_sitelist_.greylist, false,
+                         parsing_mode),
       },
       StringSizeCompare);
 

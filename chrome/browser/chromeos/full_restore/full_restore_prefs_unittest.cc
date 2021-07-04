@@ -4,11 +4,13 @@
 
 #include "chrome/browser/chromeos/full_restore/full_restore_prefs.h"
 
-#include "ash/public/cpp/ash_features.h"
+#include <memory>
+
 #include "base/test/scoped_feature_list.h"
-#include "chrome/browser/chromeos/login/users/fake_chrome_user_manager.h"
+#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/common/pref_names.h"
+#include "components/full_restore/features.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/user_manager/scoped_user_manager.h"
@@ -21,12 +23,13 @@ namespace full_restore {
 class FullRestorePrefsTest : public testing::Test {
  public:
   FullRestorePrefsTest()
-      : user_manager_enabler_(
-            std::make_unique<chromeos::FakeChromeUserManager>()) {}
+      : user_manager_enabler_(std::make_unique<FakeChromeUserManager>()) {}
 
   void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(ash::features::kFullRestore);
-    pref_service_.reset(new sync_preferences::TestingPrefServiceSyncable);
+    scoped_feature_list_.InitAndEnableFeature(
+        ::full_restore::features::kFullRestore);
+    pref_service_ =
+        std::make_unique<sync_preferences::TestingPrefServiceSyncable>();
   }
 
   user_prefs::PrefRegistrySyncable* registry() {
@@ -34,7 +37,7 @@ class FullRestorePrefsTest : public testing::Test {
   }
 
   FakeChromeUserManager* GetFakeUserManager() const {
-    return static_cast<chromeos::FakeChromeUserManager*>(
+    return static_cast<FakeChromeUserManager*>(
         user_manager::UserManager::Get());
   }
 
@@ -55,6 +58,7 @@ TEST_F(FullRestorePrefsTest, NewUser) {
 
   SetDefaultRestorePrefIfNecessary(pref_service_.get());
   EXPECT_EQ(RestoreOption::kAskEveryTime, GetRestoreOption());
+  EXPECT_TRUE(CanPerformRestore(pref_service_.get()));
 }
 
 // When a user upgrades to the full restore release, set 'ask every time' as the
@@ -68,6 +72,7 @@ TEST_F(FullRestorePrefsTest, UpgradingFromRestore) {
   RegisterProfilePrefs(registry());
   SetDefaultRestorePrefIfNecessary(pref_service_.get());
   EXPECT_EQ(RestoreOption::kAskEveryTime, GetRestoreOption());
+  EXPECT_TRUE(CanPerformRestore(pref_service_.get()));
 }
 
 // When a user upgrades to the full restore release, set 'do not restore' as the
@@ -81,6 +86,7 @@ TEST_F(FullRestorePrefsTest, UpgradingFromNotRestore) {
   RegisterProfilePrefs(registry());
   SetDefaultRestorePrefIfNecessary(pref_service_.get());
   EXPECT_EQ(RestoreOption::kDoNotRestore, GetRestoreOption());
+  EXPECT_FALSE(CanPerformRestore(pref_service_.get()));
 }
 
 // For a new Chrome OS user, set 'always restore' as the default value if the
@@ -91,6 +97,7 @@ TEST_F(FullRestorePrefsTest, NewChromeOSUserFromRestore) {
   RegisterProfilePrefs(registry());
   SetDefaultRestorePrefIfNecessary(pref_service_.get());
   EXPECT_EQ(RestoreOption::kAskEveryTime, GetRestoreOption());
+  EXPECT_TRUE(CanPerformRestore(pref_service_.get()));
 
   SessionStartupPref::RegisterProfilePrefs(registry());
   pref_service_->SetInteger(
@@ -99,6 +106,7 @@ TEST_F(FullRestorePrefsTest, NewChromeOSUserFromRestore) {
 
   UpdateRestorePrefIfNecessary(pref_service_.get());
   EXPECT_EQ(RestoreOption::kAlways, GetRestoreOption());
+  EXPECT_TRUE(CanPerformRestore(pref_service_.get()));
 }
 
 // For a new Chrome OS user, set 'ask every time' as the default value if the
@@ -109,6 +117,7 @@ TEST_F(FullRestorePrefsTest, NewChromeOSUserFromNotRestore) {
   RegisterProfilePrefs(registry());
   SetDefaultRestorePrefIfNecessary(pref_service_.get());
   EXPECT_EQ(RestoreOption::kAskEveryTime, GetRestoreOption());
+  EXPECT_TRUE(CanPerformRestore(pref_service_.get()));
 
   SessionStartupPref::RegisterProfilePrefs(registry());
   pref_service_->SetInteger(
@@ -117,6 +126,7 @@ TEST_F(FullRestorePrefsTest, NewChromeOSUserFromNotRestore) {
 
   UpdateRestorePrefIfNecessary(pref_service_.get());
   EXPECT_EQ(RestoreOption::kAskEveryTime, GetRestoreOption());
+  EXPECT_TRUE(CanPerformRestore(pref_service_.get()));
 }
 
 }  // namespace full_restore

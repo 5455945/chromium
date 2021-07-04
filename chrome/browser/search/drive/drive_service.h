@@ -9,6 +9,7 @@
 #include <string>
 
 #include "base/sequence_checker.h"
+#include "base/time/time.h"
 #include "chrome/browser/search/drive/drive.mojom.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/signin/public/identity_manager/access_token_info.h"
@@ -16,6 +17,9 @@
 #include "services/data_decoder/public/cpp/data_decoder.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+
+class PrefRegistrySimple;
+class PrefService;
 
 namespace signin {
 class IdentityManager;
@@ -25,31 +29,46 @@ class PrimaryAccountAccessTokenFetcher;
 // Handles requests for user Google Drive data.
 class DriveService : public KeyedService {
  public:
+  static const char kLastDismissedTimePrefName[];
+  static const base::TimeDelta kDismissDuration;
+
   DriveService(const DriveService&) = delete;
   DriveService(
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-      signin::IdentityManager* identity_manager);
+      signin::IdentityManager* identity_manager,
+      const std::string& application_locale,
+      PrefService* pref_service);
   ~DriveService() override;
+
+  static void RegisterProfilePrefs(PrefRegistrySimple* registry);
 
   using GetFilesCallback = drive::mojom::DriveHandler::GetFilesCallback;
   // Retrieves Google Drive document suggestions from ItemSuggest API.
   void GetDriveFiles(GetFilesCallback callback);
+  // Makes the service not return data for a specified amount of time.
+  void DismissModule();
+  // Makes the service return data again even if dimiss time is not yet over.
+  void RestoreModule();
 
  private:
-  void OnTokenReceived(GetFilesCallback callback,
-                       GoogleServiceAuthError error,
+  void OnTokenReceived(GoogleServiceAuthError error,
                        signin::AccessTokenInfo token_info);
-  void OnJsonReceived(GetFilesCallback callback,
-                      const std::unique_ptr<std::string> json_response);
-  void OnJsonParsed(GetFilesCallback callback,
-                    data_decoder::DataDecoder::ValueOrError result);
+  void OnJsonReceived(const std::string& token,
+                      std::unique_ptr<std::string> json_response);
+  void OnJsonParsed(data_decoder::DataDecoder::ValueOrError result);
 
   // Used for fetching OAuth2 access tokens. Only non-null when a token
   // is made available, or a token is being fetched.
   std::unique_ptr<signin::PrimaryAccountAccessTokenFetcher> token_fetcher_;
   std::unique_ptr<network::SimpleURLLoader> url_loader_;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
+  std::vector<GetFilesCallback> callbacks_;
   signin::IdentityManager* identity_manager_;
+  std::string application_locale_;
+  PrefService* pref_service_;
+  std::unique_ptr<std::string> cached_json_;
+  base::Time cached_json_time_;
+  std::string cached_json_token_;
   SEQUENCE_CHECKER(sequence_checker_);
   base::WeakPtrFactory<DriveService> weak_factory_{this};
 };

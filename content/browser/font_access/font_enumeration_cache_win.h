@@ -10,8 +10,8 @@
 
 #include "base/deferred_sequenced_task_runner.h"
 #include "base/memory/read_only_shared_memory_region.h"
+#include "base/no_destructor.h"
 #include "base/synchronization/atomic_flag.h"
-#include "base/time/time.h"
 #include "content/browser/font_access/font_enumeration_cache.h"
 #include "content/common/content_export.h"
 #include "third_party/blink/public/common/font_access/font_enumeration_table.pb.h"
@@ -19,9 +19,6 @@
 using blink::mojom::FontEnumerationStatus;
 
 namespace base {
-template <typename T>
-class NoDestructor;
-
 class ElapsedTimer;
 }
 

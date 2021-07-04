@@ -20,10 +20,20 @@ id<GREYMatcher> WindowWithNumber(int window_number) {
   return [ChromeMatchersAppInterface windowWithNumber:window_number];
 }
 
+id<GREYMatcher> BlockerWindowWithNumber(int window_number) {
+  return [ChromeMatchersAppInterface blockerWindowWithNumber:window_number];
+}
+
 id<GREYMatcher> MatchInWindowWithNumber(int window_number,
                                         id<GREYMatcher> matcher) {
   return grey_allOf(matcher, grey_ancestor(WindowWithNumber(window_number)),
                     nil);
+}
+
+id<GREYMatcher> MatchInBlockerWindowWithNumber(int window_number,
+                                               id<GREYMatcher> matcher) {
+  return grey_allOf(matcher,
+                    grey_ancestor(BlockerWindowWithNumber(window_number)), nil);
 }
 
 id<GREYMatcher> ButtonWithAccessibilityLabel(NSString* label) {
@@ -172,6 +182,18 @@ id<GREYMatcher> TabShareButton() {
 
 id<GREYMatcher> ShowTabsButton() {
   return [ChromeMatchersAppInterface showTabsButton];
+}
+
+id<GREYMatcher> AddToReadingListButton() {
+  return [ChromeMatchersAppInterface addToReadingListButton];
+}
+
+id<GREYMatcher> AddToBookmarksButton() {
+  return [ChromeMatchersAppInterface addToBookmarksButton];
+}
+
+id<GREYMatcher> CloseTabMenuButton() {
+  return [ChromeMatchersAppInterface closeTabMenuButton];
 }
 
 id<GREYMatcher> SettingsSwitchCell(NSString* accessibility_identifier,
@@ -404,8 +426,12 @@ id<GREYMatcher> ClearAutofillButton() {
   return [ChromeMatchersAppInterface clearAutofillButton];
 }
 
-id<GREYMatcher> ContentSuggestionCollectionView() {
+id<GREYMatcher> ContentSuggestionsCollectionView() {
   return [ChromeMatchersAppInterface contentSuggestionCollectionView];
+}
+
+id<GREYMatcher> NTPCollectionView() {
+  return [ChromeMatchersAppInterface ntpCollectionView];
 }
 
 id<GREYMatcher> WarningMessageView() {
@@ -448,7 +474,11 @@ id<GREYMatcher> SystemSelectionCalloutCopyButton() {
   return [ChromeMatchersAppInterface systemSelectionCalloutCopyButton];
 }
 
-id<GREYMatcher> CopyActivityButton() API_AVAILABLE(ios(13)) {
+id<GREYMatcher> SystemSelectionCalloutOverflowButton() {
+  return [ChromeMatchersAppInterface systemSelectionCalloutOverflowButton];
+}
+
+id<GREYMatcher> CopyActivityButton() {
   return [ChromeMatchersAppInterface copyActivityButton];
 }
 
@@ -489,12 +519,25 @@ id<GREYMatcher> FakeOmnibox() {
   return [ChromeMatchersAppInterface fakeOmnibox];
 }
 
+id<GREYMatcher> DiscoverHeaderLabel() {
+  return [ChromeMatchersAppInterface discoverHeaderLabel];
+}
+
+id<GREYMatcher> NTPLogo() {
+  return [ChromeMatchersAppInterface ntpLogo];
+}
+
 id<GREYMatcher> WebViewMatcher() {
   return [ChromeMatchersAppInterface webViewMatcher];
 }
 
 id<GREYMatcher> WebStateScrollViewMatcher() {
   return [ChromeMatchersAppInterface webStateScrollViewMatcher];
+}
+
+id<GREYMatcher> WebStateScrollViewMatcherInWindowWithNumber(int windowNumber) {
+  return [ChromeMatchersAppInterface
+      webStateScrollViewMatcherInWindowWithNumber:windowNumber];
 }
 
 id<GREYMatcher> HistoryClearBrowsingDataButton() {
@@ -547,6 +590,18 @@ id<GREYMatcher> TabGridIncognitoTabsPanelButton() {
 
 id<GREYMatcher> TabGridOtherDevicesPanelButton() {
   return [ChromeMatchersAppInterface tabGridOtherDevicesPanelButton];
+}
+
+id<GREYMatcher> TabGridBackground() {
+  return [ChromeMatchersAppInterface tabGridBackground];
+}
+
+id<GREYMatcher> RegularTabGrid() {
+  return [ChromeMatchersAppInterface regularTabGrid];
+}
+
+id<GREYMatcher> IncognitoTabGrid() {
+  return [ChromeMatchersAppInterface incognitoTabGrid];
 }
 
 id<GREYMatcher> TabGridCloseButtonForCellAtIndex(unsigned int index) {
@@ -683,8 +738,17 @@ id<GREYMatcher> ManualFallbackCreditCardTableViewWindowMatcher() {
       manualFallbackCreditCardTableViewWindowMatcher];
 }
 
-id<GREYMatcher> ActivityViewHeader(NSString* page_title) {
-  return [ChromeMatchersAppInterface activityViewHeaderWithTitle:page_title];
+id<GREYMatcher> ActivityViewHeader(NSString* url_host, NSString* page_title) {
+  return [ChromeMatchersAppInterface activityViewHeaderWithURLHost:url_host
+                                                             title:page_title];
+}
+
+id<GREYMatcher> ManualFallbackSuggestPasswordMatcher() {
+  return [ChromeMatchersAppInterface manualFallbackSuggestPasswordMatcher];
+}
+
+id<GREYMatcher> UseSuggestedPasswordMatcher() {
+  return [ChromeMatchersAppInterface useSuggestedPasswordMatcher];
 }
 
 }  // namespace chrome_test_util

@@ -10,7 +10,6 @@
 
 #include <map>
 #include <memory>
-#include <string>
 #include <utility>
 
 #include "base/containers/mru_cache.h"
@@ -19,7 +18,6 @@
 #include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/optional.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "build/chromeos_buildflags.h"
@@ -27,18 +25,17 @@
 #include "media/base/cdm_context.h"
 #include "media/base/status.h"
 #include "media/base/supported_video_decoder_config.h"
+#include "media/base/video_aspect_ratio.h"
 #include "media/base/video_codecs.h"
 #include "media/base/video_frame_layout.h"
 #include "media/gpu/chromeos/video_decoder_pipeline.h"
 #include "media/gpu/decode_surface_handler.h"
 #include "media/gpu/vaapi/vaapi_utils.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/gpu_memory_buffer.h"
-
-namespace gpu {
-class GpuDriverBugWorkarounds;
-}
+#include "ui/gfx/hdr_metadata.h"
 
 namespace media {
 
@@ -56,8 +53,7 @@ class VaapiVideoDecoder : public DecoderInterface,
       scoped_refptr<base::SequencedTaskRunner> decoder_task_runner,
       base::WeakPtr<DecoderInterface::Client> client);
 
-  static SupportedVideoDecoderConfigs GetSupportedConfigs(
-      const gpu::GpuDriverBugWorkarounds& workarounds);
+  static SupportedVideoDecoderConfigs GetSupportedConfigs();
 
   // DecoderInterface implementation.
   void Initialize(const VideoDecoderConfig& config,
@@ -68,6 +64,7 @@ class VaapiVideoDecoder : public DecoderInterface,
   void Decode(scoped_refptr<DecoderBuffer> buffer, DecodeCB decode_cb) override;
   void Reset(base::OnceClosure reset_cb) override;
   void ApplyResolutionChange() override;
+  bool NeedsTranscryption() override;
 
   // DecodeSurfaceHandler<VASurface> implementation.
   scoped_refptr<VASurface> CreateSurface() override;
@@ -169,16 +166,16 @@ class VaapiVideoDecoder : public DecoderInterface,
   OutputCB output_cb_;
 
   // Callback used to notify the client when we have lost decode context and
-  // request a reset. (Used in protected decoding).
+  // request a reset (Used in protected decoding).
   WaitingCB waiting_cb_;
 
-  // The video stream's profile.
+  // Bitstream information, written during Initialize().
   VideoCodecProfile profile_ = VIDEO_CODEC_PROFILE_UNKNOWN;
-  // Color space of the video frame.
   VideoColorSpace color_space_;
+  absl::optional<gfx::HDRMetadata> hdr_metadata_;
 
-  // Ratio of natural size to |visible_rect_| of the output frames.
-  double pixel_aspect_ratio_ = 0.0;
+  // Aspect ratio from the config.
+  VideoAspectRatio aspect_ratio_;
 
   // Video frame pool used to allocate and recycle video frames.
   DmabufVideoFramePool* frame_pool_ = nullptr;
@@ -192,7 +189,7 @@ class VaapiVideoDecoder : public DecoderInterface,
   // Queue containing all requested decode tasks.
   base::queue<DecodeTask> decode_task_queue_;
   // The decode task we're currently trying to execute.
-  base::Optional<DecodeTask> current_decode_task_;
+  absl::optional<DecodeTask> current_decode_task_;
   // The next input buffer id.
   int32_t next_buffer_id_ = 0;
 
@@ -240,7 +237,11 @@ class VaapiVideoDecoder : public DecoderInterface,
 
   // When we are doing scaled decoding, this is the scale factor we are using,
   // and applies the same in both dimensions.
-  base::Optional<float> decode_to_output_scale_factor_;
+  absl::optional<float> decode_to_output_scale_factor_;
+
+  // This is used on AMD protected content implementations to indicate that the
+  // DecoderBuffers we receive have been transcrypted and need special handling.
+  bool transcryption_ = false;
 
   SEQUENCE_CHECKER(sequence_checker_);
 

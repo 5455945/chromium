@@ -40,6 +40,7 @@ class Time;
 }
 
 namespace content {
+class ResourceContext;
 class WebUI;
 }
 
@@ -101,19 +102,21 @@ class Profile : public content::BrowserContext {
     EXIT_CRASHED,
   };
 
+  // Defines an ID to distinguish different off-the-record profiles of a regular
+  // profile.
   class OTRProfileID {
    public:
-    // Creates an OTR profile ID from |profile_id|.
-    // |profile_id| should follow the following naming scheme:
-    // "<component>::<subcomponent_id>". For example, "HaTS::WebDialog"
-    explicit OTRProfileID(const std::string& profile_id);
-
-    // ID used by the incognito and guest profiles.
-    // TODO(https://crbug.com/1125474): To be replaced with |IncognitoID| when
+    // ID used by the Incognito and Guest profiles.
+    // TODO(https://crbug.com/1225171): To be replaced with |IncognitoID| if
     // OTR Guest profiles are deprecated.
     static const OTRProfileID PrimaryID();
 
     // Creates a unique OTR profile id with the given profile id prefix.
+    //
+    // WARNING:
+    // The use of this class to create non-primary OTR profiles in Desktop
+    // platforms is restricted exclusively for cases where extensions should not
+    // be applicable to run. Please see crbug.com/1098697#c3 for more details.
     static OTRProfileID CreateUnique(const std::string& profile_id_prefix);
 
     // Creates a unique OTR profile id to be used for DevTools browser contexts.
@@ -121,6 +124,9 @@ class Profile : public content::BrowserContext {
 
     // Creates a unique OTR profile id to be used for media router.
     static OTRProfileID CreateUniqueForMediaRouter();
+
+    // Creates a unique OTR profile id for tests.
+    static OTRProfileID CreateUniqueForTesting();
 
     bool operator==(const OTRProfileID& other) const {
       return profile_id_ == other.profile_id_;
@@ -146,6 +152,10 @@ class Profile : public content::BrowserContext {
         JNIEnv* env,
         const base::android::JavaRef<jobject>& j_otr_profile_id);
 
+    // Constructs an OTRProfileID based on the string passed in. Should only be
+    // called with values previously returned by Serialize().
+    static OTRProfileID Deserialize(const std::string& value);
+
     // Constructs a string that represents OTRProfileID from the provided
     // OTRProfileID.
     // TODO(crbug.com/1161104): Use one serialize function for both java and
@@ -158,13 +168,16 @@ class Profile : public content::BrowserContext {
     friend std::ostream& operator<<(std::ostream& out,
                                     const OTRProfileID& profile_id);
 
+    // Creates an OTR profile ID from |profile_id|.
+    // |profile_id| should follow the following naming scheme:
+    // "<component>::<subcomponent_id>". For example, "HaTS::WebDialog"
+    explicit OTRProfileID(const std::string& profile_id);
+
     OTRProfileID() = default;
 
     // Returns this OTRProfileID in a string format that can be used for debug
     // message.
     const std::string& ToString() const;
-
-    static int first_unused_index_;
 
     const std::string profile_id_;
   };
@@ -173,10 +186,15 @@ class Profile : public content::BrowserContext {
    public:
     virtual ~Delegate();
 
+    // Called when creation of the profile is started.
+    virtual void OnProfileCreationStarted(Profile* profile,
+                                          CreateMode create_mode) = 0;
+
     // Called when creation of the profile is finished.
-    virtual void OnProfileCreated(Profile* profile,
-                                  bool success,
-                                  bool is_new_profile) = 0;
+    virtual void OnProfileCreationFinished(Profile* profile,
+                                           CreateMode create_mode,
+                                           bool success,
+                                           bool is_new_profile) = 0;
   };
 
   // Key used to bind profile to the widget with which it is associated.
@@ -214,6 +232,13 @@ class Profile : public content::BrowserContext {
   base::FilePath GetPath() override = 0;
   virtual base::FilePath GetPath() const = 0;
 
+  // Returns the base name of the profile, which is the profile directory name
+  // within the user data directory, e.g. "Default", "Profile 1", "Profile 2".
+  base::FilePath GetBaseName() const;
+
+  // Similar to GetBaseName(), but returns a string for debugging.
+  std::string GetDebugName() const;
+
   // Return whether this context is off the record. Default is false.
   // Note that for Chrome this covers BOTH Incognito mode and Guest sessions.
   bool IsOffTheRecord() override = 0;
@@ -221,7 +246,8 @@ class Profile : public content::BrowserContext {
   virtual const OTRProfileID& GetOTRProfileID() const = 0;
 
   variations::VariationsClient* GetVariationsClient() override;
-  content::SharedCorsOriginAccessList* GetSharedCorsOriginAccessList() override;
+
+  content::ResourceContext* GetResourceContext() override;
 
   // Returns the creation time of this profile. This will either be the creation
   // time of the profile directory or, for ephemeral off-the-record profiles,
@@ -241,25 +267,26 @@ class Profile : public content::BrowserContext {
 
   // Return an OffTheRecord version of this profile with the given
   // |otr_profile_id|. The returned pointer is owned by the receiving profile.
+  // If an OffTheRecord with |otr_profile_id| profile id does not exist, a new
+  // profile is created and returned if |create_if_needed| is true or a nullptr
+  // is returned if it is false.
   // If the receiving profile is OffTheRecord, the owner would be its original
   // profile.
   //
-  // WARNING I: This will create the OffTheRecord profile if it doesn't already
-  // exist. If this isn't what you want, you need to check
-  // HasOffTheRecordProfile() first.
-  //
-  // WARNING II: Once a profile is no longer used, use
+  // WARNING: Once a profile is no longer used, use
   // ProfileDestroyer::DestroyProfileWhenAppropriate or
   // ProfileDestroyer::DestroyOffTheRecordProfileNow to destroy it.
-  virtual Profile* GetOffTheRecordProfile(
-      const OTRProfileID& otr_profile_id) = 0;
+  virtual Profile* GetOffTheRecordProfile(const OTRProfileID& otr_profile_id,
+                                          bool create_if_needed) = 0;
 
   // Returns all OffTheRecord profiles.
   virtual std::vector<Profile*> GetAllOffTheRecordProfiles() = 0;
 
   // Returns the primary OffTheRecord profile. Creates the profile if it doesn't
-  // exist.
-  Profile* GetPrimaryOTRProfile();
+  // exist. If primary OffTheRecord profile does not exist and
+  // |create_if_needed| is true, a new profile is created, otherwise nullptr is
+  // returned.
+  Profile* GetPrimaryOTRProfile(bool create_if_needed);
 
   // Destroys the OffTheRecord profile.
   virtual void DestroyOffTheRecordProfile(Profile* otr_profile) = 0;
@@ -307,18 +334,8 @@ class Profile : public content::BrowserContext {
   virtual ChromeZoomLevelPrefs* GetZoomLevelPrefs();
 #endif
 
-  // Retrieves a pointer to the PrefService that manages the preferences
-  // for OffTheRecord Profiles.  This PrefService is lazily created the first
-  // time that this method is called.
-  // TODO(https://crbug.com/1065444): Investigate whether it's possible to
-  // remove.
-  virtual PrefService* GetOffTheRecordPrefs() = 0;
-
-  // Like GetOffTheRecordPrefs but gives a read-only view of prefs that can be
-  // used even if there's no OTR profile at the moment
-  // (i.e. HasOffTheRecordProfile is false).
-  // TODO(https://crbug.com/1065444): Investigate whether it's possible to
-  // remove.
+  // Gives a read-only view of prefs that can be used even if there's no OTR
+  // profile at the moment (i.e. HasOffTheRecordProfile is false).
   virtual PrefService* GetReadOnlyOffTheRecordPrefs();
 
   // Returns the main URLLoaderFactory.
@@ -401,9 +418,9 @@ class Profile : public content::BrowserContext {
   // more recent (or equal to) the one specified.
   virtual bool WasCreatedByVersionOrLater(const std::string& version) = 0;
 
-  std::string GetDebugName() const;
-
-  // IsRegularProfile() and IsIncognitoProfile() are mutually exclusive.
+  // IsRegularProfile(), IsSystemProfile(), IsIncognitoProfile(), and
+  // IsGuestSession() are mutually exclusive.
+  //
   // IsSystemProfile() returns true for both regular and off-the-record profile
   //   of the system profile.
   // IsOffTheRecord() is true for the off the record profile of Incognito mode,
@@ -421,25 +438,25 @@ class Profile : public content::BrowserContext {
   bool IsPrimaryOTRProfile() const;
 
   // Returns whether ephemeral Guest profiles are enabled.
+  //
+  // NOTE: Ephemeral Guest profiles are deprecated and code support is under
+  // removal.
+  // TODO(https://crbug.com/1225156): Delete this function.
   static bool IsEphemeralGuestProfileEnabled();
 
   // Returns whether it is a Guest session. This covers both regular and
   // off-the-record profiles of a Guest session.
-  // This function only returns true for non-ephemeral Guest sessions.
-  // TODO(https://crbug.com/1125474): Audit all use cases and consider adding
-  // |IsEphemeralGuestProfile|. Remove after audit is done on all relevant
-  // platforms and non-ephemeral Guest profiles are deprecated.
   virtual bool IsGuestSession() const;
 
-  // Returns whether it is an ephemeral Guest profile. This covers both regular
-  // and off-the-record profiles of a Guest session.
-  // TODO(https://crbug.com/1125474): After auditing all use cases of
-  // |IsGuestSession| on all platforms and removal of all calls to
-  // |IsGuestSession|, rename to |IsGuestProfile|.
-  virtual bool IsEphemeralGuestProfile() const;
+  // Returns whether it is an ephemeral Guest profile.
+  //
+  // NOTE: Ephemeral Guest profiles are deprecated and code support is under
+  // removal.
+  // TODO(https://crbug.com/1225156): Delete this function.
+  bool IsEphemeralGuestProfile() const;
 
   // Returns whether it is a system profile.
-  virtual bool IsSystemProfile() const;
+  bool IsSystemProfile() const;
 
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
   // Returns `true` if this is the first/initial Profile in Lacros, and - for
@@ -516,22 +533,7 @@ class Profile : public content::BrowserContext {
 
   virtual void RecordMainFrameNavigation() = 0;
 
-  void SetCorsOriginAccessListForOrigin(
-      TargetBrowserContexts target_mode,
-      const url::Origin& source_origin,
-      std::vector<network::mojom::CorsOriginPatternPtr> allow_patterns,
-      std::vector<network::mojom::CorsOriginPatternPtr> block_patterns,
-      base::OnceClosure closure) override;
-
  protected:
-  void set_is_guest_profile(bool is_guest_profile) {
-    is_guest_profile_ = is_guest_profile;
-  }
-
-  void set_is_system_profile(bool is_system_profile) {
-    is_system_profile_ = is_system_profile;
-  }
-
   // Creates an OffTheRecordProfile which points to this Profile.
   static std::unique_ptr<Profile> CreateOffTheRecordProfile(
       Profile* parent,
@@ -547,14 +549,13 @@ class Profile : public content::BrowserContext {
   // Returns whether the user has signed in this profile to an account.
   virtual bool IsSignedIn() = 0;
 
-  // TODO(lukasza): Move this method to the //content layer.
-  void SetCorsOriginAccessListForThisContextOnly(
-      const url::Origin& source_origin,
-      std::vector<network::mojom::CorsOriginPatternPtr> allow_patterns,
-      std::vector<network::mojom::CorsOriginPatternPtr> block_patterns,
-      base::OnceClosure closure);
-
  private:
+  // Created on the UI thread, and returned by GetResourceContext(), but
+  // otherwise lives on and is destroyed on the IO thread.
+  //
+  // TODO(https://crbug.com/908955): Get rid of ResourceContext.
+  std::unique_ptr<content::ResourceContext> resource_context_;
+
   bool restored_last_session_ = false;
 
   // Used to prevent the notification that this Profile is destroyed from
@@ -567,19 +568,10 @@ class Profile : public content::BrowserContext {
   // true or false, so that calls can be nested.
   int accessibility_pause_level_ = 0;
 
-  bool is_guest_profile_ = false;
-
-  // A non-browsing profile not associated to a user. Sample use: User-Manager.
-  bool is_system_profile_ = false;
-
   base::ObserverList<ProfileObserver> observers_;
 
   class ChromeVariationsClient;
   std::unique_ptr<variations::VariationsClient> chrome_variations_client_;
-
-  // TODO(lukasza): Move this field to the //content layer.
-  scoped_refptr<content::SharedCorsOriginAccessList>
-      shared_cors_origin_access_list_;
 };
 
 // The comparator for profile pointers as key in a map.

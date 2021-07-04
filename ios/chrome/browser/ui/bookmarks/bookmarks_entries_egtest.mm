@@ -70,9 +70,6 @@ id<GREYMatcher> AddBookmarkButton() {
 
 // Tear down called once per test.
 - (void)tearDown {
-  // No-op if only one window presents.
-  [ChromeEarlGrey closeAllExtraWindows];
-  [EarlGrey setRootMatcherForSubsequentInteractions:nil];
   [ChromeEarlGrey clearBookmarks];
   [BookmarkEarlGrey clearBookmarksPositionCache];
   [super tearDown];
@@ -122,14 +119,6 @@ id<GREYMatcher> AddBookmarkButton() {
                                                      newFolderEnabled:YES];
 }
 
-// TODO(crbug.com/781445): Re-enable this test on 32-bit.
-#if defined(ARCH_CPU_64_BITS)
-#define MAYBE_testSwipeToDeleteDisabledInEditMode \
-  testSwipeToDeleteDisabledInEditMode
-#else
-#define MAYBE_testSwipeToDeleteDisabledInEditMode \
-  FLAKY_testSwipeToDeleteDisabledInEditMode
-#endif
 - (void)testSwipeToDeleteDisabledInEditMode {
   // TODO(crbug.com/851227): On non Compact Width  the bookmark cell is being
   // deleted by grey_swipeFastInDirection.
@@ -347,7 +336,9 @@ id<GREYMatcher> AddBookmarkButton() {
       performAction:grey_tap()];
 
   // Select URL.
-  [[EarlGrey selectElementWithMatcher:grey_accessibilityID(@"French URL")]
+  [[EarlGrey
+      selectElementWithMatcher:grey_allOf(grey_accessibilityID(@"French URL"),
+                                          grey_sufficientlyVisible(), nil)]
       performAction:grey_tap()];
 
   // Tap cancel after modifying the url.
@@ -450,8 +441,7 @@ id<GREYMatcher> AddBookmarkButton() {
 }
 
 // Verify the Open All functionality on multiple url selection.
-// TODO(crbug.com/816699): Re-enable this test on simulators.
-- (void)FLAKY_testContextMenuForMultipleURLOpenAll {
+- (void)testContextMenuForMultipleURLOpenAll {
   [BookmarkEarlGrey setupStandardBookmarks];
   [BookmarkEarlGreyUI openBookmarks];
   [BookmarkEarlGreyUI openMobileBookmarks];
@@ -493,8 +483,7 @@ id<GREYMatcher> AddBookmarkButton() {
 }
 
 // Verify the Open All in Incognito functionality on multiple url selection.
-// TODO(crbug.com/816699): Re-enable this test on simulators.
-- (void)FLAKY_testContextMenuForMultipleURLOpenAllInIncognito {
+- (void)testContextMenuForMultipleURLOpenAllInIncognito {
   [BookmarkEarlGrey setupStandardBookmarks];
   [BookmarkEarlGreyUI openBookmarks];
   [BookmarkEarlGreyUI openMobileBookmarks];
@@ -1152,14 +1141,13 @@ id<GREYMatcher> AddBookmarkButton() {
   [ChromeEarlGrey openNewWindow];
   [ChromeEarlGrey waitForForegroundWindowCount:2];
 
-  [EarlGrey setRootMatcherForSubsequentInteractions:WindowWithNumber(1)];
-  [BookmarkEarlGreyUI openBookmarks];
+  [BookmarkEarlGreyUI openBookmarksInWindowWithNumber:1];
   [BookmarkEarlGreyUI openMobileBookmarks];
 
   // Load url in first window and bookmark it.
   [EarlGrey setRootMatcherForSubsequentInteractions:WindowWithNumber(0)];
   [ChromeEarlGrey loadURL:URL1 inWindowWithNumber:0];
-  [ChromeEarlGreyUI openToolsMenu];
+  [ChromeEarlGreyUI openToolsMenuInWindowWithNumber:0];
   [ChromeEarlGreyUI tapToolsMenuButton:AddBookmarkButton()];
 
   // Assert it appeared in second window's list.
@@ -1169,8 +1157,7 @@ id<GREYMatcher> AddBookmarkButton() {
       assertWithMatcher:grey_notNil()];
 
   // Open bookmark panel in first window also.
-  [EarlGrey setRootMatcherForSubsequentInteractions:WindowWithNumber(0)];
-  [BookmarkEarlGreyUI openBookmarks];
+  [BookmarkEarlGreyUI openBookmarksInWindowWithNumber:0];
   [BookmarkEarlGreyUI openMobileBookmarks];
 
   [[EarlGrey selectElementWithMatcher:TappableBookmarkNodeWithLabel(

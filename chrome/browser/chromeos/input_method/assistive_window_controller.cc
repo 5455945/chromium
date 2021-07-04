@@ -56,6 +56,8 @@ AssistiveWindowController::~AssistiveWindowController() {
     suggestion_window_view_->GetWidget()->RemoveObserver(this);
   if (undo_window_ && undo_window_->GetWidget())
     undo_window_->GetWidget()->RemoveObserver(this);
+  if (grammar_suggestion_window_ && grammar_suggestion_window_->GetWidget())
+    grammar_suggestion_window_->GetWidget()->RemoveObserver(this);
   CHECK(!IsInObserverList());
 }
 
@@ -80,6 +82,18 @@ void AssistiveWindowController::InitUndoWindow() {
   widget->Show();
 }
 
+void AssistiveWindowController::InitGrammarSuggestionWindow() {
+  if (grammar_suggestion_window_)
+    return;
+  // grammar_suggestion_window_ is deleted by
+  // DialogDelegateView::DeleteDelegate.
+  grammar_suggestion_window_ =
+      new ui::ime::GrammarSuggestionWindow(GetParentView(), this);
+  views::Widget* widget = grammar_suggestion_window_->InitWidget();
+  widget->AddObserver(this);
+  widget->Show();
+}
+
 void AssistiveWindowController::OnWidgetClosing(views::Widget* widget) {
   if (suggestion_window_view_ &&
       widget == suggestion_window_view_->GetWidget()) {
@@ -90,12 +104,17 @@ void AssistiveWindowController::OnWidgetClosing(views::Widget* widget) {
     widget->RemoveObserver(this);
     undo_window_ = nullptr;
   }
+  if (grammar_suggestion_window_ &&
+      widget == grammar_suggestion_window_->GetWidget()) {
+    widget->RemoveObserver(this);
+    grammar_suggestion_window_ = nullptr;
+  }
 }
 
 // TODO(crbug/1119570): Update AcceptSuggestion signature (either use
 // announce_string, or no string)
 void AssistiveWindowController::AcceptSuggestion(
-    const base::string16& suggestion) {
+    const std::u16string& suggestion) {
   if (window_.type == ui::ime::AssistiveWindowType::kEmojiSuggestion) {
     tts_handler_->Announce(
         l10n_util::GetStringUTF8(IDS_SUGGESTION_EMOJI_SUGGESTED));
@@ -110,6 +129,8 @@ void AssistiveWindowController::HideSuggestion() {
   confirmed_length_ = 0;
   if (suggestion_window_view_)
     suggestion_window_view_->GetWidget()->Close();
+  if (grammar_suggestion_window_)
+    grammar_suggestion_window_->GetWidget()->Close();
 }
 
 void AssistiveWindowController::SetBounds(const Bounds& bounds) {
@@ -119,13 +140,17 @@ void AssistiveWindowController::SetBounds(const Bounds& bounds) {
   // position before showing.
   // TODO(crbug/1112982): Investigate getting bounds to suggester before sending
   // show suggestion request.
-  if (suggestion_window_view_ && confirmed_length_ == 0)
-    suggestion_window_view_->SetAnchorRect(bounds.caret);
+  if (suggestion_window_view_ && !tracking_last_suggestion_) {
+    suggestion_window_view_->SetAnchorRect(
+        confirmed_length_ == 0 ? bounds.caret : bounds.composition_text);
+  }
+  if (grammar_suggestion_window_) {
+    grammar_suggestion_window_->SetAnchorRect(bounds.caret);
+  }
 }
 
 void AssistiveWindowController::FocusStateChanged() {
-  if (suggestion_window_view_)
-    HideSuggestion();
+  HideSuggestion();
   if (undo_window_)
     undo_window_->Hide();
 }
@@ -134,6 +159,7 @@ void AssistiveWindowController::ShowSuggestion(
     const ui::ime::SuggestionDetails& details) {
   if (!suggestion_window_view_)
     InitSuggestionWindow();
+  tracking_last_suggestion_ = suggestion_text_ == details.text;
   suggestion_text_ = details.text;
   confirmed_length_ = details.confirmed_length;
   suggestion_window_view_->Show(details);
@@ -159,12 +185,20 @@ void AssistiveWindowController::SetButtonHighlighted(
       undo_window_->SetButtonHighlighted(button, highlighted);
       tts_handler_->Announce(button.announce_string);
       break;
+    case ui::ime::AssistiveWindowType::kGrammarSuggestion:
+      if (!grammar_suggestion_window_)
+        return;
+
+      grammar_suggestion_window_->SetButtonHighlighted(button, highlighted);
+      if (highlighted)
+        tts_handler_->Announce(button.announce_string);
+      break;
     case ui::ime::AssistiveWindowType::kNone:
       break;
   }
 }
 
-base::string16 AssistiveWindowController::GetSuggestionText() const {
+std::u16string AssistiveWindowController::GetSuggestionText() const {
   return suggestion_text_;
 }
 
@@ -196,6 +230,19 @@ void AssistiveWindowController::SetAssistiveWindowProperties(
         suggestion_window_view_->ShowMultipleCandidates(window);
       } else {
         HideSuggestion();
+      }
+      break;
+    case ui::ime::AssistiveWindowType::kGrammarSuggestion:
+      if (window.candidates.size() == 0)
+        return;
+      if (!grammar_suggestion_window_)
+        InitGrammarSuggestionWindow();
+      if (window.visible) {
+        grammar_suggestion_window_->SetAnchorRect(bounds_.caret);
+        grammar_suggestion_window_->SetSuggestion(window.candidates[0]);
+        grammar_suggestion_window_->Show();
+      } else {
+        grammar_suggestion_window_->Hide();
       }
       break;
     case ui::ime::AssistiveWindowType::kNone:

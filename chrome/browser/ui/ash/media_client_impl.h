@@ -11,16 +11,21 @@
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
-#include "chrome/browser/chromeos/camera_mic/vm_camera_mic_manager.h"
+#include "chrome/browser/ash/camera_mic/vm_camera_mic_manager.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/ui/browser_list_observer.h"
-#include "media/capture/video/chromeos/ash/camera_hal_dispatcher_impl.h"
+#include "media/capture/video/chromeos/camera_hal_dispatcher_impl.h"
 #include "media/capture/video/chromeos/mojom/cros_camera_service.mojom.h"
 #include "ui/base/accelerators/media_keys_listener.h"
 
+namespace apps {
+class AppCapabilityAccessCache;
+class AppRegistryCache;
+}  // namespace apps
+
 class MediaClientImpl : public ash::MediaClient,
+                        public ash::VmCameraMicManager::Observer,
                         public BrowserListObserver,
-                        public chromeos::VmCameraMicManager::Observer,
                         public MediaCaptureDevicesDispatcher::Observer,
                         public media::CameraPrivacySwitchObserver,
                         public media::CameraActiveClientObserver {
@@ -58,9 +63,8 @@ class MediaClientImpl : public ash::MediaClient,
   // BrowserListObserver:
   void OnBrowserSetLastActive(Browser* browser) override;
 
-  // chromeos::VmCameraMicManager::Observer
-  void OnVmCameraMicActiveChanged(
-      chromeos::VmCameraMicManager* manager) override;
+  // ash::VmCameraMicManager::Observer
+  void OnVmCameraMicActiveChanged(ash::VmCameraMicManager* manager) override;
 
   // media::CameraPrivacySwitchObserver:
   void OnCameraPrivacySwitchStatusChanged(
@@ -76,6 +80,13 @@ class MediaClientImpl : public ash::MediaClient,
                                    ui::MediaKeysListener::Delegate* delegate);
   void DisableCustomMediaKeyHandler(content::BrowserContext* context,
                                     ui::MediaKeysListener::Delegate* delegate);
+
+  // Returns the (short) name of the app attempting to use the camera, or an
+  // empty string if the short name is not available.  Publicly visible for
+  // testing.
+  static std::u16string GetNameOfAppAccessingCamera(
+      apps::AppCapabilityAccessCache* capability_cache,
+      apps::AppRegistryCache* registry_cache);
 
  private:
   // Sets |is_forcing_media_client_key_handling_| to true if

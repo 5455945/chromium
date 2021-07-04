@@ -94,13 +94,9 @@ void TestRouteResultCodeHistograms(
                                  RouteRequestResult::ResultCode)> record_cb,
     const std::string& base_histogram_name) {
   TestRouteResultCodeHistogramsWithProviders(
-      record_cb, MediaRouteProviderId::EXTENSION, base_histogram_name,
-      MediaRouteProviderId::WIRED_DISPLAY,
-      base_histogram_name + ".WiredDisplay");
-
-  TestRouteResultCodeHistogramsWithProviders(
-      record_cb, MediaRouteProviderId::CAST, base_histogram_name + ".Cast",
-      MediaRouteProviderId::DIAL, base_histogram_name + ".DIAL");
+      record_cb, MediaRouteProviderId::WIRED_DISPLAY,
+      base_histogram_name + ".WiredDisplay", MediaRouteProviderId::DIAL,
+      base_histogram_name + ".DIAL");
 
   TestRouteResultCodeHistogramsWithProviders(
       record_cb, MediaRouteProviderId::CAST, base_histogram_name + ".Cast",
@@ -218,16 +214,14 @@ TEST(MediaRouterMetricsTest, RecordMediaSinkType) {
   MediaRouterMetrics::RecordMediaSinkType(SinkIconType::WIRED_DISPLAY);
   MediaRouterMetrics::RecordMediaSinkType(SinkIconType::CAST);
   MediaRouterMetrics::RecordMediaSinkType(SinkIconType::CAST_AUDIO);
-  MediaRouterMetrics::RecordMediaSinkType(SinkIconType::HANGOUT);
   MediaRouterMetrics::RecordMediaSinkType(SinkIconType::CAST);
   MediaRouterMetrics::RecordMediaSinkType(SinkIconType::GENERIC);
 
-  tester.ExpectTotalCount(MediaRouterMetrics::kHistogramMediaSinkType, 6);
+  tester.ExpectTotalCount(MediaRouterMetrics::kHistogramMediaSinkType, 5);
   EXPECT_THAT(
       tester.GetAllSamples(MediaRouterMetrics::kHistogramMediaSinkType),
       ElementsAre(Bucket(static_cast<int>(SinkIconType::CAST), 2),
                   Bucket(static_cast<int>(SinkIconType::CAST_AUDIO), 1),
-                  Bucket(static_cast<int>(SinkIconType::HANGOUT), 1),
                   Bucket(static_cast<int>(SinkIconType::WIRED_DISPLAY), 1),
                   Bucket(static_cast<int>(SinkIconType::GENERIC), 1)));
 }

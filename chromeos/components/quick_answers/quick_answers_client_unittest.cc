@@ -9,7 +9,6 @@
 #include <utility>
 
 #include "ash/constants/ash_features.h"
-#include "ash/public/cpp/assistant/assistant_state.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "chromeos/components/quick_answers/quick_answers_model.h"
@@ -89,11 +88,9 @@ class QuickAnswersClientTest : public testing::Test {
 
   // Testing::Test:
   void SetUp() override {
-    assistant_state_ = std::make_unique<ash::AssistantState>();
     mock_delegate_ = std::make_unique<MockQuickAnswersDelegate>();
 
     client_ = std::make_unique<QuickAnswersClient>(&test_url_loader_factory_,
-                                                   assistant_state_.get(),
                                                    mock_delegate_.get());
 
     result_loader_factory_callback_ = base::BindRepeating(
@@ -116,17 +113,6 @@ class QuickAnswersClientTest : public testing::Test {
   void IntentGeneratorTestCallback(const IntentInfo& intent_info) {}
 
  protected:
-  void NotifyAssistantStateChange(
-      bool setting_enabled,
-      bool context_enabled,
-      chromeos::assistant::AssistantAllowedState assistant_state,
-      const std::string& locale) {
-    client_->OnAssistantSettingsEnabled(setting_enabled);
-    client_->OnAssistantContextEnabled(context_enabled);
-    client_->OnAssistantFeatureAllowedChanged(assistant_state);
-    client_->OnLocaleChanged(locale);
-  }
-
   std::unique_ptr<ResultLoader> CreateResultLoader() {
     return std::move(mock_result_loader_);
   }
@@ -138,7 +124,6 @@ class QuickAnswersClientTest : public testing::Test {
   std::unique_ptr<QuickAnswersClient> client_;
   std::unique_ptr<MockQuickAnswersDelegate> mock_delegate_;
   std::unique_ptr<MockResultLoader> mock_result_loader_;
-  std::unique_ptr<ash::AssistantState> assistant_state_;
   std::unique_ptr<MockIntentGenerator> mock_intent_generator_;
   base::test::SingleThreadTaskEnvironment task_environment_;
   network::TestURLLoaderFactory test_url_loader_factory_;
@@ -148,115 +133,6 @@ class QuickAnswersClientTest : public testing::Test {
       intent_generator_factory_callback_;
   IntentGenerator::IntentGeneratorCallback intent_generator_callback_;
 };
-
-TEST_F(QuickAnswersClientTest, FeatureEligible) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(chromeos::features::kQuickAnswers);
-
-  // Verify that OnEligibilityChanged is called.
-  EXPECT_CALL(*mock_delegate_, OnEligibilityChanged(false)).Times(0);
-  EXPECT_CALL(*mock_delegate_, OnEligibilityChanged(true)).Times(1);
-
-  NotifyAssistantStateChange(
-      /*setting_enabled=*/true,
-      /*context_enabled=*/true,
-      /*assistant_state=*/chromeos::assistant::AssistantAllowedState::ALLOWED,
-      /*locale=*/"en-US");
-}
-
-TEST_F(QuickAnswersClientTest, FeatureIneligibleAfterContextDisabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures({chromeos::features::kQuickAnswers}, {});
-
-  // Verify that OnEligibilityChanged is called.
-  EXPECT_CALL(*mock_delegate_, OnEligibilityChanged(true));
-  EXPECT_CALL(*mock_delegate_, OnEligibilityChanged(false));
-
-  NotifyAssistantStateChange(
-      /*setting_enabled=*/true,
-      /*context_enabled=*/true,
-      /*assistant_state=*/chromeos::assistant::AssistantAllowedState::ALLOWED,
-      /*locale=*/"en-US");
-
-  NotifyAssistantStateChange(
-      /*setting_enabled=*/true,
-      /*context_enabled=*/false,
-      /*assistant_state=*/chromeos::assistant::AssistantAllowedState::ALLOWED,
-      /*locale=*/"en-US");
-}
-
-TEST_F(QuickAnswersClientTest, FeatureDisabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures({}, {chromeos::features::kQuickAnswers});
-
-  // Verify that OnEligibilityChanged is called.
-  EXPECT_CALL(*mock_delegate_, OnEligibilityChanged(false)).Times(0);
-  EXPECT_CALL(*mock_delegate_, OnEligibilityChanged(true)).Times(0);
-
-  NotifyAssistantStateChange(
-      /*setting_enabled=*/true,
-      /*context_enabled=*/true,
-      /*assistant_state=*/chromeos::assistant::AssistantAllowedState::ALLOWED,
-      /*locale=*/"en-US");
-}
-
-TEST_F(QuickAnswersClientTest, AssistantSettingDisabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures({}, {chromeos::features::kQuickAnswers});
-
-  // Verify that OnEligibilityChanged is called.
-  EXPECT_CALL(*mock_delegate_, OnEligibilityChanged(false)).Times(0);
-  EXPECT_CALL(*mock_delegate_, OnEligibilityChanged(true)).Times(0);
-
-  NotifyAssistantStateChange(
-      /*setting_enabled=*/false,
-      /*context_enabled=*/true,
-      /*assistant_state=*/chromeos::assistant::AssistantAllowedState::ALLOWED,
-      /*locale=*/"en-US");
-}
-
-TEST_F(QuickAnswersClientTest, AssistantContextDisabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures({}, {chromeos::features::kQuickAnswers});
-
-  // Verify that OnEligibilityChanged is called.
-  EXPECT_CALL(*mock_delegate_, OnEligibilityChanged(false)).Times(0);
-  EXPECT_CALL(*mock_delegate_, OnEligibilityChanged(true)).Times(0);
-
-  NotifyAssistantStateChange(
-      /*setting_enabled=*/true,
-      /*context_enabled=*/false,
-      /*assistant_state=*/chromeos::assistant::AssistantAllowedState::ALLOWED,
-      /*locale=*/"en-US");
-}
-
-TEST_F(QuickAnswersClientTest, AssistantNotAllowed) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures({}, {chromeos::features::kQuickAnswers});
-
-  // Verify that OnEligibilityChanged is called.
-  EXPECT_CALL(*mock_delegate_, OnEligibilityChanged(false)).Times(0);
-  EXPECT_CALL(*mock_delegate_, OnEligibilityChanged(true)).Times(0);
-
-  NotifyAssistantStateChange(
-      /*setting_enabled=*/true,
-      /*context_enabled=*/true,
-      /*assistant_state=*/
-      chromeos::assistant::AssistantAllowedState::DISALLOWED_BY_POLICY,
-      /*locale=*/"en-US");
-}
-
-TEST_F(QuickAnswersClientTest, UnsupportedLocale) {
-  // Verify that OnEligibilityChanged is called.
-  EXPECT_CALL(*mock_delegate_, OnEligibilityChanged(false)).Times(0);
-  EXPECT_CALL(*mock_delegate_, OnEligibilityChanged(true)).Times(0);
-
-  NotifyAssistantStateChange(
-      /*setting_enabled=*/true,
-      /*context_enabled=*/true,
-      /*assistant_state=*/chromeos::assistant::AssistantAllowedState::ALLOWED,
-      /*locale=*/"en-GB");
-}
 
 TEST_F(QuickAnswersClientTest, NetworkError) {
   // Verify that OnNetworkError is called.
@@ -333,25 +209,6 @@ TEST_F(QuickAnswersClientTest, FetchQuickAnswers) {
   client_->FetchQuickAnswers(*quick_answers_request);
 }
 
-TEST_F(QuickAnswersClientTest, NotSendRequestForUnknownIntent) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      chromeos::features::kQuickAnswersTextAnnotator);
-
-  std::unique_ptr<QuickAnswersRequest> quick_answers_request =
-      std::make_unique<QuickAnswersRequest>();
-  quick_answers_request->selected_text = "sel";
-
-  mock_result_loader_ =
-      std::make_unique<MockResultLoader>(&test_url_loader_factory_, nullptr);
-  EXPECT_CALL(*mock_result_loader_, Fetch(::testing::_)).Times(0);
-  QuickAnswersClient::SetResultLoaderFactoryForTesting(
-      &result_loader_factory_callback_);
-
-  client_->IntentGeneratorCallback(*quick_answers_request, /*skip_fetch=*/false,
-                                   IntentInfo("sel", IntentType::kUnknown));
-}
-
 TEST_F(QuickAnswersClientTest, PreprocessDefinitionIntent) {
   std::unique_ptr<QuickAnswersRequest> quick_answers_request =
       std::make_unique<QuickAnswersRequest>();
@@ -376,6 +233,9 @@ TEST_F(QuickAnswersClientTest, PreprocessDefinitionIntent) {
 }
 
 TEST_F(QuickAnswersClientTest, PreprocessTranslationIntent) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      chromeos::features::kQuickAnswersTranslationCloudAPI);
   std::unique_ptr<QuickAnswersRequest> quick_answers_request =
       std::make_unique<QuickAnswersRequest>();
   quick_answers_request->selected_text = "sel";

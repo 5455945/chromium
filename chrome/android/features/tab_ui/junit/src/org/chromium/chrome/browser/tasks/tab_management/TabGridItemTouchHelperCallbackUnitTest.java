@@ -38,6 +38,7 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.robolectric.annotation.Config;
 
+import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
@@ -193,8 +194,9 @@ public class TabGridItemTouchHelperCallbackUnitTest {
     }
 
     private void setupItemTouchHelperCallback(boolean isDialog) {
-        mItemTouchHelperCallback = new TabGridItemTouchHelperCallback(mModel, mTabModelSelector,
-                mTabClosedListener, isDialog ? mTabGridDialogHandler : null, "", !isDialog);
+        mItemTouchHelperCallback = new TabGridItemTouchHelperCallback(
+                ContextUtils.getApplicationContext(), mModel, mTabModelSelector, mTabClosedListener,
+                isDialog ? mTabGridDialogHandler : null, "", !isDialog);
         mItemTouchHelperCallback.setupCallback(THRESHOLD, THRESHOLD, THRESHOLD, mProfile);
         mItemTouchHelperCallback.getMovementFlags(mRecyclerView, mMockViewHolder1);
     }
@@ -784,31 +786,31 @@ public class TabGridItemTouchHelperCallbackUnitTest {
     }
 
     @Test
-    public void priceWelcomeMessageItemNotDraggable() {
-        when(mMockViewHolder1.getItemViewType()).thenReturn(TabProperties.UiType.PRICE_WELCOME);
+    public void largeMessageItemNotDraggable() {
+        when(mMockViewHolder1.getItemViewType()).thenReturn(TabProperties.UiType.LARGE_MESSAGE);
         setupItemTouchHelperCallback(false);
         assertFalse(
                 mItemTouchHelperCallback.hasDragFlagForTesting(mRecyclerView, mMockViewHolder1));
     }
 
     @Test
-    public void priceWelcomeMessageItemSwipeable() {
-        when(mMockViewHolder1.getItemViewType()).thenReturn(TabProperties.UiType.PRICE_WELCOME);
+    public void largeMessageItemSwipeable() {
+        when(mMockViewHolder1.getItemViewType()).thenReturn(TabProperties.UiType.LARGE_MESSAGE);
         setupItemTouchHelperCallback(false);
         assertTrue(mItemTouchHelperCallback.hasSwipeFlag(mRecyclerView, mMockViewHolder1));
     }
 
     @Test
-    public void priceWelcomeMessageItemNotDropable() {
-        when(mMockViewHolder1.getItemViewType()).thenReturn(TabProperties.UiType.PRICE_WELCOME);
+    public void largeMessageItemNotDropable() {
+        when(mMockViewHolder1.getItemViewType()).thenReturn(TabProperties.UiType.LARGE_MESSAGE);
         setupItemTouchHelperCallback(false);
         assertFalse(mItemTouchHelperCallback.canDropOver(
                 mRecyclerView, mMockViewHolder2, mMockViewHolder1));
     }
 
     @Test(expected = AssertionError.class)
-    public void priceWelcomeMessageItemOnMoveFail() {
-        when(mMockViewHolder1.getItemViewType()).thenReturn(TabProperties.UiType.PRICE_WELCOME);
+    public void largeMessageItemOnMoveFail() {
+        when(mMockViewHolder1.getItemViewType()).thenReturn(TabProperties.UiType.LARGE_MESSAGE);
         setupItemTouchHelperCallback(false);
         mItemTouchHelperCallback.onMove(mRecyclerView, mMockViewHolder1, mMockViewHolder2);
     }

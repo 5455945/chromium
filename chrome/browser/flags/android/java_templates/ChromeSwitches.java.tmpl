@@ -36,12 +36,6 @@ public abstract class ChromeSwitches {{
     /** Disable promos shown on startup. */
     public static final String DISABLE_STARTUP_PROMOS = "disable-startup-promos-for-testing";
 
-    /**
-     * Forces the First Run Experience (FRE) flow complete check to always return true.
-     */
-    public static final String FORCE_FIRST_RUN_FLOW_COMPLETE_FOR_TESTING =
-            "force-first-run-flow-complete";
-
     /** Force the crash dump to be uploaded regardless of preferences. */
     public static final String FORCE_CRASH_DUMP_UPLOAD = "force-dump-upload";
 
@@ -144,7 +138,7 @@ public abstract class ChromeSwitches {{
      */
     public static final String CHROME_HOME_SWIPE_LOGIC_VELOCITY = "velocity";
 
-    /** Switch for enabling the Chrome Survey. */
+    /** Switch for enabling the Chrome Survey. Only works when UMA is accepted. */
     public static final String CHROME_FORCE_ENABLE_SURVEY = "force-enable-chrome-survey";
 
     /** Switch to enable incognito tabs to be seen in Android Recents. */
@@ -187,6 +181,10 @@ public abstract class ChromeSwitches {{
     /** Disable the default browser promo. */
     public static final String DISABLE_DEFAULT_BROWSER_PROMO =
             "disable-default-browser-promo";
+
+    /** Debug Chime notifications. */
+    public static final String DEBUG_CHIME_NOTIFICATION =
+            "debug-chime-notification";
 
 {NATIVE_STRINGS}
 

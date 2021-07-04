@@ -10,6 +10,7 @@
 #include "base/feature_list.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/enterprise/connectors/connectors_manager.h"
+#include "components/enterprise/common/proto/connectors.pb.h"
 #include "components/keyed_service/content/browser_context_keyed_service_factory.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/policy/core/common/policy_types.h"
@@ -48,12 +49,12 @@ class ConnectorsService : public KeyedService {
 
   // Accessors that check kEnterpriseConnectorsEnabled is enabled, and then call
   // the corresponding method in ConnectorsManager.
-  base::Optional<ReportingSettings> GetReportingSettings(
+  absl::optional<ReportingSettings> GetReportingSettings(
       ReportingConnector connector);
-  base::Optional<AnalysisSettings> GetAnalysisSettings(
+  absl::optional<AnalysisSettings> GetAnalysisSettings(
       const GURL& url,
       AnalysisConnector connector);
-  base::Optional<FileSystemSettings> GetFileSystemSettings(
+  absl::optional<FileSystemSettings> GetFileSystemSettings(
       const GURL& url,
       FileSystemConnector connector);
 
@@ -62,6 +63,12 @@ class ConnectorsService : public KeyedService {
   bool IsConnectorEnabled(FileSystemConnector connector) const;
 
   bool DelayUntilVerdict(AnalysisConnector connector);
+  absl::optional<std::u16string> GetCustomMessage(AnalysisConnector connector,
+                                                  const std::string& tag);
+  absl::optional<GURL> GetLearnMoreUrl(AnalysisConnector connector,
+                                       const std::string& tag);
+  bool HasCustomInfoToDisplay(AnalysisConnector connector,
+                              const std::string& tag);
 
   std::vector<std::string> GetAnalysisServiceProviderNames(
       AnalysisConnector connector);
@@ -69,9 +76,9 @@ class ConnectorsService : public KeyedService {
       ReportingConnector connector);
 
   // DM token accessor function for real-time URL checks. Returns a profile or
-  // browser DM token depending on the policy scope, and base::nullopt if there
+  // browser DM token depending on the policy scope, and absl::nullopt if there
   // is no token to use.
-  base::Optional<std::string> GetDMTokenForRealTimeUrlCheck() const;
+  absl::optional<std::string> GetDMTokenForRealTimeUrlCheck() const;
 
   // Returns the value to used by the enterprise real-time URL check Connector
   // if it is set and if the scope it's set at has a valid browser-profile
@@ -99,10 +106,10 @@ class ConnectorsService : public KeyedService {
 
   // Returns the DM token to use with the given |scope_pref|. That pref should
   // contain either POLICY_SCOPE_MACHINE or POLICY_SCOPE_USER.
-  base::Optional<DmToken> GetDmToken(const char* scope_pref) const;
-  base::Optional<DmToken> GetBrowserDmToken() const;
+  absl::optional<DmToken> GetDmToken(const char* scope_pref) const;
+  absl::optional<DmToken> GetBrowserDmToken() const;
 #if !BUILDFLAG(IS_CHROMEOS_ASH)
-  base::Optional<DmToken> GetProfileDmToken() const;
+  absl::optional<DmToken> GetProfileDmToken() const;
 
   // Returns true if the browser isn't managed by CBCM, otherwise this checks if
   // the affiliations IDs from the profile and browser policy fetching responses
@@ -117,6 +124,10 @@ class ConnectorsService : public KeyedService {
   // - The kEnterpriseConnectorsEnabled feature is disabled
   // - The profile is incognito
   bool ConnectorsEnabled() const;
+
+  // Obtain a ClientMetadata instance corresponding to the current
+  // OnSecurityEvent policy value.
+  std::unique_ptr<ClientMetadata> BuildClientMetadata();
 
   content::BrowserContext* context_;
   std::unique_ptr<ConnectorsManager> connectors_manager_;

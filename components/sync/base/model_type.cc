@@ -8,9 +8,9 @@
 
 #include <ostream>
 
+#include "base/cxx17_backports.h"
 #include "base/logging.h"
 #include "base/notreached.h"
-#include "base/stl_util.h"
 #include "base/strings/string_split.h"
 #include "base/values.h"
 #include "components/sync/protocol/app_setting_specifics.pb.h"
@@ -62,8 +62,6 @@ struct ModelTypeInfo {
 const ModelTypeInfo kModelTypeInfoMap[] = {
     {UNSPECIFIED, "", "", "Unspecified", -1,
      ModelTypeForHistograms::kUnspecified},
-    {TOP_LEVEL_FOLDER, "", "", "Top Level Folder", -1,
-     ModelTypeForHistograms::kTopLevelFolder},
     {BOOKMARKS, "BOOKMARK", "bookmarks", "Bookmarks",
      sync_pb::EntitySpecifics::kBookmarkFieldNumber,
      ModelTypeForHistograms::kBookmarks},
@@ -135,10 +133,6 @@ const ModelTypeInfo kModelTypeInfoMap[] = {
     {APP_LIST, "APP_LIST", "app_list", "App List",
      sync_pb::EntitySpecifics::kAppListFieldNumber,
      ModelTypeForHistograms::kAppList},
-    {DEPRECATED_SUPERVISED_USER_ALLOWLISTS, "MANAGED_USER_WHITELIST",
-     "managed_user_whitelists", "Managed User Whitelists",
-     sync_pb::EntitySpecifics::kManagedUserWhitelistFieldNumber,
-     ModelTypeForHistograms::kDeprecatedSupervisedUserAllowlists},
     {ARC_PACKAGE, "ARC_PACKAGE", "arc_package", "Arc Package",
      sync_pb::EntitySpecifics::kArcPackageFieldNumber,
      ModelTypeForHistograms::kArcPackage},
@@ -177,6 +171,9 @@ const ModelTypeInfo kModelTypeInfoMap[] = {
     {SHARING_MESSAGE, "SHARING_MESSAGE", "sharing_message", "Sharing Message",
      sync_pb::EntitySpecifics::kSharingMessageFieldNumber,
      ModelTypeForHistograms::kSharingMessage},
+    {WORKSPACE_DESK, "WORKSPACE_DESK", "workspace_desk", "Workspace Desk",
+     sync_pb::EntitySpecifics::kWorkspaceDeskFieldNumber,
+     ModelTypeForHistograms::kWorkspaceDesk},
     // ---- Proxy types ----
     {PROXY_TABS, "", "", "Tabs", -1, ModelTypeForHistograms::kProxyTabs},
     // ---- Control Types ----
@@ -185,21 +182,20 @@ const ModelTypeInfo kModelTypeInfoMap[] = {
      ModelTypeForHistograms::kNigori},
 };
 
-static_assert(base::size(kModelTypeInfoMap) == ModelType::NUM_ENTRIES,
-              "kModelTypeInfoMap should have ModelType::NUM_ENTRIES elements");
+static_assert(base::size(kModelTypeInfoMap) == GetNumModelTypes(),
+              "kModelTypeInfoMap should have GetNumModelTypes() elements");
 
-static_assert(39 == syncer::ModelType::NUM_ENTRIES,
+static_assert(38 == syncer::GetNumModelTypes(),
               "When adding a new type, update enum SyncModelTypes in enums.xml "
               "and suffix SyncModelType in histograms.xml.");
 
-static_assert(39 == syncer::ModelType::NUM_ENTRIES,
+static_assert(38 == syncer::GetNumModelTypes(),
               "When adding a new type, update kAllocatorDumpNameAllowlist in "
               "base/trace_event/memory_infra_background_allowlist.cc.");
 
 void AddDefaultFieldValue(ModelType type, sync_pb::EntitySpecifics* specifics) {
   switch (type) {
     case UNSPECIFIED:
-    case TOP_LEVEL_FOLDER:
       NOTREACHED() << "No default field value for " << ModelTypeToString(type);
       break;
     case BOOKMARKS:
@@ -268,9 +264,6 @@ void AddDefaultFieldValue(ModelType type, sync_pb::EntitySpecifics* specifics) {
     case APP_LIST:
       specifics->mutable_app_list();
       break;
-    case DEPRECATED_SUPERVISED_USER_ALLOWLISTS:
-      specifics->mutable_managed_user_whitelist();
-      break;
     case ARC_PACKAGE:
       specifics->mutable_arc_package();
       break;
@@ -304,6 +297,9 @@ void AddDefaultFieldValue(ModelType type, sync_pb::EntitySpecifics* specifics) {
     case WIFI_CONFIGURATIONS:
       specifics->mutable_wifi_configuration();
       break;
+    case WORKSPACE_DESK:
+      specifics->mutable_workspace_desk();
+      break;
     case OS_PREFERENCES:
       specifics->mutable_os_preference();
       break;
@@ -312,9 +308,6 @@ void AddDefaultFieldValue(ModelType type, sync_pb::EntitySpecifics* specifics) {
       break;
     case SHARING_MESSAGE:
       specifics->mutable_sharing_message();
-      break;
-    case ModelType::NUM_ENTRIES:
-      NOTREACHED() << "No default field value for " << ModelTypeToString(type);
       break;
   }
 }
@@ -334,28 +327,8 @@ int GetSpecificsFieldNumberFromModelType(ModelType model_type) {
   return kModelTypeInfoMap[model_type].specifics_field_number;
 }
 
-// Note: keep this consistent with GetModelType in entry.cc!
-ModelType GetModelType(const sync_pb::SyncEntity& sync_entity) {
-  ModelType specifics_type = GetModelTypeFromSpecifics(sync_entity.specifics());
-  if (specifics_type != UNSPECIFIED)
-    return specifics_type;
-
-  // Loose check for server-created top-level folders that aren't
-  // bound to a particular model type.
-  if (!sync_entity.server_defined_unique_tag().empty() &&
-      sync_entity.folder()) {
-    return TOP_LEVEL_FOLDER;
-  }
-
-  // This is an item of a datatype we can't understand. Maybe it's
-  // from the future?  Either we mis-encoded the object, or the
-  // server sent us entries it shouldn't have.
-  DVLOG(1) << "Unknown datatype in sync proto.";
-  return UNSPECIFIED;
-}
-
 ModelType GetModelTypeFromSpecifics(const sync_pb::EntitySpecifics& specifics) {
-  static_assert(39 == ModelType::NUM_ENTRIES,
+  static_assert(38 == syncer::GetNumModelTypes(),
                 "When adding new protocol types, the following type lookup "
                 "logic must be updated.");
   if (specifics.has_bookmark())
@@ -400,8 +373,6 @@ ModelType GetModelTypeFromSpecifics(const sync_pb::EntitySpecifics& specifics) {
     return SUPERVISED_USER_SETTINGS;
   if (specifics.has_app_list())
     return APP_LIST;
-  if (specifics.has_managed_user_whitelist())
-    return DEPRECATED_SUPERVISED_USER_ALLOWLISTS;
   if (specifics.has_arc_package())
     return ARC_PACKAGE;
   if (specifics.has_printer())
@@ -430,12 +401,16 @@ ModelType GetModelTypeFromSpecifics(const sync_pb::EntitySpecifics& specifics) {
     return SHARING_MESSAGE;
   if (specifics.has_autofill_offer())
     return AUTOFILL_WALLET_OFFER;
+  if (specifics.has_workspace_desk())
+    return WORKSPACE_DESK;
 
+  // This client version doesn't understand |specifics|.
+  DVLOG(1) << "Unknown datatype in sync proto.";
   return UNSPECIFIED;
 }
 
 ModelTypeSet EncryptableUserTypes() {
-  static_assert(39 == ModelType::NUM_ENTRIES,
+  static_assert(38 == syncer::GetNumModelTypes(),
                 "If adding an unencryptable type, remove from "
                 "encryptable_user_types below.");
   ModelTypeSet encryptable_user_types = UserTypes();
@@ -451,7 +426,6 @@ ModelTypeSet EncryptableUserTypes() {
   encryptable_user_types.Remove(PRIORITY_PREFERENCES);
   encryptable_user_types.Remove(OS_PRIORITY_PREFERENCES);
   encryptable_user_types.Remove(SUPERVISED_USER_SETTINGS);
-  encryptable_user_types.Remove(DEPRECATED_SUPERVISED_USER_ALLOWLISTS);
   // Proxy types have no sync representation and are therefore not encrypted.
   // Note however that proxy types map to one or more protocol types, which
   // may or may not be encrypted themselves.
@@ -463,54 +437,35 @@ const char* ModelTypeToString(ModelType model_type) {
   // This is used in serialization routines as well as for displaying debug
   // information.  Do not attempt to change these string values unless you know
   // what you're doing.
-  if (model_type >= UNSPECIFIED && model_type < ModelType::NUM_ENTRIES)
-    return kModelTypeInfoMap[model_type].model_type_string;
-  NOTREACHED() << "No known extension for model type.";
-  return "Invalid";
+  return kModelTypeInfoMap[model_type].model_type_string;
 }
 
 const char* ModelTypeToHistogramSuffix(ModelType model_type) {
-  DCHECK_GE(model_type, UNSPECIFIED);
-  DCHECK_LT(model_type, ModelType::NUM_ENTRIES);
-
   // We use the same string that is used for notification types because they
   // satisfy all we need (being stable and explanatory).
   return kModelTypeInfoMap[model_type].notification_type;
 }
 
 ModelTypeForHistograms ModelTypeHistogramValue(ModelType model_type) {
-  DCHECK_GE(model_type, UNSPECIFIED);
-  DCHECK_LT(model_type, ModelType::NUM_ENTRIES);
   return kModelTypeInfoMap[model_type].model_type_histogram_val;
 }
 
 int ModelTypeToStableIdentifier(ModelType model_type) {
-  DCHECK_GE(model_type, UNSPECIFIED);
-  DCHECK_LT(model_type, ModelType::NUM_ENTRIES);
   // Make sure the value is stable and positive.
   return static_cast<int>(ModelTypeHistogramValue(model_type)) + 1;
 }
 
 std::unique_ptr<base::Value> ModelTypeToValue(ModelType model_type) {
-  if (model_type >= FIRST_REAL_MODEL_TYPE) {
-    return std::make_unique<base::Value>(ModelTypeToString(model_type));
-  }
-  if (model_type == TOP_LEVEL_FOLDER) {
-    return std::make_unique<base::Value>("Top-level folder");
-  }
-  DCHECK_EQ(model_type, UNSPECIFIED);
-  return std::make_unique<base::Value>("Unspecified");
+  return std::make_unique<base::Value>(ModelTypeToString(model_type));
 }
 
 ModelType ModelTypeFromString(const std::string& model_type_string) {
-  if (model_type_string != "Unspecified" &&
-      model_type_string != "Top Level Folder") {
-    for (size_t i = 0; i < base::size(kModelTypeInfoMap); ++i) {
-      if (kModelTypeInfoMap[i].model_type_string == model_type_string)
-        return kModelTypeInfoMap[i].model_type;
-    }
-  }
-  return UNSPECIFIED;
+  auto* iter =
+      std::find_if(std::begin(kModelTypeInfoMap), std::end(kModelTypeInfoMap),
+                   [&](const ModelTypeInfo& info) {
+                     return info.model_type_string == model_type_string;
+                   });
+  return iter != std::end(kModelTypeInfoMap) ? iter->model_type : UNSPECIFIED;
 }
 
 std::string ModelTypeSetToString(ModelTypeSet model_types) {
@@ -585,23 +540,24 @@ bool RealModelTypeToNotificationType(ModelType model_type,
 
 bool NotificationTypeToRealModelType(const std::string& notification_type,
                                      ModelType* model_type) {
-  if (notification_type.empty()) {
-    *model_type = UNSPECIFIED;
+  auto* iter =
+      std::find_if(std::begin(kModelTypeInfoMap), std::end(kModelTypeInfoMap),
+                   [&](const ModelTypeInfo& info) {
+                     return info.notification_type == notification_type;
+                   });
+  if (iter == std::end(kModelTypeInfoMap)) {
     return false;
   }
-  for (size_t i = 0; i < base::size(kModelTypeInfoMap); ++i) {
-    if (kModelTypeInfoMap[i].notification_type == notification_type) {
-      *model_type = kModelTypeInfoMap[i].model_type;
-      return true;
-    }
+  if (!IsRealDataType(iter->model_type)) {
+    return false;
   }
-  *model_type = UNSPECIFIED;
-  return false;
+  *model_type = iter->model_type;
+  return true;
 }
 
 bool IsRealDataType(ModelType model_type) {
   return model_type >= FIRST_REAL_MODEL_TYPE &&
-         model_type < ModelType::NUM_ENTRIES;
+         model_type <= LAST_REAL_MODEL_TYPE;
 }
 
 bool IsProxyType(ModelType model_type) {
@@ -622,7 +578,6 @@ bool IsTypeWithClientGeneratedRoot(ModelType model_type) {
 }
 
 bool TypeSupportsHierarchy(ModelType model_type) {
-  // TODO(stanisc): crbug/438313: Should this also include TOP_LEVEL_FOLDER?
   return model_type == BOOKMARKS;
 }
 

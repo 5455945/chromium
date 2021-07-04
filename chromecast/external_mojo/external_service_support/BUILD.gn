@@ -12,8 +12,8 @@ source_set("external_service") {
     "external_service.cc",
     "external_service.h",
   ]
+  public_deps = [ "//base" ]
   deps = [
-    "//base",
     "//chromecast/external_mojo/broker_service",
     "//chromecast/external_mojo/public/mojom",
     "//chromecast/mojo",
@@ -36,6 +36,7 @@ source_set("test_support") {
   deps = [
     ":external_service",
     "//base",
+    "//chromecast/external_mojo/public/mojom:test_support",
     "//mojo/public/cpp/bindings",
   ]
 }

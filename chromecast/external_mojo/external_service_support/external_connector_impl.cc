@@ -184,7 +184,7 @@ base::CallbackListSubscription
 ExternalConnectorImpl::AddConnectionErrorCallback(
     base::RepeatingClosure callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return error_callbacks_.Add(std::move(callback));
+  return error_closures_.Add(std::move(callback));
 }
 
 void ExternalConnectorImpl::RegisterService(const std::string& service_name,
@@ -266,9 +266,7 @@ std::unique_ptr<ExternalConnector> ExternalConnectorImpl::Clone() {
   if (broker_connection_) {
     return std::make_unique<ExternalConnectorImpl>(broker_connection_);
   }
-  DCHECK(connector_.is_bound())
-      << "Cannot clone an ExternalConnector before it "
-      << "is bound to a sequence.";
+  BindConnectorIfNecessary();
   mojo::PendingRemote<external_mojo::mojom::ExternalConnector> remote;
   connector_->Clone(remote.InitWithNewPipeAndPassReceiver());
   return std::make_unique<ExternalConnectorImpl>(std::move(remote));
@@ -294,7 +292,7 @@ void ExternalConnectorImpl::OnMojoDisconnect() {
     Connect();
     BindConnectorIfNecessary();
   }
-  error_callbacks_.Notify();
+  error_closures_.Notify();
 }
 
 void ExternalConnectorImpl::BindConnectorIfNecessary() {

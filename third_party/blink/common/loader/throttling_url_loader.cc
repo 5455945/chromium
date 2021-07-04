@@ -5,7 +5,11 @@
 #include "third_party/blink/public/common/loader/throttling_url_loader.h"
 
 #include "base/bind.h"
+#include "base/containers/contains.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/single_thread_task_runner.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_piece.h"
 #include "base/strings/stringprintf.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/trace_event.h"
@@ -15,6 +19,7 @@
 #include "net/url_request/redirect_util.h"
 #include "services/network/public/cpp/cors/cors.h"
 #include "services/network/public/cpp/features.h"
+#include "services/network/public/mojom/early_hints.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 
 namespace blink {
@@ -68,6 +73,29 @@ void CheckThrottleWillNotCauseCorsPreflight(
 }
 #endif
 
+void RecordHistogram(const std::string& stage,
+                     base::Time start,
+                     const std::string& metric_type) {
+  base::TimeDelta delta = base::Time::Now() - start;
+  base::UmaHistogramTimes(
+      base::StrCat({"Net.URLLoaderThrottle", metric_type, ".", stage}), delta);
+}
+
+void RecordDeferTimeHistogram(const std::string& stage,
+                              base::Time start,
+                              const char* throttle_name) {
+  constexpr char kMetricType[] = "DeferTime";
+  RecordHistogram(stage, start, kMetricType);
+  if (throttle_name != nullptr) {
+    RecordHistogram(base::StrCat({stage, ".", throttle_name}), start,
+                    kMetricType);
+  }
+}
+
+void RecordExecutionTimeHistogram(const std::string& stage, base::Time start) {
+  RecordHistogram(stage, start, "ExecutionTime");
+}
+
 }  // namespace
 
 const char ThrottlingURLLoader::kFollowRedirectReason[] = "FollowRedirect";
@@ -78,6 +106,9 @@ class ThrottlingURLLoader::ForwardingThrottleDelegate
   ForwardingThrottleDelegate(ThrottlingURLLoader* loader,
                              URLLoaderThrottle* throttle)
       : loader_(loader), throttle_(throttle) {}
+  ForwardingThrottleDelegate(const ForwardingThrottleDelegate&) = delete;
+  ForwardingThrottleDelegate& operator=(const ForwardingThrottleDelegate&) =
+      delete;
   ~ForwardingThrottleDelegate() override = default;
 
   // URLLoaderThrottle::Delegate:
@@ -207,6 +238,9 @@ class ThrottlingURLLoader::ForwardingThrottleDelegate
       owner_->loader_->inside_delegate_calls_++;
     }
 
+    ScopedDelegateCall(const ScopedDelegateCall&) = delete;
+    ScopedDelegateCall& operator=(const ScopedDelegateCall&) = delete;
+
     ~ScopedDelegateCall() {
       // The loader may have been detached and destroyed.
       if (owner_->loader_)
@@ -215,25 +249,20 @@ class ThrottlingURLLoader::ForwardingThrottleDelegate
 
    private:
     ForwardingThrottleDelegate* const owner_;
-    DISALLOW_COPY_AND_ASSIGN(ScopedDelegateCall);
   };
 
   ThrottlingURLLoader* loader_;
   URLLoaderThrottle* const throttle_;
-
-  DISALLOW_COPY_AND_ASSIGN(ForwardingThrottleDelegate);
 };
 
 ThrottlingURLLoader::StartInfo::StartInfo(
     scoped_refptr<network::SharedURLLoaderFactory> in_url_loader_factory,
-    int32_t in_routing_id,
     int32_t in_request_id,
     uint32_t in_options,
     network::ResourceRequest* in_url_request,
     scoped_refptr<base::SingleThreadTaskRunner> in_task_runner,
-    base::Optional<std::vector<std::string>> in_cors_exempt_header_list)
+    absl::optional<std::vector<std::string>> in_cors_exempt_header_list)
     : url_loader_factory(std::move(in_url_loader_factory)),
-      routing_id(in_routing_id),
       request_id(in_request_id),
       options(in_options),
       url_request(*in_url_request),
@@ -266,20 +295,18 @@ ThrottlingURLLoader::PriorityInfo::PriorityInfo(
 std::unique_ptr<ThrottlingURLLoader> ThrottlingURLLoader::CreateLoaderAndStart(
     scoped_refptr<network::SharedURLLoaderFactory> factory,
     std::vector<std::unique_ptr<URLLoaderThrottle>> throttles,
-    int32_t routing_id,
     int32_t request_id,
     uint32_t options,
     network::ResourceRequest* url_request,
     network::mojom::URLLoaderClient* client,
     const net::NetworkTrafficAnnotationTag& traffic_annotation,
     scoped_refptr<base::SingleThreadTaskRunner> task_runner,
-    base::Optional<std::vector<std::string>> cors_exempt_header_list) {
+    absl::optional<std::vector<std::string>> cors_exempt_header_list) {
   DCHECK(url_request);
   std::unique_ptr<ThrottlingURLLoader> loader(new ThrottlingURLLoader(
       std::move(throttles), client, traffic_annotation));
-  loader->Start(std::move(factory), routing_id, request_id, options,
-                url_request, std::move(task_runner),
-                std::move(cors_exempt_header_list));
+  loader->Start(std::move(factory), request_id, options, url_request,
+                std::move(task_runner), std::move(cors_exempt_header_list));
   return loader;
 }
 
@@ -352,7 +379,7 @@ void ThrottlingURLLoader::FollowRedirect(
   }
 
   if (url_loader_) {
-    base::Optional<GURL> new_url;
+    absl::optional<GURL> new_url;
     if (!throttle_will_redirect_redirect_url_.is_empty())
       new_url = throttle_will_redirect_redirect_url_;
     url_loader_->FollowRedirect(removed_headers_, modified_headers_,
@@ -410,12 +437,11 @@ ThrottlingURLLoader::ThrottlingURLLoader(
 
 void ThrottlingURLLoader::Start(
     scoped_refptr<network::SharedURLLoaderFactory> factory,
-    int32_t routing_id,
     int32_t request_id,
     uint32_t options,
     network::ResourceRequest* url_request,
     scoped_refptr<base::SingleThreadTaskRunner> task_runner,
-    base::Optional<std::vector<std::string>> cors_exempt_header_list) {
+    absl::optional<std::vector<std::string>> cors_exempt_header_list) {
   DCHECK_EQ(DEFERRED_NONE, deferred_stage_);
   DCHECK(!loader_completed_);
 
@@ -438,7 +464,10 @@ void ThrottlingURLLoader::Start(
       }
 #endif
 
+      base::Time start = base::Time::Now();
       throttle->WillStartRequest(url_request, &throttle_deferred);
+      RecordExecutionTimeHistogram(GetStageNameForHistogram(DEFERRED_START),
+                                   start);
 
 #if DCHECK_IS_ON()
       if (cors_exempt_header_list) {
@@ -469,9 +498,24 @@ void ThrottlingURLLoader::Start(
     }
   }
 
-  start_info_ = std::make_unique<StartInfo>(
-      factory, routing_id, request_id, options, url_request,
-      std::move(task_runner), std::move(cors_exempt_header_list));
+  if (url_request->trusted_params) {
+    // Only the browser process should set `trusted_params`. Unfortunately, we
+    // don't have an explicit way to tell if we are in the browser process. If
+    // `trusted_params` are already set, it is reasonable to conclude we are in
+    // the browser process here. Even in the event that other code in the
+    // renderer process incorrectly set `trusted_params`, we assume that the
+    // URLLoaderFactory that receives the request is marked as untrusted and
+    // will fail the load rather than respecting the `trusted_params`.
+    mojo::PendingRemote<network::mojom::AcceptCHFrameObserver> remote;
+    accept_ch_frame_observers_.Add(this,
+                                   remote.InitWithNewPipeAndPassReceiver());
+    url_request->trusted_params->accept_ch_frame_observer = std::move(remote);
+  }
+
+  start_info_ = std::make_unique<StartInfo>(factory, request_id, options,
+                                            url_request, std::move(task_runner),
+                                            std::move(cors_exempt_header_list));
+
   if (deferred)
     deferred_stage_ = DEFERRED_START;
   else
@@ -497,12 +541,12 @@ void ThrottlingURLLoader::StartNow() {
         start_info_->url_request.referrer.spec(),
         // Use status code 307 to preserve the method, so POST requests work.
         net::HTTP_TEMPORARY_REDIRECT, throttle_will_start_redirect_url_,
-        base::nullopt, false, false, false);
+        absl::nullopt, false, false, false);
 
     bool should_clear_upload = false;
     net::RedirectUtil::UpdateHttpRequest(
         start_info_->url_request.url, start_info_->url_request.method,
-        redirect_info, base::nullopt, base::nullopt,
+        redirect_info, absl::nullopt, absl::nullopt,
         &start_info_->url_request.headers, &should_clear_upload);
 
     if (should_clear_upload)
@@ -533,8 +577,7 @@ void ThrottlingURLLoader::StartNow() {
   DCHECK(start_info_->url_loader_factory);
   start_info_->url_loader_factory->CreateLoaderAndStart(
       url_loader_.BindNewPipeAndPassReceiver(start_info_->task_runner),
-      start_info_->routing_id, start_info_->request_id, start_info_->options,
-      start_info_->url_request,
+      start_info_->request_id, start_info_->options, start_info_->url_request,
       client_receiver_.BindNewPipeAndPassRemote(start_info_->task_runner),
       net::MutableNetworkTrafficAnnotationTag(traffic_annotation_));
 
@@ -575,16 +618,27 @@ bool ThrottlingURLLoader::HandleThrottleResult(URLLoaderThrottle* throttle,
     return false;
   *should_defer |= throttle_deferred;
   if (throttle_deferred)
-    deferring_throttles_.insert(throttle);
+    deferring_throttles_.insert({throttle, base::Time::Now()});
   return true;
 }
 
 void ThrottlingURLLoader::StopDeferringForThrottle(
     URLLoaderThrottle* throttle) {
-  if (deferring_throttles_.find(throttle) == deferring_throttles_.end())
+  auto iter = deferring_throttles_.find(throttle);
+  if (iter == deferring_throttles_.end())
     return;
 
-  deferring_throttles_.erase(throttle);
+  if (deferred_stage_ != DEFERRED_NONE) {
+    const char* name = nullptr;
+    if (deferred_stage_ == DEFERRED_START) {
+      name = throttle->NameForLoggingWillStartRequest();
+    } else if (deferred_stage_ == DEFERRED_RESPONSE) {
+      name = throttle->NameForLoggingWillProcessResponse();
+    }
+    RecordDeferTimeHistogram(GetStageNameForHistogram(deferred_stage_),
+                             iter->second, name);
+  }
+  deferring_throttles_.erase(iter);
   if (deferring_throttles_.empty() && !loader_completed_)
     Resume();
 }
@@ -616,6 +670,14 @@ void ThrottlingURLLoader::RestartWithModifiedHeadersNow(
   FollowRedirectForcingRestart();
 }
 
+void ThrottlingURLLoader::OnReceiveEarlyHints(
+    network::mojom::EarlyHintsPtr early_hints) {
+  DCHECK_EQ(DEFERRED_NONE, deferred_stage_);
+  DCHECK(!loader_completed_);
+
+  forwarding_client_->OnReceiveEarlyHints(std::move(early_hints));
+}
+
 void ThrottlingURLLoader::OnReceiveResponse(
     network::mojom::URLResponseHeadPtr response_head) {
   DCHECK_EQ(DEFERRED_NONE, deferred_stage_);
@@ -633,8 +695,11 @@ void ThrottlingURLLoader::OnReceiveResponse(
     for (auto& entry : throttles_) {
       auto* throttle = entry.throttle.get();
       bool throttle_deferred = false;
+      base::Time start = base::Time::Now();
       throttle->BeforeWillProcessResponse(response_url_, *response_head,
                                           &throttle_deferred);
+      RecordExecutionTimeHistogram(
+          GetStageNameForHistogram(DEFERRED_BEFORE_RESPONSE), start);
       if (!HandleThrottleResult(throttle, throttle_deferred, &deferred))
         return;
     }
@@ -657,8 +722,11 @@ void ThrottlingURLLoader::OnReceiveResponse(
     for (auto& entry : throttles_) {
       auto* throttle = entry.throttle.get();
       bool throttle_deferred = false;
+      base::Time start = base::Time::Now();
       throttle->WillProcessResponse(response_url_, response_head.get(),
                                     &throttle_deferred);
+      RecordExecutionTimeHistogram(GetStageNameForHistogram(DEFERRED_RESPONSE),
+                                   start);
       if (!HandleThrottleResult(throttle, throttle_deferred, &deferred))
         return;
     }
@@ -691,6 +759,7 @@ void ThrottlingURLLoader::OnReceiveRedirect(
       net::HttpRequestHeaders modified_headers;
       net::HttpRequestHeaders modified_cors_exempt_headers;
       net::RedirectInfo redirect_info_copy = redirect_info;
+      base::Time start = base::Time::Now();
       throttle->WillRedirectRequest(
           &redirect_info_copy, *response_head, &throttle_deferred,
           &removed_headers, &modified_headers, &modified_cors_exempt_headers);
@@ -698,6 +767,8 @@ void ThrottlingURLLoader::OnReceiveRedirect(
       if (!weak_ptr)
         return;
 
+      RecordExecutionTimeHistogram(GetStageNameForHistogram(DEFERRED_REDIRECT),
+                                   start);
 #if DCHECK_IS_ON()
       if (start_info_->cors_exempt_header_list) {
         CheckThrottleWillNotCauseCorsPreflight(
@@ -799,7 +870,10 @@ void ThrottlingURLLoader::OnComplete(
     for (auto& entry : throttles_) {
       auto* throttle = entry.throttle.get();
       bool throttle_deferred = false;
+      base::Time start = base::Time::Now();
       throttle->WillOnCompleteWithError(status, &throttle_deferred);
+      RecordExecutionTimeHistogram(GetStageNameForHistogram(DEFERRED_COMPLETE),
+                                   start);
       if (!HandleThrottleResult(throttle, throttle_deferred, &deferred))
         return;
     }
@@ -823,6 +897,23 @@ void ThrottlingURLLoader::OnComplete(
   // destroy |url_loader_| appropriately.
   loader_completed_ = true;
   forwarding_client_->OnComplete(status);
+}
+
+void ThrottlingURLLoader::OnAcceptCHFrameReceived(
+    const GURL& url,
+    const std::vector<network::mojom::WebClientHintsType>& accept_ch_frame,
+    OnAcceptCHFrameReceivedCallback callback) {
+  for (auto& entry : throttles_) {
+    auto* throttle = entry.throttle.get();
+    throttle->HandleAcceptCHFrameReceived(url, accept_ch_frame);
+  }
+
+  std::move(callback).Run(net::OK);
+}
+
+void ThrottlingURLLoader::Clone(
+    mojo::PendingReceiver<network::mojom::AcceptCHFrameObserver> listener) {
+  accept_ch_frame_observers_.Add(this, std::move(listener));
 }
 
 void ThrottlingURLLoader::OnClientConnectionError() {
@@ -979,12 +1070,30 @@ void ThrottlingURLLoader::DisconnectClient(base::StringPiece custom_reason) {
   if (!custom_reason.empty()) {
     url_loader_.ResetWithReason(
         network::mojom::URLLoader::kClientDisconnectReason,
-        custom_reason.as_string());
+        std::string(custom_reason));
   } else {
     url_loader_.reset();
   }
 
   loader_completed_ = true;
+}
+
+const char* ThrottlingURLLoader::GetStageNameForHistogram(DeferredStage stage) {
+  switch (stage) {
+    case DEFERRED_START:
+      return "WillStartRequest";
+    case DEFERRED_REDIRECT:
+      return "WillRedirectRequest";
+    case DEFERRED_BEFORE_RESPONSE:
+      return "BeforeWillProcessResponse";
+    case DEFERRED_RESPONSE:
+      return "WillProcessResponse";
+    case DEFERRED_COMPLETE:
+      return "WillOnCompleteWithError";
+    default:
+      NOTREACHED();
+  }
+  return "";
 }
 
 ThrottlingURLLoader::ThrottleEntry::ThrottleEntry(

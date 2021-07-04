@@ -14,6 +14,7 @@
 #include "base/time/clock.h"
 #include "content/browser/conversions/conversion_report.h"
 #include "content/browser/conversions/conversion_storage.h"
+#include "content/browser/conversions/rate_limit_table.h"
 #include "content/common/content_export.h"
 #include "sql/database.h"
 #include "sql/meta_table.h"
@@ -54,8 +55,6 @@ class CONTENT_EXPORT ConversionStorageSql : public ConversionStorage {
   };
 
  private:
-  friend class ConversionStorageSqlMigrations;
-
   enum class DbStatus {
     // The database has never been created, i.e. there is no database file at
     // all.
@@ -77,11 +76,11 @@ class CONTENT_EXPORT ConversionStorageSql : public ConversionStorage {
 
   // ConversionStorage
   void StoreImpression(const StorableImpression& impression) override;
-  int MaybeCreateAndStoreConversionReports(
+  bool MaybeCreateAndStoreConversionReport(
       const StorableConversion& conversion) override;
-  std::vector<ConversionReport> GetConversionsToReport(
-      base::Time expiry_time) override;
-  std::vector<StorableImpression> GetActiveImpressions() override;
+  std::vector<ConversionReport> GetConversionsToReport(base::Time expiry_time,
+                                                       int limit = -1) override;
+  std::vector<StorableImpression> GetActiveImpressions(int limit = -1) override;
   int DeleteExpiredImpressions() override;
   bool DeleteConversion(int64_t conversion_id) override;
   void ClearData(
@@ -94,19 +93,31 @@ class CONTENT_EXPORT ConversionStorageSql : public ConversionStorage {
   void ClearAllDataAllTime();
 
   bool HasCapacityForStoringImpression(const std::string& serialized_origin);
-  bool HasCapacityForStoringConversion(const std::string& serialized_origin);
+  int GetCapacityForStoringConversion(const std::string& serialized_origin);
 
-  enum class ImpressionFilter { kAll, kOnlyActive };
+  enum class MaybeReplaceLowerPriorityReportResult {
+    kError,
+    kAddNewReport,
+    kDropNewReport,
+    kReplaceOldReport,
+  };
+  MaybeReplaceLowerPriorityReportResult MaybeReplaceLowerPriorityReport(
+      const StorableImpression& impression,
+      int num_conversions,
+      int64_t conversion_priority,
+      base::Time report_time);
 
-  // Returns rows of the impressions table. |filter| indicates whether to
-  // only retrieve active impressions. |min_expiry_time| controls the minimum
-  // impression expiry time to filter by. |start_impression_id| is the smallest
-  // impression id that can be returned. |num_impressions| limits the number
-  // of rows returned.
-  std::vector<StorableImpression> GetImpressions(ImpressionFilter filter,
-                                                 base::Time min_expiry_time,
-                                                 int64_t start_impression_id,
-                                                 int num_impressions);
+  // When storing an event-source impression, deletes active event-source
+  // impressions in order by |impression_time| until there are sufficiently few
+  // unique conversion destinations for the same |impression_site|.
+  bool EnsureCapacityForPendingDestinationLimit(
+      const StorableImpression& impression);
+
+  // Stores |report| in the database, but uses |impression_id| rather than
+  // |ConversionReport::impression::impression_id()|, which may be null.
+  bool StoreConversionReport(const ConversionReport& report,
+                             int64_t impression_id,
+                             int64_t priority);
 
   // Initializes the database if necessary, and returns whether the database is
   // open. |should_create| indicates whether the database should be created if
@@ -129,12 +140,17 @@ class CONTENT_EXPORT ConversionStorageSql : public ConversionStorage {
   // at for lazy initialization, and used as a signal for if the database is
   // closed. This is initialized in the first call to LazyInit() to avoid doing
   // additional work in the constructor, see https://crbug.com/1121307.
-  base::Optional<DbStatus> db_init_status_;
+  absl::optional<DbStatus> db_init_status_;
 
   // May be null if the database:
   //  - could not be opened
   //  - table/index initialization failed
   std::unique_ptr<sql::Database> db_;
+
+  // Table which stores timestamps of sent reports, and checks if new reports
+  // can be created given API rate limits. The underlying table is created in
+  // |db_|, but only accessed within |RateLimitTable|.
+  RateLimitTable rate_limit_table_;
 
   sql::MetaTable meta_table_;
 

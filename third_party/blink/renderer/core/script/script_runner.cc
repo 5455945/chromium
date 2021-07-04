@@ -26,12 +26,14 @@
 #include "third_party/blink/renderer/core/script/script_runner.h"
 
 #include <algorithm>
+
 #include "base/feature_list.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+#include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/core/script/script_loader.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
@@ -44,11 +46,9 @@
 namespace blink {
 
 ScriptRunner::ScriptRunner(Document* document)
-    : ExecutionContextLifecycleStateObserver(document->GetExecutionContext()),
-      document_(document),
+    : document_(document),
       task_runner_(document->GetTaskRunner(TaskType::kNetworking)) {
   DCHECK(document);
-  UpdateStateIfNeeded();
 }
 
 void ScriptRunner::QueueScriptForExecution(PendingScript* pending_script) {
@@ -76,37 +76,6 @@ void ScriptRunner::PostTask(const base::Location& web_trace_location) {
       WTF::Bind(&ScriptRunner::ExecuteTask, WrapWeakPersistent(this)));
 }
 
-void ScriptRunner::ContextLifecycleStateChanged(
-    mojom::FrameLifecycleState state) {
-  if (!IsExecutionSuspended())
-    PostTasksForReadyScripts(FROM_HERE);
-}
-
-bool ScriptRunner::IsExecutionSuspended() {
-  return !GetExecutionContext() || GetExecutionContext()->IsContextPaused() ||
-         is_force_deferred_;
-}
-
-void ScriptRunner::SetForceDeferredExecution(bool force_deferred) {
-  DCHECK(force_deferred != is_force_deferred_);
-
-  is_force_deferred_ = force_deferred;
-  if (!IsExecutionSuspended())
-    PostTasksForReadyScripts(FROM_HERE);
-}
-
-void ScriptRunner::PostTasksForReadyScripts(
-    const base::Location& web_trace_location) {
-  DCHECK(!IsExecutionSuspended());
-
-  for (size_t i = 0; i < async_scripts_to_execute_soon_.size(); ++i) {
-    PostTask(web_trace_location);
-  }
-  for (size_t i = 0; i < in_order_scripts_to_execute_soon_.size(); ++i) {
-    PostTask(web_trace_location);
-  }
-}
-
 void ScriptRunner::ScheduleReadyInOrderScripts() {
   while (!pending_in_order_scripts_.IsEmpty() &&
          pending_in_order_scripts_.front()
@@ -117,9 +86,9 @@ void ScriptRunner::ScheduleReadyInOrderScripts() {
   }
 }
 
-void ScriptRunner::DelayAsyncScriptUntilMilestoneReached(
-    PendingScript* pending_script) {
-  DCHECK(!delay_async_script_milestone_reached_);
+void ScriptRunner::DelayAsyncScript(PendingScript* pending_script) {
+  DCHECK(!delay_async_script_milestone_reached_ ||
+         async_script_execution_paused_);
   SECURITY_CHECK(pending_async_scripts_.Contains(pending_script));
   pending_async_scripts_.erase(pending_script);
 
@@ -129,8 +98,9 @@ void ScriptRunner::DelayAsyncScriptUntilMilestoneReached(
   pending_delayed_async_scripts_.push_back(pending_script);
 }
 
-void ScriptRunner::NotifyDelayedAsyncScriptsMilestoneReached() {
-  delay_async_script_milestone_reached_ = true;
+void ScriptRunner::ScheduleDelayedAsyncScripts() {
+  DCHECK(delay_async_script_milestone_reached_ ||
+         !async_script_execution_paused_);
   while (!pending_delayed_async_scripts_.IsEmpty()) {
     PendingScript* pending_script = pending_delayed_async_scripts_.TakeFirst();
     DCHECK_EQ(pending_script->GetSchedulingType(),
@@ -139,6 +109,11 @@ void ScriptRunner::NotifyDelayedAsyncScriptsMilestoneReached() {
     async_scripts_to_execute_soon_.push_back(pending_script);
     PostTask(FROM_HERE);
   }
+}
+
+void ScriptRunner::NotifyDelayedAsyncScriptsMilestoneReached() {
+  delay_async_script_milestone_reached_ = true;
+  ScheduleDelayedAsyncScripts();
 }
 
 bool ScriptRunner::CanDelayAsyncScripts() {
@@ -201,8 +176,9 @@ void ScriptRunner::NotifyScriptReady(PendingScript* pending_script) {
       // to detach).
       SECURITY_CHECK(pending_async_scripts_.Contains(pending_script));
 
-      if (pending_script->IsEligibleForDelay() && CanDelayAsyncScripts()) {
-        DelayAsyncScriptUntilMilestoneReached(pending_script);
+      if ((pending_script->IsEligibleForDelay() && CanDelayAsyncScripts()) ||
+          async_script_execution_paused_) {
+        DelayAsyncScript(pending_script);
         return;
       }
 
@@ -298,7 +274,8 @@ bool ScriptRunner::ExecuteInOrderTask() {
 
 bool ScriptRunner::ExecuteAsyncTask() {
   TRACE_EVENT0("blink", "ScriptRunner::ExecuteAsyncTask");
-  if (async_scripts_to_execute_soon_.IsEmpty())
+  if (async_script_execution_paused_ ||
+      async_scripts_to_execute_soon_.IsEmpty())
     return false;
 
   // Remove the async script loader from the ready-to-exec set and execute.
@@ -314,13 +291,12 @@ bool ScriptRunner::ExecuteAsyncTask() {
 }
 
 void ScriptRunner::ExecuteTask() {
+  DCHECK(!document_->domWindow() || !document_->domWindow()->IsContextPaused());
+
   // This method is triggered by ScriptRunner::PostTask, and runs directly from
   // the scheduler. So, the call stack is safe to reenter.
   scheduler::CooperativeSchedulingManager::AllowedStackScope
       allowed_stack_scope(scheduler::CooperativeSchedulingManager::Instance());
-
-  if (IsExecutionSuspended())
-    return;
 
   if (ExecuteAsyncTask())
     return;
@@ -329,8 +305,25 @@ void ScriptRunner::ExecuteTask() {
     return;
 }
 
+void ScriptRunner::PauseAsyncScriptExecution() {
+  if (async_script_execution_paused_)
+    return;
+  TRACE_EVENT0("blink", "ScriptRunner::PauseAsyncScriptExecution");
+  async_script_execution_paused_ = true;
+}
+
+void ScriptRunner::ResumeAsyncScriptExecution() {
+  if (!async_script_execution_paused_)
+    return;
+  TRACE_EVENT0("blink", "ScriptRunner::ResumeAsyncScriptExecution");
+  async_script_execution_paused_ = false;
+  for (wtf_size_t i = 0; i < async_scripts_to_execute_soon_.size(); i++) {
+    PostTask(FROM_HERE);
+  }
+  ScheduleDelayedAsyncScripts();
+}
+
 void ScriptRunner::Trace(Visitor* visitor) const {
-  ExecutionContextLifecycleStateObserver::Trace(visitor);
   visitor->Trace(document_);
   visitor->Trace(pending_in_order_scripts_);
   visitor->Trace(pending_async_scripts_);

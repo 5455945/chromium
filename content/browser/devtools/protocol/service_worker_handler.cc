@@ -4,6 +4,8 @@
 
 #include "content/browser/devtools/protocol/service_worker_handler.h"
 
+#include <memory>
+
 #include "base/bind.h"
 #include "base/callback_helpers.h"
 #include "base/containers/flat_set.h"
@@ -31,6 +33,7 @@
 #include "content/public/browser/service_worker_context.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/mojom/push_messaging/push_messaging_status.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_object.mojom.h"
 #include "url/gurl.h"
@@ -159,7 +162,7 @@ void DispatchSyncEventOnCoreThread(
     const std::string& tag,
     bool last_chance) {
   context->FindReadyRegistrationForId(
-      registration_id, origin,
+      registration_id, blink::StorageKey(origin),
       base::BindOnce(&DidFindRegistrationForDispatchSyncEventOnCoreThread,
                      sync_context, tag, last_chance));
 }
@@ -171,7 +174,7 @@ void DispatchPeriodicSyncEventOnCoreThread(
     int64_t registration_id,
     const std::string& tag) {
   context->FindReadyRegistrationForId(
-      registration_id, origin,
+      registration_id, blink::StorageKey(origin),
       base::BindOnce(
           &DidFindRegistrationForDispatchPeriodicSyncEventOnCoreThread,
           sync_context, tag));
@@ -189,7 +192,7 @@ ServiceWorkerHandler::ServiceWorkerHandler(bool allow_inspect_worker)
 ServiceWorkerHandler::~ServiceWorkerHandler() = default;
 
 void ServiceWorkerHandler::Wire(UberDispatcher* dispatcher) {
-  frontend_.reset(new ServiceWorker::Frontend(dispatcher->channel()));
+  frontend_ = std::make_unique<ServiceWorker::Frontend>(dispatcher->channel());
   ServiceWorker::Dispatcher::wire(dispatcher, this);
 }
 
@@ -257,7 +260,9 @@ Response ServiceWorkerHandler::StartWorker(const std::string& scope_url) {
     return CreateDomainNotEnabledErrorResponse();
   if (!context_)
     return CreateContextErrorResponse();
-  context_->StartActiveServiceWorker(GURL(scope_url), base::DoNothing());
+  context_->StartActiveServiceWorker(
+      GURL(scope_url), blink::StorageKey::CreateFromStringForTesting(scope_url),
+      base::DoNothing());
   return Response::Success();
 }
 
@@ -266,7 +271,9 @@ Response ServiceWorkerHandler::SkipWaiting(const std::string& scope_url) {
     return CreateDomainNotEnabledErrorResponse();
   if (!context_)
     return CreateContextErrorResponse();
-  context_->SkipWaitingWorker(GURL(scope_url));
+  context_->SkipWaitingWorker(
+      GURL(scope_url),
+      blink::StorageKey::CreateFromStringForTesting(scope_url));
   return Response::Success();
 }
 
@@ -304,7 +311,9 @@ Response ServiceWorkerHandler::UpdateRegistration(
     return CreateDomainNotEnabledErrorResponse();
   if (!context_)
     return CreateContextErrorResponse();
-  context_->UpdateRegistration(GURL(scope_url));
+  context_->UpdateRegistration(
+      GURL(scope_url),
+      blink::StorageKey::CreateFromStringForTesting(scope_url));
   return Response::Success();
 }
 
@@ -346,13 +355,12 @@ Response ServiceWorkerHandler::DeliverPushMessage(
   int64_t id = 0;
   if (!base::StringToInt64(registration_id, &id))
     return CreateInvalidVersionIdErrorResponse();
-  base::Optional<std::string> payload;
+  absl::optional<std::string> payload;
   if (data.size() > 0)
     payload = data;
-  BrowserContext::DeliverPushMessage(
-      browser_context_, GURL(origin), id, /* push_message_id= */ std::string(),
-      std::move(payload),
-      base::BindOnce([](blink::mojom::PushEventStatus status) {}));
+  browser_context_->DeliverPushMessage(GURL(origin), id,
+                                       /* message_id= */ std::string(),
+                                       std::move(payload), base::DoNothing());
 
   return Response::Success();
 }

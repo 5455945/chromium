@@ -10,44 +10,51 @@
 #include "components/flags_ui/feature_entry.h"
 #include "components/flags_ui/flags_state.h"
 #include "components/flags_ui/flags_storage.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/layout/flex_layout_view.h"
-#include "ui/views/metadata/metadata_header_macros.h"
+
+class Browser;
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+class Profile;
+#endif
 
 // TODO(elainechien): Use composition instead of inheritance.
 class ChromeLabsBubbleView : public views::BubbleDialogDelegateView {
  public:
   METADATA_HEADER(ChromeLabsBubbleView);
   static void Show(views::View* anchor_view,
-                   const ChromeLabsBubbleViewModel* model);
+                   Browser* browser,
+                   const ChromeLabsBubbleViewModel* model,
+                   bool user_is_chromeos_owner);
 
   static bool IsShowing();
 
   static void Hide();
+
+  void RestartToApplyFlags();
 
   ~ChromeLabsBubbleView() override;
 
   // Getter functions for testing.
   static ChromeLabsBubbleView* GetChromeLabsBubbleViewForTesting();
   flags_ui::FlagsState* GetFlagsStateForTesting();
-  flags_ui::FlagsStorage* GetFlagsStorageForTesting();
   views::View* GetMenuItemContainerForTesting();
   bool IsRestartPromptVisibleForTesting();
 
  private:
   ChromeLabsBubbleView(views::View* anchor_view,
-                       const ChromeLabsBubbleViewModel* model);
+                       Browser* browser,
+                       const ChromeLabsBubbleViewModel* model,
+                       bool user_is_chromeos_owner);
 
   std::unique_ptr<ChromeLabsItemView> CreateLabItem(
       const LabInfo& lab,
       int default_index,
-      const flags_ui::FeatureEntry* entry);
+      const flags_ui::FeatureEntry* entry,
+      Browser* browser);
 
   int GetIndexOfEnabledLabState(const flags_ui::FeatureEntry* entry);
-
-  bool IsFeatureSupportedOnChannel(const LabInfo& lab);
-
-  bool IsFeatureSupportedOnPlatform(const flags_ui::FeatureEntry* entry);
 
   void ShowRelaunchPrompt();
 
@@ -61,6 +68,9 @@ class ChromeLabsBubbleView : public views::BubbleDialogDelegateView {
   const ChromeLabsBubbleViewModel* model_;
 
   views::View* restart_prompt_;
-};
 
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+  Profile* profile_ = nullptr;
+#endif
+};
 #endif  // CHROME_BROWSER_UI_VIEWS_TOOLBAR_CHROME_LABS_BUBBLE_VIEW_H_

@@ -6,15 +6,15 @@
 # pylint complains about the assertXXX methods and the usage of short variables
 # m/a/b/d in the tests.
 
+import json
 import types
 import unittest
 
-import cStringIO as StringIO
-
-from collections import OrderedDict
-
 from blinkpy.common.system.filesystem_mock import FileSystemTestCase, MockFileSystem
 from blinkpy.web_tests import merge_results
+
+from collections import OrderedDict
+from six import StringIO
 
 
 class JSONMergerTests(unittest.TestCase):
@@ -623,13 +623,27 @@ class MergeFilesJSONPTests(FileSystemTestCase):
         self.assertDictEqual(expected_json, json_data)
         self.assertEqual(expected_after, after)
 
-    def assertDump(self, before, json, after, expected_data):
-        fd = StringIO.StringIO()
-        merge_results.MergeFilesJSONP.dump_jsonp(fd, before, json, after)
-        self.assertMultiLineEqual(fd.getvalue(), expected_data)
+    def assertDump(self, before, json_data, after):
+        fd = StringIO()
+        merge_results.MergeFilesJSONP.dump_jsonp(fd, before, json_data, after)
+        merged_str = fd.getvalue()
+        self.assertTrue(self.check_before_after(merged_str, before, after))
+        json_str = self.remove_before_after(merged_str, before, after)
+        self.assertEqual(json_data, json.loads(json_str))
+
+    @staticmethod
+    def check_before_after(json_str, before, after):
+        return json_str.startswith(before) and json_str.endswith(after)
+
+    @staticmethod
+    def remove_before_after(full_json_str, before, after):
+        json_str = full_json_str[len(before):]
+        if after:
+            json_str = json_str[:-len(after)]
+        return json_str
 
     def test_load(self):
-        fdcls = StringIO.StringIO
+        fdcls = StringIO
         self.assertLoad(fdcls('{"a": 1}'), '', {'a': 1}, '')
         self.assertLoad(fdcls('f({"a": 1});'), 'f(', {'a': 1}, ');')
         self.assertLoad(fdcls('var o = {"a": 1}'), 'var o = ', {'a': 1}, '')
@@ -638,31 +652,18 @@ class MergeFilesJSONPTests(FileSystemTestCase):
         self.assertLoad(fdcls('/* {"a": 1} */'), '/* ', {'a': 1}, ' */')
 
     def test_dump(self):
-        self.assertDump('', {}, '', '{}')
-        self.assertDump('f(', {}, ');', 'f({});')
-        self.assertDump('var o = ', {}, '', 'var o = {}')
-        self.assertDump('while(1); // ', {}, '', 'while(1); // {}')
-        self.assertDump('/* ', {}, ' */', '/* {} */')
+        self.assertDump('', {}, '')
+        self.assertDump('f(', {}, ');')
+        self.assertDump('var o = ', {}, '')
+        self.assertDump('while(1); // ', {}, '')
+        self.assertDump('/* ', {}, ' */')
 
-        self.assertDump('', {'a': 1}, '', """\
-{
-  "a": 1
-}""")
-        self.assertDump(
-            '', {
-                'a': [1, 'c', 3],
-                'b': 2
-            }, '', """\
-{
-  "a": [
-    1,
-    "c",
-    3
-  ],
-  "b": 2
-}""")
+        self.assertDump('', {'a': 1}, '')
+        self.assertDump('', {'a': [1, 'c', 3], 'b': 2}, '')
 
     def assertMergeResults(self,
+                           before,
+                           after,
                            mock_filesystem_contents,
                            inputargs,
                            filesystem_contains,
@@ -672,8 +673,23 @@ class MergeFilesJSONPTests(FileSystemTestCase):
 
         file_merger = merge_results.MergeFilesJSONP(mock_filesystem,
                                                     json_data_merger)
-        with self.assertFilesAdded(mock_filesystem, filesystem_contains):
-            file_merger(*inputargs)
+        file_merger(*inputargs)
+        files = mock_filesystem.files_under('/output')
+        self.assertTrue(len(files) == 1)
+        expected_mock_filesystem = MockFileSystem(filesystem_contains)
+        expected_files = expected_mock_filesystem.files_under('/output')
+        actual_output = mock_filesystem.read_text_file(files[0])
+        expected_output = expected_mock_filesystem.read_text_file(
+            expected_files[0])
+        self.assertTrue(self.check_before_after(actual_output, before, after))
+        self.assertTrue(self.check_before_after(expected_output, before,
+                                                after))
+        actual_json_str = self.remove_before_after(actual_output, before,
+                                                   after)
+        expected_json_str = self.remove_before_after(expected_output, before,
+                                                     after)
+        self.assertEqual(json.loads(actual_json_str),
+                         json.loads(expected_json_str))
 
     def assertMergeRaises(self, mock_filesystem_contents, inputargs):
         mock_filesystem = MockFileSystem(
@@ -684,41 +700,29 @@ class MergeFilesJSONPTests(FileSystemTestCase):
             file_merger(*inputargs)
 
     def test_single_file(self):
-        self.assertMergeResults({
-            '/s/filea': '{"a": 1}'
-        }, ('/output/out1', ['/s/filea']),
+        self.assertMergeResults('', '', {'/s/filea': '{"a": 1}'},
+                                ('/output/out1', ['/s/filea']),
                                 {'/output/out1': """\
-{
-  "a": 1
-}"""})
+{"a":1}"""})
 
-        self.assertMergeResults({
-            '/s/filef1a': 'f1({"a": 1})'
-        }, ('/output/outf1', ['/s/filef1a']),
+        self.assertMergeResults('f1(', ')', {'/s/filef1a': 'f1({"a": 1})'},
+                                ('/output/outf1', ['/s/filef1a']),
                                 {'/output/outf1': """\
-f1({
-  "a": 1
-})"""})
+f1({"a":1})"""})
 
-        self.assertMergeResults({
-            '/s/fileb1': '{"b": 2}'
-        }, ('/output/out2', ['/s/fileb1']),
+        self.assertMergeResults('', '', {'/s/fileb1': '{"b": 2}'},
+                                ('/output/out2', ['/s/fileb1']),
                                 {'/output/out2': """\
-{
-  "b": 2
-}"""})
+{"b":2}"""})
 
-        self.assertMergeResults({
-            '/s/filef1b1': 'f1({"b": 2})'
-        }, ('/output/outf2', ['/s/filef1b1']),
+        self.assertMergeResults('f1(', ')', {'/s/filef1b1': 'f1({"b": 2})'},
+                                ('/output/outf2', ['/s/filef1b1']),
                                 {'/output/outf2': """\
-f1({
-  "b": 2
-})"""})
+f1({"b":2})"""})
 
     def test_two_files_nonconflicting_values(self):
         self.assertMergeResults(
-            {
+            '', '', {
                 '/s/filea': '{"a": 1}',
                 '/s/fileb1': '{"b": 2}',
             }, ('/output/out3', ['/s/filea', '/s/fileb1']),
@@ -729,7 +733,7 @@ f1({
 }"""})
 
         self.assertMergeResults(
-            {
+            'f1(', ')', {
                 '/s/filef1a': 'f1({"a": 1})',
                 '/s/filef1b1': 'f1({"b": 2})',
             }, ('/output/outf3', ['/s/filef1a', '/s/filef1b1']),
@@ -754,25 +758,29 @@ f1({
         json_data_merger = merge_results.JSONMerger()
         json_data_merger.fallback_matcher = json_data_merger.merge_equal
 
-        self.assertMergeResults({
-            '/s/fileb1': '{"b": 2}',
-            '/s/fileb2': '{"b": 2}',
-        }, ('/output/out4', ['/s/fileb1', '/s/fileb2']),
+        self.assertMergeResults('',
+                                '', {
+                                    '/s/fileb1': '{"b": 2}',
+                                    '/s/fileb2': '{"b": 2}',
+                                },
+                                ('/output/out4', ['/s/fileb1', '/s/fileb2']),
                                 {'/output/out4': """\
 {
   "b": 2
 }"""},
                                 json_data_merger=json_data_merger)
 
-        self.assertMergeResults({
-            '/s/filef1b1': 'f1({"b": 2})',
-            '/s/filef1b2': 'f1({"b": 2})',
-        }, ('/output/outf4', ['/s/filef1b1', '/s/filef1b2']),
-                                {'/output/outf4': """\
+        self.assertMergeResults(
+            'f1(',
+            ')', {
+                '/s/filef1b1': 'f1({"b": 2})',
+                '/s/filef1b2': 'f1({"b": 2})',
+            }, ('/output/outf4', ['/s/filef1b1', '/s/filef1b2']),
+            {'/output/outf4': """\
 f1({
   "b": 2
 })"""},
-                                json_data_merger=json_data_merger)
+            json_data_merger=json_data_merger)
 
     def test_two_files_conflicting_values(self):
         self.assertMergeRaises({
@@ -795,6 +803,79 @@ f1({
             '/s/filea': '{"a": 1}',
             '/s/filef1a': 'f1({"a": 1})',
         }, ('/output/outff4', ['/s/filea', '/s/filef1a']))
+
+
+class JSONWptReportsMerger(unittest.TestCase):
+    def test_time_start(self):
+        merger = merge_results.JSONWptReportsMerger()
+        self.assertEqual({
+            'time_start': 2
+        },
+                         merger.merge([{
+                             'time_start': 3
+                         }, {
+                             'time_start': 2
+                         }]))
+        self.assertEqual({
+            'time_start': 2
+        },
+                         merger.merge([{
+                             'time_start': 2
+                         }, {
+                             'time_start': 3
+                         }]))
+        self.assertEqual({
+            'time_start': 12
+        }, merger.merge([{
+            'time_start': 12
+        }, {}]))
+
+    def test_time_end(self):
+        merger = merge_results.JSONWptReportsMerger()
+        self.assertEqual({
+            'time_end': 3
+        },
+                         merger.merge([{
+                             'time_end': 3
+                         }, {
+                             'time_end': 2
+                         }]))
+        self.assertEqual({
+            'time_end': 3
+        },
+                         merger.merge([{
+                             'time_end': 2
+                         }, {
+                             'time_end': 3
+                         }]))
+        self.assertEqual({
+            'time_end': 12
+        }, merger.merge([{
+            'time_end': 12
+        }, {}]))
+
+    def test_run_info(self):
+        merger = merge_results.JSONWptReportsMerger()
+        self.assertEqual({
+            'run_info': {"os": "linux"}
+        },
+                         merger.merge([{
+                             'run_info': {"os": "linux"}
+                         }, {
+                             'run_info': {"os": "win"}
+                         }]))
+
+    def test_results(self):
+        merger = merge_results.JSONWptReportsMerger()
+        self.assertEqual({
+            'results': [{"test": "/foo/foo.html"},
+                        {"test": "/bar/bar.html"}]
+        },
+                         merger.merge([{
+                             "results": [{"test": "/foo/foo.html"}]
+                         }, {
+                             "results": [{"test": "/bar/bar.html"}]
+                         }]))
 
 
 class JSONTestResultsMerger(unittest.TestCase):
@@ -1477,9 +1558,28 @@ ADD_RESULTS({
             fs, results_json_value_overrides={'layout_tests_dir': 'src'})
         merger.merge('/out', ['/shards/0', '/shards/1'])
 
-        for fname, contents in self.web_test_output_filesystem.items():
+        for fname, expected_contents in self.web_test_output_filesystem.items(
+        ):
             self.assertIn(fname, fs.files)
-            self.assertMultiLineEqual(contents, fs.files[fname])
+            if fname.endswith(".json"):
+                actual_json_str = fs.files[fname]
+                expected_json_str = expected_contents
+                if "archived_results" in fname or "failing_results" in fname:
+                    self.assertTrue(
+                        MergeFilesJSONPTests.check_before_after(
+                            fs.files[fname], 'ADD_RESULTS(', ");"))
+                    self.assertTrue(
+                        MergeFilesJSONPTests.check_before_after(
+                            expected_contents, 'ADD_RESULTS(', ");"))
+                    actual_json_str = MergeFilesJSONPTests.remove_before_after(
+                        fs.files[fname], 'ADD_RESULTS(', ");")
+                    expected_json_str = MergeFilesJSONPTests.remove_before_after(
+                        expected_contents, 'ADD_RESULTS(', ");")
+
+                self.assertEqual(json.loads(actual_json_str),
+                                 json.loads(expected_json_str))
+            else:
+                self.assertMultiLineEqual(expected_contents, fs.files[fname])
 
 
 class MarkMissingShardsTest(unittest.TestCase):
@@ -1638,4 +1738,5 @@ class MarkMissingShardsTest(unittest.TestCase):
             '/out/output.json',
             fs)
         final_merged_output_json = fs.files['/out/output.json']
-        self.assertEqual(final_merged_output_json, self.final_output_json)
+        self.assertEqual(json.loads(final_merged_output_json),
+                         json.loads(self.final_output_json))

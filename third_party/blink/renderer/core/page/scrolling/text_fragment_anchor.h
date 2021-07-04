@@ -48,9 +48,8 @@ class CORE_EXPORT TextFragmentAnchor final : public FragmentAnchor,
   // In this case, we also avoid generating the token unless the new URL has a
   // text fragment in it (and thus it'll be consumed immediately).
   static bool GenerateNewTokenForSameDocument(
-      const String& fragment,
+      const DocumentLoader&,
       WebFrameLoadType load_type,
-      bool is_content_initiated,
       SameDocumentNavigationSource source);
 
   static TextFragmentAnchor* TryCreateFragmentDirective(
@@ -62,6 +61,8 @@ class CORE_EXPORT TextFragmentAnchor final : public FragmentAnchor,
       const Vector<TextFragmentSelector>& text_fragment_selectors,
       LocalFrame& frame,
       bool should_scroll);
+  TextFragmentAnchor(const TextFragmentAnchor&) = delete;
+  TextFragmentAnchor& operator=(const TextFragmentAnchor&) = delete;
   ~TextFragmentAnchor() override = default;
 
   bool Invoke() override;
@@ -85,6 +86,14 @@ class CORE_EXPORT TextFragmentAnchor final : public FragmentAnchor,
                     bool is_unique) override;
 
   void NoMatchFound() override {}
+
+  static bool ShouldDismissOnScrollOrClick();
+
+  const HeapVector<Member<TextFragmentFinder>>& TextFragmentFinders() const {
+    return text_fragment_finders_;
+  }
+
+  bool IsTextFragmentAnchor() override { return true; }
 
  private:
   // Called when the search is finished. Reports metrics and activates the
@@ -141,8 +150,6 @@ class CORE_EXPORT TextFragmentAnchor final : public FragmentAnchor,
   } beforematch_state_ = kNoMatchFound;
 
   Member<TextFragmentAnchorMetrics> metrics_;
-
-  DISALLOW_COPY_AND_ASSIGN(TextFragmentAnchor);
 };
 
 }  // namespace blink

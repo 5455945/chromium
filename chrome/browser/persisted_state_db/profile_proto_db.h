@@ -12,7 +12,6 @@
 #include "base/bind.h"
 #include "base/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
-#include "base/optional.h"
 #include "base/sequenced_task_runner.h"
 #include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
@@ -22,6 +21,7 @@
 #include "components/leveldb_proto/public/proto_database.h"
 #include "components/leveldb_proto/public/proto_database_provider.h"
 #include "content/public/browser/browser_context.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/leveldatabase/src/include/leveldb/options.h"
 
 class ProfileProtoDBTest;
@@ -130,12 +130,17 @@ class ProfileProtoDB : public KeyedService {
   // Returns true if the database failed to initialize.
   bool FailedToInit() const;
 
+  static bool DatabasePrefixFilter(const std::string& key_prefix,
+                                   const std::string& key) {
+    return base::StartsWith(key, key_prefix, base::CompareCase::SENSITIVE);
+  }
+
   // Browser context associated with ProfileProtoDB (ProfileProtoDB are per
   // profile).
   content::BrowserContext* browser_context_;
 
   // Status of the database initialization.
-  base::Optional<leveldb_proto::Enums::InitStatus> database_status_;
+  absl::optional<leveldb_proto::Enums::InitStatus> database_status_;
 
   // The database for storing content storage information.
   std::unique_ptr<leveldb_proto::ProtoDatabase<T>> storage_database_;
@@ -146,21 +151,6 @@ class ProfileProtoDB : public KeyedService {
 
   base::WeakPtrFactory<ProfileProtoDB> weak_ptr_factory_{this};
 };
-
-namespace {
-
-leveldb::ReadOptions CreateReadOptions() {
-  leveldb::ReadOptions opts;
-  opts.fill_cache = false;
-  return opts;
-}
-
-bool DatabasePrefixFilter(const std::string& key_prefix,
-                          const std::string& key) {
-  return base::StartsWith(key, key_prefix, base::CompareCase::SENSITIVE);
-}
-
-}  // namespace
 
 template <typename T>
 ProfileProtoDB<T>::~ProfileProtoDB() = default;
@@ -215,7 +205,7 @@ void ProfileProtoDB<T>::LoadContentWithPrefix(const std::string& key_prefix,
   } else {
     storage_database_->LoadEntriesWithFilter(
         base::BindRepeating(&DatabasePrefixFilter, key_prefix),
-        CreateReadOptions(),
+        {.fill_cache = false},
         /* target_prefix */ "",
         base::BindOnce(&ProfileProtoDB::OnLoadContent,
                        weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
@@ -314,7 +304,7 @@ ProfileProtoDB<T>::ProfileProtoDB(
     const base::FilePath& database_dir,
     leveldb_proto::ProtoDbType proto_db_type)
     : browser_context_(browser_context),
-      database_status_(base::nullopt),
+      database_status_(absl::nullopt),
       storage_database_(proto_database_provider->GetDB<T>(
           proto_db_type,
           database_dir,
@@ -331,7 +321,7 @@ template <typename T>
 ProfileProtoDB<T>::ProfileProtoDB(
     std::unique_ptr<leveldb_proto::ProtoDatabase<T>> storage_database,
     scoped_refptr<base::SequencedTaskRunner> task_runner)
-    : database_status_(base::nullopt),
+    : database_status_(absl::nullopt),
       storage_database_(std::move(storage_database)) {
   static_assert(std::is_base_of<google::protobuf::MessageLite, T>::value,
                 "T must implement 'google::protobuf::MessageLite'");
@@ -344,7 +334,7 @@ template <typename T>
 void ProfileProtoDB<T>::OnDatabaseInitialized(
     leveldb_proto::Enums::InitStatus status) {
   database_status_ =
-      base::make_optional<leveldb_proto::Enums::InitStatus>(status);
+      absl::make_optional<leveldb_proto::Enums::InitStatus>(status);
   for (auto& deferred_operation : deferred_operations_) {
     std::move(deferred_operation).Run();
   }
@@ -389,7 +379,7 @@ void ProfileProtoDB<T>::OnOperationCommitted(OperationCallback callback,
 // Returns true if initialization status of database is not yet known.
 template <typename T>
 bool ProfileProtoDB<T>::InitStatusUnknown() const {
-  return database_status_ == base::nullopt;
+  return database_status_ == absl::nullopt;
 }
 
 // Returns true if the database failed to initialize.

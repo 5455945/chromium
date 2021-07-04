@@ -5,6 +5,8 @@
 import * as animate from './animation.js';
 import {assertInstanceof} from './chrome_util.js';
 import * as dom from './dom.js';
+// eslint-disable-next-line no-unused-vars
+import {I18nString} from './i18n_string.js';
 import * as Comlink from './lib/comlink.js';
 import * as loadTimeData from './models/load_time_data.js';
 import * as state from './state.js';
@@ -64,14 +66,6 @@ export function getShortcutIdentifier(event) {
     }
   }
   return identifier;
-}
-
-/**
- * Makes the element unfocusable by mouse.
- * @param {!HTMLElement} element Element to be unfocusable.
- */
-export function makeUnfocusableByMouse(element) {
-  element.addEventListener('mousedown', (event) => event.preventDefault());
 }
 
 /**
@@ -147,8 +141,8 @@ export function toggleChecked(element, checked) {
 
 /**
  * Binds on/off of specified state with different aria label on an element.
- * @param {{element: !Element, state: !state.State, onLabel: string,
- *     offLabel: string}} params
+ * @param {{element: !Element, state: !state.State, onLabel: !I18nString,
+ *     offLabel: !I18nString}} params
  */
 export function bindElementAriaLabelWithState(
     {element, state: s, onLabel, offLabel}) {
@@ -166,6 +160,8 @@ export function bindElementAriaLabelWithState(
  * @param {!HTMLElement} el
  */
 export function setInkdropEffect(el) {
+  const tpl = instantiateTemplate('#inkdrop-template');
+  el.appendChild(tpl);
   el.addEventListener('click', (e) => {
     const tRect =
         assertInstanceof(e.target, HTMLElement).getBoundingClientRect();
@@ -178,7 +174,7 @@ export function setInkdropEffect(el) {
     el.style.setProperty('--drop-x', `${dropX}px`);
     el.style.setProperty('--drop-y', `${dropY}px`);
     el.style.setProperty('--drop-radius', `${radius}px`);
-    animate.play(el);
+    animate.playOnChild(el);
   });
 }
 
@@ -216,4 +212,13 @@ export async function createUntrustedJSModule(scriptUrl) {
       await Comlink.wrap(Comlink.windowEndpoint(iFrame.contentWindow, self));
   await untrustedRemote.loadScript(scriptUrl);
   return untrustedRemote;
+}
+
+/**
+ * Sleeps for a specified time.
+ * @param {number} ms Milliseconds to sleep.
+ * @return {!Promise}
+ */
+export function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

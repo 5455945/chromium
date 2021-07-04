@@ -101,7 +101,7 @@ interface FrameSinkManager {
   // This function should only be used synchronously for destroying root
   // CompositorFrameSinks to ensure the GL context/surface is destroyed before
   // the platform window.
-  [Sync]
+  [Sync, NoInterrupt]
   DestroyCompositorFrameSink(FrameSinkId frame_sink_id) => ();
 
   // Set up a BeginFrame relationship between two FrameSinkIds. In this case,
@@ -124,17 +124,11 @@ interface FrameSinkManager {
   // Marks the given SurfaceIds for destruction.
   EvictSurfaces(array<SurfaceId> surface_ids);
 
-  // Starts throttling the frame sinks specified by |frame_sink_ids| and all
-  // their descendant sinks to send BeginFrames at an interval of |interval|.
-  // |interval| should be greater than zero. Previous throttling operation on
-  // any frame sinks must be first ended by calling EndThrottling() before
-  // applying the current throttling operation.
-  StartThrottling(
-      array<FrameSinkId> frame_sink_ids,
-      mojo_base.mojom.TimeDelta interval);
-
-  // Ends all previously throttled frame sinks.
-  EndThrottling();
+  // Throttles the frame sinks specified by |frame_sink_ids| and all their
+  // descendant sinks to send BeginFrames at an interval of |interval|. This
+  // operation clears out any previous throttling operation on any frame sinks.
+  Throttle(array<FrameSinkId> frame_sink_ids,
+           mojo_base.mojom.TimeDelta interval);
 
   // Takes a snapshot of |surface_id| or a newer surface with the same
   // FrameSinkId. The request will be queued up until such surface exists and is

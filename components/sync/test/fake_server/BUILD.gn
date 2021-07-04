@@ -33,6 +33,7 @@ static_library("fake_server") {
     "//net",
     "//services/network/public/cpp:cpp",
     "//testing/gtest",
+    "//ui/gfx",
     "//url",
   ]
 
@@ -52,10 +53,7 @@ if (is_android) {
 
   static_library("fake_server_android") {
     testonly = true
-    sources = [
-      "android/fake_server_helper_android.cc",
-      "android/fake_server_helper_android.h",
-    ]
+    sources = [ "android/fake_server_helper_android.cc" ]
     deps = [
       ":fake_server",
       ":fake_server_jni",

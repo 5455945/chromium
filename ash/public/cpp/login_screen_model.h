@@ -8,7 +8,6 @@
 #include <string>
 
 #include "ash/public/cpp/ash_public_export.h"
-#include "base/strings/string16.h"
 #include "base/time/time.h"
 
 class AccountId;
@@ -18,7 +17,7 @@ namespace ash {
 enum class FingerprintState;
 enum class OobeDialogState;
 struct AuthDisabledData;
-struct EasyUnlockIconOptions;
+struct EasyUnlockIconInfo;
 struct InputMethodItem;
 struct LocaleItem;
 struct LoginUserInfo;
@@ -39,9 +38,9 @@ class ASH_PUBLIC_EXPORT LoginScreenModel {
 
   // Requests to show the custom icon in the user pod.
   // |account_id|:  The account id of the user in the user pod.
-  // |icon|:        Information regarding the icon.
+  // |icon_info|:   Information regarding the icon.
   virtual void ShowEasyUnlockIcon(const AccountId& account_id,
-                                  const EasyUnlockIconOptions& icon) = 0;
+                                  const EasyUnlockIconInfo& icon_info) = 0;
 
   // Update the status of the challenge-response authentication against a
   // security token for the given user.
@@ -52,7 +51,7 @@ class ASH_PUBLIC_EXPORT LoginScreenModel {
   // used to notify users of important messages before they log in to their
   // session. (e.g. Tell the user that an update of the user data will start
   // on login.) If |message| is empty, the banner will be hidden.
-  virtual void UpdateWarningMessage(const base::string16& message) = 0;
+  virtual void UpdateWarningMessage(const std::u16string& message) = 0;
 
   // Update the status of fingerprint for |account_id|.
   virtual void SetFingerprintState(const AccountId& account_id,

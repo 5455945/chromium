@@ -15,7 +15,6 @@
 #include "base/hash/hash.h"
 #include "base/i18n/string_compare.h"
 #include "base/metrics/user_metrics_action.h"
-#include "base/stl_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/bookmarks/browser/bookmark_model.h"
@@ -43,7 +42,7 @@ namespace bookmark_utils_ios {
 
 NSString* const kBookmarksSnackbarCategory = @"BookmarksSnackbarCategory";
 
-base::Optional<NodeSet> FindNodesByIds(bookmarks::BookmarkModel* model,
+absl::optional<NodeSet> FindNodesByIds(bookmarks::BookmarkModel* model,
                                        const std::set<int64_t>& ids) {
   DCHECK(model);
   NodeSet nodes;
@@ -59,7 +58,7 @@ base::Optional<NodeSet> FindNodesByIds(bookmarks::BookmarkModel* model,
   }
 
   if (ids.size() != nodes.size())
-    return base::nullopt;
+    return absl::nullopt;
 
   return nodes;
 }
@@ -166,7 +165,7 @@ MDCSnackbarMessage* CreateOrUpdateBookmarkWithUndoToast(
     bookmarks::BookmarkModel* bookmark_model,
     ChromeBrowserState* browser_state) {
   DCHECK(!node || node->is_url());
-  base::string16 titleString = base::SysNSStringToUTF16(title);
+  std::u16string titleString = base::SysNSStringToUTF16(title);
 
   // If the bookmark has no changes supporting Undo, just bail out.
   if (node && node->GetTitle() == titleString && node->url() == url &&
@@ -215,7 +214,7 @@ MDCSnackbarMessage* CreateBookmarkAtPositionWithUndoToast(
     int position,
     bookmarks::BookmarkModel* bookmark_model,
     ChromeBrowserState* browser_state) {
-  base::string16 titleString = base::SysNSStringToUTF16(title);
+  std::u16string titleString = base::SysNSStringToUTF16(title);
 
   UndoManagerWrapper* wrapper =
       [[UndoManagerWrapper alloc] initWithBrowserState:browser_state];

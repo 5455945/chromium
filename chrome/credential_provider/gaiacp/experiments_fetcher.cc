@@ -23,8 +23,7 @@ namespace credential_provider {
 namespace {
 
 // HTTP endpoint on the GCPW service to fetch experiments.
-const base::char16 kGcpwServiceFetchExperimentsPath[] =
-    STRING16_LITERAL("/v1/experiments");
+const char16_t kGcpwServiceFetchExperimentsPath[] = u"/v1/experiments";
 
 // Default timeout when trying to make requests to the GCPW service.
 const base::TimeDelta kDefaultFetchExperimentsRequestTimeout =
@@ -179,7 +178,7 @@ HRESULT ExperimentsFetcher::FetchAndStoreExperimentsInternal(
   }
 
   // Make the fetch experiments HTTP request.
-  base::Optional<base::Value> request_result;
+  absl::optional<base::Value> request_result;
   HRESULT hr = WinHttpUrlFetcher::BuildRequestAndFetchResultFromHttpService(
       GetExperimentsUrl(), access_token, {}, *request_dict.get(),
       kDefaultFetchExperimentsRequestTimeout, kMaxNumHttpRetries,

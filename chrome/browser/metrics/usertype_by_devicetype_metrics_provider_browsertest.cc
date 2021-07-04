@@ -5,30 +5,28 @@
 #include "chrome/browser/metrics/usertype_by_devicetype_metrics_provider.h"
 
 #include "base/logging.h"
-#include "base/optional.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "chrome/browser/ash/login/existing_user_controller.h"
+#include "chrome/browser/ash/login/test/fake_gaia_mixin.h"
+#include "chrome/browser/ash/login/test/local_policy_test_server_mixin.h"
+#include "chrome/browser/ash/login/test/logged_in_user_mixin.h"
+#include "chrome/browser/ash/login/test/session_manager_state_waiter.h"
+#include "chrome/browser/ash/login/wizard_controller.h"
+#include "chrome/browser/ash/policy/core/device_local_account.h"
+#include "chrome/browser/ash/policy/core/device_policy_cros_browser_test.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part_chromeos.h"
-#include "chrome/browser/chromeos/login/existing_user_controller.h"
-#include "chrome/browser/chromeos/login/test/fake_gaia_mixin.h"
-#include "chrome/browser/chromeos/login/test/local_policy_test_server_mixin.h"
-#include "chrome/browser/chromeos/login/test/logged_in_user_mixin.h"
-#include "chrome/browser/chromeos/login/test/session_manager_state_waiter.h"
-#include "chrome/browser/chromeos/login/wizard_controller.h"
-#include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
-#include "chrome/browser/chromeos/policy/device_cloud_policy_store_chromeos.h"
-#include "chrome/browser/chromeos/policy/device_local_account.h"
-#include "chrome/browser/chromeos/policy/device_policy_cros_browser_test.h"
 #include "chrome/common/chrome_features.h"
 #include "chromeos/dbus/session_manager/fake_session_manager_client.h"
 #include "components/metrics/metrics_service.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_store.h"
-#include "components/policy/core/common/cloud/policy_builder.h"
+#include "components/policy/core/common/cloud/test/policy_builder.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "content/public/test/browser_test.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace {
 
@@ -39,21 +37,21 @@ using testing::InvokeWithoutArgs;
 const char kAccountId1[] = "dla1@example.com";
 const char kDisplayName1[] = "display name 1";
 
-base::Optional<em::PolicyData::MarketSegment> GetMarketSegment(
+absl::optional<em::PolicyData::MarketSegment> GetMarketSegment(
     policy::MarketSegment device_segment) {
   switch (device_segment) {
     case policy::MarketSegment::UNKNOWN:
-      return base::nullopt;
+      return absl::nullopt;
     case policy::MarketSegment::EDUCATION:
       return em::PolicyData::ENROLLED_EDUCATION;
     case policy::MarketSegment::ENTERPRISE:
       return em::PolicyData::ENROLLED_ENTERPRISE;
   }
   NOTREACHED();
-  return base::nullopt;
+  return absl::nullopt;
 }
 
-base::Optional<em::PolicyData::MetricsLogSegment> GetMetricsLogSegment(
+absl::optional<em::PolicyData::MetricsLogSegment> GetMetricsLogSegment(
     UserSegment user_segment) {
   switch (user_segment) {
     case UserSegment::kK12:
@@ -66,13 +64,13 @@ base::Optional<em::PolicyData::MetricsLogSegment> GetMetricsLogSegment(
       return em::PolicyData::ENTERPRISE;
     case UserSegment::kUnmanaged:
     case UserSegment::kManagedGuestSession:
-      return base::nullopt;
+      return absl::nullopt;
   }
   NOTREACHED();
-  return base::nullopt;
+  return absl::nullopt;
 }
 
-base::Optional<AccountId> GetPrimaryAccountId() {
+absl::optional<AccountId> GetPrimaryAccountId() {
   return AccountId::FromUserEmailGaiaId(
       chromeos::FakeGaiaMixin::kEnterpriseUser1,
       chromeos::FakeGaiaMixin::kEnterpriseUser1GaiaId);
@@ -151,12 +149,12 @@ class TestCase {
 
   policy::MarketSegment GetDeviceSegment() const { return device_segment_; }
 
-  base::Optional<em::PolicyData::MetricsLogSegment> GetMetricsLogSegment()
+  absl::optional<em::PolicyData::MetricsLogSegment> GetMetricsLogSegment()
       const {
     return ::GetMetricsLogSegment(user_segment_);
   }
 
-  base::Optional<em::PolicyData::MarketSegment> GetMarketSegment() const {
+  absl::optional<em::PolicyData::MarketSegment> GetMarketSegment() const {
     return ::GetMarketSegment(device_segment_);
   }
 
@@ -247,7 +245,7 @@ class UserTypeByDeviceTypeMetricsProviderTest
     // Add an account with DeviceLocalAccount::Type::TYPE_PUBLIC_SESSION.
     AddPublicSessionToDevicePolicy(kAccountId1);
 
-    base::Optional<em::PolicyData::MarketSegment> market_segment =
+    absl::optional<em::PolicyData::MarketSegment> market_segment =
         GetParam().GetMarketSegment();
     if (market_segment) {
       device_policy()->policy_data().set_market_segment(market_segment.value());
@@ -285,7 +283,7 @@ class UserTypeByDeviceTypeMetricsProviderTest
   }
 
   void LogInUser() {
-    base::Optional<em::PolicyData::MetricsLogSegment> log_segment =
+    absl::optional<em::PolicyData::MetricsLogSegment> log_segment =
         GetParam().GetMetricsLogSegment();
     if (log_segment) {
       logged_in_user_mixin_.GetUserPolicyMixin()
@@ -303,8 +301,7 @@ class UserTypeByDeviceTypeMetricsProviderTest
 
   void StartPublicSessionLogin() {
     // Start login into the device-local account.
-    chromeos::LoginDisplayHost* host =
-        chromeos::LoginDisplayHost::default_host();
+    auto* host = ash::LoginDisplayHost::default_host();
     ASSERT_TRUE(host);
     host->StartSignInScreen();
     chromeos::ExistingUserController* controller =
@@ -321,7 +318,7 @@ class UserTypeByDeviceTypeMetricsProviderTest
   void WaitForSessionStart() {
     if (IsSessionStarted())
       return;
-    chromeos::WizardController::SkipPostLoginScreensForTesting();
+    ash::WizardController::SkipPostLoginScreensForTesting();
     chromeos::test::WaitForPrimaryUserSessionStart();
   }
 

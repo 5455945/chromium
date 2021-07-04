@@ -7,6 +7,7 @@
 
 #include <memory>
 
+#include "base/memory/ptr_util.h"
 #import "ios/chrome/browser/signin/authentication_service.h"
 #import "ios/public/provider/chrome/browser/signin/chrome_identity.h"
 
@@ -34,10 +35,6 @@ class AuthenticationServiceFake : public AuthenticationService {
                bool force_clear_browsing_data,
                ProceduralBlock completion) override;
 
-  void SetHaveAccountsChangedWhileInBackground(bool changed);
-
-  bool HaveAccountsChangedWhileInBackground() const override;
-
   bool IsAuthenticated() const override;
 
   ChromeIdentity* GetAuthenticatedIdentity() const override;
@@ -45,13 +42,20 @@ class AuthenticationServiceFake : public AuthenticationService {
   bool IsAuthenticatedIdentityManaged() const override;
 
  private:
-  AuthenticationServiceFake(PrefService* pref_service,
-                            SyncSetupService* sync_setup_service,
-                            signin::IdentityManager* identity_manager,
-                            syncer::SyncService* sync_service);
+  AuthenticationServiceFake(
+      PrefService* pref_service,
+      SyncSetupService* sync_setup_service,
+      ChromeAccountManagerService* account_manager_service,
+      signin::IdentityManager* identity_manager,
+      syncer::SyncService* sync_service);
+
+  // Internal method effectively signing out the user.
+  void SignOutInternal(ProceduralBlock completion);
 
   __strong ChromeIdentity* authenticated_identity_;
-  bool have_accounts_changed_while_in_background_;
+
+  // WeakPtrFactory should be last.
+  base::WeakPtrFactory<AuthenticationServiceFake> weak_factory_{this};
 };
 
 #endif  // IOS_CHROME_BROWSER_SIGNIN_AUTHENTICATION_SERVICE_FAKE_H_

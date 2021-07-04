@@ -42,7 +42,9 @@
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/input_type_names.h"
 #include "third_party/blink/renderer/core/layout/layout_block.h"
+#include "third_party/blink/renderer/core/layout/layout_embedded_content.h"
 #include "third_party/blink/renderer/core/layout/layout_image.h"
+#include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/layout/ng/ng_physical_box_fragment.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/page/scrolling/top_document_root_scroller_controller.h"
@@ -257,7 +259,10 @@ CompositorElementId HitTestResult::GetScrollableContainer() const {
           cur_box->UniqueId(), CompositorElementIdNamespace::kScroll);
     }
 
-    cur_box = cur_box->ContainingBlock();
+    if (IsA<LayoutView>(cur_box))
+      cur_box = cur_box->GetFrame()->OwnerLayoutObject();
+    else
+      cur_box = cur_box->ContainingBlock();
   }
 
   return InnerNode()
@@ -392,12 +397,14 @@ const AtomicString& HitTestResult::AltDisplayString() const {
 }
 
 Image* HitTestResult::GetImage() const {
-  Node* inner_node_or_image_map_image = InnerNodeOrImageMapImage();
-  if (!inner_node_or_image_map_image)
+  return GetImage(InnerNodeOrImageMapImage());
+}
+
+Image* HitTestResult::GetImage(const Node* node) {
+  if (!node)
     return nullptr;
 
-  LayoutObject* layout_object =
-      inner_node_or_image_map_image->GetLayoutObject();
+  LayoutObject* layout_object = node->GetLayoutObject();
   if (layout_object && layout_object->IsImage()) {
     auto* image = To<LayoutImage>(layout_object);
     if (image->CachedImage() && !image->CachedImage()->ErrorOccurred())
@@ -416,9 +423,8 @@ IntRect HitTestResult::ImageRect() const {
       .EnclosingBoundingBox();
 }
 
-KURL HitTestResult::AbsoluteImageURL() const {
-  Node* inner_node_or_image_map_image = InnerNodeOrImageMapImage();
-  if (!inner_node_or_image_map_image)
+KURL HitTestResult::AbsoluteImageURL(const Node* node) {
+  if (!node)
     return KURL();
 
   AtomicString url_string;
@@ -426,23 +432,24 @@ KURL HitTestResult::AbsoluteImageURL() const {
   // even if they don't have a LayoutImage (e.g. because the image didn't load
   // and we are using an alt container). For other elements we don't create alt
   // containers so ensure they contain a loaded image.
-  auto* html_input_element =
-      DynamicTo<HTMLInputElement>(inner_node_or_image_map_image);
-  if (IsA<HTMLImageElement>(*inner_node_or_image_map_image) ||
+  auto* html_input_element = DynamicTo<HTMLInputElement>(node);
+  if (IsA<HTMLImageElement>(*node) ||
       (html_input_element &&
        html_input_element->type() == input_type_names::kImage))
-    url_string = To<Element>(*inner_node_or_image_map_image).ImageSourceURL();
-  else if ((inner_node_or_image_map_image->GetLayoutObject() &&
-            inner_node_or_image_map_image->GetLayoutObject()->IsImage()) &&
-           (IsA<HTMLEmbedElement>(*inner_node_or_image_map_image) ||
-            IsA<HTMLObjectElement>(*inner_node_or_image_map_image) ||
-            IsA<SVGImageElement>(*inner_node_or_image_map_image)))
-    url_string = To<Element>(*inner_node_or_image_map_image).ImageSourceURL();
+    url_string = To<Element>(*node).ImageSourceURL();
+  else if ((node->GetLayoutObject() && node->GetLayoutObject()->IsImage()) &&
+           (IsA<HTMLEmbedElement>(*node) || IsA<HTMLObjectElement>(*node) ||
+            IsA<SVGImageElement>(*node)))
+    url_string = To<Element>(*node).ImageSourceURL();
   if (url_string.IsEmpty())
     return KURL();
 
-  return inner_node_or_image_map_image->GetDocument().CompleteURL(
+  return node->GetDocument().CompleteURL(
       StripLeadingAndTrailingHTMLSpaces(url_string));
+}
+
+KURL HitTestResult::AbsoluteImageURL() const {
+  return AbsoluteImageURL(InnerNodeOrImageMapImage());
 }
 
 KURL HitTestResult::AbsoluteMediaURL() const {
@@ -506,26 +513,40 @@ bool HitTestResult::IsContentEditable() const {
   return HasEditableStyle(*inner_node_);
 }
 
-ListBasedHitTestBehavior HitTestResult::AddNodeToListBasedTestResult(
+std::tuple<bool, ListBasedHitTestBehavior>
+HitTestResult::AddNodeToListBasedTestResultInternal(
     Node* node,
-    const HitTestLocation& location,
-    const PhysicalRect& rect) {
+    const HitTestLocation& location) {
   // If we are in the process of retargeting for `inert`, continue.
   if (GetHitTestRequest().RetargetForInert() && InertNode() && !InnerNode())
-    return kContinueHitTesting;
+    return std::make_tuple(false, kContinueHitTesting);
 
   // If not a list-based test, stop testing because the hit has been found.
   if (!GetHitTestRequest().ListBased())
-    return kStopHitTesting;
+    return std::make_tuple(false, kStopHitTesting);
 
   if (!node)
-    return kContinueHitTesting;
+    return std::make_tuple(false, kContinueHitTesting);
 
   MutableListBasedTestResult().insert(node);
 
   if (GetHitTestRequest().PenetratingList())
-    return kContinueHitTesting;
+    return std::make_tuple(false, kContinueHitTesting);
 
+  // The second argument will be ignored.
+  return std::make_tuple(true, kContinueHitTesting);
+}
+
+ListBasedHitTestBehavior HitTestResult::AddNodeToListBasedTestResult(
+    Node* node,
+    const HitTestLocation& location,
+    const PhysicalRect& rect) {
+  bool should_check_containment;
+  ListBasedHitTestBehavior behavior;
+  std::tie(should_check_containment, behavior) =
+      AddNodeToListBasedTestResultInternal(node, location);
+  if (!should_check_containment)
+    return behavior;
   return rect.Contains(location.BoundingBox()) ? kStopHitTesting
                                                : kContinueHitTesting;
 }
@@ -533,23 +554,28 @@ ListBasedHitTestBehavior HitTestResult::AddNodeToListBasedTestResult(
 ListBasedHitTestBehavior HitTestResult::AddNodeToListBasedTestResult(
     Node* node,
     const HitTestLocation& location,
+    const FloatQuad& quad) {
+  bool should_check_containment;
+  ListBasedHitTestBehavior behavior;
+  std::tie(should_check_containment, behavior) =
+      AddNodeToListBasedTestResultInternal(node, location);
+  if (!should_check_containment)
+    return behavior;
+  return quad.ContainsQuad(FloatRect(location.BoundingBox()))
+             ? kStopHitTesting
+             : kContinueHitTesting;
+}
+
+ListBasedHitTestBehavior HitTestResult::AddNodeToListBasedTestResult(
+    Node* node,
+    const HitTestLocation& location,
     const Region& region) {
-  // If we are in the process of retargeting for `inert`, continue.
-  if (GetHitTestRequest().RetargetForInert() && InertNode() && !InnerNode())
-    return kContinueHitTesting;
-
-  // If not a list-based test, stop testing because the hit has been found.
-  if (!GetHitTestRequest().ListBased())
-    return kStopHitTesting;
-
-  if (!node)
-    return kContinueHitTesting;
-
-  MutableListBasedTestResult().insert(node);
-
-  if (GetHitTestRequest().PenetratingList())
-    return kContinueHitTesting;
-
+  bool should_check_containment;
+  ListBasedHitTestBehavior behavior;
+  std::tie(should_check_containment, behavior) =
+      AddNodeToListBasedTestResultInternal(node, location);
+  if (!should_check_containment)
+    return behavior;
   return region.Contains(location.EnclosingIntRect()) ? kStopHitTesting
                                                       : kContinueHitTesting;
 }

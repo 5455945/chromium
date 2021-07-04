@@ -10,14 +10,15 @@
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/shell.h"
 #include "ash/style/ash_color_provider.h"
-#include "base/scoped_observer.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/aura/client/focus_change_observer.h"
 #include "ui/aura/client/focus_client.h"
+#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/events/event_handler.h"
 #include "ui/gfx/geometry/point.h"
+#include "ui/views/animation/ink_drop.h"
 #include "ui/views/background.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/wm/core/coordinate_conversion.h"
@@ -47,7 +48,7 @@ constexpr base::TimeDelta kBubbleAnimationDuration =
 // associated bubble in response.
 class LoginBubbleHandler : public ui::EventHandler {
  public:
-  LoginBubbleHandler(LoginBaseBubbleView* bubble) : bubble_(bubble) {
+  explicit LoginBubbleHandler(LoginBaseBubbleView* bubble) : bubble_(bubble) {
     Shell::Get()->AddPreTargetHandler(this);
   }
 
@@ -75,8 +76,12 @@ class LoginBubbleHandler : public ui::EventHandler {
     if (!bubble_->GetVisible())
       return;
 
-    if (bubble_->GetBubbleOpener() && bubble_->GetBubbleOpener()->HasFocus())
+    // Hide the bubble if the bubble opener is about to lose focus from tab
+    // traversal.
+    if (bubble_->GetBubbleOpener() && bubble_->GetBubbleOpener()->HasFocus() &&
+        event->key_code() != ui::VKEY_TAB) {
       return;
+    }
 
     if (login_views_utils::HasFocusInAnyChildView(bubble_))
       return;
@@ -138,10 +143,10 @@ void LoginBaseBubbleView::EnsureLayer() {
   SetPaintToLayer();
   SkColor background_color = AshColorProvider::Get()->GetBaseLayerColor(
       AshColorProvider::BaseLayerType::kTransparent80);
-  layer()->SetBackgroundBlur(
-      static_cast<float>(AshColorProvider::LayerBlurSigma::kBlurDefault));
   SetBackground(views::CreateRoundedRectBackground(background_color,
                                                    kBubbleBorderRadius));
+  layer()->SetBackgroundBlur(
+      static_cast<float>(AshColorProvider::LayerBlurSigma::kBlurDefault));
   layer()->SetFillsBoundsOpaquely(false);
 }
 
@@ -272,6 +277,14 @@ void LoginBaseBubbleView::OnBlur() {
   Hide();
 }
 
+void LoginBaseBubbleView::OnThemeChanged() {
+  views::View::OnThemeChanged();
+  SkColor background_color = AshColorProvider::Get()->GetBaseLayerColor(
+      AshColorProvider::BaseLayerType::kTransparent80);
+  SetBackground(views::CreateRoundedRectBackground(background_color,
+                                                   kBubbleBorderRadius));
+}
+
 void LoginBaseBubbleView::SetPadding(int horizontal_padding,
                                      int vertical_padding) {
   horizontal_padding_ = horizontal_padding;
@@ -298,10 +311,10 @@ gfx::Rect LoginBaseBubbleView::GetWorkArea() const {
 
 void LoginBaseBubbleView::ScheduleAnimation(bool visible) {
   if (GetBubbleOpener()) {
-    GetBubbleOpener()->AnimateInkDrop(visible
-                                          ? views::InkDropState::ACTIVATED
-                                          : views::InkDropState::DEACTIVATED,
-                                      nullptr /*event*/);
+    views::InkDrop::Get(GetBubbleOpener())
+        ->AnimateToState(visible ? views::InkDropState::ACTIVATED
+                                 : views::InkDropState::DEACTIVATED,
+                         nullptr /*event*/);
   }
 
   if (layer())

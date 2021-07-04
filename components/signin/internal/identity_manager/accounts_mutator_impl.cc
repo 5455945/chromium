@@ -4,7 +4,6 @@
 
 #include "components/signin/internal/identity_manager/accounts_mutator_impl.h"
 
-#include "base/optional.h"
 #include "build/chromeos_buildflags.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/internal/identity_manager/account_tracker_service.h"
@@ -15,6 +14,7 @@
 #include "components/signin/public/identity_manager/account_info.h"
 #include "google_apis/gaia/core_account_id.h"
 #include "google_apis/gaia/gaia_constants.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace signin {
 
@@ -63,8 +63,8 @@ CoreAccountId AccountsMutatorImpl::AddOrUpdateAccount(
 
 void AccountsMutatorImpl::UpdateAccountInfo(
     const CoreAccountId& account_id,
-    base::Optional<bool> is_child_account,
-    base::Optional<bool> is_under_advanced_protection) {
+    absl::optional<bool> is_child_account,
+    absl::optional<bool> is_under_advanced_protection) {
   if (is_child_account.has_value()) {
     account_tracker_service_->SetIsChildAccount(account_id,
                                                 is_child_account.value());
@@ -122,6 +122,13 @@ void AccountsMutatorImpl::MoveAccount(AccountsMutator* target,
   // of the current mutator to avoid tying it with the new mutator. See
   // https://crbug.com/813928#c16
   RecreateSigninScopedDeviceId(pref_service_);
+}
+#endif
+
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+CoreAccountId AccountsMutatorImpl::SeedAccountInfo(const std::string& gaia_id,
+                                                   const std::string& email) {
+  return account_tracker_service_->SeedAccountInfo(gaia_id, email);
 }
 #endif
 

@@ -8,7 +8,7 @@
 #include "base/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
-#include "base/scoped_observer.h"
+#include "base/scoped_observation.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
@@ -66,11 +66,13 @@ class HidManagerImpl : public mojom::HidManager, public HidService::Observer {
   // HidService::Observer:
   void OnDeviceAdded(mojom::HidDeviceInfoPtr device_info) override;
   void OnDeviceRemoved(mojom::HidDeviceInfoPtr device_info) override;
+  void OnDeviceChanged(mojom::HidDeviceInfoPtr device_info) override;
 
   std::unique_ptr<HidService> hid_service_;
   mojo::ReceiverSet<mojom::HidManager> receivers_;
   mojo::AssociatedRemoteSet<mojom::HidManagerClient> clients_;
-  ScopedObserver<HidService, HidService::Observer> hid_service_observer_;
+  base::ScopedObservation<HidService, HidService::Observer>
+      hid_service_observation_{this};
 
   base::WeakPtrFactory<HidManagerImpl> weak_factory_{this};
   DISALLOW_COPY_AND_ASSIGN(HidManagerImpl);

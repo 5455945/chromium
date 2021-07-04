@@ -70,12 +70,17 @@ class FakeIncomingMessagesListener
     messages_received_.push_back(message);
   }
 
+  void OnComplete(bool success) override { on_complete_result_ = success; }
+
   const std::vector<std::string>& messages_received() {
     return messages_received_;
   }
 
+  absl::optional<bool> on_complete_result() { return on_complete_result_; }
+
  private:
   std::vector<std::string> messages_received_;
+  absl::optional<bool> on_complete_result_;
 };
 
 class ReceiveMessagesExpressTest : public testing::Test {
@@ -84,8 +89,8 @@ class ReceiveMessagesExpressTest : public testing::Test {
       : test_shared_loader_factory_(
             base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
                 &test_url_loader_factory_)) {
-    identity_test_environment_.MakeUnconsentedPrimaryAccountAvailable(
-        kTestAccount);
+    identity_test_environment_.MakePrimaryAccountAvailable(
+        kTestAccount, signin::ConsentLevel::kSignin);
   }
   ~ReceiveMessagesExpressTest() override = default;
 
@@ -109,6 +114,10 @@ class ReceiveMessagesExpressTest : public testing::Test {
 
   const std::vector<std::string>& GetMessagesReceived() {
     return message_listener_.messages_received();
+  }
+
+  absl::optional<bool> OnCompleteResult() {
+    return message_listener_.on_complete_result();
   }
 
   std::string GetFastPathOnlyResponse() {
@@ -149,7 +158,7 @@ class ReceiveMessagesExpressTest : public testing::Test {
   network::TestURLLoaderFactory test_url_loader_factory_;
   scoped_refptr<network::SharedURLLoaderFactory> test_shared_loader_factory_;
 
-  base::Optional<bool> start_receive_success_;
+  absl::optional<bool> start_receive_success_;
   FakeIncomingMessagesListener message_listener_;
   mojo::Receiver<sharing::mojom::IncomingMessagesListener> listener_receiver_{
       &message_listener_};
@@ -240,7 +249,6 @@ TEST_F(ReceiveMessagesExpressTest, SuccessfulPartialResponse) {
 
 TEST_F(ReceiveMessagesExpressTest, StopPreventsPendingTransfer) {
   base::RunLoop run_loop;
-
   StartReceivingMessages(&run_loop, /*token_success=*/true);
 
   // Calls OnDataReceived() in ReceiveMessagesExpress.
@@ -283,4 +291,44 @@ TEST_F(ReceiveMessagesExpressTest, PendingRemoteCleanupDisconnects) {
   // should disconnect.
   session_pending_remote_.reset();
   run_loop_2.Run();
+}
+
+TEST_F(ReceiveMessagesExpressTest, OnCompleteAfterSuccess) {
+  base::RunLoop run_loop;
+  StartReceivingMessages(&run_loop, /*token_success=*/true);
+
+  std::vector<std::string> messages = {"quick brown", "fox"};
+  std::string response = BuildResponseProto(messages).SerializeAsString();
+  GetTestUrlLoaderFactory().AddResponse(kInstantMessagingReceiveMessageAPI,
+                                        response, net::HTTP_OK);
+  run_loop.Run();
+
+  ASSERT_EQ(0, GetTestUrlLoaderFactory().NumPending());
+  ASSERT_TRUE(OnCompleteResult().has_value());
+  EXPECT_TRUE(OnCompleteResult().value());
+}
+
+TEST_F(ReceiveMessagesExpressTest, NoOnCompleteWithoutFastPathReady) {
+  base::RunLoop run_loop;
+  StartReceivingMessages(&run_loop, /*token_success=*/true);
+
+  std::vector<std::string> messages = {"quick brown", "fox"};
+  std::string response =
+      BuildResponseProto(messages, /*include_fast_path_ready=*/false)
+          .SerializeAsString();
+  GetTestUrlLoaderFactory().AddResponse(kInstantMessagingReceiveMessageAPI,
+                                        response, net::HTTP_FORBIDDEN);
+  run_loop.Run();
+
+  ASSERT_EQ(0, GetTestUrlLoaderFactory().NumPending());
+  ASSERT_FALSE(OnCompleteResult().has_value());
+}
+
+TEST_F(ReceiveMessagesExpressTest, FastPathTimeout) {
+  base::RunLoop run_loop;
+  StartReceivingMessages(&run_loop, /*token_success=*/true);
+  run_loop.Run();
+  ASSERT_TRUE(start_receive_success_.has_value());
+  EXPECT_FALSE(start_receive_success_.value());
+  ASSERT_FALSE(OnCompleteResult().has_value());
 }

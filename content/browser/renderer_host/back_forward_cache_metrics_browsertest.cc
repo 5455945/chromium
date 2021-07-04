@@ -24,6 +24,7 @@
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/shell/browser/shell.h"
+#include "content/test/content_browser_test_utils_internal.h"
 #include "net/dns/mock_host_resolver.h"
 #include "services/device/public/cpp/test/scoped_geolocation_overrider.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -36,9 +37,6 @@ using testing::ElementsAre;
 namespace content {
 
 namespace {
-
-constexpr uint64_t kPageShowFeature = static_cast<uint64_t>(
-    blink::scheduler::WebSchedulerTrackedFeature::kPageShowEventListener);
 
 constexpr uint64_t kRequestedGeolocationPermissionFeature =
     static_cast<uint64_t>(blink::scheduler::WebSchedulerTrackedFeature::
@@ -109,7 +107,13 @@ class BackForwardCacheMetricsBrowserTest : public ContentBrowserTest,
   std::unique_ptr<device::ScopedGeolocationOverrider> geolocation_override_;
 };
 
-IN_PROC_BROWSER_TEST_F(BackForwardCacheMetricsBrowserTest, UKM) {
+// https://crbug.com/1219373 fails with BFCache field trial testing config.
+#if defined(OS_ANDROID)
+#define MAYBE_UKM DISABLED_UKM
+#else
+#define MAYBE_UKM UKM
+#endif
+IN_PROC_BROWSER_TEST_F(BackForwardCacheMetricsBrowserTest, MAYBE_UKM) {
   ukm::TestAutoSetUkmRecorder recorder;
 
   const GURL url1(
@@ -185,54 +189,6 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheMetricsBrowserTest, UKM) {
   EXPECT_THAT(recorder.GetEntries("HistoryNavigation", {last_navigation_id}),
               testing::ElementsAre(UkmEntry{id6, {{last_navigation_id, id2}}},
                                    UkmEntry{id9, {{last_navigation_id, id1}}}));
-}
-
-IN_PROC_BROWSER_TEST_F(BackForwardCacheMetricsBrowserTest,
-                       NavigatedToTheMostRecentEntry) {
-  ukm::TestAutoSetUkmRecorder recorder;
-
-  const GURL url1(
-      embedded_test_server()->GetURL("/frame_tree/page_with_one_frame.html"));
-  const GURL url2(embedded_test_server()->GetURL("/title1.html"));
-  const char kChildFrameId[] = "child0";
-
-  EXPECT_TRUE(NavigateToURL(shell(), url1));
-  EXPECT_TRUE(
-      NavigateIframeToURL(shell()->web_contents(), kChildFrameId, url2));
-  EXPECT_TRUE(NavigateToURL(shell(), url2));
-
-  {
-    // We are waiting for two navigations here: main frame and subframe.
-    TestNavigationObserver navigation_observer(shell()->web_contents(), 2);
-    shell()->GoBackOrForward(-2);
-    navigation_observer.WaitForNavigationFinished();
-  }
-
-  {
-    TestNavigationObserver navigation_observer(shell()->web_contents());
-    shell()->GoBackOrForward(1);
-    navigation_observer.WaitForNavigationFinished();
-  }
-
-  {
-    TestNavigationObserver navigation_observer(shell()->web_contents());
-    shell()->GoBackOrForward(1);
-    navigation_observer.WaitForNavigationFinished();
-  }
-  // The navigation entries are:
-  // [url1(subframe), url1(url2), *url2].
-
-  std::string navigated_to_last_entry =
-      "NavigatedToTheMostRecentEntryForDocument";
-
-  // The first back navigation goes to the url1(subframe) entry, while the last
-  // active entry for that document was url1(url2).
-  // The second back/forward navigation is a subframe one and should be ignored.
-  // The last one navigates to the actual entry.
-  EXPECT_THAT(
-      recorder.GetMetrics("HistoryNavigation", {navigated_to_last_entry}),
-      testing::ElementsAre(UkmMetrics{{navigated_to_last_entry, false}},
-                           UkmMetrics{{navigated_to_last_entry, true}}));
 }
 
 IN_PROC_BROWSER_TEST_F(BackForwardCacheMetricsBrowserTest, CloneAndGoBack) {
@@ -497,9 +453,8 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheMetricsBrowserTest, Features_MainFrame) {
   // ukm::SourceId id2 = ToSourceId(navigation_ids_[1]);
   ukm::SourceId id3 = ToSourceId(navigation_ids_[2]);
 
-  EXPECT_THAT(
-      GetFeatureUsageMetrics(&recorder),
-      testing::ElementsAre(FeatureUsage{id3, 1 << kPageShowFeature, 0, 0}));
+  EXPECT_THAT(GetFeatureUsageMetrics(&recorder),
+              testing::ElementsAre(FeatureUsage{id3, 0, 0, 0}));
 }
 
 IN_PROC_BROWSER_TEST_F(BackForwardCacheMetricsBrowserTest,
@@ -524,13 +479,18 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheMetricsBrowserTest,
   // ukm::SourceId id2 = ToSourceId(navigation_ids_[1]);
   ukm::SourceId id3 = ToSourceId(navigation_ids_[2]);
 
-  EXPECT_THAT(
-      GetFeatureUsageMetrics(&recorder),
-      testing::ElementsAre(FeatureUsage{id3, 1 << kPageShowFeature, 0, 0}));
+  EXPECT_THAT(GetFeatureUsageMetrics(&recorder),
+              testing::ElementsAre(FeatureUsage{id3, 0, 0, 0}));
 }
 
+// https://crbug.com/1219373 fails with BFCache field trial testing config.
+#if defined(OS_ANDROID)
+#define MAYBE_Features_SameOriginSubframes DISABLED_Features_SameOriginSubframes
+#else
+#define MAYBE_Features_SameOriginSubframes Features_SameOriginSubframes
+#endif
 IN_PROC_BROWSER_TEST_F(BackForwardCacheMetricsBrowserTest,
-                       Features_SameOriginSubframes) {
+                       MAYBE_Features_SameOriginSubframes) {
   ukm::TestAutoSetUkmRecorder recorder;
 
   const GURL url1(embedded_test_server()->GetURL(
@@ -552,9 +512,8 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheMetricsBrowserTest,
   // ukm::SourceId id3 = ToSourceId(navigation_ids_[2]);
   ukm::SourceId id4 = ToSourceId(navigation_ids_[3]);
 
-  EXPECT_THAT(
-      GetFeatureUsageMetrics(&recorder),
-      testing::ElementsAre(FeatureUsage{id4, 0, 1 << kPageShowFeature, 0}));
+  EXPECT_THAT(GetFeatureUsageMetrics(&recorder),
+              testing::ElementsAre(FeatureUsage{id4, 0, 0, 0}));
 }
 
 IN_PROC_BROWSER_TEST_F(BackForwardCacheMetricsBrowserTest,
@@ -581,13 +540,19 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheMetricsBrowserTest,
   // ukm::SourceId id3 = ToSourceId(navigation_ids_[2]);
   ukm::SourceId id4 = ToSourceId(navigation_ids_[3]);
 
-  EXPECT_THAT(
-      GetFeatureUsageMetrics(&recorder),
-      testing::ElementsAre(FeatureUsage{id4, 0, 1 << kPageShowFeature, 0}));
+  EXPECT_THAT(GetFeatureUsageMetrics(&recorder),
+              testing::ElementsAre(FeatureUsage{id4, 0, 0, 0}));
 }
 
+// https://crbug.com/1219373 fails with BFCache field trial testing config.
+#if defined(OS_ANDROID)
+#define MAYBE_Features_CrossOriginSubframes \
+  DISABLED_Features_CrossOriginSubframes
+#else
+#define MAYBE_Features_CrossOriginSubframes Features_CrossOriginSubframes
+#endif
 IN_PROC_BROWSER_TEST_F(BackForwardCacheMetricsBrowserTest,
-                       Features_CrossOriginSubframes) {
+                       MAYBE_Features_CrossOriginSubframes) {
   ukm::TestAutoSetUkmRecorder recorder;
 
   const GURL url1(embedded_test_server()->GetURL(
@@ -610,9 +575,8 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheMetricsBrowserTest,
   // ukm::SourceId id3 = ToSourceId(navigation_ids_[2]);
   ukm::SourceId id4 = ToSourceId(navigation_ids_[3]);
 
-  EXPECT_THAT(
-      GetFeatureUsageMetrics(&recorder),
-      testing::ElementsAre(FeatureUsage{id4, 0, 0, 1 << kPageShowFeature}));
+  EXPECT_THAT(GetFeatureUsageMetrics(&recorder),
+              testing::ElementsAre(FeatureUsage{id4, 0, 0, 0}));
 }
 
 IN_PROC_BROWSER_TEST_F(BackForwardCacheMetricsBrowserTest, DedicatedWorker) {
@@ -867,8 +831,7 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheEnabledMetricsBrowserTest,
 
   // Make url1 ineligible for caching so that when we navigate back it doesn't
   // fetch the RenderFrameHost from the back-forward cache.
-  content::BackForwardCache::DisableForRenderFrameHost(
-      rfh_url1, "BackForwardCacheMetricsBrowserTest");
+  DisableForRenderFrameHostForTesting(rfh_url1);
   EXPECT_TRUE(NavigateToURL(shell(), url3));
 
   // 6) Go back and reload.

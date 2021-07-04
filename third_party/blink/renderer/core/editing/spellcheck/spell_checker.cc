@@ -30,6 +30,7 @@
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/web/web_text_check_client.h"
 #include "third_party/blink/public/web/web_text_decoration_type.h"
+#include "third_party/blink/renderer/core/clipboard/data_transfer.h"
 #include "third_party/blink/renderer/core/clipboard/data_transfer_access_policy.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
@@ -519,6 +520,10 @@ void SpellChecker::ReplaceMisspelledRange(const String& text) {
 
   // 'beforeinput' event handler may destroy target frame.
   if (current_document != GetFrame().GetDocument())
+    return;
+
+  // No DOM mutation if EditContext is active.
+  if (GetFrame().GetInputMethodController().GetActiveEditContext())
     return;
 
   // TODO(editing-dev): The use of UpdateStyleAndLayout

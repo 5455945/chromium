@@ -405,8 +405,8 @@ class DiceBrowserTest : public InProcessBrowserTest,
   // Signin with a main account and add token for a secondary account.
   void SetupSignedInAccounts() {
     // Signin main account.
-    AccountInfo primary_account_info =
-        signin::MakePrimaryAccountAvailable(GetIdentityManager(), main_email_);
+    AccountInfo primary_account_info = signin::MakePrimaryAccountAvailable(
+        GetIdentityManager(), main_email_, signin::ConsentLevel::kSync);
     ASSERT_TRUE(
         GetIdentityManager()->HasAccountWithRefreshToken(GetMainAccountID()));
     ASSERT_FALSE(
@@ -963,15 +963,8 @@ IN_PROC_BROWSER_TEST_F(DiceBrowserTest, EnableSyncAfterToken) {
         auto url =
             content::Details<content::LoadNotificationDetails>(details)->url;
         // Some test flags (e.g. ForceWebRequestProxyForTest) can change whether
-        // the reported NTP URL is the virtual chrome://newtab or one of the
-        // concrete chrome://new-tab-page or
-        // chrome-search://local-ntp/local-ntp.html. As far as this test is
-        // concerned either URL is fine.
-        auto concrete_ntp_url =
-            base::FeatureList::IsEnabled(ntp_features::kWebUI)
-                ? GURL(chrome::kChromeUINewTabPageURL)
-                : GURL(chrome::kChromeSearchLocalNtpUrl);
-        return url == concrete_ntp_url ||
+        // the reported NTP URL is chrome://newtab or chrome://new-tab-page.
+        return url == GURL(chrome::kChromeUINewTabPageURL) ||
                url == GURL(chrome::kChromeUINewTabURL);
       }));
 
@@ -987,8 +980,7 @@ IN_PROC_BROWSER_TEST_F(DiceBrowserTest, EnableSyncAfterToken) {
   ntp_url_observer.Wait();
 
   // Dismiss the Sync confirmation UI.
-  EXPECT_TRUE(login_ui_test_utils::ConfirmSyncConfirmationDialog(
-      browser(), base::TimeDelta::FromSeconds(30)));
+  EXPECT_TRUE(login_ui_test_utils::ConfirmSyncConfirmationDialog(browser()));
 }
 
 // Tests that Sync is enabled if the ENABLE_SYNC response is received before the
@@ -1049,8 +1041,7 @@ IN_PROC_BROWSER_TEST_F(DiceBrowserTest, MAYBE_EnableSyncBeforeToken) {
   ntp_url_observer.Wait();
 
   // Dismiss the Sync confirmation UI.
-  EXPECT_TRUE(login_ui_test_utils::ConfirmSyncConfirmationDialog(
-      browser(), base::TimeDelta::FromSeconds(30)));
+  EXPECT_TRUE(login_ui_test_utils::ConfirmSyncConfirmationDialog(browser()));
 }
 
 // Tests that turning off Dice via preferences works.
@@ -1101,7 +1092,8 @@ IN_PROC_BROWSER_TEST_F(DiceBrowserTest, TurnOffDice) {
 // Checks that Dice is disabled in incognito mode.
 IN_PROC_BROWSER_TEST_F(DiceBrowserTest, Incognito) {
   Browser* incognito_browser = Browser::Create(Browser::CreateParams(
-      browser()->profile()->GetPrimaryOTRProfile(), true));
+      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true),
+      true));
 
   // Check that Dice is disabled.
   EXPECT_FALSE(AccountConsistencyModeManager::IsDiceEnabledForProfile(
@@ -1169,6 +1161,8 @@ IN_PROC_BROWSER_TEST_F(DiceManageAccountBrowserTest,
       local_state->GetList(prefs::kProfilesDeleted);
   EXPECT_TRUE(deleted_profiles);
   EXPECT_EQ(1U, deleted_profiles->GetList().size());
+
+  content::RunAllTasksUntilIdle();
 
   // Verify that there is an active profile.
   Profile* initial_profile = browser()->profile();

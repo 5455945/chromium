@@ -83,17 +83,12 @@ class PerDeviceProvisioningPermissionRequest
     return permissions::RequestType::kProtectedMediaIdentifier;
   }
 
-  base::string16 GetMessageText() const final {
+  std::u16string GetMessageText() const final {
     // Note that the string is specific to per-device provisioning.
     return l10n_util::GetStringFUTF16(
         IDS_PROTECTED_MEDIA_IDENTIFIER_PER_DEVICE_PROVISIONING_INFOBAR_TEXT,
         url_formatter::FormatUrlForSecurityDisplay(
             GetOrigin(), url_formatter::SchemeDisplay::OMIT_CRYPTOGRAPHIC));
-  }
-
-  base::string16 GetMessageTextFragment() const final {
-    return l10n_util::GetStringUTF16(
-        IDS_PROTECTED_MEDIA_IDENTIFIER_PERMISSION_FRAGMENT);
   }
 
   GURL GetOrigin() const final { return origin_.GetURL(); }

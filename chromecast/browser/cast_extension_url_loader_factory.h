@@ -5,8 +5,6 @@
 #ifndef CHROMECAST_BROWSER_CAST_EXTENSION_URL_LOADER_FACTORY_H_
 #define CHROMECAST_BROWSER_CAST_EXTENSION_URL_LOADER_FACTORY_H_
 
-#include <memory>
-
 #include "base/macros.h"
 #include "base/no_destructor.h"
 #include "components/keyed_service/content/browser_context_keyed_service_shutdown_notifier_factory.h"
@@ -64,7 +62,6 @@ class CastExtensionURLLoaderFactory
   // network::mojom::URLLoaderFactory:
   void CreateLoaderAndStart(
       mojo::PendingReceiver<network::mojom::URLLoader> loader_receiver,
-      int32_t routing_id,
       int32_t request_id,
       uint32_t options,
       const network::ResourceRequest& request,

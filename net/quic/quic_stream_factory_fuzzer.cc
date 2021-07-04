@@ -6,7 +6,7 @@
 
 #include <fuzzer/FuzzedDataProvider.h>
 
-#include "base/stl_util.h"
+#include "base/cxx17_backports.h"
 #include "net/base/network_isolation_key.h"
 #include "net/base/test_completion_callback.h"
 #include "net/cert/ct_policy_enforcer.h"
@@ -15,6 +15,7 @@
 #include "net/cert/x509_certificate.h"
 #include "net/dns/context_host_resolver.h"
 #include "net/dns/fuzzed_host_resolver_util.h"
+#include "net/dns/public/secure_dns_policy.h"
 #include "net/http/http_server_properties.h"
 #include "net/http/transport_security_state.h"
 #include "net/quic/mock_crypto_client_stream_factory.h"
@@ -32,7 +33,7 @@ namespace net {
 
 namespace {
 
-const char kCertData[] = {
+const uint8_t kCertData[] = {
 #include "net/data/ssl/certificates/wildcard.inc"
 };
 
@@ -58,7 +59,7 @@ struct Env {
     crypto_client_stream_factory.set_use_mock_crypter(true);
     cert_verifier = std::make_unique<MockCertVerifier>();
     verify_details.cert_verify_result.verified_cert =
-        X509Certificate::CreateFromBytes(kCertData, base::size(kCertData));
+        X509Certificate::CreateFromBytes(kCertData);
     CHECK(verify_details.cert_verify_result.verified_cert);
     verify_details.cert_verify_result.is_issued_by_known_root = true;
   }
@@ -147,8 +148,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
   request.Request(
       env->host_port_pair, version, PRIVACY_MODE_DISABLED, DEFAULT_PRIORITY,
-      SocketTag(), NetworkIsolationKey(), false /* disable_secure_dns */,
-      kCertVerifyFlags, GURL(kUrl), env->net_log, &net_error_details,
+      SocketTag(), NetworkIsolationKey(), SecureDnsPolicy::kAllow,
+      true /* use_dns_aliases */, kCertVerifyFlags, GURL(kUrl), env->net_log,
+      &net_error_details,
       /*failed_on_default_network_callback=*/CompletionOnceCallback(),
       callback.callback());
 
@@ -157,7 +159,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       request.ReleaseSessionHandle();
   if (!session)
     return 0;
-  std::unique_ptr<HttpStream> stream(new QuicHttpStream(std::move(session)));
+  auto dns_aliases = session->GetDnsAliasesForSessionKey(request.session_key());
+  auto stream = std::make_unique<QuicHttpStream>(std::move(session),
+                                                 std::move(dns_aliases));
 
   HttpRequestInfo request_info;
   request_info.method = kMethod;

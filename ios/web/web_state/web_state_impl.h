@@ -17,7 +17,6 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
-#include "base/strings/string16.h"
 #include "base/values.h"
 #import "ios/web/js_messaging/web_frames_manager_impl.h"
 #import "ios/web/navigation/navigation_manager_delegate.h"
@@ -46,7 +45,6 @@ class NavigationContextImpl;
 class NavigationManager;
 class SessionCertificatePolicyCacheImpl;
 class WebFrame;
-class WebInterstitialImpl;
 class WebUIIOS;
 
 // Implementation of WebState.
@@ -97,7 +95,7 @@ class WebStateImpl : public WebState,
 
   // Called when a script command is received.
   void OnScriptCommandReceived(const std::string& command,
-                               const base::DictionaryValue& value,
+                               const base::Value& value,
                                const GURL& page_url,
                                bool user_is_interacting,
                                web::WebFrame* sender_frame);
@@ -137,12 +135,26 @@ class WebStateImpl : public WebState,
   // that is the point where MIME type is set from HTTP headers.
   void SetContentsMimeType(const std::string& mime_type);
 
-  // Returns whether the navigation corresponding to |request| should be allowed
-  // to continue by asking its policy deciders. Defaults to
-  // PolicyDecision::Allow().
-  WebStatePolicyDecider::PolicyDecision ShouldAllowRequest(
+  // Decides whether the navigation corresponding to |request| should be
+  // allowed to continue by asking its policy deciders, and calls |callback|
+  // with the decision. Defaults to PolicyDecision::Allow(). If at least one
+  // policy decider's decision is PolicyDecision::Cancel(), the final result is
+  // PolicyDecision::Cancel(). Otherwise, if at least one policy decider's
+  // decision is PolicyDecision::CancelAndDisplayError(), the final result is
+  // PolicyDecision::CancelAndDisplayError(), with the error corresponding to
+  // the first PolicyDecision::CancelAndDisplayError() result that was received.
+  void ShouldAllowRequest(
       NSURLRequest* request,
-      const WebStatePolicyDecider::RequestInfo& request_info);
+      const WebStatePolicyDecider::RequestInfo& request_info,
+      WebStatePolicyDecider::PolicyDecisionCallback callback);
+
+  // Decides whether the navigation corresponding to |response| should
+  // be allowed to display an error page if an error occurs, by asking its
+  // policy deciders. If at least one policy decider's decision is false,
+  // returns false; otherwise returns true.
+  bool ShouldAllowErrorPageToBeDisplayed(NSURLResponse* response,
+                                         bool for_main_frame);
+
   // Decides whether the navigation corresponding to |response| should be
   // allowed to continue by asking its policy deciders, and calls |callback|
   // with the decision. Defaults to PolicyDecision::Allow(). If at least one
@@ -154,7 +166,7 @@ class WebStateImpl : public WebState,
   void ShouldAllowResponse(
       NSURLResponse* response,
       bool for_main_frame,
-      base::OnceCallback<void(WebStatePolicyDecider::PolicyDecision)> callback);
+      WebStatePolicyDecider::PolicyDecisionCallback callback);
 
   // Determines whether the given link with |link_url| should show a preview on
   // force touch.
@@ -203,13 +215,13 @@ class WebStateImpl : public WebState,
   CRWSessionStorage* BuildSessionStorage() override;
   CRWJSInjectionReceiver* GetJSInjectionReceiver() const override;
   void LoadData(NSData* data, NSString* mime_type, const GURL& url) override;
-  void ExecuteJavaScript(const base::string16& javascript) override;
-  void ExecuteJavaScript(const base::string16& javascript,
+  void ExecuteJavaScript(const std::u16string& javascript) override;
+  void ExecuteJavaScript(const std::u16string& javascript,
                          JavaScriptResultCallback callback) override;
   void ExecuteUserJavaScript(NSString* javaScript) override;
   const std::string& GetContentsMimeType() const override;
   bool ContentIsHTML() const override;
-  const base::string16& GetTitle() const override;
+  const std::u16string& GetTitle() const override;
   bool IsLoading() const override;
   double GetLoadingProgress() const override;
   bool IsCrashed() const override;
@@ -219,8 +231,6 @@ class WebStateImpl : public WebState,
   const GURL& GetVisibleURL() const override;
   const GURL& GetLastCommittedURL() const override;
   GURL GetCurrentURL(URLVerificationTrustLevel* trust_level) const override;
-  bool IsShowingWebInterstitial() const override;
-  WebInterstitial* GetWebInterstitial() const override;
   base::CallbackListSubscription AddScriptCommandCallback(
       const ScriptCommandCallback& callback,
       const std::string& command_prefix) override;
@@ -235,6 +245,8 @@ class WebStateImpl : public WebState,
   void AddObserver(WebStateObserver* observer) override;
   void RemoveObserver(WebStateObserver* observer) override;
   void CloseWebState() override;
+  bool SetSessionStateData(NSData* data) override;
+  NSData* SessionStateData() override;
 
   // Returns the UserAgent that should be used to load the |url| if it is a new
   // navigation. This will be Mobile or Desktop.
@@ -248,9 +260,6 @@ class WebStateImpl : public WebState,
   // will return |user_agent|.
   // GetUserAgentForSessionRestoration() will always return |user_agent|.
   void SetUserAgent(UserAgentType user_agent);
-
-  // Adds |interstitial|'s view to the web controller's content view.
-  void ShowWebInterstitial(WebInterstitialImpl* interstitial);
 
   // Notifies the delegate that the load progress was updated.
   void SendChangeLoadProgress(double progress);
@@ -266,6 +275,9 @@ class WebStateImpl : public WebState,
                            NSString* message_text,
                            NSString* default_prompt_text,
                            DialogClosedCallback callback);
+
+  // Returns true if a javascript dialog is running.
+  bool IsJavaScriptDialogRunning();
 
   // Instructs the delegate to create a new web state. Called when this WebState
   // wants to open a new window. |url| is the URL of the new window;
@@ -285,11 +297,8 @@ class WebStateImpl : public WebState,
   void CancelDialogs();
 
   // NavigationManagerDelegate:
-  void ClearTransientContent() override;
   void ClearDialogs() override;
   void RecordPageStateInNavigationItem() override;
-  void OnGoToIndexSameDocumentNavigation(NavigationInitiationType type,
-                                         bool has_user_gesture) override;
   void LoadCurrentItem(NavigationInitiationType type) override;
   void LoadIfNecessary() override;
   void Reload() override;
@@ -375,11 +384,8 @@ class WebStateImpl : public WebState,
 
   std::string mime_type_;
 
-  // Weak pointer to the interstitial page being displayed, if any.
-  WebInterstitialImpl* interstitial_;
-
   // Returned by reference.
-  base::string16 empty_string16_;
+  std::u16string empty_string16_;
 
   // Callbacks associated to command prefixes.
   std::map<std::string,

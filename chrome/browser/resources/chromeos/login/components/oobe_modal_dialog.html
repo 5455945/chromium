@@ -7,8 +7,9 @@
 <link rel="import" href="chrome://resources/cr_elements/cr_dialog/cr_dialog.html">
 <link rel="import" href="chrome://resources/cr_elements/shared_style_css.html">
 
+<link rel="import" href="/components/buttons/oobe_text_button.html">
 <link rel="import" href="/components/common_styles.html">
-<link rel="import" href="/components/oobe_i18n_behavior.html">
+<link rel="import" href="/components/behaviors/oobe_i18n_behavior.html">
 
 <!--
 OOBE Modal Dialog
@@ -45,6 +46,7 @@ The dialog provides two properties that can be set directly from HTML.
       }
 
       #contentContainer {
+        height: var(--oobe-modal-dialog-content-height);
         @apply --oobe-default-font;
         padding-bottom:
             var(--oobe-modal-dialog-content-slot-padding-bottom, 12px);

@@ -161,7 +161,7 @@ class TestModelTypeSyncBridge : public FakeModelTypeSyncBridge {
     return supports_incremental_updates_;
   }
 
-  base::Optional<ModelError> MergeSyncData(
+  absl::optional<ModelError> MergeSyncData(
       std::unique_ptr<MetadataChangeList> metadata_change_list,
       EntityChangeList entity_data) override {
     merge_call_count_++;
@@ -173,7 +173,7 @@ class TestModelTypeSyncBridge : public FakeModelTypeSyncBridge {
     return FakeModelTypeSyncBridge::MergeSyncData(
         std::move(metadata_change_list), std::move(entity_data));
   }
-  base::Optional<ModelError> ApplySyncChanges(
+  absl::optional<ModelError> ApplySyncChanges(
       std::unique_ptr<MetadataChangeList> metadata_change_list,
       EntityChangeList entity_changes) override {
     apply_call_count_++;
@@ -439,7 +439,7 @@ class ClientTagBasedModelTypeProcessorTest : public ::testing::Test {
     EXPECT_TRUE(expect_error_);
     histogram_tester_->ExpectBucketCount("Sync.ModelTypeErrorSite.PREFERENCE",
                                          *expect_error_, /*count=*/1);
-    expect_error_ = base::nullopt;
+    expect_error_ = absl::nullopt;
     // Do not expect for a start callback anymore.
     if (run_loop_) {
       run_loop_->Quit();
@@ -472,7 +472,7 @@ class ClientTagBasedModelTypeProcessorTest : public ::testing::Test {
   MockModelTypeWorker* worker_;
 
   // Whether to expect an error from the processor (and from which site).
-  base::Optional<ClientTagBasedModelTypeProcessor::ErrorSite> expect_error_;
+  absl::optional<ClientTagBasedModelTypeProcessor::ErrorSite> expect_error_;
   std::unique_ptr<base::HistogramTester> histogram_tester_;
 };
 
@@ -572,8 +572,14 @@ TEST_F(ClientTagBasedModelTypeProcessorTest, ShouldMergeLocalAndRemoteChanges) {
 
   EXPECT_EQ(0, bridge()->merge_call_count());
   // Initial sync with one server item.
+  base::HistogramTester histogram_tester;
   worker()->UpdateFromServer(GetHash(kKey2), GenerateSpecifics(kKey2, kValue2));
   EXPECT_EQ(1, bridge()->merge_call_count());
+
+  histogram_tester.ExpectUniqueSample(
+      "Sync.ModelTypeInitialUpdateReceived",
+      /*sample=*/syncer::ModelTypeHistogramValue(GetModelType()),
+      /*expected_count=*/1);
 
   // Now have data and metadata for both items, as well as a commit request for
   // the local item.
@@ -629,11 +635,17 @@ TEST_F(ClientTagBasedModelTypeProcessorTest, ShouldApplyIncrementalUpdates) {
 
   // Check that data coming from sync is treated as a normal GetUpdates.
   OnSyncStarting();
+  base::HistogramTester histogram_tester;
   worker()->UpdateFromServer(GetHash(kKey2), GenerateSpecifics(kKey2, kValue2));
   EXPECT_EQ(0, bridge()->merge_call_count());
   EXPECT_EQ(1, bridge()->apply_call_count());
   EXPECT_EQ(2U, db()->data_count());
   EXPECT_EQ(2U, db()->metadata_count());
+
+  histogram_tester.ExpectUniqueSample(
+      "Sync.ModelTypeIncrementalUpdateReceived",
+      /*sample=*/syncer::ModelTypeHistogramValue(GetModelType()),
+      /*expected_count=*/1);
 }
 
 // Test that an error during the merge is propagated to the error handler.
@@ -2371,11 +2383,7 @@ TEST_F(ClientTagBasedModelTypeProcessorTest,
   type_processor()->ModelReadyToSync(std::move(metadata_batch));
   ASSERT_TRUE(type_processor()->IsModelReadyToSyncForTest());
 
-  base::HistogramTester histogram_tester;
   OnSyncStarting();
-  histogram_tester.ExpectBucketCount(
-      "Sync.PersistedModelTypeIdMismatch",
-      /*bucket=*/ModelTypeHistogramValue(GetModelType()), /*count=*/1);
 
   // Model should still be ready to sync.
   ASSERT_TRUE(type_processor()->IsModelReadyToSyncForTest());
@@ -2777,7 +2785,6 @@ TEST_F(ClientTagBasedModelTypeProcessorTest, ShouldResetOnInvalidDataTypeId) {
 
   ResetStateWriteItem(kKey1, kValue1);
 
-  base::HistogramTester histogram_tester;
   OnSyncStarting();
   // Set different data type id.
   sync_pb::ModelTypeState model_type_state = db()->model_type_state();
@@ -2790,8 +2797,6 @@ TEST_F(ClientTagBasedModelTypeProcessorTest, ShouldResetOnInvalidDataTypeId) {
 
   ModelReadyToSync();
   EXPECT_EQ(0U, ProcessorEntityCount());
-  histogram_tester.ExpectUniqueSample("Sync.PersistedModelTypeIdMismatch",
-                                      ModelTypeForHistograms::kPreferences, 1);
 }
 
 TEST_F(ClientTagBasedModelTypeProcessorTest,

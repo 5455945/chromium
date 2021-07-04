@@ -13,6 +13,9 @@
 
 namespace updater {
 
+constexpr int kRegistrationSuccess = 0;
+constexpr int kRegistrationAlreadyRegistered = 1;
+
 struct RegistrationRequest {
   RegistrationRequest();
   RegistrationRequest(const RegistrationRequest&);
@@ -43,12 +46,10 @@ struct RegistrationRequest {
 };
 
 struct RegistrationResponse {
-  RegistrationResponse() = default;
   explicit RegistrationResponse(int status_code) : status_code(status_code) {}
-  ~RegistrationResponse() = default;
 
-  // Status code of the registration. 0 = success. All others = failure.
-  int status_code = 0;
+  // Status code of the registration.
+  int status_code = kRegistrationSuccess;
 };
 
 }  // namespace updater

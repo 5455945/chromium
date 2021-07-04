@@ -5,17 +5,14 @@
 #include <map>
 #include <string>
 
-#include "base/base_switches.h"
 #include "base/command_line.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/guid.h"
 #include "base/macros.h"
 #include "base/path_service.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -28,30 +25,27 @@
 #include "chrome/browser/ui/autofill/chrome_autofill_client.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
-#include "chrome/test/base/test_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/autofill/content/browser/content_autofill_driver.h"
 #include "components/autofill/content/browser/content_autofill_driver_factory.h"
-#include "components/autofill/core/browser/autofill_manager.h"
-#include "components/autofill/core/browser/autofill_manager_test_delegate.h"
 #include "components/autofill/core/browser/autofill_test_utils.h"
+#include "components/autofill/core/browser/browser_autofill_manager.h"
+#include "components/autofill/core/browser/browser_autofill_manager_test_delegate.h"
 #include "components/autofill/core/browser/data_model/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/credit_card.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/geo/state_names.h"
 #include "components/autofill/core/browser/proto/server.pb.h"
 #include "components/autofill/core/common/autofill_features.h"
-#include "components/autofill/core/common/autofill_switches.h"
 #include "components/autofill/core/common/autofill_util.h"
+#include "components/variations/variations_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/test_utils.h"
 #include "net/dns/mock_host_resolver.h"
 #include "services/network/public/cpp/data_element.h"
-#include "services/network/public/cpp/network_switches.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using captured_sites_test_utils::CapturedSiteParams;
@@ -93,10 +87,10 @@ class AutofillCapturedSitesInteractiveTest
                     content::RenderFrameHost* frame) override {
     content::WebContents* web_contents =
         content::WebContents::FromRenderFrameHost(frame);
-    AutofillManager* autofill_manager =
+    BrowserAutofillManager* autofill_manager =
         ContentAutofillDriverFactory::FromWebContents(web_contents)
             ->DriverForFrame(frame)
-            ->autofill_manager();
+            ->browser_autofill_manager();
     autofill_manager->SetTestDelegate(test_delegate());
 
     int tries = 0;
@@ -155,8 +149,7 @@ class AutofillCapturedSitesInteractiveTest
                          base::CompareCase::INSENSITIVE_ASCII)) {
       if (type == autofill::CREDIT_CARD_NAME_FIRST ||
           type == autofill::CREDIT_CARD_NAME_LAST) {
-        card_.SetRawInfo(autofill::CREDIT_CARD_NAME_FULL,
-                         base::ASCIIToUTF16(""));
+        card_.SetRawInfo(autofill::CREDIT_CARD_NAME_FULL, u"");
       }
       card_.SetRawInfo(type, base::UTF8ToUTF16(field_value));
     } else {
@@ -173,7 +166,7 @@ class AutofillCapturedSitesInteractiveTest
 
  protected:
   AutofillCapturedSitesInteractiveTest()
-      : profile_(test::GetFullProfile()),
+      : profile_(test::GetIncompleteProfile2()),
         card_(CreditCard(base::GenerateGUID(), "http://www.example.com")) {
     for (size_t i = NO_SERVER_DATA; i < MAX_VALID_FIELD_TYPE; ++i) {
       ServerFieldType field_type = static_cast<ServerFieldType>(i);
@@ -236,10 +229,10 @@ class AutofillCapturedSitesInteractiveTest
     // elements in a form to determine if the form is ready for interaction.
     feature_list_.InitWithFeatures(
         /*enabled_features=*/{features::kAutofillShowTypePredictions},
-        /*disabled_features=*/{features::kAutofillCacheQueryResponses});
-    command_line->AppendSwitch(switches::kShowAutofillTypePredictions);
-    command_line->AppendSwitchASCII(::switches::kForceFieldTrials, "Foo/Bar");
-
+        /*disabled_features=*/{});
+    command_line->AppendSwitchASCII(
+        variations::switches::kVariationsOverrideCountry, "us");
+    AutofillUiTest::SetUpCommandLine(command_line);
     captured_sites_test_utils::TestRecipeReplayer::SetUpCommandLine(
         command_line);
   }
@@ -340,6 +333,12 @@ IN_PROC_BROWSER_TEST_P(AutofillCapturedSitesInteractiveTest, Recipe) {
     }
   }
 }
+
+// This test is called with a dynamic list and will be empty during the Password
+// run instance, so adding GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST a la
+// crbug/1192206
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(
+    AutofillCapturedSitesInteractiveTest);
 INSTANTIATE_TEST_SUITE_P(
     All,
     AutofillCapturedSitesInteractiveTest,

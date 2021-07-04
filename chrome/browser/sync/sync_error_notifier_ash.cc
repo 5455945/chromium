@@ -56,14 +56,19 @@ void ShowSyncSetup(Profile* profile) {
 
 void TriggerSyncKeyRetrieval(Profile* profile) {
   chrome::ScopedTabbedBrowserDisplayer displayer(profile);
-  sync_ui_util::OpenTabForSyncKeyRetrieval(
-      displayer.browser(), syncer::KeyRetrievalTriggerForUMA::kNotification);
+  OpenTabForSyncKeyRetrieval(displayer.browser(),
+                             syncer::KeyRetrievalTriggerForUMA::kNotification);
+}
+
+void TriggerSyncRecoverabilityDegradedFix(Profile* profile) {
+  chrome::ScopedTabbedBrowserDisplayer displayer(profile);
+  OpenTabForSyncKeyRecoverabilityDegraded(displayer.browser());
 }
 
 BubbleViewParameters GetBubbleViewParameters(
     Profile* profile,
     syncer::SyncService* sync_service) {
-  if (sync_ui_util::ShouldShowPassphraseError(sync_service)) {
+  if (ShouldShowSyncPassphraseError(sync_service)) {
     BubbleViewParameters params;
     params.message_id = IDS_SYNC_PASSPHRASE_ERROR_BUBBLE_VIEW_MESSAGE;
     // |profile| is guaranteed to outlive the callback because the ownership of
@@ -74,16 +79,29 @@ BubbleViewParameters GetBubbleViewParameters(
     return params;
   }
 
-  DCHECK(sync_ui_util::ShouldShowSyncKeysMissingError(sync_service));
+  if (ShouldShowSyncKeysMissingError(sync_service, profile->GetPrefs())) {
+    BubbleViewParameters params;
+    params.message_id =
+        sync_service->GetUserSettings()->IsEncryptEverythingEnabled()
+            ? IDS_SYNC_NEEDS_KEYS_FOR_EVERYTHING_ERROR_BUBBLE_VIEW_MESSAGE
+            : IDS_SYNC_NEEDS_KEYS_FOR_PASSWORDS_ERROR_BUBBLE_VIEW_MESSAGE;
+
+    params.click_action = base::BindRepeating(&TriggerSyncKeyRetrieval,
+                                              base::Unretained(profile));
+    return params;
+  }
+
+  DCHECK(ShouldShowTrustedVaultDegradedRecoverabilityError(
+      sync_service, profile->GetPrefs()));
 
   BubbleViewParameters params;
   params.message_id =
       sync_service->GetUserSettings()->IsEncryptEverythingEnabled()
-          ? IDS_SYNC_NEEDS_KEYS_FOR_EVERYTHING_ERROR_BUBBLE_VIEW_MESSAGE
-          : IDS_SYNC_NEEDS_KEYS_FOR_PASSWORDS_ERROR_BUBBLE_VIEW_MESSAGE;
+          ? IDS_SYNC_RECOVERABILITY_DEGRADED_FOR_EVERYTHING_ERROR_BUBBLE_VIEW_MESSAGE
+          : IDS_SYNC_RECOVERABILITY_DEGRADED_FOR_PASSWORDS_ERROR_BUBBLE_VIEW_MESSAGE;
 
-  params.click_action =
-      base::BindRepeating(&TriggerSyncKeyRetrieval, base::Unretained(profile));
+  params.click_action = base::BindRepeating(
+      &TriggerSyncRecoverabilityDegradedFix, base::Unretained(profile));
   return params;
 }
 
@@ -113,8 +131,10 @@ void SyncErrorNotifier::OnStateChanged(syncer::SyncService* service) {
   DCHECK_EQ(service, sync_service_);
 
   const bool should_display_notification =
-      sync_ui_util::ShouldShowPassphraseError(sync_service_) ||
-      sync_ui_util::ShouldShowSyncKeysMissingError(sync_service_);
+      ShouldShowSyncPassphraseError(sync_service_) ||
+      ShouldShowSyncKeysMissingError(service, profile_->GetPrefs()) ||
+      ShouldShowTrustedVaultDegradedRecoverabilityError(service,
+                                                        profile_->GetPrefs());
 
   if (should_display_notification == notification_displayed_) {
     return;
@@ -148,8 +168,7 @@ void SyncErrorNotifier::OnStateChanged(syncer::SyncService* service) {
       ash::CreateSystemNotification(
           message_center::NOTIFICATION_TYPE_SIMPLE, notification_id_,
           l10n_util::GetStringUTF16(IDS_SYNC_ERROR_BUBBLE_VIEW_TITLE),
-          l10n_util::GetStringUTF16(parameters.message_id),
-          l10n_util::GetStringUTF16(IDS_SIGNIN_ERROR_DISPLAY_SOURCE),
+          l10n_util::GetStringUTF16(parameters.message_id), std::u16string(),
           GURL(notification_id_), notifier_id,
           message_center::RichNotificationData(),
           base::MakeRefCounted<message_center::HandleNotificationClickDelegate>(

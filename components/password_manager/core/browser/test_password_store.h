@@ -33,7 +33,8 @@ MATCHER_P(MatchesFormExceptStore, expected, "") {
 // in memory and does all its manipulations on the main thread. Since this
 // is only used for testing, only the parts of the interface that are needed
 // for testing have been implemented.
-class TestPasswordStore : public PasswordStore {
+// TODO(crbug.com/1222591): Implement only the PasswordStoreInterface.
+class TestPasswordStore : public PasswordStore, public PasswordStoreBackend {
  public:
   // We need to qualify password_manager::IsAccountStore with the full
   // namespace, otherwise, it's confused with the method
@@ -78,6 +79,13 @@ class TestPasswordStore : public PasswordStore {
   scoped_refptr<base::SequencedTaskRunner> CreateBackgroundTaskRunner()
       const override;
 
+  // PasswordStoreBackend interface
+  void GetAllLoginsAsync(LoginsReply callback) override;
+  void GetAutofillableLoginsAsync(LoginsReply callback) override;
+  void FillMatchingLoginsAsync(
+      LoginsReply callback,
+      const std::vector<PasswordFormDigest>& forms) override;
+
   // PasswordStore interface
   PasswordStoreChangeList AddLoginImpl(const PasswordForm& form,
                                        AddLoginError* error) override;
@@ -85,13 +93,9 @@ class TestPasswordStore : public PasswordStore {
                                           UpdateLoginError* error) override;
   PasswordStoreChangeList RemoveLoginImpl(const PasswordForm& form) override;
   std::vector<std::unique_ptr<PasswordForm>> FillMatchingLogins(
-      const FormDigest& form) override;
+      const PasswordFormDigest& form) override;
   std::vector<std::unique_ptr<PasswordForm>> FillMatchingLoginsByPassword(
-      const base::string16& plain_text_password) override;
-  bool FillAutofillableLogins(
-      std::vector<std::unique_ptr<PasswordForm>>* forms) override;
-  bool FillBlocklistLogins(
-      std::vector<std::unique_ptr<PasswordForm>>* forms) override;
+      const std::u16string& plain_text_password) override;
   DatabaseCleanupResult DeleteUndecryptableLogins() override;
   std::vector<InteractionsStats> GetSiteStatsImpl(
       const GURL& origin_domain) override;
@@ -115,12 +119,11 @@ class TestPasswordStore : public PasswordStore {
       base::Time delete_end) override;
   void AddSiteStatsImpl(const InteractionsStats& stats) override;
   void RemoveSiteStatsImpl(const GURL& origin_domain) override;
-  std::vector<InteractionsStats> GetAllSiteStatsImpl() override;
   PasswordStoreChangeList AddInsecureCredentialImpl(
       const InsecureCredential& insecure_credentials) override;
   PasswordStoreChangeList RemoveInsecureCredentialsImpl(
       const std::string& signon_realm,
-      const base::string16& username,
+      const std::u16string& username,
       RemoveInsecureCredentialsReason reason) override;
   std::vector<InsecureCredential> GetAllInsecureCredentialsImpl() override;
   std::vector<InsecureCredential> GetMatchingInsecureCredentialsImpl(
@@ -145,6 +148,11 @@ class TestPasswordStore : public PasswordStore {
   bool DeleteAndRecreateDatabaseFile() override;
 
  private:
+  LoginsResult GetAllLoginsInternal();
+  LoginsResult GetAutofillableLoginsInternal();
+  LoginsResult FillMatchingLoginsBulk(
+      const std::vector<PasswordFormDigest>& forms);
+
   const password_manager::IsAccountStore is_account_store_;
 
   PasswordMap stored_passwords_;

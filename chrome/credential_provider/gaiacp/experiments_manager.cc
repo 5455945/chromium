@@ -71,7 +71,7 @@ bool ExperimentsManager::ReloadExperiments(const std::wstring& sid) {
   experiments_file->Read(0, buffer.data(), buffer.size());
   experiments_file.reset();
 
-  base::Optional<base::Value> experiments_data =
+  absl::optional<base::Value> experiments_data =
       base::JSONReader::Read(base::StringPiece(buffer.data(), buffer.size()),
                              base::JSON_ALLOW_TRAILING_COMMAS);
   if (!experiments_data || !experiments_data->is_dict()) {
@@ -146,7 +146,7 @@ bool ExperimentsManager::GetExperimentForUserAsBool(const std::string& sid,
 }
 
 bool ExperimentsManager::ExperimentsEnabled() const {
-  return GetGlobalFlagOrDefault(kExperimentsEnabledRegKey, 0);
+  return GetGlobalFlagOrDefault(kExperimentsEnabledRegKey, 1);
 }
 
 std::vector<std::string> ExperimentsManager::GetExperimentsList() const {

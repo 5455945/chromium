@@ -14,9 +14,12 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
-#include "base/optional.h"
+#include "base/timer/timer.h"
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "device/bluetooth/bluetooth_adapter.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "ui/events/devices/input_device_event_observer.h"
+#include "ui/events/devices/stylus_state.h"
 
 namespace ash {
 
@@ -27,7 +30,8 @@ class PeripheralBatteryListenerTest;
 // several sources, allowing simpler unified observation.
 class ASH_EXPORT PeripheralBatteryListener
     : public chromeos::PowerManagerClient::Observer,
-      public device::BluetoothAdapter::Observer {
+      public device::BluetoothAdapter::Observer,
+      public ui::InputDeviceEventObserver {
  public:
   struct BatteryInfo {
     enum class PeripheralType {
@@ -67,8 +71,9 @@ class ASH_EXPORT PeripheralBatteryListener
 
     BatteryInfo();
     BatteryInfo(const std::string& key,
-                const base::string16& name,
-                base::Optional<uint8_t> level,
+                const std::u16string& name,
+                absl::optional<uint8_t> level,
+                bool battery_report_eligible,
                 base::TimeTicks last_update_timestamp,
                 PeripheralType type,
                 ChargeStatus charge_status,
@@ -81,10 +86,16 @@ class ASH_EXPORT PeripheralBatteryListener
     std::string key;
 
     // Human readable name for the device. It is changeable.
-    base::string16 name;
-    // Battery level within range [0, 100], or unset. This is changeable.
+    std::u16string name;
+    // Battery level within range [0, 100], or unset. This is changeable as
+    // the peripheral charge level changes.
     // TODO(kenalba): explain when we might have an unset state.
-    base::Optional<uint8_t> level;
+    absl::optional<uint8_t> level;
+    // True unless peripheral is known to have unreliable battery reporting.
+    // It is changeable.
+    // TODO(kenalba): specify how a nullopt level and !battery_report_eligible
+    // interact.
+    bool battery_report_eligible = true;
     // Time of last known update of the battery state; this is changeable,
     // and may be updated even if no other fields are; it gives the time of the
     // last known confirmed reading.
@@ -94,8 +105,8 @@ class ASH_EXPORT PeripheralBatteryListener
     // a peripheral notified the system of status, distinct from a periodic
     // poll or poll on powerd restart. Unset (nullopt) if there has never been
     // an active update.
-    base::Optional<base::TimeTicks> last_active_update_timestamp =
-        base::nullopt;
+    absl::optional<base::TimeTicks> last_active_update_timestamp =
+        absl::nullopt;
 
     // Describes whether battery has been used for stylus-related elements,
     // or anything else. Note that stylus information received through the
@@ -158,18 +169,22 @@ class ASH_EXPORT PeripheralBatteryListener
       const std::string& name,
       int level,
       power_manager::PeripheralBatteryStatus_ChargeStatus status,
+      const std::string& serial_number,
       bool active_update) override;
 
   // device::BluetoothAdapter::Observer:
   void DeviceBatteryChanged(
       device::BluetoothAdapter* adapter,
       device::BluetoothDevice* device,
-      base::Optional<uint8_t> new_battery_percentage) override;
+      absl::optional<uint8_t> new_battery_percentage) override;
   void DeviceConnectedStateChanged(device::BluetoothAdapter* adapter,
                                    device::BluetoothDevice* device,
                                    bool is_now_connected) override;
   void DeviceRemoved(device::BluetoothAdapter* adapter,
                      device::BluetoothDevice* device) override;
+
+  //  ui::InputDeviceEventObserver:
+  void OnDeviceListsComplete() override;
 
  private:
   friend class PeripheralBatteryNotifierListenerTest;
@@ -194,6 +209,36 @@ class ASH_EXPORT PeripheralBatteryListener
   FRIEND_TEST_ALL_PREFIXES(PeripheralBatteryListenerTest,
                            MultipleObserverationLifetimeObeyed);
 
+  friend class PeripheralBatteryListenerIncompleteDevicesTest;
+  FRIEND_TEST_ALL_PREFIXES(PeripheralBatteryListenerIncompleteDevicesTest,
+                           GarageCharging);
+  FRIEND_TEST_ALL_PREFIXES(PeripheralBatteryListenerIncompleteDevicesTest,
+                           GarageChargesFully);
+  FRIEND_TEST_ALL_PREFIXES(PeripheralBatteryListenerIncompleteDevicesTest,
+                           GarageChargesFullyFromFiftyPercent);
+  FRIEND_TEST_ALL_PREFIXES(PeripheralBatteryListenerIncompleteDevicesTest,
+                           GarageChargingResumed);
+  FRIEND_TEST_ALL_PREFIXES(PeripheralBatteryListenerIncompleteDevicesTest,
+                           GarageChargingInterrupted);
+
+  // Report whether we are producing a 'battery peripheral' based on
+  // stylus dock/garage switch
+  bool HasSyntheticStylusGarargePeripheral();
+
+  void UpdateSyntheticStylusGarargePeripheral();
+  void GetSwitchStateCallback(ui::StylusState state);
+
+  // Compute the estimated charge level for the docked stylus based on
+  // prior knowledge of stylus charge levels. Returns nullopt if there
+  // was no prior information.
+  absl::optional<uint8_t> DerateLastChargeLevel();
+
+  // Periodic callback used when docked stylus is charging; it will
+  // be provided with the time that charging started, and the derated
+  // charge level at that time.
+  void GarageTimerAction(base::TimeTicks charge_start_time,
+                         absl::optional<uint8_t> start_level);
+
   void NotifyAddingBattery(const BatteryInfo& battery);
   void NotifyRemovingBattery(const BatteryInfo& battery);
   void NotifyUpdatedBatteryLevel(const BatteryInfo& battery);
@@ -217,6 +262,14 @@ class ASH_EXPORT PeripheralBatteryListener
   // PeripheralBatteryListener is an observer of |bluetooth_adapter_| for
   // bluetooth device change/remove events.
   scoped_refptr<device::BluetoothAdapter> bluetooth_adapter_;
+
+  // PeripheralBatteryListener is an observer of InputDeviceEventObserver for
+  // stylus garage insertion/removal messages.
+  void OnStylusStateChanged(ui::StylusState state) override;
+
+  bool synthetic_stylus_garage_peripheral_ = false;
+  absl::optional<ui::StylusState> current_stylus_state_;
+  base::RepeatingTimer garage_charge_timer_;
 
   base::ObserverList<Observer> observers_;
 

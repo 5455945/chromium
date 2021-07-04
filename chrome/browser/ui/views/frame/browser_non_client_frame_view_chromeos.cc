@@ -43,6 +43,8 @@
 #include "ui/aura/env.h"
 #include "ui/base/hit_test.h"
 #include "ui/base/layout.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/models/image_model.h"
 #include "ui/display/screen.h"
 #include "ui/events/gestures/gesture_recognizer.h"
 #include "ui/gfx/canvas.h"
@@ -51,7 +53,6 @@
 #include "ui/gfx/scoped_canvas.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/rect_based_targeting_utils.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
@@ -232,7 +233,7 @@ SkColor BrowserNonClientFrameViewChromeOS::GetCaptionColor(
 
   // Web apps apply a theme color if specified by the extension.
   Browser* browser = browser_view()->browser();
-  base::Optional<SkColor> theme_color =
+  absl::optional<SkColor> theme_color =
       browser->app_controller()->GetThemeColor();
   if (theme_color)
     active_color = views::FrameCaptionButton::GetButtonColor(*theme_color);
@@ -268,10 +269,14 @@ int BrowserNonClientFrameViewChromeOS::NonClientHitTest(
     const gfx::Point& point) {
   int hit_test = chromeos::FrameBorderNonClientHitTest(this, point);
 
-  // When the window is restored we want a large click target above the tabs
-  // to drag the window, so redirect clicks in the tab's shadow to caption.
+  // When the window is restored (and not in tablet split-view mode) we want a
+  // large click target above the tabs to drag the window, so redirect clicks in
+  // the tab's shadow to caption.
   if (hit_test == HTCLIENT && !frame()->IsMaximized() &&
-      !frame()->IsFullscreen()) {
+      !frame()->IsFullscreen() &&
+      !chromeos::TabletState::Get()->InTabletMode()) {
+    // TODO(crbug.com/1213133): Tab Strip hit calculation and bounds logic
+    // should reside in the TabStrip class.
     gfx::Point client_point(point);
     View::ConvertPointToTarget(this, frame()->client_view(), &client_point);
     gfx::Rect tabstrip_shadow_bounds(browser_view()->tabstrip()->bounds());
@@ -401,6 +406,27 @@ void BrowserNonClientFrameViewChromeOS::ChildPreferredSizeChanged(
   }
 }
 
+bool BrowserNonClientFrameViewChromeOS::DoesIntersectRect(
+    const views::View* target,
+    const gfx::Rect& rect) const {
+  DCHECK_EQ(target, this);
+  if (!views::ViewTargeterDelegate::DoesIntersectRect(this, rect)) {
+    // |rect| is outside the frame's bounds.
+    return false;
+  }
+
+  bool should_leave_to_top_container = false;
+#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
+  // In immersive mode, the caption buttons container is reparented to the
+  // TopContainerView and hence |rect| should not be claimed here.  See
+  // BrowserNonClientFrameViewChromeOS::OnImmersiveRevealStarted().
+  should_leave_to_top_container =
+      browser_view()->immersive_mode_controller()->IsRevealed();
+#endif
+
+  return !should_leave_to_top_container;
+}
+
 SkColor BrowserNonClientFrameViewChromeOS::GetTitleColor() {
   return browser_view()->GetRegularOrGuestSession()
              ? kNormalWindowTitleTextColor
@@ -497,9 +523,9 @@ bool BrowserNonClientFrameViewChromeOS::ShouldTabIconViewAnimate() const {
   return current_tab && current_tab->IsLoading();
 }
 
-gfx::ImageSkia BrowserNonClientFrameViewChromeOS::GetFaviconForTabIconView() {
+ui::ImageModel BrowserNonClientFrameViewChromeOS::GetFaviconForTabIconView() {
   views::WidgetDelegate* delegate = frame()->widget_delegate();
-  return delegate ? delegate->GetWindowIcon() : gfx::ImageSkia();
+  return delegate ? delegate->GetWindowIcon() : ui::ImageModel();
 }
 
 void BrowserNonClientFrameViewChromeOS::OnWindowDestroying(
@@ -547,12 +573,26 @@ void BrowserNonClientFrameViewChromeOS::OnImmersiveRevealStarted() {
     container->AddChildViewAt(web_app_frame_toolbar(), 0);
 
   container->Layout();
+
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+  // In Lacros, when entering in immersive fullscreen, it is possible
+  // that chromeos::FrameHeader::painted_height_ is set to '0', when
+  // Layout() is called. This is because the tapstrip gets hidden.
+  //
+  // When it happens, PaintFrameImagesInRoundRect() has an empty rect
+  // to paint onto, and the TabStrip's new theme is not painted.
+  if (frame_header_ && frame_header_->GetHeaderHeightForPainting() == 0)
+    frame_header_->LayoutHeader();
+#endif
 }
 
 void BrowserNonClientFrameViewChromeOS::OnImmersiveRevealEnded() {
-  AddChildViewAt(caption_button_container_, 0);
+  // Ensure the WebAppFrameToolbarView and FrameCaptionButtonContainerView
+  // receive events before the BrowserView by appending instead of inserting
+  // the child views.
   if (web_app_frame_toolbar())
-    AddChildViewAt(web_app_frame_toolbar(), 0);
+    AddChildView(web_app_frame_toolbar());
+  AddChildView(caption_button_container_);
   Layout();
 }
 
@@ -740,7 +780,7 @@ bool BrowserNonClientFrameViewChromeOS::GetOverviewMode() const {
 
 void BrowserNonClientFrameViewChromeOS::OnUpdateFrameColor() {
   aura::Window* window = frame()->GetNativeWindow();
-  base::Optional<SkColor> active_color, inactive_color;
+  absl::optional<SkColor> active_color, inactive_color;
   if (!UsePackagedAppHeaderStyle(browser_view()->browser())) {
     active_color = GetFrameColor(BrowserFrameActiveState::kActive);
     inactive_color = GetFrameColor(BrowserFrameActiveState::kInactive);

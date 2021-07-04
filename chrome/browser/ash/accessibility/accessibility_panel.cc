@@ -4,12 +4,15 @@
 
 #include "chrome/browser/ash/accessibility/accessibility_panel.h"
 
+#include <memory>
+
 #include "ash/public/cpp/shell_window_ids.h"
 #include "base/macros.h"
 #include "chrome/browser/extensions/chrome_extension_web_contents_observer.h"
 #include "chrome/browser/ui/ash/ash_util.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/view_type_utils.h"
+#include "extensions/common/mojom/view_type.mojom.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/views/controls/webview/webview.h"
@@ -47,10 +50,12 @@ AccessibilityPanel::AccessibilityPanel(content::BrowserContext* browser_context,
 
   views::WebView* web_view = new views::WebView(browser_context);
   web_contents_ = web_view->GetWebContents();
-  web_contents_observer_.reset(
-      new AccessibilityPanelWebContentsObserver(web_contents_, this));
+  web_contents_observer_ =
+      std::make_unique<AccessibilityPanelWebContentsObserver>(web_contents_,
+                                                              this);
   web_contents_->SetDelegate(this);
-  extensions::SetViewType(web_contents_, extensions::VIEW_TYPE_COMPONENT);
+  extensions::SetViewType(web_contents_,
+                          extensions::mojom::ViewType::kComponent);
   extensions::ChromeExtensionWebContentsObserver::CreateForWebContents(
       web_contents_);
   web_view->LoadInitialURL(GURL(content_url));
@@ -65,7 +70,7 @@ AccessibilityPanel::AccessibilityPanel(content::BrowserContext* browser_context,
       &params, ShellWindowId::kShellWindowId_AccessibilityPanelContainer);
   params.bounds = display::Screen::GetScreen()->GetPrimaryDisplay().bounds();
   params.delegate = this;
-  params.activatable = views::Widget::InitParams::ACTIVATABLE_NO;
+  params.activatable = views::Widget::InitParams::Activatable::kNo;
   params.name = widget_name;
   params.shadow_elevation = wm::kShadowElevationInactiveWindow;
   widget_->Init(std::move(params));

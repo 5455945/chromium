@@ -6,6 +6,7 @@
 
 #include "base/base_switches.h"
 #include "base/command_line.h"
+#include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/system/sys_info.h"
 #include "build/build_config.h"
@@ -538,8 +539,8 @@ cc::LayerTreeSettings GenerateLayerTreeSettings(
   // Disable occlusion if de-jelly effect is enabled.
   settings.enable_occlusion &= !settings.allow_de_jelly_effect;
 
-  settings.enable_transform_interop =
-      base::FeatureList::IsEnabled(features::kTransformInterop);
+  settings.enable_backface_visibility_interop =
+      RuntimeEnabledFeatures::BackfaceVisibilityInteropEnabled();
 
   return settings;
 }

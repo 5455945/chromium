@@ -29,10 +29,12 @@ class TestMetricsServiceClient : public MetricsServiceClient {
   // MetricsServiceClient:
   metrics::MetricsService* GetMetricsService() override;
   void SetMetricsClientId(const std::string& client_id) override;
+  bool ShouldUploadMetricsForUserId(uint64_t user_id) override;
   int32_t GetProduct() override;
   std::string GetApplicationLocale() override;
   bool GetBrand(std::string* brand_code) override;
   SystemProfileProto::Channel GetChannel() override;
+  bool IsExtendedStableChannel() override;
   std::string GetVersionString() override;
   void CollectFinalMetricsForLog(base::OnceClosure done_callback) override;
   std::unique_ptr<MetricsLogUploader> CreateUploader(
@@ -44,9 +46,14 @@ class TestMetricsServiceClient : public MetricsServiceClient {
   base::TimeDelta GetStandardUploadInterval() override;
   bool IsReportingPolicyManaged() override;
   EnableMetricsDefault GetMetricsReportingDefaultState() override;
-  std::string GetAppPackageName() override;
+  std::string GetAppPackageNameIfLoggable() override;
   bool ShouldResetClientIdsOnClonedInstall() override;
   MetricsLogStore::StorageLimits GetStorageLimits() const override;
+
+  // Adds/removes |user_id| from the set of user ids that have metrics consent
+  // as true.
+  void AllowMetricUploadForUserId(uint64_t user_id);
+  void RemoveMetricUploadForUserId(uint64_t user_id);
 
   const std::string& get_client_id() const { return client_id_; }
   // Returns a weak ref to the last created uploader.
@@ -55,6 +62,9 @@ class TestMetricsServiceClient : public MetricsServiceClient {
   void set_product(int32_t product) { product_ = product; }
   void set_reporting_is_managed(bool managed) {
     reporting_is_managed_ = managed;
+  }
+  void set_is_extended_stable_channel(bool is_extended_stable_channel) {
+    is_extended_stable_channel_ = is_extended_stable_channel;
   }
   void set_enable_default(EnableMetricsDefault enable_default) {
     enable_default_ = enable_default;
@@ -71,12 +81,14 @@ class TestMetricsServiceClient : public MetricsServiceClient {
   std::string version_string_;
   int32_t product_;
   bool reporting_is_managed_;
+  bool is_extended_stable_channel_;
   EnableMetricsDefault enable_default_;
   bool should_reset_client_ids_on_cloned_install_ = false;
   MetricsLogStore::StorageLimits storage_limits_;
+  std::set<uint64_t> allowed_user_ids_;
 
   // A weak ref to the last created TestMetricsLogUploader.
-  TestMetricsLogUploader* uploader_;
+  TestMetricsLogUploader* uploader_ = nullptr;
 
   DISALLOW_COPY_AND_ASSIGN(TestMetricsServiceClient);
 };

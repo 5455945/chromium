@@ -186,8 +186,8 @@ void ConvolverHandler::SetBuffer(AudioBuffer* buffer,
 
   // Create the reverb with the given impulse response.
   std::unique_ptr<Reverb> reverb = std::make_unique<Reverb>(
-      buffer_bus.get(), audio_utilities::kRenderQuantumFrames, MaxFFTSize,
-      Context() && Context()->HasRealtimeConstraint(), normalize_);
+      buffer_bus.get(), GetDeferredTaskHandler().RenderQuantumFrames(),
+      MaxFFTSize, Context() && Context()->HasRealtimeConstraint(), normalize_);
 
   {
     // The context must be locked since changing the buffer can
@@ -298,7 +298,7 @@ void ConvolverHandler::CheckNumberOfChannelsForInput(AudioNodeInput* input) {
   Context()->AssertGraphOwner();
 
   DCHECK(input);
-  DCHECK_EQ(input, &this->Input(0));
+  DCHECK_EQ(input, &Input(0));
 
   if (shared_buffer_) {
     unsigned number_of_output_channels = ComputeNumberOfOutputChannels(

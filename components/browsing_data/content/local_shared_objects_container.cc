@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/strings/string_piece.h"
 #include "components/browsing_data/content/appcache_helper.h"
 #include "components/browsing_data/content/cache_storage_helper.h"
 #include "components/browsing_data/content/canonical_cookie_hash.h"
@@ -25,7 +26,9 @@
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "net/cookies/canonical_cookie.h"
 #include "net/cookies/cookie_util.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 namespace browsing_data {
 namespace {
@@ -43,29 +46,25 @@ LocalSharedObjectsContainer::LocalSharedObjectsContainer(
     const std::vector<storage::FileSystemType>& additional_file_system_types,
     browsing_data::CookieHelper::IsDeletionDisabledCallback callback)
     : appcaches_(new CannedAppCacheHelper(
-          content::BrowserContext::GetDefaultStoragePartition(browser_context)
-              ->GetAppCacheService())),
-      cookies_(new CannedCookieHelper(
-          content::BrowserContext::GetDefaultStoragePartition(browser_context),
-          std::move(callback))),
+          browser_context->GetDefaultStoragePartition()->GetAppCacheService())),
+      cookies_(
+          new CannedCookieHelper(browser_context->GetDefaultStoragePartition(),
+                                 std::move(callback))),
       databases_(new CannedDatabaseHelper(browser_context)),
       file_systems_(new CannedFileSystemHelper(
-          content::BrowserContext::GetDefaultStoragePartition(browser_context)
-              ->GetFileSystemContext(),
-          additional_file_system_types)),
+          browser_context->GetDefaultStoragePartition()->GetFileSystemContext(),
+          additional_file_system_types,
+          browser_context->GetDefaultStoragePartition()->GetNativeIOContext())),
       indexed_dbs_(new CannedIndexedDBHelper(
-          content::BrowserContext::GetDefaultStoragePartition(
-              browser_context))),
+          browser_context->GetDefaultStoragePartition())),
       local_storages_(new CannedLocalStorageHelper(browser_context)),
       service_workers_(new CannedServiceWorkerHelper(
-          content::BrowserContext::GetDefaultStoragePartition(browser_context)
+          browser_context->GetDefaultStoragePartition()
               ->GetServiceWorkerContext())),
       shared_workers_(new CannedSharedWorkerHelper(
-          content::BrowserContext::GetDefaultStoragePartition(browser_context),
-          browser_context->GetResourceContext())),
+          browser_context->GetDefaultStoragePartition())),
       cache_storages_(new CannedCacheStorageHelper(
-          content::BrowserContext::GetDefaultStoragePartition(
-              browser_context))),
+          browser_context->GetDefaultStoragePartition())),
       session_storages_(new CannedLocalStorageHelper(browser_context)) {}
 
 LocalSharedObjectsContainer::~LocalSharedObjectsContainer() = default;
@@ -124,9 +123,10 @@ size_t LocalSharedObjectsContainer::GetObjectCountForDomain(
       ++count;
   }
 
-  // Count indexed dbs for the domain of the given |origin|.
-  for (const auto& storage_origin : indexed_dbs()->GetOrigins()) {
-    if (SameDomainOrHost(origin, storage_origin.GetURL()))
+  // Count indexed dbs for the domain of the given `storage_key`.
+  for (const auto& storage_key : indexed_dbs()->GetStorageKeys()) {
+    // TODO(https://crbug.com/1199077): Use the real StorageKey once migrated.
+    if (SameDomainOrHost(origin, storage_key.origin().GetURL()))
       ++count;
   }
 
@@ -187,14 +187,16 @@ size_t LocalSharedObjectsContainer::GetDomainCount() const {
   for (const auto& origin : session_storages()->GetOrigins())
     hosts.insert(origin.host());
 
-  for (const auto& origin : indexed_dbs()->GetOrigins())
-    hosts.insert(origin.host());
+  for (const auto& storage_key : indexed_dbs()->GetStorageKeys()) {
+    // TODO(https://crbug.com/1199077): Use the real StorageKey once migrated.
+    hosts.insert(storage_key.origin().host());
+  }
 
   for (const auto& origin : service_workers()->GetOrigins())
     hosts.insert(origin.host());
 
   for (const auto& info : shared_workers()->GetSharedWorkerInfo())
-    hosts.insert(info.constructor_origin.host());
+    hosts.insert(info.storage_key.origin().host());
 
   for (const auto& origin : cache_storages()->GetOrigins())
     hosts.insert(origin.host());
@@ -215,7 +217,7 @@ size_t LocalSharedObjectsContainer::GetDomainCount() const {
     if (!domain.empty())
       domains.insert(std::move(domain));
     else
-      domains.insert(host.as_string());
+      domains.insert(std::string(host));
   }
   return domains.size();
 }

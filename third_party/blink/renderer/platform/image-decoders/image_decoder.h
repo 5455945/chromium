@@ -37,7 +37,6 @@
 #include "third_party/blink/renderer/platform/image-decoders/image_frame.h"
 #include "third_party/blink/renderer/platform/image-decoders/segment_reader.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/wtf/assertions.h"
 #include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
@@ -66,6 +65,8 @@ class PLATFORM_EXPORT ImagePlanes final {
 
  public:
   ImagePlanes();
+  ImagePlanes(const ImagePlanes&) = delete;
+  ImagePlanes& operator=(const ImagePlanes&) = delete;
 
   // |color_type| is kGray_8_SkColorType if GetYUVBitDepth() == 8 and either
   // kA16_float_SkColorType or kA16_unorm_SkColorType if GetYUVBitDepth() > 8.
@@ -87,8 +88,6 @@ class PLATFORM_EXPORT ImagePlanes final {
   size_t row_bytes_[cc::kNumYUVPlanes];
   SkColorType color_type_;
   bool has_complete_scan_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(ImagePlanes);
 };
 
 class PLATFORM_EXPORT ColorProfile final {
@@ -96,6 +95,8 @@ class PLATFORM_EXPORT ColorProfile final {
 
  public:
   ColorProfile(const skcms_ICCProfile&, std::unique_ptr<uint8_t[]> = nullptr);
+  ColorProfile(const ColorProfile&) = delete;
+  ColorProfile& operator=(const ColorProfile&) = delete;
   static std::unique_ptr<ColorProfile> Create(const void* buffer, size_t size);
 
   const skcms_ICCProfile* GetProfile() const { return &profile_; }
@@ -103,8 +104,6 @@ class PLATFORM_EXPORT ColorProfile final {
  private:
   skcms_ICCProfile profile_;
   std::unique_ptr<uint8_t[]> buffer_;
-
-  DISALLOW_COPY_AND_ASSIGN(ColorProfile);
 };
 
 class PLATFORM_EXPORT ColorProfileTransform final {
@@ -113,6 +112,8 @@ class PLATFORM_EXPORT ColorProfileTransform final {
  public:
   ColorProfileTransform(const skcms_ICCProfile* src_profile,
                         const skcms_ICCProfile* dst_profile);
+  ColorProfileTransform(const ColorProfileTransform&) = delete;
+  ColorProfileTransform& operator=(const ColorProfileTransform&) = delete;
 
   const skcms_ICCProfile* SrcProfile() const;
   const skcms_ICCProfile* DstProfile() const;
@@ -120,8 +121,6 @@ class PLATFORM_EXPORT ColorProfileTransform final {
  private:
   const skcms_ICCProfile* src_profile_;
   skcms_ICCProfile dst_profile_;
-
-  DISALLOW_COPY_AND_ASSIGN(ColorProfileTransform);
 };
 
 // ImageDecoder is a base for all format-specific decoders
@@ -167,6 +166,8 @@ class PLATFORM_EXPORT ImageDecoder {
     kPreferStillImage,
   };
 
+  ImageDecoder(const ImageDecoder&) = delete;
+  ImageDecoder& operator=(const ImageDecoder&) = delete;
   virtual ~ImageDecoder() = default;
 
   // Returns a caller-owned decoder of the appropriate type.  Returns nullptr if
@@ -611,10 +612,8 @@ class PLATFORM_EXPORT ImageDecoder {
 
   bool source_to_target_color_transform_needs_update_ = false;
   std::unique_ptr<ColorProfileTransform> source_to_target_color_transform_;
-
-  DISALLOW_COPY_AND_ASSIGN(ImageDecoder);
 };
 
 }  // namespace blink
 
-#endif
+#endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_IMAGE_DECODERS_IMAGE_DECODER_H_

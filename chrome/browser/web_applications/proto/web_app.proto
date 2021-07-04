@@ -6,6 +6,7 @@ syntax = "proto2";
 
 import "components/sync/protocol/web_app_specifics.proto";
 import "chrome/browser/web_applications/proto/web_app_share_target.proto";
+import "chrome/browser/web_applications/system_web_apps/system_web_app_data.proto";
 
 option optimize_for = LITE_RUNTIME;
 
@@ -34,6 +35,7 @@ message WebAppProtocolHandler {
 
 message WebAppUrlHandlerProto {
   required string origin = 1;
+  required bool has_origin_wildcard = 2;
 }
 
 // A set to track simultaneous installs and uninstalls from multiple install
@@ -52,31 +54,9 @@ message ChromeOSDataProto {
   required bool show_in_search = 2;
   required bool show_in_management = 3;
   required bool is_disabled = 4;
+  optional bool oem_installed = 5;
 }
 
-// Properties for System Web Apps.
-message SystemWebAppDataProto {
-  enum SystemAppType {
-    FILE_MANAGER = 1;
-    TELEMETRY = 2;
-    SAMPLE = 3;
-    SETTINGS = 4;
-    CAMERA = 5;
-    TERMINAL = 6;
-    MEDIA = 7;
-    HELP = 8;
-    PRINT_MANAGEMENT = 9;
-    SCANNING = 10;
-    DIAGNOSTICS = 11;
-    CONNECTIVITY_DIAGNOSTICS = 12;
-    ECHE = 13;
-    CROSH = 14;
-  };
-
-  optional SystemAppType system_app_type = 1;
-}
-
-// Properties for System Web Apps.
 message ClientDataProto {
   optional SystemWebAppDataProto system_web_app_data = 1;
 }
@@ -86,11 +66,15 @@ message WebAppShortcutsMenuItemInfoProto {
   required string name = 1;
   required string url = 2;
   repeated sync_pb.WebAppIconInfo shortcut_icon_infos = 3;
+  repeated sync_pb.WebAppIconInfo shortcut_icon_infos_maskable = 4;
+  repeated sync_pb.WebAppIconInfo shortcut_icon_infos_monochrome = 5;
 }
 
 // List of icon sizes downloaded to disk for a shortcuts menu item.
 message DownloadedShortcutsMenuIconSizesProto {
   repeated int32 icon_sizes = 1;
+  repeated int32 icon_sizes_maskable = 2;
+  repeated int32 icon_sizes_monochrome = 3;
 }
 
 // Full WebApp object data. See detailed comments in
@@ -114,6 +98,7 @@ message WebAppProto {
     STANDALONE = 3;
     FULLSCREEN = 4;
     WINDOW_CONTROLS_OVERLAY = 5;
+    TABBED = 6;
   }
 
   // Local data. May vary across devices. Not to be synced.
@@ -131,7 +116,8 @@ message WebAppProto {
 
   // A list of icon sizes we successfully downloaded to store on disk, for icons
   // that are suitable for any purpose (ie. IconPurpose::ANY). See also:
-  // |downloaded_icon_sizes_purpose_maskable|.
+  // |downloaded_icon_sizes_purpose_maskable|,
+  // |downloaded_icon_sizes_purpose_monochrome|.
   repeated int32 downloaded_icon_sizes_purpose_any = 11;
 
   // A list of file handlers.
@@ -209,4 +195,29 @@ message WebAppProto {
   optional CaptureLinks capture_links = 29;
 
   optional string manifest_url = 30;
+
+  // Last time the Badging API was used.
+  // ms since the Unix epoch. See sync/base/time.h.
+  optional int64 last_badging_time = 31;
+
+  optional bool file_handler_permission_blocked = 32;
+
+  // A list of icon sizes we successfully downloaded to store on disk for
+  // monochrome icons. (IconPurpose::MONOCHROME). See also:
+  // |downloaded_icon_sizes_purpose_any|,
+  // |downloaded_icon_sizes_purpose_maskable|.
+  repeated int32 downloaded_icon_sizes_purpose_monochrome = 33;
+
+  optional bool window_controls_overlay_enabled = 34;
+
+  // If present, the URL to use to create a new note in the app.
+  optional string note_taking_new_note_url = 35;
+
+  // Whether the app should be loaded in a dedicated storage partition.
+  optional bool is_storage_isolated = 36;
+
+  // A list of approved launch protocols when launching the app with a protocol
+  // url. This list is checked to see if we can bypass the permission dialog
+  // when launching the web app.
+  repeated string approved_launch_protocols = 37;
 }

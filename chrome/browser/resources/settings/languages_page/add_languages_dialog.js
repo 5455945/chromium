@@ -9,63 +9,70 @@
 import 'chrome://resources/cr_elements/cr_button/cr_button.m.js';
 import 'chrome://resources/cr_elements/cr_checkbox/cr_checkbox.m.js';
 import 'chrome://resources/cr_elements/cr_dialog/cr_dialog.m.js';
-import 'chrome://resources/cr_elements/cr_search_field/cr_search_field.m.js';
+import 'chrome://resources/cr_elements/cr_search_field/cr_search_field.js';
 import 'chrome://resources/cr_elements/shared_vars_css.m.js';
 import 'chrome://resources/polymer/v3_0/iron-list/iron-list.js';
-import './languages.m.js';
-import '../settings_shared_css.m.js';
+import '../settings_shared_css.js';
 
 import {CrScrollableBehavior} from 'chrome://resources/cr_elements/cr_scrollable_behavior.m.js';
-import {FindShortcutBehavior} from 'chrome://resources/cr_elements/find_shortcut_behavior.m.js';
-import {html, Polymer} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {FindShortcutBehavior} from 'chrome://resources/cr_elements/find_shortcut_behavior.js';
+import {html, mixinBehaviors, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
-import {LanguageSettingsActionType, LanguageSettingsMetricsProxyImpl} from './languages_settings_metrics_proxy.js';
 
-Polymer({
-  is: 'settings-add-languages-dialog',
+/**
+ * @constructor
+ * @extends {PolymerElement}
+ */
+const SettingsAddLanguagesDialogElementBase = mixinBehaviors(
+    [CrScrollableBehavior, FindShortcutBehavior], PolymerElement);
 
-  _template: html`{__html_template__}`,
+/** @polymer */
+class SettingsAddLanguagesDialogElement extends
+    SettingsAddLanguagesDialogElementBase {
+  static get is() {
+    return 'settings-add-languages-dialog';
+  }
 
-  behaviors: [
-    CrScrollableBehavior,
-    FindShortcutBehavior,
-  ],
+  static get template() {
+    return html`{__html_template__}`;
+  }
 
-  properties: {
-    /** @type {!LanguagesModel|undefined} */
-    languages: {
-      type: Object,
-      notify: true,
-    },
-
-    /** @type {!LanguageHelper} */
-    languageHelper: Object,
-
-    /** @private {!Set<string>} */
-    languagesToAdd_: {
-      type: Object,
-      value() {
-        return new Set();
+  static get properties() {
+    return {
+      /** @type  {!Array<!chrome.languageSettingsPrivate.Language>} */
+      languages: {
+        type: Array,
+        notify: true,
       },
-    },
 
-    /** @private */
-    disableActionButton_: {
-      type: Boolean,
-      value: true,
-    },
+      /** @private {!Set<string>} */
+      languagesToAdd_: {
+        type: Object,
+        value() {
+          return new Set();
+        },
+      },
 
-    /** @private */
-    filterValue_: {
-      type: String,
-      value: '',
-    },
-  },
+      /** @private */
+      disableActionButton_: {
+        type: Boolean,
+        value: true,
+      },
+
+      /** @private */
+      filterValue_: {
+        type: String,
+        value: '',
+      },
+    };
+  }
 
   /** @override */
-  attached() {
+  connectedCallback() {
+    super.connectedCallback();
+
     this.$.dialog.showModal();
-  },
+  }
 
   // Override FindShortcutBehavior methods.
   handleFindShortcut(modalContextOpen) {
@@ -76,13 +83,13 @@ Polymer({
       searchInput.focus();
     }
     return true;
-  },
+  }
 
   // Override FindShortcutBehavior methods.
   searchInputHasFocus() {
     return this.$.search.getSearchInput() ===
         this.$.search.shadowRoot.activeElement;
-  },
+  }
 
   /**
    * @param {!CustomEvent<string>} e
@@ -90,7 +97,7 @@ Polymer({
    */
   onSearchChanged_(e) {
     this.filterValue_ = e.detail;
-  },
+  }
 
   /**
    * @return {!Array<!chrome.languageSettingsPrivate.Language>} A list of
@@ -98,21 +105,17 @@ Polymer({
    * @private
    */
   getLanguages_() {
-    const filterValue =
-        this.filterValue_ ? this.filterValue_.toLowerCase() : null;
-    return this.languages.supported.filter(language => {
-      if (!this.languageHelper.canEnableLanguage(language)) {
-        return false;
-      }
+    if (!this.filterValue_) {
+      return this.languages;
+    }
 
-      if (filterValue === null) {
-        return true;
-      }
+    const filterValue = this.filterValue_.toLowerCase();
 
+    return this.languages.filter(language => {
       return language.displayName.toLowerCase().includes(filterValue) ||
           language.nativeDisplayName.toLowerCase().includes(filterValue);
     });
-  },
+  }
 
   /**
    * @param {!chrome.languageSettingsPrivate.Language} language
@@ -126,7 +129,7 @@ Polymer({
       displayText += ' - ' + language.nativeDisplayName;
     }
     return displayText;
-  },
+  }
 
   /**
    * True if the user has chosen to add this language (checked its checkbox).
@@ -136,7 +139,7 @@ Polymer({
    */
   willAdd_(languageCode) {
     return this.languagesToAdd_.has(languageCode);
-  },
+  }
 
   /**
    * Handler for checking or unchecking a language item.
@@ -157,25 +160,25 @@ Polymer({
     }
 
     this.disableActionButton_ = !this.languagesToAdd_.size;
-  },
+  }
 
   /** @private */
   onCancelButtonTap_() {
     this.$.dialog.close();
-  },
+  }
 
   /**
    * Enables the checked languages.
    * @private
    */
   onActionButtonTap_() {
+    this.dispatchEvent(new CustomEvent('languages-added', {
+      bubbles: true,
+      composed: true,
+      detail: Array.from(this.languagesToAdd_),
+    }));
     this.$.dialog.close();
-    this.languagesToAdd_.forEach(languageCode => {
-      this.languageHelper.enableLanguage(languageCode);
-      LanguageSettingsMetricsProxyImpl.getInstance().recordSettingsMetric(
-          LanguageSettingsActionType.LANGUAGE_ADDED);
-    });
-  },
+  }
 
   /**
    * @param {!KeyboardEvent} e
@@ -188,5 +191,8 @@ Polymer({
     } else if (e.key !== 'PageDown' && e.key !== 'PageUp') {
       this.$.search.scrollIntoViewIfNeeded();
     }
-  },
-});
+  }
+}
+
+customElements.define(
+    SettingsAddLanguagesDialogElement.is, SettingsAddLanguagesDialogElement);

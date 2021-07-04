@@ -6,11 +6,13 @@
 #include "base/callback_helpers.h"
 #include "base/command_line.h"
 #include "base/run_loop.h"
+#include "base/scoped_observation.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/test/test_timeouts.h"
 #include "build/build_config.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
+#include "content/browser/renderer_host/render_process_host_internal_observer.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_launcher_utils.h"
@@ -45,6 +47,8 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/blink/public/common/chrome_debug_urls.h"
 
 #if defined(OS_WIN)
 #include "base/win/windows_version.h"
@@ -274,8 +278,7 @@ IN_PROC_BROWSER_TEST_F(RenderProcessHostTest,
   RenderProcessHost* rph =
       shell()->web_contents()->GetMainFrame()->GetProcess();
   // Make it believe it's a guest.
-  static_cast<RenderProcessHostImpl*>(rph)->set_is_for_guests_only_for_testing(
-      true);
+  static_cast<RenderProcessHostImpl*>(rph)->SetForGuestsOnlyForTesting();
   EXPECT_EQ(1, RenderProcessHost::GetCurrentRenderProcessCountForTesting());
 
   // Navigate to a different page.
@@ -485,9 +488,9 @@ IN_PROC_BROWSER_TEST_F(RenderProcessHostTest, SpareRendererDuringClosing) {
 
 // Class that simulates the fact that some //content embedders (e.g. by
 // overriding ChromeContentBrowserClient::GetStoragePartitionConfigForSite) can
-// cause BrowserContext::GetDefaultStoragePartition(browser_context) to differ
-// from BrowserContext::GetStoragePartition(browser_context, site_instance) even
-// if |site_instance| is not for guests.
+// cause `browser_context->GetDefaultStoragePartition()` to differ from
+// `browser_context->GetStoragePartition(site_instance)` even if `site_instance`
+// is not for guests.
 class CustomStoragePartitionForSomeSites : public TestContentBrowserClient {
  public:
   explicit CustomStoragePartitionForSomeSites(const GURL& site_to_isolate)
@@ -498,24 +501,21 @@ class CustomStoragePartitionForSomeSites : public TestContentBrowserClient {
       const GURL& site) override {
     // Override for |site_to_isolate_|.
     if (site == site_to_isolate_) {
-      return StoragePartitionConfig::Create("blah_isolated_storage",
-                                            "blah_isolated_storage",
-                                            false /* in_memory */);
+      return StoragePartitionConfig::Create(
+          browser_context, "blah_isolated_storage", "blah_isolated_storage",
+          false /* in_memory */);
     }
 
-    return StoragePartitionConfig::CreateDefault();
+    return StoragePartitionConfig::CreateDefault(browser_context);
   }
 
-  std::string GetStoragePartitionIdForSite(BrowserContext* browser_context,
-                                           const GURL& site) override {
+  StoragePartitionId GetStoragePartitionIdForSite(
+      BrowserContext* browser_context,
+      const GURL& site) override {
     if (site == site_to_isolate_)
-      return "custom";
-    return "";
-  }
-
-  bool IsValidStoragePartitionId(BrowserContext* browser_context,
-                                 const std::string& partition_id) override {
-    return partition_id == "" || partition_id == "custom";
+      return StoragePartitionId(
+          site.spec(), GetStoragePartitionConfigForSite(browser_context, site));
+    return StoragePartitionId(browser_context);
   }
 
  private:
@@ -541,9 +541,9 @@ IN_PROC_BROWSER_TEST_F(RenderProcessHostTest,
   ContentBrowserClient* old_client =
       SetBrowserClientForTesting(&modified_client);
   StoragePartition* default_storage =
-      BrowserContext::GetDefaultStoragePartition(browser_context);
+      browser_context->GetDefaultStoragePartition();
   StoragePartition* custom_storage =
-      BrowserContext::GetStoragePartitionForSite(browser_context, test_site);
+      browser_context->GetStoragePartition(test_site_instance.get());
   EXPECT_NE(default_storage, custom_storage);
 
   // Open a test window - it should be associated with the default storage
@@ -756,8 +756,8 @@ IN_PROC_BROWSER_TEST_F(RenderProcessHostTest,
   // We can't use NavigateToURL here since it accesses the shell() after
   // navigating, which the shell_closer deletes.
   ScopedAllowRendererCrashes scoped_allow_renderer_crashes(shell());
-  NavigateToURLBlockUntilNavigationsComplete(
-      shell(), GURL(kChromeUICrashURL), 1);
+  NavigateToURLBlockUntilNavigationsComplete(shell(),
+                                             GURL(blink::kChromeUICrashURL), 1);
 
   // The key here is that all the RenderProcessExited callbacks precede all the
   // RenderProcessHostDestroyed callbacks.
@@ -870,8 +870,8 @@ IN_PROC_BROWSER_TEST_F(RenderProcessHostTest, KillProcessZerosAudioStreams) {
                                 run_loop.QuitClosure());
 
     std::string result;
-    EXPECT_TRUE(
-        ExecuteScriptAndExtractString(shell(), "StartOscillator();", &result))
+    EXPECT_EQ("OK", EvalJs(shell(), "StartOscillator();",
+                           EXECUTE_SCRIPT_USE_MANUAL_REPLY))
         << "Failed to execute javascript.";
     run_loop.Run();
 
@@ -940,8 +940,9 @@ IN_PROC_BROWSER_TEST_F(CaptureStreamRenderProcessHostTest,
   RenderProcessHostImpl* rph = static_cast<RenderProcessHostImpl*>(
       shell()->web_contents()->GetMainFrame()->GetProcess());
   std::string result;
-  EXPECT_TRUE(ExecuteScriptAndExtractString(
-      shell(), "getUserMediaAndExpectSuccess({video: true});", &result))
+  EXPECT_EQ("OK",
+            EvalJs(shell(), "getUserMediaAndExpectSuccess({video: true});",
+                   EXECUTE_SCRIPT_USE_MANUAL_REPLY))
       << "Failed to execute javascript.";
   EXPECT_EQ(1, rph->get_media_stream_count_for_testing());
 }
@@ -956,8 +957,8 @@ IN_PROC_BROWSER_TEST_F(CaptureStreamRenderProcessHostTest,
   RenderProcessHostImpl* rph = static_cast<RenderProcessHostImpl*>(
       shell()->web_contents()->GetMainFrame()->GetProcess());
   std::string result;
-  EXPECT_TRUE(ExecuteScriptAndExtractString(
-      shell(), "getUserMediaAndStop({video: true});", &result))
+  EXPECT_EQ("OK", EvalJs(shell(), "getUserMediaAndStop({video: true});",
+                         EXECUTE_SCRIPT_USE_MANUAL_REPLY))
       << "Failed to execute javascript.";
   EXPECT_EQ(0, rph->get_media_stream_count_for_testing());
 }
@@ -973,8 +974,9 @@ IN_PROC_BROWSER_TEST_F(CaptureStreamRenderProcessHostTest,
   RenderProcessHostImpl* rph = static_cast<RenderProcessHostImpl*>(
       shell()->web_contents()->GetMainFrame()->GetProcess());
   std::string result;
-  EXPECT_TRUE(ExecuteScriptAndExtractString(
-      shell(), "getUserMediaAndExpectSuccess({video: true});", &result))
+  EXPECT_EQ("OK",
+            EvalJs(shell(), "getUserMediaAndExpectSuccess({video: true});",
+                   EXECUTE_SCRIPT_USE_MANUAL_REPLY))
       << "Failed to execute javascript.";
   EXPECT_EQ(1, rph->get_media_stream_count_for_testing());
 
@@ -1017,9 +1019,10 @@ IN_PROC_BROWSER_TEST_F(CaptureStreamRenderProcessHostTest,
   RenderProcessHostImpl* rph = static_cast<RenderProcessHostImpl*>(
       shell()->web_contents()->GetMainFrame()->GetProcess());
   std::string result;
-  EXPECT_TRUE(ExecuteScriptAndExtractString(
-      shell(), "getUserMediaAndExpectSuccess({video: false, audio: true});",
-      &result))
+  EXPECT_EQ("OK",
+            EvalJs(shell(),
+                   "getUserMediaAndExpectSuccess({video: false, audio: true});",
+                   EXECUTE_SCRIPT_USE_MANUAL_REPLY))
       << "Failed to execute javascript.";
   EXPECT_EQ(1, rph->get_media_stream_count_for_testing());
 }
@@ -1035,9 +1038,10 @@ IN_PROC_BROWSER_TEST_F(CaptureStreamRenderProcessHostTest,
   RenderProcessHostImpl* rph = static_cast<RenderProcessHostImpl*>(
       shell()->web_contents()->GetMainFrame()->GetProcess());
   std::string result;
-  EXPECT_TRUE(ExecuteScriptAndExtractString(
-      shell(), "getUserMediaAndExpectSuccess({video: false, audio: true});",
-      &result))
+  EXPECT_EQ("OK",
+            EvalJs(shell(),
+                   "getUserMediaAndExpectSuccess({video: false, audio: true});",
+                   EXECUTE_SCRIPT_USE_MANUAL_REPLY))
       << "Failed to execute javascript.";
   EXPECT_EQ(1, rph->get_media_stream_count_for_testing());
 
@@ -1152,8 +1156,14 @@ IN_PROC_BROWSER_TEST_F(RenderProcessHostTest,
       base::BindRepeating(HandleHungBeacon, base::RepeatingClosure()));
   ASSERT_TRUE(embedded_test_server()->Start());
 
-  EXPECT_TRUE(NavigateToURL(
-      shell(), embedded_test_server()->GetURL("/send-beacon.html")));
+  const auto kTestUrl = embedded_test_server()->GetURL("/send-beacon.html");
+  if (IsIsolatedOriginRequiredToGuaranteeDedicatedProcess()) {
+    // Isolate host so that the first and second navigation are guaranteed to
+    // be in different processes.
+    IsolateOriginsForTesting(embedded_test_server(), shell()->web_contents(),
+                             {kTestUrl.host()});
+  }
+  EXPECT_TRUE(NavigateToURL(shell(), kTestUrl));
 
   RenderFrameHostImpl* rfh = static_cast<RenderFrameHostImpl*>(
       shell()->web_contents()->GetMainFrame());
@@ -1187,8 +1197,15 @@ IN_PROC_BROWSER_TEST_F(RenderProcessHostTest,
       base::BindRepeating(HandleHungBeacon, base::RepeatingClosure()));
   ASSERT_TRUE(embedded_test_server()->Start());
 
-  EXPECT_TRUE(NavigateToURL(
-      shell(), embedded_test_server()->GetURL("/fetch-keepalive.html")));
+  const auto kTestUrl = embedded_test_server()->GetURL("/fetch-keepalive.html");
+  if (IsIsolatedOriginRequiredToGuaranteeDedicatedProcess()) {
+    // Isolate host so that the first and second navigation are guaranteed to
+    // be in different processes.
+    IsolateOriginsForTesting(embedded_test_server(), shell()->web_contents(),
+                             {kTestUrl.host()});
+  }
+
+  EXPECT_TRUE(NavigateToURL(shell(), kTestUrl));
 
   RenderFrameHostImpl* rfh = static_cast<RenderFrameHostImpl*>(
       shell()->web_contents()->GetMainFrame());
@@ -1213,8 +1230,8 @@ IN_PROC_BROWSER_TEST_F(RenderProcessHostTest, ManyKeepaliveRequests) {
       base::MakeRefCounted<DelayedHttpResponseWithResolver::Resolver>();
   embedded_test_server()->RegisterRequestHandler(
       base::BindRepeating(HandleHungBeaconWithResolver, resolver));
-  const base::string16 title = base::ASCIIToUTF16("Resolved");
-  const base::string16 waiting = base::ASCIIToUTF16("Waiting");
+  const std::u16string title = u"Resolved";
+  const std::u16string waiting = u"Waiting";
 
   ASSERT_TRUE(embedded_test_server()->Start());
   EXPECT_TRUE(NavigateToURL(
@@ -1239,7 +1256,7 @@ IN_PROC_BROWSER_TEST_F(RenderProcessHostTest, TooManyKeepaliveRequests) {
   embedded_test_server()->RegisterRequestHandler(
       base::BindRepeating(HandleHungBeacon, base::RepeatingClosure()));
   ASSERT_TRUE(embedded_test_server()->Start());
-  const base::string16 title = base::ASCIIToUTF16("Rejected");
+  const std::u16string title = u"Rejected";
 
   TitleWatcher watcher(shell()->web_contents(), title);
 
@@ -1250,50 +1267,83 @@ IN_PROC_BROWSER_TEST_F(RenderProcessHostTest, TooManyKeepaliveRequests) {
   EXPECT_EQ(title, watcher.WaitAndGetTitle());
 }
 
+// Records the value of |host->IsProcessBackgrounded()| when it changes.
+// |host| must remain a valid reference for the lifetime of this object.
+class IsProcessBackgroundedObserver : public RenderProcessHostInternalObserver {
+ public:
+  explicit IsProcessBackgroundedObserver(RenderProcessHostImpl* host)
+      : host_observation_(this) {
+    host_observation_.Observe(host);
+  }
+
+  void RenderProcessBackgroundedChanged(RenderProcessHostImpl* host) override {
+    backgrounded_ = host->IsProcessBackgrounded();
+  }
+
+  // Returns the latest recorded value if there was one and resets the recorded
+  // value to |nullopt|.
+  absl::optional<bool> TakeValue() {
+    auto value = backgrounded_;
+    backgrounded_ = absl::nullopt;
+    return value;
+  }
+
+ private:
+  // Stores the last observed value of IsProcessBackgrounded for a host.
+  absl::optional<bool> backgrounded_;
+  base::ScopedObservation<RenderProcessHostImpl,
+                          RenderProcessHostInternalObserver,
+                          &RenderProcessHostImpl::AddInternalObserver,
+                          &RenderProcessHostImpl::RemoveInternalObserver>
+      host_observation_;
+};
+
 IN_PROC_BROWSER_TEST_F(RenderProcessHostTest, PriorityOverride) {
-  // RenderProcessHostImpl::UpdateProcessPriority has an early check of
-  // run_renderer_in_process and exits for RenderProcessHosts without a child
-  // process launcher.  In order to skip initializing that here and the layer of
-  // indirection, we explicitly run in-process, which we must also disable once
-  // the test has finished to prevent crashing on exit.
-  RenderProcessHost::SetRunRendererInProcess(true);
-  RenderProcessHostImpl* process = static_cast<RenderProcessHostImpl*>(
-      RenderProcessHostImpl::CreateRenderProcessHost(
-          ShellContentBrowserClient::Get()->browser_context(), nullptr));
+  // Start up a real renderer process.
+  ASSERT_TRUE(embedded_test_server()->Start());
+  GURL test_url = embedded_test_server()->GetURL("/simple_page.html");
+  EXPECT_TRUE(NavigateToURL(shell(), test_url));
+  RenderProcessHost* rph =
+      shell()->web_contents()->GetMainFrame()->GetProcess();
+  RenderProcessHostImpl* process = static_cast<RenderProcessHostImpl*>(rph);
+
+  IsProcessBackgroundedObserver observer(process);
 
   // It starts off as normal priority with no override.
   EXPECT_FALSE(process->HasPriorityOverride());
   EXPECT_FALSE(process->IsProcessBackgrounded());
+  EXPECT_FALSE(observer.TakeValue().has_value());
 
   process->SetPriorityOverride(false /* foreground */);
   EXPECT_TRUE(process->HasPriorityOverride());
   EXPECT_TRUE(process->IsProcessBackgrounded());
+  EXPECT_EQ(observer.TakeValue().value(), process->IsProcessBackgrounded());
 
   process->SetPriorityOverride(true /* foreground */);
   EXPECT_TRUE(process->HasPriorityOverride());
   EXPECT_FALSE(process->IsProcessBackgrounded());
+  EXPECT_EQ(observer.TakeValue().value(), process->IsProcessBackgrounded());
 
   process->SetPriorityOverride(false /* foreground */);
   EXPECT_TRUE(process->HasPriorityOverride());
   EXPECT_TRUE(process->IsProcessBackgrounded());
+  EXPECT_EQ(observer.TakeValue().value(), process->IsProcessBackgrounded());
 
   // Add a pending view, and expect the process to *stay* backgrounded.
   process->AddPendingView();
   EXPECT_TRUE(process->HasPriorityOverride());
   EXPECT_TRUE(process->IsProcessBackgrounded());
+  EXPECT_FALSE(observer.TakeValue().has_value());
 
   // Clear the override. The pending view should cause the process to go back to
   // being foregrounded.
   process->ClearPriorityOverride();
   EXPECT_FALSE(process->HasPriorityOverride());
   EXPECT_FALSE(process->IsProcessBackgrounded());
+  EXPECT_EQ(observer.TakeValue().value(), process->IsProcessBackgrounded());
 
   // Clear the pending view so the test doesn't explode.
   process->RemovePendingView();
-  EXPECT_FALSE(process->HasPriorityOverride());
-  EXPECT_TRUE(process->IsProcessBackgrounded());
-
-  RenderProcessHost::SetRunRendererInProcess(false);
 }
 
 // This test verifies properties of RenderProcessHostImpl *before* Init method

@@ -13,7 +13,9 @@
 #include "base/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/task/post_task.h"
+#include "base/task/thread_pool.h"
 #include "base/trace_event/common/trace_event_common.h"
+#include "base/trace_event/trace_event.h"
 #include "base/unguessable_token.h"
 #include "components/paint_preview/browser/paint_preview_base_service.h"
 #include "components/paint_preview/player/android/jni_headers/PlayerCompositorDelegateImpl_jni.h"
@@ -54,6 +56,7 @@ ScopedJavaLocalRef<jobjectArray> ToJavaUnguessableTokenArray(
 }
 
 ScopedJavaGlobalRef<jobject> ConvertToJavaBitmap(const SkBitmap& sk_bitmap) {
+  TRACE_EVENT0("paint_preview", "ConvertToJavaBitmap");
   return ScopedJavaGlobalRef<jobject>(
       gfx::ConvertToJavaBitmap(sk_bitmap, gfx::OomBehavior::kReturnNullOnOom));
 }
@@ -120,7 +123,10 @@ PlayerCompositorDelegateAndroid::PlayerCompositorDelegateAndroid(
 
 void PlayerCompositorDelegateAndroid::OnCompositorReady(
     CompositorStatus compositor_status,
-    mojom::PaintPreviewBeginCompositeResponsePtr composite_response) {
+    mojom::PaintPreviewBeginCompositeResponsePtr composite_response,
+    std::unique_ptr<ui::AXTreeUpdate> ax_tree) {
+  TRACE_EVENT0("paint_preview",
+               "PlayerCompositorDelegateAndroid::OnCompositorReady");
   bool compositor_started = CompositorStatus::OK == compositor_status;
   base::UmaHistogramBoolean(
       "Browser.PaintPreview.Player.CompositorProcessStartedCorrectly",
@@ -177,7 +183,8 @@ void PlayerCompositorDelegateAndroid::OnCompositorReady(
 
   Java_PlayerCompositorDelegateImpl_onCompositorReady(
       env, java_ref_, j_root_frame_guid, j_all_guids, j_scroll_extents,
-      j_scroll_offsets, j_subframe_count, j_subframe_ids, j_subframe_rects);
+      j_scroll_offsets, j_subframe_count, j_subframe_ids, j_subframe_rects,
+      reinterpret_cast<intptr_t>(ax_tree.release()));
 }
 
 void PlayerCompositorDelegateAndroid::OnMemoryPressure(
@@ -238,6 +245,7 @@ jint PlayerCompositorDelegateAndroid::RequestBitmap(
     jint j_clip_y,
     jint j_clip_width,
     jint j_clip_height) {
+  TRACE_EVENT0("paint_preview", "RequestBitmap");
   TRACE_EVENT_NESTABLE_ASYNC_BEGIN0(
       "paint_preview", "PlayerCompositorDelegateAndroid::RequestBitmap",
       TRACE_ID_LOCAL(request_id_));
@@ -249,7 +257,7 @@ jint PlayerCompositorDelegateAndroid::RequestBitmap(
       ScopedJavaGlobalRef<jobject>(j_error_callback), request_id_);
   ++request_id_;
 
-  base::Optional<base::UnguessableToken> frame_guid;
+  absl::optional<base::UnguessableToken> frame_guid;
   if (j_frame_guid) {
     frame_guid =
         base::android::UnguessableTokenAndroid::FromJavaUnguessableToken(
@@ -277,6 +285,7 @@ void PlayerCompositorDelegateAndroid::OnBitmapCallback(
     int request_id,
     mojom::PaintPreviewCompositor::BitmapStatus status,
     const SkBitmap& sk_bitmap) {
+  TRACE_EVENT0("paint_preview", "OnBitmapReceived");
   TRACE_EVENT_NESTABLE_ASYNC_END2(
       "paint_preview", "PlayerCompositorDelegateAndroid::RequestBitmap",
       TRACE_ID_LOCAL(request_id), "status", static_cast<int>(status), "bytes",

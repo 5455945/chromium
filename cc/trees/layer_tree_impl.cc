@@ -651,7 +651,7 @@ void LayerTreeImpl::PushPropertiesTo(LayerTreeImpl* target_tree) {
 
   // Note: this needs to happen after SetPropertyTrees.
   target_tree->HandleTickmarksVisibilityChange();
-  target_tree->HandleScrollbarShowRequestsFromMain();
+  target_tree->HandleScrollbarShowRequests();
   target_tree->AddPresentationCallbacks(std::move(presentation_callbacks_));
   presentation_callbacks_.clear();
 
@@ -689,7 +689,7 @@ void LayerTreeImpl::HandleTickmarksVisibilityChange() {
   }
 }
 
-void LayerTreeImpl::HandleScrollbarShowRequestsFromMain() {
+void LayerTreeImpl::HandleScrollbarShowRequests() {
   for (auto* layer : *this) {
     if (!layer->needs_show_scrollbars())
       continue;
@@ -697,7 +697,7 @@ void LayerTreeImpl::HandleScrollbarShowRequestsFromMain() {
         host_impl_->ScrollbarAnimationControllerForElementId(
             layer->element_id());
     if (controller) {
-      controller->DidRequestShowFromMainThread();
+      controller->DidRequestShow();
       layer->set_needs_show_scrollbars(false);
     }
   }
@@ -1292,6 +1292,10 @@ const TransformNode* LayerTreeImpl::OverscrollElasticityTransformNode() const {
       viewport_property_ids_.overscroll_elasticity_transform);
 }
 
+ElementId LayerTreeImpl::OverscrollElasticityEffectElementId() const {
+  return viewport_property_ids_.overscroll_elasticity_effect;
+}
+
 const TransformNode* LayerTreeImpl::PageScaleTransformNode() const {
   return property_trees()->transform_tree.Node(
       viewport_property_ids_.page_scale_transform);
@@ -1491,7 +1495,7 @@ LayerImpl* LayerTreeImpl::LayerById(int id) const {
   return iter != layer_id_map_.end() ? iter->second : nullptr;
 }
 
-// TODO(masonfreed): If this shows up on profiles, this could use
+// TODO(masonf): If this shows up on profiles, this could use
 // a layer_element_map_ approach similar to LayerById().
 LayerImpl* LayerTreeImpl::LayerByElementId(ElementId element_id) const {
   auto it =

@@ -4,8 +4,8 @@
 
 #include "third_party/blink/renderer/core/input/mouse_event_manager.h"
 
+#include "base/metrics/histogram_macros.h"
 #include "build/build_config.h"
-#include "third_party/blink/public/common/widget/screen_info.h"
 #include "third_party/blink/public/mojom/input/focus_type.mojom-blink.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_drag_event_init.h"
@@ -23,6 +23,7 @@
 #include "third_party/blink/renderer/core/editing/visible_selection.h"
 #include "third_party/blink/renderer/core/events/drag_event.h"
 #include "third_party/blink/renderer/core/events/mouse_event.h"
+#include "third_party/blink/renderer/core/events/pointer_event_factory.h"
 #include "third_party/blink/renderer/core/events/web_input_event_conversion.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
@@ -42,11 +43,13 @@
 #include "third_party/blink/renderer/core/page/focus_controller.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/page/pointer_lock_controller.h"
+#include "third_party/blink/renderer/core/page/scrolling/text_fragment_anchor.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/core/svg/svg_document_extensions.h"
 #include "third_party/blink/renderer/platform/geometry/float_quad.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom-blink.h"
+#include "ui/display/screen_info.h"
 
 namespace blink {
 
@@ -346,8 +349,11 @@ WebInputEventResult MouseEventManager::SetMousePositionAndDispatchMouseEvent(
     const AtomicString& event_type,
     const WebMouseEvent& web_mouse_event) {
   SetElementUnderMouse(target_element, canvas_region_id, web_mouse_event);
-  return DispatchMouseEvent(element_under_mouse_, event_type, web_mouse_event,
-                            canvas_region_id, nullptr, nullptr);
+  return DispatchMouseEvent(
+      element_under_mouse_, event_type, web_mouse_event, canvas_region_id,
+      nullptr, nullptr, false, web_mouse_event.id,
+      PointerEventFactory::PointerTypeNameForWebPointPointerType(
+          web_mouse_event.pointer_type));
 }
 
 WebInputEventResult MouseEventManager::DispatchMouseClickIfNeeded(
@@ -688,11 +694,8 @@ WebInputEventResult MouseEventManager::HandleMousePressEvent(
 
   mouse_down_ = event.Event();
 
-  if (RuntimeEnabledFeatures::TextFragmentIdentifiersEnabled(
-          frame_->DomWindow())) {
-    if (frame_->View())
-      frame_->View()->DismissFragmentAnchor();
-  }
+  if (frame_->View() && TextFragmentAnchor::ShouldDismissOnScrollOrClick())
+    frame_->View()->DismissFragmentAnchor();
 
   if (frame_->GetDocument()->IsSVGDocument() &&
       frame_->GetDocument()->AccessSVGExtensions().ZoomAndPanEnabled()) {
@@ -746,6 +749,12 @@ WebInputEventResult MouseEventManager::HandleMouseReleaseEvent(
   AutoscrollController* controller = scroll_manager_->GetAutoscrollController();
   if (controller && controller->SelectionAutoscrollInProgress())
     scroll_manager_->StopAutoscroll();
+
+  // |SelectionController| calls |PositionForPoint()| which requires
+  // |kPrePaintClean|. |FocusDocumentView| above is the last possible
+  // modifications before we call |SelectionController|.
+  if (LocalFrameView* frame_view = frame_->View())
+    frame_view->UpdateLifecycleToPrePaintClean(DocumentUpdateReason::kInput);
 
   return frame_->GetEventHandler()
                  .GetSelectionController()
@@ -1211,6 +1220,10 @@ Node* MouseEventManager::MousePressNode() {
 
 void MouseEventManager::SetMousePressNode(Node* node) {
   mouse_press_node_ = node;
+}
+
+Element* MouseEventManager::MouseDownElement() {
+  return mouse_down_element_;
 }
 
 void MouseEventManager::SetClickElement(Element* element) {

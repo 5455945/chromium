@@ -23,13 +23,16 @@
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "components/safe_browsing/content/browser/client_side_detection_service.h"
+#include "components/safe_browsing/content/browser/client_side_model_loader.h"
+#include "components/safe_browsing/core/common/proto/client_model.pb.h"
+#include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
-#include "components/safe_browsing/core/proto/client_model.pb.h"
-#include "components/safe_browsing/core/proto/csd.pb.h"
+#include "components/safe_browsing/core/common/safebrowsing_constants.h"
 #include "components/variations/variations_associated_data.h"
 #include "content/public/test/browser_task_environment.h"
 #include "crypto/sha2.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -46,22 +49,6 @@ using ::testing::_;
 using content::BrowserThread;
 
 namespace safe_browsing {
-namespace {
-
-class MockModelLoader : public ModelLoader {
- public:
-  explicit MockModelLoader(const std::string& model_name)
-      : ModelLoader(base::RepeatingClosure(), nullptr, model_name) {}
-  ~MockModelLoader() override {}
-
-  MOCK_METHOD1(ScheduleFetch, void(int64_t));
-  MOCK_METHOD0(CancelFetcher, void());
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MockModelLoader);
-};
-
-}  // namespace
 
 class ClientSideDetectionServiceTest : public testing::Test {
  public:
@@ -85,8 +72,7 @@ class ClientSideDetectionServiceTest : public testing::Test {
 
   bool SendClientReportPhishingRequest(const GURL& phishing_url,
                                        float score,
-                                       bool is_extended_reporting,
-                                       bool is_enhanced_reporting) {
+                                       const std::string& access_token) {
     std::unique_ptr<ClientPhishingRequest> request =
         std::make_unique<ClientPhishingRequest>(ClientPhishingRequest());
     request->set_url(phishing_url.spec());
@@ -95,9 +81,10 @@ class ClientSideDetectionServiceTest : public testing::Test {
 
     base::RunLoop run_loop;
     csd_service_->SendClientReportPhishingRequest(
-        std::move(request), is_extended_reporting, is_enhanced_reporting,
+        std::move(request),
         base::BindOnce(&ClientSideDetectionServiceTest::SendRequestDone,
-                       base::Unretained(this), run_loop.QuitWhenIdleClosure()));
+                       base::Unretained(this), run_loop.QuitWhenIdleClosure()),
+        access_token);
     phishing_url_ = phishing_url;
     run_loop.Run();  // Waits until callback is called.
     return is_phishing_;
@@ -243,25 +230,26 @@ TEST_F(ClientSideDetectionServiceTest, SendClientReportPhishingRequest) {
 
   GURL url("http://a.com/");
   float score = 0.4f;  // Some random client score.
+  std::string access_token;
 
   // Safe browsing is not enabled.
   profile_->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled, false);
-  EXPECT_FALSE(SendClientReportPhishingRequest(url, score, false, true));
+  EXPECT_FALSE(SendClientReportPhishingRequest(url, score, access_token));
 
   profile_->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled, true);
   base::Time before = base::Time::Now();
 
   // Invalid response body from the server.
   SetClientReportPhishingResponse("invalid proto response", net::OK);
-  EXPECT_FALSE(SendClientReportPhishingRequest(url, score, false, false));
+  EXPECT_FALSE(SendClientReportPhishingRequest(url, score, access_token));
 
-  // Normal behavior.
+  // Normal behavior with no access token.
   ClientPhishingResponse response;
   response.set_phishy(true);
   SetClientReportPhishingResponse(response.SerializeAsString(), net::OK);
-  EXPECT_TRUE(SendClientReportPhishingRequest(url, score, false, true));
-  EXPECT_TRUE(SendClientReportPhishingRequest(url, score, true, false));
-  EXPECT_TRUE(SendClientReportPhishingRequest(url, score, false, false));
+  EXPECT_TRUE(SendClientReportPhishingRequest(url, score, access_token));
+  EXPECT_TRUE(SendClientReportPhishingRequest(url, score, access_token));
+  EXPECT_TRUE(SendClientReportPhishingRequest(url, score, access_token));
 
   // This request will fail
   GURL second_url("http://b.com/");
@@ -269,11 +257,11 @@ TEST_F(ClientSideDetectionServiceTest, SendClientReportPhishingRequest) {
   SetClientReportPhishingResponse(response.SerializeAsString(),
                                   net::ERR_FAILED);
   EXPECT_FALSE(
-      SendClientReportPhishingRequest(second_url, score, false, false));
+      SendClientReportPhishingRequest(second_url, score, access_token));
 
   base::Time after = base::Time::Now();
 
-  // Check that we have recorded all 3 requests within the correct time range.
+  // Check that we have recorded all 5 requests within the correct time range.
   std::deque<base::Time>& report_times = GetPhishingReportTimes();
   EXPECT_EQ(5U, report_times.size());
   EXPECT_TRUE(OverPhishingReportLimit());
@@ -290,6 +278,55 @@ TEST_F(ClientSideDetectionServiceTest, SendClientReportPhishingRequest) {
   EXPECT_TRUE(csd_service_->GetValidCachedResult(url, &is_phishing));
   EXPECT_TRUE(is_phishing);
   EXPECT_FALSE(csd_service_->IsInCache(second_url));
+}
+
+TEST_F(ClientSideDetectionServiceTest,
+       SendClientReportPhishingRequestWithToken) {
+  SetModelFetchResponses();
+  csd_service_ = std::make_unique<ClientSideDetectionService>(
+      std::make_unique<ClientSideDetectionServiceDelegate>(profile_));
+  csd_service_->SetURLLoaderFactoryForTesting(test_shared_loader_factory_);
+
+  profile_->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled, true);
+
+  GURL url("http://a.com/");
+  float score = 0.4f;  // Some random client score.
+  std::string access_token = "fake access token";
+  ClientPhishingResponse response;
+  response.set_phishy(true);
+  test_url_loader_factory_.SetInterceptor(
+      base::BindLambdaForTesting([&](const network::ResourceRequest& request) {
+        std::string out;
+        EXPECT_TRUE(request.headers.GetHeader(
+            net::HttpRequestHeaders::kAuthorization, &out));
+        EXPECT_EQ(out, kAuthHeaderBearer + access_token);
+      }));
+  SetClientReportPhishingResponse(response.SerializeAsString(), net::OK);
+  EXPECT_TRUE(SendClientReportPhishingRequest(url, score, access_token));
+}
+
+TEST_F(ClientSideDetectionServiceTest,
+       SendClientReportPhishingRequestWithoutToken) {
+  SetModelFetchResponses();
+  csd_service_ = std::make_unique<ClientSideDetectionService>(
+      std::make_unique<ClientSideDetectionServiceDelegate>(profile_));
+  csd_service_->SetURLLoaderFactoryForTesting(test_shared_loader_factory_);
+
+  profile_->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled, true);
+
+  GURL url("http://a.com/");
+  float score = 0.4f;  // Some random client score.
+  std::string access_token = "";
+  ClientPhishingResponse response;
+  response.set_phishy(true);
+  test_url_loader_factory_.SetInterceptor(
+      base::BindLambdaForTesting([&](const network::ResourceRequest& request) {
+        std::string out;
+        EXPECT_FALSE(request.headers.GetHeader(
+            net::HttpRequestHeaders::kAuthorization, &out));
+      }));
+  SetClientReportPhishingResponse(response.SerializeAsString(), net::OK);
+  EXPECT_TRUE(SendClientReportPhishingRequest(url, score, access_token));
 }
 
 TEST_F(ClientSideDetectionServiceTest, GetNumReportTest) {
@@ -340,53 +377,6 @@ TEST_F(ClientSideDetectionServiceTest, IsPrivateIPAddress) {
   EXPECT_TRUE(csd_service_->IsPrivateIPAddress("blah"));
 }
 
-TEST_F(ClientSideDetectionServiceTest, SetEnabledAndRefreshState) {
-  // Check that the model isn't downloaded until the service is enabled.
-  profile_->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled, false);
-  csd_service_ = std::make_unique<ClientSideDetectionService>(
-      std::make_unique<ClientSideDetectionServiceDelegate>(profile_));
-  EXPECT_FALSE(csd_service_->enabled());
-  EXPECT_TRUE(csd_service_->model_loader_ == nullptr);
-
-  // Inject mock loader.
-  csd_service_->SetModelLoaderFactoryForTesting(base::BindLambdaForTesting([] {
-    auto loader = std::make_unique<StrictMock<MockModelLoader>>("model1");
-    return std::unique_ptr<ModelLoader>(std::move(loader));
-  }));
-
-  EXPECT_FALSE(csd_service_->enabled());
-
-  // Check that initial ScheduleFetch() calls are made.
-  csd_service_->SetModelLoaderFactoryForTesting(base::BindLambdaForTesting([] {
-    auto loader = std::make_unique<StrictMock<MockModelLoader>>("model1");
-    EXPECT_CALL(
-        *loader,
-        ScheduleFetch(
-            ClientSideDetectionService::kInitialClientModelFetchDelayMs));
-
-    // Whenever this model is torn down, CancelFetcher will be called.
-    EXPECT_CALL(*loader, CancelFetcher());
-    return std::unique_ptr<ModelLoader>(std::move(loader));
-  }));
-  profile_->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled, true);
-  base::RunLoop().RunUntilIdle();
-
-  // Check that enabling again doesn't request the model.
-  profile_->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled, true);
-  // No calls expected.
-  base::RunLoop().RunUntilIdle();
-
-  // Check that disabling the service cancels pending requests. CancelFetch will
-  // be called here.
-  profile_->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled, false);
-  base::RunLoop().RunUntilIdle();
-
-  // Check that disabling again doesn't request the model.
-  profile_->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled, false);
-  // No calls expected.
-  base::RunLoop().RunUntilIdle();
-}
-
 TEST_F(ClientSideDetectionServiceTest, TestModelFollowsPrefs) {
   profile_->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled, false);
   profile_->GetPrefs()->SetBoolean(prefs::kSafeBrowsingScoutReportingEnabled,
@@ -396,26 +386,11 @@ TEST_F(ClientSideDetectionServiceTest, TestModelFollowsPrefs) {
       std::make_unique<ClientSideDetectionServiceDelegate>(profile_));
 
   // Safe Browsing is not enabled.
-  EXPECT_EQ(csd_service_->model_loader_, nullptr);
+  EXPECT_FALSE(csd_service_->enabled());
 
   // Safe Browsing is enabled.
   profile_->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled, true);
-  ASSERT_NE(csd_service_->model_loader_, nullptr);
-  EXPECT_EQ(csd_service_->model_loader_->name(),
-            "client_model_v5_variation_6.pb");
-
-  // Safe Browsing extended reporting is enabled
-  profile_->GetPrefs()->SetBoolean(prefs::kSafeBrowsingScoutReportingEnabled,
-                                   true);
-  ASSERT_NE(csd_service_->model_loader_, nullptr);
-  EXPECT_EQ(csd_service_->model_loader_->name(),
-            "client_model_v5_ext_variation_6.pb");
-
-  // Safe Browsing enhanced protection is enabled.
-  profile_->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnhanced, true);
-  ASSERT_NE(csd_service_->model_loader_, nullptr);
-  EXPECT_EQ(csd_service_->model_loader_->name(),
-            "client_model_v5_ext_variation_6.pb");
+  EXPECT_TRUE(csd_service_->enabled());
 }
 
 }  // namespace safe_browsing

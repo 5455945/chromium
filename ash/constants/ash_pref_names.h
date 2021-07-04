@@ -15,7 +15,11 @@ extern const char kAssistiveInputFeatureSettings[];
 COMPONENT_EXPORT(ASH_CONSTANTS)
 extern const char kAssistPersonalInfoEnabled[];
 COMPONENT_EXPORT(ASH_CONSTANTS)
-extern const char kESimProfilesPrefName[];
+extern const char kAssistPredictiveWritingEnabled[];
+COMPONENT_EXPORT(ASH_CONSTANTS)
+extern const char kESimRefreshedEuiccs[];
+COMPONENT_EXPORT(ASH_CONSTANTS)
+extern const char kESimProfiles[];
 COMPONENT_EXPORT(ASH_CONSTANTS)
 extern const char kEmojiSuggestionEnabled[];
 COMPONENT_EXPORT(ASH_CONSTANTS)
@@ -43,7 +47,7 @@ extern const char kQuirksClientLastServerCheck[];
 COMPONENT_EXPORT(ASH_CONSTANTS)
 extern const char kDeviceWiFiFastTransitionEnabled[];
 COMPONENT_EXPORT(ASH_CONSTANTS)
-extern const char kSecondaryGoogleAccountSigninAllowed[];
+extern const char kInputNoiseCancellationEnabled[];
 COMPONENT_EXPORT(ASH_CONSTANTS)
 extern const char kSamlPasswordModifiedTime[];
 COMPONENT_EXPORT(ASH_CONSTANTS)

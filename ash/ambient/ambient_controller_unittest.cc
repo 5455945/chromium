@@ -10,8 +10,11 @@
 
 #include "ash/ambient/test/ambient_ash_test_base.h"
 #include "ash/ambient/ui/ambient_container_view.h"
+#include "ash/assistant/assistant_interaction_controller_impl.h"
+#include "ash/assistant/model/assistant_interaction_model.h"
 #include "ash/public/cpp/ambient/ambient_prefs.h"
 #include "ash/public/cpp/ambient/ambient_ui_model.h"
+#include "ash/public/cpp/assistant/controller/assistant_interaction_controller.h"
 #include "ash/root_window_controller.h"
 #include "ash/shell.h"
 #include "ash/system/power/power_status.h"
@@ -22,12 +25,16 @@
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "chromeos/dbus/power_manager/power_supply_properties.pb.h"
 #include "chromeos/dbus/power_manager/suspend.pb.h"
+#include "chromeos/services/libassistant/public/cpp/assistant_interaction_metadata.h"
 #include "ui/events/event.h"
 #include "ui/events/keycodes/keyboard_codes_posix.h"
+#include "ui/events/platform/platform_event_source.h"
 #include "ui/events/pointer_details.h"
 #include "ui/events/types/event_type.h"
 
 namespace ash {
+
+using chromeos::assistant::AssistantInteractionMetadata;
 
 constexpr char kUser1[] = "user1@gmail.com";
 constexpr char kUser2[] = "user2@gmail.com";
@@ -441,15 +448,54 @@ TEST_F(AmbientControllerTest,
 }
 
 TEST_F(AmbientControllerTest,
+       CheckAcquireAndReleaseWakeLockWhenBatteryBatteryIsFullAndDischarging) {
+  SetPowerStateDischarging();
+  SetBatteryPercent(100.f);
+  SetExternalPowerConnected();
+
+  // Lock screen to start ambient mode, and flush the loop to ensure
+  // the acquire wake lock request has reached the wake lock provider.
+  LockScreen();
+  FastForwardToLockScreenTimeout();
+  FastForwardTiny();
+
+  EXPECT_EQ(1, GetNumOfActiveWakeLocks(
+                   device::mojom::WakeLockType::kPreventDisplaySleep));
+
+  HideAmbientScreen();
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(0, GetNumOfActiveWakeLocks(
+                   device::mojom::WakeLockType::kPreventDisplaySleep));
+
+  // Ambient screen showup again after inactivity.
+  FastForwardToLockScreenTimeout();
+
+  EXPECT_EQ(1, GetNumOfActiveWakeLocks(
+                   device::mojom::WakeLockType::kPreventDisplaySleep));
+
+  // Unlock screen to exit ambient mode.
+  UnlockScreen();
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(0, GetNumOfActiveWakeLocks(
+                   device::mojom::WakeLockType::kPreventDisplaySleep));
+}
+
+TEST_F(AmbientControllerTest,
        CheckAcquireAndReleaseWakeLockWhenBatteryStateChanged) {
   SetPowerStateDischarging();
+  SetExternalPowerConnected();
+  SetBatteryPercent(50.f);
+
   // Lock screen to start ambient mode.
   LockScreen();
   FastForwardToLockScreenTimeout();
   FastForwardTiny();
 
   EXPECT_TRUE(ambient_controller()->IsShown());
-  // Should not acquire wake lock when device is not charging.
+  // Should not acquire wake lock when device is not charging and with low
+  // battery.
   EXPECT_EQ(0, GetNumOfActiveWakeLocks(
                    device::mojom::WakeLockType::kPreventDisplaySleep));
 
@@ -462,7 +508,7 @@ TEST_F(AmbientControllerTest,
                    device::mojom::WakeLockType::kPreventDisplaySleep));
 
   // Simulates a full battery.
-  SetPowerStateFull();
+  SetBatteryPercent(100.f);
 
   // Should keep the wake lock as the charger is still connected.
   EXPECT_EQ(1, GetNumOfActiveWakeLocks(
@@ -472,7 +518,28 @@ TEST_F(AmbientControllerTest,
   SetPowerStateDischarging();
   base::RunLoop().RunUntilIdle();
 
-  // Should release the wake lock when battery is not charging.
+  // Should keep the wake lock when battery is high.
+  EXPECT_EQ(1, GetNumOfActiveWakeLocks(
+                   device::mojom::WakeLockType::kPreventDisplaySleep));
+
+  SetBatteryPercent(50.f);
+  base::RunLoop().RunUntilIdle();
+
+  // Should release the wake lock when battery is not charging and low.
+  EXPECT_EQ(0, GetNumOfActiveWakeLocks(
+                   device::mojom::WakeLockType::kPreventDisplaySleep));
+
+  SetBatteryPercent(100.f);
+  base::RunLoop().RunUntilIdle();
+
+  // Should take the wake lock when battery is not charging and high.
+  EXPECT_EQ(1, GetNumOfActiveWakeLocks(
+                   device::mojom::WakeLockType::kPreventDisplaySleep));
+
+  SetExternalPowerDisconnected();
+  base::RunLoop().RunUntilIdle();
+
+  // Should release the wake lock when power is not connected.
   EXPECT_EQ(0, GetNumOfActiveWakeLocks(
                    device::mojom::WakeLockType::kPreventDisplaySleep));
 
@@ -720,6 +787,47 @@ TEST_F(AmbientControllerTest,
 
   // Should dismiss ambient mode screen.
   SetScreenIdleStateAndWait(/*dimmed=*/true, /*off=*/true);
+  FastForwardTiny();
+  EXPECT_FALSE(ambient_controller()->IsShown());
+
+  // Screen back on again, should not have ambient screen, but still has lock
+  // screen.
+  SetScreenIdleStateAndWait(/*dimmed=*/false, /*off=*/false);
+  EXPECT_TRUE(IsLocked());
+  EXPECT_FALSE(ambient_controller()->IsShown());
+
+  FastForwardToLockScreenTimeout();
+  FastForwardTiny();
+  EXPECT_TRUE(ambient_controller()->IsShown());
+}
+
+TEST_F(AmbientControllerTest,
+       ShouldHideAmbientScreenWhenDisplayIsOffAndNotStartWhenLockScreen) {
+  GetSessionControllerClient()->SetShouldLockScreenAutomatically(true);
+  SetPowerStateDischarging();
+  EXPECT_FALSE(ambient_controller()->IsShown());
+
+  // Should not lock the device and enter ambient mode when the screen is
+  // dimmed.
+  SetScreenIdleStateAndWait(/*dimmed=*/true, /*off=*/false);
+  EXPECT_FALSE(IsLocked());
+
+  FastForwardTiny();
+  EXPECT_TRUE(ambient_controller()->IsShown());
+
+  // Should not lock the device because the device is not charging.
+  FastForwardToBackgroundLockScreenTimeout();
+  EXPECT_FALSE(IsLocked());
+
+  // Should dismiss ambient mode screen.
+  SetScreenIdleStateAndWait(/*dimmed=*/true, /*off=*/true);
+  FastForwardTiny();
+  EXPECT_FALSE(ambient_controller()->IsShown());
+
+  // Lock screen will not start ambient mode.
+  LockScreen();
+  EXPECT_TRUE(IsLocked());
+
   FastForwardToLockScreenTimeout();
   FastForwardTiny();
   EXPECT_FALSE(ambient_controller()->IsShown());
@@ -773,6 +881,15 @@ TEST_F(AmbientControllerTest, ShowsOnMultipleDisplays) {
 }
 
 TEST_F(AmbientControllerTest, RespondsToDisplayAdded) {
+  // UpdateDisplay triggers a rogue MouseEvent that cancels Ambient mode when
+  // testing with Xvfb. A corresponding MouseEvent is not fired on a real device
+  // when an external display is added. Ignore this MouseEvent for testing.
+  // Store the old |ShouldIgnoreNativePlatformEvents| value and reset it at the
+  // end of the test.
+  bool old_should_ignore_events =
+      ui::PlatformEventSource::ShouldIgnoreNativePlatformEvents();
+  ui::PlatformEventSource::SetIgnoreNativePlatformEvents(true);
+
   UpdateDisplay("800x600");
   ShowAmbientScreen();
   FastForwardToNextImage();
@@ -790,6 +907,9 @@ TEST_F(AmbientControllerTest, RespondsToDisplayAdded) {
   for (auto* ctrl : RootWindowController::root_window_controllers())
     EXPECT_TRUE(ctrl->ambient_widget_for_testing() &&
                 ctrl->ambient_widget_for_testing()->IsVisible());
+
+  ui::PlatformEventSource::SetIgnoreNativePlatformEvents(
+      old_should_ignore_events);
 }
 
 TEST_F(AmbientControllerTest, HandlesDisplayRemoved) {
@@ -935,6 +1055,22 @@ TEST_F(AmbientControllerTest, BindsObserversWhenAmbientOn) {
 
   EXPECT_FALSE(ctrl->user_activity_observer_.IsObserving());
   EXPECT_FALSE(ctrl->power_status_observer_.IsObserving());
+}
+
+TEST_F(AmbientControllerTest, ShowDismissAmbientScreenUponAssistantQuery) {
+  // Without user interaction, should show ambient mode.
+  ShowAmbientScreen();
+  EXPECT_TRUE(ambient_controller()->IsShown());
+
+  // Trigger Assistant interaction.
+  static_cast<AssistantInteractionControllerImpl*>(
+      AssistantInteractionController::Get())
+      ->OnInteractionStarted(AssistantInteractionMetadata());
+  base::RunLoop().RunUntilIdle();
+
+  // Ambient screen should dismiss.
+  EXPECT_TRUE(GetContainerViews().empty());
+  EXPECT_FALSE(ambient_controller()->IsShown());
 }
 
 }  // namespace ash

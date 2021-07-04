@@ -59,11 +59,13 @@ class SupervisedUserSettingsService : public KeyedService,
   // inactive, i.e. the user is not supervised.
   using SettingsCallbackType = void(const base::DictionaryValue*);
   using SettingsCallback = base::RepeatingCallback<SettingsCallbackType>;
-  using SettingsCallbackList = base::CallbackList<SettingsCallbackType>;
+  using SettingsCallbackList =
+      base::RepeatingCallbackList<SettingsCallbackType>;
 
   using ShutdownCallbackType = void();
   using ShutdownCallback = base::RepeatingCallback<ShutdownCallbackType>;
-  using ShutdownCallbackList = base::CallbackList<ShutdownCallbackType>;
+  using ShutdownCallbackList =
+      base::RepeatingCallbackList<ShutdownCallbackType>;
 
   SupervisedUserSettingsService();
   ~SupervisedUserSettingsService() override;
@@ -126,14 +128,14 @@ class SupervisedUserSettingsService : public KeyedService,
 
   // SyncableService implementation:
   void WaitUntilReadyToSync(base::OnceClosure done) override;
-  base::Optional<syncer::ModelError> MergeDataAndStartSyncing(
+  absl::optional<syncer::ModelError> MergeDataAndStartSyncing(
       syncer::ModelType type,
       const syncer::SyncDataList& initial_sync_data,
       std::unique_ptr<syncer::SyncChangeProcessor> sync_processor,
       std::unique_ptr<syncer::SyncErrorFactory> error_handler) override;
   void StopSyncing(syncer::ModelType type) override;
   syncer::SyncDataList GetAllSyncDataForTesting(syncer::ModelType type) const;
-  base::Optional<syncer::ModelError> ProcessSyncChanges(
+  absl::optional<syncer::ModelError> ProcessSyncChanges(
       const base::Location& from_here,
       const syncer::SyncChangeList& change_list) override;
 

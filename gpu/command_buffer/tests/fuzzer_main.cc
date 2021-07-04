@@ -12,10 +12,10 @@
 #include "base/bind.h"
 #include "base/callback_helpers.h"
 #include "base/command_line.h"
+#include "base/cxx17_backports.h"
 #include "base/i18n/icu_util.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
-#include "base/stl_util.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
@@ -336,14 +336,14 @@ class CommandBufferSetup {
 #endif
 
     CHECK(gl::init::InitializeStaticGLBindingsImplementation(
-        gl::kGLImplementationEGLANGLE, false));
+        gl::GLImplementationParts(gl::kGLImplementationEGLANGLE), false));
     CHECK(
         gl::init::InitializeGLOneOffPlatformImplementation(false, false, true));
 #elif defined(GPU_FUZZER_USE_SWIFTSHADER)
     command_line->AppendSwitchASCII(switches::kUseGL,
                                     gl::kGLImplementationSwiftShaderName);
     CHECK(gl::init::InitializeStaticGLBindingsImplementation(
-        gl::kGLImplementationSwiftShaderGL, false));
+        gl::GLImplementationParts(gl::kGLImplementationSwiftShaderGL), false));
     CHECK(
         gl::init::InitializeGLOneOffPlatformImplementation(false, false, true));
 #elif defined(GPU_FUZZER_USE_STUB)

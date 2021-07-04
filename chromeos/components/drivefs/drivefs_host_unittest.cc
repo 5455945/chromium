@@ -12,7 +12,7 @@
 #include "base/check.h"
 #include "base/notreached.h"
 #include "base/run_loop.h"
-#include "base/scoped_observer.h"
+#include "base/scoped_observation.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_split.h"
 #include "base/test/bind.h"
@@ -84,10 +84,10 @@ class MockDriveFs : public mojom::DriveFsInterceptorForTesting,
 
   MOCK_METHOD1(OnGetNextPage,
                drive::FileError(
-                   base::Optional<std::vector<mojom::QueryItemPtr>>* items));
+                   absl::optional<std::vector<mojom::QueryItemPtr>>* items));
 
   void GetNextPage(GetNextPageCallback callback) override {
-    base::Optional<std::vector<mojom::QueryItemPtr>> items;
+    absl::optional<std::vector<mojom::QueryItemPtr>> items;
     auto error = OnGetNextPage(&items);
     std::move(callback).Run(error, std::move(items));
   }
@@ -125,8 +125,8 @@ class TestingDriveFsHostDelegate : public DriveFsHost::Delegate,
   // DriveFsHost::MountObserver:
   MOCK_METHOD1(OnMounted, void(const base::FilePath&));
   MOCK_METHOD2(OnMountFailed,
-               void(MountFailure, base::Optional<base::TimeDelta>));
-  MOCK_METHOD1(OnUnmounted, void(base::Optional<base::TimeDelta>));
+               void(MountFailure, absl::optional<base::TimeDelta>));
+  MOCK_METHOD1(OnUnmounted, void(absl::optional<base::TimeDelta>));
 
   drive::DriveNotificationManager& GetDriveNotificationManager() override {
     return drive_notification_manager_;
@@ -207,8 +207,8 @@ class DriveFsHostTest : public ::testing::Test, public mojom::DriveFsBootstrap {
     account_id_ = AccountId::FromUserEmailGaiaId("test@example.com", "ID");
 
     disk_manager_ = std::make_unique<chromeos::disks::MockDiskMountManager>();
-    identity_test_env_.MakeUnconsentedPrimaryAccountAvailable(
-        "test@example.com");
+    identity_test_env_.MakePrimaryAccountAvailable(
+        "test@example.com", signin::ConsentLevel::kSignin);
     host_delegate_ = std::make_unique<TestingDriveFsHostDelegate>(
         identity_test_env_.identity_manager(), account_id_);
     auto timer = std::make_unique<base::MockOneShotTimer>();
@@ -264,11 +264,11 @@ class DriveFsHostTest : public ::testing::Test, public mojom::DriveFsBootstrap {
 
   void SendOnMounted() { delegate_->OnMounted(); }
 
-  void SendOnUnmounted(base::Optional<base::TimeDelta> delay) {
+  void SendOnUnmounted(absl::optional<base::TimeDelta> delay) {
     delegate_->OnUnmounted(std::move(delay));
   }
 
-  void SendMountFailed(base::Optional<base::TimeDelta> delay) {
+  void SendMountFailed(absl::optional<base::TimeDelta> delay) {
     delegate_->OnMountFailed(std::move(delay));
   }
 
@@ -333,7 +333,7 @@ class DriveFsHostTest : public ::testing::Test, public mojom::DriveFsBootstrap {
   std::unique_ptr<TestingDriveFsHostDelegate> host_delegate_;
   std::unique_ptr<DriveFsHost> host_;
   base::MockOneShotTimer* timer_;
-  base::Optional<bool> verbose_logging_enabled_;
+  absl::optional<bool> verbose_logging_enabled_;
 
   mojo::Receiver<mojom::DriveFsBootstrap> bootstrap_receiver_{this};
   MockDriveFs mock_drivefs_;
@@ -341,7 +341,7 @@ class DriveFsHostTest : public ::testing::Test, public mojom::DriveFsBootstrap {
   mojo::Remote<mojom::DriveFsDelegate> delegate_;
   mojo::PendingReceiver<mojom::DriveFsDelegate> pending_delegate_receiver_;
   std::string token_;
-  base::Optional<std::string> init_access_token_;
+  absl::optional<std::string> init_access_token_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(DriveFsHostTest);
@@ -349,8 +349,9 @@ class DriveFsHostTest : public ::testing::Test, public mojom::DriveFsBootstrap {
 
 TEST_F(DriveFsHostTest, Basic) {
   MockDriveFsHostObserver observer;
-  ScopedObserver<DriveFsHost, DriveFsHostObserver> observer_scoper(&observer);
-  observer_scoper.Add(host_.get());
+  base::ScopedObservation<DriveFsHost, DriveFsHostObserver> observation_scoper(
+      &observer);
+  observation_scoper.Observe(host_.get());
 
   EXPECT_FALSE(host_->IsMounted());
 
@@ -485,8 +486,9 @@ ACTION_P(CloneStruct, output) {
 TEST_F(DriveFsHostTest, OnSyncingStatusUpdate_ForwardToObservers) {
   ASSERT_NO_FATAL_FAILURE(DoMount());
   MockDriveFsHostObserver observer;
-  ScopedObserver<DriveFsHost, DriveFsHostObserver> observer_scoper(&observer);
-  observer_scoper.Add(host_.get());
+  base::ScopedObservation<DriveFsHost, DriveFsHostObserver> observation_scoper(
+      &observer);
+  observation_scoper.Observe(host_.get());
   auto status = mojom::SyncingStatus::New();
   status->item_events.emplace_back(base::in_place, 12, 34, "filename.txt",
                                    mojom::ItemEvent::State::kInProgress, 123,
@@ -510,8 +512,9 @@ ACTION_P(CloneVectorOfStructs, output) {
 TEST_F(DriveFsHostTest, OnFilesChanged_ForwardToObservers) {
   ASSERT_NO_FATAL_FAILURE(DoMount());
   MockDriveFsHostObserver observer;
-  ScopedObserver<DriveFsHost, DriveFsHostObserver> observer_scoper(&observer);
-  observer_scoper.Add(host_.get());
+  base::ScopedObservation<DriveFsHost, DriveFsHostObserver> observation_scoper(
+      &observer);
+  observation_scoper.Observe(host_.get());
   std::vector<mojom::FileChangePtr> changes;
   changes.emplace_back(base::in_place, base::FilePath("/create"),
                        mojom::FileChange::Type::kCreate);
@@ -532,8 +535,9 @@ TEST_F(DriveFsHostTest, OnFilesChanged_ForwardToObservers) {
 TEST_F(DriveFsHostTest, OnError_ForwardToObservers) {
   ASSERT_NO_FATAL_FAILURE(DoMount());
   MockDriveFsHostObserver observer;
-  ScopedObserver<DriveFsHost, DriveFsHostObserver> observer_scoper(&observer);
-  observer_scoper.Add(host_.get());
+  base::ScopedObservation<DriveFsHost, DriveFsHostObserver> observation_scoper(
+      &observer);
+  observation_scoper.Observe(host_.get());
   auto error = mojom::DriveError::New(
       mojom::DriveError::Type::kCantUploadStorageFull, base::FilePath("/foo"));
   mojom::DriveErrorPtr observed_error;
@@ -548,8 +552,9 @@ TEST_F(DriveFsHostTest, OnError_ForwardToObservers) {
 TEST_F(DriveFsHostTest, OnError_IgnoreUnknownErrorTypes) {
   ASSERT_NO_FATAL_FAILURE(DoMount());
   MockDriveFsHostObserver observer;
-  ScopedObserver<DriveFsHost, DriveFsHostObserver> observer_scoper(&observer);
-  observer_scoper.Add(host_.get());
+  base::ScopedObservation<DriveFsHost, DriveFsHostObserver> observation_scoper(
+      &observer);
+  observation_scoper.Observe(host_.get());
   EXPECT_CALL(observer, OnError(_)).Times(0);
   delegate_->OnError(mojom::DriveError::New(
       static_cast<mojom::DriveError::Type>(
@@ -731,7 +736,7 @@ TEST_F(DriveFsHostTest, Remount_CachedOnceOnly) {
       "auth token", clock_.Now() + kTokenLifetime);
   EXPECT_FALSE(identity_test_env_.IsAccessTokenRequestPending());
 
-  base::Optional<base::TimeDelta> delay = base::TimeDelta::FromSeconds(5);
+  absl::optional<base::TimeDelta> delay = base::TimeDelta::FromSeconds(5);
   EXPECT_CALL(*host_delegate_, OnUnmounted(delay));
   SendOnUnmounted(delay);
   base::RunLoop().RunUntilIdle();
@@ -767,7 +772,7 @@ TEST_F(DriveFsHostTest, Remount_RequestInflight) {
       base::BindLambdaForTesting([&](mojom::AccessTokenStatus status,
                                      const std::string& token) { FAIL(); }));
 
-  base::Optional<base::TimeDelta> delay = base::TimeDelta::FromSeconds(5);
+  absl::optional<base::TimeDelta> delay = base::TimeDelta::FromSeconds(5);
   EXPECT_CALL(*host_delegate_, OnUnmounted(delay));
   SendOnUnmounted(delay);
   base::RunLoop().RunUntilIdle();
@@ -792,7 +797,7 @@ TEST_F(DriveFsHostTest, Remount_RequestInflightCompleteAfterMount) {
       base::BindLambdaForTesting([&](mojom::AccessTokenStatus status,
                                      const std::string& token) { FAIL(); }));
 
-  base::Optional<base::TimeDelta> delay = base::TimeDelta::FromSeconds(5);
+  absl::optional<base::TimeDelta> delay = base::TimeDelta::FromSeconds(5);
   EXPECT_CALL(*host_delegate_, OnUnmounted(delay));
   SendOnUnmounted(delay);
   base::RunLoop().RunUntilIdle();

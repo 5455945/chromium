@@ -9,21 +9,21 @@
 #include <memory>
 #include <utility>
 
+#include "ash/webui/file_manager/url_constants.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
+#include "base/cxx17_backports.h"
 #include "base/notreached.h"
-#include "base/stl_util.h"
 #include "base/task/post_task.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
+#include "chrome/browser/ash/arc/fileapi/arc_documents_provider_util.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/chromeos/arc/fileapi/arc_documents_provider_util.h"
 #include "chrome/browser/chromeos/fileapi/file_access_permissions.h"
 #include "chrome/browser/chromeos/fileapi/file_system_backend_delegate.h"
 #include "chrome/browser/chromeos/fileapi/observable_file_system_operation_impl.h"
 #include "chrome/browser/media_galleries/fileapi/media_file_system_backend.h"
 #include "chrome/common/url_constants.h"
-#include "chromeos/components/file_manager/url_constants.h"
 #include "chromeos/dbus/cros_disks_client.h"
 #include "net/base/escape.h"
 #include "storage/browser/file_system/async_file_util.h"
@@ -37,7 +37,6 @@
 #include "storage/common/file_system/file_system_mount_option.h"
 #include "storage/common/file_system/file_system_types.h"
 #include "storage/common/file_system/file_system_util.h"
-#include "url/origin.h"
 
 namespace chromeos {
 namespace {
@@ -238,19 +237,17 @@ bool FileSystemBackend::IsAccessAllowed(
   if (!CanHandleURL(url))
     return false;
 
+  const url::Origin origin = url.origin();
   // If there is no origin set, then it's an internal access.
-  if (url.origin().opaque())
+  if (origin.opaque())
     return true;
 
-#if !defined(OFFICIAL_BUILD)
   // The chrome://file-manager can access its filesystem origin.
-  if (url.origin().GetURL() ==
-      chromeos::file_manager::kChromeUIFileManagerURL) {
+  if (origin.GetURL() == ash::file_manager::kChromeUIFileManagerURL) {
     return true;
   }
-#endif
 
-  const std::string& extension_id = url.origin().host();
+  const std::string& extension_id = origin.host();
   if (url.type() == storage::kFileSystemTypeRestrictedLocal) {
     for (size_t i = 0; i < base::size(kOemAccessibleExtensions); ++i) {
       if (extension_id == kOemAccessibleExtensions[i])
@@ -258,12 +255,12 @@ bool FileSystemBackend::IsAccessAllowed(
     }
   }
 
-  return file_access_permissions_->HasAccessPermission(extension_id,
+  return file_access_permissions_->HasAccessPermission(origin,
                                                        url.virtual_path());
 }
 
-void FileSystemBackend::GrantFileAccessToExtension(
-    const std::string& extension_id,
+void FileSystemBackend::GrantFileAccessToOrigin(
+    const url::Origin& origin,
     const base::FilePath& virtual_path) {
   std::string id;
   storage::FileSystemType type;
@@ -277,12 +274,11 @@ void FileSystemBackend::GrantFileAccessToExtension(
     return;
   }
 
-  file_access_permissions_->GrantAccessPermission(extension_id, virtual_path);
+  file_access_permissions_->GrantAccessPermission(origin, virtual_path);
 }
 
-void FileSystemBackend::RevokeAccessForExtension(
-    const std::string& extension_id) {
-  file_access_permissions_->RevokePermissions(extension_id);
+void FileSystemBackend::RevokeAccessForOrigin(const url::Origin& origin) {
+  file_access_permissions_->RevokePermissions(origin);
 }
 
 std::vector<base::FilePath> FileSystemBackend::GetRootDirectories() const {
@@ -423,7 +419,7 @@ FileSystemBackend::CreateFileStreamReader(
   DCHECK(url.is_valid());
 
   if (!IsAccessAllowed(url))
-    return std::unique_ptr<storage::FileStreamReader>();
+    return nullptr;
 
   switch (url.type()) {
     case storage::kFileSystemTypeProvided:
@@ -451,7 +447,7 @@ FileSystemBackend::CreateFileStreamReader(
     default:
       NOTREACHED();
   }
-  return std::unique_ptr<storage::FileStreamReader>();
+  return nullptr;
 }
 
 std::unique_ptr<storage::FileStreamWriter>
@@ -462,7 +458,7 @@ FileSystemBackend::CreateFileStreamWriter(
   DCHECK(url.is_valid());
 
   if (!IsAccessAllowed(url))
-    return std::unique_ptr<storage::FileStreamWriter>();
+    return nullptr;
 
   switch (url.type()) {
     case storage::kFileSystemTypeProvided:
@@ -484,11 +480,11 @@ FileSystemBackend::CreateFileStreamWriter(
     // Read only file systems.
     case storage::kFileSystemTypeRestrictedLocal:
     case storage::kFileSystemTypeArcContent:
-      return std::unique_ptr<storage::FileStreamWriter>();
+      return nullptr;
     default:
       NOTREACHED();
   }
-  return std::unique_ptr<storage::FileStreamWriter>();
+  return nullptr;
 }
 
 bool FileSystemBackend::GetVirtualPath(const base::FilePath& filesystem_path,

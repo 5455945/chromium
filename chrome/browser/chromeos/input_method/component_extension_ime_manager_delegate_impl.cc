@@ -14,10 +14,11 @@
 #include "base/json/json_string_value_serializer.h"
 #include "base/logging.h"
 #include "base/path_service.h"
-#include "base/stl_util.h"
+#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/system/sys_info.h"
 #include "base/task/post_task.h"
+#include "base/task/thread_pool.h"
 #include "build/branding_buildflags.h"
 #include "chrome/browser/extensions/component_loader.h"
 #include "chrome/browser/extensions/extension_service.h"
@@ -160,14 +161,8 @@ void OnFilePathChecked(Profile* profile,
     // TODO(http://b/170278753): Remove this once NaCl decoder is removed.
     if ((*extension_id == extension_ime_util::kXkbExtensionId) &&
         base::FeatureList::IsEnabled(chromeos::features::kImeMojoDecoder)) {
-      const std::string bg_page = "background.html";
-      const std::string mojo_bg_page = "background_mojo.html";
-
-      // Don't update if the IME extension hasn't Mojo background page.
-      if (base::PathExists(file_path->Append(mojo_bg_page))) {
-        base::ReplaceFirstSubstringAfterOffset(&manifest_str, 0, bg_page,
-                                               mojo_bg_page);
-      }
+      base::ReplaceFirstSubstringAfterOffset(
+          &manifest_str, 0, "background.html", "background_mojo.html");
     }
 #endif
     DoLoadExtension(profile, *extension_id, manifest_str, *file_path);
@@ -361,7 +356,7 @@ void ComponentExtensionIMEManagerDelegateImpl::ReadComponentExtensionsInfo(
     ComponentExtensionIME component_ime;
     ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
     component_ime.manifest =
-        rb.GetRawDataResource(extension.manifest_resource_id).as_string();
+        std::string(rb.GetRawDataResource(extension.manifest_resource_id));
 
     if (component_ime.manifest.empty()) {
       LOG(ERROR) << "Couldn't get manifest from resource_id("

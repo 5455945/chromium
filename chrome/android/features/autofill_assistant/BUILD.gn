@@ -35,7 +35,6 @@ android_library("java") {
   deps = [
     ":java_resources",
     "//base:base_java",
-    "//base:jni_java",
     "//chrome/android:base_module_java",
     "//chrome/android:chrome_java",
     "//chrome/browser/browser_controls/android:java",
@@ -46,6 +45,7 @@ android_library("java") {
     "//chrome/browser/signin/services/android:java",
     "//chrome/browser/tab:java",
     "//chrome/browser/ui/android/favicon:java",
+    "//chrome/browser/ui/android/omnibox:java",
     "//chrome/browser/ui/messages/android:java",
     "//chrome/browser/util:java",
     "//chrome/browser/version:java",
@@ -93,6 +93,7 @@ android_library("java") {
     "java/src/org/chromium/chrome/browser/autofill_assistant/AssistantBottomBarNativeDelegate.java",
     "java/src/org/chromium/chrome/browser/autofill_assistant/AssistantBottomSheetContent.java",
     "java/src/org/chromium/chrome/browser/autofill_assistant/AssistantCoordinator.java",
+    "java/src/org/chromium/chrome/browser/autofill_assistant/AssistantDependenciesImpl.java",
     "java/src/org/chromium/chrome/browser/autofill_assistant/AssistantDialogButton.java",
     "java/src/org/chromium/chrome/browser/autofill_assistant/AssistantInfoPopup.java",
     "java/src/org/chromium/chrome/browser/autofill_assistant/AssistantKeyboardCoordinator.java",
@@ -201,11 +202,13 @@ android_library("java") {
 generate_jni("jni_headers") {
   sources = [
     "java/src/org/chromium/chrome/browser/autofill_assistant/AssistantBottomBarNativeDelegate.java",
+    "java/src/org/chromium/chrome/browser/autofill_assistant/AssistantDependenciesImpl.java",
     "java/src/org/chromium/chrome/browser/autofill_assistant/AssistantDialogButton.java",
     "java/src/org/chromium/chrome/browser/autofill_assistant/AssistantInfoPopup.java",
     "java/src/org/chromium/chrome/browser/autofill_assistant/AssistantModel.java",
     "java/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantClient.java",
     "java/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantDirectActionImpl.java",
+    "java/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantServiceInjector.java",
     "java/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantUiController.java",
     "java/src/org/chromium/chrome/browser/autofill_assistant/carousel/AssistantChip.java",
     "java/src/org/chromium/chrome/browser/autofill_assistant/details/AssistantDetails.java",
@@ -238,6 +241,10 @@ generate_jni("jni_headers") {
   split_name = "autofill_assistant"
 }
 
+generate_jni("jni_headers_public") {
+  sources = [ "public/java/src/org/chromium/chrome/browser/autofill_assistant/Starter.java" ]
+}
+
 generate_jni("test_support_jni_headers") {
   testonly = true
   sources = [
@@ -263,7 +270,6 @@ android_library("autofill_assistant_java_test_support") {
     ":test_support_jni_headers",
     "//base:base_java",
     "//base:base_java_test_support",
-    "//base:jni_java",
     "//components/autofill_assistant/browser:proto_java",
     "//content/public/test/android:content_java_test_support",
     "//third_party/android_deps:protobuf_lite_runtime_java",
@@ -277,6 +283,7 @@ android_library("test_java") {
   testonly = true
 
   sources = [
+    "javatests/src/org/chromium/chrome/browser/autofill_assistant/AssistantDependenciesTest.java",
     "javatests/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantAccessibilityIntegrationTest.java",
     "javatests/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantActionsCarouselUiTest.java",
     "javatests/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantAutostartTest.java",
@@ -292,6 +299,7 @@ android_library("test_java") {
     "javatests/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantFormActionTest.java",
     "javatests/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantGenericUiTest.java",
     "javatests/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantHeaderUiTest.java",
+    "javatests/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantHistoryDeletionObserverTest.java",
     "javatests/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantInfoBoxUiTest.java",
     "javatests/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantInputActionIntegrationTest.java",
     "javatests/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantInterruptIntegrationTest.java",
@@ -303,15 +311,21 @@ android_library("test_java") {
     "javatests/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantPersonalDataManagerTest.java",
     "javatests/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantProgressBarIntegrationTest.java",
     "javatests/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantPromptNavigationIntegrationTest.java",
+    "javatests/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantScreenOrientationHelper.java",
+    "javatests/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantTabHelperCustomTabTest.java",
+    "javatests/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantTabHelperRegularTabTest.java",
     "javatests/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantTextUtilsTest.java",
     "javatests/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantTriggerScriptIntegrationTest.java",
     "javatests/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantUiTest.java",
     "javatests/src/org/chromium/chrome/browser/autofill_assistant/AutofillAssistantUiTestUtil.java",
     "javatests/src/org/chromium/chrome/browser/autofill_assistant/BottomSheetOnboardingCoordinatorTest.java",
+    "javatests/src/org/chromium/chrome/browser/autofill_assistant/InChromeTriggeringTest.java",
     "javatests/src/org/chromium/chrome/browser/autofill_assistant/PasswordChangeFixtureParameters.java",
     "javatests/src/org/chromium/chrome/browser/autofill_assistant/PasswordChangeFixtureTest.java",
     "javatests/src/org/chromium/chrome/browser/autofill_assistant/PasswordChangeFixtureTestUtils.java",
+    "javatests/src/org/chromium/chrome/browser/autofill_assistant/ProtoTestUtil.java",
     "javatests/src/org/chromium/chrome/browser/autofill_assistant/TestingAutofillAssistantModuleEntryProvider.java",
+    "javatests/src/org/chromium/chrome/browser/autofill_assistant/TriggerContextTest.java",
   ]
 
   deps = [
@@ -321,20 +335,24 @@ android_library("test_java") {
     "//base:base_java",
     "//base:base_java_test_support",
     "//chrome/android:chrome_java",
+    "//chrome/android:chrome_test_java",
     "//chrome/android:chrome_test_util_java",
     "//chrome/browser/flags:java",
     "//chrome/browser/image_fetcher:java",
     "//chrome/browser/password_manager/android:java",
     "//chrome/browser/password_manager/android_test_helpers:test_support_java",
     "//chrome/browser/preferences:java",
+    "//chrome/browser/profiles/android:java",
     "//chrome/browser/signin/services/android:java",
     "//chrome/browser/tab:java",
     "//chrome/browser/tabmodel:java",
+    "//chrome/browser/ui/android/omnibox:java",
     "//chrome/browser/util:java",
     "//chrome/test/android:chrome_java_test_support",
     "//components/autofill_assistant/browser:proto_java",
     "//components/browser_ui/bottomsheet/android:java",
     "//components/browser_ui/widget/android:java",
+    "//components/external_intents/android:java",
     "//content/public/android:content_java",
     "//content/public/test/android:content_java_test_support",
     "//net/android:net_java_test_support",
@@ -373,7 +391,7 @@ android_resources("java_resources") {
     "java/res/drawable/ic_autofill_assistant_add_circle_24dp.xml",
     "java/res/drawable/ic_autofill_assistant_default_progress_start_black_24dp.xml",
     "java/res/drawable/ic_check_circle_black_24dp.xml",
-    "java/res/drawable/ic_clear_black_24dp.xml",
+    "java/res/drawable/ic_clear_black_chrome_24dp.xml",
     "java/res/drawable/ic_confirmation_number_black_24dp.xml",
     "java/res/drawable/ic_directions_car_black_24dp.xml",
     "java/res/drawable/ic_done_black_24dp.xml",
@@ -439,31 +457,33 @@ java_strings_grd("java_strings_grd") {
                 [ "values-{{source_name_part}}/android_chrome_autofill_assistant_strings.xml" ])
 }
 
-zip("password_change_tests_runner") {
-  testonly = true
-  inputs = [
-    "$root_build_dir/test_runner/ChromePublicTest.apk",
-    "$root_build_dir/test_runner/ChromiumNetTestSupport.apk",
-    "$root_build_dir/test_runner/config_example.cfg",
-    "$root_build_dir/test_runner/parse_logs.py",
-    "$root_build_dir/test_runner/runner.py",
-  ]
-  output = "$root_build_dir/test_runner/password_change_tests_runner.zip"
-  deps = [ ":copy_password_change_tests_runner" ]
-}
+if (!incremental_install) {
+  zip("password_change_tests_runner") {
+    testonly = true
+    inputs = [
+      "$root_build_dir/test_runner/ChromePublicTest.apk",
+      "$root_build_dir/test_runner/ChromiumNetTestSupport.apk",
+      "$root_build_dir/test_runner/config_example.cfg",
+      "$root_build_dir/test_runner/parse_logs.py",
+      "$root_build_dir/test_runner/runner.py",
+    ]
+    output = "$root_build_dir/test_runner/password_change_tests_runner.zip"
+    deps = [ ":copy_password_change_tests_runner" ]
+  }
 
-copy("copy_password_change_tests_runner") {
-  testonly = true
-  sources = [
-    "$root_build_dir/apks/ChromePublicTest.apk",
-    "$root_build_dir/apks/ChromiumNetTestSupport.apk",
-    "tools/password_change_tests_runner/config_example.cfg",
-    "tools/password_change_tests_runner/parse_logs.py",
-    "tools/password_change_tests_runner/runner.py",
-  ]
-  outputs = [ "$root_out_dir/test_runner/{{source_file_part}}" ]
-  deps = [
-    "//chrome/android:chrome_public_test_apk__test_apk__create",
-    "//net/android:net_test_support_apk__create",
-  ]
+  copy("copy_password_change_tests_runner") {
+    testonly = true
+    sources = [
+      "$root_build_dir/apks/ChromePublicTest.apk",
+      "$root_build_dir/apks/ChromiumNetTestSupport.apk",
+      "tools/password_change_tests_runner/config_example.cfg",
+      "tools/password_change_tests_runner/parse_logs.py",
+      "tools/password_change_tests_runner/runner.py",
+    ]
+    outputs = [ "$root_out_dir/test_runner/{{source_file_part}}" ]
+    deps = [
+      "//chrome/android:chrome_public_test_apk__test_apk__create",
+      "//net/android:net_test_support_apk__create",
+    ]
+  }
 }

@@ -13,13 +13,14 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted_delete_on_sequence.h"
 #include "base/memory/weak_ptr.h"
-#include "base/optional.h"
 #include "content/browser/background_fetch/background_fetch_delegate_proxy.h"
 #include "content/browser/background_fetch/background_fetch_event_dispatcher.h"
 #include "content/browser/background_fetch/storage/get_initialization_data_task.h"
 #include "content/browser/devtools/devtools_background_services_context_impl.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/browser_thread.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/mojom/background_fetch/background_fetch.mojom.h"
 
 namespace storage {
@@ -62,11 +63,11 @@ class CONTENT_EXPORT BackgroundFetchContext
   void Shutdown();
 
   // Gets the active Background Fetch registration identified by |developer_id|
-  // for the given |service_worker_id| and |origin|. The |callback| will be
+  // for the given |service_worker_id| and |storage_key|. The |callback| will be
   // invoked with the registration when it has been retrieved.
   void GetRegistration(
       int64_t service_worker_registration_id,
-      const url::Origin& origin,
+      const blink::StorageKey& storage_key,
       const std::string& developer_id,
       blink::mojom::BackgroundFetchService::GetRegistrationCallback callback);
 
@@ -74,7 +75,7 @@ class CONTENT_EXPORT BackgroundFetchContext
   // Worker and invokes |callback| with that list.
   void GetDeveloperIdsForServiceWorker(
       int64_t service_worker_registration_id,
-      const url::Origin& origin,
+      const blink::StorageKey& storage_key,
       blink::mojom::BackgroundFetchService::GetDeveloperIdsCallback callback);
 
   // Starts a Background Fetch for the |registration_id|. The |requests| will be
@@ -123,8 +124,8 @@ class CONTENT_EXPORT BackgroundFetchContext
   // internal |icon| is guarnteed to be not null.
   void UpdateUI(
       const BackgroundFetchRegistrationId& registration_id,
-      const base::Optional<std::string>& title,
-      const base::Optional<SkBitmap>& icon,
+      const absl::optional<std::string>& title,
+      const absl::optional<SkBitmap>& icon,
       blink::mojom::BackgroundFetchRegistrationService::UpdateUICallback
           callback);
 

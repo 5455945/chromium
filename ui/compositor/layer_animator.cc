@@ -9,7 +9,7 @@
 #include <memory>
 
 #include "base/check_op.h"
-#include "base/stl_util.h"
+#include "base/containers/cxx20_erase.h"
 #include "base/trace_event/trace_event.h"
 #include "cc/animation/animation.h"
 #include "cc/animation/animation_host.h"
@@ -91,6 +91,8 @@ LayerAnimator* LayerAnimator::CreateImplicitAnimator() {
     if (duration.is_zero() && delegate() &&                            \
         (preemption_strategy_ != ENQUEUE_NEW_ANIMATION)) {             \
       StopAnimatingProperty(LayerAnimationElement::property);          \
+      if (!delegate())                                                 \
+        return;                                                        \
       delegate()->Set##name##FromAnimation(                            \
           value, PropertyChangeReason::NOT_FROM_ANIMATION);            \
       return;                                                          \

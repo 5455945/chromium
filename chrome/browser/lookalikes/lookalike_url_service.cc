@@ -11,6 +11,7 @@
 #include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/singleton.h"
+#include "base/metrics/field_trial_params.h"
 #include "base/task/post_task.h"
 #include "base/time/default_clock.h"
 #include "base/trace_event/trace_event.h"
@@ -21,6 +22,7 @@
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/keyed_service/content/browser_context_keyed_service_factory.h"
+#include "components/lookalikes/core/features.h"
 #include "components/lookalikes/core/lookalike_url_util.h"
 #include "components/site_engagement/content/site_engagement_score.h"
 #include "components/site_engagement/content/site_engagement_service.h"
@@ -105,6 +107,13 @@ std::vector<DomainInfo> UpdateEngagedSitesOnWorkerThread(
 }
 
 }  // namespace
+
+// static
+const base::FeatureParam<base::TimeDelta>
+    LookalikeUrlService::kManifestFetchDelay{
+        &lookalikes::features::kLookalikeDigitalAssetLinks,
+        lookalikes::features::kLookalikeDigitalAssetLinksTimeoutParameter,
+        base::TimeDelta::FromSeconds(5)};
 
 LookalikeUrlService::LookalikeUrlService(Profile* profile)
     : profile_(profile), clock_(base::DefaultClock::GetInstance()) {}

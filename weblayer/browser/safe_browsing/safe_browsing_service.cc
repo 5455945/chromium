@@ -4,6 +4,8 @@
 
 #include "weblayer/browser/safe_browsing/safe_browsing_service.h"
 
+#include <memory>
+
 #include "base/bind.h"
 #include "base/path_service.h"
 #include "components/prefs/pref_service.h"
@@ -11,9 +13,9 @@
 #include "components/safe_browsing/android/safe_browsing_api_handler_bridge.h"
 #include "components/safe_browsing/content/browser/browser_url_loader_throttle.h"
 #include "components/safe_browsing/content/browser/mojo_safe_browsing_impl.h"
-#include "components/safe_browsing/core/browser/safe_browsing_network_context.h"
+#include "components/safe_browsing/content/browser/safe_browsing_network_context.h"
+#include "components/safe_browsing/core/browser/realtime/url_lookup_service.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
-#include "components/safe_browsing/core/realtime/url_lookup_service.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -88,8 +90,8 @@ void SafeBrowsingService::Initialize() {
     return;
   }
 
-  safe_browsing_api_handler_.reset(
-      new safe_browsing::SafeBrowsingApiHandlerBridge());
+  safe_browsing_api_handler_ =
+      std::make_unique<safe_browsing::SafeBrowsingApiHandlerBridge>();
   safe_browsing::SafeBrowsingApiHandler::SetInstance(
       safe_browsing_api_handler_.get());
 

@@ -23,6 +23,7 @@
 
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_root.h"
 
+#include "third_party/blink/renderer/core/editing/position_with_affinity.h"
 #include "third_party/blink/renderer/core/frame/frame_owner.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/layout/hit_test_result.h"
@@ -75,8 +76,8 @@ void LayoutSVGRoot::UnscaledIntrinsicSizingInfo(
   auto* svg = To<SVGSVGElement>(GetNode());
   DCHECK(svg);
 
-  base::Optional<float> intrinsic_width = svg->IntrinsicWidth();
-  base::Optional<float> intrinsic_height = svg->IntrinsicHeight();
+  absl::optional<float> intrinsic_width = svg->IntrinsicWidth();
+  absl::optional<float> intrinsic_height = svg->IntrinsicHeight();
   intrinsic_sizing_info.size =
       FloatSize(intrinsic_width.value_or(0), intrinsic_height.value_or(0));
   intrinsic_sizing_info.has_width = intrinsic_width.has_value();
@@ -210,7 +211,7 @@ void LayoutSVGRoot::UpdateLayout() {
   // StyleDidChange because descendants have not yet run StyleDidChange, so we
   // don't know their compositing reasons yet. A layout is scheduled when
   // |HasCompositingDescendants()| changes to ensure this is run.
-  if (Layer() && RuntimeEnabledFeatures::CompositeSVGEnabled())
+  if (Layer())
     Layer()->UpdateSelfPaintingLayer();
 
   // The local-to-border-box transform is a function with the following as
@@ -519,14 +520,6 @@ void LayoutSVGRoot::MapLocalToAncestor(const LayoutBoxModelObject* ancestor,
   LayoutReplaced::MapLocalToAncestor(ancestor, transform_state, mode);
 }
 
-const LayoutObject* LayoutSVGRoot::PushMappingToContainer(
-    const LayoutBoxModelObject* ancestor_to_stop_at,
-    LayoutGeometryMap& geometry_map) const {
-  NOT_DESTROYED();
-  return LayoutReplaced::PushMappingToContainer(ancestor_to_stop_at,
-                                                geometry_map);
-}
-
 void LayoutSVGRoot::UpdateCachedBoundaries() {
   NOT_DESTROYED();
   bool ignore;
@@ -596,8 +589,8 @@ PaintLayerType LayoutSVGRoot::LayerTypeRequired() const {
   auto layer_type_required = LayoutReplaced::LayerTypeRequired();
   if (layer_type_required == kNoPaintLayer) {
     // Force a paint layer so,
-    // 1) In CompositeSVG mode, a GraphicsLayer can be created if there are
-    // directly-composited descendants.
+    // 1) A GraphicsLayer can be created if there are directly-composited
+    // descendants.
     // 2) The parent layer will know if there are non-isolated descendants with
     // blend mode.
     layer_type_required = kForcedPaintLayer;
@@ -607,8 +600,7 @@ PaintLayerType LayoutSVGRoot::LayerTypeRequired() const {
 
 CompositingReasons LayoutSVGRoot::AdditionalCompositingReasons() const {
   NOT_DESTROYED();
-  return RuntimeEnabledFeatures::CompositeSVGEnabled() &&
-                 !RuntimeEnabledFeatures::CompositeAfterPaintEnabled() &&
+  return !RuntimeEnabledFeatures::CompositeAfterPaintEnabled() &&
                  HasDescendantWithCompositingReason()
              ? CompositingReason::kSVGRoot
              : CompositingReason::kNone;

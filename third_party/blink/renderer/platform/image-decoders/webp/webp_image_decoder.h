@@ -40,10 +40,10 @@ class SkData;
 namespace blink {
 
 class PLATFORM_EXPORT WEBPImageDecoder final : public ImageDecoder {
-  DISALLOW_COPY_AND_ASSIGN(WEBPImageDecoder);
-
  public:
   WEBPImageDecoder(AlphaOption, const ColorBehavior&, size_t max_decoded_bytes);
+  WEBPImageDecoder(const WEBPImageDecoder&) = delete;
+  WEBPImageDecoder& operator=(const WEBPImageDecoder&) = delete;
   ~WEBPImageDecoder() override;
 
   // ImageDecoder:
@@ -143,4 +143,4 @@ class PLATFORM_EXPORT WEBPImageDecoder final : public ImageDecoder {
 
 }  // namespace blink
 
-#endif
+#endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_IMAGE_DECODERS_WEBP_WEBP_IMAGE_DECODER_H_

@@ -17,9 +17,10 @@
       }
 
       h1 {
+        color: var(--cr-primary-text-color);
         font-family: 'Google Sans';
         font-size: 16px;
-        font-weight: bold;
+        font-weight: normal;
         line-height: 24px;
         margin: 0;
         padding-block-end: 0;
@@ -117,10 +118,10 @@
         </cr-radio-group>
       </div>
       <div class="layout horizontal center" slot="button-container">
-        <cr-button class="cancel-button" on-click="onCancelTap_">
+        <cr-button class="cancel-button" on-click="onCancelClick_">
           $i18n{cancel}
         </cr-button>
-        <cr-button class="action-button" on-click="onUpdateTap_">
+        <cr-button class="action-button" on-click="onSaveClick_">
           $i18n{nearbyShareUpdateDataUsage}
         </cr-button>
     </cr-dialog>

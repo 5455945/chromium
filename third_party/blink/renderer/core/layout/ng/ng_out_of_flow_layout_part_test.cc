@@ -1382,6 +1382,8 @@ TEST_F(NGOutOfFlowLayoutPartTest, AbsposNestedFragmentationNewColumns) {
       )HTML");
   String dump = DumpFragmentTree(GetElementById("container"));
 
+  // Note that it's not obvious that the block-size of the last inner
+  // fragmentainer (after the spanners) is correct; see crbug.com/1224337
   String expectation = R"DUMP(.:: LayoutNG Physical Fragment Tree ::.
   offset:unplaced size:1000x100
     offset:0,0 size:1000x100
@@ -1394,22 +1396,18 @@ TEST_F(NGOutOfFlowLayoutPartTest, AbsposNestedFragmentationNewColumns) {
           offset:258,10 size:232x10
             offset:0,0 size:55x10
             offset:0,0 size:5x10
-            offset:248,0 size:5x10
-            offset:496,0 size:5x10
           offset:10,20 size:480x0
           offset:10,20 size:480x0
           offset:10,20 size:480x0
+          offset:10,20 size:232x40
+            offset:0,0 size:5x20
 )DUMP";
   EXPECT_EQ(expectation, dump);
 }
 
-// TODO(almaher): Figure out why this is hitting a DCHECK in
-// AssertClearedPaintInvalidationFlags.
-//
 // Fragmented OOF element inside a nested multi-column starting at a
 // fragmentainer index beyond the last existing fragmentainer.
-TEST_F(NGOutOfFlowLayoutPartTest,
-       DISABLED_AbsposNestedFragmentationNewEmptyColumns) {
+TEST_F(NGOutOfFlowLayoutPartTest, AbsposNestedFragmentationNewEmptyColumns) {
   SetBodyInnerHTML(
       R"HTML(
       <style>
@@ -1439,8 +1437,8 @@ TEST_F(NGOutOfFlowLayoutPartTest,
       )HTML");
   String dump = DumpFragmentTree(GetElementById("container"));
 
-  // TODO(almaher): The OOFs are added out of order due to how ordering is
-  // currently handled in NGSimplifiedOOFLayoutAlgorithm.
+  // Note that it's not obvious that the block-size of the last inner
+  // fragmentainers (after the spanners) are correct; see crbug.com/1224337
   String expectation = R"DUMP(.:: LayoutNG Physical Fragment Tree ::.
   offset:unplaced size:1000x100
     offset:0,0 size:1000x100
@@ -1451,12 +1449,16 @@ TEST_F(NGOutOfFlowLayoutPartTest,
             offset:0,0 size:55x40
           offset:258,0 size:242x40
             offset:0,0 size:55x40
-            offset:774,0 size:5x40
-            offset:1032,0 size:5x40
-            offset:516,0 size:5x40
           offset:0,40 size:500x0
           offset:0,40 size:500x0
           offset:0,40 size:500x0
+          offset:0,40 size:242x40
+          offset:258,40 size:242x40
+            offset:0,0 size:5x40
+          offset:516,40 size:242x40
+            offset:0,0 size:5x40
+          offset:774,40 size:242x40
+            offset:0,0 size:5x40
 )DUMP";
   EXPECT_EQ(expectation, dump);
 }
@@ -1506,6 +1508,70 @@ TEST_F(NGOutOfFlowLayoutPartTest,
           offset:0,10 size:4x10
 )DUMP";
   EXPECT_EQ(expectation, dump);
+}
+
+TEST_F(NGOutOfFlowLayoutPartTest, PositionedObjectsInMulticol) {
+  SetBodyInnerHTML(
+      R"HTML(
+      <style>
+        .multicol {
+          column-count: 2; column-fill: auto; column-gap: 0px;
+        }
+      </style>
+      <div class="multicol" id="outer">
+        <div class="multicol" id="inner" style="position:relative;">
+          <div id="abs1" style="position:absolute;"></div>
+          <div id="rel" style="position:relative;">
+            <div id="abs2" style="position:absolute;"></div>
+          </div>
+        </div>
+      </div>
+      )HTML");
+  Element* outer_multicol = GetDocument().getElementById("outer");
+  auto* multicol = To<LayoutBlockFlow>(outer_multicol->GetLayoutObject());
+  EXPECT_FALSE(multicol->PositionedObjects());
+
+  Element* inner_multicol = GetDocument().getElementById("inner");
+  multicol = To<LayoutBlockFlow>(inner_multicol->GetLayoutObject());
+  auto* abs = GetLayoutBoxByElementId("abs1");
+  EXPECT_TRUE(multicol->PositionedObjects()->Contains(abs));
+  EXPECT_EQ(multicol->PositionedObjects()->size(), 1u);
+
+  Element* rel_element = GetDocument().getElementById("rel");
+  auto* rel = To<LayoutBlockFlow>(rel_element->GetLayoutObject());
+  abs = GetLayoutBoxByElementId("abs2");
+  EXPECT_TRUE(rel->PositionedObjects()->Contains(abs));
+  EXPECT_EQ(rel->PositionedObjects()->size(), 1u);
+}
+
+TEST_F(NGOutOfFlowLayoutPartTest, PositionedObjectsInMulticolWithInline) {
+  SetBodyInnerHTML(
+      R"HTML(
+      <style>
+        #multicol {
+          column-count: 2; column-fill: auto; column-gap: 0px;
+        }
+      </style>
+      <div id="multicol">
+        <div id="target">
+          <span style="position: relative;">
+            <div id="abs1" style="position:absolute;"></div>
+            <div id="abs2" style="position:absolute;"></div>
+          </span>
+        </div>
+      </div>
+      )HTML");
+  Element* multicol_element = GetDocument().getElementById("multicol");
+  auto* multicol = To<LayoutBlockFlow>(multicol_element->GetLayoutObject());
+  EXPECT_FALSE(multicol->PositionedObjects());
+
+  Element* target_element = GetDocument().getElementById("target");
+  auto* target = To<LayoutBlockFlow>(target_element->GetLayoutObject());
+  auto* abs1 = GetLayoutBoxByElementId("abs1");
+  auto* abs2 = GetLayoutBoxByElementId("abs2");
+  EXPECT_TRUE(target->PositionedObjects()->Contains(abs1));
+  EXPECT_TRUE(target->PositionedObjects()->Contains(abs2));
+  EXPECT_EQ(target->PositionedObjects()->size(), 2u);
 }
 }  // namespace
 }  // namespace blink

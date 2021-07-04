@@ -6,15 +6,17 @@
 
 #include <algorithm>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "base/bind.h"
+#include "base/cxx17_backports.h"
 #include "base/path_service.h"
 #include "base/single_thread_task_runner.h"
-#include "base/stl_util.h"
 #include "base/strings/pattern.h"
+#include "base/strings/stringprintf.h"
 #include "cc/base/switches.h"
 #include "content/public/browser/browser_child_process_observer.h"
 #include "content/public/browser/browser_context.h"
@@ -60,6 +62,7 @@
 #include "mojo/public/cpp/bindings/remote_set.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "net/net_buildflags.h"
+#include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "services/service_manager/public/cpp/manifest.h"
 #include "services/service_manager/public/cpp/manifest_builder.h"
@@ -113,6 +116,11 @@ class BoundsMatchVideoSizeOverlayWindow : public OverlayWindow {
   void SetSkipAdButtonVisibility(bool is_visible) override {}
   void SetNextTrackButtonVisibility(bool is_visible) override {}
   void SetPreviousTrackButtonVisibility(bool is_visible) override {}
+  void SetMicrophoneMuted(bool muted) override {}
+  void SetCameraState(bool turned_on) override {}
+  void SetToggleMicrophoneButtonVisibility(bool is_visible) override {}
+  void SetToggleCameraButtonVisibility(bool is_visible) override {}
+  void SetHangUpButtonVisibility(bool is_visible) override {}
   void SetSurfaceId(const viz::SurfaceId& surface_id) override {}
   cc::Layer* GetLayerForTesting() override { return nullptr; }
 
@@ -425,8 +433,8 @@ PlatformNotificationService*
 WebTestContentBrowserClient::GetPlatformNotificationService(
     content::BrowserContext* browser_context) {
   if (!mock_platform_notification_service_) {
-    mock_platform_notification_service_.reset(
-        new MockPlatformNotificationService(browser_context));
+    mock_platform_notification_service_ =
+        std::make_unique<MockPlatformNotificationService>(browser_context);
   }
 
   return mock_platform_notification_service_.get();

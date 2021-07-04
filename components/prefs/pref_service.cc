@@ -18,11 +18,11 @@
 #include "base/metrics/histogram.h"
 #include "base/notreached.h"
 #include "base/single_thread_task_runner.h"
-#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/util/values/values_util.h"
+#include "base/values.h"
 #include "build/build_config.h"
 #include "components/prefs/default_pref_store.h"
 #include "components/prefs/pref_notifier_impl.h"
@@ -73,7 +73,7 @@ void CheckForNewPrefChangesInPrefStore(
   if (!pref_store)
     return;
   auto values = pref_store->GetValues();
-  for (const auto& item : values->DictItems()) {
+  for (auto item : values->DictItems()) {
     // If the key already presents, skip it as a store with higher precedence
     // already sets the entry.
     if (pref_changed_map->find(item.first) != pref_changed_map->end())
@@ -196,7 +196,7 @@ base::FilePath PrefService::GetFilePath(const std::string& path) const {
   const base::Value* value = GetPreferenceValueChecked(path);
   if (!value)
     return base::FilePath();
-  base::Optional<base::FilePath> result = util::ValueToFilePath(*value);
+  absl::optional<base::FilePath> result = util::ValueToFilePath(*value);
   DCHECK(result);
   return *result;
 }
@@ -492,7 +492,7 @@ void PrefService::SetInt64(const std::string& path, int64_t value) {
 
 int64_t PrefService::GetInt64(const std::string& path) const {
   const base::Value* value = GetPreferenceValueChecked(path);
-  base::Optional<int64_t> integer = util::ValueToInt64(value);
+  absl::optional<int64_t> integer = util::ValueToInt64(value);
   DCHECK(integer);
   return integer.value_or(0);
 }
@@ -519,7 +519,7 @@ void PrefService::SetTime(const std::string& path, base::Time value) {
 
 base::Time PrefService::GetTime(const std::string& path) const {
   const base::Value* value = GetPreferenceValueChecked(path);
-  base::Optional<base::Time> time = util::ValueToTime(value);
+  absl::optional<base::Time> time = util::ValueToTime(value);
   DCHECK(time);
   return time.value_or(base::Time());
 }
@@ -530,7 +530,7 @@ void PrefService::SetTimeDelta(const std::string& path, base::TimeDelta value) {
 
 base::TimeDelta PrefService::GetTimeDelta(const std::string& path) const {
   const base::Value* value = GetPreferenceValueChecked(path);
-  base::Optional<base::TimeDelta> time_delta = util::ValueToTimeDelta(value);
+  absl::optional<base::TimeDelta> time_delta = util::ValueToTimeDelta(value);
   DCHECK(time_delta);
   return time_delta.value_or(base::TimeDelta());
 }
@@ -559,22 +559,13 @@ base::Value* PrefService::GetMutableUserPref(const std::string& path,
     return value;
   }
 
-  // TODO(crbug.com/859477): Remove once root cause has been found.
-  if (value && value->type() != type) {
-    DEBUG_ALIAS_FOR_CSTR(path_copy, path.c_str(), 1024);
-    base::debug::DumpWithoutCrashing();
-  }
-
   // If no user preference of the correct type exists, clone default value.
   const base::Value* default_value = nullptr;
   pref_registry_->defaults()->GetValue(path, &default_value);
-  // TODO(crbug.com/859477): Revert to DCHECK once root cause has been found.
-  if (default_value->type() != type) {
-    DEBUG_ALIAS_FOR_CSTR(path_copy, path.c_str(), 1024);
-    base::debug::DumpWithoutCrashing();
-  }
-  user_pref_store_->SetValueSilently(path, default_value->CreateDeepCopy(),
-                                     GetWriteFlags(pref));
+  DCHECK_EQ(default_value->type(), type);
+  user_pref_store_->SetValueSilently(
+      path, base::Value::ToUniquePtrValue(default_value->Clone()),
+      GetWriteFlags(pref));
   user_pref_store_->GetMutableValue(path, &value);
   return value;
 }
@@ -719,4 +710,9 @@ const base::Value* PrefService::GetPreferenceValueChecked(
   const base::Value* value = GetPreferenceValue(path);
   DCHECK(value) << "Trying to read an unregistered pref: " << path;
   return value;
+}
+
+void PrefService::CommitPendingWriteSynchronously() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  user_pref_store_->CommitPendingWriteSynchronously();
 }

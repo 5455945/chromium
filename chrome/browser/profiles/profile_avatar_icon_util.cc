@@ -9,13 +9,14 @@
 #include <utility>
 #include <vector>
 
+#include "base/cxx17_backports.h"
 #include "base/feature_list.h"
 #include "base/files/file_util.h"
 #include "base/format_macros.h"
 #include "base/macros.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/path_service.h"
 #include "base/rand_util.h"
-#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/values.h"
@@ -363,13 +364,9 @@ constexpr size_t kPlaceholderAvatarIndex = 0;
 #endif
 
 ui::ImageModel GetGuestAvatar(int size) {
-  if (base::FeatureList::IsEnabled(features::kNewProfilePicker)) {
     return ui::ImageModel::FromVectorIcon(
         kUserAccountAvatarIcon, ui::NativeTheme::kColorId_AvatarIconGuest,
         size);
-  }
-  return ui::ImageModel::FromVectorIcon(kUserAccountAvatarIcon,
-                                        gfx::kGoogleGrey500, size);
 }
 
 gfx::Image GetSizedAvatarIcon(const gfx::Image& image,
@@ -438,28 +435,12 @@ gfx::Image GetAvatarIconForNSMenu(const base::FilePath& profile_path) {
     return gfx::Image();
   }
 
-  if (base::FeatureList::IsEnabled(features::kNewProfilePicker)) {
-    // Get a higher res than 16px so it looks good after cropping to a circle.
-    gfx::Image icon =
-        entry->GetAvatarIcon(kAvatarIconSize, /*download_high_res=*/false);
-    return profiles::GetSizedAvatarIcon(
-        icon, /*is_rectangle=*/true, kMenuAvatarIconSize, kMenuAvatarIconSize,
-        profiles::SHAPE_CIRCLE);
-  }
-
-  constexpr int kOldMenuAvatarIconSize = 38;
+  // Get a higher res than 16px so it looks good after cropping to a circle.
   gfx::Image icon =
-      entry->GetAvatarIcon(kOldMenuAvatarIconSize, /*download_high_res=*/false);
-
-  // The image might be too large and need to be resized, e.g. if this is a
-  // signed-in user using the GAIA profile photo.
-  if (icon.Width() > kOldMenuAvatarIconSize ||
-      icon.Height() > kOldMenuAvatarIconSize) {
-    icon = profiles::GetSizedAvatarIcon(icon, /*is_rectangle=*/true,
-                                        kOldMenuAvatarIconSize,
-                                        kOldMenuAvatarIconSize);
-  }
-  return icon;
+      entry->GetAvatarIcon(kAvatarIconSize, /*download_high_res=*/false);
+  return profiles::GetSizedAvatarIcon(icon, /*is_rectangle=*/true,
+                                      kMenuAvatarIconSize, kMenuAvatarIconSize,
+                                      profiles::SHAPE_CIRCLE);
 }
 #endif
 
@@ -692,28 +673,25 @@ bool IsDefaultAvatarIconUrl(const std::string& url, size_t* icon_index) {
   return false;
 }
 
-std::unique_ptr<base::DictionaryValue> GetAvatarIconAndLabelDict(
+base::flat_map<std::string, base::Value> GetAvatarIconAndLabelDict(
     const std::string& url,
-    const base::string16& label,
+    const std::u16string& label,
     size_t index,
     bool selected,
     bool is_gaia_avatar) {
-  std::unique_ptr<base::DictionaryValue> avatar_info(
-      new base::DictionaryValue());
-  avatar_info->SetStringPath("url", url);
-  avatar_info->SetStringPath("label", label);
-  avatar_info->SetIntPath("index", index);
-  avatar_info->SetBoolPath("selected", selected);
-  avatar_info->SetBoolPath("isGaiaAvatar", is_gaia_avatar);
+  base::flat_map<std::string, base::Value> avatar_info;
+  avatar_info.emplace("url", url);
+  avatar_info.emplace("label", label);
+  avatar_info.emplace("index", static_cast<int>(index));
+  avatar_info.emplace("selected", selected);
+  avatar_info.emplace("isGaiaAvatar", is_gaia_avatar);
   return avatar_info;
 }
 
-std::unique_ptr<base::DictionaryValue> GetDefaultProfileAvatarIconAndLabel(
+base::flat_map<std::string, base::Value> GetDefaultProfileAvatarIconAndLabel(
     SkColor fill_color,
     SkColor stroke_color,
     bool selected) {
-  std::unique_ptr<base::DictionaryValue> avatar_info(
-      new base::DictionaryValue());
   gfx::Image icon = profiles::GetPlaceholderAvatarIconWithColors(
       fill_color, stroke_color, kAvatarIconSize);
   size_t index = profiles::GetPlaceholderAvatarIndex();
@@ -724,13 +702,13 @@ std::unique_ptr<base::DictionaryValue> GetDefaultProfileAvatarIconAndLabel(
       index, selected, /*is_gaia_avatar=*/false);
 }
 
-std::unique_ptr<base::ListValue> GetCustomProfileAvatarIconsAndLabels(
+std::vector<base::Value> GetCustomProfileAvatarIconsAndLabels(
     size_t selected_avatar_idx) {
-  std::unique_ptr<base::ListValue> avatars(new base::ListValue());
+  std::vector<base::Value> avatars;
 
   for (size_t i = GetModernAvatarIconStartIndex();
        i < GetDefaultAvatarIconCount(); ++i) {
-    avatars->Append(GetAvatarIconAndLabelDict(
+    avatars.emplace_back(GetAvatarIconAndLabelDict(
         profiles::GetDefaultAvatarIconUrl(i),
         l10n_util::GetStringUTF16(
             profiles::GetDefaultAvatarLabelResourceIDAtIndex(i)),
@@ -796,9 +774,9 @@ SkBitmap GetBadgedWinIconBitmapForAvatar(const SkBitmap& app_icon_bitmap,
 
   // Resize the avatar image down to the desired badge size, maintaining aspect
   // ratio (but prefer more square than rectangular when rounding).
-  const int avatar_badge_height =
-      std::ceilf(avatar_badge_width * (float{source_bitmap.height()} /
-                                       float{source_bitmap.width()}));
+  const int avatar_badge_height = base::ClampCeil(
+      avatar_badge_width *
+      (static_cast<float>(source_bitmap.height()) / source_bitmap.width()));
   SkBitmap sk_icon = skia::ImageOperations::Resize(
       source_bitmap, skia::ImageOperations::RESIZE_LANCZOS3,
       avatar_badge_width, avatar_badge_height);
@@ -822,7 +800,7 @@ SkBitmap GetBadgedWinIconBitmapForAvatar(const SkBitmap& app_icon_bitmap,
   const int cutout_top = app_icon_bitmap.height() - cutout_size;
   const int icon_left = cutout_left;
   const int icon_top =
-      cutout_top + int{std::ceilf((cutout_size - avatar_badge_height) / 2.0f)};
+      cutout_top + base::ClampCeil((cutout_size - avatar_badge_height) / 2.0f);
   const SkRRect clip_circle = SkRRect::MakeOval(
       SkRect::MakeXYWH(cutout_left, cutout_top, cutout_size, cutout_size));
 

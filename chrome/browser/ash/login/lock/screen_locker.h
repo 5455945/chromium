@@ -15,14 +15,13 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
-#include "base/optional.h"
 #include "base/sequenced_task_runner_helpers.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "chrome/browser/chromeos/login/challenge_response_auth_keys_loader.h"
-#include "chrome/browser/chromeos/login/help_app_launcher.h"
-#include "chrome/browser/chromeos/login/security_token_pin_dialog_host_ash_impl.h"
-#include "chrome/browser/chromeos/login/ui/login_display.h"
+#include "chrome/browser/ash/login/challenge_response_auth_keys_loader.h"
+#include "chrome/browser/ash/login/help_app_launcher.h"
+#include "chrome/browser/ash/login/security_token_pin_dialog_host_ash_impl.h"
+#include "chrome/browser/ash/login/ui/login_display.h"
 #include "chromeos/login/auth/auth_status_consumer.h"
 #include "chromeos/login/auth/challenge_response_key.h"
 #include "chromeos/login/auth/user_context.h"
@@ -31,6 +30,7 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/device/public/mojom/fingerprint.mojom.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/ime/chromeos/input_method_manager.h"
 
@@ -323,5 +323,10 @@ class ScreenLocker
 };
 
 }  // namespace chromeos
+
+// TODO(https://crbug.com/1164001): remove when //c/b/ash/login moved to ash.
+namespace ash {
+using ::chromeos::ScreenLocker;
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_LOCK_SCREEN_LOCKER_H_

@@ -30,6 +30,10 @@ namespace chrome_test_util {
 // returned.
 id ExecuteJavaScript(NSString* javascript, NSError** out_error);
 
+// Returns current keyWindow, from the list of all of the remote application
+// windows. Use only for single window tests.
+UIWindow* GetAnyKeyWindow();
+
 }  // namespace chrome_test_util
 
 #define ChromeEarlGrey \
@@ -49,6 +53,9 @@ id ExecuteJavaScript(NSString* javascript, NSError** out_error);
 
 // Returns YES if running on an iPad.
 - (BOOL)isIPadIdiom;
+
+// YES if the current interface language uses RTL layout.
+- (BOOL)isRTL;
 
 // Returns YES if the main application window's rootViewController has a compact
 // horizontal size class.
@@ -85,9 +92,9 @@ id ExecuteJavaScript(NSString* javascript, NSError** out_error);
 
 #pragma mark - Navigation Utilities (EG2)
 
-// Instructs the application delegate to open |URL| with default opening
+// Instructs some connected scene to open |URL| with default opening
 // options.
-- (void)applicationOpenURL:(const GURL&)URL;
+- (void)sceneOpenURL:(const GURL&)URL;
 
 // Loads |URL| in the current WebState with transition type
 // ui::PAGE_TRANSITION_TYPED, and if waitForCompletion is YES
@@ -159,6 +166,14 @@ id ExecuteJavaScript(NSString* javascript, NSError** out_error);
 // Clears fake sync server data if the server is running.
 - (void)clearSyncServerData;
 
+// Revokes the sync consent for the primary account. The user will continue
+// to be signed-in to Chrome.
+- (void)revokeSyncConsent;
+
+// Clears the first sync setup preference. The user will be effectively in
+// the signed-in state with no syncing consent.
+- (void)clearSyncFirstSetupComplete;
+
 // Starts the sync server. The server should not be running when calling this.
 - (void)startSync;
 
@@ -188,11 +203,11 @@ id ExecuteJavaScript(NSString* javascript, NSError** out_error);
                      autofillProfileName:(const std::string&)fullName
     WARN_UNUSED_RESULT;
 
-// Sets up a fake sync server to be used by the ProfileSyncService.
+// Sets up a fake sync server to be used by the SyncServiceImpl.
 - (void)setUpFakeSyncServer;
 
-// Tears down the fake sync server used by the ProfileSyncService and restores
-// the real one.
+// Tears down the fake sync server used by the SyncServiceImpl and restores the
+// real one.
 - (void)tearDownFakeSyncServer;
 
 // Gets the number of entities of the given |type|.
@@ -430,6 +445,11 @@ id ExecuteJavaScript(NSString* javascript, NSError** out_error);
 - (void)waitForIncognitoTabCount:(NSUInteger)count
               inWindowWithNumber:(int)windowNumber;
 
+// Waits for the JavaScript query |javaScriptCondition| to return |boolValue|
+// YES. If the condition is not met within kWaitForActionTimeout a GREYAssert is
+// induced.
+- (void)waitForJavaScriptCondition:(NSString*)javaScriptCondition;
+
 #pragma mark - SignIn Utilities (EG2)
 
 // Signs the user out, clears the known accounts entirely and checks whether the
@@ -500,6 +520,11 @@ id ExecuteJavaScript(NSString* javascript, NSError** out_error);
 // If the condition is not met within a timeout a GREYAssert is induced.
 - (void)waitForWebStateContainingLoadedImageElementWithID:
     (const std::string&)UTF8ImageID;
+
+// Waits for the web state's scroll view zoom scale to be suitably close (within
+// 0.05) of the expected scale. Returns nil if the condition is met within a
+// timeout, or else an NSError indicating why the operation failed.
+- (void)waitForWebStateZoomScale:(CGFloat)scale;
 
 // Returns the current web state's VisibleURL.
 - (GURL)webStateVisibleURL;
@@ -605,9 +630,6 @@ id ExecuteJavaScript(NSString* javascript, NSError** out_error);
 // Returns whether the mobile version of the websites are requested by default.
 - (BOOL)isMobileModeByDefault WARN_UNUSED_RESULT;
 
-// Returns whether the illustrated empty stated feature is enabled.
-- (BOOL)isIllustratedEmptyStatesEnabled;
-
 // Returns whether the native context menus feature is enabled or not.
 - (BOOL)isNativeContextMenusEnabled;
 
@@ -692,8 +714,10 @@ id ExecuteJavaScript(NSString* javascript, NSError** out_error);
                               useNewString:(BOOL)useNewString;
 
 // Taps on the Share context menu action and validates that the ActivityView
-// was brought up with |pageTitle| in its header.
-- (void)verifyShareActionWithPageTitle:(NSString*)pageTitle;
+// was brought up with the correct title in its header. The title starts as the
+// host of the loaded |URL| and is then updated to the page title |pageTitle|.
+- (void)verifyShareActionWithURL:(const GURL&)URL
+                       pageTitle:(NSString*)pageTitle;
 
 #pragma mark - Unified Consent utilities
 

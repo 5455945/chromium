@@ -5,12 +5,11 @@
 #include "ash/wm/gestures/back_gesture/back_gesture_event_handler.h"
 
 #include "ash/app_list/app_list_controller_impl.h"
+#include "ash/constants/app_types.h"
+#include "ash/constants/ash_features.h"
 #include "ash/display/screen_orientation_controller.h"
-#include "ash/home_screen/home_screen_controller.h"
 #include "ash/keyboard/keyboard_util.h"
 #include "ash/keyboard/ui/keyboard_ui_controller.h"
-#include "ash/public/cpp/app_types.h"
-#include "ash/public/cpp/ash_features.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shelf/contextual_tooltip.h"
 #include "ash/shell.h"
@@ -25,6 +24,7 @@
 #include "ash/wm/window_state.h"
 #include "ash/wm/window_util.h"
 #include "ash/wm/wm_event.h"
+#include "base/containers/contains.h"
 #include "base/i18n/rtl.h"
 #include "base/metrics/user_metrics.h"
 #include "chromeos/ui/base/window_properties.h"
@@ -171,19 +171,14 @@ void ActivateUnderneathWindowInSplitViewMode(
 
 }  // namespace
 
-BackGestureEventHandler::BackGestureEventHandler()
-    : gesture_provider_(this, this) {
+BackGestureEventHandler::BackGestureEventHandler() {
   if (features::AreContextualNudgesEnabled()) {
     nudge_controller_ =
         std::make_unique<BackGestureContextualNudgeControllerImpl>();
   }
-
-  display::Screen::GetScreen()->AddObserver(this);
 }
 
-BackGestureEventHandler::~BackGestureEventHandler() {
-  display::Screen::GetScreen()->RemoveObserver(this);
-}
+BackGestureEventHandler::~BackGestureEventHandler() = default;
 
 void BackGestureEventHandler::OnDisplayMetricsChanged(
     const display::Display& display,
@@ -354,14 +349,13 @@ bool BackGestureEventHandler::MaybeHandleBackGesture(
         if (!keyboard_util::CloseKeyboardIfActive()) {
           ActivateUnderneathWindowInSplitViewMode(
               back_start_location_, dragged_from_splitview_divider_);
-          if (shell->home_screen_controller()->IsHomeScreenVisible()) {
+          if (shell->app_list_controller()->IsHomeScreenVisible()) {
             DCHECK(shell->app_list_controller()->GetAppListViewState() ==
                    AppListViewState::kFullscreenSearch);
             // Exit home screen search and go back to home screen all apps page.
             shell->app_list_controller()->Back();
           } else {
             auto* top_window = window_util::GetTopWindow();
-            DCHECK(top_window);
             auto* top_window_state = WindowState::Get(top_window);
             if (top_window_state && top_window_state->IsFullscreen() &&
                 !shell->overview_controller()->InOverviewSession()) {
@@ -402,8 +396,12 @@ bool BackGestureEventHandler::MaybeHandleBackGesture(
               // window.
               SendBackEvent(screen_location);
             }
-            RecordUnderneathWindowType(
-                GetUnderneathWindowType(back_gesture_start_scenario_type_));
+            // |top_window| could be nullptr while in overview mode since back
+            // gesture is allowed in overview mode even no window opens.
+            if (top_window) {
+              RecordUnderneathWindowType(
+                  GetUnderneathWindowType(back_gesture_start_scenario_type_));
+            }
           }
         }
         back_gesture_affordance_->Complete();
@@ -451,7 +449,7 @@ bool BackGestureEventHandler::CanStartGoingBack(
       hit_bounds_in_screen.Contains(screen_location);
 
   const bool is_home_launcher_visible =
-      shell->home_screen_controller()->IsHomeScreenVisible();
+      shell->app_list_controller()->IsHomeScreenVisible();
   const bool is_fullscreen_search_state =
       shell->app_list_controller()->GetAppListViewState() ==
       AppListViewState::kFullscreenSearch;

@@ -13,7 +13,6 @@
 
 #include "base/compiler_specific.h"
 #include "base/containers/flat_map.h"
-#include "base/containers/flat_set.h"
 #include "base/files/file_path.h"
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
@@ -24,6 +23,7 @@
 #include "build/chromeos_buildflags.h"
 #include "components/services/storage/public/mojom/cache_storage_control.mojom.h"
 #include "components/services/storage/public/mojom/indexed_db_control.mojom.h"
+#include "components/services/storage/public/mojom/local_storage_control.mojom.h"
 #include "components/services/storage/public/mojom/partition.mojom.h"
 #include "components/services/storage/public/mojom/storage_service.mojom.h"
 #include "content/browser/appcache/chrome_appcache_service.h"
@@ -41,7 +41,6 @@
 #include "content/browser/locks/lock_manager.h"
 #include "content/browser/notifications/platform_notification_context_impl.h"
 #include "content/browser/payments/payment_app_context_impl.h"
-#include "content/browser/prerender/prerender_host_registry.h"
 #include "content/browser/push_messaging/push_messaging_context.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "content/browser/url_loader_factory_getter.h"
@@ -80,12 +79,14 @@ namespace content {
 class BackgroundFetchContext;
 class BlobRegistryWrapper;
 class ConversionManagerImpl;
+class ComputePressureManager;
 class CookieStoreContext;
 class FontAccessContext;
 class GeneratedCodeCacheContext;
 class FileSystemAccessEntryFactory;
 class FileSystemAccessManagerImpl;
-class NativeIOContext;
+class InterestGroupManager;
+class NativeIOContextImpl;
 class PrefetchURLLoaderService;
 class QuotaContext;
 
@@ -93,7 +94,7 @@ class CONTENT_EXPORT StoragePartitionImpl
     : public StoragePartition,
       public blink::mojom::DomStorage,
       public network::mojom::NetworkContextClient,
-      public network::mojom::AuthenticationAndCertificateObserver {
+      public network::mojom::URLLoaderNetworkServiceObserver {
  public:
   // It is guaranteed that storage partitions are destructed before the
   // browser context starts shutting down its corresponding IO thread residents
@@ -132,6 +133,7 @@ class CONTENT_EXPORT StoragePartitionImpl
 
   // StoragePartition interface.
   base::FilePath GetPath() override;
+  base::FilePath GetBucketBasePath() override;
   network::mojom::NetworkContext* GetNetworkContext() override;
   scoped_refptr<network::SharedURLLoaderFactory>
   GetURLLoaderFactoryForBrowserProcess() override;
@@ -143,10 +145,12 @@ class CONTENT_EXPORT StoragePartitionImpl
   void CreateHasTrustTokensAnswerer(
       mojo::PendingReceiver<network::mojom::HasTrustTokensAnswerer> receiver,
       const url::Origin& top_frame_origin) override;
-  mojo::PendingRemote<network::mojom::AuthenticationAndCertificateObserver>
-  CreateAuthAndCertObserverForFrame(int process_id, int routing_id) override;
-  mojo::PendingRemote<network::mojom::AuthenticationAndCertificateObserver>
-  CreateAuthAndCertObserverForNavigationRequest(int frame_tree_id) override;
+  mojo::PendingRemote<network::mojom::URLLoaderNetworkServiceObserver>
+  CreateURLLoaderNetworkObserverForFrame(int process_id,
+                                         int routing_id) override;
+  mojo::PendingRemote<network::mojom::URLLoaderNetworkServiceObserver>
+  CreateURLLoaderNetworkObserverForNavigationRequest(
+      int frame_tree_id) override;
   storage::QuotaManager* GetQuotaManager() override;
   ChromeAppCacheService* GetAppCacheService() override;
   BackgroundSyncContextImpl* GetBackgroundSyncContext() override;
@@ -154,6 +158,7 @@ class CONTENT_EXPORT StoragePartitionImpl
   FontAccessContext* GetFontAccessContext() override;
   storage::DatabaseTracker* GetDatabaseTracker() override;
   DOMStorageContextWrapper* GetDOMStorageContext() override;
+  storage::mojom::LocalStorageControl* GetLocalStorageControl() override;
   LockManager* GetLockManager();  // override; TODO: Add to interface
   storage::mojom::IndexedDBControl& GetIndexedDBControl() override;
   FileSystemAccessEntryFactory* GetFileSystemAccessEntryFactory() override;
@@ -165,6 +170,7 @@ class CONTENT_EXPORT StoragePartitionImpl
   DevToolsBackgroundServicesContextImpl* GetDevToolsBackgroundServicesContext()
       override;
   ContentIndexContextImpl* GetContentIndexContext() override;
+  NativeIOContext* GetNativeIOContext() override;
 #if !defined(OS_ANDROID)
   HostZoomMap* GetHostZoomMap() override;
   HostZoomLevelContext* GetHostZoomLevelContext() override;
@@ -220,10 +226,10 @@ class CONTENT_EXPORT StoragePartitionImpl
   FileSystemAccessManagerImpl* GetFileSystemAccessManager();
   BucketContext* GetBucketContext();
   QuotaContext* GetQuotaContext();
-  NativeIOContext* GetNativeIOContext();
   ConversionManagerImpl* GetConversionManager();
   FontAccessManagerImpl* GetFontAccessManager();
-  PrerenderHostRegistry* GetPrerenderHostRegistry();
+  InterestGroupManager* GetInterestGroupManager();
+  ComputePressureManager* GetComputePressureManager();
   std::string GetPartitionDomain();
 
   // blink::mojom::DomStorage interface.
@@ -250,12 +256,6 @@ class CONTENT_EXPORT StoragePartitionImpl
   void OnCanSendDomainReliabilityUpload(
       const GURL& origin,
       OnCanSendDomainReliabilityUploadCallback callback) override;
-  void OnClearSiteData(int32_t process_id,
-                       int32_t routing_id,
-                       const GURL& url,
-                       const std::string& header_value,
-                       int load_flags,
-                       OnClearSiteDataCallback callback) override;
 #if defined(OS_ANDROID)
   void OnGenerateHttpNegotiateAuthToken(
       const std::string& server_auth_token,
@@ -271,22 +271,22 @@ class CONTENT_EXPORT StoragePartitionImpl
       network::mojom::FulfillTrustTokenIssuanceRequestPtr request,
       OnTrustTokenIssuanceDivertedToSystemCallback callback) override;
 
-  // network::mojom::AuthenticationAndCertificateObserver interface.
+  // network::mojom::URLLoaderNetworkServiceObserver interface.
   void OnSSLCertificateError(const GURL& url,
                              int net_error,
                              const net::SSLInfo& ssl_info,
                              bool fatal,
                              OnSSLCertificateErrorCallback response) override;
   void OnCertificateRequested(
-      const base::Optional<base::UnguessableToken>& window_id,
+      const absl::optional<base::UnguessableToken>& window_id,
       const scoped_refptr<net::SSLCertRequestInfo>& cert_info,
       mojo::PendingRemote<network::mojom::ClientCertificateResponder>
           cert_responder) override;
-  void Clone(mojo::PendingReceiver<
-             network::mojom::AuthenticationAndCertificateObserver> listener)
-      override;
+  void Clone(
+      mojo::PendingReceiver<network::mojom::URLLoaderNetworkServiceObserver>
+          listener) override;
   void OnAuthRequired(
-      const base::Optional<base::UnguessableToken>& window_id,
+      const absl::optional<base::UnguessableToken>& window_id,
       uint32_t request_id,
       const GURL& url,
       bool first_auth_attempt,
@@ -294,6 +294,15 @@ class CONTENT_EXPORT StoragePartitionImpl
       const scoped_refptr<net::HttpResponseHeaders>& head_headers,
       mojo::PendingRemote<network::mojom::AuthChallengeResponder>
           auth_challenge_responder) override;
+  void OnClearSiteData(const GURL& url,
+                       const std::string& header_value,
+                       int load_flags,
+                       OnClearSiteDataCallback callback) override;
+  void OnLoadingStateUpdate(network::mojom::LoadInfoPtr info,
+                            OnLoadingStateUpdateCallback callback) override;
+  void OnDataUseUpdate(int32_t network_traffic_annotation_id_hash,
+                       int64_t recv_bytes,
+                       int64_t sent_bytes) override;
 
   scoped_refptr<URLLoaderFactoryGetter> url_loader_factory_getter() {
     return url_loader_factory_getter_;
@@ -367,7 +376,7 @@ class CONTENT_EXPORT StoragePartitionImpl
   mojo::PendingRemote<network::mojom::CookieAccessObserver>
   CreateCookieAccessObserverForServiceWorker();
 
-  mojo::PendingRemote<network::mojom::AuthenticationAndCertificateObserver>
+  mojo::PendingRemote<network::mojom::URLLoaderNetworkServiceObserver>
   CreateAuthCertObserverForServiceWorker();
 
   std::vector<std::string> GetCorsExemptHeaderList();
@@ -552,10 +561,14 @@ class CONTENT_EXPORT StoragePartitionImpl
   std::unique_ptr<leveldb_proto::ProtoDatabaseProvider>
       proto_database_provider_;
   scoped_refptr<ContentIndexContextImpl> content_index_context_;
-  scoped_refptr<NativeIOContext> native_io_context_;
+  scoped_refptr<NativeIOContextImpl> native_io_context_;
   std::unique_ptr<ConversionManagerImpl> conversion_manager_;
   std::unique_ptr<FontAccessManagerImpl> font_access_manager_;
-  std::unique_ptr<PrerenderHostRegistry> prerender_host_registry_;
+  std::unique_ptr<InterestGroupManager> interest_group_manager_;
+
+  // TODO(crbug.com/1205695): ComputePressureManager should live elsewher. The
+  //                          Compute Pressure API does not store data.
+  std::unique_ptr<ComputePressureManager> compute_pressure_manager_;
 
   // ReceiverSet for DomStorage, using the
   // ChildProcessSecurityPolicyImpl::Handle as the binding context type. The
@@ -621,13 +634,13 @@ class CONTENT_EXPORT StoragePartitionImpl
   mojo::UniqueReceiverSet<network::mojom::CookieAccessObserver>
       service_worker_cookie_observers_;
 
-  struct AuthAndCertContext {
+  struct URLLoaderNetworkContext {
     int process_id;
     int routing_id;
   };
-  mojo::ReceiverSet<network::mojom::AuthenticationAndCertificateObserver,
-                    AuthAndCertContext>
-      auth_cert_observers_;
+  mojo::ReceiverSet<network::mojom::URLLoaderNetworkServiceObserver,
+                    URLLoaderNetworkContext>
+      url_loader_network_observers_;
 
   // |local_trust_token_fulfiller_| provides responses to certain Trust Tokens
   // operations, for instance via the content embedder calling into a system

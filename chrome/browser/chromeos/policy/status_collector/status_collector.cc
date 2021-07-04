@@ -8,10 +8,10 @@
 #include "chrome/browser/ash/app_mode/arc/arc_kiosk_app_manager.h"
 #include "chrome/browser/ash/app_mode/kiosk_app_manager.h"
 #include "chrome/browser/ash/app_mode/web_app/web_kiosk_app_manager.h"
-#include "chrome/browser/chromeos/policy/device_local_account.h"
+#include "chrome/browser/ash/policy/core/device_local_account.h"
+#include "chrome/browser/ash/policy/core/user_cloud_policy_manager_chromeos.h"
 #include "chrome/browser/chromeos/policy/status_collector/activity_storage.h"
 #include "chrome/browser/chromeos/policy/status_collector/app_info_generator.h"
-#include "chrome/browser/chromeos/policy/user_cloud_policy_manager_chromeos.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/system/statistics_provider.h"
@@ -28,7 +28,7 @@ namespace ent_mgmt = ::enterprise_management;
 // session has been removed from policy since the session started, in which
 // case we won't report its status).
 std::unique_ptr<DeviceLocalAccount> GetCurrentKioskDeviceLocalAccount(
-    chromeos::CrosSettings* settings) {
+    ash::CrosSettings* settings) {
   if (!user_manager::UserManager::Get()->IsLoggedInAsAnyKioskApp()) {
     return nullptr;
   }
@@ -82,12 +82,12 @@ void StatusCollector::RegisterProfilePrefs(PrefRegistrySimple* registry) {
 }
 
 // static
-base::Optional<std::string> StatusCollector::GetBootMode(
+absl::optional<std::string> StatusCollector::GetBootMode(
     chromeos::system::StatisticsProvider* statistics_provider) {
   std::string dev_switch_mode;
   if (!statistics_provider->GetMachineStatistic(
           chromeos::system::kDevSwitchBootKey, &dev_switch_mode)) {
-    return base::nullopt;
+    return absl::nullopt;
   }
 
   if (dev_switch_mode == chromeos::system::kDevSwitchBootValueDev) {
@@ -98,11 +98,11 @@ base::Optional<std::string> StatusCollector::GetBootMode(
     return std::string("Verified");
   }
 
-  return base::nullopt;
+  return absl::nullopt;
 }
 
 StatusCollector::StatusCollector(chromeos::system::StatisticsProvider* provider,
-                                 chromeos::CrosSettings* cros_settings,
+                                 ash::CrosSettings* cros_settings,
                                  base::Clock* clock)
     : statistics_provider_(provider),
       cros_settings_(cros_settings),
@@ -113,7 +113,7 @@ StatusCollector::~StatusCollector() = default;
 std::unique_ptr<DeviceLocalAccount>
 StatusCollector::GetAutoLaunchedKioskSessionInfo() {
   std::unique_ptr<DeviceLocalAccount> account =
-      GetCurrentKioskDeviceLocalAccount(chromeos::CrosSettings::Get());
+      GetCurrentKioskDeviceLocalAccount(ash::CrosSettings::Get());
   if (!account) {
     // No auto-launched kiosk session active.
     return nullptr;

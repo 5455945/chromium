@@ -16,12 +16,10 @@
 #include "ash/app_list/app_list_controller_impl.h"
 #include "ash/app_list/test/app_list_test_helper.h"
 #include "ash/app_list/views/app_list_view.h"
+#include "ash/constants/app_types.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/display/screen_orientation_controller.h"
 #include "ash/public/cpp/accessibility_controller.h"
-#include "ash/public/cpp/app_types.h"
-#include "ash/public/cpp/ash_features.h"
-#include "ash/public/cpp/ash_switches.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/public/cpp/tablet_mode.h"
 #include "ash/public/cpp/test/shell_test_api.h"
@@ -49,6 +47,7 @@
 #include "ui/aura/test/test_window_delegate.h"
 #include "ui/base/hit_test.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator.h"
 #include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/compositor/test/test_utils.h"
@@ -202,7 +201,7 @@ class TabletModeControllerTest : public AshTestBase {
   std::unique_ptr<aura::Window> CreateDesktopWindowSnappedLeft(
       const gfx::Rect& bounds = gfx::Rect()) {
     std::unique_ptr<aura::Window> window = CreateTestWindow(bounds);
-    WMEvent snap_to_left(WM_EVENT_CYCLE_SNAP_LEFT);
+    WMEvent snap_to_left(WM_EVENT_CYCLE_SNAP_PRIMARY);
     WindowState::Get(window.get())->OnWMEvent(&snap_to_left);
     return window;
   }
@@ -211,7 +210,7 @@ class TabletModeControllerTest : public AshTestBase {
   std::unique_ptr<aura::Window> CreateDesktopWindowSnappedRight(
       const gfx::Rect& bounds = gfx::Rect()) {
     std::unique_ptr<aura::Window> window = CreateTestWindow(bounds);
-    WMEvent snap_to_right(WM_EVENT_CYCLE_SNAP_RIGHT);
+    WMEvent snap_to_right(WM_EVENT_CYCLE_SNAP_SECONDARY);
     WindowState::Get(window.get())->OnWMEvent(&snap_to_right);
     return window;
   }
@@ -604,10 +603,10 @@ TEST_F(TabletModeControllerTest, VerticalHingeTest) {
   }
 }
 
-// Test if this case does not crash. See http://crbug.com/462806
+// Test if this case does not crash. See http://crbug.com/462806.
 TEST_F(TabletModeControllerTest, DisplayDisconnectionDuringOverview) {
   // Do not animate wallpaper on entering overview.
-  OverviewWallpaperController::SetDoNotChangeWallpaperForTests();
+  OverviewWallpaperController::SetDisableChangeWallpaperForTest(true);
 
   UpdateDisplay("800x600,800x600");
   std::unique_ptr<aura::Window> w1(
@@ -618,12 +617,14 @@ TEST_F(TabletModeControllerTest, DisplayDisconnectionDuringOverview) {
   ASSERT_FALSE(IsTabletModeStarted());
 
   tablet_mode_controller()->SetEnabledForTest(true);
-  EXPECT_TRUE(Shell::Get()->overview_controller()->StartOverview());
+  EXPECT_TRUE(EnterOverview());
 
   UpdateDisplay("800x600");
   base::RunLoop().RunUntilIdle();
   EXPECT_FALSE(Shell::Get()->overview_controller()->InOverviewSession());
   EXPECT_EQ(w1->GetRootWindow(), w2->GetRootWindow());
+
+  OverviewWallpaperController::SetDisableChangeWallpaperForTest(false);
 }
 
 // Test that the disabling of the internal display exits tablet mode, and that
@@ -1348,7 +1349,7 @@ TEST_F(TabletModeControllerTest,
   WindowState* left_window_state = WindowState::Get(left_window.get());
   ASSERT_TRUE(left_window_state->CanSnap());
   ASSERT_FALSE(split_view_controller()->CanSnapWindow(left_window.get()));
-  WMEvent snap_to_left(WM_EVENT_CYCLE_SNAP_LEFT);
+  WMEvent snap_to_left(WM_EVENT_CYCLE_SNAP_PRIMARY);
   left_window_state->OnWMEvent(&snap_to_left);
   std::unique_ptr<aura::Window> right_window =
       CreateDesktopWindowSnappedRight();
@@ -1378,7 +1379,7 @@ TEST_F(TabletModeControllerTest,
   WindowState* right_window_state = WindowState::Get(right_window.get());
   ASSERT_TRUE(right_window_state->CanSnap());
   ASSERT_FALSE(split_view_controller()->CanSnapWindow(right_window.get()));
-  WMEvent snap_to_right(WM_EVENT_CYCLE_SNAP_RIGHT);
+  WMEvent snap_to_right(WM_EVENT_CYCLE_SNAP_SECONDARY);
   right_window_state->OnWMEvent(&snap_to_right);
   wm::ActivateWindow(right_window.get());
   tablet_mode_controller()->SetEnabledForTest(true);
@@ -1407,7 +1408,7 @@ TEST_F(TabletModeControllerTest,
   WindowState* right_window_state = WindowState::Get(right_window.get());
   ASSERT_TRUE(right_window_state->CanSnap());
   ASSERT_FALSE(split_view_controller()->CanSnapWindow(right_window.get()));
-  WMEvent snap_to_right(WM_EVENT_CYCLE_SNAP_RIGHT);
+  WMEvent snap_to_right(WM_EVENT_CYCLE_SNAP_SECONDARY);
   right_window_state->OnWMEvent(&snap_to_right);
   ASSERT_EQ(left_window.get(), window_util::GetActiveWindow());
   tablet_mode_controller()->SetEnabledForTest(true);
@@ -1435,7 +1436,7 @@ TEST_F(TabletModeControllerTest,
   WindowState* left_window_state = WindowState::Get(left_window.get());
   ASSERT_TRUE(left_window_state->CanSnap());
   ASSERT_FALSE(split_view_controller()->CanSnapWindow(left_window.get()));
-  WMEvent snap_to_left(WM_EVENT_CYCLE_SNAP_LEFT);
+  WMEvent snap_to_left(WM_EVENT_CYCLE_SNAP_PRIMARY);
   left_window_state->OnWMEvent(&snap_to_left);
   std::unique_ptr<aura::Window> right_window =
       CreateDesktopWindowSnappedRight();
@@ -1458,7 +1459,7 @@ TEST_F(TabletModeControllerTest,
   tablet_mode_controller()->SetEnabledForTest(true);
   app_list_controller->ShowAppList();
 
-  EXPECT_FALSE(app_list_controller->IsVisible(base::nullopt));
+  EXPECT_FALSE(app_list_controller->IsVisible());
 }
 
 // Test that if both the active window and the previous window are snapped on
@@ -1632,6 +1633,31 @@ TEST_F(TabletModeControllerTest, TabletModeTransitionHistogramsSnappedWindows) {
   histogram_tester.ExpectTotalCount(kExitHistogram, 0);
 }
 
+// Tests that closing a window during the tablet mode enter animation does not
+// cause a crash.
+TEST_F(TabletModeControllerTest, CloseWindowDuringEnterAnimation) {
+  std::unique_ptr<aura::Window> window = CreateAppWindow(gfx::Rect(250, 100));
+
+  ui::ScopedAnimationDurationScaleMode test_duration_mode(
+      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+
+  tablet_mode_controller()->SetEnabledForTest(true);
+  window.reset();
+}
+
+// Tests that closing a window during the tablet mode exit animation does not
+// cause a crash.
+TEST_F(TabletModeControllerTest, CloseWindowDuringExitAnimation) {
+  std::unique_ptr<aura::Window> window = CreateAppWindow(gfx::Rect(250, 100));
+  tablet_mode_controller()->SetEnabledForTest(true);
+
+  ui::ScopedAnimationDurationScaleMode test_duration_mode(
+      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+
+  tablet_mode_controller()->SetEnabledForTest(false);
+  window.reset();
+}
+
 class TabletModeControllerOnDeviceTest : public TabletModeControllerTest {
  public:
   TabletModeControllerOnDeviceTest() = default;
@@ -1750,7 +1776,7 @@ TEST_F(TabletModeControllerScreenshotTest, FromOverviewNoScreenshot) {
   window2->layer()->GetAnimator()->StopAnimating();
 
   // Enter overview.
-  Shell::Get()->overview_controller()->StartOverview();
+  EnterOverview();
   ShellTestApi().WaitForOverviewAnimationState(
       OverviewAnimationState::kEnterAnimationComplete);
 

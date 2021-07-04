@@ -16,6 +16,7 @@
 #include "content/common/content_export.h"
 #include "content/public/common/drop_data.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/page/drag_operation.h"
 #include "third_party/blink/public/mojom/frame/lifecycle.mojom.h"
@@ -38,7 +39,6 @@ namespace content {
 
 class BrowserAccessibilityManager;
 class FrameTree;
-class RenderFrameHostImpl;
 class RenderWidgetHostImpl;
 class RenderWidgetHostInputEventRouter;
 class RenderViewHostDelegateView;
@@ -122,9 +122,6 @@ class CONTENT_EXPORT RenderWidgetHostDelegate {
   // Returns true if the |event| was handled.
   virtual bool PreHandleGestureEvent(const blink::WebGestureEvent& event);
 
-  // Notifies that screen rects were sent to renderer process.
-  virtual void DidSendScreenRects(RenderWidgetHostImpl* rwh) {}
-
   // Get the root BrowserAccessibilityManager for this frame tree.
   virtual BrowserAccessibilityManager* GetRootBrowserAccessibilityManager();
 
@@ -136,7 +133,7 @@ class CONTENT_EXPORT RenderWidgetHostDelegate {
   // Send OS Cut/Copy/Paste actions to the focused frame.
   virtual void ExecuteEditCommand(
       const std::string& command,
-      const base::Optional<base::string16>& value) = 0;
+      const absl::optional<std::u16string>& value) = 0;
   virtual void Undo() = 0;
   virtual void Redo() = 0;
   virtual void Cut() = 0;
@@ -214,8 +211,9 @@ class CONTENT_EXPORT RenderWidgetHostDelegate {
   // to frame-based widgets. Other widgets are always kBrowser.
   virtual blink::mojom::DisplayMode GetDisplayMode() const;
 
-  // Notification that the widget has lost capture.
-  virtual void LostCapture(RenderWidgetHostImpl* render_widget_host) {}
+  // Returns the Window Control Overlay rectangle. Only applies to an
+  // outermost main frame's widget. Other widgets always returns an empty rect.
+  virtual gfx::Rect GetWindowsControlsOverlayRect() const;
 
   // Notification that the widget has lost the mouse lock.
   virtual void LostMouseLock(RenderWidgetHostImpl* render_widget_host) {}
@@ -251,13 +249,6 @@ class CONTENT_EXPORT RenderWidgetHostDelegate {
 
   // Returns the TextInputManager tracking text input state.
   virtual TextInputManager* GetTextInputManager();
-
-  // Returns true if this RenderWidgetHost should remain hidden. This is used by
-  // the RenderWidgetHost to ask the delegate if it can be shown in the event of
-  // something other than the WebContents attempting to enable visibility of
-  // this RenderWidgetHost.
-  // TODO(nasko): Move this to RenderViewHostDelegate.
-  virtual bool IsHidden();
 
   // Returns the associated RenderViewHostDelegateView*, if possible.
   virtual RenderViewHostDelegateView* GetDelegateView();
@@ -295,9 +286,6 @@ class CONTENT_EXPORT RenderWidgetHostDelegate {
 
   // Returns true if there is context menu shown on page.
   virtual bool IsShowingContextMenuOnPage() const;
-
-  // Returns the focused frame across all delegates, or nullptr if none.
-  virtual RenderFrameHostImpl* GetFocusedFrameFromFocusedDelegate();
 
   // Invoked when the vertical scroll direction of the root layer changes. Note
   // that if a scroll in a given direction occurs, the scroll is completed, and

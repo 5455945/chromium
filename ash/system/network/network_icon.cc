@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "ash/constants/ash_features.h"
-#include "ash/public/cpp/ash_features.h"
 #include "ash/public/cpp/network_icon_image_source.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/strings/grit/ash_strings.h"
@@ -393,7 +392,7 @@ void NetworkIconImpl::GetBadges(const NetworkStateProperties* network,
   } else if (type == NetworkType::kCellular) {
     // technology_badge_ is set in UpdateCellularState.
     if (is_connected && network->type_state->get_cellular()->roaming) {
-      badges->bottom_right = {&kNetworkBadgeRoamingIcon, icon_color};
+      badges->center_left = {&kNetworkBadgeRoamingIcon, icon_color};
     }
   }
   // Only show technology badge when connected.
@@ -556,7 +555,7 @@ gfx::ImageSkia GetDisconnectedImageForNetworkType(NetworkType network_type) {
   return GetBasicImage(ICON_TYPE_LIST, network_type, false /* connected */);
 }
 
-base::string16 GetLabelForNetworkList(const NetworkStateProperties* network) {
+std::u16string GetLabelForNetworkList(const NetworkStateProperties* network) {
   if (network->type == NetworkType::kCellular) {
     ActivationStateType activation_state =
         network->type_state->get_cellular()->activation_state;

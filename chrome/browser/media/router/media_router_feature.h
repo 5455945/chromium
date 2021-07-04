@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_MEDIA_ROUTER_MEDIA_ROUTER_FEATURE_H_
 
 #include "base/feature_list.h"
+#include "build/build_config.h"
 
 class PrefRegistrySimple;
 class PrefService;
@@ -18,6 +19,10 @@ namespace media_router {
 
 // Returns true if Media Router is enabled for |context|.
 bool MediaRouterEnabled(content::BrowserContext* context);
+
+// Clears stored prefs so they don't leak between tests running in the same
+// process.
+void ClearMediaRouterStoredPrefsForTesting();
 
 #if !defined(OS_ANDROID)
 
@@ -39,7 +44,6 @@ extern const base::Feature kCastMediaRouteProvider;
 extern const base::Feature kCastAllowAllIPsFeature;
 
 // Determine whether global media controls are used to start and stop casting.
-// Only relevant when media::kGlobalMediaControlsOverlayControls is enabled.
 extern const base::Feature kGlobalMediaControlsCastStartStop;
 
 // If enabled, allows all websites to request to start mirroring via
@@ -48,6 +52,12 @@ extern const base::Feature kAllowAllSitesToInitiateMirroring;
 
 // If enabled, meetings appear as receivers in the Cast menu.
 extern const base::Feature kCastToMeetingFromCastDialog;
+
+// If enabled, users can submit Cast feedback via the chrome://cast-feedback
+// WebUI.
+// TODO(crbug.com/1173633): Remove this flag now that the feature is enabled by
+// default.
+extern const base::Feature kCastFeedbackDialog;
 
 namespace prefs {
 // Pref name for the enterprise policy for allowing Cast devices on all IPs.

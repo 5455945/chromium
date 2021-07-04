@@ -16,15 +16,15 @@
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chrome/browser/ash/certificate_provider/certificate_provider_service.h"
 #include "chrome/browser/ash/certificate_provider/certificate_provider_service_factory.h"
+#include "chrome/browser/ash/lock_screen_apps/state_controller.h"
+#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/settings/device_settings_test_helper.h"
 #include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
 #include "chrome/browser/chromeos/input_method/mock_input_method_manager_impl.h"
-#include "chrome/browser/chromeos/lock_screen_apps/state_controller.h"
-#include "chrome/browser/chromeos/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ui/ash/accessibility/fake_accessibility_controller.h"
-#include "chrome/browser/ui/ash/assistant/assistant_client_impl.h"
-#include "chrome/browser/ui/ash/login_screen_client.h"
+#include "chrome/browser/ui/ash/assistant/assistant_browser_delegate_impl.h"
+#include "chrome/browser/ui/ash/login_screen_client_impl.h"
 #include "chrome/browser/ui/ash/session_controller_client_impl.h"
 #include "chrome/browser/ui/ash/test_login_screen.h"
 #include "chrome/browser/ui/ash/test_session_controller.h"
@@ -34,9 +34,11 @@
 #include "chromeos/cryptohome/system_salt_getter.h"
 #include "chromeos/dbus/audio/cras_audio_client.h"
 #include "chromeos/dbus/biod/biod_client.h"
-#include "chromeos/dbus/cryptohome/cryptohome_client.h"
+#include "chromeos/dbus/concierge/concierge_client.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/tpm_manager/tpm_manager_client.h"
+#include "chromeos/dbus/userdataauth/cryptohome_misc_client.h"
+#include "chromeos/dbus/userdataauth/userdataauth_client.h"
 #include "chromeos/login/login_state/login_state.h"
 #include "chromeos/login/session/session_termination_manager.h"
 #include "chromeos/system/fake_statistics_provider.h"
@@ -72,10 +74,12 @@ class ScreenLockerUnitTest : public testing::Test {
 
   void SetUp() override {
     DBusThreadManager::Initialize();
+    ConciergeClient::InitializeFake(/*fake_cicerone_client=*/nullptr);
     BiodClient::InitializeFake();
     CrasAudioClient::InitializeFake();
     TpmManagerClient::InitializeFake();
-    CryptohomeClient::InitializeFake();
+    CryptohomeMiscClient::InitializeFake();
+    UserDataAuthClient::InitializeFake();
 
     // MojoSystemInfoDispatcher dependency:
     bluez::BluezDBusManager::GetSetterForTesting();
@@ -93,8 +97,8 @@ class ScreenLockerUnitTest : public testing::Test {
         std::make_unique<SessionControllerClientImpl>();
     session_controller_client_->Init();
 
-    // Initialize AssistantClientImpl:
-    assistant_client_ = std::make_unique<AssistantClientImpl>();
+    // Initialize AssistantBrowserDelegate:
+    assistant_delegate_ = std::make_unique<AssistantBrowserDelegateImpl>();
 
     // Initialize AccessibilityManager and dependencies:
     observer_ = std::make_unique<audio::TestObserver>((base::DoNothing()));
@@ -134,14 +138,16 @@ class ScreenLockerUnitTest : public testing::Test {
     audio::SoundsManager::Shutdown();
     audio::AudioStreamHandler::SetObserverForTesting(nullptr);
     observer_.reset();
-    assistant_client_.reset();
+    assistant_delegate_.reset();
     session_controller_client_.reset();
     LoginState::Shutdown();
     bluez::BluezDBusManager::Shutdown();
-    CryptohomeClient::Shutdown();
+    UserDataAuthClient::Shutdown();
+    CryptohomeMiscClient::Shutdown();
     TpmManagerClient::Shutdown();
     CrasAudioClient::Shutdown();
     BiodClient::Shutdown();
+    ConciergeClient::Shutdown();
     DBusThreadManager::Shutdown();
   }
 
@@ -160,10 +166,10 @@ class ScreenLockerUnitTest : public testing::Test {
   // ScreenLocker dependencies:
   // * AccessibilityManager dependencies:
   FakeAccessibilityController fake_accessibility_controller_;
-  // * LoginScreenClient dependencies:
+  // * LoginScreenClientImpl dependencies:
   session_manager::SessionManager session_manager_;
   TestLoginScreen test_login_screen_;
-  LoginScreenClient login_screen_client_;
+  LoginScreenClientImpl login_screen_client_;
   // * SessionControllerClientImpl dependencies:
   FakeChromeUserManager* fake_user_manager_{new FakeChromeUserManager()};
   user_manager::ScopedUserManager scoped_user_manager_{
@@ -173,7 +179,7 @@ class ScreenLockerUnitTest : public testing::Test {
   ScopedDeviceSettingsTestHelper device_settings_test_helper_;
   TestSessionController test_session_controller_;
   std::unique_ptr<SessionControllerClientImpl> session_controller_client_;
-  std::unique_ptr<AssistantClientImpl> assistant_client_;
+  std::unique_ptr<AssistantBrowserDelegateImpl> assistant_delegate_;
   chromeos::SessionTerminationManager session_termination_manager_;
 
   std::unique_ptr<audio::TestObserver> observer_;

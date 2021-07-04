@@ -16,18 +16,17 @@
 #include "chrome/browser/policy/profile_policy_connector_builder.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/test/integration/bookmarks_helper.h"
-#include "chrome/browser/sync/test/integration/profile_sync_service_harness.h"
 #include "chrome/browser/sync/test/integration/sync_integration_test_util.h"
+#include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
-#include "chrome/browser/sync/test/integration/updated_progress_marker_checker.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_node.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/policy_constants.h"
-#include "components/sync/driver/profile_sync_service.h"
 #include "components/sync/driver/sync_service.h"
+#include "components/sync/driver/sync_service_impl.h"
 #include "components/sync/engine/cycle/sync_cycle_snapshot.h"
 #include "components/sync/engine/loopback_server/persistent_permanent_entity.h"
 #include "content/public/test/browser_test.h"
@@ -41,6 +40,7 @@ using bookmarks::BookmarkNode;
 using bookmarks_helper::AddFolder;
 using bookmarks_helper::AddURL;
 using bookmarks_helper::AllModelsMatch;
+using bookmarks_helper::BookmarkModelMatchesFakeServerChecker;
 using bookmarks_helper::BookmarksMatchChecker;
 using bookmarks_helper::BookmarksTitleChecker;
 using bookmarks_helper::CheckFaviconExpired;
@@ -83,6 +83,7 @@ using testing::ElementsAreArray;
 using testing::IsEmpty;
 using testing::NotNull;
 using testing::SizeIs;
+using testing::UnorderedElementsAreArray;
 
 using BookmarkNodeMatcher = testing::Matcher<std::unique_ptr<BookmarkNode>>;
 
@@ -112,7 +113,8 @@ IN_PROC_BROWSER_TEST_F(TwoClientBookmarksSyncTest, Sanity) {
 
   GURL google_url("http://www.google.com");
   ASSERT_NE(nullptr, AddURL(0, "Google", google_url));
-  ASSERT_TRUE(GetClient(0)->AwaitMutualSyncCycleCompletion(GetClient(1)));
+  ASSERT_TRUE(BookmarksMatchChecker().Wait());
+
   ASSERT_NE(nullptr, AddURL(1, "Yahoo", GURL("http://www.yahoo.com")));
   ASSERT_TRUE(BookmarksMatchChecker().Wait());
 
@@ -137,15 +139,14 @@ IN_PROC_BROWSER_TEST_F(TwoClientBookmarksSyncTest, Sanity) {
 
 IN_PROC_BROWSER_TEST_F(TwoClientBookmarksSyncTest, SimultaneousURLChanges) {
   ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
-  ASSERT_TRUE(BookmarksMatchChecker().Wait());
 
-  GURL initial_url("http://www.google.com");
-  GURL second_url("http://www.google.com/abc");
-  GURL third_url("http://www.google.com/def");
-  std::string title = "Google";
+  const GURL initial_url("http://www.google.com");
+  const GURL second_url("http://www.google.com/abc");
+  const GURL third_url("http://www.google.com/def");
+  const std::string title = "Google";
 
   ASSERT_NE(nullptr, AddURL(0, title, initial_url));
-  ASSERT_TRUE(GetClient(0)->AwaitMutualSyncCycleCompletion(GetClient(1)));
+  ASSERT_TRUE(BookmarksMatchChecker().Wait());
 
   ASSERT_NE(nullptr, SetURL(0, GetUniqueNodeByURL(0, initial_url), second_url));
   ASSERT_NE(nullptr, SetURL(1, GetUniqueNodeByURL(1, initial_url), third_url));
@@ -200,7 +201,8 @@ IN_PROC_BROWSER_TEST_F(TwoClientBookmarksSyncTest, SC_AddFirstBMWithFavicon) {
 
   const BookmarkNode* bookmark = AddURL(0, kGenericURLTitle, page_url);
   ASSERT_NE(nullptr, bookmark);
-  ASSERT_TRUE(GetClient(0)->AwaitMutualSyncCycleCompletion(GetClient(1)));
+  ASSERT_TRUE(BookmarksMatchChecker().Wait());
+
   SetFavicon(0, bookmark, icon_url, favicon, bookmarks_helper::FROM_UI);
   EXPECT_TRUE(BookmarksMatchChecker().Wait());
 
@@ -220,10 +222,10 @@ IN_PROC_BROWSER_TEST_F(TwoClientBookmarksSyncTest, SC_SetFaviconHiDPI) {
   // Set the supported scale factors to include 2x such that CreateFavicon()
   // creates a favicon with hidpi representations and that methods in the
   // FaviconService request hidpi favicons.
-  std::vector<ui::ScaleFactor> supported_scale_factors;
+  std::vector<ui::ResourceScaleFactor> supported_scale_factors;
   supported_scale_factors.push_back(ui::SCALE_FACTOR_100P);
   supported_scale_factors.push_back(ui::SCALE_FACTOR_200P);
-  ui::SetSupportedScaleFactors(supported_scale_factors);
+  ui::SetSupportedResourceScaleFactors(supported_scale_factors);
 
   const GURL page_url(kGenericURL);
   const GURL icon_url1("http://www.google.com/favicon1.ico");
@@ -233,7 +235,7 @@ IN_PROC_BROWSER_TEST_F(TwoClientBookmarksSyncTest, SC_SetFaviconHiDPI) {
 
   const BookmarkNode* bookmark0 = AddURL(0, kGenericURLTitle, page_url);
   ASSERT_NE(nullptr, bookmark0);
-  ASSERT_TRUE(GetClient(0)->AwaitMutualSyncCycleCompletion(GetClient(1)));
+  ASSERT_TRUE(BookmarksMatchChecker().Wait());
 
   gfx::Image favicon = CreateFavicon(SK_ColorWHITE);
   SetFavicon(0, bookmark0, icon_url1, favicon, bookmarks_helper::FROM_UI);
@@ -275,9 +277,9 @@ IN_PROC_BROWSER_TEST_F(TwoClientBookmarksSyncTest,
                        SC_UpdatingTitleDoesNotUpdateFaviconLastUpdatedTime) {
   ASSERT_TRUE(SetupClients()) << "SetupClients() failed.";
 
-  std::vector<ui::ScaleFactor> supported_scale_factors;
+  std::vector<ui::ResourceScaleFactor> supported_scale_factors;
   supported_scale_factors.push_back(ui::SCALE_FACTOR_100P);
-  ui::SetSupportedScaleFactors(supported_scale_factors);
+  ui::SetSupportedResourceScaleFactors(supported_scale_factors);
 
   const GURL page_url(kGenericURL);
   const GURL icon_url("http://www.google.com/favicon.ico");
@@ -1194,7 +1196,6 @@ IN_PROC_BROWSER_TEST_F(TwoClientBookmarksSyncTest,
     matchers_in_folder.push_back(matchers[2]);
     matchers.erase(matchers.begin() + 2);
 
-    ASSERT_TRUE(GetClient(0)->AwaitMutualSyncCycleCompletion(GetClient(1)));
     ASSERT_TRUE(BookmarksMatchChecker().Wait());
 
     EXPECT_THAT(GetBookmarkBarNode(1)->children(), ElementsAreArray(matchers));
@@ -1238,7 +1239,6 @@ IN_PROC_BROWSER_TEST_F(TwoClientBookmarksSyncTest,
     matchers.back() = IsFolderWithTitleAndChildren(
         kGenericFolderName, ElementsAreArray(matchers_in_folder));
 
-    ASSERT_TRUE(GetClient(0)->AwaitMutualSyncCycleCompletion(GetClient(1)));
     ASSERT_TRUE(BookmarksMatchChecker().Wait());
     EXPECT_THAT(GetBookmarkBarNode(1)->children(), ElementsAreArray(matchers));
   }
@@ -1962,32 +1962,38 @@ IN_PROC_BROWSER_TEST_F(TwoClientBookmarksSyncTest,
   ASSERT_TRUE(SetupClients()) << "SetupClients() failed.";
 
   for (size_t i = 0; i < 25; ++i) {
-    std::string title0 = IndexedURLTitle(i);
-    GURL url0 = GURL(IndexedURL(i));
+    const std::string title0 = IndexedURLTitle(i);
+    const GURL url0 = GURL(IndexedURL(i));
     ASSERT_NE(nullptr, AddURL(0, i, title0, url0));
-    std::string title1 = IndexedURLTitle(i + 50);
-    GURL url1 = GURL(IndexedURL(i + 50));
+
+    const std::string title1 = IndexedURLTitle(i + 50);
+    const GURL url1 = GURL(IndexedURL(i + 50));
     ASSERT_NE(nullptr, AddURL(1, i, title1, url1));
   }
   for (size_t i = 25; i < 30; ++i) {
-    std::string title0 = IndexedFolderName(i);
+    const std::string title0 = IndexedFolderName(i);
     const BookmarkNode* folder0 = AddFolder(0, i, title0);
     ASSERT_NE(nullptr, folder0);
-    std::string title1 = IndexedFolderName(i + 50);
+
+    const std::string title1 = IndexedFolderName(i + 50);
     const BookmarkNode* folder1 = AddFolder(1, i, title1);
     ASSERT_NE(nullptr, folder1);
     for (size_t j = 0; j < 5; ++j) {
-      std::string title0 = IndexedURLTitle(i + 5 * j);
-      GURL url0 = GURL(IndexedURL(i + 5 * j));
+      const std::string title0 = IndexedURLTitle(i + 5 * j);
+      const GURL url0 = GURL(IndexedURL(i + 5 * j));
       ASSERT_NE(nullptr, AddURL(0, folder0, j, title0, url0));
-      std::string title1 = IndexedURLTitle(i + 5 * j + 50);
-      GURL url1 = GURL(IndexedURL(i + 5 * j + 50));
+
+      const std::string title1 = IndexedURLTitle(i + 5 * j + 50);
+      const GURL url1 = GURL(IndexedURL(i + 5 * j + 50));
       ASSERT_NE(nullptr, AddURL(1, folder1, j, title1, url1));
     }
   }
+
+  // Generate several duplicate URLs which should match during bookmarks model
+  // merge.
   for (size_t i = 100; i < 125; ++i) {
-    std::string title = IndexedURLTitle(i);
-    GURL url = GURL(IndexedURL(i));
+    const std::string title = IndexedURLTitle(i);
+    const GURL url = GURL(IndexedURL(i));
     ASSERT_NE(nullptr, AddURL(0, title, url));
     ASSERT_NE(nullptr, AddURL(1, title, url));
   }
@@ -2163,12 +2169,10 @@ IN_PROC_BROWSER_TEST_F(TwoClientBookmarksSyncTest,
 
 IN_PROC_BROWSER_TEST_F(TwoClientBookmarksSyncTest, DisableBookmarks) {
   ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
-  ASSERT_TRUE(BookmarksMatchChecker().Wait());
 
   ASSERT_TRUE(
       GetClient(1)->DisableSyncForType(syncer::UserSelectableType::kBookmarks));
   ASSERT_NE(nullptr, AddFolder(1, kGenericFolderName));
-  ASSERT_TRUE(AwaitQuiescence());
   ASSERT_FALSE(AllModelsMatch());
 
   ASSERT_TRUE(
@@ -2178,11 +2182,12 @@ IN_PROC_BROWSER_TEST_F(TwoClientBookmarksSyncTest, DisableBookmarks) {
 
 IN_PROC_BROWSER_TEST_F(TwoClientBookmarksSyncTest, DisableSync) {
   ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
-  ASSERT_TRUE(BookmarksMatchChecker().Wait());
 
   ASSERT_TRUE(GetClient(1)->DisableSyncForAllDatatypes());
   ASSERT_NE(nullptr, AddFolder(0, IndexedFolderName(0)));
-  ASSERT_TRUE(UpdatedProgressMarkerChecker(GetSyncService(0)).Wait());
+  ASSERT_TRUE(BookmarkModelMatchesFakeServerChecker(0, GetSyncService(0),
+                                                    GetFakeServer())
+                  .Wait());
   ASSERT_FALSE(AllModelsMatch());
 
   ASSERT_NE(nullptr, AddFolder(1, IndexedFolderName(1)));
@@ -2210,7 +2215,6 @@ IN_PROC_BROWSER_TEST_F(TwoClientBookmarksSyncTest, MC_DuplicateFolders) {
   }
 
   ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
-  ASSERT_TRUE(BookmarksMatchChecker().Wait());
   ASSERT_FALSE(ContainsDuplicateBookmarks(0));
 }
 
@@ -2225,7 +2229,9 @@ IN_PROC_BROWSER_TEST_F(TwoClientBookmarksSyncTest, MC_DeleteBookmark) {
   ASSERT_NE(nullptr, AddURL(0, GetBookmarkBarNode(0), 0, "bar", bar_url));
   ASSERT_NE(nullptr, AddURL(0, GetOtherNode(0), 0, "other", other_url));
 
-  ASSERT_TRUE(UpdatedProgressMarkerChecker(GetSyncService(0)).Wait());
+  ASSERT_TRUE(BookmarkModelMatchesFakeServerChecker(0, GetSyncService(0),
+                                                    GetFakeServer())
+                  .Wait());
 
   ASSERT_TRUE(HasNodeWithURL(0, bar_url));
   ASSERT_TRUE(HasNodeWithURL(0, other_url));
@@ -2233,14 +2239,16 @@ IN_PROC_BROWSER_TEST_F(TwoClientBookmarksSyncTest, MC_DeleteBookmark) {
   ASSERT_FALSE(HasNodeWithURL(1, other_url));
 
   Remove(0, GetBookmarkBarNode(0), 0);
-  ASSERT_TRUE(UpdatedProgressMarkerChecker(GetSyncService(0)).Wait());
+  ASSERT_TRUE(BookmarkModelMatchesFakeServerChecker(0, GetSyncService(0),
+                                                    GetFakeServer())
+                  .Wait());
 
   ASSERT_FALSE(HasNodeWithURL(0, bar_url));
   ASSERT_TRUE(HasNodeWithURL(0, other_url));
 
   ASSERT_TRUE(
       GetClient(1)->EnableSyncForType(syncer::UserSelectableType::kBookmarks));
-  ASSERT_TRUE(AwaitQuiescence());
+  ASSERT_TRUE(BookmarksMatchChecker().Wait());
 
   ASSERT_FALSE(HasNodeWithURL(0, bar_url));
   ASSERT_TRUE(HasNodeWithURL(0, other_url));
@@ -2419,31 +2427,33 @@ IN_PROC_BROWSER_TEST_F(TwoClientBookmarksSyncTest,
 // order is).
 IN_PROC_BROWSER_TEST_F(TwoClientBookmarksSyncTest, RacyPositionChanges) {
   ASSERT_TRUE(SetupSync()) << "SetupSync() failed.";
-  ASSERT_TRUE(BookmarksMatchChecker().Wait());
 
   // Add initial bookmarks.
-  size_t num_bookmarks = 5;
-  for (size_t i = 0; i < num_bookmarks; ++i) {
+  constexpr size_t kNumBookmarks = 5;
+  std::vector<BookmarkNodeMatcher> matchers;
+  for (size_t i = 0; i < kNumBookmarks; ++i) {
     ASSERT_NE(nullptr, AddURL(0, i, IndexedURLTitle(i), GURL(IndexedURL(i))));
+    matchers.push_back(
+        IsUrlBookmarkWithTitleAndUrl(IndexedURLTitle(i), GURL(IndexedURL(i))));
   }
 
-  // Once we make diverging changes the verifer is helpless.
-  ASSERT_TRUE(AwaitQuiescence());
   ASSERT_TRUE(BookmarksMatchChecker().Wait());
 
   // Make changes on client 0.
-  for (size_t i = 0; i < num_bookmarks; ++i) {
+  for (size_t i = 0; i < kNumBookmarks; ++i) {
     const BookmarkNode* node = GetUniqueNodeByURL(0, GURL(IndexedURL(i)));
-    size_t rand_pos = size_t{base::RandInt(0, int{num_bookmarks} - 1)};
+    size_t rand_pos =
+        static_cast<size_t>(base::RandInt(0, int{kNumBookmarks} - 1));
     DVLOG(1) << "Moving client 0's bookmark " << i << " to position "
              << rand_pos;
     Move(0, node, node->parent(), rand_pos);
   }
 
   // Make changes on client 1.
-  for (size_t i = 0; i < num_bookmarks; ++i) {
+  for (size_t i = 0; i < kNumBookmarks; ++i) {
     const BookmarkNode* node = GetUniqueNodeByURL(1, GURL(IndexedURL(i)));
-    size_t rand_pos = size_t{base::RandInt(0, int{num_bookmarks} - 1)};
+    size_t rand_pos =
+        static_cast<size_t>(base::RandInt(0, int{kNumBookmarks} - 1));
     DVLOG(1) << "Moving client 1's bookmark " << i << " to position "
              << rand_pos;
     Move(1, node, node->parent(), rand_pos);
@@ -2452,24 +2462,28 @@ IN_PROC_BROWSER_TEST_F(TwoClientBookmarksSyncTest, RacyPositionChanges) {
   ASSERT_TRUE(BookmarksMatchChecker().Wait());
 
   // Now make changes to client 1 first.
-  for (size_t i = 0; i < num_bookmarks; ++i) {
+  for (size_t i = 0; i < kNumBookmarks; ++i) {
     const BookmarkNode* node = GetUniqueNodeByURL(1, GURL(IndexedURL(i)));
-    size_t rand_pos = size_t{base::RandInt(0, int{num_bookmarks} - 1)};
+    size_t rand_pos =
+        static_cast<size_t>(base::RandInt(0, int{kNumBookmarks} - 1));
     DVLOG(1) << "Moving client 1's bookmark " << i << " to position "
              << rand_pos;
     Move(1, node, node->parent(), rand_pos);
   }
 
   // Make changes on client 0.
-  for (size_t i = 0; i < num_bookmarks; ++i) {
+  for (size_t i = 0; i < kNumBookmarks; ++i) {
     const BookmarkNode* node = GetUniqueNodeByURL(0, GURL(IndexedURL(i)));
-    size_t rand_pos = size_t{base::RandInt(0, int{num_bookmarks} - 1)};
+    size_t rand_pos =
+        static_cast<size_t>(base::RandInt(0, int{kNumBookmarks} - 1));
     DVLOG(1) << "Moving client 0's bookmark " << i << " to position "
              << rand_pos;
     Move(0, node, node->parent(), rand_pos);
   }
 
-  ASSERT_TRUE(BookmarksMatchChecker().Wait());
+  EXPECT_TRUE(BookmarksMatchChecker().Wait());
+  EXPECT_THAT(GetBookmarkBarNode(0)->children(),
+              UnorderedElementsAreArray(matchers));
 }
 
 // Trigger the server side creation of Synced Bookmarks. Ensure both clients
@@ -2543,12 +2557,11 @@ IN_PROC_BROWSER_TEST_F(TwoClientBookmarksSyncTest,
 
   // Remove all
   RemoveAll(0);
+  ASSERT_TRUE(BookmarksMatchChecker().Wait());
 
-  ASSERT_TRUE(GetClient(0)->AwaitMutualSyncCycleCompletion(GetClient(1)));
   // Verify other node has no children now.
-  EXPECT_TRUE(GetOtherNode(0)->children().empty());
-  EXPECT_TRUE(GetBookmarkBarNode(0)->children().empty());
-  ASSERT_TRUE(AllModelsMatch());
+  EXPECT_TRUE(GetOtherNode(1)->children().empty());
+  EXPECT_TRUE(GetBookmarkBarNode(1)->children().empty());
 }
 
 // Verifies that managed bookmarks (installed by policy) don't get synced.

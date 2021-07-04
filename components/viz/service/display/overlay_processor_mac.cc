@@ -52,7 +52,7 @@ gfx::Rect OverlayProcessorMac::GetAndResetOverlayDamage() {
 void OverlayProcessorMac::ProcessForOverlays(
     DisplayResourceProvider* resource_provider,
     AggregatedRenderPassList* render_passes,
-    const SkMatrix44& output_color_matrix,
+    const skia::Matrix44& output_color_matrix,
     const OverlayProcessorInterface::FilterOperationsMap& render_pass_filters,
     const OverlayProcessorInterface::FilterOperationsMap&
         render_pass_backdrop_filters,
@@ -99,13 +99,16 @@ void OverlayProcessorMac::ProcessForOverlays(
     *damage_rect = gfx::Rect();
   }
 
-  // TODO(https://crbug.com/1152849): If there is any HDR or protected content,
-  // use an underlay strategy to move those to |candidates| and replace them
-  // with transparent quads in |render_pass->quad_list|.
+  // TODO(crbug.com/1204555): uncomment the following call once underlay
+  // mechanism is properly implemented on MacOS.
+  // ca_layer_overlay_processor_->PutForcedOverlayContentIntoOverlays(
+  //    resource_provider, render_pass.get(),
+  //    gfx::RectF(render_pass->output_rect), &render_pass->quad_list,
+  //    render_pass_filters, render_pass_backdrop_filters, candidates);
 }
 
 void OverlayProcessorMac::AdjustOutputSurfaceOverlay(
-    base::Optional<OutputSurfaceOverlayPlane>* output_surface_plane) {
+    absl::optional<OutputSurfaceOverlayPlane>* output_surface_plane) {
   if (!output_surface_plane->has_value())
     return;
 

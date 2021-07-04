@@ -413,7 +413,7 @@ bool ComponentCloudPolicyStore::ParsePolicy(const std::string& data,
   // Each description is an object that contains the policy value under the
   // "Value" key. The optional "Level" key is either "Mandatory" (default) or
   // "Recommended".
-  for (const auto& it : json.DictItems()) {
+  for (auto it : json.DictItems()) {
     const std::string& policy_name = it.first;
     base::Value description = std::move(it.second);
     if (!description.is_dict()) {
@@ -421,7 +421,7 @@ bool ComponentCloudPolicyStore::ParsePolicy(const std::string& data,
       return false;
     }
 
-    base::Optional<base::Value> value = description.ExtractKey(kValue);
+    absl::optional<base::Value> value = description.ExtractKey(kValue);
     if (!value.has_value()) {
       LOG(ERROR)
           << "The JSON blob dictionary value doesn't contain the required "

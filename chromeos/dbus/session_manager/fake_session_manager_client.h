@@ -32,6 +32,11 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
     kInMemory,  // Store policy in memory only. Usually used for tests.
   };
 
+  // A callback tht FakeSessionManagerClient can use to inform the test that
+  // LoadShillProfile has been called.
+  using OnLoadShillProfileCallback = base::RepeatingCallback<void(
+      const cryptohome::AccountIdentifier& cryptohome_id)>;
+
   // Constructs a FakeSessionManagerClient with PolicyStorageType == kInMemory.
   // NOTE: This is different from SessionManagerClient::InitializeFake which
   // constructs an instance with PolicyStorageType == kOnDisk. Use
@@ -57,6 +62,7 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
   void EmitAshInitialized() override;
   void RestartJob(int socket_fd,
                   const std::vector<std::string>& argv,
+                  RestartJobReason reason,
                   VoidDBusMethodCallback callback) override;
   void SaveLoginPassword(const std::string& password) override;
 
@@ -75,6 +81,8 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
   void StartSession(
       const cryptohome::AccountIdentifier& cryptohome_id) override;
   void StopSession(login_manager::SessionStopReason reason) override;
+  void LoadShillProfile(
+      const cryptohome::AccountIdentifier& cryptohome_id) override;
   void StartDeviceWipe() override;
   void StartRemoteDeviceWipe(
       const enterprise_management::SignedData& signed_command) override;
@@ -141,7 +149,7 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
   void QueryAdbSideload(QueryAdbSideloadCallback callback) override;
 
   // Notifies observers as if ArcInstanceStopped signal is received.
-  void NotifyArcInstanceStopped();
+  void NotifyArcInstanceStopped(login_manager::ArcContainerStopReason reason);
 
   // Returns true if flags for |cryptohome_id| have been set. If the return
   // value is |true|, |*out_flags_for_user| is filled with the flags passed to
@@ -162,9 +170,14 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
     restart_job_callback_ = std::move(callback);
   }
 
-  const base::Optional<std::vector<std::string>>& restart_job_argv() const {
+  const absl::optional<std::vector<std::string>>& restart_job_argv() const {
     return restart_job_argv_;
   }
+
+  absl::optional<RestartJobReason> restart_job_reason() const {
+    return restart_job_reason_;
+  }
+
   // If |force_failure| is true, forces StorePolicy() to fail.
   void ForceStorePolicyFailure(bool force_failure) {
     force_store_policy_failure_ = force_failure;
@@ -265,6 +278,10 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
     adb_sideload_response_ = response;
   }
 
+  void set_on_load_shill_profile_callback(OnLoadShillProfileCallback callback) {
+    on_load_shill_profile_callback_ = std::move(callback);
+  }
+
   bool session_stopped() const { return session_stopped_; }
 
   const SessionManagerClient::ActiveSessionsMap& user_sessions() const {
@@ -287,7 +304,11 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
 
   // If restart job was requested, and the client supports restart job, the
   // requested restarted arguments.
-  base::Optional<std::vector<std::string>> restart_job_argv_;
+  absl::optional<std::vector<std::string>> restart_job_argv_;
+
+  // If restart job was requested, and the client supports restart job, the
+  // requested restart reason.
+  absl::optional<RestartJobReason> restart_job_reason_;
 
   base::ObserverList<Observer>::Unchecked observers_{
       SessionManagerClient::kObserverListPolicy};
@@ -322,6 +343,7 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
   std::string last_tpm_firmware_update_mode_;
   bool screen_is_locked_ = false;
   bool force_state_keys_missing_ = false;
+  OnLoadShillProfileCallback on_load_shill_profile_callback_;
 
   bool arc_available_ = false;
   bool force_upgrade_failure_ = false;
@@ -350,6 +372,18 @@ class COMPONENT_EXPORT(SESSION_MANAGER) FakeSessionManagerClient
 
   base::WeakPtrFactory<FakeSessionManagerClient> weak_ptr_factory_{this};
   DISALLOW_COPY_AND_ASSIGN(FakeSessionManagerClient);
+};
+
+class COMPONENT_EXPORT(SESSION_MANAGER) ScopedFakeSessionManagerClient {
+ public:
+  ScopedFakeSessionManagerClient();
+  ~ScopedFakeSessionManagerClient();
+};
+
+class COMPONENT_EXPORT(SESSION_MANAGER) ScopedFakeInMemorySessionManagerClient {
+ public:
+  ScopedFakeInMemorySessionManagerClient();
+  ~ScopedFakeInMemorySessionManagerClient();
 };
 
 }  // namespace chromeos

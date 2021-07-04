@@ -4,8 +4,10 @@
 
 #include "ash/metrics/pointer_metrics_recorder.h"
 
+#include <memory>
+
+#include "ash/constants/app_types.h"
 #include "ash/display/screen_orientation_controller_test_api.h"
-#include "ash/public/cpp/app_types.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
@@ -57,8 +59,8 @@ PointerMetricsRecorderTest::~PointerMetricsRecorderTest() = default;
 
 void PointerMetricsRecorderTest::SetUp() {
   AshTestBase::SetUp();
-  pointer_metrics_recorder_.reset(new PointerMetricsRecorder());
-  histogram_tester_.reset(new base::HistogramTester());
+  pointer_metrics_recorder_ = std::make_unique<PointerMetricsRecorder>();
+  histogram_tester_ = std::make_unique<base::HistogramTester>();
   widget_ = CreateTestWidget();
 }
 

@@ -8,6 +8,7 @@
 
 #include "base/base64.h"
 #include "base/bind.h"
+#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/files/file_path.h"
 #include "base/i18n/rtl.h"
@@ -19,17 +20,20 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_features.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/background/ntp_background_service.h"
 #include "chrome/browser/search/background/ntp_background_service_factory.h"
 #include "chrome/browser/search/instant_service.h"
-#include "chrome/browser/search/one_google_bar/one_google_bar_service_factory.h"
 #include "chrome/browser/search/promos/promo_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/search_provider_logos/logo_service_factory.h"
 #include "chrome/browser/ui/chrome_select_file_policy.h"
+#include "chrome/browser/ui/hats/hats_service.h"
+#include "chrome/browser/ui/hats/hats_service_factory.h"
+#include "chrome/browser/ui/webui/new_tab_page/ntp_pref_names.h"
 #include "chrome/browser/ui/webui/realbox/realbox.mojom.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/search/instant_types.h"
@@ -54,30 +58,24 @@ const int64_t kMaxDownloadBytes = 1024 * 1024;
 
 new_tab_page::mojom::ThemePtr MakeTheme(const NtpTheme& ntp_theme) {
   auto theme = new_tab_page::mojom::Theme::New();
+  auto most_visited = most_visited::mojom::MostVisitedTheme::New();
   theme->is_default = ntp_theme.using_default_theme;
   theme->background_color = ntp_theme.background_color;
-  theme->shortcut_background_color = ntp_theme.shortcut_color;
-  theme->shortcut_text_color = ntp_theme.text_color;
-  theme->shortcut_use_white_add_icon =
-      color_utils::IsDark(ntp_theme.shortcut_color);
-  theme->shortcut_use_title_pill = false;
+  most_visited->background_color = ntp_theme.shortcut_color;
+  most_visited->use_white_tile_icon =
+      color_utils::IsDark(most_visited->background_color);
+  most_visited->is_dark = !color_utils::IsDark(ntp_theme.text_color);
+  most_visited->use_title_pill = false;
+  theme->text_color = ntp_theme.text_color;
   theme->is_dark = !color_utils::IsDark(ntp_theme.text_color);
   if (ntp_theme.logo_alternate) {
     theme->logo_color = ntp_theme.logo_color;
   }
   auto background_image = new_tab_page::mojom::BackgroundImage::New();
   if (!ntp_theme.custom_background_url.is_empty()) {
-    base::StringPiece url = ntp_theme.custom_background_url.spec();
-    // TODO(crbug.com/1041125): Clean up when chrome-search://local-ntp removed.
-    if (base::StartsWith(url, "chrome-search://local-ntp/")) {
-      background_image->url =
-          GURL("chrome-untrusted://new-tab-page/" +
-               url.substr(strlen("chrome-search://local-ntp/")).as_string());
-    } else {
-      background_image->url = ntp_theme.custom_background_url;
-    }
+    background_image->url = ntp_theme.custom_background_url;
   } else if (ntp_theme.has_theme_image) {
-    theme->shortcut_use_title_pill = true;
+    most_visited->use_title_pill = true;
     background_image->url =
         GURL(base::StrCat({"chrome-untrusted://theme/IDR_THEME_NTP_BACKGROUND?",
                            ntp_theme.theme_id}));
@@ -157,6 +155,8 @@ new_tab_page::mojom::ThemePtr MakeTheme(const NtpTheme& ntp_theme) {
     theme->daily_refresh_collection_id = ntp_theme.collection_id;
   }
 
+  theme->most_visited = std::move(most_visited);
+
   auto search_box = realbox::mojom::SearchBoxTheme::New();
   search_box->bg = ntp_theme.search_box.bg;
   search_box->icon = ntp_theme.search_box.icon;
@@ -176,21 +176,6 @@ new_tab_page::mojom::ThemePtr MakeTheme(const NtpTheme& ntp_theme) {
   theme->search_box = std::move(search_box);
 
   return theme;
-}
-
-ntp_tiles::NTPTileImpression MakeNTPTileImpression(
-    const new_tab_page::mojom::MostVisitedTile& tile,
-    uint32_t index) {
-  return ntp_tiles::NTPTileImpression(
-      /*index=*/index,
-      /*source=*/static_cast<ntp_tiles::TileSource>(tile.source),
-      /*title_source=*/
-      static_cast<ntp_tiles::TileTitleSource>(tile.title_source),
-      /*visual_type=*/
-      ntp_tiles::TileVisualType::ICON_REAL /* unused on desktop */,
-      /*icon_type=*/favicon_base::IconType::kInvalid /* unused on desktop */,
-      /*data_generation_time=*/tile.data_generation_time,
-      /*url_for_rappor=*/GURL() /* unused */);
 }
 
 SkColor ParseHexColor(const std::string& color) {
@@ -337,8 +322,6 @@ NewTabPageHandler::NewTabPageHandler(
       ntp_background_service_(
           NtpBackgroundServiceFactory::GetForProfile(profile)),
       logo_service_(LogoServiceFactory::GetForProfile(profile)),
-      one_google_bar_service_(
-          OneGoogleBarServiceFactory::GetForProfile(profile)),
       profile_(profile),
       web_contents_(web_contents),
       ntp_navigation_start_time_(ntp_navigation_start_time),
@@ -349,16 +332,12 @@ NewTabPageHandler::NewTabPageHandler(
   CHECK(instant_service_);
   CHECK(ntp_background_service_);
   CHECK(logo_service_);
-  CHECK(one_google_bar_service_);
   CHECK(promo_service_);
   CHECK(web_contents_);
   instant_service_->AddObserver(this);
   ntp_background_service_->AddObserver(this);
   instant_service_->UpdateNtpTheme();
   promo_service_observation_.Observe(promo_service_);
-  one_google_bar_service_observation_.Observe(one_google_bar_service_);
-  logger_.SetModulesVisible(
-      profile_->GetPrefs()->GetBoolean(prefs::kNtpModulesVisible));
 }
 
 NewTabPageHandler::~NewTabPageHandler() {
@@ -375,74 +354,29 @@ void NewTabPageHandler::RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterListPref(prefs::kNtpDisabledModules, true);
 }
 
-void NewTabPageHandler::AddMostVisitedTile(
-    const GURL& url,
-    const std::string& title,
-    AddMostVisitedTileCallback callback) {
-  bool success = instant_service_->AddCustomLink(url, title);
-  std::move(callback).Run(success);
-  logger_.LogEvent(NTP_CUSTOMIZE_SHORTCUT_ADD, base::TimeDelta() /* unused */);
-}
-
-void NewTabPageHandler::DeleteMostVisitedTile(const GURL& url) {
-  if (instant_service_->IsCustomLinksEnabled()) {
-    instant_service_->DeleteCustomLink(url);
-    logger_.LogEvent(NTP_CUSTOMIZE_SHORTCUT_REMOVE,
-                     base::TimeDelta() /* unused */);
-  } else {
-    instant_service_->DeleteMostVisitedItem(url);
-    last_blocklisted_ = url;
-  }
-}
-
-void NewTabPageHandler::RestoreMostVisitedDefaults() {
-  if (instant_service_->IsCustomLinksEnabled()) {
-    instant_service_->ResetCustomLinks();
-    logger_.LogEvent(NTP_CUSTOMIZE_SHORTCUT_RESTORE_ALL,
-                     base::TimeDelta() /* unused */);
-  } else {
-    instant_service_->UndoAllMostVisitedDeletions();
-  }
-}
-
-void NewTabPageHandler::ReorderMostVisitedTile(const GURL& url,
-                                               uint8_t new_pos) {
-  instant_service_->ReorderCustomLink(url, new_pos);
-}
-
 void NewTabPageHandler::SetMostVisitedSettings(bool custom_links_enabled,
                                                bool visible) {
-  auto pair = instant_service_->GetCurrentShortcutSettings();
-  // The first of the pair is true if most-visited tiles are being used.
-  bool old_custom_links_enabled = !pair.first;
-  bool old_visible = pair.second;
-  // |ToggleMostVisitedOrCustomLinks()| always notifies observers. Since we only
-  // want to notify once, we need to call |ToggleShortcutsVisibility()| with
-  // false if we are also going to call |ToggleMostVisitedOrCustomLinks()|.
-  bool toggleCustomLinksEnabled =
-      old_custom_links_enabled != custom_links_enabled;
+  bool old_visible = IsShortcutsVisible();
   if (old_visible != visible) {
-    instant_service_->ToggleShortcutsVisibility(
-        /* do_notify= */ !toggleCustomLinksEnabled);
+    profile_->GetPrefs()->SetBoolean(ntp_prefs::kNtpShortcutsVisible, visible);
     logger_.LogEvent(NTP_CUSTOMIZE_SHORTCUT_TOGGLE_VISIBILITY,
                      base::TimeDelta() /* unused */);
   }
-  if (toggleCustomLinksEnabled) {
-    instant_service_->ToggleMostVisitedOrCustomLinks();
+
+  bool old_custom_links_enabled = IsCustomLinksEnabled();
+  if (old_custom_links_enabled != custom_links_enabled) {
+    profile_->GetPrefs()->SetBoolean(ntp_prefs::kNtpUseMostVisitedTiles,
+                                     !custom_links_enabled);
     logger_.LogEvent(NTP_CUSTOMIZE_SHORTCUT_TOGGLE_TYPE,
                      base::TimeDelta() /* unused */);
   }
 }
 
-void NewTabPageHandler::UndoMostVisitedTileAction() {
-  if (instant_service_->IsCustomLinksEnabled()) {
-    instant_service_->UndoCustomLinkAction();
-    logger_.LogEvent(NTP_CUSTOMIZE_SHORTCUT_UNDO,
-                     base::TimeDelta() /* unused */);
-  } else if (last_blocklisted_.is_valid()) {
-    instant_service_->UndoMostVisitedDeletion(last_blocklisted_);
-    last_blocklisted_ = GURL();
-  }
+void NewTabPageHandler::GetMostVisitedSettings(
+    GetMostVisitedSettingsCallback callback) {
+  bool custom_links_enabled = IsCustomLinksEnabled();
+  bool visible = IsShortcutsVisible();
+  std::move(callback).Run(custom_links_enabled, visible);
 }
 
 void NewTabPageHandler::SetBackgroundImage(const std::string& attribution_1,
@@ -472,25 +406,6 @@ void NewTabPageHandler::SetNoBackgroundImage() {
       /* image_url */ GURL(), /* attribution_1= */ "", /* attribution_2= */ "",
       /* attribution_url= */ GURL(), /* collection_id= */ "");
   LogEvent(NTP_BACKGROUND_IMAGE_RESET);
-}
-
-void NewTabPageHandler::UpdateMostVisitedInfo() {
-  // OnNewTabPageOpened refreshes the most visited entries while
-  // UpdateMostVisitedInfo triggers a call to MostVisitedInfoChanged.
-  instant_service_->OnNewTabPageOpened();
-  instant_service_->UpdateMostVisitedInfo();
-}
-
-void NewTabPageHandler::UpdateMostVisitedTile(
-    const GURL& url,
-    const GURL& new_url,
-    const std::string& new_title,
-    UpdateMostVisitedTileCallback callback) {
-  bool success = instant_service_->UpdateCustomLink(
-      url, new_url != url ? new_url : GURL(), new_title);
-  std::move(callback).Run(success);
-  logger_.LogEvent(NTP_CUSTOMIZE_SHORTCUT_UPDATE,
-                   base::TimeDelta() /* unused */);
 }
 
 void NewTabPageHandler::GetBackgroundCollections(
@@ -546,6 +461,10 @@ void NewTabPageHandler::GetDoodle(GetDoodleCallback callback) {
 
 void NewTabPageHandler::ChooseLocalCustomBackground(
     ChooseLocalCustomBackgroundCallback callback) {
+  // Early return if the select file dialog is already active.
+  if (select_file_dialog_)
+    return;
+
   select_file_dialog_ = ui::SelectFileDialog::Create(
       this, std::make_unique<ChromeSelectFilePolicy>(web_contents_));
   ui::SelectFileDialog::FileTypeInfo file_types;
@@ -554,32 +473,15 @@ void NewTabPageHandler::ChooseLocalCustomBackground(
   file_types.extensions[0].push_back(FILE_PATH_LITERAL("jpg"));
   file_types.extensions[0].push_back(FILE_PATH_LITERAL("jpeg"));
   file_types.extensions[0].push_back(FILE_PATH_LITERAL("png"));
+  file_types.extensions[0].push_back(FILE_PATH_LITERAL("gif"));
   file_types.extension_description_overrides.push_back(
       l10n_util::GetStringUTF16(IDS_UPLOAD_IMAGE_FORMAT));
+  choose_local_custom_background_callback_ = std::move(callback);
   select_file_dialog_->SelectFile(
-      ui::SelectFileDialog::SELECT_OPEN_FILE, base::string16(),
+      ui::SelectFileDialog::SELECT_OPEN_FILE, std::u16string(),
       profile_->last_selected_directory(), &file_types, 0,
       base::FilePath::StringType(), web_contents_->GetTopLevelNativeWindow(),
       nullptr);
-  choose_local_custom_background_callback_ = std::move(callback);
-}
-
-void NewTabPageHandler::GetOneGoogleBarParts(
-    const std::string& query_params,
-    GetOneGoogleBarPartsCallback callback) {
-  if (!one_google_bar_service_) {
-    return;
-  }
-  one_google_bar_parts_callbacks_.push_back(std::move(callback));
-  bool wait_for_refresh =
-      one_google_bar_service_->SetAdditionalQueryParams(query_params);
-  if (one_google_bar_service_->one_google_bar_data().has_value() &&
-      !wait_for_refresh &&
-      base::FeatureList::IsEnabled(ntp_features::kCacheOneGoogleBar)) {
-    OnOneGoogleBarDataUpdated();
-  }
-  one_google_bar_load_start_time_ = base::TimeTicks::Now();
-  one_google_bar_service_->Refresh();
 }
 
 void NewTabPageHandler::GetPromo(GetPromoCallback callback) {
@@ -631,33 +533,44 @@ void NewTabPageHandler::OnRestoreModule(const std::string& module_id) {
 
 void NewTabPageHandler::SetModulesVisible(bool visible) {
   profile_->GetPrefs()->SetBoolean(prefs::kNtpModulesVisible, visible);
-  UpdateModulesVisible();
-}
-
-void NewTabPageHandler::UpdateModulesVisible() {
-  page_->SetModulesVisible(
-      profile_->GetPrefs()->GetBoolean(prefs::kNtpModulesVisible));
+  UpdateDisabledModules();
 }
 
 void NewTabPageHandler::SetModuleDisabled(const std::string& module_id,
                                           bool disabled) {
   ListPrefUpdate update(profile_->GetPrefs(), prefs::kNtpDisabledModules);
+  base::Value module_id_value(module_id);
   if (disabled) {
-    update->AppendIfNotPresent(std::make_unique<base::Value>(module_id));
+    if (!base::Contains(update->GetList(), module_id_value))
+      update->Append(std::move(module_id_value));
   } else {
-    update->EraseListValue(base::Value(module_id));
+    update->EraseListValue(module_id_value);
   }
+  UpdateDisabledModules();
 }
 
-void NewTabPageHandler::GetDisabledModules(
-    GetDisabledModulesCallback callback) {
-  const auto* module_ids_value =
-      profile_->GetPrefs()->GetList(prefs::kNtpDisabledModules);
+void NewTabPageHandler::UpdateDisabledModules() {
   std::vector<std::string> module_ids;
-  for (const auto& id : *module_ids_value) {
-    module_ids.push_back(id.GetString());
+  // If the module visibility is managed by policy we either disable all modules
+  // (if invisible) or no modules (if visible).
+  if (!profile_->GetPrefs()->IsManagedPreference(prefs::kNtpModulesVisible)) {
+    const auto* module_ids_value =
+        profile_->GetPrefs()->GetList(prefs::kNtpDisabledModules);
+    for (const auto& id : module_ids_value->GetList()) {
+      module_ids.push_back(id.GetString());
+    }
   }
-  std::move(callback).Run(std::move(module_ids));
+  page_->SetDisabledModules(
+      !profile_->GetPrefs()->GetBoolean(prefs::kNtpModulesVisible),
+      std::move(module_ids));
+}
+
+void NewTabPageHandler::OnModulesLoadedWithData() {
+  HatsService* hats_service =
+      HatsServiceFactory::GetForProfile(profile_, /*create_if_necessary=*/true);
+  CHECK(hats_service);
+  hats_service->LaunchDelayedSurveyForWebContents(kHatsSurveyTriggerNtpModules,
+                                                  web_contents_, 0);
 }
 
 void NewTabPageHandler::OnPromoDataUpdated() {
@@ -679,7 +592,7 @@ void NewTabPageHandler::OnPromoDataUpdated() {
       UMA_HISTOGRAM_MEDIUM_TIMES("NewTabPage.Promos.RequestLatency2.Failure",
                                  duration);
     }
-    promo_load_start_time_ = base::nullopt;
+    promo_load_start_time_ = absl::nullopt;
   }
 
   const auto& data = promo_service_->promo_data();
@@ -703,62 +616,18 @@ void NewTabPageHandler::OnAppRendered(double time) {
                    base::Time::FromJsTime(time) - ntp_navigation_start_time_);
 }
 
-void NewTabPageHandler::OnMostVisitedTilesRendered(
-    std::vector<new_tab_page::mojom::MostVisitedTilePtr> tiles,
-    double time) {
-  for (size_t i = 0; i < tiles.size(); i++) {
-    logger_.LogMostVisitedImpression(MakeNTPTileImpression(*tiles[i], i));
-  }
-  // This call flushes all most visited impression logs to UMA histograms.
-  // Therefore, it must come last.
-  logger_.LogEvent(NTP_ALL_TILES_LOADED,
-                   base::Time::FromJsTime(time) - ntp_navigation_start_time_);
-}
-
 void NewTabPageHandler::OnOneGoogleBarRendered(double time) {
   logger_.LogEvent(NTP_ONE_GOOGLE_BAR_SHOWN,
                    base::Time::FromJsTime(time) - ntp_navigation_start_time_);
 }
 
 void NewTabPageHandler::OnPromoRendered(double time,
-                                        const base::Optional<GURL>& log_url) {
+                                        const absl::optional<GURL>& log_url) {
   logger_.LogEvent(NTP_MIDDLE_SLOT_PROMO_SHOWN,
                    base::Time::FromJsTime(time) - ntp_navigation_start_time_);
   if (log_url.has_value() && log_url->is_valid()) {
     Fetch(*log_url, base::BindOnce([](bool, std::unique_ptr<std::string>) {}));
   }
-}
-
-void NewTabPageHandler::OnMostVisitedTileNavigation(
-    new_tab_page::mojom::MostVisitedTilePtr tile,
-    uint32_t index,
-    uint8_t mouse_button,
-    bool alt_key,
-    bool ctrl_key,
-    bool meta_key,
-    bool shift_key) {
-  logger_.LogMostVisitedNavigation(MakeNTPTileImpression(*tile, index));
-
-  if (!base::FeatureList::IsEnabled(
-          ntp_features::kNtpHandleMostVisitedNavigationExplicitly))
-    return;
-
-  WindowOpenDisposition disposition = ui::DispositionFromClick(
-      /*middle_button=*/mouse_button == 1, alt_key, ctrl_key, meta_key,
-      shift_key);
-  // Clicks on the MV tiles should be treated as if the user clicked on a
-  // bookmark. This is consistent with Android's native implementation and
-  // ensures the visit count for the MV entry is updated.
-  // Use a link transition for query tiles, e.g., repeatable queries, so that
-  // their visit count is not updated by this navigation. Otherwise duplicate
-  // query tiles could also be offered as most visited.
-  // |is_query_tile| can be true only when ntp_features::kNtpRepeatableQueries
-  // is enabled.
-  web_contents_->OpenURL(content::OpenURLParams(
-      tile->url, content::Referrer(), disposition,
-      tile->is_query_tile ? ui::PAGE_TRANSITION_LINK
-                          : ui::PAGE_TRANSITION_AUTO_BOOKMARK,
-      false));
 }
 
 void NewTabPageHandler::OnCustomizeDialogAction(
@@ -816,7 +685,7 @@ void NewTabPageHandler::OnCustomizeDialogAction(
 
 void NewTabPageHandler::OnDoodleImageClicked(
     new_tab_page::mojom::DoodleImageType type,
-    const base::Optional<::GURL>& log_url) {
+    const absl::optional<::GURL>& log_url) {
   NTPLoggingEventType event;
   switch (type) {
     case new_tab_page::mojom::DoodleImageType::kAnimation:
@@ -861,7 +730,7 @@ void NewTabPageHandler::OnDoodleImageRendered(
 void NewTabPageHandler::OnDoodleShared(
     new_tab_page::mojom::DoodleShareChannel channel,
     const std::string& doodle_id,
-    const base::Optional<std::string>& share_id) {
+    const absl::optional<std::string>& share_id) {
   int channel_id;
   switch (channel) {
     case new_tab_page::mojom::DoodleShareChannel::kFacebook:
@@ -898,132 +767,12 @@ void NewTabPageHandler::OnPromoLinkClicked() {
   LogEvent(NTP_MIDDLE_SLOT_PROMO_LINK_CLICKED);
 }
 
-void NewTabPageHandler::OnVoiceSearchAction(
-    new_tab_page::mojom::VoiceSearchAction action) {
-  NTPLoggingEventType event;
-  switch (action) {
-    case new_tab_page::mojom::VoiceSearchAction::kActivateSearchBox:
-      event = NTP_VOICE_ACTION_ACTIVATE_SEARCH_BOX;
-      break;
-    case new_tab_page::mojom::VoiceSearchAction::kActivateKeyboard:
-      event = NTP_VOICE_ACTION_ACTIVATE_KEYBOARD;
-      break;
-    case new_tab_page::mojom::VoiceSearchAction::kCloseOverlay:
-      event = NTP_VOICE_ACTION_CLOSE_OVERLAY;
-      break;
-    case new_tab_page::mojom::VoiceSearchAction::kQuerySubmitted:
-      event = NTP_VOICE_ACTION_QUERY_SUBMITTED;
-      break;
-    case new_tab_page::mojom::VoiceSearchAction::kSupportLinkClicked:
-      event = NTP_VOICE_ACTION_SUPPORT_LINK_CLICKED;
-      break;
-    case new_tab_page::mojom::VoiceSearchAction::kTryAgainLink:
-      event = NTP_VOICE_ACTION_TRY_AGAIN_LINK;
-      break;
-    case new_tab_page::mojom::VoiceSearchAction::kTryAgainMicButton:
-      event = NTP_VOICE_ACTION_TRY_AGAIN_MIC_BUTTON;
-      break;
-  }
-  LogEvent(event);
-}
-
-void NewTabPageHandler::OnVoiceSearchError(
-    new_tab_page::mojom::VoiceSearchError error) {
-  NTPLoggingEventType event;
-  switch (error) {
-    case new_tab_page::mojom::VoiceSearchError::kAborted:
-      event = NTP_VOICE_ERROR_ABORTED;
-      break;
-    case new_tab_page::mojom::VoiceSearchError::kNoSpeech:
-      event = NTP_VOICE_ERROR_NO_SPEECH;
-      break;
-    case new_tab_page::mojom::VoiceSearchError::kAudioCapture:
-      event = NTP_VOICE_ERROR_AUDIO_CAPTURE;
-      break;
-    case new_tab_page::mojom::VoiceSearchError::kNetwork:
-      event = NTP_VOICE_ERROR_NETWORK;
-      break;
-    case new_tab_page::mojom::VoiceSearchError::kNotAllowed:
-      event = NTP_VOICE_ERROR_NOT_ALLOWED;
-      break;
-    case new_tab_page::mojom::VoiceSearchError::kLanguageNotSupported:
-      event = NTP_VOICE_ERROR_LANGUAGE_NOT_SUPPORTED;
-      break;
-    case new_tab_page::mojom::VoiceSearchError::kNoMatch:
-      event = NTP_VOICE_ERROR_NO_MATCH;
-      break;
-    case new_tab_page::mojom::VoiceSearchError::kServiceNotAllowed:
-      event = NTP_VOICE_ERROR_SERVICE_NOT_ALLOWED;
-      break;
-    case new_tab_page::mojom::VoiceSearchError::kBadGrammar:
-      event = NTP_VOICE_ERROR_BAD_GRAMMAR;
-      break;
-    case new_tab_page::mojom::VoiceSearchError::kOther:
-      event = NTP_VOICE_ERROR_OTHER;
-      break;
-  }
-  LogEvent(event);
-}
-
-void NewTabPageHandler::OnModuleImpression(const std::string& module_id,
-                                           double time) {
-  logger_.LogModuleImpression(
-      module_id, base::Time::FromJsTime(time) - ntp_navigation_start_time_);
-}
-
-void NewTabPageHandler::OnModuleLoaded(const std::string& module_id,
-                                       base::TimeDelta duration,
-                                       double time) {
-  logger_.LogModuleLoaded(
-      module_id, base::Time::FromJsTime(time) - ntp_navigation_start_time_,
-      duration);
-}
-
-void NewTabPageHandler::OnModuleUsage(const std::string& module_id) {
-  logger_.LogModuleUsage(module_id);
-}
-
-void NewTabPageHandler::OnModulesRendered(double time) {
-  logger_.LogEvent(NTP_MODULES_SHOWN,
-                   base::Time::FromJsTime(time) - ntp_navigation_start_time_);
-}
-
 void NewTabPageHandler::NtpThemeChanged(const NtpTheme& ntp_theme) {
   page_->SetTheme(MakeTheme(ntp_theme));
 }
 
 void NewTabPageHandler::MostVisitedInfoChanged(
-    const InstantMostVisitedInfo& info) {
-  auto* template_url_service =
-      TemplateURLServiceFactory::GetForProfile(profile_);
-  std::vector<new_tab_page::mojom::MostVisitedTilePtr> list;
-  auto result = new_tab_page::mojom::MostVisitedInfo::New();
-  for (auto& tile : info.items) {
-    auto value = new_tab_page::mojom::MostVisitedTile::New();
-    if (tile.title.empty()) {
-      value->title = tile.url.spec();
-      value->title_direction = base::i18n::LEFT_TO_RIGHT;
-    } else {
-      value->title = base::UTF16ToUTF8(tile.title);
-      value->title_direction =
-          base::i18n::GetFirstStrongCharacterDirection(tile.title);
-    }
-    value->url = tile.url;
-    value->source = static_cast<int32_t>(tile.source);
-    value->title_source = static_cast<int32_t>(tile.title_source);
-    value->data_generation_time = tile.data_generation_time;
-    value->is_query_tile =
-        base::FeatureList::IsEnabled(ntp_features::kNtpRepeatableQueries) &&
-        template_url_service &&
-        template_url_service->IsSearchResultsPageFromDefaultSearchProvider(
-            tile.url);
-    list.push_back(std::move(value));
-  }
-  result->custom_links_enabled = !info.use_most_visited;
-  result->tiles = std::move(list);
-  result->visible = info.is_visible;
-  page_->SetMostVisitedInfo(std::move(result));
-}
+    const InstantMostVisitedInfo& info) {}
 
 void NewTabPageHandler::OnCollectionInfoAvailable() {
   if (!background_collections_callback_) {
@@ -1102,42 +851,10 @@ void NewTabPageHandler::OnNtpBackgroundServiceShuttingDown() {
   ntp_background_service_ = nullptr;
 }
 
-void NewTabPageHandler::OnOneGoogleBarDataUpdated() {
-  base::Optional<OneGoogleBarData> data =
-      one_google_bar_service_->one_google_bar_data();
-
-  if (one_google_bar_load_start_time_.has_value()) {
-    NTPUserDataLogger::LogOneGoogleBarFetchDuration(
-        /*success=*/data.has_value(),
-        /*duration=*/base::TimeTicks::Now() - *one_google_bar_load_start_time_);
-    one_google_bar_load_start_time_ = base::nullopt;
-  }
-
-  for (auto& callback : one_google_bar_parts_callbacks_) {
-    if (data.has_value()) {
-      auto parts = new_tab_page::mojom::OneGoogleBarParts::New();
-      parts->bar_html = data->bar_html;
-      parts->in_head_script = data->in_head_script;
-      parts->in_head_style = data->in_head_style;
-      parts->after_bar_script = data->after_bar_script;
-      parts->end_of_body_html = data->end_of_body_html;
-      parts->end_of_body_script = data->end_of_body_script;
-      std::move(callback).Run(std::move(parts));
-    } else {
-      std::move(callback).Run(nullptr);
-    }
-  }
-  one_google_bar_parts_callbacks_.clear();
-}
-
-void NewTabPageHandler::OnOneGoogleBarServiceShuttingDown() {
-  one_google_bar_service_observation_.Reset();
-  one_google_bar_service_ = nullptr;
-}
-
 void NewTabPageHandler::FileSelected(const base::FilePath& path,
                                      int index,
                                      void* params) {
+  DCHECK(choose_local_custom_background_callback_);
   if (instant_service_) {
     profile_->set_last_selected_directory(path.DirName());
     instant_service_->SelectLocalBackgroundImage(path);
@@ -1149,22 +866,25 @@ void NewTabPageHandler::FileSelected(const base::FilePath& path,
   LogEvent(NTP_CUSTOMIZE_LOCAL_IMAGE_DONE);
   LogEvent(NTP_BACKGROUND_UPLOAD_DONE);
 
-  std::move(choose_local_custom_background_callback_).Run(true);
+  if (choose_local_custom_background_callback_)
+    std::move(choose_local_custom_background_callback_).Run(true);
 }
 
 void NewTabPageHandler::FileSelectionCanceled(void* params) {
+  DCHECK(choose_local_custom_background_callback_);
   select_file_dialog_ = nullptr;
   // File selection can happen at any time after NTP load, and is not logged
   // with the event.
   LogEvent(NTP_CUSTOMIZE_LOCAL_IMAGE_CANCEL);
   LogEvent(NTP_BACKGROUND_UPLOAD_CANCEL);
-  std::move(choose_local_custom_background_callback_).Run(false);
+  if (choose_local_custom_background_callback_)
+    std::move(choose_local_custom_background_callback_).Run(false);
 }
 
 void NewTabPageHandler::OnLogoAvailable(
     GetDoodleCallback callback,
     search_provider_logos::LogoCallbackReason type,
-    const base::Optional<search_provider_logos::EncodedLogo>& logo) {
+    const absl::optional<search_provider_logos::EncodedLogo>& logo) {
   if (!logo) {
     std::move(callback).Run(nullptr);
     return;
@@ -1247,9 +967,8 @@ void NewTabPageHandler::Fetch(const GURL& url,
             }
           }
         })");
-  auto url_loader_factory =
-      content::BrowserContext::GetDefaultStoragePartition(profile_)
-          ->GetURLLoaderFactoryForBrowserProcess();
+  auto url_loader_factory = profile_->GetDefaultStoragePartition()
+                                ->GetURLLoaderFactoryForBrowserProcess();
   auto request = std::make_unique<network::ResourceRequest>();
   request->url = url;
   auto loader =
@@ -1278,12 +997,12 @@ void NewTabPageHandler::OnLogFetchResult(OnDoodleImageRenderedCallback callback,
                                          bool success,
                                          std::unique_ptr<std::string> body) {
   if (!success || body->size() < 4 || body->substr(0, 4) != ")]}'") {
-    std::move(callback).Run("", base::nullopt, "");
+    std::move(callback).Run("", absl::nullopt, "");
     return;
   }
   auto value = base::JSONReader::Read(body->substr(4));
   if (!value.has_value()) {
-    std::move(callback).Run("", base::nullopt, "");
+    std::move(callback).Run("", absl::nullopt, "");
     return;
   }
 
@@ -1296,15 +1015,23 @@ void NewTabPageHandler::OnLogFetchResult(OnDoodleImageRenderedCallback callback,
       value->FindPath("ddllog.interaction_log_url");
   auto interaction_log_url =
       interaction_log_url_value && interaction_log_url_value->is_string()
-          ? base::Optional<GURL>(
+          ? absl::optional<GURL>(
                 GURL(TemplateURLServiceFactory::GetForProfile(profile_)
                          ->search_terms_data()
                          .GoogleBaseURLValue())
                     .Resolve(interaction_log_url_value->GetString()))
-          : base::nullopt;
+          : absl::nullopt;
   auto* encoded_ei_value = value->FindPath("ddllog.encoded_ei");
   auto encoded_ei = encoded_ei_value && encoded_ei_value->is_string()
                         ? encoded_ei_value->GetString()
                         : "";
   std::move(callback).Run(target_url_params, interaction_log_url, encoded_ei);
+}
+
+bool NewTabPageHandler::IsCustomLinksEnabled() const {
+  return !profile_->GetPrefs()->GetBoolean(ntp_prefs::kNtpUseMostVisitedTiles);
+}
+
+bool NewTabPageHandler::IsShortcutsVisible() const {
+  return profile_->GetPrefs()->GetBoolean(ntp_prefs::kNtpShortcutsVisible);
 }

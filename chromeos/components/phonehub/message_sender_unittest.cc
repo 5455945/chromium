@@ -10,7 +10,6 @@
 #include <string>
 
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chromeos/components/phonehub/proto/phonehub_api.pb.h"
 #include "chromeos/services/secure_channel/public/cpp/client/fake_connection_manager.h"
@@ -104,7 +103,7 @@ TEST_F(MessageSenderImplTest, SendDismissNotificationRequest) {
 
 TEST_F(MessageSenderImplTest, SendNotificationInlineReplyRequest) {
   const int expected_id = 24;
-  const base::string16 expected_reply(base::UTF8ToUTF16("Test message"));
+  const std::u16string expected_reply(u"Test message");
 
   proto::NotificationInlineReplyRequest request;
   request.set_notification_id(expected_id);
@@ -130,6 +129,19 @@ TEST_F(MessageSenderImplTest, SendRingDeviceRequest) {
 
   message_sender_->SendRingDeviceRequest(/*device_ringing_enabled=*/true);
   VerifyMessage(proto::MessageType::RING_DEVICE_REQUEST, &request,
+                fake_connection_manager_->sent_messages().back());
+}
+
+TEST_F(MessageSenderImplTest, SendFetchCameraRollItemsRequest) {
+  proto::FetchCameraRollItemsRequest request;
+  request.add_current_item_metadata();
+  request.mutable_current_item_metadata(0)->set_key("key0");
+  request.add_current_item_metadata();
+  request.mutable_current_item_metadata(1)->set_key("key1");
+
+  message_sender_->SendFetchCameraRollItemsRequest(request);
+
+  VerifyMessage(proto::MessageType::FETCH_CAMERA_ROLL_ITEMS_REQUEST, &request,
                 fake_connection_manager_->sent_messages().back());
 }
 

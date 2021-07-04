@@ -15,6 +15,7 @@
 #include "components/prefs/pref_service.h"
 #include "components/ukm/content/source_url_recorder.h"
 #include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/common/url_constants.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
@@ -32,7 +33,7 @@ SoundContentSettingObserver::SoundContentSettingObserver(
       Profile::FromBrowserContext(web_contents()->GetBrowserContext());
   host_content_settings_map_ =
       HostContentSettingsMapFactory::GetForProfile(profile);
-  observer_.Add(host_content_settings_map_);
+  observation_.Observe(host_content_settings_map_);
 
 #if !defined(OS_ANDROID)
   // Listen to changes of the block autoplay pref.
@@ -53,7 +54,9 @@ void SoundContentSettingObserver::ReadyToCommitNavigation(
 
   GURL url = navigation_handle->IsInMainFrame()
                  ? navigation_handle->GetURL()
-                 : navigation_handle->GetWebContents()->GetLastCommittedURL();
+                 : navigation_handle->GetRenderFrameHost()
+                       ->GetMainFrame()
+                       ->GetLastCommittedURL();
 
   content_settings::SettingInfo setting_info;
   std::unique_ptr<base::Value> setting =
@@ -84,7 +87,8 @@ void SoundContentSettingObserver::ReadyToCommitNavigation(
 
 void SoundContentSettingObserver::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
-  if (navigation_handle->IsInMainFrame() && navigation_handle->HasCommitted() &&
+  if (navigation_handle->IsInPrimaryMainFrame() &&
+      navigation_handle->HasCommitted() &&
       !navigation_handle->IsSameDocument()) {
     MuteOrUnmuteIfNecessary();
     logged_site_muted_ukm_ = false;

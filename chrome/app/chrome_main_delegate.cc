@@ -11,6 +11,7 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/cpu.h"
+#include "base/cxx17_backports.h"
 #include "base/dcheck_is_on.h"
 #include "base/files/file_path.h"
 #include "base/i18n/rtl.h"
@@ -19,7 +20,6 @@
 #include "base/process/memory.h"
 #include "base/process/process.h"
 #include "base/process/process_handle.h"
-#include "base/stl_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequence_manager/thread_controller_power_monitor.h"
@@ -119,8 +119,8 @@
 #include "ash/constants/ash_paths.h"
 #include "ash/constants/ash_switches.h"
 #include "base/system/sys_info.h"
+#include "chrome/browser/ash/dbus/ash_dbus_helper.h"
 #include "chrome/browser/chromeos/boot_times_recorder.h"
-#include "chrome/browser/chromeos/dbus/dbus_helper.h"
 #include "chrome/browser/chromeos/startup_settings_cache.h"
 #include "chromeos/dbus/constants/dbus_paths.h"
 #include "chromeos/hugepage_text/hugepage_text.h"
@@ -136,7 +136,7 @@
 #include "chrome/browser/android/metrics/uma_session_stats.h"
 #include "chrome/browser/flags/android/chrome_feature_list.h"
 #include "chrome/common/chrome_descriptors.h"
-#include "content/public/common/cpu_affinity.h"
+#include "components/power_scheduler/power_scheduler.h"
 #include "net/android/network_change_notifier_factory_android.h"
 #else  // defined(OS_ANDROID)
 // Diagnostics is only available on non-android platforms.
@@ -178,7 +178,8 @@
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chrome/browser/lacros/lacros_chrome_service_delegate_impl.h"
+#include "chrome/common/chrome_paths_lacros.h"
+#include "chromeos/crosapi/mojom/crosapi.mojom.h"  // nogncheck
 #include "chromeos/lacros/lacros_chrome_service_impl.h"
 #endif
 
@@ -191,7 +192,7 @@ base::LazyInstance<ChromeContentUtilityClient>::DestructorAtExit
 
 extern int NaClMain(const content::MainFunctionParams&);
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !defined(OS_CHROMEOS)
 extern int CloudPrintServiceProcessMain(const content::MainFunctionParams&);
 #endif
 
@@ -331,7 +332,7 @@ bool HandleVersionSwitches(const base::CommandLine& command_line) {
   if (command_line.HasSwitch(switches::kVersion)) {
     printf("%s %s %s\n", version_info::GetProductName().c_str(),
            version_info::GetVersionNumber().c_str(),
-           chrome::GetChannelName().c_str());
+           chrome::GetChannelName(chrome::WithExtendedStable(true)).c_str());
     return true;
   }
 
@@ -533,7 +534,7 @@ void ChromeMainDelegate::PostEarlyInitialization(bool is_running_tests) {
   // The feature list depends on BrowserPolicyConnectorChromeOS which depends
   // on DBus, so initialize it here. Some D-Bus clients may depend on feature
   // list, so initialize them separately later at the end of this function.
-  chromeos::InitializeDBus();
+  ash::InitializeDBus();
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
@@ -542,8 +543,17 @@ void ChromeMainDelegate::PostEarlyInitialization(bool is_running_tests) {
   // This also needs ThreadPool sequences to post some tasks internally.
   // However, the tasks can be suspended until actual start of the ThreadPool
   // sequences later.
-  lacros_chrome_service_ = std::make_unique<chromeos::LacrosChromeServiceImpl>(
-      std::make_unique<LacrosChromeServiceDelegateImpl>());
+  lacros_chrome_service_ =
+      std::make_unique<chromeos::LacrosChromeServiceImpl>();
+  {
+    const crosapi::mojom::BrowserInitParams* init_params =
+        lacros_chrome_service_->init_params();
+    // default_paths may null on browser_tests.
+    if (init_params->default_paths) {
+      chrome::SetLacrosDefaultPaths(init_params->default_paths->documents,
+                                    init_params->default_paths->downloads);
+    }
+  }
 #endif
 
   ChromeFeatureListCreator* chrome_feature_list_creator =
@@ -560,7 +570,7 @@ void ChromeMainDelegate::PostEarlyInitialization(bool is_running_tests) {
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   // Initialize D-Bus clients that depend on feature list.
-  chromeos::InitializeFeatureListDependentDBus();
+  ash::InitializeFeatureListDependentDBus();
 #endif
 
 #if defined(OS_ANDROID)
@@ -609,10 +619,8 @@ void ChromeMainDelegate::PostFieldTrialInitialization() {
   // For child processes, this requires allowlisting of the sched_setaffinity()
   // syscall in the sandbox (baseline_policy_android.cc). When this call is
   // removed, the sandbox allowlist should be updated too.
-  if (base::FeatureList::IsEnabled(
-          features::kCpuAffinityRestrictToLittleCores)) {
-    content::EnforceProcessCpuAffinity(base::CpuAffinityMode::kLittleCoresOnly);
-  }
+  power_scheduler::PowerScheduler::GetInstance()
+      ->InitializePolicyFromFeatureList();
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
@@ -664,6 +672,14 @@ void ChromeMainDelegate::PostFieldTrialInitialization() {
 
   base::HangWatcher::InitializeOnMainThread();
 }
+
+#if defined(OS_WIN)
+bool ChromeMainDelegate::ShouldHandleConsoleControlEvents() {
+  // Handle console control events so that orderly shutdown can be performed by
+  // ChromeContentBrowserClient's override of SessionEnding.
+  return true;
+}
+#endif
 
 bool ChromeMainDelegate::BasicStartupComplete(int* exit_code) {
 #if BUILDFLAG(IS_CHROMEOS_ASH)
@@ -1148,7 +1164,7 @@ int ChromeMainDelegate::RunProcess(
   NOTREACHED();  // Android provides a subclass and shares no code here.
 #else
   static const MainFunction kMainFunctions[] = {
-#if BUILDFLAG(ENABLE_PRINT_PREVIEW) && !BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(ENABLE_PRINT_PREVIEW) && !defined(OS_CHROMEOS)
     {switches::kCloudPrintServiceProcess, CloudPrintServiceProcessMain},
 #endif
 
@@ -1250,7 +1266,7 @@ ChromeMainDelegate::CreateContentUtilityClient() {
   return g_chrome_content_utility_client.Pointer();
 }
 
-void ChromeMainDelegate::PreCreateMainMessageLoop() {
+void ChromeMainDelegate::PreBrowserMain() {
 #if defined(OS_MAC)
   // Tell Cocoa to finish its initialization, which we want to do manually
   // instead of calling NSApplicationMain(). The primary reason is that NSAM()

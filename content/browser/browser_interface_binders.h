@@ -5,7 +5,6 @@
 #ifndef CONTENT_BROWSER_BROWSER_INTERFACE_BINDERS_H_
 #define CONTENT_BROWSER_BROWSER_INTERFACE_BINDERS_H_
 
-#include "content/browser/service_worker/service_worker_info.h"
 #include "content/common/content_export.h"
 #include "mojo/public/cpp/bindings/binder_map.h"
 #include "services/device/public/mojom/battery_monitor.mojom-forward.h"
@@ -20,6 +19,8 @@ class RenderFrameHostImpl;
 class DedicatedWorkerHost;
 class SharedWorkerHost;
 class ServiceWorkerHost;
+struct ServiceWorkerVersionInfo;
+struct ServiceWorkerVersionBaseInfo;
 
 namespace internal {
 
@@ -57,7 +58,7 @@ url::Origin GetContextForHost(SharedWorkerHost* host);
 void PopulateBinderMap(ServiceWorkerHost* host, mojo::BinderMap* map);
 void PopulateBinderMapWithContext(
     ServiceWorkerHost* host,
-    mojo::BinderMapWithContext<const ServiceWorkerVersionInfo&>* map);
+    mojo::BinderMapWithContext<const ServiceWorkerVersionBaseInfo&>* map);
 ServiceWorkerVersionInfo GetContextForHost(ServiceWorkerHost* host);
 
 // Registers the handlers for interfaces requested by `AgentSchedulingGroup`s.

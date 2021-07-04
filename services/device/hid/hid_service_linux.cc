@@ -38,7 +38,7 @@
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #include "base/system/sys_info.h"
-#include "chromeos/dbus/permission_broker/permission_broker_client.h"
+#include "chromeos/dbus/permission_broker/permission_broker_client.h"  // nogncheck
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 namespace device {
@@ -172,6 +172,20 @@ const char* GetPhysicalDeviceId(udev_device* hidraw_device) {
   return hid_sysfs_path;
 }
 
+// Convert from a Linux |bus_id| (defined in linux/input.h) to a
+// mojom::HidBusType.
+mojom::HidBusType BusTypeFromLinuxBusId(uint16_t bus_id) {
+  switch (bus_id) {
+    case BUS_USB:
+      return mojom::HidBusType::kHIDBusTypeUSB;
+    case BUS_BLUETOOTH:
+      return mojom::HidBusType::kHIDBusTypeBluetooth;
+    default:
+      break;
+  }
+  return mojom::HidBusType::kHIDBusTypeUnknown;
+}
+
 }  // namespace
 
 struct HidServiceLinux::ConnectParams {
@@ -251,6 +265,12 @@ class HidServiceLinux::BlockingTaskRunnerHelper : public UdevWatcher::Observer {
       return;
 
     uint32_t int_property = 0;
+    if (!HexStringToUInt(base::StringPiece(parts[0]), &int_property) ||
+        int_property > std::numeric_limits<uint16_t>::max()) {
+      return;
+    }
+    auto bus_type = BusTypeFromLinuxBusId(int_property);
+
     if (!HexStringToUInt(base::StringPiece(parts[1]), &int_property) ||
         int_property > std::numeric_limits<uint16_t>::max()) {
       return;
@@ -291,9 +311,7 @@ class HidServiceLinux::BlockingTaskRunnerHelper : public UdevWatcher::Observer {
 
     auto device_info = base::MakeRefCounted<HidDeviceInfo>(
         platform_device_id, physical_device_id, vendor_id, product_id,
-        product_name, serial_number,
-        // TODO(reillyg): Detect Bluetooth. crbug.com/443335
-        mojom::HidBusType::kHIDBusTypeUSB,
+        product_name, serial_number, bus_type,
         std::vector<uint8_t>(report_descriptor_str.begin(),
                              report_descriptor_str.end()),
         device_node);
@@ -359,18 +377,18 @@ void HidServiceLinux::Connect(const std::string& device_guid,
   }
   scoped_refptr<HidDeviceInfo> device_info = map_entry->second;
 
+// TODO(huangs): Enable for IS_CHROMEOS_LACROS for crbug.com/1223456.
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-  // Adapt |callback| to a repeating callback because the implementation below
-  // requires separate callbacks for success and error. Only one will be called.
-  auto copyable_callback = base::AdaptCallbackForRepeating(std::move(callback));
+  auto split_callback = base::SplitOnceCallback(std::move(callback));
   chromeos::PermissionBrokerClient::Get()->OpenPath(
       device_info->device_node(),
       base::BindOnce(
           &HidServiceLinux::OnPathOpenComplete,
           std::make_unique<ConnectParams>(device_info, allow_protected_reports,
-                                          copyable_callback)),
+                                          std::move(split_callback.first))),
       base::BindOnce(&HidServiceLinux::OnPathOpenError,
-                     device_info->device_node(), copyable_callback));
+                     device_info->device_node(),
+                     std::move(split_callback.second)));
 #else
   auto params = std::make_unique<ConnectParams>(
       device_info, allow_protected_reports, std::move(callback));

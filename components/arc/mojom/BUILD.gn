@@ -27,7 +27,9 @@ if (is_chromeos_ash) {
       "cast_receiver.mojom",
       "cert_store.mojom",
       "clipboard.mojom",
+      "compatibility_mode.mojom",
       "crash_collector.mojom",
+      "dark_theme.mojom",
       "digital_goods.mojom",
       "disk_quota.mojom",
       "enterprise_reporting.mojom",
@@ -41,8 +43,10 @@ if (is_chromeos_ash) {
       "kiosk.mojom",
       "lock_screen.mojom",
       "media_session.mojom",
+      "memory.mojom",
       "metrics.mojom",
       "midis.mojom",
+      "nearby_share.mojom",
       "net.mojom",
       "obb_mounter.mojom",
       "payment_app.mojom",
@@ -69,6 +73,7 @@ if (is_chromeos_ash) {
       "volume_mounter.mojom",
       "wake_lock.mojom",
       "wallpaper.mojom",
+      "webapk.mojom",
     ]
 
     public_deps = [
@@ -85,7 +90,7 @@ if (is_chromeos_ash) {
       "//services/media_session/public/mojom",
       "//services/resource_coordinator/public/mojom",
       "//third_party/blink/public/mojom:android_mojo_bindings",
-      "//ui/accessibility/mojom",
+      "//ui/accessibility/mojom:ax_assistant_mojom",
       "//ui/gfx/geometry/mojom",
       "//url/mojom:url_mojom_gurl",
     ]

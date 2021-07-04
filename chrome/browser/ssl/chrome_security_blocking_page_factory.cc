@@ -18,6 +18,7 @@
 #include "chrome/browser/ssl/insecure_form/insecure_form_controller_client.h"
 #include "chrome/browser/ssl/ssl_error_controller_client.h"
 #include "chrome/browser/ssl/stateful_ssl_host_state_delegate_factory.h"
+#include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/common/channel_info.h"
 #include "components/security_interstitials/content/content_metrics_helper.h"
 #include "components/security_interstitials/content/settings_page_helper.h"
@@ -30,8 +31,8 @@
 #if defined(OS_WIN)
 #include "base/enterprise_util.h"
 #elif BUILDFLAG(IS_CHROMEOS_ASH)
+#include "chrome/browser/ash/policy/core/browser_policy_connector_chromeos.h"
 #include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
 #endif
 
 #if defined(OS_ANDROID)
@@ -188,6 +189,7 @@ ChromeSecurityBlockingPageFactory::CreateSSLPage(
   page = std::make_unique<SSLBlockingPage>(
       web_contents, cert_error, ssl_info, request_url, options_mask,
       time_triggered, support_url, std::move(ssl_cert_reporter), overridable,
+      /*can_show_enhanced_protection_message=*/true,
       std::move(controller_client));
 
   DoChromeSpecificSetup(page.get());
@@ -204,7 +206,7 @@ ChromeSecurityBlockingPageFactory::CreateCaptivePortalBlockingPage(
     int cert_error) {
   auto page = std::make_unique<CaptivePortalBlockingPage>(
       web_contents, request_url, login_url, std::move(ssl_cert_reporter),
-      ssl_info,
+      /*can_show_enhanced_protection_message=*/true, ssl_info,
       std::make_unique<SSLErrorControllerClient>(
           web_contents, ssl_info, cert_error, request_url,
           CreateMetricsHelperAndStartRecording(web_contents, request_url,
@@ -227,7 +229,8 @@ ChromeSecurityBlockingPageFactory::CreateBadClockBlockingPage(
     std::unique_ptr<SSLCertReporter> ssl_cert_reporter) {
   auto page = std::make_unique<BadClockBlockingPage>(
       web_contents, cert_error, ssl_info, request_url, time_triggered,
-      clock_state, std::move(ssl_cert_reporter),
+      /*can_show_enhanced_protection_message=*/true, clock_state,
+      std::move(ssl_cert_reporter),
       std::make_unique<SSLErrorControllerClient>(
           web_contents, ssl_info, cert_error, request_url,
           CreateMetricsHelperAndStartRecording(web_contents, request_url,
@@ -247,7 +250,7 @@ ChromeSecurityBlockingPageFactory::CreateLegacyTLSBlockingPage(
     const net::SSLInfo& ssl_info) {
   auto page = std::make_unique<LegacyTLSBlockingPage>(
       web_contents, cert_error, request_url, std::move(ssl_cert_reporter),
-      ssl_info,
+      /*can_show_enhanced_protection_message=*/true, ssl_info,
       std::make_unique<SSLErrorControllerClient>(
           web_contents, ssl_info, cert_error, request_url,
           CreateMetricsHelperAndStartRecording(web_contents, request_url,
@@ -268,7 +271,8 @@ ChromeSecurityBlockingPageFactory::CreateMITMSoftwareBlockingPage(
     const std::string& mitm_software_name) {
   auto page = std::make_unique<MITMSoftwareBlockingPage>(
       web_contents, cert_error, request_url, std::move(ssl_cert_reporter),
-      ssl_info, mitm_software_name, IsEnterpriseManaged(),
+      /*can_show_enhanced_protection_message=*/true, ssl_info,
+      mitm_software_name, IsEnterpriseManaged(),
       std::make_unique<SSLErrorControllerClient>(
           web_contents, ssl_info, cert_error, request_url,
           CreateMetricsHelperAndStartRecording(web_contents, request_url,
@@ -288,7 +292,7 @@ ChromeSecurityBlockingPageFactory::CreateBlockedInterceptionBlockingPage(
     const net::SSLInfo& ssl_info) {
   auto page = std::make_unique<BlockedInterceptionBlockingPage>(
       web_contents, cert_error, request_url, std::move(ssl_cert_reporter),
-      ssl_info,
+      /*can_show_enhanced_protection_message=*/true, ssl_info,
       std::make_unique<SSLErrorControllerClient>(
           web_contents, ssl_info, cert_error, request_url,
           CreateMetricsHelperAndStartRecording(web_contents, request_url,
@@ -323,7 +327,7 @@ void ChromeSecurityBlockingPageFactory::DoChromeSpecificSetup(
 #elif BUILDFLAG(IS_CHROMEOS_ASH)
         report->SetIsEnterpriseManaged(g_browser_process->platform_part()
                                            ->browser_policy_connector_chromeos()
-                                           ->IsEnterpriseManaged());
+                                           ->IsDeviceEnterpriseManaged());
 #endif
 
         // TODO(estade): this one is probably necessary for all clients, and

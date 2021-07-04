@@ -61,14 +61,15 @@ class AccessTokenFetcherTest : public testing::Test {
         url_loader_factory_.GetSafeWeakWrapper(),  // dummy; not for unit tests.
         "box", GURL(kTokenEndpoint), "refresh token",
         "",  // use existing refresh token to get access token.
+        /*consumer_name=*/"file_system_access_token_fetcher_unittest",
         base::BindOnce(&AccessTokenFetcherTest::OnResponse,
                        factory_.GetWeakPtr()));
   }
 
-  void OnResponse(bool success,
+  void OnResponse(const GoogleServiceAuthError& status,
                   const std::string& access_token,
                   const std::string& refresh_token) {
-    fetch_success_ = success;
+    fetch_success_ = (status.state() == GoogleServiceAuthError::State::NONE);
     access_token_fetched_ = access_token;
     refresh_token_fetched_ = refresh_token;
   }

@@ -12,9 +12,9 @@
 #include "base/containers/contains.h"
 #include "base/memory/ptr_util.h"
 #include "base/notreached.h"
-#include "build/chromeos_buildflags.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/geometry/size.h"
+#include "url/gurl.h"
 
 #if defined(USE_OZONE)
 #include "ui/base/ui_base_features.h"
@@ -24,22 +24,30 @@ namespace ui {
 
 // static
 bool Clipboard::IsSupportedClipboardBuffer(ClipboardBuffer buffer) {
+  // Use lambda instead of local helper function in order to access private
+  // member IsSelectionBufferAvailable().
+  static auto IsSupportedSelectionClipboard = []() -> bool {
+#if defined(USE_OZONE) && !defined(OS_CHROMEOS)
+    if (features::IsUsingOzonePlatform()) {
+      ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
+      CHECK(clipboard);
+      return clipboard->IsSelectionBufferAvailable();
+    }
+#endif
+#if !defined(OS_WIN) && !defined(OS_APPLE) && !defined(OS_CHROMEOS)
+    return true;
+#else
+    return false;
+#endif
+  };
+
   switch (buffer) {
     case ClipboardBuffer::kCopyPaste:
       return true;
     case ClipboardBuffer::kSelection:
-#if defined(USE_OZONE) && !BUILDFLAG(IS_CHROMEOS_ASH)
-      if (features::IsUsingOzonePlatform()) {
-        ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
-        CHECK(clipboard);
-        return clipboard->IsSelectionBufferAvailable();
-      }
-#endif
-#if !defined(OS_WIN) && !defined(OS_APPLE) && !BUILDFLAG(IS_CHROMEOS_ASH)
-      return true;
-#else
-      return false;
-#endif
+      // Cache the result to make this function cheap.
+      static bool selection_result = IsSupportedSelectionClipboard();
+      return selection_result;
     case ClipboardBuffer::kDrag:
       return false;
   }
@@ -149,8 +157,8 @@ void Clipboard::DispatchPortableRepresentation(PortableFormat format,
       if (params.size() == 2) {
         if (params[1].empty())
           return;
-        WriteHTML(&(params[0].front()), params[0].size(),
-                  &(params[1].front()), params[1].size());
+        WriteHTML(&(params[0].front()), params[0].size(), &(params[1].front()),
+                  params[1].size());
       } else if (params.size() == 1) {
         WriteHTML(&(params[0].front()), params[0].size(), nullptr, 0);
       }
@@ -203,7 +211,7 @@ void Clipboard::DispatchPortableRepresentation(PortableFormat format,
 void Clipboard::DispatchPlatformRepresentations(
     std::vector<Clipboard::PlatformRepresentation> platform_representations) {
   for (const auto& representation : platform_representations) {
-    WriteData(ClipboardFormatType::GetType(representation.format),
+    WriteData(ClipboardFormatType::GetCustomPlatformType(representation.format),
               reinterpret_cast<const char*>(representation.data.data()),
               representation.data.size());
   }
@@ -247,5 +255,98 @@ bool Clipboard::IsMarkedByOriginatorAsConfidential() const {
 }
 
 void Clipboard::MarkAsConfidential() {}
+
+void Clipboard::ReadAvailableTypes(ClipboardBuffer buffer,
+                                   const DataTransferEndpoint* data_dst,
+                                   ReadAvailableTypesCallback callback) const {
+  std::vector<std::u16string> types;
+  ReadAvailableTypes(buffer, data_dst, &types);
+  std::move(callback).Run(std::move(types));
+}
+
+void Clipboard::ReadAvailablePlatformSpecificFormatNames(
+    ClipboardBuffer buffer,
+    const DataTransferEndpoint* data_dst,
+    ReadAvailablePlatformSpecificFormatNamesCallback callback) const {
+  std::move(callback).Run(
+      ReadAvailablePlatformSpecificFormatNames(buffer, data_dst));
+}
+
+void Clipboard::ReadText(ClipboardBuffer buffer,
+                         const DataTransferEndpoint* data_dst,
+                         ReadTextCallback callback) const {
+  std::u16string result;
+  ReadText(buffer, data_dst, &result);
+  std::move(callback).Run(std::move(result));
+}
+
+void Clipboard::ReadAsciiText(ClipboardBuffer buffer,
+                              const DataTransferEndpoint* data_dst,
+                              ReadAsciiTextCallback callback) const {
+  std::string result;
+  ReadAsciiText(buffer, data_dst, &result);
+  std::move(callback).Run(std::move(result));
+}
+
+void Clipboard::ReadHTML(ClipboardBuffer buffer,
+                         const DataTransferEndpoint* data_dst,
+                         ReadHtmlCallback callback) const {
+  std::u16string markup;
+  std::string src_url;
+  uint32_t fragment_start;
+  uint32_t fragment_end;
+  ReadHTML(buffer, data_dst, &markup, &src_url, &fragment_start, &fragment_end);
+  std::move(callback).Run(std::move(markup), GURL(src_url), fragment_start,
+                          fragment_end);
+}
+
+void Clipboard::ReadSvg(ClipboardBuffer buffer,
+                        const DataTransferEndpoint* data_dst,
+                        ReadSvgCallback callback) const {
+  std::u16string result;
+  ReadSvg(buffer, data_dst, &result);
+  std::move(callback).Run(std::move(result));
+}
+
+void Clipboard::ReadRTF(ClipboardBuffer buffer,
+                        const DataTransferEndpoint* data_dst,
+                        ReadRTFCallback callback) const {
+  std::string result;
+  ReadRTF(buffer, data_dst, &result);
+  std::move(callback).Run(std::move(result));
+}
+
+void Clipboard::ReadCustomData(ClipboardBuffer buffer,
+                               const std::u16string& type,
+                               const DataTransferEndpoint* data_dst,
+                               ReadCustomDataCallback callback) const {
+  std::u16string result;
+  ReadCustomData(buffer, type, data_dst, &result);
+  std::move(callback).Run(std::move(result));
+}
+
+void Clipboard::ReadFilenames(ClipboardBuffer buffer,
+                              const DataTransferEndpoint* data_dst,
+                              ReadFilenamesCallback callback) const {
+  std::vector<ui::FileInfo> result;
+  ReadFilenames(buffer, data_dst, &result);
+  std::move(callback).Run(std::move(result));
+}
+
+void Clipboard::ReadBookmark(const DataTransferEndpoint* data_dst,
+                             ReadBookmarkCallback callback) const {
+  std::u16string title;
+  std::string url;
+  ReadBookmark(data_dst, &title, &url);
+  std::move(callback).Run(std::move(title), GURL(url));
+}
+
+void Clipboard::ReadData(const ClipboardFormatType& format,
+                         const DataTransferEndpoint* data_dst,
+                         ReadDataCallback callback) const {
+  std::string result;
+  ReadData(format, data_dst, &result);
+  std::move(callback).Run(std::move(result));
+}
 
 }  // namespace ui

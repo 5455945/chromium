@@ -22,8 +22,8 @@
 #include "content/shell/browser/shell.h"
 #include "storage/browser/quota/quota_manager.h"
 #include "storage/common/database/database_identifier.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "url/gurl.h"
-#include "url/origin.h"
 
 namespace content {
 
@@ -68,13 +68,13 @@ class NativeIOManagerBrowserTest : public ContentBrowserTest {
 
   static void DeleteNativeIODataOnIOThread(
       scoped_refptr<storage::QuotaManager> quota_manager,
-      url::Origin origin,
+      const blink::StorageKey& storage_key,
       base::OnceCallback<void(blink::mojom::QuotaStatusCode)> callback) {
     storage::QuotaClientTypes nativeio_quota_client_type;
     nativeio_quota_client_type.insert(storage::QuotaClientType::kNativeIO);
 
-    quota_manager->DeleteOriginData(
-        origin, blink::mojom::StorageType::kTemporary,
+    quota_manager->DeleteStorageKeyData(
+        storage_key, blink::mojom::StorageType::kTemporary,
         nativeio_quota_client_type, std::move(callback));
   }
 
@@ -135,8 +135,9 @@ IN_PROC_BROWSER_TEST_F(NativeIOManagerBrowserTest,
   Shell* browser = CreateBrowser();
   base::RunLoop run_loop;
   scoped_refptr<storage::QuotaManager> quota_manager =
-      BrowserContext::GetDefaultStoragePartition(
-          browser->web_contents()->GetBrowserContext())
+      browser->web_contents()
+          ->GetBrowserContext()
+          ->GetDefaultStoragePartition()
           ->GetQuotaManager();
 
   NavigateToURLBlockUntilNavigationsComplete(browser, test_url,
@@ -145,7 +146,7 @@ IN_PROC_BROWSER_TEST_F(NativeIOManagerBrowserTest,
   blink::mojom::QuotaStatusCode deletion_result;
   RunOnIOThreadBlocking(base::BindOnce(
       &NativeIOManagerBrowserTest::DeleteNativeIODataOnIOThread, quota_manager,
-      url::Origin::Create(test_url),
+      blink::StorageKey::CreateFromStringForTesting(test_url.spec()),
       base::BindLambdaForTesting([&](blink::mojom::QuotaStatusCode result) {
         deletion_result = result;
         run_loop.Quit();
@@ -158,6 +159,17 @@ IN_PROC_BROWSER_TEST_F(NativeIOManagerBrowserTest,
             expected_caught_error);
   EXPECT_EQ(EvalJs(browser, "countFiles()").ExtractInt(), 0);
   EXPECT_TRUE(EvalJs(browser, "openAnotherFile()").ExtractBool());
+}
+
+IN_PROC_BROWSER_TEST_F(NativeIOManagerBrowserTest, ThrowsInIncognito) {
+  const GURL& test_url =
+      embedded_test_server()->GetURL("/native_io/throws_in_incognito.html");
+  Shell* browser = CreateOffTheRecordBrowser();
+  NavigateToURLBlockUntilNavigationsComplete(browser, test_url,
+                                             /*number_of_navigations=*/1);
+  EXPECT_TRUE(EvalJs(browser, "tryAccessStorageFoundation()").ExtractBool());
+  EXPECT_TRUE(
+      EvalJs(browser, "tryAccessStorageFoundationSync()").ExtractBool());
 }
 
 }  // namespace content

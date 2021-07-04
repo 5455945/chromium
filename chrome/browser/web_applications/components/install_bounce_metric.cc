@@ -5,7 +5,6 @@
 #include "chrome/browser/web_applications/components/install_bounce_metric.h"
 
 #include "base/metrics/histogram_macros.h"
-#include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_registry_simple.h"
@@ -15,9 +14,9 @@
 
 namespace {
 
-base::Optional<base::Time>& GetTimeOverride() {
-  static base::NoDestructor<base::Optional<base::Time>> g_time_override;
-  return *g_time_override;
+absl::optional<base::Time>& GetTimeOverride() {
+  static absl::optional<base::Time> time_override;
+  return time_override;
 }
 
 base::Time GetTime() {
@@ -28,14 +27,14 @@ base::Time GetTime() {
 
 // TODO(alancutter): Dedupe Time/Value conversion logic with
 // app_banner_settings_helper.cc and PrefService.
-base::Optional<base::Time> ParseTime(const base::Value* value) {
+absl::optional<base::Time> ParseTime(const base::Value* value) {
   std::string delta_string;
   if (!value || !value->GetAsString(&delta_string))
-    return base::nullopt;
+    return absl::nullopt;
 
   int64_t integer;
   if (!base::StringToInt64(delta_string, &integer))
-    return base::nullopt;
+    return absl::nullopt;
 
   return base::Time::FromDeltaSinceWindowsEpoch(
       base::TimeDelta::FromMicroseconds(integer));
@@ -54,7 +53,7 @@ struct InstallMetrics {
   webapps::WebappInstallSource source;
 };
 
-base::Optional<InstallMetrics> ParseInstallMetricsFromPrefs(
+absl::optional<InstallMetrics> ParseInstallMetricsFromPrefs(
     const PrefService* pref_service,
     const web_app::AppId& app_id) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -62,20 +61,20 @@ base::Optional<InstallMetrics> ParseInstallMetricsFromPrefs(
   const base::DictionaryValue* ids_to_metrics =
       pref_service->GetDictionary(prefs::kWebAppInstallMetrics);
   if (!ids_to_metrics)
-    return base::nullopt;
+    return absl::nullopt;
 
   const base::Value* metrics = ids_to_metrics->FindDictKey(app_id);
   if (!metrics)
-    return base::nullopt;
+    return absl::nullopt;
 
-  base::Optional<base::Time> timestamp =
+  absl::optional<base::Time> timestamp =
       ParseTime(metrics->FindKey(kInstallTimestamp));
   if (!timestamp)
-    return base::nullopt;
+    return absl::nullopt;
 
   const base::Value* source = metrics->FindKey(kInstallSource);
   if (!source || !source->is_int())
-    return base::nullopt;
+    return absl::nullopt;
 
   return InstallMetrics{
       *timestamp, static_cast<webapps::WebappInstallSource>(source->GetInt())};
@@ -98,7 +97,7 @@ void WriteInstallMetricsToPrefs(const InstallMetrics& install_metrics,
 
 namespace web_app {
 
-void SetInstallBounceMetricTimeForTesting(base::Optional<base::Time> time) {
+void SetInstallBounceMetricTimeForTesting(absl::optional<base::Time> time) {
   GetTimeOverride() = time;
 }
 
@@ -116,7 +115,7 @@ void RecordWebAppInstallationTimestamp(
 
 void RecordWebAppUninstallation(PrefService* pref_service,
                                 const AppId& app_id) {
-  base::Optional<InstallMetrics> metrics =
+  absl::optional<InstallMetrics> metrics =
       ParseInstallMetricsFromPrefs(pref_service, app_id);
   if (!metrics)
     return;

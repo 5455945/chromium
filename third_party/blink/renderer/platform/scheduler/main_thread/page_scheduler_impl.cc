@@ -10,9 +10,9 @@
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
-#include "base/optional.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/switches.h"
 #include "third_party/blink/public/platform/platform.h"
@@ -69,19 +69,25 @@ constexpr base::TimeDelta kDefaultDelayForBackgroundAndNetworkIdleTabFreezing =
 constexpr base::TimeDelta kThrottledWakeUpDuration =
     base::TimeDelta::FromMilliseconds(3);
 
+// The duration for which intensive throttling should be inhibited for
+// same-origin frames when the page title or favicon is updated.
+constexpr base::TimeDelta
+    kTimeToInhibitIntensiveThrottlingOnTitleOrFaviconUpdate =
+        base::TimeDelta::FromSeconds(3);
+
 constexpr base::TimeDelta kDefaultDelayForTrackingIPCsPostedToCachedFrames =
     base::TimeDelta::FromSeconds(15);
 
 // Values coming from the field trial config are interpreted as follows:
 //   -1 is "not set". Scheduler should use a reasonable default.
-//   0 corresponds to base::nullopt.
+//   0 corresponds to absl::nullopt.
 //   Other values are left without changes.
 
 struct BackgroundThrottlingSettings {
   double budget_recovery_rate;
-  base::Optional<base::TimeDelta> max_budget_level;
-  base::Optional<base::TimeDelta> max_throttling_delay;
-  base::Optional<base::TimeDelta> initial_budget;
+  absl::optional<base::TimeDelta> max_budget_level;
+  absl::optional<base::TimeDelta> max_throttling_delay;
+  absl::optional<base::TimeDelta> initial_budget;
 };
 
 double GetDoubleParameterFromMap(const base::FieldTrialParams& settings,
@@ -98,9 +104,9 @@ double GetDoubleParameterFromMap(const base::FieldTrialParams& settings,
   return parsed_value;
 }
 
-base::Optional<base::TimeDelta> DoubleToOptionalTime(double value) {
+absl::optional<base::TimeDelta> DoubleToOptionalTime(double value) {
   if (value == 0)
-    return base::nullopt;
+    return absl::nullopt;
   return base::TimeDelta::FromSecondsD(value);
 }
 
@@ -167,6 +173,7 @@ base::TimeDelta GetTimeToDelayIPCTrackingWhileStoredInBackForwardCache() {
 }  // namespace
 
 constexpr base::TimeDelta PageSchedulerImpl::kDefaultThrottledWakeUpInterval;
+constexpr base::TimeDelta PageSchedulerImpl::kIntensiveThrottledWakeUpInterval;
 
 PageSchedulerImpl::PageSchedulerImpl(
     PageScheduler::Delegate* delegate,
@@ -187,17 +194,16 @@ PageSchedulerImpl::PageSchedulerImpl(
       are_wake_ups_intensively_throttled_(false),
       keep_active_(main_thread_scheduler_->SchedulerKeepActive()),
       had_recent_title_or_favicon_update_(false),
-      focused_(delegate ? delegate->IsFocused() : true),
       delegate_(delegate),
       delay_for_background_tab_freezing_(GetDelayForBackgroundTabFreezing()),
       freeze_on_network_idle_enabled_(base::FeatureList::IsEnabled(
           blink::features::kFreezeBackgroundTabOnNetworkIdle)),
       delay_for_background_and_network_idle_tab_freezing_(
           GetDelayForBackgroundAndNetworkIdleTabFreezing()) {
-  page_lifecycle_state_tracker_.reset(new PageLifecycleStateTracker(
+  page_lifecycle_state_tracker_ = std::make_unique<PageLifecycleStateTracker>(
       this, kDefaultPageVisibility == PageVisibilityState::kVisible
                 ? PageLifecycleState::kActive
-                : PageLifecycleState::kHiddenBackgrounded));
+                : PageLifecycleState::kHiddenBackgrounded);
   do_throttle_cpu_time_callback_.Reset(base::BindRepeating(
       &PageSchedulerImpl::DoThrottleCPUTime, base::Unretained(this)));
   do_intensively_throttle_wake_ups_callback_.Reset(
@@ -341,6 +347,8 @@ void PageSchedulerImpl::SetPageBackForwardCached(
   is_stored_in_back_forward_cache_ = is_in_back_forward_cache;
 
   if (!is_stored_in_back_forward_cache_) {
+    TRACE_EVENT_INSTANT("navigation",
+                        "PageSchedulerImpl::SetPageBackForwardCached_Restore");
     set_ipc_posted_handler_task_.Cancel();
     has_ipc_detection_enabled_ = false;
     main_thread_scheduler_->UpdateIpcTracking();
@@ -349,6 +357,8 @@ void PageSchedulerImpl::SetPageBackForwardCached(
     }
     stored_in_back_forward_cache_timestamp_ = base::TimeTicks();
   } else {
+    TRACE_EVENT_INSTANT("navigation",
+                        "PageSchedulerImpl::SetPageBackForwardCached_Store");
     stored_in_back_forward_cache_timestamp_ =
         main_thread_scheduler_->tick_clock()->NowTicks();
 
@@ -362,13 +372,6 @@ void PageSchedulerImpl::SetPageBackForwardCached(
   }
 }
 
-void PageSchedulerImpl::OnFocusChanged(bool focused) {
-  DCHECK_NE(focused_, focused);
-
-  focused_ = focused;
-  NotifyFrames();
-}
-
 void PageSchedulerImpl::SetUpIPCTaskDetection() {
   DCHECK(is_stored_in_back_forward_cache_);
   has_ipc_detection_enabled_ = true;
@@ -379,6 +382,13 @@ void PageSchedulerImpl::SetUpIPCTaskDetection() {
 }
 
 void PageSchedulerImpl::SetKeepActive(bool keep_active) {
+  if (keep_active) {
+    TRACE_EVENT_INSTANT("renderer.scheduler",
+                        "PageSchedulerImpl::SetKeepActive_True");
+  } else {
+    TRACE_EVENT_INSTANT("renderer.scheduler",
+                        "PageSchedulerImpl::SetKeepActive_False");
+  }
   if (keep_active_ == keep_active)
     return;
   keep_active_ = keep_active;
@@ -421,7 +431,6 @@ void PageSchedulerImpl::RegisterFrameSchedulerImpl(
   MaybeInitializeBackgroundCPUTimeBudgetPool(&lazy_now);
 
   frame_schedulers_.insert(frame_scheduler);
-  main_thread_scheduler_->OnFrameAdded(*frame_scheduler);
   frame_scheduler->UpdatePolicy();
 }
 
@@ -438,7 +447,6 @@ std::unique_ptr<blink::FrameScheduler> PageSchedulerImpl::CreateFrameScheduler(
 void PageSchedulerImpl::Unregister(FrameSchedulerImpl* frame_scheduler) {
   DCHECK(frame_schedulers_.find(frame_scheduler) != frame_schedulers_.end());
   frame_schedulers_.erase(frame_scheduler);
-  main_thread_scheduler_->OnFrameRemoved(*frame_scheduler);
 }
 
 void PageSchedulerImpl::OnNavigation() {
@@ -588,8 +596,14 @@ void PageSchedulerImpl::OnTraceLogEnabled() {
   }
 }
 
-bool PageSchedulerImpl::IsPageFocused() const {
-  return focused_;
+void PageSchedulerImpl::OnFirstContentfulPaintInMainFrame() {
+  // Now we get the FCP notification here only for the main frame, notify all
+  // frames within the page to recompute priority for JS timer tasks.
+  if (base::FeatureList::IsEnabled(kDeprioritizeDOMTimersDuringPageLoading) &&
+      kDeprioritizeDOMTimersPhase.Get() ==
+          DeprioritizeDOMTimersPhase::kFirstContentfulPaint) {
+    NotifyFrames();
+  }
 }
 
 bool PageSchedulerImpl::IsWaitingForMainFrameContentfulPaint() const {
@@ -610,8 +624,7 @@ bool PageSchedulerImpl::IsWaitingForMainFrameMeaningfulPaint() const {
                      });
 }
 
-void PageSchedulerImpl::WriteIntoTracedValue(
-    perfetto::TracedValue context) const {
+void PageSchedulerImpl::WriteIntoTrace(perfetto::TracedValue context) const {
   auto dict = std::move(context).WriteDictionary();
   dict.Add("page_visible", page_visibility_ == PageVisibilityState::kVisible);
   dict.Add("is_audio_playing", IsAudioPlaying());
@@ -712,10 +725,8 @@ void PageSchedulerImpl::MaybeInitializeWakeUpBudgetPools(
   for (WakeUpBudgetPool* pool : AllWakeUpBudgetPools())
     pool->SetWakeUpDuration(kThrottledWakeUpDuration);
 
-  if (IsIntensiveWakeUpThrottlingEnabled()) {
-    same_origin_intensive_wake_up_budget_pool_
-        ->AllowUnalignedWakeUpIfNoRecentWakeUp();
-  }
+  same_origin_intensive_wake_up_budget_pool_
+      ->AllowLowerAlignmentIfNoRecentWakeUp(kDefaultThrottledWakeUpInterval);
 
   UpdateWakeUpBudgetPools(lazy_now);
 }
@@ -759,11 +770,9 @@ void PageSchedulerImpl::UpdatePolicyOnVisibilityChange(
           FROM_HERE, do_throttle_cpu_time_callback_.GetCallback(),
           kThrottlingDelayAfterBackgrounding);
     }
-    if (IsIntensiveWakeUpThrottlingEnabled()) {
-      main_thread_scheduler_->ControlTaskRunner()->PostDelayedTask(
-          FROM_HERE, do_intensively_throttle_wake_ups_callback_.GetCallback(),
-          GetIntensiveWakeUpThrottlingGracePeriod());
-    }
+    main_thread_scheduler_->ControlTaskRunner()->PostDelayedTask(
+        FROM_HERE, do_intensively_throttle_wake_ups_callback_.GetCallback(),
+        GetIntensiveWakeUpThrottlingGracePeriod());
   }
   if (notification_policy == NotificationPolicy::kNotifyFrames)
     NotifyFrames();
@@ -780,8 +789,6 @@ void PageSchedulerImpl::DoThrottleCPUTime() {
 }
 
 void PageSchedulerImpl::DoIntensivelyThrottleWakeUps() {
-  DCHECK(IsIntensiveWakeUpThrottlingEnabled());
-
   do_intensively_throttle_wake_ups_callback_.Cancel();
   are_wake_ups_intensively_throttled_ = true;
 
@@ -813,14 +820,6 @@ void PageSchedulerImpl::OnTitleOrFaviconUpdated() {
     // for same-origin frames. This enables alternating effects meant to grab
     // the user's attention. Cross-origin frames are not affected, since they
     // shouldn't be able to observe that the page title or favicon was updated.
-    base::TimeDelta time_to_inhibit_intensive_throttling =
-        GetTimeToInhibitIntensiveThrottlingOnTitleOrFaviconUpdate();
-
-    if (time_to_inhibit_intensive_throttling.is_zero()) {
-      // No inhibiting to be done.
-      return;
-    }
-
     had_recent_title_or_favicon_update_ = true;
     base::sequence_manager::LazyNow lazy_now(
         main_thread_scheduler_->tick_clock());
@@ -830,7 +829,7 @@ void PageSchedulerImpl::OnTitleOrFaviconUpdated() {
     reset_had_recent_title_or_favicon_update_.Cancel();
     main_thread_scheduler_->ControlTaskRunner()->PostDelayedTask(
         FROM_HERE, reset_had_recent_title_or_favicon_update_.GetCallback(),
-        time_to_inhibit_intensive_throttling);
+        kTimeToInhibitIntensiveThrottlingOnTitleOrFaviconUpdate);
   }
 }
 
@@ -852,7 +851,7 @@ base::TimeDelta PageSchedulerImpl::GetIntensiveWakeUpThrottlingDuration(
 
   if (are_wake_ups_intensively_throttled_ &&
       !opted_out_from_aggressive_throttling_)
-    return GetIntensiveWakeUpThrottlingDurationBetweenWakeUps();
+    return kIntensiveThrottledWakeUpInterval;
   else
     return kDefaultThrottledWakeUpInterval;
 }
@@ -962,7 +961,7 @@ void PageSchedulerImpl::PageLifecycleStateTracker::SetPageLifecycleState(
     PageLifecycleState new_state) {
   if (new_state == current_state_)
     return;
-  base::Optional<PageLifecycleStateTransition> transition =
+  absl::optional<PageLifecycleStateTransition> transition =
       ComputePageLifecycleStateTransition(current_state_, new_state);
   if (transition) {
     UMA_HISTOGRAM_ENUMERATION(
@@ -978,14 +977,14 @@ PageSchedulerImpl::PageLifecycleStateTracker::GetPageLifecycleState() const {
 }
 
 // static
-base::Optional<PageSchedulerImpl::PageLifecycleStateTransition>
+absl::optional<PageSchedulerImpl::PageLifecycleStateTransition>
 PageSchedulerImpl::PageLifecycleStateTracker::
     ComputePageLifecycleStateTransition(PageLifecycleState old_state,
                                         PageLifecycleState new_state) {
   switch (old_state) {
     case PageLifecycleState::kUnknown:
       // We don't track the initial transition.
-      return base::nullopt;
+      return absl::nullopt;
     case PageLifecycleState::kActive:
       switch (new_state) {
         case PageLifecycleState::kHiddenForegrounded:
@@ -994,7 +993,7 @@ PageSchedulerImpl::PageLifecycleStateTracker::
           return PageLifecycleStateTransition::kActiveToHiddenBackgrounded;
         default:
           NOTREACHED();
-          return base::nullopt;
+          return absl::nullopt;
       }
     case PageLifecycleState::kHiddenForegrounded:
       switch (new_state) {
@@ -1007,7 +1006,7 @@ PageSchedulerImpl::PageLifecycleStateTracker::
           return PageLifecycleStateTransition::kHiddenForegroundedToFrozen;
         default:
           NOTREACHED();
-          return base::nullopt;
+          return absl::nullopt;
       }
     case PageLifecycleState::kHiddenBackgrounded:
       switch (new_state) {
@@ -1020,7 +1019,7 @@ PageSchedulerImpl::PageLifecycleStateTracker::
           return PageLifecycleStateTransition::kHiddenBackgroundedToFrozen;
         default:
           NOTREACHED();
-          return base::nullopt;
+          return absl::nullopt;
       }
     case PageLifecycleState::kFrozen:
       switch (new_state) {
@@ -1032,7 +1031,7 @@ PageSchedulerImpl::PageLifecycleStateTracker::
           return PageLifecycleStateTransition::kFrozenToHiddenBackgrounded;
         default:
           NOTREACHED();
-          return base::nullopt;
+          return absl::nullopt;
       }
   }
 }

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Copyright 2020 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -16,6 +17,9 @@ _NINJA_PATH = os.path.join(_CHROMIUM_SRC, 'third_party', 'depot_tools', 'ninja')
 
 # Relative to _CHROMIUM_SRC
 _GN_SRC_REL_PATH = os.path.join('third_party', 'depot_tools', 'gn')
+
+# Regex for determining whether compile failed because 'gn gen' needs to be run.
+_GN_GEN_REGEX = re.compile(r'ninja: (error|fatal):')
 
 
 def _raise_command_exception(args, returncode, output):
@@ -73,21 +77,38 @@ def _copy_and_append_gn_args(src_args_path, dest_args_path, extra_args):
     f_out.write('\n'.join(extra_args))
 
 
-def _find_lines_after_prefix(text, prefix, num_lines):
-  """Searches |text| for a line which starts with |prefix|.
+def _find_regex_in_test_failure_output(test_output, regex):
+  """Searches for regex in test output.
 
-  Args:
-    text: String to search in.
-    prefix: Prefix to search for.
-    num_lines: Number of lines, starting with line with prefix, to return.
-  Returns:
-    Matched lines. Returns None otherwise.
+    Args:
+      test_output: test output.
+      regex: regular expression to search for.
+    Returns:
+      Whether the regular expression was found in the part of the test output
+      after the 'FAILED' message.
+
+      If the regex does not contain '\n':
+        the first 5 lines after the 'FAILED' message (including the text on the
+        line after the 'FAILED' message) is searched.
+      Otherwise:
+        the entire test output after the 'FAILED' message is searched.
   """
-  lines = text.split('\n')
-  for i, line in enumerate(lines):
-    if line.startswith(prefix):
-      return lines[i:i + num_lines]
-  return None
+  failed_index = test_output.find('FAILED')
+  if failed_index < 0:
+    return False
+
+  failure_message = test_output[failed_index:]
+  if regex.find('\n') >= 0:
+    return re.search(regex, failure_message)
+
+  return _search_regex_in_list(failure_message.split('\n')[:5], regex)
+
+
+def _search_regex_in_list(value, regex):
+  for line in value:
+    if re.search(regex, line):
+      return True
+  return False
 
 
 def main():
@@ -105,26 +126,33 @@ def main():
   options = parser.parse_args()
 
   with open(options.test_configs_path) as f:
-    test_configs = json.loads(f.read())
+    # Escape '\' in '\.' now. This avoids having to do the escaping in the test
+    # specification.
+    config_text = f.read().replace(r'\.', r'\\.')
+    test_configs = json.loads(config_text)
 
   if not os.path.exists(options.out_dir):
     os.makedirs(options.out_dir)
 
   out_gn_args_path = os.path.join(options.out_dir, 'args.gn')
   extra_gn_args = [
-      'enable_android_nocompile_tests = true', 'treat_warnings_as_errors = true'
+      'enable_android_nocompile_tests = true',
+      'treat_warnings_as_errors = true',
+      # GOMA does not work with non-standard output directories.
+      'use_goma = false',
   ]
   _copy_and_append_gn_args(options.gn_args_path, out_gn_args_path,
                            extra_gn_args)
 
-  # As all of the test targets are declared in the same BUILD.gn file, it does
-  # not matter which test target is used as the root target.
+  # Extract directory from test target. As all of the test targets are declared
+  # in the same BUILD.gn file, it does not matter which test target is used.
+  target0_dir = test_configs[0]['target'].rsplit(':', 1)[0]
   gn_args = [
-      _GN_SRC_REL_PATH, '--root-target=' + test_configs[0]['target'], 'gen',
+      _GN_SRC_REL_PATH, '--root-target=' + target0_dir, 'gen',
       os.path.relpath(options.out_dir, _CHROMIUM_SRC)
   ]
-  _run_command(gn_args, cwd=_CHROMIUM_SRC)
 
+  ran_gn_gen = False
   error_messages = []
   for config in test_configs:
     # Strip leading '//'
@@ -136,15 +164,17 @@ def main():
     # "Compile successful." is not a compiler log message.
     test_output = _run_command_get_output(ninja_args, '""\nCompile successful.')
 
-    failure_message_lines = _find_lines_after_prefix(test_output, 'FAILED:', 5)
+    # 'gn gen' takes > 1s to run. Only run 'gn gen' if it is needed for compile.
+    if _search_regex_in_list(test_output.split('\n'), _GN_GEN_REGEX):
+      assert not ran_gn_gen
+      ran_gn_gen = True
+      _run_command(gn_args, cwd=_CHROMIUM_SRC)
 
-    found_expect_regex = False
-    if failure_message_lines:
-      for line in failure_message_lines:
-        if re.search(expect_regex, line):
-          found_expect_regex = True
-          break
-    if not found_expect_regex:
+      # Redo compile.
+      test_output = _run_command_get_output(ninja_args,
+                                            '""\nCompile successful.')
+
+    if not _find_regex_in_test_failure_output(test_output, expect_regex):
       error_message = '//{} failed.\nExpected compile output pattern:\n'\
           '{}\nActual compile output:\n{}'.format(
               gn_path, expect_regex, test_output)

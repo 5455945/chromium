@@ -14,9 +14,12 @@
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/web_back_forward_cache_loader_helper.h"
 #include "third_party/blink/public/platform/web_url_loader_factory.h"
+#include "third_party/blink/public/web/web_local_frame.h"
+#include "third_party/blink/public/web/web_local_frame_client.h"
 #include "third_party/blink/renderer/core/fileapi/public_url_manager.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/frame/local_frame_client.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/core/loader/prefetched_signed_exchange_manager.h"
 #include "third_party/blink/renderer/platform/exported/wrapped_resource_request.h"
@@ -137,7 +140,11 @@ std::unique_ptr<WebURLLoader> LoaderFactoryForFrame::CreateURLLoader(
 
 std::unique_ptr<WebCodeCacheLoader>
 LoaderFactoryForFrame::CreateCodeCacheLoader() {
-  return Platform::Current()->CreateCodeCacheLoader();
+  if (document_loader_->GetCodeCacheHost() == nullptr) {
+    return nullptr;
+  }
+  return blink::WebCodeCacheLoader::Create(
+      document_loader_->GetCodeCacheHost());
 }
 
 std::unique_ptr<blink::scheduler::WebResourceLoadingTaskRunnerHandle>
@@ -152,9 +159,15 @@ void LoaderFactoryForFrame::IssueKeepAliveHandleIfRequested(
     mojom::blink::LocalFrameHost& local_frame_host,
     mojo::PendingReceiver<mojom::blink::KeepAliveHandle> pending_receiver) {
   DCHECK(pending_receiver);
-  if (request.GetKeepalive()) {
+  if (request.GetKeepalive() && keep_alive_handle_factory_.is_bound()) {
     keep_alive_handle_factory_->IssueKeepAliveHandle(
         std::move(pending_receiver));
+  }
+
+  if (!keep_alive_handle_factory_.is_bound()) {
+    // TODO(crbug.com/1188074): Remove this CHECK once the investigation is
+    // done.
+    CHECK(window_->IsContextDestroyed());
   }
 }
 

@@ -81,10 +81,17 @@ public class AwPacProcessor {
         getConnectivityManager().registerNetworkCallback(builder.build(), mNetworkCallback);
     }
 
+    private void unregisterNetworkCallback() {
+        if (mNetworkCallback == null) return;
+
+        getConnectivityManager().unregisterNetworkCallback(mNetworkCallback);
+        mNetworkCallback = null;
+    }
+
     // The calling code must not call any methods after it called destroy().
     @UsedByReflection("Android")
     public void destroy() {
-        getConnectivityManager().unregisterNetworkCallback(mNetworkCallback);
+        unregisterNetworkCallback();
         AwPacProcessorJni.get().destroyNative(mNativePacProcessor, this);
     }
 
@@ -103,8 +110,8 @@ public class AwPacProcessor {
         mNetwork = network;
         if (mNetwork != null) {
             registerNetworkCallback();
-        } else if (mNetworkCallback != null) {
-            getConnectivityManager().unregisterNetworkCallback(mNetworkCallback);
+        } else {
+            unregisterNetworkCallback();
         }
         updateNetworkLinkAddress(network, getConnectivityManager().getLinkProperties(network));
     }

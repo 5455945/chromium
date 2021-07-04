@@ -13,9 +13,7 @@
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
-#include "base/optional.h"
 #include "base/run_loop.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/cancelable_task_tracker.h"
@@ -25,10 +23,12 @@
 #include "components/favicon_base/favicon_types.h"
 #include "components/webapps/browser/installable/installable_manager.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
+#include "components/webapps/common/web_page_metadata.mojom.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/test_renderer_host.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/manifest/manifest.h"
 #include "third_party/blink/public/mojom/manifest/display_mode.mojom.h"
 #include "ui/gfx/image/image_unittest_util.h"
@@ -68,7 +68,7 @@ class ObserverWaiter : public AddToHomescreenDataFetcher::Observer {
     run_loop.Run();
   }
 
-  void OnUserTitleAvailable(const base::string16& title,
+  void OnUserTitleAvailable(const std::u16string& title,
                             const GURL& url,
                             bool is_webapk_compatible) override {
     // This should only be called once.
@@ -89,12 +89,12 @@ class ObserverWaiter : public AddToHomescreenDataFetcher::Observer {
       quit_closure_.Run();
   }
 
-  base::string16 title() const { return title_; }
+  std::u16string title() const { return title_; }
   bool is_webapk_compatible() const { return is_webapk_compatible_; }
   bool title_available() const { return title_available_; }
 
  private:
-  base::string16 title_;
+  std::u16string title_;
   bool is_webapk_compatible_;
   bool title_available_;
   bool data_available_;
@@ -112,7 +112,7 @@ blink::Manifest BuildDefaultManifest() {
   manifest.display = kDefaultManifestDisplayMode;
 
   blink::Manifest::ImageResource primary_icon;
-  primary_icon.type = base::ASCIIToUTF16("image/png");
+  primary_icon.type = u"image/png";
   primary_icon.sizes.push_back(gfx::Size(144, 144));
   primary_icon.purpose.push_back(
       blink::mojom::ManifestImageResource_Purpose::ANY);
@@ -163,7 +163,8 @@ class TestInstallableManager : public InstallableManager {
          params.valid_primary_icon ? primary_icon_url_ : GURL(),
          params.valid_primary_icon ? primary_icon_.get() : nullptr,
          params.prefer_maskable_icon, GURL() /* splash_icon_url */,
-         nullptr /* splash_icon */, std::vector<SkBitmap>() /* screenshots */,
+         nullptr /* splash_icon */, params.prefer_maskable_icon,
+         std::vector<SkBitmap>() /* screenshots */,
          params.valid_manifest ? is_installable : false,
          params.has_worker ? is_installable : false});
   }
@@ -175,8 +176,8 @@ class TestInstallableManager : public InstallableManager {
 
     if (!manifest.icons.empty()) {
       primary_icon_url_ = manifest_.icons[0].src;
-      primary_icon_.reset(
-          new SkBitmap(gfx::test::CreateBitmap(kIconSizePx, kIconSizePx)));
+      primary_icon_ = std::make_unique<SkBitmap>(
+          gfx::test::CreateBitmap(kIconSizePx, kIconSizePx));
     }
   }
 
@@ -495,7 +496,7 @@ TEST_F(AddToHomescreenDataFetcherTest, ManifestNameClobbersWebApplicationName) {
     // Check the case where we have no icons.
     blink::Manifest manifest = BuildDefaultManifest();
     manifest.icons.clear();
-    manifest.short_name = base::nullopt;
+    manifest.short_name = absl::nullopt;
     SetManifest(manifest);
 
     ObserverWaiter waiter;
@@ -509,7 +510,7 @@ TEST_F(AddToHomescreenDataFetcherTest, ManifestNameClobbersWebApplicationName) {
   }
 
   blink::Manifest manifest(BuildDefaultManifest());
-  manifest.short_name = base::nullopt;
+  manifest.short_name = absl::nullopt;
   SetManifest(manifest);
 
   {
@@ -566,8 +567,8 @@ TEST_F(AddToHomescreenDataFetcherTest, ManifestNoNameNoShortName) {
   //  - WebApplicationInfo::title is used as the "name".
   //  - We still use the icons from the manifest.
   blink::Manifest manifest(BuildDefaultManifest());
-  manifest.name = base::nullopt;
-  manifest.short_name = base::nullopt;
+  manifest.name = absl::nullopt;
+  manifest.short_name = absl::nullopt;
 
   // Check the case where we don't time out waiting for the service worker.
   SetManifest(manifest);

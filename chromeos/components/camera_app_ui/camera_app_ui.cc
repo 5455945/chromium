@@ -100,11 +100,11 @@ void TranslateVideoDeviceId(
     const std::string& salt,
     const url::Origin& origin,
     const std::string& source_id,
-    base::OnceCallback<void(const base::Optional<std::string>&)> callback) {
+    base::OnceCallback<void(const absl::optional<std::string>&)> callback) {
   auto callback_on_io_thread = base::BindOnce(
       [](const std::string& salt, const url::Origin& origin,
          const std::string& source_id,
-         base::OnceCallback<void(const base::Optional<std::string>&)>
+         base::OnceCallback<void(const absl::optional<std::string>&)>
              callback) {
         content::GetMediaDeviceIDForHMAC(
             blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE, salt,
@@ -179,27 +179,6 @@ std::unique_ptr<chromeos_camera::CameraAppHelperImpl> CreateCameraAppHelper(
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-// static
-void CameraAppUI::ConnectToCameraAppDeviceProvider(
-    content::RenderFrameHost* source,
-    mojo::PendingReceiver<cros::mojom::CameraAppDeviceProvider> receiver) {
-  auto provider =
-      CreateCameraAppDeviceProvider(source->GetLastCommittedOrigin(),
-                                    source->GetProcess()->GetBrowserContext());
-  mojo::MakeSelfOwnedReceiver(std::move(provider), std::move(receiver));
-}
-
-// static
-void CameraAppUI::ConnectToCameraAppHelper(
-    content::RenderFrameHost* source,
-    mojo::PendingReceiver<chromeos_camera::mojom::CameraAppHelper> receiver) {
-  auto* window = source->GetNativeView()->GetToplevelWindow();
-  auto helper = CreateCameraAppHelper(
-      /*camera_app_ui=*/nullptr, source->GetProcess()->GetBrowserContext(),
-      window);
-  mojo::MakeSelfOwnedReceiver(std::move(helper), std::move(receiver));
-}
-
 CameraAppUI::CameraAppUI(content::WebUI* web_ui,
                          std::unique_ptr<CameraAppUIDelegate> delegate)
     : ui::MojoWebUIController(web_ui), delegate_(std::move(delegate)) {
@@ -214,6 +193,8 @@ CameraAppUI::CameraAppUI(content::WebUI* web_ui,
       host_origin, ContentSettingsType::MEDIASTREAM_MIC);
   allowlist->RegisterAutoGrantedPermission(
       host_origin, ContentSettingsType::MEDIASTREAM_CAMERA);
+  allowlist->RegisterAutoGrantedPermission(host_origin,
+                                           ContentSettingsType::FILE_HANDLING);
   allowlist->RegisterAutoGrantedPermission(
       host_origin, ContentSettingsType::FILE_SYSTEM_READ_GUARD);
   allowlist->RegisterAutoGrantedPermission(
@@ -294,6 +275,11 @@ void CameraAppUI::DevToolsAgentHostDetached(
     return;
   }
   app_window_manager()->SetDevToolsEnabled(false);
+}
+
+bool CameraAppUI::IsJavascriptErrorReportingEnabled() {
+  // Since we proactively call CrashReportPrivate.reportError() in CCA now.
+  return false;
 }
 
 WEB_UI_CONTROLLER_TYPE_IMPL(CameraAppUI)

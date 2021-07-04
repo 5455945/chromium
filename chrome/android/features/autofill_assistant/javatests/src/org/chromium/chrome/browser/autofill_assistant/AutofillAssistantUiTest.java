@@ -18,7 +18,6 @@ import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
 import static org.mockito.Mockito.inOrder;
 
-import android.content.Intent;
 import android.support.test.InstrumentationRegistry;
 import android.view.View;
 import android.view.ViewGroup;
@@ -40,7 +39,6 @@ import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.library_loader.LibraryLoader;
 import org.chromium.base.test.util.CriteriaHelper;
-import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.UrlUtils;
 import org.chromium.chrome.autofill_assistant.R;
 import org.chromium.chrome.browser.autofill_assistant.carousel.AssistantActionsCarouselCoordinator;
@@ -97,14 +95,6 @@ public class AutofillAssistantUiTest {
         mTestServer.stopAndDestroyServer();
     }
 
-    /**
-     * @see CustomTabsTestUtils#createMinimalCustomTabIntent(Context, String).
-     */
-    private Intent createMinimalCustomTabIntent() {
-        return AutofillAssistantUiTestUtil.createMinimalCustomTabIntentForAutobot(
-                mTestPage, /* startImmediately = */ true);
-    }
-
     private CustomTabActivity getActivity() {
         return mCustomTabActivityTestRule.getActivity();
     }
@@ -113,25 +103,31 @@ public class AutofillAssistantUiTest {
         return AutofillAssistantUiTestUtil.getBottomSheetController(getActivity());
     }
 
+    private AssistantCoordinator createAndShowAssistantCoordinator() {
+        return TestThreadUtils.runOnUiThreadBlockingNoException(() -> {
+            AssistantCoordinator coordinator = new AssistantCoordinator(getActivity(),
+                    initializeBottomSheet(), getActivity().getTabObscuringHandler(),
+                    /* overlayCoordinator= */ null,
+                    /* keyboardCoordinatorDelegate= */ null,
+                    getActivity().getWindowAndroid().getKeyboardDelegate(),
+                    getActivity().getCompositorViewHolder(), getActivity().getActivityTabProvider(),
+                    getActivity().getBrowserControlsManager(),
+                    getActivity().getWindowAndroid().getApplicationBottomInsetProvider());
+            coordinator.show();
+            return coordinator;
+        });
+    }
 
     // TODO(crbug.com/806868): Add more UI details test and check, like payment request UI,
     // highlight chips and so on.
     @Test
     @MediumTest
-    public void testStartAndAccept() throws Exception {
+    public void testStartAndAccept() {
         InOrder inOrder = inOrder(mRunnableMock);
-
-        mCustomTabActivityTestRule.startCustomTabActivityWithIntent(createMinimalCustomTabIntent());
-        BottomSheetController bottomSheetController =
-                TestThreadUtils.runOnUiThreadBlocking(this::initializeBottomSheet);
-        AssistantCoordinator assistantCoordinator = TestThreadUtils.runOnUiThreadBlocking(() -> {
-            AssistantCoordinator coordinator = new AssistantCoordinator(getActivity(),
-                    bottomSheetController, getActivity().getTabObscuringHandler(),
-                    /* overlayCoordinator= */ null,
-                    /* keyboardCoordinatorDelegate= */ null);
-            coordinator.show();
-            return coordinator;
-        });
+        mCustomTabActivityTestRule.startCustomTabActivityWithIntent(
+                CustomTabsTestUtils.createMinimalCustomTabIntent(
+                        InstrumentationRegistry.getTargetContext(), mTestPage));
+        AssistantCoordinator assistantCoordinator = createAndShowAssistantCoordinator();
 
         // Bottom sheet is shown in the BottomSheet when creating the AssistantCoordinator.
         View contentView = AutofillAssistantUiTestUtil.getBottomSheetController(getActivity())
@@ -253,20 +249,13 @@ public class AutofillAssistantUiTest {
 
     @Test
     @MediumTest
-    public void testTooltipBubble() throws Exception {
+    public void testTooltipBubble() {
         InOrder inOrder = inOrder(mRunnableMock);
 
-        mCustomTabActivityTestRule.startCustomTabActivityWithIntent(createMinimalCustomTabIntent());
-        BottomSheetController bottomSheetController =
-                TestThreadUtils.runOnUiThreadBlocking(this::initializeBottomSheet);
-        AssistantCoordinator assistantCoordinator = TestThreadUtils.runOnUiThreadBlocking(() -> {
-            AssistantCoordinator coordinator = new AssistantCoordinator(getActivity(),
-                    bottomSheetController, getActivity().getTabObscuringHandler(),
-                    /* overlayCoordinator= */ null,
-                    /* keyboardCoordinatorDelegate= */ null);
-            coordinator.show();
-            return coordinator;
-        });
+        mCustomTabActivityTestRule.startCustomTabActivityWithIntent(
+                CustomTabsTestUtils.createMinimalCustomTabIntent(
+                        InstrumentationRegistry.getTargetContext(), mTestPage));
+        AssistantCoordinator assistantCoordinator = createAndShowAssistantCoordinator();
 
         // Bottom sheet is shown in the BottomSheet when creating the AssistantCoordinator.
         View contentView = AutofillAssistantUiTestUtil.getBottomSheetController(getActivity())
@@ -290,42 +279,5 @@ public class AutofillAssistantUiTest {
         onView(withText(testBubbleMessage))
                 .inRoot(withDecorView(not(getActivity().getWindow().getDecorView())))
                 .check(matches(isDisplayed()));
-    }
-
-    /**
-     * With animation on, hides the bottom sheet, and then immediately shows it, and then
-     * immediately hides it. Tests that this doesn't cause a crash (see b/179131022).
-     */
-    @Test
-    @MediumTest
-    @DisabledTest(message = "crbug/1180011")
-    public void testBottomSheetHideExpandWithAnimationDoesNotCrash() throws Exception {
-        mCustomTabActivityTestRule.startCustomTabActivityWithIntent(createMinimalCustomTabIntent());
-        BottomSheetController bottomSheetController =
-                TestThreadUtils.runOnUiThreadBlocking(this::initializeBottomSheet);
-        AssistantCoordinator assistantCoordinator = TestThreadUtils.runOnUiThreadBlocking(() -> {
-            AssistantCoordinator coordinator = new AssistantCoordinator(getActivity(),
-                    bottomSheetController, getActivity().getTabObscuringHandler(),
-                    /* overlayCoordinator= */ null,
-                    /* keyboardCoordinatorDelegate= */ null);
-            coordinator.show();
-            return coordinator;
-        });
-
-        // BottomSheet is shown when creating the AssistantCoordinator.
-        View contentView = AutofillAssistantUiTestUtil.getBottomSheetController(getActivity())
-                                   .getCurrentSheetContent()
-                                   .getContentView();
-        ViewGroup bottomSheetContent = contentView.findViewById(R.id.autofill_assistant);
-        Assert.assertNotNull(bottomSheetContent);
-
-        // Immediately expand and hide the bottom sheet.
-        AssistantBottomBarCoordinator bottomBarCoordinator =
-                assistantCoordinator.getBottomBarCoordinator();
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            bottomBarCoordinator.hide();
-            bottomBarCoordinator.showContent(/* shouldExpand = */ true, /* animate = */ true);
-            bottomBarCoordinator.hide();
-        });
     }
 }

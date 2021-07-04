@@ -5,8 +5,8 @@
 #include "ash/public/cpp/accelerators.h"
 
 #include "base/callback.h"
+#include "base/cxx17_backports.h"
 #include "base/no_destructor.h"
-#include "base/stl_util.h"
 
 namespace ash {
 
@@ -36,8 +36,8 @@ const AcceleratorData kAcceleratorData[] = {
     {true, ui::VKEY_KBD_BRIGHTNESS_DOWN, ui::EF_NONE, KEYBOARD_BRIGHTNESS_DOWN},
     {true, ui::VKEY_KBD_BRIGHTNESS_UP, ui::EF_NONE, KEYBOARD_BRIGHTNESS_UP},
     // Maximize button.
-    {true, ui::VKEY_MEDIA_LAUNCH_APP2, ui::EF_CONTROL_DOWN, TOGGLE_MIRROR_MODE},
-    {true, ui::VKEY_MEDIA_LAUNCH_APP2, ui::EF_ALT_DOWN, SWAP_PRIMARY_DISPLAY},
+    {true, ui::VKEY_ZOOM, ui::EF_CONTROL_DOWN, TOGGLE_MIRROR_MODE},
+    {true, ui::VKEY_ZOOM, ui::EF_ALT_DOWN, SWAP_PRIMARY_DISPLAY},
     // Cycle windows button.
     {true, ui::VKEY_MEDIA_LAUNCH_APP1, ui::EF_CONTROL_DOWN, TAKE_SCREENSHOT},
     {true, ui::VKEY_MEDIA_LAUNCH_APP1, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN,
@@ -63,6 +63,7 @@ const AcceleratorData kAcceleratorData[] = {
     {false, ui::VKEY_SLEEP, ui::EF_NONE, LOCK_RELEASED},
     {true, ui::VKEY_POWER, ui::EF_NONE, POWER_PRESSED},
     {false, ui::VKEY_POWER, ui::EF_NONE, POWER_RELEASED},
+    {true, ui::VKEY_MEDIA_LAUNCH_APP2, ui::EF_NONE, OPEN_CALCULATOR},
     {true, ui::VKEY_ESCAPE, ui::EF_CONTROL_DOWN | ui::EF_COMMAND_DOWN,
      OPEN_DIAGNOSTICS},
     {true, ui::VKEY_M, ui::EF_SHIFT_DOWN | ui::EF_ALT_DOWN, OPEN_FILE_MANAGER},
@@ -127,8 +128,8 @@ const AcceleratorData kAcceleratorData[] = {
     // extended keyboard shortcuts.
     {false, ui::VKEY_LWIN, ui::EF_NONE, TOGGLE_APP_LIST},
     {false, ui::VKEY_LWIN, ui::EF_SHIFT_DOWN, TOGGLE_APP_LIST_FULLSCREEN},
-    {true, ui::VKEY_MEDIA_LAUNCH_APP2, ui::EF_NONE, TOGGLE_FULLSCREEN},
-    {true, ui::VKEY_MEDIA_LAUNCH_APP2, ui::EF_SHIFT_DOWN, TOGGLE_FULLSCREEN},
+    {true, ui::VKEY_ZOOM, ui::EF_NONE, TOGGLE_FULLSCREEN},
+    {true, ui::VKEY_ZOOM, ui::EF_SHIFT_DOWN, TOGGLE_FULLSCREEN},
     {true, ui::VKEY_ESCAPE, ui::EF_SHIFT_DOWN | ui::EF_COMMAND_DOWN, UNPIN},
     {true, ui::VKEY_L, ui::EF_SHIFT_DOWN | ui::EF_ALT_DOWN, FOCUS_SHELF},
     {true, ui::VKEY_V, ui::EF_SHIFT_DOWN | ui::EF_ALT_DOWN, FOCUS_PIP},
@@ -207,13 +208,13 @@ const AcceleratorData kAcceleratorData[] = {
 
     // Virtual Desks shortcuts.
     // Desk activation:
-    {true, ui::VKEY_OEM_4, ui::EF_COMMAND_DOWN, DESKS_ACTIVATE_DESK},
-    {true, ui::VKEY_OEM_6, ui::EF_COMMAND_DOWN, DESKS_ACTIVATE_DESK},
+    {true, ui::VKEY_OEM_4, ui::EF_COMMAND_DOWN, DESKS_ACTIVATE_DESK_LEFT},
+    {true, ui::VKEY_OEM_6, ui::EF_COMMAND_DOWN, DESKS_ACTIVATE_DESK_RIGHT},
     // Moving windows to desks:
     {true, ui::VKEY_OEM_4, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN,
-     DESKS_MOVE_ACTIVE_ITEM},
+     DESKS_MOVE_ACTIVE_ITEM_LEFT},
     {true, ui::VKEY_OEM_6, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN,
-     DESKS_MOVE_ACTIVE_ITEM},
+     DESKS_MOVE_ACTIVE_ITEM_RIGHT},
     // TODO(afakhry): Implement activating and moving windows to a desk by
     // its index directly.
 
@@ -248,15 +249,15 @@ const AcceleratorData kEnableWithNewMappingAcceleratorData[] = {
 
     // Desk activation:
     {true, ui::VKEY_LEFT, ui::EF_COMMAND_DOWN | ui::EF_CONTROL_DOWN,
-     DESKS_ACTIVATE_DESK},
+     DESKS_ACTIVATE_DESK_LEFT},
     {true, ui::VKEY_RIGHT, ui::EF_COMMAND_DOWN | ui::EF_CONTROL_DOWN,
-     DESKS_ACTIVATE_DESK},
+     DESKS_ACTIVATE_DESK_RIGHT},
 
     // Moving windows to desks:
     {true, ui::VKEY_LEFT, ui::EF_COMMAND_DOWN | ui::EF_ALT_DOWN,
-     DESKS_MOVE_ACTIVE_ITEM},
+     DESKS_MOVE_ACTIVE_ITEM_LEFT},
     {true, ui::VKEY_RIGHT, ui::EF_COMMAND_DOWN | ui::EF_ALT_DOWN,
-     DESKS_MOVE_ACTIVE_ITEM},
+     DESKS_MOVE_ACTIVE_ITEM_RIGHT},
 
     // Snap
     {true, ui::VKEY_OEM_COMMA,
@@ -284,6 +285,23 @@ const AcceleratorData kEnableWithNewMappingAcceleratorData[] = {
 
 const size_t kEnableWithNewMappingAcceleratorDataLength =
     base::size(kEnableWithNewMappingAcceleratorData);
+
+const AcceleratorData kEnableWithPositionalAcceleratorsData[] = {
+    // These are the desk shortcuts as advertised, but previously
+    // they were implicitly implemented in terms of F11 and F12
+    // due to event rewrites. Since the F-Key rewrites are deprecated
+    // these can be implemented based on the keys they actually are.
+    //
+    // TODO(crbug.com/1179893): Merge these to the main table once
+    // IsImprovedKeyboardShortcutsEnabled() is permanently enabled.
+    {true, ui::VKEY_OEM_PLUS, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN,
+     DESKS_NEW_DESK},
+    {true, ui::VKEY_OEM_MINUS, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN,
+     DESKS_REMOVE_CURRENT_DESK},
+};
+
+const size_t kEnableWithPositionalAcceleratorsDataLength =
+    base::size(kEnableWithPositionalAcceleratorsData);
 
 // static
 AcceleratorController* AcceleratorController::Get() {

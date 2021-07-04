@@ -9,6 +9,7 @@
 
 #include "base/bind.h"
 #include "base/run_loop.h"
+#include "base/scoped_observation.h"
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -59,7 +60,7 @@ class StateStoreObserver : public StateStore::TestObserver {
  public:
   explicit StateStoreObserver(content::BrowserContext* context)
       : state_store_(extensions::ExtensionSystem::Get(context)->state_store()) {
-    observed_.Add(state_store_);
+    observed_.Observe(state_store_);
   }
 
   ~StateStoreObserver() final = default;
@@ -92,7 +93,7 @@ class StateStoreObserver : public StateStore::TestObserver {
   std::set<std::string> ids_with_writes_;
   std::string waiting_for_id_;
   base::RunLoop run_loop_;
-  ScopedObserver<StateStore, StateStore::TestObserver> observed_{this};
+  base::ScopedObservation<StateStore, StateStore::TestObserver> observed_{this};
 };
 
 constexpr char kPersistentExtensionId[] = "cmgkkmeeoiceijkpmaabbmpgnkpaaela";
@@ -102,6 +103,13 @@ constexpr char kPersistentExtensionId[] = "cmgkkmeeoiceijkpmaabbmpgnkpaaela";
 class ExtensionContextMenuBrowserTest
     : public extensions::ExtensionBrowserTest {
  public:
+  ExtensionContextMenuBrowserTest() = default;
+  ~ExtensionContextMenuBrowserTest() override = default;
+  ExtensionContextMenuBrowserTest(const ExtensionContextMenuBrowserTest&) =
+      delete;
+  ExtensionContextMenuBrowserTest& operator=(
+      const ExtensionContextMenuBrowserTest&) = delete;
+
   // Returns the active WebContents.
   WebContents* GetWebContents() {
     return browser()->tab_strip_model()->GetActiveWebContents();
@@ -182,10 +190,10 @@ class ExtensionContextMenuBrowserTest
 
   bool MenuHasExtensionItemWithLabel(TestRenderViewContextMenu* menu,
                                      const std::string& label) {
-    base::string16 label16 = base::UTF8ToUTF16(label);
+    std::u16string label16 = base::UTF8ToUTF16(label);
     for (const auto& it : menu->extension_items().extension_item_map_) {
       const MenuItem::Id& id = it.second;
-      base::string16 tmp_label;
+      std::u16string tmp_label;
       EXPECT_TRUE(GetItemLabel(menu, id, &tmp_label));
       if (tmp_label == label16)
         return true;
@@ -198,7 +206,7 @@ class ExtensionContextMenuBrowserTest
   // false.
   bool GetItemLabel(TestRenderViewContextMenu* menu,
                     const MenuItem::Id& id,
-                    base::string16* result) const {
+                    std::u16string* result) const {
     int command_id = 0;
     if (!FindCommandId(menu, id, &command_id))
       return false;
@@ -259,6 +267,12 @@ class ExtensionContextMenuLazyTest
     : public ExtensionContextMenuBrowserTest,
       public testing::WithParamInterface<ContextType> {
  public:
+  ExtensionContextMenuLazyTest() = default;
+  ~ExtensionContextMenuLazyTest() override = default;
+  ExtensionContextMenuLazyTest(const ExtensionContextMenuLazyTest&) = delete;
+  ExtensionContextMenuLazyTest& operator=(const ExtensionContextMenuLazyTest&) =
+      delete;
+
   void SetUpOnMainThread() override {
     ExtensionContextMenuBrowserTest::SetUpOnMainThread();
     // Set shorter delays to prevent test timeouts.
@@ -615,7 +629,7 @@ IN_PROC_BROWSER_TEST_P(ExtensionContextMenuLazyTest, LongTitle) {
   std::unique_ptr<TestRenderViewContextMenu> menu(
       TestRenderViewContextMenu::Create(GetWebContents(), url, GURL(), GURL()));
 
-  base::string16 label;
+  std::u16string label;
   ASSERT_TRUE(GetItemLabel(menu.get(), item->id(), &label));
   ASSERT_TRUE(label.size() <= limit);
 }
@@ -634,6 +648,9 @@ IN_PROC_BROWSER_TEST_P(ExtensionContextMenuLazyTest, TopLevel) {
   //   Ze Extension with multiple Context Menus
   //     Context Menu #1
   //     Context Menu #2
+  // TODO(crbug.com/1208359): Service Worker version is very flaky.
+  if (GetParam() == ContextType::kServiceWorker)
+    return;
 
   // Load extensions and wait until it's created a single menu item.
   ExtensionTestMessageListener listener1("created item", false);
@@ -667,15 +684,12 @@ IN_PROC_BROWSER_TEST_P(ExtensionContextMenuLazyTest, TopLevel) {
   ASSERT_TRUE(menu->GetMenuModelAndItemIndex(
       ContextMenuMatcher::ConvertToExtensionsCustomCommandId(0), &model,
       &index));
-  EXPECT_EQ(base::UTF8ToUTF16("An Extension with multiple Context Menus"),
+  EXPECT_EQ(u"An Extension with multiple Context Menus",
             model->GetLabelAt(index++));
-  EXPECT_EQ(base::UTF8ToUTF16("Context Menu #1 - Extension #2"),
-            model->GetLabelAt(index++));
-  EXPECT_EQ(base::UTF8ToUTF16("Context Menu #2 - Extension #3"),
-            model->GetLabelAt(index++));
-  EXPECT_EQ(base::UTF8ToUTF16("Context Menu #3 - Extension #1"),
-            model->GetLabelAt(index++));
-  EXPECT_EQ(base::UTF8ToUTF16("Ze Extension with multiple Context Menus"),
+  EXPECT_EQ(u"Context Menu #1 - Extension #2", model->GetLabelAt(index++));
+  EXPECT_EQ(u"Context Menu #2 - Extension #3", model->GetLabelAt(index++));
+  EXPECT_EQ(u"Context Menu #3 - Extension #1", model->GetLabelAt(index++));
+  EXPECT_EQ(u"Ze Extension with multiple Context Menus",
             model->GetLabelAt(index++));
 }
 
@@ -762,7 +776,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionContextMenuPersistentTest, Separators) {
   // name.
   MenuModel* model = nullptr;
   int index = 0;
-  base::string16 label;
+  std::u16string label;
   ASSERT_TRUE(menu->GetMenuModelAndItemIndex(
       ContextMenuMatcher::ConvertToExtensionsCustomCommandId(0),
       &model,
@@ -787,7 +801,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionContextMenuPersistentTest, Separators) {
       ContextMenuMatcher::ConvertToExtensionsCustomCommandId(0),
       &model,
       &index));
-  EXPECT_EQ(base::UTF8ToUTF16("parent"), model->GetLabelAt(index));
+  EXPECT_EQ(u"parent", model->GetLabelAt(index));
   submenu = model->GetSubmenuModelAt(index);
   ASSERT_TRUE(submenu);
   VerifyMenuForSeparatorsTest(*submenu);
@@ -987,7 +1001,8 @@ IN_PROC_BROWSER_TEST_P(ExtensionContextMenuLazyTest,
                                                  false);
 
   // Create an incognito profile.
-  Profile* incognito = browser()->profile()->GetPrimaryOTRProfile();
+  Profile* incognito =
+      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true);
   ASSERT_TRUE(incognito);
   ASSERT_TRUE(LoadContextMenuExtensionWithIncognitoFlags("incognito"));
 

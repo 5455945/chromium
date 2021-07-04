@@ -6,13 +6,13 @@
 
 #include <string>
 
-#include "base/optional.h"
 #include "base/strings/string_number_conversions.h"
 #include "chrome/browser/chromeos/input_method/assistive_window_properties.h"
 #include "chrome/browser/chromeos/input_method/ui/assistive_delegate.h"
 #include "chrome/browser/chromeos/input_method/ui/suggestion_view.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/link.h"
 
@@ -64,21 +64,21 @@ class SuggestionWindowViewTest : public ChromeViewsTestBase {
         [](const views::View* v) { return !!v->background(); });
   }
 
-  base::Optional<int> GetHighlightedIndex() const {
+  absl::optional<int> GetHighlightedIndex() const {
     const auto& children =
         suggestion_window_view_->candidate_area_for_testing()->children();
     const auto it =
         std::find_if(children.cbegin(), children.cend(),
                      [](const views::View* v) { return !!v->background(); });
     return (it == children.cend())
-               ? base::nullopt
-               : base::make_optional(std::distance(children.cbegin(), it));
+               ? absl::nullopt
+               : absl::make_optional(std::distance(children.cbegin(), it));
   }
 
   SuggestionWindowView* suggestion_window_view_;
   std::unique_ptr<MockAssistiveDelegate> delegate_ =
       std::make_unique<MockAssistiveDelegate>();
-  std::vector<base::string16> candidates_;
+  std::vector<std::u16string> candidates_;
   chromeos::AssistiveWindowProperties window_;
   AssistiveWindowButton candidate_button_;
   AssistiveWindowButton setting_link_view_;
@@ -100,7 +100,7 @@ TEST_F(SuggestionWindowViewTest, HighlightOneCandidateWhenIndexIsValid) {
 
 TEST_F(SuggestionWindowViewTest, HighlightNoCandidateWhenIndexIsInvalid) {
   suggestion_window_view_->ShowMultipleCandidates(window_);
-  for (int index : {-1, int{candidates_.size()}}) {
+  for (int index : {-1, static_cast<int>(candidates_.size())}) {
     candidate_button_.index = index;
     suggestion_window_view_->SetButtonHighlighted(candidate_button_, true);
 
@@ -175,7 +175,7 @@ TEST_F(SuggestionWindowViewTest, DoesNotUnhighlightCandidateIfOutOfRange) {
   candidate_button_.index = highlight_index;
   suggestion_window_view_->SetButtonHighlighted(candidate_button_, true);
 
-  for (int index : {-1, int{candidates_.size()}}) {
+  for (int index : {-1, static_cast<int>(candidates_.size())}) {
     candidate_button_.index = index;
     suggestion_window_view_->SetButtonHighlighted(candidate_button_, false);
 

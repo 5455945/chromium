@@ -8,7 +8,7 @@
 #include <stdint.h>
 
 #include "base/memory/scoped_refptr.h"
-#include "base/optional.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/renderer/platform/geometry/int_size.h"
 #include "third_party/blink/renderer/platform/graphics/image.h"
 #include "third_party/blink/renderer/platform/graphics/image_orientation.h"
@@ -19,9 +19,7 @@
 
 namespace blink {
 
-class FloatPoint;
 class FloatRect;
-class FloatSize;
 class Font;
 class GraphicsContext;
 class ImageObserver;
@@ -40,7 +38,7 @@ class PLATFORM_EXPORT PlaceholderImage final : public Image {
 
   ~PlaceholderImage() override;
 
-  IntSize Size() const override;
+  IntSize SizeWithConfig(SizeConfig) const override;
 
   void Draw(cc::PaintCanvas*,
             const cc::PaintFlags&,
@@ -72,12 +70,9 @@ class PLATFORM_EXPORT PlaceholderImage final : public Image {
   bool CurrentFrameKnownToBeOpaque() override;
 
   void DrawPattern(GraphicsContext&,
-                   const FloatRect& src_rect,
-                   const FloatSize& scale,
-                   const FloatPoint& phase,
-                   SkBlendMode,
+                   const cc::PaintFlags&,
                    const FloatRect& dest_rect,
-                   const FloatSize& repeat_spacing,
+                   const ImageTilingInfo& tiling_info,
                    RespectImageOrientationEnum) override;
 
   // SetData does nothing, and the passed in buffer is ignored.
@@ -94,11 +89,11 @@ class PLATFORM_EXPORT PlaceholderImage final : public Image {
   scoped_refptr<SharedFont> shared_font_;
 
   // Lazily initialized.
-  base::Optional<float> cached_text_width_;
+  absl::optional<float> cached_text_width_;
   sk_sp<PaintRecord> paint_record_for_current_frame_;
   PaintImage::ContentId paint_record_content_id_;
 };
 
 }  // namespace blink
 
-#endif
+#endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_PLACEHOLDER_IMAGE_H_

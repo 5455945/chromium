@@ -13,6 +13,7 @@
 #import "ios/chrome/browser/ui/fancy_ui/primary_action_button.h"
 #include "ios/chrome/browser/ui/util/ui_util.h"
 #import "ios/chrome/browser/ui/util/uikit_ui_util.h"
+#include "ios/chrome/common/crash_report/crash_helper.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #include "ios/chrome/grit/ios_chromium_strings.h"
 #import "ui/gfx/ios/NSString+CrStringDrawing.h"
@@ -67,6 +68,11 @@ const NSTimeInterval kUploadTotalTime = 5;
 + (BOOL)hasSuggestions {
   if ([SafeModeViewController detectedThirdPartyMods])
     return YES;
+
+  static dispatch_once_t once_token = 0;
+  dispatch_once(&once_token, ^{
+    crash_helper::ProcessIntermediateReportsForSafeMode();
+  });
   return [SafeModeViewController hasReportToUpload];
 }
 
@@ -80,8 +86,8 @@ const NSTimeInterval kUploadTotalTime = 5;
   // If uploading is enabled and more than one report has stacked up, then we
   // assume that the app may be in a state that is preventing crash report
   // uploads before crashing again.
-  return crash_helper::UserEnabledUploading() &&
-         crash_helper::GetCrashReportCount() > 1;
+  return crash_helper::common::UserEnabledUploading() &&
+         crash_helper::GetPendingCrashReportCount() > 1;
 }
 
 // Return any jailbroken library that appears in SafeModeCrashingModulesConfig.
@@ -219,9 +225,9 @@ const NSTimeInterval kUploadTotalTime = 5;
   [self centerView:_startButton afterView:description];
   [_innerView addSubview:_startButton];
 
-  crash_helper::StartUploadingReportsInRecoveryMode();
   UIView* lastView = _startButton;
   if ([SafeModeViewController hasReportToUpload]) {
+    crash_helper::StartUploadingReportsInRecoveryMode();
 
     // If there are no jailbreak modifications, then present the "Sending crash
     // report..." UI.

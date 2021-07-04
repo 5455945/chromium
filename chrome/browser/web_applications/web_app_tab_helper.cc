@@ -15,7 +15,7 @@
 #include "chrome/browser/web_applications/components/web_app_ui_manager.h"
 #include "chrome/browser/web_applications/manifest_update_manager.h"
 #include "chrome/browser/web_applications/policy/web_app_policy_manager.h"
-#include "chrome/browser/web_applications/system_web_app_manager.h"
+#include "chrome/browser/web_applications/system_web_apps/system_web_app_manager.h"
 #include "content/public/browser/media_session.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/site_instance.h"
@@ -35,7 +35,7 @@ WebAppTabHelper::WebAppTabHelper(content::WebContents* web_contents)
       provider_(WebAppProviderBase::GetProviderBase(
           Profile::FromBrowserContext(web_contents->GetBrowserContext()))) {
   DCHECK(provider_);
-  observer_.Add(&provider_->registrar());
+  observation_.Observe(&provider_->registrar());
   SetAppId(
       FindAppIdWithUrlInScope(web_contents->GetSiteInstance()->GetSiteURL()));
 }
@@ -68,7 +68,10 @@ void WebAppTabHelper::SetAppId(const AppId& app_id) {
 
 void WebAppTabHelper::ReadyToCommitNavigation(
     content::NavigationHandle* navigation_handle) {
-  if (navigation_handle->IsInMainFrame()) {
+  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
+  // frames. This caller was converted automatically to the primary main frame
+  // to preserve its semantics. Follow up to confirm correctness.
+  if (navigation_handle->IsInPrimaryMainFrame()) {
     const GURL& url = navigation_handle->GetURL();
     const AppId app_id = FindAppIdWithUrlInScope(url);
     SetAppId(app_id);
@@ -85,7 +88,11 @@ void WebAppTabHelper::ReadyToCommitNavigation(
 
 void WebAppTabHelper::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
-  if (!navigation_handle->IsInMainFrame() || !navigation_handle->HasCommitted())
+  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
+  // frames. This caller was converted automatically to the primary main frame
+  // to preserve its semantics. Follow up to confirm correctness.
+  if (!navigation_handle->IsInPrimaryMainFrame() ||
+      !navigation_handle->HasCommitted())
     return;
 
   if (!navigation_handle->GetURL().IsAboutBlank())
@@ -159,7 +166,7 @@ void WebAppTabHelper::OnAppRegistrarShutdown() {
 }
 
 void WebAppTabHelper::OnAppRegistrarDestroyed() {
-  observer_.RemoveAll();
+  observation_.Reset();
 }
 
 void WebAppTabHelper::ResetAppId() {

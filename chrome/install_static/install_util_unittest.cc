@@ -8,7 +8,7 @@
 
 #include <tuple>
 
-#include "base/stl_util.h"
+#include "base/cxx17_backports.h"
 #include "base/strings/string_util.h"
 #include "base/test/test_reg_util_win.h"
 #include "base/win/win_util.h"
@@ -279,7 +279,7 @@ TEST(InstallStaticTest, SpacesAndQuotesWindowsInspired) {
 TEST(InstallStaticTest, BrowserProcessTest) {
   EXPECT_FALSE(IsProcessTypeInitialized());
   InitializeProcessType();
-  EXPECT_FALSE(IsNonBrowserProcess());
+  EXPECT_TRUE(IsBrowserProcess());
 }
 
 class InstallStaticUtilTest
@@ -710,7 +710,8 @@ TEST_P(InstallStaticUtilTest, UsageStatsPolicy) {
 }
 
 TEST_P(InstallStaticUtilTest, GetChromeChannelName) {
-  EXPECT_EQ(default_channel(), GetChromeChannelName());
+  EXPECT_EQ(default_channel(),
+            GetChromeChannelName(/*with_extended_stable=*/false));
 }
 
 TEST_P(InstallStaticUtilTest, GetSandboxSidPrefix) {

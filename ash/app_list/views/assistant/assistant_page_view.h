@@ -7,15 +7,15 @@
 
 #include <memory>
 
-#include "ash/app_list/app_list_export.h"
 #include "ash/app_list/views/app_list_page.h"
+#include "ash/ash_export.h"
 #include "ash/assistant/model/assistant_ui_model_observer.h"
 #include "ash/public/cpp/app_list/app_list_types.h"
 #include "ash/public/cpp/assistant/controller/assistant_controller.h"
 #include "ash/public/cpp/assistant/controller/assistant_controller_observer.h"
-#include "base/macros.h"
-#include "base/optional.h"
 #include "base/scoped_observation.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 
 namespace ash {
 
@@ -24,15 +24,18 @@ class AssistantViewDelegate;
 class ViewShadow;
 
 // The Assistant page for the app list.
-class APP_LIST_EXPORT AssistantPageView : public AppListPage,
-                                          public AssistantControllerObserver,
-                                          public AssistantUiModelObserver {
+class ASH_EXPORT AssistantPageView : public AppListPage,
+                                     public AssistantControllerObserver,
+                                     public AssistantUiModelObserver {
  public:
+  METADATA_HEADER(AssistantPageView);
+
   explicit AssistantPageView(AssistantViewDelegate* assistant_view_delegate);
+  AssistantPageView(const AssistantPageView&) = delete;
+  AssistantPageView& operator=(const AssistantPageView&) = delete;
   ~AssistantPageView() override;
 
   // AppListPage:
-  const char* GetClassName() const override;
   gfx::Size GetMinimumSize() const override;
   void OnBoundsChanged(const gfx::Rect& prev_bounds) override;
   void RequestFocus() override;
@@ -44,7 +47,7 @@ class APP_LIST_EXPORT AssistantPageView : public AppListPage,
   void OnAnimationStarted(AppListState from_state,
                           AppListState to_state) override;
   gfx::Size GetPreferredSearchBoxSize() const override;
-  base::Optional<int> GetSearchBoxTop(
+  absl::optional<int> GetSearchBoxTop(
       AppListViewState view_state) const override;
   void UpdatePageOpacityForState(AppListState state,
                                  float search_box_opacity,
@@ -70,8 +73,8 @@ class APP_LIST_EXPORT AssistantPageView : public AppListPage,
   void OnUiVisibilityChanged(
       AssistantVisibility new_visibility,
       AssistantVisibility old_visibility,
-      base::Optional<AssistantEntryPoint> entry_point,
-      base::Optional<AssistantExitPoint> exit_point) override;
+      absl::optional<AssistantEntryPoint> entry_point,
+      absl::optional<AssistantExitPoint> exit_point) override;
 
  private:
   void InitLayout();
@@ -88,8 +91,6 @@ class APP_LIST_EXPORT AssistantPageView : public AppListPage,
 
   base::ScopedObservation<AssistantController, AssistantControllerObserver>
       assistant_controller_observation_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(AssistantPageView);
 };
 
 }  // namespace ash

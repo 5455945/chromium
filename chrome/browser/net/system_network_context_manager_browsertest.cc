@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "base/feature_list.h"
-#include "base/optional.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -27,6 +26,7 @@
 #include "content/public/test/browser_test.h"
 #include "net/dns/public/dns_over_https_server_config.h"
 #include "net/dns/public/secure_dns_mode.h"
+#include "net/net_buildflags.h"
 #include "services/cert_verifier/test_cert_verifier_service_factory.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/network_service_buildflags.h"
@@ -35,6 +35,7 @@
 #include "testing/gmock/include/gmock/gmock-matchers.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/features.h"
 
 #if BUILDFLAG(BUILTIN_CERT_VERIFIER_FEATURE_SUPPORTED)
@@ -191,8 +192,14 @@ void RunStubResolverConfigTests(bool async_dns_feature_enabled) {
 
 using SystemNetworkContextManagerBrowsertest = InProcessBrowserTest;
 
+// TODO(crbug.com/1226023): Test is flaky.
+#if defined(OS_WIN)
+#define MAYBE_StubResolverDefaultConfig DISABLED_StubResolverDefaultConfig
+#else
+#define MAYBE_StubResolverDefaultConfig StubResolverDefaultConfig
+#endif
 IN_PROC_BROWSER_TEST_F(SystemNetworkContextManagerBrowsertest,
-                       StubResolverDefaultConfig) {
+                       MAYBE_StubResolverDefaultConfig) {
   RunStubResolverConfigTests(base::FeatureList::IsEnabled(features::kAsyncDns));
 }
 
@@ -326,8 +333,14 @@ class SystemNetworkContextManagerStubResolverBrowsertest
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
+// TODO(https://crbug.com/1225151): flaky
+#if defined(OS_WIN)
+#define MAYBE_StubResolverConfig DISABLED_StubResolverConfig
+#else
+#define MAYBE_StubResolverConfig StubResolverConfig
+#endif
 IN_PROC_BROWSER_TEST_P(SystemNetworkContextManagerStubResolverBrowsertest,
-                       StubResolverConfig) {
+                       MAYBE_StubResolverConfig) {
   RunStubResolverConfigTests(GetParam());
 }
 
@@ -392,7 +405,8 @@ IN_PROC_BROWSER_TEST_P(SystemNetworkContextManagerFreezeQUICUaBrowsertest,
   if (GetParam()) {  // if the UA Freeze feature is turned on
     EXPECT_EQ("", quic_ua);
   } else {
-    EXPECT_THAT(quic_ua, testing::HasSubstr(chrome::GetChannelName()));
+    EXPECT_THAT(quic_ua, testing::HasSubstr(chrome::GetChannelName(
+                             chrome::WithExtendedStable(false))));
     EXPECT_THAT(quic_ua,
                 testing::HasSubstr(
                     version_info::GetProductNameAndVersionForUserAgent()));
@@ -431,7 +445,7 @@ INSTANTIATE_TEST_SUITE_P(All,
 
 class SystemNetworkContextManagerCertificateTransparencyBrowsertest
     : public SystemNetworkContextManagerBrowsertest,
-      public testing::WithParamInterface<base::Optional<bool>> {
+      public testing::WithParamInterface<absl::optional<bool>> {
  public:
   SystemNetworkContextManagerCertificateTransparencyBrowsertest() {
     SystemNetworkContextManager::SetEnableCertificateTransparencyForTesting(
@@ -439,54 +453,16 @@ class SystemNetworkContextManagerCertificateTransparencyBrowsertest
   }
   ~SystemNetworkContextManagerCertificateTransparencyBrowsertest() override {
     SystemNetworkContextManager::SetEnableCertificateTransparencyForTesting(
-        base::nullopt);
+        absl::nullopt);
   }
 };
 
-#if BUILDFLAG(IS_CT_SUPPORTED)
-IN_PROC_BROWSER_TEST_P(
-    SystemNetworkContextManagerCertificateTransparencyBrowsertest,
-    CertificateTransparencyConfig) {
-  network::mojom::NetworkContextParamsPtr context_params =
-      g_browser_process->system_network_context_manager()
-          ->CreateDefaultNetworkContextParams();
-
-  const bool kDefault =
-#if BUILDFLAG(GOOGLE_CHROME_BRANDING) && defined(OFFICIAL_BUILD) && \
-    !defined(OS_ANDROID)
-      true;
-#else
-      false;
-#endif
-
-  EXPECT_EQ(GetParam().value_or(kDefault),
-            context_params->enforce_chrome_ct_policy);
-  EXPECT_NE(GetParam().value_or(kDefault), context_params->ct_logs.empty());
-
-  if (GetParam().value_or(kDefault)) {
-    bool has_google_log = false;
-    bool has_disqualified_log = false;
-    for (const auto& ct_log : context_params->ct_logs) {
-      has_google_log |= ct_log->operated_by_google;
-      has_disqualified_log |= ct_log->disqualified_at.has_value();
-    }
-    EXPECT_TRUE(has_google_log);
-    EXPECT_TRUE(has_disqualified_log);
-  }
-}
-#endif
-
-INSTANTIATE_TEST_SUITE_P(
-    All,
-    SystemNetworkContextManagerCertificateTransparencyBrowsertest,
-    ::testing::Values(base::nullopt, true, false));
-
 #if BUILDFLAG(BUILTIN_CERT_VERIFIER_FEATURE_SUPPORTED)
-class SystemNetworkContextServiceCertVerifierBuiltinFeaturePolicyTest
+class SystemNetworkContextServiceCertVerifierBuiltinPermissionsPolicyTest
     : public policy::PolicyTest,
       public testing::WithParamInterface<bool> {
  public:
-  SystemNetworkContextServiceCertVerifierBuiltinFeaturePolicyTest() {
+  SystemNetworkContextServiceCertVerifierBuiltinPermissionsPolicyTest() {
     bool use_builtin_cert_verifier = GetParam();
     cert_verifier_impl_ =
         use_builtin_cert_verifier
@@ -548,7 +524,7 @@ class SystemNetworkContextServiceCertVerifierBuiltinFeaturePolicyTest
 };
 
 IN_PROC_BROWSER_TEST_P(
-    SystemNetworkContextServiceCertVerifierBuiltinFeaturePolicyTest,
+    SystemNetworkContextServiceCertVerifierBuiltinPermissionsPolicyTest,
     Test) {
   network::mojom::NetworkContextParamsPtr network_context_params_ptr;
 
@@ -591,6 +567,6 @@ IN_PROC_BROWSER_TEST_P(
 
 INSTANTIATE_TEST_SUITE_P(
     All,
-    SystemNetworkContextServiceCertVerifierBuiltinFeaturePolicyTest,
+    SystemNetworkContextServiceCertVerifierBuiltinPermissionsPolicyTest,
     ::testing::Bool());
 #endif  // BUILDFLAG(BUILTIN_CERT_VERIFIER_FEATURE_SUPPORTED)

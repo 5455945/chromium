@@ -9,6 +9,7 @@
 
 #include "base/time/time.h"
 #include "net/base/net_export.h"
+#include "url/gurl.h"
 
 namespace net {
 
@@ -241,6 +242,60 @@ enum class CookieAccessScheme {
   kMaxValue = kTrustworthy  // Keep as the last value.
 };
 
+// Used to populate a histogram that measures which schemes are used to set
+// cookies and how frequently. Many of these probably won't/can't be used,
+// but we know about them and there's no harm in including them.
+//
+// Do not reorder or renumber. Used for metrics.
+enum class CookieSourceSchemeName {
+  kOther = 0,  // Catch all for any other schemes that may be used.
+  kAboutBlankURL = 1,
+  kAboutSrcdocURL = 2,
+  kAboutBlankPath = 3,
+  kAboutSrcdocPath = 4,
+  kAboutScheme = 5,
+  kBlobScheme = 6,
+  kContentScheme = 7,
+  kContentIDScheme = 8,
+  kDataScheme = 9,
+  kFileScheme = 10,
+  kFileSystemScheme = 11,
+  kFtpScheme = 12,
+  kHttpScheme = 13,
+  kHttpsScheme = 14,
+  kJavaScriptScheme = 15,
+  kMailToScheme = 16,
+  kQuicTransportScheme = 17,
+  kTelScheme = 18,
+  kUrnScheme = 19,
+  kWsScheme = 20,
+  kWssScheme = 21,
+  kChromeExtensionScheme = 22,
+  kMaxValue = kChromeExtensionScheme
+};
+
+// This enum must match the numbering for FirstPartySetsContextType in
+// histograms/enums.xml. Do not reorder or remove items, only add new items at
+// the end.
+enum class FirstPartySetsContextType {
+  // Unknown context type.
+  kUnknown = 0,
+  // The top frame was ignored, and the rest of the context consisted of at
+  // least 2 different parties.
+  kTopFrameIgnoredMixed = 1,
+  // The top frame was ignored, and the rest of the context was a single party.
+  kTopFrameIgnoredHomogeneous = 2,
+  // The top frame and resource URL were of different parties.
+  kTopResourceMismatch = 3,
+  // The top frame and resource URL were both of the same party, and there was
+  // at least one intervening frame of a different party.
+  kTopResourceMatchMixed = 4,
+  // The top frame, resource URL, and all intervening frames were all from the
+  // same party.
+  kHomogeneous = 5,
+  kMaxValue = kHomogeneous,
+};
+
 // Returns the Set-Cookie header priority token corresponding to |priority|.
 NET_EXPORT std::string CookiePriorityToString(CookiePriority priority);
 
@@ -269,6 +324,9 @@ NET_EXPORT void RecordCookieSameSiteAttributeValueHistogram(
 // potentially interesting values that cookies could be set by or sent to. This
 // is because UMA cannot handle the full range.
 NET_EXPORT CookiePort ReducePortRangeForCookieHistogram(const int port);
+
+// Returns the appropriate enum value for the scheme of the given GURL.
+CookieSourceSchemeName GetSchemeNameEnum(const GURL& url);
 
 }  // namespace net
 

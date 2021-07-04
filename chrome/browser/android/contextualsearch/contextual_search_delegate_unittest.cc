@@ -24,8 +24,10 @@
 #include "chrome/browser/flags/android/chrome_feature_list.h"
 #include "chrome/common/chrome_switches.h"
 #include "components/search_engines/template_url_service.h"
+#include "components/variations/scoped_variations_ids_provider.h"
 #include "net/base/escape.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -50,14 +52,14 @@ class ContextualSearchDelegateTest : public testing::Test {
         base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
             &test_url_loader_factory_);
     template_url_service_.reset(CreateTemplateURLService());
-    delegate_.reset(new ContextualSearchDelegate(
+    delegate_ = std::make_unique<ContextualSearchDelegate>(
         test_shared_url_loader_factory_, template_url_service_.get(),
         base::BindRepeating(
             &ContextualSearchDelegateTest::recordSearchTermResolutionResponse,
             base::Unretained(this)),
         base::BindRepeating(
             &ContextualSearchDelegateTest::recordSampleSelectionAvailable,
-            base::Unretained(this))));
+            base::Unretained(this)));
     feature_list_.InitAndEnableFeature(chrome::android::kRelatedSearches);
   }
 
@@ -84,13 +86,13 @@ class ContextualSearchDelegateTest : public testing::Test {
   }
 
   void CreateDefaultSearchContextAndRequestSearchTerm() {
-    base::string16 surrounding = base::UTF8ToUTF16("Barack Obama just spoke.");
+    std::u16string surrounding = u"Barack Obama just spoke.";
     CreateSearchContextAndRequestSearchTerm("Barack Obama", surrounding, 0, 6);
   }
 
   void CreateSearchContextAndRequestSearchTerm(
       const std::string& selected_text,
-      const base::string16& surrounding_text,
+      const std::u16string& surrounding_text,
       int start_offset,
       int end_offset) {
     test_context_ = new ContextualSearchContext(
@@ -141,7 +143,7 @@ class ContextualSearchDelegateTest : public testing::Test {
   // Cannot be in an actual test because OnTextSurroundingSelectionAvailable
   // is private.
   void CallOnTextSurroundingSelectionAvailable() {
-    delegate_->OnTextSurroundingSelectionAvailable(base::string16(), 1, 2);
+    delegate_->OnTextSurroundingSelectionAvailable(std::u16string(), 1, 2);
   }
 
   void CallResolveSearchTermFromContext() {
@@ -169,7 +171,7 @@ class ContextualSearchDelegateTest : public testing::Test {
     base::RunLoop().RunUntilIdle();
   }
 
-  void SetSurroundingContext(const base::string16& surrounding_text,
+  void SetSurroundingContext(const std::u16string& surrounding_text,
                              int start_offset,
                              int end_offset) {
     test_context_ = new ContextualSearchContext(
@@ -236,7 +238,7 @@ class ContextualSearchDelegateTest : public testing::Test {
   std::string search_url_full() { return search_url_full_; }
   std::string search_url_preload() { return search_url_preload_; }
   int coca_card_tag() { return coca_card_tag_; }
-  std::vector<std::string> related_searches() { return related_searches_; }
+  std::string related_searches_json() { return related_searches_json_; }
 
   // The delegate under test.
   std::unique_ptr<ContextualSearchDelegate> delegate_;
@@ -264,11 +266,11 @@ class ContextualSearchDelegateTest : public testing::Test {
     search_url_full_ = resolved_search_term.search_url_full;
     search_url_preload_ = resolved_search_term.search_url_preload;
     coca_card_tag_ = resolved_search_term.coca_card_tag;
-    related_searches_ = resolved_search_term.related_searches;
+    related_searches_json_ = resolved_search_term.related_searches_json;
   }
 
   void recordSampleSelectionAvailable(const std::string& encoding,
-                                      const base::string16& surrounding_text,
+                                      const std::u16string& surrounding_text,
                                       size_t start_offset,
                                       size_t end_offset) {
     // unused.
@@ -293,10 +295,12 @@ class ContextualSearchDelegateTest : public testing::Test {
   std::string search_url_full_;
   std::string search_url_preload_;
   int coca_card_tag_;
-  std::vector<std::string> related_searches_;
+  std::string related_searches_json_;
 
   base::test::SingleThreadTaskEnvironment task_environment_{
       base::test::SingleThreadTaskEnvironment::MainThreadType::IO};
+  variations::ScopedVariationsIdsProvider scoped_variations_ids_provider_{
+      variations::VariationsIdsProvider::Mode::kUseSignedInState};
   std::unique_ptr<TemplateURLService> template_url_service_;
   scoped_refptr<network::SharedURLLoaderFactory>
       test_shared_url_loader_factory_;
@@ -401,7 +405,7 @@ TEST_F(ContextualSearchDelegateTest, InvalidResponse) {
 }
 
 TEST_F(ContextualSearchDelegateTest, ExpandSelectionToEnd) {
-  base::string16 surrounding = base::UTF8ToUTF16("Barack Obama just spoke.");
+  std::u16string surrounding = u"Barack Obama just spoke.";
   std::string selected_text = "Barack";
   CreateSearchContextAndRequestSearchTerm(selected_text, surrounding, 0, 6);
   SetResponseStringAndSimulateResponse(selected_text, "0", "12");
@@ -411,7 +415,7 @@ TEST_F(ContextualSearchDelegateTest, ExpandSelectionToEnd) {
 }
 
 TEST_F(ContextualSearchDelegateTest, ExpandSelectionToStart) {
-  base::string16 surrounding = base::UTF8ToUTF16("Barack Obama just spoke.");
+  std::u16string surrounding = u"Barack Obama just spoke.";
   std::string selected_text = "Obama";
   CreateSearchContextAndRequestSearchTerm(selected_text, surrounding, 7, 12);
   SetResponseStringAndSimulateResponse(selected_text, "0", "12");
@@ -421,7 +425,7 @@ TEST_F(ContextualSearchDelegateTest, ExpandSelectionToStart) {
 }
 
 TEST_F(ContextualSearchDelegateTest, ExpandSelectionBothDirections) {
-  base::string16 surrounding = base::UTF8ToUTF16("Barack Obama just spoke.");
+  std::u16string surrounding = u"Barack Obama just spoke.";
   std::string selected_text = "Ob";
   CreateSearchContextAndRequestSearchTerm(selected_text, surrounding, 7, 9);
   SetResponseStringAndSimulateResponse(selected_text, "0", "12");
@@ -431,7 +435,7 @@ TEST_F(ContextualSearchDelegateTest, ExpandSelectionBothDirections) {
 }
 
 TEST_F(ContextualSearchDelegateTest, ExpandSelectionInvalidRange) {
-  base::string16 surrounding = base::UTF8ToUTF16("Barack Obama just spoke.");
+  std::u16string surrounding = u"Barack Obama just spoke.";
   std::string selected_text = "Ob";
   CreateSearchContextAndRequestSearchTerm(selected_text, surrounding, 7, 9);
   SetResponseStringAndSimulateResponse(selected_text, "0", "1001");
@@ -441,7 +445,7 @@ TEST_F(ContextualSearchDelegateTest, ExpandSelectionInvalidRange) {
 }
 
 TEST_F(ContextualSearchDelegateTest, ExpandSelectionInvalidDistantStart) {
-  base::string16 surrounding = base::UTF8ToUTF16("Barack Obama just spoke.");
+  std::u16string surrounding = u"Barack Obama just spoke.";
   std::string selected_text = "Ob";
   CreateSearchContextAndRequestSearchTerm(selected_text, surrounding,
                                           0xffffffff, 0xffffffff - 2);
@@ -452,7 +456,7 @@ TEST_F(ContextualSearchDelegateTest, ExpandSelectionInvalidDistantStart) {
 }
 
 TEST_F(ContextualSearchDelegateTest, ExpandSelectionInvalidNoOverlap) {
-  base::string16 surrounding = base::UTF8ToUTF16("Barack Obama just spoke.");
+  std::u16string surrounding = u"Barack Obama just spoke.";
   std::string selected_text = "Ob";
   CreateSearchContextAndRequestSearchTerm(selected_text, surrounding, 0, 12);
   SetResponseStringAndSimulateResponse(selected_text, "12", "14");
@@ -462,7 +466,7 @@ TEST_F(ContextualSearchDelegateTest, ExpandSelectionInvalidNoOverlap) {
 }
 
 TEST_F(ContextualSearchDelegateTest, ExpandSelectionInvalidDistantEndAndRange) {
-  base::string16 surrounding = base::UTF8ToUTF16("Barack Obama just spoke.");
+  std::u16string surrounding = u"Barack Obama just spoke.";
   std::string selected_text = "Ob";
   CreateSearchContextAndRequestSearchTerm(selected_text, surrounding,
                                           0xffffffff, 0xffffffff - 2);
@@ -473,7 +477,7 @@ TEST_F(ContextualSearchDelegateTest, ExpandSelectionInvalidDistantEndAndRange) {
 }
 
 TEST_F(ContextualSearchDelegateTest, ExpandSelectionLargeNumbers) {
-  base::string16 surrounding = base::UTF8ToUTF16("Barack Obama just spoke.");
+  std::u16string surrounding = u"Barack Obama just spoke.";
   std::string selected_text = "Ob";
   CreateSearchContextAndRequestSearchTerm(selected_text, surrounding,
                                           268435450, 268435455);
@@ -484,7 +488,7 @@ TEST_F(ContextualSearchDelegateTest, ExpandSelectionLargeNumbers) {
 }
 
 TEST_F(ContextualSearchDelegateTest, ContractSelectionValid) {
-  base::string16 surrounding = base::UTF8ToUTF16("Barack Obama just spoke.");
+  std::u16string surrounding = u"Barack Obama just spoke.";
   std::string selected_text = "Barack Obama just";
   CreateSearchContextAndRequestSearchTerm(selected_text, surrounding, 0, 17);
   SetResponseStringAndSimulateResponse(selected_text, "0", "12");
@@ -494,7 +498,7 @@ TEST_F(ContextualSearchDelegateTest, ContractSelectionValid) {
 }
 
 TEST_F(ContextualSearchDelegateTest, ContractSelectionInvalid) {
-  base::string16 surrounding = base::UTF8ToUTF16("Barack Obama just spoke.");
+  std::u16string surrounding = u"Barack Obama just spoke.";
   std::string selected_text = "Barack Obama just";
   CreateSearchContextAndRequestSearchTerm(selected_text, surrounding, 0, 17);
   SetResponseStringAndSimulateResponse(selected_text, "5", "5");
@@ -515,42 +519,42 @@ TEST_F(ContextualSearchDelegateTest, ExtractMentionsStartEnd) {
 }
 
 TEST_F(ContextualSearchDelegateTest, SampleSurroundingText) {
-  base::string16 sample = base::ASCIIToUTF16("this is Barack Obama in office.");
+  std::u16string sample = u"this is Barack Obama in office.";
   int limit_each_side = 3;
   size_t start = 8;
   size_t end = 20;
-  base::string16 result =
+  std::u16string result =
       delegate_->SampleSurroundingText(sample, limit_each_side, &start, &end);
   EXPECT_EQ(static_cast<size_t>(3), start);
   EXPECT_EQ(static_cast<size_t>(15), end);
-  EXPECT_EQ(base::ASCIIToUTF16("is Barack Obama in"), result);
+  EXPECT_EQ(u"is Barack Obama in", result);
 }
 
 TEST_F(ContextualSearchDelegateTest, SampleSurroundingTextNegativeLimit) {
-  base::string16 sample = base::ASCIIToUTF16("this is Barack Obama in office.");
+  std::u16string sample = u"this is Barack Obama in office.";
   int limit_each_side = -2;
   size_t start = 8;
   size_t end = 20;
-  base::string16 result =
+  std::u16string result =
       delegate_->SampleSurroundingText(sample, limit_each_side, &start, &end);
   EXPECT_EQ(static_cast<size_t>(0), start);
   EXPECT_EQ(static_cast<size_t>(12), end);
-  EXPECT_EQ(base::ASCIIToUTF16("Barack Obama"), result);
+  EXPECT_EQ(u"Barack Obama", result);
 }
 
 TEST_F(ContextualSearchDelegateTest, SampleSurroundingTextSameStartEnd) {
-  base::string16 sample = base::ASCIIToUTF16("this is Barack Obama in office.");
+  std::u16string sample = u"this is Barack Obama in office.";
   int limit_each_side = 3;
   size_t start = 11;
   size_t end = 11;
-  base::string16 result =
+  std::u16string result =
       delegate_->SampleSurroundingText(sample, limit_each_side, &start, &end);
   VLOG(0) << "start " << start;
   VLOG(0) << "end " << end;
   VLOG(0) << "result " << result;
   EXPECT_EQ(static_cast<size_t>(3), start);
   EXPECT_EQ(static_cast<size_t>(3), end);
-  EXPECT_EQ(base::ASCIIToUTF16("Barack"), result);
+  EXPECT_EQ(u"Barack", result);
 }
 
 TEST_F(ContextualSearchDelegateTest, DecodeSearchTermFromJsonResponse) {
@@ -566,7 +570,8 @@ TEST_F(ContextualSearchDelegateTest, DecodeSearchTermFromJsonResponse) {
       "\"search_url_preload\":\"https://www.google.com/"
       "search?q=define+obscure&ctxs=2&pf=c&sns=1\","
       "\"card_tag\":12,"
-      "\"searches\":[\"Barack Obama\",\"Donald Trump\"]"
+      "\"suggestions\":{\"content\":[{\"title\":\"Barack "
+      "Obama\"},{\"title\":\"Donald Trump\"}]}"
       "}";
   std::string search_term;
   std::string display_text;
@@ -584,14 +589,14 @@ TEST_F(ContextualSearchDelegateTest, DecodeSearchTermFromJsonResponse) {
   std::string search_url_full;
   std::string search_url_preload;
   int coca_card_tag;
-  std::vector<std::string> related_searches;
+  std::string related_searches_json;
 
   delegate_->DecodeSearchTermFromJsonResponse(
       json_with_escape, &search_term, &display_text, &alternate_term, &mid,
       &prevent_preload, &mention_start, &mention_end, &context_language,
       &thumbnail_url, &caption, &quick_action_uri, &quick_action_category,
       &logged_event_id, &search_url_full, &search_url_preload, &coca_card_tag,
-      &related_searches);
+      &related_searches_json);
 
   EXPECT_EQ("obama", search_term);
   EXPECT_EQ("Barack Obama", display_text);
@@ -611,9 +616,7 @@ TEST_F(ContextualSearchDelegateTest, DecodeSearchTermFromJsonResponse) {
   EXPECT_EQ("https://www.google.com/search?q=define+obscure&ctxs=2&pf=c&sns=1",
             search_url_preload);
   EXPECT_EQ(12, coca_card_tag);
-  EXPECT_EQ(2u, related_searches.size());
-  EXPECT_EQ("Barack Obama", related_searches[0]);
-  EXPECT_EQ("Donald Trump", related_searches[1]);
+  EXPECT_FALSE(related_searches_json.empty());
 }
 
 TEST_F(ContextualSearchDelegateTest, ResponseWithLanguage) {
@@ -710,25 +713,31 @@ TEST_F(ContextualSearchDelegateTest, ResponseWithStringCocaCardTag) {
 
 TEST_F(ContextualSearchDelegateTest, ResponseWithRelatedSearches) {
   CreateDefaultSearchContextAndRequestSearchTerm();
-  std::string response("{\"searches\":[\"RSS 1\",\"RSS 2\"]}");
+  // Although this JSON is a reasonable sample of expected content the nested
+  // JSON for the suggestions is not parsed in native code.
+  std::string response(
+      "{\"suggestions\":"
+      "{\"content\":"
+      "[{\"title\":\"Barack Obama\"},{\"title\":\"Donald Trump\"}]}}");
   SimulateResponseReturned(response);
-  EXPECT_EQ(2u, related_searches().size());
-  EXPECT_EQ("RSS 1", related_searches()[0]);
-  EXPECT_EQ("RSS 2", related_searches()[1]);
+  EXPECT_TRUE(related_searches_json().find("Barack Obama") !=
+              std::string::npos);
+  EXPECT_TRUE(related_searches_json().find("Donald Trump") !=
+              std::string::npos);
 }
 
 TEST_F(ContextualSearchDelegateTest, ResponseWithRelatedSearchesWhenDisabled) {
   base::test::ScopedFeatureList local_feature_list;
   local_feature_list.InitAndDisableFeature(chrome::android::kRelatedSearches);
   CreateDefaultSearchContextAndRequestSearchTerm();
-  std::string response("{\"searches\":[\"RSS 1\",\"RSS 2\"]}");
+  std::string response("{\"rsearches\":{\"RSS 1\",\"RSS 2\"}");
   SimulateResponseReturned(response);
-  EXPECT_EQ(0u, related_searches().size());
+  EXPECT_TRUE(related_searches_json().empty());
 }
 
 TEST_F(ContextualSearchDelegateTest, ResponseWithEmptyRelatedSearches) {
   CreateDefaultSearchContextAndRequestSearchTerm();
-  std::string response("{\"searches\":[]}");
+  std::string response("{\"rsearches\":{}");
   SimulateResponseReturned(response);
-  EXPECT_EQ(0u, related_searches().size());
+  EXPECT_TRUE(related_searches_json().empty());
 }

@@ -1,7 +1,12 @@
 // Copyright 2014 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-'use strict';
+
+import {addEntries, ENTRIES, RootPath, sendTestMessage, TestEntryInfo} from '../test_util.js';
+import {testcase} from '../testcase.js';
+
+import {IGNORE_APP_ERRORS, isSinglePartitionFormat, openNewWindow, remoteCall, setupAndWaitUntilReady} from './background.js';
+import {BASIC_DRIVE_ENTRY_SET, BASIC_FAKE_ENTRY_SET, BASIC_LOCAL_ENTRY_SET, COMPUTERS_ENTRY_SET} from './test_data.js';
 
 /**
  * Checks if the files initially added by the C++ side are displayed, and
@@ -11,12 +16,11 @@
  * @param {Array<TestEntryInfo>} defaultEntries Default file entries.
  */
 async function fileDisplay(path, defaultEntries) {
-  const defaultList = TestEntryInfo.getExpectedRows(defaultEntries).sort();
-
   // Open Files app on the given |path| with default file entries.
   const appId = await setupAndWaitUntilReady(path);
 
   // Verify the default file list is present in |result|.
+  const defaultList = TestEntryInfo.getExpectedRows(defaultEntries).sort();
   await remoteCall.waitForFiles(appId, defaultList);
 
   // Add new file entries.
@@ -321,9 +325,8 @@ testcase.fileDisplayUsbPartitionSort = async () => {
   // Sort by type in ascending order.
   await remoteCall.callRemoteTestUtil(
       'fakeMouseClick', appId, ['.table-header-cell:nth-of-type(4)']);
-  const iconSortedAsc = (await isFilesNg(appId)) ?
-      '.table-header-cell .sorted [iron-icon="files16:arrow_up_small"]' :
-      '.table-header-sort-image-asc';
+  const iconSortedAsc =
+      '.table-header-cell .sorted [iron-icon="files16:arrow_up_small"]';
   await remoteCall.waitForElement(appId, iconSortedAsc);
 
   // Check that partitions are sorted in ascending order based on the partition
@@ -338,9 +341,8 @@ testcase.fileDisplayUsbPartitionSort = async () => {
   // Sort by type in descending order.
   await remoteCall.callRemoteTestUtil(
       'fakeMouseClick', appId, ['.table-header-cell:nth-of-type(4)']);
-  const iconSortedDesc = (await isFilesNg(appId)) ?
-      '.table-header-cell .sorted [iron-icon="files16:arrow_down_small"]' :
-      '.table-header-sort-image-desc';
+  const iconSortedDesc =
+      '.table-header-cell .sorted [iron-icon="files16:arrow_down_small"]';
   await remoteCall.waitForElement(appId, iconSortedDesc);
 
   // Check that partitions are sorted in descending order based on the partition
@@ -400,8 +402,7 @@ async function searchDownloads(searchTerm, expectedResults) {
       'fakeEvent', appId, ['#search-box cr-input', 'focus']));
 
   // Input a text.
-  await remoteCall.callRemoteTestUtil(
-      'inputText', appId, ['#search-box cr-input', searchTerm]);
+  await remoteCall.inputText(appId, '#search-box cr-input', searchTerm);
 
   // Notify the element of the input.
   chrome.test.assertTrue(!!await remoteCall.callRemoteTestUtil(
@@ -440,8 +441,7 @@ testcase.fileSearchNotFound = async () => {
       'fakeEvent', appId, ['#search-box cr-input', 'focus']));
 
   // Input a text.
-  await remoteCall.callRemoteTestUtil(
-      'inputText', appId, ['#search-box cr-input', searchTerm]);
+  await remoteCall.inputText(appId, '#search-box cr-input', searchTerm);
 
   // Notify the element of the input.
   await remoteCall.callRemoteTestUtil(
@@ -517,8 +517,12 @@ testcase.fileDisplayWithoutVolumesThenMountDownloads = async () => {
   const downloadsRow = ['Downloads', '--', 'Folder'];
   const crostiniRow = ['Linux files', '--', 'Folder'];
   const trashRow = ['Trash', '--', 'Folder'];
+  const expectedRows = [downloadsRow, crostiniRow, trashRow];
+  if (await sendTestMessage({name: 'isTrashEnabled'}) !== 'true') {
+    expectedRows.pop();
+  }
   await remoteCall.waitForFiles(
-      appId, [downloadsRow, crostiniRow, trashRow],
+      appId, expectedRows,
       {ignoreFileSize: true, ignoreLastModifiedTime: true});
 };
 
@@ -716,6 +720,9 @@ testcase.fileDisplayUnmountDriveWithSharedWithMeSelected = async () => {
     ['Linux files', '--', 'Folder'],
     ['Trash', '--', 'Folder'],
   ];
+  if (await sendTestMessage({name: 'isTrashEnabled'}) !== 'true') {
+    expectedRows.pop();
+  }
   await remoteCall.waitForFiles(
       appId, expectedRows, {ignoreLastModifiedTime: true});
 };
@@ -778,6 +785,9 @@ async function unmountRemovableVolume(removableDirectory) {
     ['Linux files', '--', 'Folder'],
     ['Trash', '--', 'Folder'],
   ];
+  if (await sendTestMessage({name: 'isTrashEnabled'}) !== 'true') {
+    expectedRows.pop();
+  }
   await remoteCall.waitForFiles(
       appId, expectedRows, {ignoreLastModifiedTime: true});
 }

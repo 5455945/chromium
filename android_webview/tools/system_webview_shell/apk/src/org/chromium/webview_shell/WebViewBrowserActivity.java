@@ -274,6 +274,8 @@ public class WebViewBrowserActivity extends AppCompatActivity {
         } else if (manufacturer.equals("lge")) {
             // https://crbug.com/1090841#c33
             threadPolicyBuilder = threadPolicyBuilder.permitDiskReads();
+            // https://crbug.com/1198139
+            threadPolicyBuilder = threadPolicyBuilder.permitDiskWrites();
         } else if (manufacturer.equals("oneplus")) {
             // https://crbug.com/1090841#c37
             threadPolicyBuilder = threadPolicyBuilder.permitDiskReads();
@@ -677,6 +679,13 @@ public class WebViewBrowserActivity extends AppCompatActivity {
         } else if (itemId == R.id.menu_devui) {
             launchWebViewDevUI();
             return true;
+        } else if (itemId == R.id.menu_hide) {
+            if (mWebView.getVisibility() == View.VISIBLE) {
+                mWebView.setVisibility(View.INVISIBLE);
+            } else {
+                mWebView.setVisibility(View.VISIBLE);
+            }
+            return true;
         }
         return super.onOptionsItemSelected(item);
     }
@@ -702,6 +711,7 @@ public class WebViewBrowserActivity extends AppCompatActivity {
         settings.setGeolocationEnabled(true);
         settings.setDatabaseEnabled(true);
         settings.setDomStorageEnabled(true);
+        settings.setAllowFileAccess(true);
 
         // Default layout behavior for chrome on android.
         settings.setUseWideViewPort(true);

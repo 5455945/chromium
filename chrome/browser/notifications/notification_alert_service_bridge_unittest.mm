@@ -2,17 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "base/mac/scoped_nsobject.h"
+#include "base/process/process_handle.h"
 #include "base/run_loop.h"
-#include "base/strings/string16.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #import "chrome/browser/notifications/notification_alert_service_bridge.h"
 #include "chrome/services/mac_notifications/public/cpp/notification_constants_mac.h"
 #include "chrome/services/mac_notifications/public/cpp/notification_operation.h"
 #include "chrome/services/mac_notifications/public/mojom/mac_notifications.mojom.h"
+#include "chrome/test/base/testing_browser_process.h"
+#include "chrome/test/base/testing_profile_manager.h"
 #include "content/public/test/browser_task_environment.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -38,6 +43,10 @@ class MockNotificationService
   MOCK_METHOD(void,
               CloseNotification,
               (mac_notifications::mojom::NotificationIdentifierPtr),
+              (override));
+  MOCK_METHOD(void,
+              CloseNotificationsForProfile,
+              (mac_notifications::mojom::ProfileIdentifierPtr),
               (override));
   MOCK_METHOD(void, CloseAllNotifications, (), (override));
 };
@@ -82,10 +91,22 @@ class NotificationAlertServiceBridgeTest : public testing::Test {
     run_loop.Run();
   }
 
-  ~NotificationAlertServiceBridgeTest() override = default;
+  ~NotificationAlertServiceBridgeTest() override {
+    // Make sure we run all remaining posted tasks that may use
+    // |profile_manager_| before we destroy it.
+    task_environment_.RunUntilIdle();
+  }
+
+  // testing::Test:
+  void SetUp() override {
+    profile_manager_ = std::make_unique<TestingProfileManager>(
+        TestingBrowserProcess::GetGlobal());
+    ASSERT_TRUE(profile_manager_->SetUp());
+  }
 
  protected:
   content::BrowserTaskEnvironment task_environment_;
+  std::unique_ptr<TestingProfileManager> profile_manager_;
   base::MockOnceClosure on_disconnect_;
   base::MockRepeatingClosure on_action_;
   MockNotificationService mock_service_;
@@ -116,15 +137,15 @@ TEST_F(NotificationAlertServiceBridgeTest, DeliverNotification) {
         EXPECT_EQ("profileId", identifier->profile->id);
         EXPECT_TRUE(identifier->profile->incognito);
 
-        EXPECT_EQ(STRING16_LITERAL("title"), notification->title);
-        EXPECT_EQ(STRING16_LITERAL("subtitle"), notification->subtitle);
-        EXPECT_EQ(STRING16_LITERAL("body"), notification->body);
+        EXPECT_EQ(u"title", notification->title);
+        EXPECT_EQ(u"subtitle", notification->subtitle);
+        EXPECT_EQ(u"body", notification->body);
         EXPECT_FALSE(notification->renotify);
         EXPECT_TRUE(notification->show_settings_button);
 
         ASSERT_EQ(2u, notification->buttons.size());
-        EXPECT_EQ(STRING16_LITERAL("button1"), notification->buttons[0]->title);
-        EXPECT_EQ(STRING16_LITERAL("button2"), notification->buttons[1]->title);
+        EXPECT_EQ(u"button1", notification->buttons[0]->title);
+        EXPECT_EQ(u"button2", notification->buttons[1]->title);
         run_loop.Quit();
       });
 
@@ -216,6 +237,19 @@ TEST_F(NotificationAlertServiceBridgeTest, CloseNotification) {
   run_loop.Run();
 }
 
+TEST_F(NotificationAlertServiceBridgeTest, CloseProfileNotifications) {
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock_service_, CloseNotificationsForProfile)
+      .WillOnce([&](mac_notifications::mojom::ProfileIdentifierPtr profile) {
+        ASSERT_TRUE(profile);
+        ASSERT_EQ("profileId", profile->id);
+        EXPECT_TRUE(profile->incognito);
+        run_loop.Quit();
+      });
+  [bridge_ closeNotificationsWithProfileId:@"profileId" incognito:YES];
+  run_loop.Run();
+}
+
 TEST_F(NotificationAlertServiceBridgeTest, CloseAllNotifications) {
   base::RunLoop run_loop;
   EXPECT_CALL(mock_service_, CloseAllNotifications).WillOnce([&]() {
@@ -226,6 +260,7 @@ TEST_F(NotificationAlertServiceBridgeTest, CloseAllNotifications) {
 }
 
 TEST_F(NotificationAlertServiceBridgeTest, OnNotificationAction) {
+  base::HistogramTester histogram_tester;
   auto profile_identifier = mac_notifications::mojom::ProfileIdentifier::New(
       "profileId", /*incognito=*/true);
   auto notification_identifier =
@@ -233,17 +268,21 @@ TEST_F(NotificationAlertServiceBridgeTest, OnNotificationAction) {
           "notificationId", std::move(profile_identifier));
   auto meta = mac_notifications::mojom::NotificationMetadata::New(
       std::move(notification_identifier), /*type=*/0, /*origin_url=*/GURL(),
-      /*creator_pid=*/0);
+      base::GetCurrentProcId());
 
   base::RunLoop run_loop;
   EXPECT_CALL(on_action_, Run).WillOnce([&]() { run_loop.Quit(); });
 
   auto action_info = mac_notifications::mojom::NotificationActionInfo::New(
       std::move(meta), NotificationOperation::NOTIFICATION_CLICK,
-      /*button_index=*/-1, /*reply=*/base::nullopt);
+      /*button_index=*/-1, /*reply=*/absl::nullopt);
   handler_remote_->OnNotificationAction(std::move(action_info));
 
   // TODO(knollr): verify expected notification action data.
   // Wait until the action has been handled.
   run_loop.Run();
+
+  histogram_tester.ExpectUniqueSample(
+      "Notifications.macOS.ActionReceived.Alert", /*sample=*/true,
+      /*expected_count=*/1);
 }

@@ -4,6 +4,7 @@
 
 #include "remoting/client/software_video_renderer.h"
 
+#include <memory>
 #include <utility>
 
 #include "base/bind.h"
@@ -79,7 +80,7 @@ void SoftwareVideoRenderer::OnSessionConfig(
   // Initialize decoder based on the selected codec.
   ChannelConfig::Codec codec = config.video_config().codec;
   if (codec == ChannelConfig::CODEC_VERBATIM) {
-    decoder_.reset(new VideoDecoderVerbatim());
+    decoder_ = std::make_unique<VideoDecoderVerbatim>();
   } else if (codec == ChannelConfig::CODEC_VP8) {
     decoder_ = VideoDecoderVpx::CreateForVP8();
   } else if (codec == ChannelConfig::CODEC_VP9) {
@@ -159,7 +160,7 @@ void SoftwareVideoRenderer::ProcessVideoPacket(
                      std::move(frame)),
       base::BindOnce(&SoftwareVideoRenderer::RenderFrame,
                      weak_factory_.GetWeakPtr(), std::move(frame_stats),
-                     base::AdaptCallbackForRepeating(done_runner.Release())));
+                     done_runner.Release()));
 }
 
 void SoftwareVideoRenderer::RenderFrame(

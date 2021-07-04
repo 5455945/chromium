@@ -9,12 +9,13 @@
 #include "base/time/time.h"
 #include "content/browser/conversions/conversion_report.h"
 #include "content/browser/conversions/conversion_storage.h"
+#include "content/browser/conversions/storable_impression.h"
 #include "content/common/content_export.h"
 
 namespace content {
 
 // Implementation of the storage delegate. This class handles assigning
-// attribution credits and report times to newly created conversion reports. It
+// report times to newly created conversion reports. It
 // also controls constants for ConversionStorage. This is owned by
 // ConversionStorageSql, and should only be accessed on the conversions storage
 // task runner.
@@ -29,18 +30,18 @@ class CONTENT_EXPORT ConversionStorageDelegateImpl
   ~ConversionStorageDelegateImpl() override = default;
 
   // ConversionStorageDelegate:
-  void ProcessNewConversionReports(
-      std::vector<ConversionReport>* reports) override;
-  int GetMaxConversionsPerImpression() const override;
+  base::Time GetReportTime(const ConversionReport& report) const override;
+  int GetMaxConversionsPerImpression(
+      StorableImpression::SourceType source_type) const override;
   int GetMaxImpressionsPerOrigin() const override;
   int GetMaxConversionsPerOrigin() const override;
+  int GetMaxAttributionDestinationsPerEventSource() const override;
+  RateLimitConfig GetRateLimits() const override;
+  StorableImpression::AttributionLogic SelectAttributionLogic(
+      const StorableImpression& impression) const override;
+  uint64_t GetFakeEventSourceTriggerData() const override;
 
  private:
-  // Get the time a conversion report should be sent, by batching reports into
-  // set reporting windows based on their impression time. This strictly delays
-  // the time a report will be sent.
-  base::Time GetReportTimeForConversion(const ConversionReport& report) const;
-
   // Whether the API is running in debug mode, meaning that there should be
   // no delays or noise added to reports.
   bool debug_mode_ = false;

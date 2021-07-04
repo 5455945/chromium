@@ -82,6 +82,12 @@ class AccessContextAuditDatabase
   // Persists the provided list of |records| in the database.
   void AddRecords(const std::vector<AccessRecord>& records);
 
+  // Returns all cookie entries in the database. No ordering is enforced.
+  std::vector<AccessRecord> GetCookieRecords();
+
+  // Returns all storage entries in the database. No ordering is enforced.
+  std::vector<AccessRecord> GetStorageRecords();
+
   // Returns all entries in the database. No ordering is enforced.
   std::vector<AccessRecord> GetAllRecords();
 
@@ -90,6 +96,13 @@ class AccessContextAuditDatabase
 
   // Removes all records from the the database.
   void RemoveAllRecords();
+
+  // Remove all records from the database from a history deletion.
+  // Unlike RemoveAllRecords, this method keeps a record of cross-site storage
+  // access but replaces the top-level origin with an opaque origin. This is due
+  // to the fact that we use cross-site storage access records to clear
+  // third-party storage when a user manually clears third-party cookies.
+  void RemoveAllRecordsHistory();
 
   // Removes all records where |begin| <= record.last_access_time <= |end|.
   void RemoveAllRecordsForTimeRange(base::Time begin, base::Time end);
@@ -128,6 +141,9 @@ class AccessContextAuditDatabase
  private:
   friend class base::RefCountedThreadSafe<AccessContextAuditDatabase>;
   bool InitializeSchema();
+
+  std::vector<AccessRecord> GetStorageRecordsForTopFrameOrigins(
+      const std::vector<url::Origin>& origins);
 
   sql::Database db_;
   sql::MetaTable meta_table_;

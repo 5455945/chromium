@@ -4,28 +4,29 @@
 
 #include "chrome/browser/ash/login/enrollment/enrollment_screen.h"
 
+#include <memory>
+
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/callback_helpers.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/timer/elapsed_timer.h"
+#include "chrome/browser/ash/login/configuration_keys.h"
 #include "chrome/browser/ash/login/enrollment/enrollment_uma.h"
+#include "chrome/browser/ash/login/screen_manager.h"
+#include "chrome/browser/ash/login/screens/base_screen.h"
+#include "chrome/browser/ash/login/startup_utils.h"
+#include "chrome/browser/ash/login/ui/login_display_host.h"
+#include "chrome/browser/ash/login/wizard_context.h"
+#include "chrome/browser/ash/login/wizard_controller.h"
+#include "chrome/browser/ash/policy/core/browser_policy_connector_chromeos.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/chromeos/login/configuration_keys.h"
-#include "chrome/browser/chromeos/login/screen_manager.h"
-#include "chrome/browser/chromeos/login/screens/base_screen.h"
-#include "chrome/browser/chromeos/login/startup_utils.h"
-#include "chrome/browser/chromeos/login/ui/login_display_host.h"
-#include "chrome/browser/chromeos/login/wizard_context.h"
-#include "chrome/browser/chromeos/login/wizard_controller.h"
-#include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
-#include "chrome/browser/chromeos/policy/tpm_auto_update_mode_policy_handler.h"
+#include "chrome/browser/chromeos/policy/handlers/tpm_auto_update_mode_policy_handler.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/policy/enrollment_status.h"
-#include "chromeos/dbus/cryptohome/cryptohome_client.h"
 #include "chromeos/dbus/dbus_method_call_status.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
@@ -33,7 +34,10 @@
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "ui/chromeos/devicetype_utils.h"
 
-using policy::EnrollmentConfig;
+namespace ash {
+namespace {
+
+using ::policy::EnrollmentConfig;
 
 // Do not change the UMA histogram parameters without renaming the histograms!
 #define UMA_ENROLLMENT_TIME(histogram_name, elapsed_timer)                   \
@@ -43,8 +47,6 @@ using policy::EnrollmentConfig;
         base::TimeDelta::FromMilliseconds(100) /* min */,                    \
         base::TimeDelta::FromMinutes(15) /* max */, 100 /* bucket_count */); \
   } while (0)
-
-namespace {
 
 const char* const kMetricEnrollmentTimeCancel =
     "Enterprise.EnrollmentTime.Cancel";
@@ -84,8 +86,6 @@ std::string GetEnterpriseDomainManager() {
 
 }  // namespace
 
-namespace chromeos {
-
 // static
 std::string EnrollmentScreen::GetResultString(Result result) {
   switch (result) {
@@ -116,7 +116,7 @@ EnrollmentScreen::EnrollmentScreen(EnrollmentScreenView* view,
   retry_policy_.maximum_backoff_ms = kMaxDelayMS;
   retry_policy_.entry_lifetime_ms = -1;
   retry_policy_.always_use_initial_delay = true;
-  retry_backoff_.reset(new net::BackoffEntry(&retry_policy_));
+  retry_backoff_ = std::make_unique<net::BackoffEntry>(&retry_policy_);
 }
 
 EnrollmentScreen::~EnrollmentScreen() {
@@ -216,11 +216,6 @@ bool EnrollmentScreen::MaybeSkip(WizardContext* context) {
 void EnrollmentScreen::ShowImpl() {
   VLOG(1) << "Show enrollment screen";
   UMA(policy::kMetricEnrollmentTriggered);
-  if (enrollment_config_.mode ==
-      policy::EnrollmentConfig::MODE_ENROLLED_ROLLBACK) {
-    RestoreAfterRollback();
-    return;
-  }
   switch (current_auth_) {
     case AUTH_OAUTH:
       ShowInteractiveScreen();
@@ -244,18 +239,9 @@ void EnrollmentScreen::HideImpl() {
   weak_ptr_factory_.InvalidateWeakPtrs();
 }
 
-void EnrollmentScreen::RestoreAfterRollback() {
-  VLOG(1) << "Restoring after version rollback.";
-  elapsed_timer_.reset(new base::ElapsedTimer());
-  view_->Show();
-  view_->ShowEnrollmentSpinnerScreen();
-  CreateEnrollmentHelper();
-  enrollment_helper_->RestoreAfterRollback();
-}
-
 void EnrollmentScreen::AuthenticateUsingAttestation() {
   VLOG(1) << "Authenticating using attestation.";
-  elapsed_timer_.reset(new base::ElapsedTimer());
+  elapsed_timer_ = std::make_unique<base::ElapsedTimer>();
   view_->Show();
   CreateEnrollmentHelper();
   if (enrollment_config_.mode ==
@@ -271,7 +257,7 @@ void EnrollmentScreen::AuthenticateUsingAttestation() {
 void EnrollmentScreen::OnLoginDone(const std::string& user,
                                    const std::string& auth_code) {
   LOG_IF(ERROR, auth_code.empty()) << "Auth code is empty.";
-  elapsed_timer_.reset(new base::ElapsedTimer());
+  elapsed_timer_ = std::make_unique<base::ElapsedTimer>();
   enrolling_user_domain_ = gaia::ExtractDomainName(user);
   UMA(enrollment_failed_once_ ? policy::kMetricEnrollmentRestarted
                               : policy::kMetricEnrollmentStarted);
@@ -427,16 +413,6 @@ void EnrollmentScreen::OnDeviceAttributeUpdatePermission(bool granted) {
   }
 }
 
-void EnrollmentScreen::OnRestoreAfterRollbackCompleted() {
-  // Pass the enterprise domain and the device type to be shown.
-  view_->SetEnterpriseDomainInfo(GetEnterpriseDomainManager(),
-                                 ui::GetChromeOSDeviceName());
-  // Show the success screen
-  StartupUtils::MarkDeviceRegistered(
-      base::BindOnce(&EnrollmentScreen::ShowEnrollmentStatusOnSuccess,
-                     weak_ptr_factory_.GetWeakPtr()));
-}
-
 void EnrollmentScreen::OnDeviceAttributeUploadCompleted(bool success) {
   if (success) {
     // If the device attributes have been successfully uploaded, fetch policy.
@@ -504,9 +480,7 @@ void EnrollmentScreen::ShowEnrollmentStatusOnSuccess() {
   if (elapsed_timer_)
     UMA_ENROLLMENT_TIME(kMetricEnrollmentTimeSuccess, elapsed_timer_);
   if (WizardController::UsingHandsOffEnrollment() ||
-      WizardController::skip_enrollment_prompts() ||
-      enrollment_config_.mode ==
-          policy::EnrollmentConfig::MODE_ENROLLED_ROLLBACK) {
+      WizardController::skip_enrollment_prompts()) {
     OnConfirmationClosed();
   } else {
     view_->ShowEnrollmentStatus(
@@ -530,9 +504,10 @@ void EnrollmentScreen::RecordEnrollmentErrorMetrics() {
     UMA_ENROLLMENT_TIME(kMetricEnrollmentTimeFailure, elapsed_timer_);
 }
 
-void EnrollmentScreen::JoinDomain(const std::string& dm_token,
-                                  const std::string& domain_join_config,
-                                  OnDomainJoinedCallback on_joined_callback) {
+void EnrollmentScreen::JoinDomain(
+    const std::string& dm_token,
+    const std::string& domain_join_config,
+    policy::OnDomainJoinedCallback on_joined_callback) {
   if (!authpolicy_login_helper_)
     authpolicy_login_helper_ = std::make_unique<AuthPolicyHelper>();
   authpolicy_login_helper_->set_dm_token(dm_token);
@@ -564,4 +539,4 @@ void EnrollmentScreen::OnActiveDirectoryJoined(
                                    machine_name, username, error);
 }
 
-}  // namespace chromeos
+}  // namespace ash

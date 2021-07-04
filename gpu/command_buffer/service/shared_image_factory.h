@@ -33,6 +33,8 @@ class MailboxManager;
 class MemoryTracker;
 class SharedContextState;
 class SharedImageBackingFactory;
+class SharedImageBackingFactoryEGL;
+class SharedImageBackingFactoryGLImage;
 class SharedImageBackingFactoryGLTexture;
 struct GpuFeatureInfo;
 struct GpuPreferences;
@@ -82,6 +84,7 @@ class GPU_GLES2_EXPORT SharedImageFactory {
                          int client_id,
                          gfx::GpuMemoryBufferHandle handle,
                          gfx::BufferFormat format,
+                         gfx::BufferPlane plane,
                          SurfaceHandle surface_handle,
                          const gfx::Size& size,
                          const gfx::ColorSpace& color_space,
@@ -127,6 +130,14 @@ class GPU_GLES2_EXPORT SharedImageFactory {
     return shared_context_state_;
   }
 
+#if defined(OS_WIN)
+  bool CreateSharedImageVideoPlanes(base::span<const Mailbox> mailboxes,
+                                    gfx::GpuMemoryBufferHandle handle,
+                                    gfx::BufferFormat format,
+                                    const gfx::Size& size,
+                                    uint32_t usage);
+#endif
+
 #if defined(OS_ANDROID)
   bool CreateSharedImageWithAHB(const Mailbox& out_mailbox,
                                 const Mailbox& in_mailbox,
@@ -140,7 +151,6 @@ class GPU_GLES2_EXPORT SharedImageFactory {
 
  private:
   bool IsSharedBetweenThreads(uint32_t usage);
-  bool CanUseWrappedSkImage(uint32_t usage) const;
   SharedImageBackingFactory* GetFactoryByUsage(
       uint32_t usage,
       viz::ResourceFormat format,
@@ -162,15 +172,21 @@ class GPU_GLES2_EXPORT SharedImageFactory {
   base::flat_set<std::unique_ptr<SharedImageRepresentationFactoryRef>>
       shared_images_;
 
-  // TODO(ericrk): This should be some sort of map from usage to factory
-  // eventually.
-  std::unique_ptr<SharedImageBackingFactoryGLTexture> gl_backing_factory_;
+  // Used for creating shared image using GLTexture backing
+  std::unique_ptr<SharedImageBackingFactoryGLTexture>
+      gl_texture_backing_factory_;
+
+  // Used for creating shared image using GLImage backing
+  std::unique_ptr<SharedImageBackingFactoryGLImage> gl_image_backing_factory_;
 
   // Used for creating shared image which can be shared between GL, Vulkan and
   // D3D12.
   std::unique_ptr<SharedImageBackingFactory> interop_backing_factory_;
 
 #if defined(OS_ANDROID)
+  // Used for creating shared image using EGL Backing
+  std::unique_ptr<SharedImageBackingFactoryEGL> egl_backing_factory_;
+
   // On android we have two interop factory which is |interop_backing_factory_|
   // and |external_vk_image_factory_| and we choose one of those
   // based on the format it supports.
@@ -209,7 +225,8 @@ class GPU_GLES2_EXPORT SharedImageRepresentationFactory {
       scoped_refptr<SharedContextState> context_State);
   std::unique_ptr<SharedImageRepresentationDawn> ProduceDawn(
       const Mailbox& mailbox,
-      WGPUDevice device);
+      WGPUDevice device,
+      WGPUBackendType backend_type);
   std::unique_ptr<SharedImageRepresentationOverlay> ProduceOverlay(
       const Mailbox& mailbox);
   std::unique_ptr<SharedImageRepresentationMemory> ProduceMemory(

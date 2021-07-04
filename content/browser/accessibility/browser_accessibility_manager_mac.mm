@@ -54,10 +54,6 @@ BrowserAccessibilityManagerMac::BrowserAccessibilityManagerMac(
     BrowserAccessibilityDelegate* delegate)
     : BrowserAccessibilityManager(delegate) {
   Initialize(initial_tree);
-  // Temporary fix. Disable extra mac nodes, which only affects column
-  // navigation but fixes a number of crash bugs seen only with VoiceOver.
-  // This does not affect verbalization of columns headers in cell navigation.
-  ax_tree()->SetEnableExtraMacNodes(GetExtraMacNodesAllowed());
 }
 
 BrowserAccessibilityManagerMac::~BrowserAccessibilityManagerMac() {}
@@ -269,6 +265,22 @@ void BrowserAccessibilityManagerMac::FireGeneratedEvent(
         return;
       }
       break;
+    case ui::AXEventGenerator::Event::MENU_POPUP_END:
+      // Calling NSAccessibilityPostNotification on a menu which is about to be
+      // closed/destroyed is possible, but the event does not appear to be
+      // emitted reliably by the NSAccessibility stack. If VoiceOver is not
+      // notified that a given menu has been closed, it might fail to present
+      // subsequent changes to the user. WebKit seems to address this by firing
+      // AXMenuClosed on the document itself when an accessible menu is being
+      // detached. See WebKit's AccessibilityObject::detachRemoteParts
+      if (BrowserAccessibilityManager* root_manager = GetRootManager()) {
+        if (BrowserAccessibility* root = root_manager->GetRoot())
+          FireNativeMacNotification((NSString*)kAXMenuClosedNotification, root);
+      }
+      return;
+    case ui::AXEventGenerator::Event::MENU_POPUP_START:
+      mac_notification = (NSString*)kAXMenuOpenedNotification;
+      break;
     case ui::AXEventGenerator::Event::MENU_ITEM_SELECTED:
       mac_notification = ui::NSAccessibilityMenuItemSelectedNotification;
       break;
@@ -319,8 +331,8 @@ void BrowserAccessibilityManagerMac::FireGeneratedEvent(
       DCHECK(node->IsTextField());
       mac_notification = NSAccessibilityValueChangedNotification;
       if (!text_edits_.empty()) {
-        base::string16 deleted_text;
-        base::string16 inserted_text;
+        std::u16string deleted_text;
+        std::u16string inserted_text;
         int32_t node_id = node->GetId();
         const auto iterator = text_edits_.find(node_id);
         id edit_text_marker = nil;
@@ -345,6 +357,9 @@ void BrowserAccessibilityManagerMac::FireGeneratedEvent(
         return;
       }
       break;
+    case ui::AXEventGenerator::Event::NAME_CHANGED:
+      mac_notification = NSAccessibilityTitleChangedNotification;
+      break;
 
     // Currently unused events on this platform.
     case ui::AXEventGenerator::Event::ACCESS_KEY_CHANGED:
@@ -352,9 +367,11 @@ void BrowserAccessibilityManagerMac::FireGeneratedEvent(
     case ui::AXEventGenerator::Event::ATOMIC_CHANGED:
     case ui::AXEventGenerator::Event::AUTO_COMPLETE_CHANGED:
     case ui::AXEventGenerator::Event::BUSY_CHANGED:
+    case ui::AXEventGenerator::Event::CHECKED_STATE_DESCRIPTION_CHANGED:
     case ui::AXEventGenerator::Event::CHILDREN_CHANGED:
     case ui::AXEventGenerator::Event::CONTROLS_CHANGED:
     case ui::AXEventGenerator::Event::CLASS_NAME_CHANGED:
+    case ui::AXEventGenerator::Event::DETAILS_CHANGED:
     case ui::AXEventGenerator::Event::DESCRIBED_BY_CHANGED:
     case ui::AXEventGenerator::Event::DESCRIPTION_CHANGED:
     case ui::AXEventGenerator::Event::DOCUMENT_TITLE_CHANGED:
@@ -379,7 +396,6 @@ void BrowserAccessibilityManagerMac::FireGeneratedEvent(
     case ui::AXEventGenerator::Event::LOAD_START:
     case ui::AXEventGenerator::Event::MULTILINE_STATE_CHANGED:
     case ui::AXEventGenerator::Event::MULTISELECTABLE_STATE_CHANGED:
-    case ui::AXEventGenerator::Event::NAME_CHANGED:
     case ui::AXEventGenerator::Event::OBJECT_ATTRIBUTE_CHANGED:
     case ui::AXEventGenerator::Event::OTHER_ATTRIBUTE_CHANGED:
     case ui::AXEventGenerator::Event::PARENT_CHANGED:
@@ -500,8 +516,8 @@ NSDictionary* BrowserAccessibilityManagerMac::
 NSDictionary*
 BrowserAccessibilityManagerMac::GetUserInfoForValueChangedNotification(
     const BrowserAccessibilityCocoa* native_node,
-    const base::string16& deleted_text,
-    const base::string16& inserted_text,
+    const std::u16string& deleted_text,
+    const std::u16string& inserted_text,
     id edit_text_marker) const {
   DCHECK(native_node);
   if (deleted_text.empty() && inserted_text.empty())

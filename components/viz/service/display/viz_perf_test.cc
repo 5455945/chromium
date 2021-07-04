@@ -5,9 +5,77 @@
 #include "components/viz/service/display/viz_perf_test.h"
 
 #include "base/command_line.h"
+#include "base/files/file_util.h"
+#include "base/json/json_reader.h"
+#include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
+#include "components/viz/common/quads/render_pass_io.h"
+#include "components/viz/test/paths.h"
 
 namespace viz {
+
+namespace {
+
+// Creates a path to the JSON file where `group` and `name` are parent folder
+// names, and `frame_index` padded to 4 digits will be the filename. e.g.
+// .../render_pass_data/group/name/0001.json
+absl::optional<base::FilePath> MakeJsonPath(const std::string& group,
+                                            const std::string& name,
+                                            size_t frame_index) {
+  base::FilePath json_path;
+  if (!base::PathService::Get(Paths::DIR_TEST_DATA, &json_path))
+    return absl::nullopt;
+  std::string filename = base::NumberToString(frame_index);
+  while (filename.length() < 4)
+    filename = "0" + filename;
+  filename += ".json";
+  return json_path.Append(FILE_PATH_LITERAL("render_pass_data"))
+      .AppendASCII(group)
+      .AppendASCII(name)
+      .AppendASCII(filename);
+}
+
+absl::optional<base::Value> ReadValueFromJson(const std::string& group,
+                                              const std::string& name,
+                                              size_t frame_index) {
+  auto json_path = MakeJsonPath(group, name, frame_index);
+  if (!json_path)
+    return absl::nullopt;
+  if (!base::PathExists(*json_path))
+    return absl::nullopt;
+  std::string json_text;
+  if (!base::ReadFileToString(*json_path, &json_text))
+    return absl::nullopt;
+  return base::JSONReader::Read(json_text);
+}
+
+}  // namespace
+
+bool CompositorRenderPassListFromJSON(
+    const std::string& tag,
+    const std::string& site,
+    uint32_t year,
+    size_t frame_index,
+    CompositorRenderPassList* render_pass_list) {
+  std::string name = site + "_" + base::NumberToString(year);
+  auto dict = ReadValueFromJson(tag, name, frame_index);
+  if (!dict) {
+    return false;
+  }
+  return CompositorRenderPassListFromDict(dict.value(), render_pass_list);
+}
+
+bool FrameDataFromJson(const std::string& group,
+                       const std::string& name,
+                       size_t frame_index,
+                       std::vector<FrameData>* frame_data_list) {
+  auto list = ReadValueFromJson(group, name, frame_index);
+  if (!list) {
+    return false;
+  }
+  return FrameDataFromList(list.value(), frame_data_list);
+}
+
 namespace {
 
 constexpr char kPerfTestTimeMillis[] = "perf-test-time-ms";

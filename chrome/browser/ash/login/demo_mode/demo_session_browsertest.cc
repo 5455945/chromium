@@ -6,15 +6,14 @@
 
 #include "base/macros.h"
 #include "chrome/browser/ash/login/demo_mode/demo_setup_controller.h"
+#include "chrome/browser/ash/login/test/device_state_mixin.h"
+#include "chrome/browser/ash/login/test/oobe_base_test.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chromeos/login/test/device_state_mixin.h"
-#include "chrome/browser/chromeos/login/test/oobe_base_test.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test.h"
 
-namespace chromeos {
-
+namespace ash {
 namespace {
 
 void SetDemoConfigPref(DemoSession::DemoModeConfig demo_config) {
@@ -49,8 +48,6 @@ void CheckNoDemoMode() {
   EXPECT_FALSE(DemoSession::IsDeviceInDemoMode());
   EXPECT_EQ(DemoSession::DemoModeConfig::kNone, DemoSession::GetDemoConfig());
 }
-
-}  // namespace
 
 // Tests locking device to policy::DEVICE_MODE_DEMO mode. It is an equivalent to
 // going through online demo mode setup or using offline setup.
@@ -169,4 +166,5 @@ IN_PROC_BROWSER_TEST_F(DemoSessionActiveDirectoryDeviceTest, NotDemoMode) {
   CheckNoDemoMode();
 }
 
-}  // namespace chromeos
+}  // namespace
+}  // namespace ash

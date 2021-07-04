@@ -91,9 +91,10 @@ void SyncableFileSystemOperation::CreateFile(const FileSystemURL& url,
   completion_callback_ = std::move(callback);
   auto task = std::make_unique<QueueableTask>(
       weak_factory_.GetWeakPtr(),
-      base::BindOnce(&FileSystemOperation::CreateFile,
-                     base::Unretained(impl_.get()), url, exclusive,
-                     base::Bind(&self::DidFinish, weak_factory_.GetWeakPtr())));
+      base::BindOnce(
+          &FileSystemOperation::CreateFile, base::Unretained(impl_.get()), url,
+          exclusive,
+          base::BindOnce(&self::DidFinish, weak_factory_.GetWeakPtr())));
   operation_runner_->PostOperationTask(std::move(task));
 }
 
@@ -111,9 +112,10 @@ void SyncableFileSystemOperation::CreateDirectory(const FileSystemURL& url,
   completion_callback_ = std::move(callback);
   auto task = std::make_unique<QueueableTask>(
       weak_factory_.GetWeakPtr(),
-      base::BindOnce(&FileSystemOperation::CreateDirectory,
-                     base::Unretained(impl_.get()), url, exclusive, recursive,
-                     base::Bind(&self::DidFinish, weak_factory_.GetWeakPtr())));
+      base::BindOnce(
+          &FileSystemOperation::CreateDirectory, base::Unretained(impl_.get()),
+          url, exclusive, recursive,
+          base::BindOnce(&self::DidFinish, weak_factory_.GetWeakPtr())));
   operation_runner_->PostOperationTask(std::move(task));
 }
 
@@ -122,7 +124,7 @@ void SyncableFileSystemOperation::Copy(
     const FileSystemURL& dest_url,
     CopyOrMoveOption option,
     ErrorBehavior error_behavior,
-    const CopyProgressCallback& progress_callback,
+    const CopyOrMoveProgressCallback& progress_callback,
     StatusCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
   if (!operation_runner_.get()) {
@@ -134,17 +136,20 @@ void SyncableFileSystemOperation::Copy(
   completion_callback_ = std::move(callback);
   auto task = std::make_unique<QueueableTask>(
       weak_factory_.GetWeakPtr(),
-      base::BindOnce(&FileSystemOperation::Copy, base::Unretained(impl_.get()),
-                     src_url, dest_url, option, error_behavior,
-                     progress_callback,
-                     base::Bind(&self::DidFinish, weak_factory_.GetWeakPtr())));
+      base::BindOnce(
+          &FileSystemOperation::Copy, base::Unretained(impl_.get()), src_url,
+          dest_url, option, error_behavior, progress_callback,
+          base::BindOnce(&self::DidFinish, weak_factory_.GetWeakPtr())));
   operation_runner_->PostOperationTask(std::move(task));
 }
 
-void SyncableFileSystemOperation::Move(const FileSystemURL& src_url,
-                                       const FileSystemURL& dest_url,
-                                       CopyOrMoveOption option,
-                                       StatusCallback callback) {
+void SyncableFileSystemOperation::Move(
+    const FileSystemURL& src_url,
+    const FileSystemURL& dest_url,
+    CopyOrMoveOption option,
+    ErrorBehavior error_behavior,
+    const CopyOrMoveProgressCallback& progress_callback,
+    StatusCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
   if (!operation_runner_.get()) {
     std::move(callback).Run(base::File::FILE_ERROR_NOT_FOUND);
@@ -156,9 +161,10 @@ void SyncableFileSystemOperation::Move(const FileSystemURL& src_url,
   completion_callback_ = std::move(callback);
   auto task = std::make_unique<QueueableTask>(
       weak_factory_.GetWeakPtr(),
-      base::BindOnce(&FileSystemOperation::Move, base::Unretained(impl_.get()),
-                     src_url, dest_url, option,
-                     base::Bind(&self::DidFinish, weak_factory_.GetWeakPtr())));
+      base::BindOnce(
+          &FileSystemOperation::Move, base::Unretained(impl_.get()), src_url,
+          dest_url, option, error_behavior, progress_callback,
+          base::BindOnce(&self::DidFinish, weak_factory_.GetWeakPtr())));
   operation_runner_->PostOperationTask(std::move(task));
 }
 
@@ -204,9 +210,10 @@ void SyncableFileSystemOperation::Remove(const FileSystemURL& url,
   completion_callback_ = std::move(callback);
   auto task = std::make_unique<QueueableTask>(
       weak_factory_.GetWeakPtr(),
-      base::BindOnce(&FileSystemOperation::Remove,
-                     base::Unretained(impl_.get()), url, recursive,
-                     base::Bind(&self::DidFinish, weak_factory_.GetWeakPtr())));
+      base::BindOnce(
+          &FileSystemOperation::Remove, base::Unretained(impl_.get()), url,
+          recursive,
+          base::BindOnce(&self::DidFinish, weak_factory_.GetWeakPtr())));
   operation_runner_->PostOperationTask(std::move(task));
 }
 
@@ -228,7 +235,8 @@ void SyncableFileSystemOperation::WriteBlob(
       base::BindOnce(
           &FileSystemOperation::WriteBlob, base::Unretained(impl_.get()), url,
           std::move(writer_delegate), std::move(blob_reader),
-          base::Bind(&self::DidWrite, weak_factory_.GetWeakPtr(), callback)));
+          base::BindRepeating(&self::DidWrite, weak_factory_.GetWeakPtr(),
+                              callback)));
   operation_runner_->PostOperationTask(std::move(task));
 }
 
@@ -250,7 +258,8 @@ void SyncableFileSystemOperation::Write(
       base::BindOnce(
           &FileSystemOperation::Write, base::Unretained(impl_.get()), url,
           std::move(writer_delegate), std::move(data_pipe),
-          base::Bind(&self::DidWrite, weak_factory_.GetWeakPtr(), callback)));
+          base::BindRepeating(&self::DidWrite, weak_factory_.GetWeakPtr(),
+                              callback)));
   operation_runner_->PostOperationTask(std::move(task));
 }
 
@@ -267,9 +276,10 @@ void SyncableFileSystemOperation::Truncate(const FileSystemURL& url,
   completion_callback_ = std::move(callback);
   auto task = std::make_unique<QueueableTask>(
       weak_factory_.GetWeakPtr(),
-      base::BindOnce(&FileSystemOperation::Truncate,
-                     base::Unretained(impl_.get()), url, length,
-                     base::Bind(&self::DidFinish, weak_factory_.GetWeakPtr())));
+      base::BindOnce(
+          &FileSystemOperation::Truncate, base::Unretained(impl_.get()), url,
+          length,
+          base::BindOnce(&self::DidFinish, weak_factory_.GetWeakPtr())));
   operation_runner_->PostOperationTask(std::move(task));
 }
 
@@ -315,10 +325,10 @@ void SyncableFileSystemOperation::CopyInForeignFile(
   completion_callback_ = std::move(callback);
   auto task = std::make_unique<QueueableTask>(
       weak_factory_.GetWeakPtr(),
-      base::BindOnce(&FileSystemOperation::CopyInForeignFile,
-                     base::Unretained(impl_.get()), src_local_disk_path,
-                     dest_url,
-                     base::Bind(&self::DidFinish, weak_factory_.GetWeakPtr())));
+      base::BindOnce(
+          &FileSystemOperation::CopyInForeignFile,
+          base::Unretained(impl_.get()), src_local_disk_path, dest_url,
+          base::BindOnce(&self::DidFinish, weak_factory_.GetWeakPtr())));
   operation_runner_->PostOperationTask(std::move(task));
 }
 

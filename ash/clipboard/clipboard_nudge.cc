@@ -3,7 +3,8 @@
 // found in the LICENSE file.
 
 #include "ash/clipboard/clipboard_nudge.h"
-#include "ash/public/cpp/ash_features.h"
+
+#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/assistant/assistant_state.h"
 #include "ash/public/cpp/shelf_config.h"
 #include "ash/public/cpp/shell_window_ids.h"
@@ -15,6 +16,7 @@
 #include "ash/style/ash_color_provider.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/chromeos/events/keyboard_layout_util.h"
+#include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/paint_vector_icon.h"
@@ -111,17 +113,16 @@ class ClipboardNudge::ClipboardNudgeView : public views::View {
       shortcut_icon = gfx::CreateVectorIcon(
           kClipboardSearchIcon, kKeyboardShortcutIconSize, icon_color);
     }
-    std::unique_ptr<views::ImageView> keyboard_shortcut_icon;
-    keyboard_shortcut_icon = std::make_unique<views::ImageView>();
+    auto keyboard_shortcut_icon = std::make_unique<views::ImageView>();
     keyboard_shortcut_icon->SetImage(shortcut_icon);
     keyboard_shortcut_icon->SetBorder(views::CreateEmptyBorder(2, 4, 0, -2));
 
     // Set the text for |label_|.
-    base::string16 shortcut_key = l10n_util::GetStringUTF16(
+    std::u16string shortcut_key = l10n_util::GetStringUTF16(
         use_launcher_key ? IDS_ASH_SHORTCUT_MODIFIER_LAUNCHER
                          : IDS_ASH_SHORTCUT_MODIFIER_SEARCH);
     size_t offset;
-    base::string16 label_text = l10n_util::GetStringFUTF16(
+    std::u16string label_text = l10n_util::GetStringFUTF16(
         nudge_type == kZeroStateNudge
             ? IDS_ASH_MULTIPASTE_ZERO_STATE_CONTEXTUAL_NUDGE
             : IDS_ASH_MULTIPASTE_CONTEXTUAL_NUDGE,
@@ -163,8 +164,8 @@ ClipboardNudge::ClipboardNudge(ClipboardNudgeType nudge_type)
   views::Widget::InitParams params(
       views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
   params.z_order = ui::ZOrderLevel::kFloatingWindow;
-  params.activatable = views::Widget::InitParams::ACTIVATABLE_NO;
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+  params.activatable = views::Widget::InitParams::Activatable::kNo;
+  params.ownership = views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET;
   params.name = "ClipboardContextualNudge";
   params.layer_type = ui::LAYER_NOT_DRAWN;
   params.parent =
@@ -189,7 +190,7 @@ void ClipboardNudge::OnHotseatStateChanged(HotseatState old_state,
 }
 
 void ClipboardNudge::Close() {
-  widget_->CloseWithReason(views::Widget::ClosedReason::kUnspecified);
+  widget_.reset();
 }
 
 void ClipboardNudge::CalculateAndSetWidgetBounds() {

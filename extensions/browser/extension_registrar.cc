@@ -7,9 +7,9 @@
 #include "base/bind.h"
 #include "base/callback_helpers.h"
 #include "base/check_op.h"
+#include "base/containers/contains.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
-#include "base/stl_util.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/devtools_agent_host.h"
@@ -62,7 +62,7 @@ void ExtensionRegistrar::AddExtension(
         version_compare_result < 0) {
       UMA_HISTOGRAM_ENUMERATION(
           "Extensions.AttemptedToDowngradeVersionLocation",
-          extension->location(), Manifest::NUM_LOCATIONS);
+          extension->location());
       UMA_HISTOGRAM_ENUMERATION("Extensions.AttemptedToDowngradeVersionType",
                                 extension->GetType(), Manifest::NUM_LOAD_TYPES);
 

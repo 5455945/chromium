@@ -27,10 +27,11 @@
 #include <iterator>
 #include <utility>
 
-#include "base/macros.h"
+#include "base/dcheck_is_on.h"
 #include "base/template_util.h"
 #include "build/build_config.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/partition_allocator.h"
+#include "third_party/blink/renderer/platform/wtf/assertions.h"
 #include "third_party/blink/renderer/platform/wtf/conditional_destructor.h"
 #include "third_party/blink/renderer/platform/wtf/construct_traits.h"
 #include "third_party/blink/renderer/platform/wtf/container_annotations.h"
@@ -571,8 +572,6 @@ class VectorBufferBase {
   T* buffer_;
   wtf_size_t capacity_;
   wtf_size_t size_;
-
-  DISALLOW_COPY_AND_ASSIGN(VectorBufferBase);
 };
 
 template <typename T,
@@ -608,7 +607,7 @@ class VectorBuffer<T, 0, Allocator> : protected VectorBufferBase<T, Allocator> {
 
   bool ExpandBuffer(wtf_size_t new_capacity) {
     size_t size_to_allocate = AllocationSize(new_capacity);
-    if (Allocator::ExpandVectorBacking(buffer_, size_to_allocate)) {
+    if (buffer_ && Allocator::ExpandVectorBacking(buffer_, size_to_allocate)) {
       capacity_ = static_cast<wtf_size_t>(size_to_allocate / sizeof(T));
       return true;
     }
@@ -699,6 +698,9 @@ class VectorBuffer : protected VectorBufferBase<T, Allocator> {
       Base::AllocateBuffer(capacity);
   }
 
+  VectorBuffer(const VectorBuffer&) = delete;
+  VectorBuffer& operator=(const VectorBuffer&) = delete;
+
   void Destruct() {
     DeallocateBuffer(buffer_);
     buffer_ = nullptr;
@@ -719,7 +721,7 @@ class VectorBuffer : protected VectorBufferBase<T, Allocator> {
       return false;
 
     size_t size_to_allocate = AllocationSize(new_capacity);
-    if (Allocator::ExpandVectorBacking(buffer_, size_to_allocate)) {
+    if (buffer_ && Allocator::ExpandVectorBacking(buffer_, size_to_allocate)) {
       capacity_ = static_cast<wtf_size_t>(size_to_allocate / sizeof(T));
       return true;
     }
@@ -981,8 +983,6 @@ class VectorBuffer : protected VectorBufferBase<T, Allocator> {
   alignas(T) char inline_buffer_[kInlineBufferSize];
   template <typename U, wtf_size_t inlineBuffer, typename V>
   friend class Deque;
-
-  DISALLOW_COPY_AND_ASSIGN(VectorBuffer);
 };
 
 //
@@ -2234,7 +2234,7 @@ namespace base {
 #if defined(__GNUC__) && !defined(__clang__) && __GNUC__ <= 7
 // Workaround for g++7 and earlier family.
 // Due to https://gcc.gnu.org/bugzilla/show_bug.cgi?id=80654, without this
-// base::Optional<WTF::Vector<T>> where T is non-copyable causes a compile
+// absl::optional<WTF::Vector<T>> where T is non-copyable causes a compile
 // error. As we know it is not trivially copy constructible, explicitly declare
 // so.
 //

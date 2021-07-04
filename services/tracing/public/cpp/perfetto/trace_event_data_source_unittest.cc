@@ -21,7 +21,6 @@
 #include "base/synchronization/waitable_event.h"
 #include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
-#include "base/test/task_environment.h"
 #include "base/threading/sequenced_task_runner_handle.h"
 #include "base/threading/thread_id_name_manager.h"
 #include "base/threading/thread_restrictions.h"
@@ -30,11 +29,13 @@
 #include "base/trace_event/thread_instruction_count.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/trace_log.h"
+#include "base/tracing/trace_time.h"
 #include "components/tracing/common/tracing_switches.h"
+#include "services/tracing/perfetto/test_utils.h"
 #include "services/tracing/public/cpp/perfetto/macros.h"
 #include "services/tracing/public/cpp/perfetto/producer_test_utils.h"
-#include "services/tracing/public/cpp/perfetto/trace_time.h"
 #include "services/tracing/public/mojom/perfetto_service.mojom.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/perfetto/include/perfetto/tracing/track.h"
 #include "third_party/perfetto/include/perfetto/tracing/track_event_interned_data_index.h"
@@ -62,18 +63,11 @@ constexpr const char kCategoryGroup[] = "foo";
 constexpr uint32_t kClockIdAbsolute = 64;
 constexpr uint32_t kClockIdIncremental = 65;
 
-// Resets trace event data source at destruction.
-class ScopedDataSourceReset {
- public:
-  ~ScopedDataSourceReset() {
-    PerfettoTracedProcess::Get()->ClearDataSourcesForTesting();
-    TraceEventDataSource::ResetForTesting();
-  }
-};
-
-class TraceEventDataSourceTest : public testing::Test {
+class TraceEventDataSourceTest : public TracingUnitTest {
  public:
   void SetUp() override {
+    TracingUnitTest::SetUp();
+
     TraceEventDataSource::GetInstance()->RegisterStartupHooks();
     // TODO(eseckler): Initialize the entire perfetto client library instead.
     perfetto::internal::TrackRegistry::InitializeInstance();
@@ -85,10 +79,9 @@ class TraceEventDataSourceTest : public testing::Test {
         base::trace_event::TraceLog::GetInstance()->process_name();
     base::trace_event::TraceLog::GetInstance()->set_process_name(kTestProcess);
 
-    PerfettoTracedProcess::ResetTaskRunnerForTesting();
     PerfettoTracedProcess::GetTaskRunner()->GetOrCreateTaskRunner();
-    auto perfetto_wrapper = std::make_unique<PerfettoTaskRunner>(
-        task_environment_.GetMainThreadTaskRunner());
+    auto perfetto_wrapper = std::make_unique<base::tracing::PerfettoTaskRunner>(
+        base::ThreadTaskRunnerHandle::Get());
     producer_client_ =
         std::make_unique<TestProducerClient>(std::move(perfetto_wrapper));
     TraceEventMetadataSource::GetInstance()->ResetForTesting();
@@ -97,13 +90,8 @@ class TraceEventDataSourceTest : public testing::Test {
   void TearDown() override {
     if (base::trace_event::TraceLog::GetInstance()->IsEnabled()) {
       base::RunLoop wait_for_tracelog_flush;
-
-      TraceEventDataSource::GetInstance()->StopTracing(base::BindOnce(
-          [](const base::RepeatingClosure& quit_closure) {
-            quit_closure.Run();
-          },
-          wait_for_tracelog_flush.QuitClosure()));
-
+      TraceEventDataSource::GetInstance()->StopTracing(
+          wait_for_tracelog_flush.QuitClosure());
       wait_for_tracelog_flush.Run();
     }
 
@@ -116,16 +104,27 @@ class TraceEventDataSourceTest : public testing::Test {
     base::ThreadIdNameManager::GetInstance()->SetName(old_thread_name_);
     base::trace_event::TraceLog::GetInstance()->set_process_name(
         old_process_name_);
+
+    TracingUnitTest::TearDown();
+
+    // Destroy after task environment shuts down so that no other threads try to
+    // add trace events.
+    TraceEventDataSource::ResetForTesting();
   }
 
   void StartTraceEventDataSource(bool privacy_filtering_enabled = false,
-                                 const std::string& chrome_trace_config = "") {
+                                 std::string chrome_trace_config = "") {
+    if (chrome_trace_config.empty()) {
+      base::trace_event::TraceConfig config(
+          "foo,cat1,cat2,cat3,browser,toplevel,-*", "");
+      chrome_trace_config = config.ToString();
+    }
     perfetto::DataSourceConfig config;
     config.mutable_chrome_config()->set_privacy_filtering_enabled(
         privacy_filtering_enabled);
     config.mutable_chrome_config()->set_trace_config(chrome_trace_config);
-    TraceEventDataSource::GetInstance()->StartTracing(producer_client(),
-                                                      config);
+    TraceEventDataSource::GetInstance()->StartTracingImpl(producer_client(),
+                                                          config);
   }
 
   TestProducerClient* producer_client() { return producer_client_.get(); }
@@ -138,7 +137,7 @@ class TraceEventDataSourceTest : public testing::Test {
     ASSERT_EQ(packet->clock_snapshot().clocks().size(), 3);
 
     EXPECT_EQ(packet->clock_snapshot().clocks()[0].clock_id(),
-              static_cast<uint32_t>(kTraceClockId));
+              static_cast<uint32_t>(base::tracing::kTraceClockId));
     EXPECT_FALSE(packet->clock_snapshot().clocks()[0].has_unit_multiplier_ns());
     EXPECT_FALSE(packet->clock_snapshot().clocks()[0].has_is_incremental());
 
@@ -345,7 +344,9 @@ class TraceEventDataSourceTest : public testing::Test {
                         int32_t tid_override = 0,
                         int32_t pid_override = 0,
                         const perfetto::Track& track = perfetto::Track(),
-                        int64_t explicit_thread_time = 0) {
+                        int64_t explicit_thread_time = 0,
+                        base::Location from_here = base::Location::Current()) {
+    SCOPED_TRACE(from_here.ToString());
     // All TrackEvents need incremental state for delta timestamps / interning.
     EXPECT_EQ(packet->sequence_flags(),
               static_cast<uint32_t>(perfetto::protos::pbzero::TracePacket::
@@ -541,44 +542,41 @@ class TraceEventDataSourceTest : public testing::Test {
 
   void ExpectEventCategories(
       const perfetto::protos::TracePacket* packet,
-      std::initializer_list<std::pair<uint32_t, std::string>> entries) {
-    ExpectInternedNames(packet->interned_data().event_categories(), entries);
+      std::initializer_list<std::pair<uint32_t, std::string>> entries,
+      base::Location from_here = base::Location::Current()) {
+    ExpectInternedNames(packet->interned_data().event_categories(), entries,
+                        from_here);
   }
 
   void ExpectEventNames(
       const perfetto::protos::TracePacket* packet,
-      std::initializer_list<std::pair<uint32_t, std::string>> entries) {
-    ExpectInternedNames(packet->interned_data().event_names(), entries);
+      std::initializer_list<std::pair<uint32_t, std::string>> entries,
+      base::Location from_here = base::Location::Current()) {
+    ExpectInternedNames(packet->interned_data().event_names(), entries,
+                        from_here);
   }
 
   void ExpectDebugAnnotationNames(
       const perfetto::protos::TracePacket* packet,
-      std::initializer_list<std::pair<uint32_t, std::string>> entries) {
+      std::initializer_list<std::pair<uint32_t, std::string>> entries,
+      base::Location from_here = base::Location::Current()) {
     ExpectInternedNames(packet->interned_data().debug_annotation_names(),
-                        entries);
+                        entries, from_here);
   }
 
   template <typename T>
   void ExpectInternedNames(
       const google::protobuf::RepeatedPtrField<T>& field,
-      std::initializer_list<std::pair<uint32_t, std::string>> entries) {
-    ASSERT_EQ(field.size(), static_cast<int>(entries.size()));
-    int i = 0;
-    for (const auto& entry : entries) {
-      EXPECT_EQ(field[i].iid(), entry.first);
-      EXPECT_EQ(field[i].name(), entry.second);
-      i++;
+      std::initializer_list<std::pair<uint32_t, std::string>> expected_entries,
+      base::Location from_here = base::Location::Current()) {
+    std::vector<std::pair<uint32_t, std::string>> entries;
+    for (int i = 0; i < field.size(); ++i) {
+      entries.emplace_back(field[i].iid(), field[i].name());
     }
+    EXPECT_THAT(entries, testing::ElementsAreArray(expected_entries));
   }
 
  protected:
-  // Destroy after task environment shuts down so that no other threads try to
-  // add trace events.
-  ScopedDataSourceReset reset_trace_event_source_;
-
-  // Do not add any other members above this member.
-  base::test::TaskEnvironment task_environment_;
-
   std::unique_ptr<TestProducerClient> producer_client_;
   uint64_t last_timestamp_ = 0;
   int64_t last_thread_time_ = 0;
@@ -639,9 +637,9 @@ std::unique_ptr<base::DictionaryValue> AddJsonMetadataGenerator() {
   metadata->SetString("foo_str", "bar");
   metadata->SetBoolean("foo_bool", true);
 
-  auto child_dict = std::make_unique<base::DictionaryValue>();
-  child_dict->SetString("child_str", "child_val");
-  metadata->Set("child_dict", std::move(child_dict));
+  base::DictionaryValue child_dict;
+  child_dict.SetString("child_str", "child_val");
+  metadata->SetKey("child_dict", std::move(child_dict));
   return metadata;
 }
 
@@ -650,8 +648,8 @@ TEST_F(TraceEventDataSourceTest, MetadataGeneratorBeforeTracing) {
   metadata_source->AddGeneratorFunction(
       base::BindRepeating(&AddJsonMetadataGenerator));
 
-  metadata_source->StartTracing(producer_client(),
-                                perfetto::DataSourceConfig());
+  metadata_source->StartTracingImpl(producer_client(),
+                                    perfetto::DataSourceConfig());
 
   base::RunLoop wait_for_stop;
   metadata_source->StopTracing(wait_for_stop.QuitClosure());
@@ -671,8 +669,8 @@ TEST_F(TraceEventDataSourceTest, MetadataGeneratorBeforeTracing) {
 TEST_F(TraceEventDataSourceTest, MetadataGeneratorWhileTracing) {
   auto* metadata_source = TraceEventMetadataSource::GetInstance();
 
-  metadata_source->StartTracing(producer_client(),
-                                perfetto::DataSourceConfig());
+  metadata_source->StartTracingImpl(producer_client(),
+                                    perfetto::DataSourceConfig());
   metadata_source->AddGeneratorFunction(
       base::BindRepeating(&AddJsonMetadataGenerator));
 
@@ -699,8 +697,8 @@ TEST_F(TraceEventDataSourceTest, MultipleMetadataGenerators) {
     return metadata;
   }));
 
-  metadata_source->StartTracing(producer_client(),
-                                perfetto::DataSourceConfig());
+  metadata_source->StartTracingImpl(producer_client(),
+                                    perfetto::DataSourceConfig());
   metadata_source->AddGeneratorFunction(
       base::BindRepeating(&AddJsonMetadataGenerator));
 
@@ -1061,8 +1059,8 @@ TEST_F(TraceEventDataSourceTest, UpdateDurationOfCompleteEvent) {
   auto* category_group_enabled =
       TRACE_EVENT_API_GET_CATEGORY_GROUP_ENABLED(kCategoryGroup);
 
-  trace_event_internal::TraceID trace_event_trace_id =
-      trace_event_internal::kNoId;
+  trace_event_internal::TraceID trace_event_trace_id(
+      trace_event_internal::kNoId);
 
   // COMPLETE events are split into a BEGIN/END event pair. Adding the event
   // writes the BEGIN event immediately.
@@ -1143,8 +1141,8 @@ TEST_F(TraceEventDataSourceTest, ExplicitThreadTimeForDifferentThread) {
   auto* category_group_enabled =
       TRACE_EVENT_API_GET_CATEGORY_GROUP_ENABLED(kCategoryGroup);
 
-  trace_event_internal::TraceID trace_event_trace_id =
-      trace_event_internal::kNoId;
+  trace_event_internal::TraceID trace_event_trace_id(
+      trace_event_internal::kNoId);
 
   // Chrome's main thread buffers and later flushes EarlyJava events on behalf
   // of other threads, including explicit thread time values. Such an event
@@ -1497,15 +1495,15 @@ TEST_F(TraceEventDataSourceTest, FilteringMetadataSource) {
     metadata->SetString("foo_str", "bar");
     metadata->SetBoolean("foo_bool", true);
 
-    auto child_dict = std::make_unique<base::DictionaryValue>();
-    child_dict->SetString("child_str", "child_val");
-    metadata->Set("child_dict", std::move(child_dict));
+    base::DictionaryValue child_dict;
+    child_dict.SetString("child_str", "child_val");
+    metadata->SetKey("child_dict", std::move(child_dict));
     return metadata;
   }));
 
   perfetto::DataSourceConfig config;
   config.mutable_chrome_config()->set_privacy_filtering_enabled(true);
-  metadata_source->StartTracing(producer_client(), config);
+  metadata_source->StartTracingImpl(producer_client(), config);
 
   base::RunLoop wait_for_stop;
   metadata_source->StopTracing(wait_for_stop.QuitClosure());
@@ -1531,7 +1529,7 @@ TEST_F(TraceEventDataSourceTest, ProtoMetadataSource) {
 
   perfetto::DataSourceConfig config;
   config.mutable_chrome_config()->set_privacy_filtering_enabled(true);
-  metadata_source->StartTracing(producer_client(), config);
+  metadata_source->StartTracingImpl(producer_client(), config);
 
   base::RunLoop wait_for_stop;
   metadata_source->StopTracing(wait_for_stop.QuitClosure());
@@ -1551,6 +1549,9 @@ class TraceEventDataSourceNoInterningTest : public TraceEventDataSourceTest {
   void SetUp() override {
     base::CommandLine::ForCurrentProcess()->AppendSwitch(
         switches::kPerfettoDisableInterning);
+    // Reset the data source to pick it up the command line flag.
+    PerfettoTracedProcess::Get()->ClearDataSourcesForTesting();
+    TraceEventDataSource::ResetForTesting();
     TraceEventDataSourceTest::SetUp();
   }
 };
@@ -1617,8 +1618,9 @@ TEST_F(TraceEventDataSourceTest, StartupTracingTimeout) {
   // Start startup tracing with no timeout. This would cause startup tracing to
   // abort and flush as soon the current thread can run tasks.
   producer_client()->set_startup_tracing_timeout_for_testing(base::TimeDelta());
-  producer_client()->SetupStartupTracing(base::trace_event::TraceConfig(),
-                                         /*privacy_filtering_enabled=*/true);
+  producer_client()->SetupStartupTracing(
+      base::trace_event::TraceConfig("foo,-*", ""),
+      /*privacy_filtering_enabled=*/true);
 
   // The trace event will be added to the SMB for the (soon to be aborted)
   // startup tracing session, since the abort didn't run yet.
@@ -1639,9 +1641,13 @@ TEST_F(TraceEventDataSourceTest, StartupTracingTimeout) {
             TRACE_EVENT_BEGIN0(kCategoryGroup, "maybe_lost");
             base::ScopedAllowBaseSyncPrimitivesForTesting allow;
             wait_for_start_tracing->Wait();
-            // This event can be hit while flushing for startup registry or when
-            // tracing is started or when already stopped tracing.
+            // This event can be hit while flushing the startup tracing session,
+            // or when the subsequent tracing session is started or when even
+            // that one was already stopped.
             TRACE_EVENT_BEGIN0(kCategoryGroup, "maybe_lost");
+
+            // Make sure that this thread's the trace writer is cleared away.
+            TraceEventDataSource::FlushCurrentThread();
           },
           std::move(wait_for_start_tracing)));
 
@@ -1653,11 +1659,11 @@ TEST_F(TraceEventDataSourceTest, StartupTracingTimeout) {
 
   // Start tracing while flush is running.
   perfetto::DataSourceConfig config;
-  data_source->StartTracing(producer_client(), config);
+  data_source->StartTracingImpl(producer_client(), config);
   wait_ptr->Signal();
 
   // Verify that the trace buffer does not have the event added to startup
-  // registry.
+  // tracing session.
   producer_client()->FlushPacketIfPossible();
   std::set<std::string> event_names;
   for (const auto& packet : producer_client()->finalized_packets()) {
@@ -1677,6 +1683,10 @@ TEST_F(TraceEventDataSourceTest, StartupTracingTimeout) {
       wait_for_stop.QuitClosure()));
 
   wait_for_stop.Run();
+
+  // Make sure that the TraceWriter destruction task posted from the ThreadPool
+  // task's flush is executed.
+  RunUntilIdle();
 }
 
 TEST_F(TraceEventDataSourceTest, TypedArgumentsTracingOff) {
@@ -1925,6 +1935,7 @@ TEST_F(TraceEventDataSourceTest, HistogramSampleTraceConfigNotEmpty) {
   UMA_HISTOGRAM_BOOLEAN("Foo1.Bar1", true);
   UMA_HISTOGRAM_BOOLEAN("Foo2.Bar2", true);
   UMA_HISTOGRAM_BOOLEAN("Foo3.Bar3", true);
+  base::RunLoop().RunUntilIdle();
 
   size_t packet_index = ExpectStandardPreamble();
 
@@ -2023,6 +2034,26 @@ TEST_F(TraceEventDataSourceTest, TypedEventInterning) {
             e_packet->interned_data().log_message_body()[0].iid());
   ASSERT_EQ("Hello interned world!",
             e_packet->interned_data().log_message_body()[0].body());
+}
+
+TEST_F(TraceEventDataSourceTest, TypedAndUntypedEventsWithDebugAnnotations) {
+  StartTraceEventDataSource();
+
+  TRACE_EVENT_INSTANT1("browser", "Event1", TRACE_EVENT_SCOPE_THREAD, "arg1",
+                       1);
+  TRACE_EVENT_INSTANT("browser", "Event2", "arg2", 2);
+
+  size_t packet_index = ExpectStandardPreamble();
+  auto* e_packet1 = producer_client()->GetFinalizedPacket(packet_index++);
+
+  ExpectEventCategories(e_packet1, {{1u, "browser"}});
+  ExpectEventNames(e_packet1, {{1u, "Event1"}});
+  ExpectDebugAnnotationNames(e_packet1, {{1u, "arg1"}});
+
+  auto* e_packet2 = producer_client()->GetFinalizedPacket(packet_index++);
+
+  ExpectEventNames(e_packet2, {{2u, "Event2"}});
+  ExpectDebugAnnotationNames(e_packet2, {{2u, "arg2"}});
 }
 
 // TODO(eseckler): Add startup tracing unittests.

@@ -13,6 +13,7 @@
 #include "base/callback.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "build/build_config.h"
@@ -43,6 +44,7 @@
 #include "chrome/browser/ui/views/tabs/tab_drag_controller.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "chrome/browser/ui/views/user_education/feature_promo_controller_views.h"
+#include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
@@ -66,6 +68,7 @@
 #include "third_party/metrics_proto/omnibox_event.pb.h"
 #include "ui/base/models/list_selection_model.h"
 #include "ui/base/models/menu_model.h"
+#include "ui/compositor/compositor.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/range/range.h"
@@ -196,7 +199,7 @@ class BrowserTabStripController::TabContextMenuContents
   FeaturePromoController* const feature_promo_controller_;
 
   // Handle we keep if showing menu IPH for tab groups.
-  base::Optional<FeaturePromoController::PromoHandle> tab_groups_promo_handle_;
+  absl::optional<FeaturePromoController::PromoHandle> tab_groups_promo_handle_;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -364,6 +367,15 @@ void BrowserTabStripController::CloseTab(int model_index) {
   model_->CloseWebContentsAt(model_index,
                              TabStripModel::CLOSE_USER_GESTURE |
                              TabStripModel::CLOSE_CREATE_HISTORICAL_TAB);
+
+  // Try to show reading list IPH if needed.
+  if (tabstrip_->GetTabCount() >= 7) {
+    feature_engagement_tracker_->NotifyEvent(
+        feature_engagement::events::kClosedTabWithEightOrMore);
+
+    browser_view_->feature_promo_controller()->MaybeShowPromo(
+        feature_engagement::kIPHReadingListEntryPointFeature);
+  }
 }
 
 void BrowserTabStripController::AddTabToGroup(
@@ -400,7 +412,7 @@ bool BrowserTabStripController::ToggleTabGroupCollapsedState(
       // active tab should switch to the next available tab. If there are no
       // available tabs for the active tab to switch to, the group will not
       // toggle to collapse.
-      const base::Optional<int> next_active =
+      const absl::optional<int> next_active =
           model_->GetNextExpandedActiveTab(GetActiveIndex(), group);
       if (!next_active.has_value()) {
         base::RecordAction(base::UserMetricsAction("TabGroups_CannotCollapse"));
@@ -435,6 +447,9 @@ void BrowserTabStripController::ShowContextMenuForTab(
   context_menu_contents_ = std::make_unique<TabContextMenuContents>(
       tab, this, browser_view_->feature_promo_controller());
   context_menu_contents_->RunMenuAt(p, source_type);
+  base::UmaHistogramEnumeration(
+      "TabStrip.Tab.Views.ActivationAction",
+      TabStripModel::TabActivationTypes::kContextMenu);
 }
 
 int BrowserTabStripController::HasAvailableDragActions() const {
@@ -465,7 +480,7 @@ void BrowserTabStripController::CreateNewTab() {
 }
 
 void BrowserTabStripController::CreateNewTabWithLocation(
-    const base::string16& location) {
+    const std::u16string& location) {
   // Use autocomplete to clean up the text, going so far as to turn it into
   // a search query if necessary.
   AutocompleteMatch match;
@@ -520,17 +535,17 @@ void BrowserTabStripController::OnStoppedDragging() {
 }
 
 void BrowserTabStripController::OnKeyboardFocusedTabChanged(
-    base::Optional<int> index) {
+    absl::optional<int> index) {
   browser_view_->browser()->command_controller()->TabKeyboardFocusChangedTo(
       index);
 }
 
-base::string16 BrowserTabStripController::GetGroupTitle(
+std::u16string BrowserTabStripController::GetGroupTitle(
     const tab_groups::TabGroupId& group) const {
   return model_->group_model()->GetTabGroup(group)->visual_data()->title();
 }
 
-base::string16 BrowserTabStripController::GetGroupContentString(
+std::u16string BrowserTabStripController::GetGroupContentString(
     const tab_groups::TabGroupId& group) const {
   return model_->group_model()->GetTabGroup(group)->GetContentString();
 }
@@ -555,12 +570,12 @@ void BrowserTabStripController::SetVisualDataForGroup(
   model_->group_model()->GetTabGroup(group)->SetVisualData(visual_data);
 }
 
-base::Optional<int> BrowserTabStripController::GetFirstTabInGroup(
+absl::optional<int> BrowserTabStripController::GetFirstTabInGroup(
     const tab_groups::TabGroupId& group) const {
   return model_->group_model()->GetTabGroup(group)->GetFirstTab();
 }
 
-base::Optional<int> BrowserTabStripController::GetLastTabInGroup(
+absl::optional<int> BrowserTabStripController::GetLastTabInGroup(
     const tab_groups::TabGroupId& group) const {
   return model_->group_model()->GetTabGroup(group)->GetLastTab();
 }
@@ -600,12 +615,12 @@ SkColor BrowserTabStripController::GetToolbarTopSeparatorColor() const {
   return GetFrameView()->GetToolbarTopSeparatorColor();
 }
 
-base::Optional<int> BrowserTabStripController::GetCustomBackgroundId(
+absl::optional<int> BrowserTabStripController::GetCustomBackgroundId(
     BrowserFrameActiveState active_state) const {
   return GetFrameView()->GetCustomBackgroundId(active_state);
 }
 
-base::string16 BrowserTabStripController::GetAccessibleTabName(
+std::u16string BrowserTabStripController::GetAccessibleTabName(
     const Tab* tab) const {
   return browser_view_->GetAccessibleTabLabel(false /* include_app_name */,
                                               tabstrip_->GetModelIndexOf(tab));
@@ -727,7 +742,7 @@ void BrowserTabStripController::OnTabGroupChanged(
         }
       }
 
-      tabstrip_->OnGroupVisualsChanged(change.group);
+      tabstrip_->OnGroupVisualsChanged(change.group, old_visuals, new_visuals);
       break;
     }
     case TabGroupChange::kMoved: {
@@ -760,7 +775,7 @@ void BrowserTabStripController::TabBlockedStateChanged(WebContents* contents,
 }
 
 void BrowserTabStripController::TabGroupedStateChanged(
-    base::Optional<tab_groups::TabGroupId> group,
+    absl::optional<tab_groups::TabGroupId> group,
     content::WebContents* contents,
     int index) {
   tabstrip_->AddTabToGroup(std::move(group), index);
@@ -794,7 +809,6 @@ void BrowserTabStripController::AddTab(WebContents* contents,
 
   tabstrip_->AddTabAt(index, TabRendererData::FromTabInModel(model_, index),
                       is_active);
-
   // Try to show tab groups IPH if needed.
   if (tabstrip_->GetTabCount() >= 6) {
     feature_engagement_tracker_->NotifyEvent(
@@ -802,6 +816,13 @@ void BrowserTabStripController::AddTab(WebContents* contents,
 
     browser_view_->feature_promo_controller()->MaybeShowPromo(
         feature_engagement::kIPHDesktopTabGroupsNewGroupFeature);
+  }
+
+  // Try to show tab search IPH if needed.
+  constexpr int kTabSearchIPHTriggerThreshold = 8;
+  if (tabstrip_->GetTabCount() >= kTabSearchIPHTriggerThreshold) {
+    browser_view_->feature_promo_controller()->MaybeShowPromo(
+        feature_engagement::kIPHTabSearchFeature);
   }
 }
 

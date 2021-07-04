@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <map>
+#include <string>
 #include <utility>
 
 #include "base/bind.h"
@@ -15,7 +16,6 @@
 #include "base/check.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/time/default_clock.h"
 #include "base/time/time.h"
@@ -94,7 +94,7 @@ struct BrowsingHistoryService::QueryHistoryState
     : public base::RefCounted<BrowsingHistoryService::QueryHistoryState> {
   QueryHistoryState() = default;
 
-  base::string16 search_text;
+  std::u16string search_text;
   QueryOptions original_options;
 
   QuerySourceStatus local_status = UNINITIALIZED;
@@ -115,11 +115,11 @@ struct BrowsingHistoryService::QueryHistoryState
 BrowsingHistoryService::HistoryEntry::HistoryEntry(
     BrowsingHistoryService::HistoryEntry::EntryType entry_type,
     const GURL& url,
-    const base::string16& title,
+    const std::u16string& title,
     base::Time time,
     const std::string& client_id,
     bool is_search_result,
-    const base::string16& snippet,
+    const std::u16string& snippet,
     bool blocked_visit,
     const GURL& remote_icon_url_for_uma,
     int visit_count,
@@ -184,10 +184,10 @@ BrowsingHistoryService::BrowsingHistoryService(
   if (web_history) {
     web_history_service_observation_.Observe(web_history);
   } else if (sync_service_) {
-    // If |web_history| is not available, it means that history sync is
-    // disabled. If |sync_service_| is not null, it means that syncing is
+    // If `web_history` is not available, it means that history sync is
+    // disabled. If `sync_service_` is not null, it means that syncing is
     // possible, and that history sync/web history may become enabled later, so
-    // attach start observing. If |sync_service_| is null then we cannot start
+    // attach start observing. If `sync_service_` is null then we cannot start
     // observing. This is okay because sync will never start for us, for example
     // it may be disabled by flag or we're part of an incognito/guest mode
     // window.
@@ -216,7 +216,7 @@ void BrowsingHistoryService::WebHistoryTimeout(
     scoped_refptr<QueryHistoryState> state) {
   state->remote_status = TIMED_OUT;
 
-  // Don't reset |web_history_request_| so we can still record histogram.
+  // Don't reset `web_history_request_` so we can still record histogram.
   // TODO(dubroy): Communicate the failure to the front end.
   if (!query_task_tracker_.HasTrackedTasks())
     ReturnResultsToDriver(std::move(state));
@@ -226,7 +226,7 @@ void BrowsingHistoryService::WebHistoryTimeout(
                             NUM_WEB_HISTORY_QUERY_BUCKETS);
 }
 
-void BrowsingHistoryService::QueryHistory(const base::string16& search_text,
+void BrowsingHistoryService::QueryHistory(const std::u16string& search_text,
                                           const QueryOptions& options) {
   scoped_refptr<QueryHistoryState> state =
       base::MakeRefCounted<QueryHistoryState>();
@@ -463,7 +463,7 @@ void BrowsingHistoryService::MergeDuplicateResults(
   // Maps a URL to the most recent entry on a particular day.
   std::map<GURL, HistoryEntry*> current_day_entries;
 
-  // Keeps track of the day that |current_day_entries| is holding entries for
+  // Keeps track of the day that `current_day_entries` is holding entries for
   // in order to handle removing per-day duplicates.
   base::Time current_day_midnight;
 
@@ -517,7 +517,7 @@ void BrowsingHistoryService::MergeDuplicateResults(
   } else if (CanRetry(state->remote_status)) {
     // TODO(skym): It is unclear if this is the best behavior. The UI is going
     // to behave incorrectly if out of order results are received. So to
-    // guarantee that doesn't happen, use |oldest_local| for continuation
+    // guarantee that doesn't happen, use `oldest_local` for continuation
     // calls. This will result in missing history entries for the failed calls.
     // crbug.com/685866 is related to this problem.
     state->remote_end_time_for_continuation = oldest_local;
@@ -653,9 +653,9 @@ void BrowsingHistoryService::WebHistoryQueryComplete(
         const base::DictionaryValue* result = nullptr;
         const base::ListValue* results = nullptr;
         const base::ListValue* ids = nullptr;
-        base::string16 url;
-        base::string16 title;
-        base::string16 favicon_url;
+        std::u16string url;
+        std::u16string title;
+        std::u16string favicon_url;
 
         if (!(events->GetDictionary(i, &event) &&
               event->GetList("result", &results) &&
@@ -698,7 +698,7 @@ void BrowsingHistoryService::WebHistoryQueryComplete(
 
           state->remote_results.emplace_back(HistoryEntry(
               HistoryEntry::REMOTE_ENTRY, gurl, title, time, client_id,
-              !state->search_text.empty(), base::string16(),
+              !state->search_text.empty(), std::u16string(),
               /* blocked_visit */ false, GURL(favicon_url), 0, 0));
         }
       }

@@ -4,11 +4,11 @@
 
 #import <UserNotifications/UserNotifications.h>
 
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "base/run_loop.h"
-#include "base/strings/string16.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
@@ -211,8 +211,7 @@ TEST_F(MacNotificationServiceUNTest, DisplayNotification) {
 
     std::vector<mac_notifications::mojom::NotificationActionButtonPtr> buttons;
     auto notification = mac_notifications::mojom::Notification::New(
-        std::move(meta), STRING16_LITERAL("title"),
-        STRING16_LITERAL("subtitle"), STRING16_LITERAL("body"),
+        std::move(meta), u"title", u"subtitle", u"body",
         /*renotify=*/true,
         /*show_settings_button=*/true, std::move(buttons),
         /*icon=*/gfx::ImageSkia());
@@ -269,6 +268,30 @@ TEST_F(MacNotificationServiceUNTest, CloseNotification) {
     auto notification_identifier = mojom::NotificationIdentifier::New(
         "notificationId", std::move(profile_identifier));
     service_remote_->CloseNotification(std::move(notification_identifier));
+
+    run_loop.Run();
+    [mock_notification_center_ verify];
+  }
+}
+
+TEST_F(MacNotificationServiceUNTest, CloseProfileNotifications) {
+  if (@available(macOS 10.14, *)) {
+    auto notifications = SetupNotifications();
+    base::RunLoop run_loop;
+    base::RepeatingClosure quit_closure = run_loop.QuitClosure();
+
+    NSArray* identifiers = @[
+      @"i|profileId|notificationId2",
+      @"i|profileId|notificationId",
+    ];
+    [[[mock_notification_center_ expect] andDo:^(NSInvocation*) {
+      quit_closure.Run();
+    }] removeDeliveredNotificationsWithIdentifiers:identifiers];
+
+    auto profile_identifier =
+        mojom::ProfileIdentifier::New("profileId", /*incognito=*/true);
+    service_remote_->CloseNotificationsForProfile(
+        std::move(profile_identifier));
 
     run_loop.Run();
     [mock_notification_center_ verify];

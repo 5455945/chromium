@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "ash/public/cpp/file_icon_util.h"
-#include "ash/public/cpp/holding_space/holding_space_color_provider.h"
 #include "ash/public/cpp/holding_space/holding_space_item.h"
 #include "base/bind.h"
 #include "base/memory/weak_ptr.h"
@@ -33,7 +32,6 @@ namespace {
 // Appearance.
 constexpr gfx::Size kImageSize(32, 32);
 constexpr int kFileTypeIconSize = 20;
-constexpr SkColor kFileTypeIconColor(gfx::kPlaceholderColor);
 
 // Helpers ---------------------------------------------------------------------
 
@@ -54,24 +52,17 @@ gfx::ImageSkia ExtractFileTypeIcon(const gfx::ImageSkia& image) {
 bool ContainsFileTypeIcon(const gfx::ImageSkia& image,
                           const base::FilePath& file_path) {
   gfx::ImageSkia actual = ExtractFileTypeIcon(image);
-  gfx::ImageSkia expected = GetIconForPath(file_path, kFileTypeIconColor);
+  gfx::ImageSkia expected =
+      GetIconForPath(file_path, /*dark_background=*/false);
   return gfx::test::AreImagesEqual(gfx::Image(actual), gfx::Image(expected));
 }
 
 bool ContainsFolderTypeIcon(const gfx::ImageSkia& image) {
   gfx::ImageSkia actual = ExtractFileTypeIcon(image);
   gfx::ImageSkia expected = gfx::CreateVectorIcon(
-      chromeos::kFiletypeFolderIcon, kFileTypeIconSize, kFileTypeIconColor);
+      chromeos::kFiletypeFolderIcon, kFileTypeIconSize, gfx::kGoogleGrey700);
   return gfx::test::AreImagesEqual(gfx::Image(actual), gfx::Image(expected));
 }
-
-// Fake implementation of HoldingSpaceColorProvider.
-class FakeHoldingSpaceColorProvider : public HoldingSpaceColorProvider {
- public:
-  // HoldingSpaceColorProvider:
-  SkColor GetBackgroundColor() const override { return gfx::kPlaceholderColor; }
-  SkColor GetFileIconColor() const override { return kFileTypeIconColor; }
-};
 
 // Helper class that provides a test implementation for the async bitmap
 // resolver callback used to generate holding space image representations.
@@ -197,7 +188,6 @@ class HoldingSpaceImageTest : public ::testing::Test {
 
  private:
   base::test::TaskEnvironment task_environment_;
-  FakeHoldingSpaceColorProvider holding_space_color_provider_;
 };
 
 // Tests the basic flow for generating holding space image bitmaps.
@@ -661,7 +651,7 @@ TEST_F(HoldingSpaceImageTest, HandleBackingFilePathChange) {
   // Update the backing file path before any image representations are
   // requested.
   const base::FilePath kUpdatedTestFile("updated_test_file.test");
-  holding_space_item->UpdateBackingFile(
+  holding_space_item->SetBackingFile(
       kUpdatedTestFile, GURL("filesystem:updated_file_system_url"));
 
   // Create test image client to issue an image request.
@@ -715,7 +705,7 @@ TEST_F(HoldingSpaceImageTest, HandleBackingFilePathChangeFor2xBitmap) {
   // Update the backing file path, and verify requests for 2x bitmap will use
   // the new file path.
   const base::FilePath kUpdatedTestFile("updated_test_file.test");
-  holding_space_item->UpdateBackingFile(
+  holding_space_item->SetBackingFile(
       kUpdatedTestFile, GURL("filesystem:updated_file_system_url"));
   EXPECT_EQ(0u, image_generator.NumberOfPendingRequests());
 
@@ -750,7 +740,7 @@ TEST_F(HoldingSpaceImageTest, RetryFailedImageRequestsOnFilePathChange) {
 
   // Update the backing file path, and simulate image load failure.
   const base::FilePath kUpdatedTestFile("updated_test_file.test");
-  holding_space_item->UpdateBackingFile(
+  holding_space_item->SetBackingFile(
       kUpdatedTestFile, GURL("filesystem:updated_file_system_url"));
   EXPECT_EQ(1u, image_generator.NumberOfPendingRequests());
   image_generator.FailRequest(0);
@@ -792,7 +782,7 @@ TEST_F(HoldingSpaceImageTest,
   // Update the backing file path, and verify the failed request was not
   // retried.
   const base::FilePath kUpdatedTestFile("updated_test_file.test");
-  holding_space_item->UpdateBackingFile(
+  holding_space_item->SetBackingFile(
       kUpdatedTestFile, GURL("filesystem:updated_file_system_url"));
 
   // Verify that image load is retried using the new file path.
@@ -817,7 +807,7 @@ TEST_F(HoldingSpaceImageTest, DontRetryImageRequestsFailedAfterPathChange) {
   // Update the backing file path before creating a client that requests an
   // image representation.
   const base::FilePath kUpdatedTestFile("updated_test_file.test");
-  holding_space_item->UpdateBackingFile(
+  holding_space_item->SetBackingFile(
       kUpdatedTestFile, GURL("filesystem:updated_file_system_url"));
 
   // Create test image client, and simulate image load failure.
@@ -858,7 +848,7 @@ TEST_F(HoldingSpaceImageTest, DontRetryImageLoadOnBackingFileChange) {
   // Update the backing file path, and verify the image load is not requested
   // again.
   const base::FilePath kUpdatedTestFile("updated_test_file.test");
-  holding_space_item->UpdateBackingFile(
+  holding_space_item->SetBackingFile(
       kUpdatedTestFile, GURL("filesystem:updated_file_system_url"));
 
   image = holding_space_item->image().GetImageSkia();
@@ -888,7 +878,7 @@ TEST_F(HoldingSpaceImageTest,
   // Update the backing file path, and verify the image load is not requested
   // again.
   const base::FilePath kUpdatedTestFile("updated_test_file.test");
-  holding_space_item->UpdateBackingFile(
+  holding_space_item->SetBackingFile(
       kUpdatedTestFile, GURL("filesystem:updated_file_system_url"));
   EXPECT_EQ(1u, image_generator.NumberOfPendingRequests());
 
@@ -930,7 +920,7 @@ TEST_F(HoldingSpaceImageTest, ItemPathMovedAndModifiedDuringInitialLoad) {
 
   // Update the backing file path, and then invalidate the image.
   const base::FilePath kUpdatedTestFile("updated_test_file.test");
-  holding_space_item->UpdateBackingFile(
+  holding_space_item->SetBackingFile(
       kUpdatedTestFile, GURL("filesystem:updated_file_system_url"));
   holding_space_item->InvalidateImage();
   ASSERT_TRUE(

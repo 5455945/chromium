@@ -15,7 +15,7 @@
 #include "ash/assistant/assistant_controller_impl.h"
 #include "ash/assistant/model/assistant_ui_model.h"
 #include "ash/assistant/test/test_assistant_service.h"
-#include "ash/public/cpp/ash_features.h"
+#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/assistant/controller/assistant_ui_controller.h"
 #include "ash/public/cpp/tablet_mode.h"
 #include "ash/root_window_controller.h"
@@ -31,6 +31,7 @@
 #include "base/command_line.h"
 #include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
+#include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/views/animation/bounds_animator.h"
@@ -125,7 +126,7 @@ class HomeButtonAnimationTest : public AshTestBase {
   }
 
  private:
-  base::Optional<ui::ScopedAnimationDurationScaleMode> animation_duration_;
+  absl::optional<ui::ScopedAnimationDurationScaleMode> animation_duration_;
 
   base::test::ScopedFeatureList scoped_feature_list_;
 };

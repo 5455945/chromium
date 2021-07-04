@@ -17,6 +17,7 @@
 #include "ios/web/common/features.h"
 #include "ios/web/common/url_util.h"
 #import "ios/web/js_messaging/crw_js_injector.h"
+#import "ios/web/js_messaging/web_view_js_utils.h"
 #import "ios/web/navigation/crw_error_page_helper.h"
 #import "ios/web/navigation/navigation_context_impl.h"
 #import "ios/web/navigation/navigation_item_impl.h"
@@ -38,7 +39,6 @@
 #import "ios/web/public/web_state_delegate.h"
 #include "ios/web/public/web_state_observer.h"
 #include "ios/web/public/webui/web_ui_ios_controller.h"
-#import "ios/web/security/web_interstitial_impl.h"
 #import "ios/web/session/session_certificate_policy_cache_impl.h"
 #import "ios/web/web_state/global_web_state_event_tracker.h"
 #import "ios/web/web_state/policy_decision_state_tracker.h"
@@ -86,7 +86,6 @@ WebStateImpl::WebStateImpl(const CreateParams& params,
       is_being_destroyed_(false),
       web_controller_(nil),
       web_frames_manager_(*this),
-      interstitial_(nullptr),
       created_with_opener_(params.created_with_opener),
       user_agent_type_(features::UseWebClientDefaultUserAgent()
                            ? UserAgentType::AUTOMATIC
@@ -205,7 +204,7 @@ void WebStateImpl::OnRenderProcessGone() {
 }
 
 void WebStateImpl::OnScriptCommandReceived(const std::string& command,
-                                           const base::DictionaryValue& value,
+                                           const base::Value& value,
                                            const GURL& page_url,
                                            bool user_is_interacting,
                                            web::WebFrame* sender_frame) {
@@ -328,7 +327,7 @@ bool WebStateImpl::HasWebUI() {
   return !!web_ui_;
 }
 
-const base::string16& WebStateImpl::GetTitle() const {
+const std::u16string& WebStateImpl::GetTitle() const {
   // TODO(stuartmorgan): Implement the NavigationManager logic necessary to
   // match the WebContents implementation of this method.
   DCHECK(Configured());
@@ -336,25 +335,6 @@ const base::string16& WebStateImpl::GetTitle() const {
   // Display title for the visible item makes more sense.
   item = navigation_manager_->GetVisibleItem();
   return item ? item->GetTitleForDisplay() : empty_string16_;
-}
-
-bool WebStateImpl::IsShowingWebInterstitial() const {
-  // Technically we could have |interstitial_| set but its view isn't
-  // being displayed, but there's no code path where that could occur.
-  return interstitial_ != nullptr;
-}
-
-WebInterstitial* WebStateImpl::GetWebInterstitial() const {
-  return interstitial_;
-}
-
-void WebStateImpl::ShowWebInterstitial(WebInterstitialImpl* interstitial) {
-  DCHECK(Configured());
-  interstitial_ = interstitial;
-
-  DCHECK(interstitial_->GetContentView());
-  DCHECK(interstitial_->GetContentView().scrollView);
-  [web_controller_ showTransientContentView:interstitial_->GetContentView()];
 }
 
 void WebStateImpl::SendChangeLoadProgress(double progress) {
@@ -407,6 +387,10 @@ void WebStateImpl::JavaScriptDialogClosed(
     weak_web_state->running_javascript_dialog_ = false;
   }
   std::move(callback).Run(success, user_input);
+}
+
+bool WebStateImpl::IsJavaScriptDialogRunning() {
+  return running_javascript_dialog_;
 }
 
 WebState* WebStateImpl::CreateNewWebState(const GURL& url,
@@ -481,23 +465,45 @@ void WebStateImpl::SetContentsMimeType(const std::string& mime_type) {
   mime_type_ = mime_type;
 }
 
-WebStatePolicyDecider::PolicyDecision WebStateImpl::ShouldAllowRequest(
+void WebStateImpl::ShouldAllowRequest(
     NSURLRequest* request,
-    const WebStatePolicyDecider::RequestInfo& request_info) {
+    const WebStatePolicyDecider::RequestInfo& request_info,
+    WebStatePolicyDecider::PolicyDecisionCallback callback) {
+  auto request_state_tracker =
+      std::make_unique<PolicyDecisionStateTracker>(std::move(callback));
+  PolicyDecisionStateTracker* request_state_tracker_ptr =
+      request_state_tracker.get();
+  auto policy_decider_callback = base::BindRepeating(
+      &PolicyDecisionStateTracker::OnSinglePolicyDecisionReceived,
+      base::Owned(std::move(request_state_tracker)));
+  int num_decisions_requested = 0;
   for (auto& policy_decider : policy_deciders_) {
-    WebStatePolicyDecider::PolicyDecision result =
-        policy_decider.ShouldAllowRequest(request, request_info);
-    if (result.ShouldCancelNavigation()) {
-      return result;
+    policy_decider.ShouldAllowRequest(request, request_info,
+                                      policy_decider_callback);
+    num_decisions_requested++;
+    if (request_state_tracker_ptr->DeterminedFinalResult())
+      break;
+  }
+
+  request_state_tracker_ptr->FinishedRequestingDecisions(
+      num_decisions_requested);
+}
+
+bool WebStateImpl::ShouldAllowErrorPageToBeDisplayed(NSURLResponse* response,
+                                                     bool for_main_frame) {
+  for (auto& policy_decider : policy_deciders_) {
+    if (!policy_decider.ShouldAllowErrorPageToBeDisplayed(response,
+                                                          for_main_frame)) {
+      return false;
     }
   }
-  return WebStatePolicyDecider::PolicyDecision::Allow();
+  return true;
 }
 
 void WebStateImpl::ShouldAllowResponse(
     NSURLResponse* response,
     bool for_main_frame,
-    base::OnceCallback<void(WebStatePolicyDecider::PolicyDecision)> callback) {
+    WebStatePolicyDecider::PolicyDecisionCallback callback) {
   auto response_state_tracker =
       std::make_unique<PolicyDecisionStateTracker>(std::move(callback));
   PolicyDecisionStateTracker* response_state_tracker_ptr =
@@ -617,7 +623,6 @@ BrowserState* WebStateImpl::GetBrowserState() const {
 
 void WebStateImpl::OpenURL(const WebState::OpenURLParams& params) {
   DCHECK(Configured());
-  ClearTransientContent();
   if (delegate_)
     delegate_->OpenURLFromWebState(this, params);
 }
@@ -683,13 +688,13 @@ CRWJSInjectionReceiver* WebStateImpl::GetJSInjectionReceiver() const {
   return [web_controller_.jsInjector JSInjectionReceiver];
 }
 
-void WebStateImpl::ExecuteJavaScript(const base::string16& javascript) {
+void WebStateImpl::ExecuteJavaScript(const std::u16string& javascript) {
   [web_controller_.jsInjector
       executeJavaScript:base::SysUTF16ToNSString(javascript)
       completionHandler:nil];
 }
 
-void WebStateImpl::ExecuteJavaScript(const base::string16& javascript,
+void WebStateImpl::ExecuteJavaScript(const std::u16string& javascript,
                                      JavaScriptResultCallback callback) {
   __block JavaScriptResultCallback stack_callback = std::move(callback);
   [web_controller_.jsInjector
@@ -871,44 +876,12 @@ void WebStateImpl::OnNavigationFinished(web::NavigationContextImpl* context) {
 
 #pragma mark - NavigationManagerDelegate implementation
 
-void WebStateImpl::ClearTransientContent() {
-  if (interstitial_) {
-    // |visible_item| can be null if non-committed entries where discarded.
-    NavigationItem* visible_item = navigation_manager_->GetVisibleItem();
-    const SSLStatus old_status =
-        visible_item ? visible_item->GetSSL() : SSLStatus();
-    // Store the currently displayed interstitial in a local variable and reset
-    // |interstitial_| early.  This is to prevent an infinite loop, as
-    // |DontProceed()| internally calls |ClearTransientContent()|.
-    web::WebInterstitial* interstitial = interstitial_;
-    interstitial_ = nullptr;
-    interstitial->DontProceed();
-    // Don't access |interstitial| after calling |DontProceed()|, as it triggers
-    // deletion.
-
-    const web::NavigationItem* new_item = navigation_manager_->GetVisibleItem();
-    if (!new_item || !visible_item || !new_item->GetSSL().Equals(old_status)) {
-      // Visible SSL state has actually changed after interstitial dismissal.
-      DidChangeVisibleSecurityState();
-    }
-  }
-  [web_controller_ clearTransientContentView];
-}
-
 void WebStateImpl::ClearDialogs() {
   CancelDialogs();
 }
 
 void WebStateImpl::RecordPageStateInNavigationItem() {
   [web_controller_ recordStateInHistory];
-}
-
-void WebStateImpl::OnGoToIndexSameDocumentNavigation(
-    NavigationInitiationType type,
-    bool has_user_gesture) {
-  [web_controller_
-      didFinishGoToIndexSameDocumentNavigationWithType:type
-                                        hasUserGesture:has_user_gesture];
 }
 
 void WebStateImpl::LoadCurrentItem(NavigationInitiationType type) {
@@ -974,6 +947,34 @@ void WebStateImpl::RestoreSessionStorage(CRWSessionStorage* session_storage) {
   restored_session_storage_ = session_storage;
   SessionStorageBuilder session_storage_builder;
   session_storage_builder.ExtractSessionState(this, session_storage);
+}
+
+bool WebStateImpl::SetSessionStateData(NSData* data) {
+  bool state_set = [web_controller_ setSessionStateData:data];
+  if (!state_set)
+    return false;
+  for (int i = 0; i < navigation_manager_->GetItemCount(); i++) {
+    web::NavigationItem* item = navigation_manager_->GetItemAtIndex(i);
+    if (base::FeatureList::IsEnabled(web::features::kUseJSForErrorPage) &&
+        [CRWErrorPageHelper isErrorPageFileURL:item->GetURL()]) {
+      item->SetVirtualURL([CRWErrorPageHelper
+          failedNavigationURLFromErrorPageFileURL:item->GetURL()]);
+    }
+  }
+  return true;
+}
+
+NSData* WebStateImpl::SessionStateData() {
+  // Don't mix safe and unsafe session restoration -- if a webState still
+  // has unrestored targetUrl pages, leave it that way.
+  for (int i = 0; i < navigation_manager_->GetItemCount(); i++) {
+    web::NavigationItem* item = navigation_manager_->GetItemAtIndex(i);
+    if (web::wk_navigation_util::IsRestoreSessionUrl(item->GetURL())) {
+      return nullptr;
+    }
+  }
+
+  return [web_controller_ sessionStateData];
 }
 
 }  // namespace web

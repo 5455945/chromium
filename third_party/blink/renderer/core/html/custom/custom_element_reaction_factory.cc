@@ -4,7 +4,7 @@
 
 #include "third_party/blink/renderer/core/html/custom/custom_element_reaction_factory.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/file_or_usv_string_or_form_data.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_union_file_formdata_usvstring.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_definition.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_reaction.h"
@@ -199,7 +199,7 @@ class CustomElementFormStateRestoreCallbackReaction final
  public:
   CustomElementFormStateRestoreCallbackReaction(
       CustomElementDefinition& definition,
-      const FileOrUSVStringOrFormData& value,
+      const V8ControlValue* value,
       const String& mode)
       : CustomElementReaction(definition), value_(value), mode_(mode) {
     DCHECK(definition.HasFormStateRestoreCallback());
@@ -216,7 +216,7 @@ class CustomElementFormStateRestoreCallbackReaction final
     definition_->RunFormStateRestoreCallback(element, value_, mode_);
   }
 
-  FileOrUSVStringOrFormData value_;
+  Member<const V8ControlValue> value_;
   String mode_;
 
   DISALLOW_COPY_AND_ASSIGN(CustomElementFormStateRestoreCallbackReaction);
@@ -280,7 +280,7 @@ CustomElementReaction& CustomElementReactionFactory::CreateFormDisabled(
 
 CustomElementReaction& CustomElementReactionFactory::CreateFormStateRestore(
     CustomElementDefinition& definition,
-    const FileOrUSVStringOrFormData& value,
+    const V8ControlValue* value,
     const String& mode) {
   return *MakeGarbageCollected<CustomElementFormStateRestoreCallbackReaction>(
       definition, value, mode);

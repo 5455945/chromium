@@ -7,9 +7,10 @@
 
 #include <string>
 
+#include "base/sequenced_task_runner.h"
 #include "base/synchronization/lock.h"
+#include "chromeos/assistant/internal/proto/assistant/display_connection.pb.h"
 #include "chromeos/services/libassistant/public/cpp/android_app_info.h"
-#include "libassistant/display/proto/display_connection.pb.h"
 #include "libassistant/shared/internal_api/display_connection.h"
 
 namespace chromeos {
@@ -26,8 +27,7 @@ class DisplayConnectionObserver {
 class DisplayConnectionImpl : public assistant_client::DisplayConnection {
  public:
   DisplayConnectionImpl(DisplayConnectionObserver* observer,
-                        bool feedback_ui_enabled,
-                        bool media_session_enabled);
+                        bool feedback_ui_enabled);
   DisplayConnectionImpl(const DisplayConnectionImpl&) = delete;
   DisplayConnectionImpl& operator=(const DisplayConnectionImpl&) = delete;
   ~DisplayConnectionImpl() override;
@@ -42,41 +42,42 @@ class DisplayConnectionImpl : public assistant_client::DisplayConnection {
   void OnAndroidAppListRefreshed(
       const std::vector<assistant::AndroidAppInfo>& apps_info);
 
+  const std::vector<assistant::AndroidAppInfo>& GetCachedAndroidAppList() {
+    return apps_info_;
+  }
+
  private:
   void SendDisplayRequestLocked();
 
   void FillDisplayRequestLocked(::assistant::display::DisplayRequest& dr);
 
-  // GUARDED_BY(update_display_request_mutex_)
-  Delegate* delegate_ = nullptr;
+  Delegate* delegate_ GUARDED_BY(update_display_request_mutex_) = nullptr;
 
+  // Owned by the parent which also owns `this`.
   DisplayConnectionObserver* const observer_;
 
   // Whether Assistant feedback UI is enabled.
   const bool feedback_ui_enabled_;
 
-  // Whether Media Session support is enabled.
-  const bool media_session_enabled_;
-
   // Whether ARC++ is enabled.
-  // GUARDED_BY(update_display_request_mutex_)
-  bool arc_play_store_enabled_ = false;
+  bool arc_play_store_enabled_ GUARDED_BY(update_display_request_mutex_) =
+      false;
 
   // Whether device apps user data consent is granted.
-  // GUARDED_BY(update_display_request_mutex_)
-  bool device_apps_enabled_ = false;
+  bool device_apps_enabled_ GUARDED_BY(update_display_request_mutex_) = false;
 
   // Whether related info setting is on.
-  // GUARDED_BY(update_display_request_mutex_)
-  bool related_info_enabled_;
+  bool related_info_enabled_ GUARDED_BY(update_display_request_mutex_) = false;
 
   // Supported Android apps information.
-  // GUARDED_BY(update_display_request_mutex_)
-  std::vector<assistant::AndroidAppInfo> apps_info_;
+  std::vector<assistant::AndroidAppInfo> GUARDED_BY(
+      update_display_request_mutex_) apps_info_;
 
   // Both LibAssistant and Chrome threads may update and send display request so
   // we always guard access with |update_display_request_mutex_|.
   base::Lock update_display_request_mutex_;
+
+  scoped_refptr<base::SequencedTaskRunner> task_runner_;
 };
 
 }  // namespace libassistant

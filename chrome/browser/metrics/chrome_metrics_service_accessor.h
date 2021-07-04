@@ -6,7 +6,6 @@
 #define CHROME_BROWSER_METRICS_CHROME_METRICS_SERVICE_ACCESSOR_H_
 
 #include <stdint.h>
-#include <vector>
 
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
@@ -76,8 +75,13 @@ class MetricsReportingHandler;
 }
 
 namespace feed {
+class FeedServiceBridge;
 class FeedServiceDelegateImpl;
 }  // namespace feed
+
+namespace browser_sync {
+class DeviceInfoSyncClientImpl;
+}  // namespace browser_sync
 
 // This class limits and documents access to metrics service helper methods.
 // Since these methods are private, each user has to be explicitly declared
@@ -128,6 +132,8 @@ class ChromeMetricsServiceAccessor : public metrics::MetricsServiceAccessor {
   friend class OptimizationGuideKeyedService;
   friend class WebUITabStripFieldTrial;
   friend class feed::FeedServiceDelegateImpl;
+  friend class browser_sync::DeviceInfoSyncClientImpl;
+  friend class feed::FeedServiceBridge;
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   friend class ChromeCameraAppUIDelegate;

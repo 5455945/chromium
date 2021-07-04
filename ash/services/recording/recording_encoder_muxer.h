@@ -21,6 +21,7 @@
 #include "media/base/audio_parameters.h"
 #include "media/muxers/webm_muxer.h"
 #include "media/video/vpx_video_encoder.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/geometry/size.h"
 
 namespace media {
@@ -29,17 +30,14 @@ class VideoFrame;
 
 namespace recording {
 
-// The type of the failures that can happen while encoding.
-enum class FailureType {
-  kEncoderInitialization,
-  kEncoding,
-};
+namespace mojom {
+enum class RecordingStatus;
+}  // namespace mojom
 
 // Defines a callback type to notify the user of RecordingEncoderMuxer of a
 // failure while encoding audio or video frames.
-// TODO(afakhry): It's possible we don't need |type| or |for_video|.
-using FailureCallback =
-    base::OnceCallback<void(FailureType type, bool for_video)>;
+using OnFailureCallback =
+    base::OnceCallback<void(mojom::RecordingStatus status)>;
 
 // Encapsulates encoding and muxing audio and video frame. An instance of this
 // object can only be interacted with via a |base::SequenceBound| wrapper, which
@@ -61,18 +59,21 @@ class RecordingEncoderMuxer {
   // initialize the video and audio encoders respectively.
   // If |audio_input_params| is nullptr, then the service is not recording
   // audio, and the muxer will be initialized accordingly.
-  // |muxer_output_callback| will be called on the same sequence of
-  // |blocking_task_runner| to provide the muxer output chunks ready to be sent
-  // to the recording service client.
-  // |on_failure_callback| will be called on the same sequence of
-  // |blocking_task_runner| to inform the owner of this object, after which
-  // all subsequent calls to EncodeVideo() and EncodeAudio() will be ignored.
+  // the webm muxer chunks will be written directly to a file at the given
+  // |webm_file_path|.
+  // |on_failure_callback| will be called to inform the owner of this object of
+  // a failure, after which all subsequent calls to EncodeVideo() and
+  // EncodeAudio() will be ignored.
+  //
+  // By default, |on_failure_callback| will be called on the same sequence of
+  // |blocking_task_runner| (unless the caller binds the given callbacks to a
+  // different sequence by means of base::BindPostTask()).
   static base::SequenceBound<RecordingEncoderMuxer> Create(
       scoped_refptr<base::SequencedTaskRunner> blocking_task_runner,
       const media::VideoEncoder::Options& video_encoder_options,
       const media::AudioParameters* audio_input_params,
-      media::WebmMuxer::WriteDataCB muxer_output_callback,
-      FailureCallback on_failure_callback);
+      const base::FilePath& webm_file_path,
+      OnFailureCallback on_failure_callback);
 
   bool did_failure_occur() const {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -97,12 +98,16 @@ class RecordingEncoderMuxer {
   // Audio and video encoders as well as the WebmMuxer may buffer several frames
   // before they're processed. It is important to flush all those buffers before
   // releasing this object so as not to drop the final portion of the recording.
-  // |on_done| will be called on the same sequence of |blocking_task_runner|
-  // when all remaining buffered frames have been processed and sent to
-  // |muxer_output_callback|.
+  // |on_done| will be called when all remaining buffered frames have been
+  // processed and written to the webm file.
+  // By default, |on_done| will be called on the same sequence of
+  // |blocking_task_runner| unless the caller binds it to another sequence by
+  // means of base::BindPostTask().
   void FlushAndFinalize(base::OnceClosure on_done);
 
  private:
+  class RecordingMuxerDelegate;
+
   struct AudioFrame {
     AudioFrame(std::unique_ptr<media::AudioBus>, base::TimeTicks);
     AudioFrame(AudioFrame&&);
@@ -117,8 +122,8 @@ class RecordingEncoderMuxer {
   RecordingEncoderMuxer(
       const media::VideoEncoder::Options& video_encoder_options,
       const media::AudioParameters* audio_input_params,
-      media::WebmMuxer::WriteDataCB muxer_output_callback,
-      FailureCallback on_failure_callback);
+      const base::FilePath& webm_file_path,
+      OnFailureCallback on_failure_callback);
   ~RecordingEncoderMuxer();
 
   // Creates and initializes the audio encoder.
@@ -150,12 +155,12 @@ class RecordingEncoderMuxer {
   // which will then by sent to muxer.
   void OnVideoEncoderOutput(
       media::VideoEncoderOutput output,
-      base::Optional<media::VideoEncoder::CodecDescription> codec_description);
+      absl::optional<media::VideoEncoder::CodecDescription> codec_description);
 
   // Called by the audio encoder to provide the |encoded_audio|.
   void OnAudioEncoded(
       media::EncodedAudioBuffer encoded_audio,
-      base::Optional<media::AudioEncoder::CodecDescription> codec_description);
+      absl::optional<media::AudioEncoder::CodecDescription> codec_description);
 
   // Called when the audio encoder flushes all its buffered frames, at which
   // point we can flush the video encoder. |on_done| will be passed to
@@ -172,9 +177,11 @@ class RecordingEncoderMuxer {
   void OnEncoderStatus(bool for_video, media::Status status);
 
   // Notifies the owner of this object (via |on_failure_callback_|) that a
-  // failure of |type| has occurred during audio or video encoding depending on
-  // the value of |for_video|.
-  void NotifyFailure(FailureType type, bool for_video);
+  // failure noted by |status| has occurred during audio or video encoding, or
+  // muxing.
+  void NotifyFailure(mojom::RecordingStatus status);
+
+  SEQUENCE_CHECKER(sequence_checker_);
 
   std::unique_ptr<media::VpxVideoEncoder> video_encoder_
       GUARDED_BY_CONTEXT(sequence_checker_);
@@ -210,7 +217,7 @@ class RecordingEncoderMuxer {
   // A callback triggered when a failure happens during encoding. Once
   // triggered, this callback is null, and therefore indicates that a failure
   // occurred (See did_failure_occur() above).
-  FailureCallback on_failure_callback_ GUARDED_BY_CONTEXT(sequence_checker_);
+  OnFailureCallback on_failure_callback_ GUARDED_BY_CONTEXT(sequence_checker_);
 
   // True once video encoder is initialized successfully.
   bool is_video_encoder_initialized_ GUARDED_BY_CONTEXT(sequence_checker_) =
@@ -219,8 +226,6 @@ class RecordingEncoderMuxer {
   // True once audio encoder is initialized successfully.
   bool is_audio_encoder_initialized_ GUARDED_BY_CONTEXT(sequence_checker_) =
       false;
-
-  SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<RecordingEncoderMuxer> weak_ptr_factory_
       GUARDED_BY_CONTEXT(sequence_checker_){this};

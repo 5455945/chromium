@@ -10,9 +10,9 @@
 #include "base/bind.h"
 #include "base/environment.h"
 #include "base/files/file_util.h"
-#include "base/optional.h"
 #include "base/process/process_metrics.h"
 #include "base/run_loop.h"
+#include "base/strings/pattern.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -37,6 +37,7 @@
 #include "testing/gtest/include/gtest/gtest-death-test.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 
@@ -184,22 +185,47 @@ TEST_F(SysInfoTest, Uptime) {
 TEST_F(SysInfoTest, HardwareModelNameFormatMacAndiOS) {
   std::string hardware_model = SysInfo::HardwareModelName();
   ASSERT_FALSE(hardware_model.empty());
-  // Check that the model is of the expected format "Foo,Bar" where "Bar" is
+
+  // Check that the model is of the expected format, which is different on iOS
+  // simulators and real iOS / MacOS devices.
+#if defined(OS_IOS) && TARGET_OS_SIMULATOR
+  // On iOS simulators, the device model looks like "iOS Simulator (Foo[,Bar])"
+  // where Foo is either "Unknown", "iPhone" or "iPad", and Bar, if present, is
+  // a number.
+  EXPECT_TRUE(base::MatchPattern(hardware_model, "iOS Simulator (*)"))
+      << hardware_model;
+  std::vector<StringPiece> mainPieces =
+      SplitStringPiece(hardware_model, "()", KEEP_WHITESPACE, SPLIT_WANT_ALL);
+  ASSERT_EQ(3u, mainPieces.size()) << hardware_model;
+  std::vector<StringPiece> modelPieces =
+      SplitStringPiece(mainPieces[1], ",", KEEP_WHITESPACE, SPLIT_WANT_ALL);
+  ASSERT_GE(modelPieces.size(), 1u) << hardware_model;
+  if (modelPieces.size() == 1u) {
+    EXPECT_TRUE(modelPieces[0] == "Unknown" || modelPieces[0] == "iPhone" ||
+                modelPieces[0] == "iPad")
+        << hardware_model;
+  } else {
+    int value;
+    EXPECT_TRUE(StringToInt(modelPieces[1], &value)) << hardware_model;
+  }
+#else
+  // The expected format is "Foo,Bar" where Foo is "iPhone" or "iPad" and Bar is
   // a number.
   std::vector<StringPiece> pieces =
       SplitStringPiece(hardware_model, ",", KEEP_WHITESPACE, SPLIT_WANT_ALL);
   ASSERT_EQ(2u, pieces.size()) << hardware_model;
   int value;
   EXPECT_TRUE(StringToInt(pieces[1], &value)) << hardware_model;
+#endif  // defined(OS_IOS) && TARGET_OS_SIMULATOR
 }
-#endif
+#endif  // defined(OS_APPLE)
 
 TEST_F(SysInfoTest, GetHardwareInfo) {
   test::TaskEnvironment task_environment;
-  base::Optional<SysInfo::HardwareInfo> hardware_info;
+  absl::optional<SysInfo::HardwareInfo> hardware_info;
 
   auto callback = base::BindOnce(
-      [](base::Optional<SysInfo::HardwareInfo>* target_info,
+      [](absl::optional<SysInfo::HardwareInfo>* target_info,
          SysInfo::HardwareInfo info) { *target_info = std::move(info); },
       &hardware_info);
   SysInfo::GetHardwareInfo(std::move(callback));
@@ -223,10 +249,10 @@ TEST_F(SysInfoTest, GetHardwareInfo) {
 TEST_F(SysInfoTest, GetHardwareInfoWMIMatchRegistry) {
   base::win::ScopedCOMInitializer com_initializer;
   test::TaskEnvironment task_environment;
-  base::Optional<SysInfo::HardwareInfo> hardware_info;
+  absl::optional<SysInfo::HardwareInfo> hardware_info;
 
   auto callback = base::BindOnce(
-      [](base::Optional<SysInfo::HardwareInfo>* target_info,
+      [](absl::optional<SysInfo::HardwareInfo>* target_info,
          SysInfo::HardwareInfo info) { *target_info = std::move(info); },
       &hardware_info);
   SysInfo::GetHardwareInfo(std::move(callback));
@@ -350,6 +376,19 @@ TEST_F(SysInfoTest, IsRunningOnChromeOS) {
     test::ScopedChromeOSVersionInfo version(kLsbRelease3, Time());
     EXPECT_TRUE(SysInfo::IsRunningOnChromeOS());
   }
+}
+
+// Regression test for https://crbug.com/1148904.
+TEST_F(SysInfoTest, ScopedChromeOSVersionInfoDoesNotChangeEnvironment) {
+  std::unique_ptr<Environment> environment = Environment::Create();
+  ASSERT_FALSE(environment->HasVar("LSB_RELEASE"));
+  {
+    const char kLsbRelease[] =
+        "CHROMEOS_RELEASE_NAME=Chrome OS\n"
+        "CHROMEOS_RELEASE_VERSION=1.2.3.4\n";
+    test::ScopedChromeOSVersionInfo version(kLsbRelease, Time());
+  }
+  EXPECT_FALSE(environment->HasVar("LSB_RELEASE"));
 }
 
 TEST_F(SysInfoTest, CrashOnBaseImage) {

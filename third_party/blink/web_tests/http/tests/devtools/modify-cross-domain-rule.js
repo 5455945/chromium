@@ -6,7 +6,7 @@
   'use strict';
   TestRunner.addResult(
       `Tests that modifying a rule in a stylesheet loaded from a different domain does not crash the renderer.\n`);
-  await TestRunner.loadModule('elements_test_runner');
+  await TestRunner.loadModule('elements'); await TestRunner.loadTestModule('elements_test_runner');
   await TestRunner.loadHTML(`
       <div id="inspected">Text</div>
     `);
@@ -80,7 +80,7 @@
           TestRunner.addResult('[!] No valid rule style received');
           TestRunner.completeTest();
         } else {
-          dumpProperties(rule.style);
+          ElementsTestRunner.dumpCSSStyleDeclaration(rule.style);
           rule.setSelectorText('body').then(onSelectorUpdated).then(successCallback);
         }
       }
@@ -104,12 +104,4 @@
       }
     }
   ]);
-
-  function dumpProperties(style) {
-    if (!style)
-      return;
-    var allProperties = style.allProperties();
-    for (var i = 0; i < allProperties.length; ++i)
-      TestRunner.addResult(allProperties[i].text);
-  }
 })();

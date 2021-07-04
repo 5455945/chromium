@@ -8,7 +8,6 @@
 #include <string>
 
 #include "base/callback.h"
-#include "base/strings/string16.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 
@@ -34,6 +33,8 @@ class VersionUpdater {
     FAILED,
     FAILED_OFFLINE,
     FAILED_CONNECTION_TYPE_DISALLOWED,
+    FAILED_HTTP,
+    FAILED_DOWNLOAD,
     DISABLED,
     DISABLED_BY_ADMIN
   };
@@ -71,7 +72,7 @@ class VersionUpdater {
                                        bool powerwash,
                                        const std::string& version,
                                        int64_t update_size,
-                                       const base::string16& message)>
+                                       const std::u16string& message)>
       StatusCallback;
 
   // Used to show or hide the promote UI elements. Mac-only.

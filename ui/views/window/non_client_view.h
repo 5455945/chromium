@@ -9,7 +9,7 @@
 
 #include "base/macros.h"
 #include "build/build_config.h"
-#include "ui/views/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/metadata/view_factory.h"
 #include "ui/views/view.h"
 #include "ui/views/view_targeter_delegate.h"
@@ -56,8 +56,7 @@ class VIEWS_EXPORT NonClientFrameView : public View,
   // the size of the sizing edges, and whether or not the window can be
   // resized.
   int GetHTComponentForFrame(const gfx::Point& point,
-                             int top_resize_border_height,
-                             int resize_border_thickness,
+                             const gfx::Insets& resize_border,
                              int top_resize_corner_height,
                              int resize_corner_width,
                              bool can_resize);
@@ -101,11 +100,7 @@ class VIEWS_EXPORT NonClientFrameView : public View,
   // View:
   void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
   void OnThemeChanged() override;
-
- protected:
-  // ViewTargeterDelegate:
-  bool DoesIntersectRect(const View* target,
-                         const gfx::Rect& rect) const override;
+  void Layout() override;
 
  private:
 #if defined(OS_WIN)
@@ -121,10 +116,11 @@ class VIEWS_EXPORT NonClientFrameView : public View,
 //
 //  The NonClientView is the logical root of all Views contained within a
 //  Window, except for the RootView which is its parent and of which it is the
-//  sole child. The NonClientView has two children, the NonClientFrameView which
+//  sole child. The NonClientView has one child, the NonClientFrameView which
 //  is responsible for painting and responding to events from the non-client
-//  portions of the window, and the ClientView, which is responsible for the
-//  same for the client area of the window:
+//  portions of the window, and for forwarding events to its child, the
+//  ClientView, which is responsible for the same for the client area of the
+//  window:
 //
 //  +- views::Widget ------------------------------------+
 //  | +- views::RootView ------------------------------+ |
@@ -135,22 +131,16 @@ class VIEWS_EXPORT NonClientFrameView : public View,
 //  | | | | << of the non-client areas of a     >> | | | |
 //  | | | | << views::Widget.                   >> | | | |
 //  | | | |                                        | | | |
-//  | | | +----------------------------------------+ | | |
-//  | | | +- views::ClientView or subclass --------+ | | |
-//  | | | |                                        | | | |
-//  | | | | << all painting and event receiving >> | | | |
-//  | | | | << of the client areas of a         >> | | | |
-//  | | | | << views::Widget.                   >> | | | |
-//  | | | |                                        | | | |
+//  | | | | +- views::ClientView or subclass ----+ | | | |
+//  | | | | |                                    | | | | |
+//  | | | | | << all painting and event       >> | | | | |
+//  | | | | | << receiving of the client      >> | | | | |
+//  | | | | | << areas of a views::Widget.    >> | | | | |
+//  | | | | +----------------------------------+ | | | | |
 //  | | | +----------------------------------------+ | | |
 //  | | +--------------------------------------------+ | |
 //  | +------------------------------------------------+ |
 //  +----------------------------------------------------+
-//
-// The NonClientFrameView and ClientView are siblings because due to theme
-// changes the NonClientFrameView may be replaced with different
-// implementations (e.g. during the switch from DWM/Aero-Glass to Vista Basic/
-// Classic rendering).
 //
 class VIEWS_EXPORT NonClientView : public View, public ViewTargeterDelegate {
  public:
@@ -214,7 +204,7 @@ class VIEWS_EXPORT NonClientView : public View, public ViewTargeterDelegate {
   ClientView* client_view() const { return client_view_; }
 
   // Set the accessible name of this view.
-  void SetAccessibleName(const base::string16& name);
+  void SetAccessibleName(const std::u16string& name);
 
   // NonClientView, View overrides:
   gfx::Size CalculatePreferredSize() const override;
@@ -248,7 +238,7 @@ class VIEWS_EXPORT NonClientView : public View, public ViewTargeterDelegate {
   View* overlay_view_ = nullptr;
 
   // The accessible name of this view.
-  base::string16 accessible_name_;
+  std::u16string accessible_name_;
 };
 
 BEGIN_VIEW_BUILDER(VIEWS_EXPORT, NonClientFrameView, View)

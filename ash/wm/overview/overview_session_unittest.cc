@@ -13,15 +13,13 @@
 #include "ash/accelerators/accelerator_controller_impl.h"
 #include "ash/accelerators/exit_warning_handler.h"
 #include "ash/accessibility/accessibility_controller_impl.h"
+#include "ash/accessibility/magnifier/docked_magnifier_controller.h"
 #include "ash/accessibility/test_accessibility_controller_client.h"
 #include "ash/app_list/app_list_controller_impl.h"
+#include "ash/constants/app_types.h"
 #include "ash/display/screen_orientation_controller.h"
 #include "ash/display/screen_orientation_controller_test_api.h"
 #include "ash/drag_drop/drag_drop_controller.h"
-#include "ash/home_screen/home_screen_controller.h"
-#include "ash/magnifier/docked_magnifier_controller_impl.h"
-#include "ash/public/cpp/app_types.h"
-#include "ash/public/cpp/ash_features.h"
 #include "ash/public/cpp/shelf_config.h"
 #include "ash/public/cpp/test/shell_test_api.h"
 #include "ash/public/cpp/window_properties.h"
@@ -65,9 +63,11 @@
 #include "ash/wm/wm_event.h"
 #include "ash/wm/workspace/workspace_window_resizer.h"
 #include "base/containers/contains.h"
+#include "base/containers/cxx20_erase.h"
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/metrics/user_action_tester.h"
@@ -80,9 +80,12 @@
 #include "ui/aura/window_event_dispatcher.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/base/hit_test.h"
+#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_animation_element.h"
 #include "ui/compositor/layer_animation_sequence.h"
 #include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/compositor/test/draw_waiter_for_test.h"
+#include "ui/compositor/test/layer_animator_test_controller.h"
 #include "ui/compositor/test/test_utils.h"
 #include "ui/display/display_layout.h"
 #include "ui/display/manager/display_manager.h"
@@ -154,6 +157,33 @@ class TweenTester : public ui::LayerAnimationObserver {
   DISALLOW_COPY_AND_ASSIGN(TweenTester);
 };
 
+// Class which tracks if a given widget has been destroyed.
+class TestDestroyedWidgetObserver : public views::WidgetObserver {
+ public:
+  explicit TestDestroyedWidgetObserver(views::Widget* widget) {
+    DCHECK(widget);
+    observation_.Observe(widget);
+  }
+  TestDestroyedWidgetObserver(const TestDestroyedWidgetObserver&) = delete;
+  TestDestroyedWidgetObserver& operator=(const TestDestroyedWidgetObserver&) =
+      delete;
+  ~TestDestroyedWidgetObserver() override = default;
+
+  // views::WidgetObserver:
+  void OnWidgetDestroyed(views::Widget* widget) override {
+    DCHECK(!widget_destroyed_);
+    widget_destroyed_ = true;
+  }
+
+  bool widget_destroyed() const { return widget_destroyed_; }
+
+ private:
+  bool widget_destroyed_ = false;
+
+  base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{
+      this};
+};
+
 }  // namespace
 
 class OverviewSessionTest : public AshTestBase {
@@ -172,10 +202,11 @@ class OverviewSessionTest : public AshTestBase {
         base::TimeDelta::FromMilliseconds(1));
     ScopedOverviewTransformWindow::SetImmediateCloseForTests(
         /*immediate=*/true);
-    OverviewWallpaperController::SetDoNotChangeWallpaperForTests();
+    OverviewWallpaperController::SetDisableChangeWallpaperForTest(true);
     PresentationTimeRecorder::SetReportPresentationTimeImmediatelyForTest(true);
   }
   void TearDown() override {
+    OverviewWallpaperController::SetDisableChangeWallpaperForTest(false);
     PresentationTimeRecorder::SetReportPresentationTimeImmediatelyForTest(
         false);
     trace_names_.clear();
@@ -520,9 +551,9 @@ TEST_F(OverviewSessionTest, WindowsOrder) {
   ToggleOverview();
   const std::vector<std::unique_ptr<OverviewItem>>& overview1 =
       GetOverviewItemsForRoot(0);
-  EXPECT_EQ(1, overview1[0]->GetWindow()->id());
-  EXPECT_EQ(3, overview1[1]->GetWindow()->id());
-  EXPECT_EQ(2, overview1[2]->GetWindow()->id());
+  EXPECT_EQ(1, overview1[0]->GetWindow()->GetId());
+  EXPECT_EQ(3, overview1[1]->GetWindow()->GetId());
+  EXPECT_EQ(2, overview1[2]->GetWindow()->GetId());
   ToggleOverview();
 
   // Activate the second window.
@@ -532,9 +563,9 @@ TEST_F(OverviewSessionTest, WindowsOrder) {
       GetOverviewItemsForRoot(0);
 
   // The order should be MRU.
-  EXPECT_EQ(2, overview2[0]->GetWindow()->id());
-  EXPECT_EQ(1, overview2[1]->GetWindow()->id());
-  EXPECT_EQ(3, overview2[2]->GetWindow()->id());
+  EXPECT_EQ(2, overview2[0]->GetWindow()->GetId());
+  EXPECT_EQ(1, overview2[1]->GetWindow()->GetId());
+  EXPECT_EQ(3, overview2[2]->GetWindow()->GetId());
   ToggleOverview();
 }
 
@@ -1460,7 +1491,7 @@ TEST_F(OverviewSessionTest, DropTargetOnCorrectDisplayForDraggingFromOverview) {
   EnterTabletMode();
   // DisplayConfigurationObserver enables mirror mode when tablet mode is
   // enabled. Disable mirror mode to test multiple displays.
-  display_manager()->SetMirrorMode(display::MirrorMode::kOff, base::nullopt);
+  display_manager()->SetMirrorMode(display::MirrorMode::kOff, absl::nullopt);
   base::RunLoop().RunUntilIdle();
 
   const aura::Window::Windows root_windows = Shell::Get()->GetAllRootWindows();
@@ -1589,7 +1620,7 @@ TEST_F(OverviewSessionTest, DragWindowShadow) {
 // Test that a label is created under the window on entering overview mode.
 TEST_F(OverviewSessionTest, CreateLabelUnderWindow) {
   std::unique_ptr<aura::Window> window(CreateTestWindow(gfx::Rect(300, 500)));
-  const base::string16 window_title = base::UTF8ToUTF16("My window");
+  const std::u16string window_title = u"My window";
   window->SetTitle(window_title);
   ToggleOverview();
   OverviewItem* window_item = GetOverviewItemsForRoot(0).back().get();
@@ -1600,7 +1631,7 @@ TEST_F(OverviewSessionTest, CreateLabelUnderWindow) {
   EXPECT_EQ(window_title, label->GetText());
 
   // Update the window title and check that the label is updated, too.
-  const base::string16 updated_title = base::UTF8ToUTF16("Updated title");
+  const std::u16string updated_title = u"Updated title";
   window->SetTitle(updated_title);
   EXPECT_EQ(updated_title, label->GetText());
 
@@ -1641,7 +1672,8 @@ TEST_F(OverviewSessionTest, DisplayOrientationChanged) {
 TEST_F(OverviewSessionTest, AcceleratorInOverviewSession) {
   ToggleOverview();
   auto* accelerator_controller = Shell::Get()->accelerator_controller();
-  auto* ewh = accelerator_controller->GetExitWarningHandlerForTest();
+  auto* ewh = AcceleratorControllerImpl::TestApi(accelerator_controller)
+                  .GetExitWarningHandler();
   ASSERT_TRUE(ewh);
   StubForTest(ewh);
   EXPECT_FALSE(is_ui_shown(ewh));
@@ -2146,14 +2178,14 @@ TEST_F(OverviewSessionTest, HandleActiveWindowNotInOverviewGrid) {
 
 // Tests that AlwaysOnTopWindow can be handled correctly in new overview
 // animations.
-// Fails consistently; see https://crbug.com/812497.
-TEST_F(OverviewSessionTest, DISABLED_HandleAlwaysOnTopWindow) {
+TEST_F(OverviewSessionTest, HandleAlwaysOnTopWindow) {
   const gfx::Rect bounds(400, 400);
   std::unique_ptr<aura::Window> window1(CreateTestWindow(bounds));
   std::unique_ptr<aura::Window> window2(CreateTestWindow(bounds));
   std::unique_ptr<aura::Window> window3(CreateTestWindow(bounds));
   std::unique_ptr<aura::Window> window4(CreateTestWindow(bounds));
-  std::unique_ptr<aura::Window> window5(CreateTestWindow(bounds));
+  std::unique_ptr<aura::Window> window5(
+      CreateTestWindow(gfx::Rect(200, 200, 400, 400)));
   std::unique_ptr<aura::Window> window6(CreateTestWindow(bounds));
   std::unique_ptr<aura::Window> window7(CreateTestWindow(bounds));
   std::unique_ptr<aura::Window> window8(CreateTestWindow(bounds));
@@ -2172,54 +2204,68 @@ TEST_F(OverviewSessionTest, DISABLED_HandleAlwaysOnTopWindow) {
   wm::ActivateWindow(window2.get());  // Will be fullscreen.
   wm::ActivateWindow(window1.get());
 
-  EXPECT_FALSE(WindowState::Get(window2.get())->IsFullscreen());
-  EXPECT_FALSE(WindowState::Get(window6.get())->IsFullscreen());
-  EXPECT_FALSE(WindowState::Get(window7.get())->IsMaximized());
-
   const WMEvent toggle_maximize_event(WM_EVENT_TOGGLE_MAXIMIZE);
   WindowState::Get(window6.get())->OnWMEvent(&toggle_maximize_event);
   const WMEvent toggle_fullscreen_event(WM_EVENT_TOGGLE_FULLSCREEN);
   WindowState::Get(window2.get())->OnWMEvent(&toggle_fullscreen_event);
   WindowState::Get(window7.get())->OnWMEvent(&toggle_fullscreen_event);
-  EXPECT_TRUE(WindowState::Get(window2.get())->IsFullscreen());
-  EXPECT_TRUE(WindowState::Get(window7.get())->IsFullscreen());
-  EXPECT_TRUE(WindowState::Get(window6.get())->IsMaximized());
+  ASSERT_TRUE(WindowState::Get(window2.get())->IsFullscreen());
+  ASSERT_TRUE(WindowState::Get(window7.get())->IsFullscreen());
+  ASSERT_TRUE(WindowState::Get(window6.get())->IsMaximized());
 
-  // Case 1: Click on |window1| to activate it and exit overview.
-  std::unique_ptr<ui::ScopedAnimationDurationScaleMode> test_duration_mode =
-      std::make_unique<ui::ScopedAnimationDurationScaleMode>(
-          ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  // Helper to check if `window` is visibly animating. In some overview
+  // animations, we use tween zero, so there is no visible animation though it
+  // technically is animating according to the ui::LayerAnimator API.
+  auto is_visibly_animating = [](aura::Window* window) -> bool {
+    ui::LayerAnimatorTestController controller(window->layer()->GetAnimator());
+    ui::LayerAnimationSequence* sequence =
+        controller.GetRunningSequence(ui::LayerAnimationElement::TRANSFORM);
+    if (!sequence)
+      return false;
+    // There's only one element per sequence in the overview animation so this
+    // is fine.
+    ui::LayerAnimationElement* element = sequence->FirstElement();
+    if (!element)
+      return false;
+    return element->tween_type() != gfx::Tween::ZERO;
+  };
+
+  // Case 1: Click on `window1` to activate it and exit overview.
+  ui::ScopedAnimationDurationScaleMode test_duration_mode(
+      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
   ToggleOverview();
-  // For entering animation, only animate |window1|, |window2|, |window3| and
-  // |window5| because |window3| and |window5| are AlwaysOnTop windows and
-  // |window2| is fullscreen.
-  EXPECT_TRUE(window1->layer()->GetAnimator()->is_animating());
-  EXPECT_TRUE(window2->layer()->GetAnimator()->is_animating());
-  EXPECT_TRUE(window3->layer()->GetAnimator()->is_animating());
-  EXPECT_FALSE(window4->layer()->GetAnimator()->is_animating());
-  EXPECT_TRUE(window5->layer()->GetAnimator()->is_animating());
-  EXPECT_FALSE(window6->layer()->GetAnimator()->is_animating());
-  EXPECT_FALSE(window7->layer()->GetAnimator()->is_animating());
-  EXPECT_FALSE(window8->layer()->GetAnimator()->is_animating());
-  base::RunLoop().RunUntilIdle();
+  // For entering animation, only animate `window1`, `window2`, `window3` and
+  // `window5`. `window2` is fullscreen so all windows except `window1`,
+  // `window3` and `window5` are occluded.
+  EXPECT_TRUE(is_visibly_animating(window1.get()));
+  EXPECT_TRUE(is_visibly_animating(window2.get()));
+  EXPECT_TRUE(is_visibly_animating(window3.get()));
+  EXPECT_FALSE(is_visibly_animating(window4.get()));
+  EXPECT_TRUE(is_visibly_animating(window5.get()));
+  EXPECT_FALSE(is_visibly_animating(window6.get()));
+  EXPECT_FALSE(is_visibly_animating(window7.get()));
+  EXPECT_FALSE(is_visibly_animating(window8.get()));
+  WaitForOverviewEnterAnimation();
 
-  // Click on |window1| to activate it and exit overview.
-  // Should animate |window1|, |window2|, |window3| and |window5| because
-  // |window3| and |window5| are AlwaysOnTop windows and |window2| is
-  // fullscreen.
+  // Click on `window1` to activate it and exit overview. `window2` occludes
+  // everything but `window1`, `window3` and `window5`, and `window1` is
+  // occluded by `window3`. So `window2`, `window3` and `window5` should be
+  // animated.
   ClickWindow(window1.get());
-  EXPECT_TRUE(window1->layer()->GetAnimator()->is_animating());
-  EXPECT_TRUE(window2->layer()->GetAnimator()->is_animating());
-  EXPECT_TRUE(window3->layer()->GetAnimator()->is_animating());
-  EXPECT_FALSE(window4->layer()->GetAnimator()->is_animating());
-  EXPECT_TRUE(window5->layer()->GetAnimator()->is_animating());
-  EXPECT_FALSE(window6->layer()->GetAnimator()->is_animating());
-  EXPECT_FALSE(window7->layer()->GetAnimator()->is_animating());
-  EXPECT_FALSE(window8->layer()->GetAnimator()->is_animating());
-  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(is_visibly_animating(window1.get()));
+  EXPECT_TRUE(is_visibly_animating(window2.get()));
+  EXPECT_TRUE(is_visibly_animating(window3.get()));
+  EXPECT_FALSE(is_visibly_animating(window4.get()));
+  EXPECT_TRUE(is_visibly_animating(window5.get()));
+  EXPECT_FALSE(is_visibly_animating(window6.get()));
+  EXPECT_FALSE(is_visibly_animating(window7.get()));
+  EXPECT_FALSE(is_visibly_animating(window8.get()));
+  WaitForOverviewExitAnimation();
 
-  // Case 2: Click on |window3| to activate it and exit overview.
-  // Should animate |window1|, |window2|, |window3| and |window5|.
+  // Case 2: Click on `window3` to activate it and exit overview. Since
+  // `window2` is fullscreen, all windows after it are occluded, except
+  // `window3` and `window5`, which are always on top. `window1` is not occluded
+  // by `window2` but has the same bounds as `window3` so is occluded.
   // Reset window z-order. Need to toggle fullscreen first to workaround
   // https://crbug.com/816224.
   WindowState::Get(window2.get())->OnWMEvent(&toggle_fullscreen_event);
@@ -2234,30 +2280,27 @@ TEST_F(OverviewSessionTest, DISABLED_HandleAlwaysOnTopWindow) {
   wm::ActivateWindow(window1.get());
   WindowState::Get(window2.get())->OnWMEvent(&toggle_fullscreen_event);
   WindowState::Get(window7.get())->OnWMEvent(&toggle_fullscreen_event);
+
   // Enter overview.
-  test_duration_mode = std::make_unique<ui::ScopedAnimationDurationScaleMode>(
-      ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
   ToggleOverview();
-  base::RunLoop().RunUntilIdle();
-  test_duration_mode = std::make_unique<ui::ScopedAnimationDurationScaleMode>(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  WaitForOverviewEnterAnimation();
 
   ClickWindow(window3.get());
-  EXPECT_TRUE(window1->layer()->GetAnimator()->is_animating());
-  EXPECT_TRUE(window2->layer()->GetAnimator()->is_animating());
-  EXPECT_TRUE(window3->layer()->GetAnimator()->is_animating());
-  EXPECT_FALSE(window4->layer()->GetAnimator()->is_animating());
-  EXPECT_TRUE(window5->layer()->GetAnimator()->is_animating());
-  EXPECT_FALSE(window6->layer()->GetAnimator()->is_animating());
-  EXPECT_FALSE(window7->layer()->GetAnimator()->is_animating());
-  EXPECT_FALSE(window8->layer()->GetAnimator()->is_animating());
-  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(is_visibly_animating(window1.get()));
+  EXPECT_TRUE(is_visibly_animating(window2.get()));
+  EXPECT_TRUE(is_visibly_animating(window3.get()));
+  EXPECT_FALSE(is_visibly_animating(window4.get()));
+  EXPECT_TRUE(is_visibly_animating(window5.get()));
+  EXPECT_FALSE(is_visibly_animating(window6.get()));
+  EXPECT_FALSE(is_visibly_animating(window7.get()));
+  EXPECT_FALSE(is_visibly_animating(window8.get()));
+  WaitForOverviewExitAnimation();
 
-  // Case 3: Click on maximized |window6| to activate it and exit overview.
-  // Should animate |window6|, |window3| and |window5| because |window3| and
-  // |window5| are AlwaysOnTop windows. |window6| is maximized.
-  // Reset window z-order. Need to toggle fullscreen first to workaround
-  // https://crbug.com/816224.
+  // Case 3: Click on maximized `window6` to activate it and exit overview.
+  // `window6` will become the topmost regular z-order window and will occlude
+  // everything except `window2` as it is fullscreen and `window3` and `window5`
+  // as they are always on top. Reset window z-order. Need to toggle fullscreen
+  // first to workaround https://crbug.com/816224.
   WindowState::Get(window2.get())->OnWMEvent(&toggle_fullscreen_event);
   WindowState::Get(window7.get())->OnWMEvent(&toggle_fullscreen_event);
   wm::ActivateWindow(window8.get());
@@ -2271,27 +2314,23 @@ TEST_F(OverviewSessionTest, DISABLED_HandleAlwaysOnTopWindow) {
   WindowState::Get(window2.get())->OnWMEvent(&toggle_fullscreen_event);
   WindowState::Get(window7.get())->OnWMEvent(&toggle_fullscreen_event);
   // Enter overview.
-  test_duration_mode = std::make_unique<ui::ScopedAnimationDurationScaleMode>(
-      ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
   ToggleOverview();
-  base::RunLoop().RunUntilIdle();
-  test_duration_mode = std::make_unique<ui::ScopedAnimationDurationScaleMode>(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  WaitForOverviewEnterAnimation();
 
   ClickWindow(window6.get());
-  EXPECT_FALSE(window1->layer()->GetAnimator()->is_animating());
-  EXPECT_FALSE(window2->layer()->GetAnimator()->is_animating());
-  EXPECT_TRUE(window3->layer()->GetAnimator()->is_animating());
-  EXPECT_FALSE(window4->layer()->GetAnimator()->is_animating());
-  EXPECT_TRUE(window5->layer()->GetAnimator()->is_animating());
-  EXPECT_TRUE(window6->layer()->GetAnimator()->is_animating());
-  EXPECT_FALSE(window7->layer()->GetAnimator()->is_animating());
-  EXPECT_FALSE(window8->layer()->GetAnimator()->is_animating());
-  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(is_visibly_animating(window1.get()));
+  EXPECT_TRUE(is_visibly_animating(window2.get()));
+  EXPECT_TRUE(is_visibly_animating(window3.get()));
+  EXPECT_FALSE(is_visibly_animating(window4.get()));
+  EXPECT_TRUE(is_visibly_animating(window5.get()));
+  EXPECT_TRUE(is_visibly_animating(window6.get()));
+  EXPECT_FALSE(is_visibly_animating(window7.get()));
+  EXPECT_FALSE(is_visibly_animating(window8.get()));
+  WaitForOverviewExitAnimation();
 
-  // Case 4: Click on |window8| to activate it and exit overview.
-  // Should animate |window8|, |window1|, |window2|, |window3| and |window5|
-  // because |window3| and |window5| are AlwaysOnTop windows and |window2| is
+  // Case 4: Click on `window8` to activate it and exit overview.
+  // Should animate `window8`, `window1`, `window2`, `window3` and `window5`
+  // because `window3` and `window5` are AlwaysOnTop windows and `window2` is
   // fullscreen.
   // Reset window z-order. Need to toggle fullscreen first to workaround
   // https://crbug.com/816224.
@@ -2307,24 +2346,21 @@ TEST_F(OverviewSessionTest, DISABLED_HandleAlwaysOnTopWindow) {
   wm::ActivateWindow(window1.get());
   WindowState::Get(window2.get())->OnWMEvent(&toggle_fullscreen_event);
   WindowState::Get(window7.get())->OnWMEvent(&toggle_fullscreen_event);
+
   // Enter overview.
-  test_duration_mode = std::make_unique<ui::ScopedAnimationDurationScaleMode>(
-      ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
   ToggleOverview();
-  base::RunLoop().RunUntilIdle();
-  test_duration_mode = std::make_unique<ui::ScopedAnimationDurationScaleMode>(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  WaitForOverviewEnterAnimation();
 
   ClickWindow(window8.get());
-  EXPECT_TRUE(window1->layer()->GetAnimator()->is_animating());
-  EXPECT_TRUE(window2->layer()->GetAnimator()->is_animating());
-  EXPECT_TRUE(window3->layer()->GetAnimator()->is_animating());
-  EXPECT_FALSE(window4->layer()->GetAnimator()->is_animating());
-  EXPECT_TRUE(window5->layer()->GetAnimator()->is_animating());
-  EXPECT_FALSE(window6->layer()->GetAnimator()->is_animating());
-  EXPECT_FALSE(window7->layer()->GetAnimator()->is_animating());
-  EXPECT_TRUE(window8->layer()->GetAnimator()->is_animating());
-  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(is_visibly_animating(window1.get()));
+  EXPECT_TRUE(is_visibly_animating(window2.get()));
+  EXPECT_TRUE(is_visibly_animating(window3.get()));
+  EXPECT_FALSE(is_visibly_animating(window4.get()));
+  EXPECT_TRUE(is_visibly_animating(window5.get()));
+  EXPECT_FALSE(is_visibly_animating(window6.get()));
+  EXPECT_FALSE(is_visibly_animating(window7.get()));
+  EXPECT_TRUE(is_visibly_animating(window8.get()));
+  WaitForOverviewExitAnimation();
 }
 
 // Verify that the selector item can animate after the item is dragged and
@@ -3042,7 +3078,7 @@ TEST_F(OverviewSessionTest, TapOnBackgroundGoToHome) {
   WindowState* window_state = WindowState::Get(window.get());
 
   EXPECT_FALSE(window_state->IsMinimized());
-  EXPECT_FALSE(Shell::Get()->home_screen_controller()->IsHomeScreenVisible());
+  EXPECT_FALSE(Shell::Get()->app_list_controller()->IsHomeScreenVisible());
   ToggleOverview();
   EXPECT_TRUE(InOverviewSession());
 
@@ -3058,7 +3094,7 @@ TEST_F(OverviewSessionTest, TapOnBackgroundGoToHome) {
 
   EXPECT_FALSE(InOverviewSession());
   EXPECT_TRUE(window_state->IsMinimized());
-  EXPECT_TRUE(Shell::Get()->home_screen_controller()->IsHomeScreenVisible());
+  EXPECT_TRUE(Shell::Get()->app_list_controller()->IsHomeScreenVisible());
 }
 
 // Tests that in tablet mode, tapping on the background in split view mode will
@@ -3070,7 +3106,7 @@ TEST_F(OverviewSessionTest, TapOnBackgroundInSplitView) {
 
   std::unique_ptr<aura::Window> window2(CreateTestWindow());
 
-  EXPECT_FALSE(Shell::Get()->home_screen_controller()->IsHomeScreenVisible());
+  EXPECT_FALSE(Shell::Get()->app_list_controller()->IsHomeScreenVisible());
   ToggleOverview();
   EXPECT_TRUE(InOverviewSession());
 
@@ -3082,7 +3118,7 @@ TEST_F(OverviewSessionTest, TapOnBackgroundInSplitView) {
   GetEventGenerator()->GestureTapAt(gfx::Point(10, 10));
 
   EXPECT_TRUE(InOverviewSession());
-  EXPECT_FALSE(Shell::Get()->home_screen_controller()->IsHomeScreenVisible());
+  EXPECT_FALSE(Shell::Get()->app_list_controller()->IsHomeScreenVisible());
   EXPECT_TRUE(split_view_controller()->InSplitViewMode());
 }
 
@@ -3202,21 +3238,21 @@ TEST_F(OverviewSessionTest, AccessibilityFocusAnnotator) {
     EXPECT_EQ(expected_next, view_accessibility.GetNextFocus());
   };
 
-  // Order should be [focus_widget, desk_widget, item_widget1, item_widget2,
-  // item_widget3].
-  check_a11y_overrides("focus", focus_widget, item_widget3, desk_widget);
-  check_a11y_overrides("desk", desk_widget, focus_widget, item_widget1);
-  check_a11y_overrides("item1", item_widget1, desk_widget, item_widget2);
+  // Order should be [focus_widget, item_widget1, item_widget2, item_widget3,
+  // desk_widget].
+  check_a11y_overrides("focus", focus_widget, desk_widget, item_widget1);
+  check_a11y_overrides("item1", item_widget1, focus_widget, item_widget2);
   check_a11y_overrides("item2", item_widget2, item_widget1, item_widget3);
-  check_a11y_overrides("item3", item_widget3, item_widget2, focus_widget);
+  check_a11y_overrides("item3", item_widget3, item_widget2, desk_widget);
+  check_a11y_overrides("desk", desk_widget, item_widget3, focus_widget);
 
-  // Remove |window2|. The new order should be [focus_widget, desk_widget,
-  // item_widget1, item_widget3].
+  // Remove |window2|. The new order should be [focus_widget, item_widget1,
+  // item_widget3, desk_widget].
   window2.reset();
-  check_a11y_overrides("focus", focus_widget, item_widget3, desk_widget);
-  check_a11y_overrides("desk", desk_widget, focus_widget, item_widget1);
-  check_a11y_overrides("item1", item_widget1, desk_widget, item_widget3);
-  check_a11y_overrides("item3", item_widget3, item_widget1, focus_widget);
+  check_a11y_overrides("focus", focus_widget, desk_widget, item_widget1);
+  check_a11y_overrides("item1", item_widget1, focus_widget, item_widget3);
+  check_a11y_overrides("item3", item_widget3, item_widget1, desk_widget);
+  check_a11y_overrides("desk", desk_widget, item_widget3, focus_widget);
 }
 
 // Tests that removing a transient child during overview does not result in a
@@ -3229,6 +3265,29 @@ TEST_F(OverviewSessionTest, RemoveTransientNoCrash) {
   ToggleOverview();
   wm::RemoveTransientChild(parent.get(), child.get());
   ToggleOverview();
+}
+
+// Tests that closing the overview item destroys the entire transient tree. Note
+// that closing does not destroy transient children which are ShellSurfaceBase,
+// but this test covers the regular case.
+TEST_F(OverviewSessionTest, ClosingTransientTree) {
+  auto widget = CreateTestWidget();
+  aura::Window* window = widget->GetNativeWindow();
+  auto child_widget = CreateTestWidget();
+  ::wm::AddTransientChild(window, child_widget->GetNativeWindow());
+
+  TestDestroyedWidgetObserver widget_observer(widget.get());
+  TestDestroyedWidgetObserver child_widget_observer(child_widget.get());
+
+  ToggleOverview();
+  OverviewItem* item = GetOverviewItemForWindow(window);
+  item->CloseWindow();
+
+  // `NativeWidgetAura::Close()` fires a post task.
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_TRUE(widget_observer.widget_destroyed());
+  EXPECT_TRUE(child_widget_observer.widget_destroyed());
 }
 
 class TabletModeOverviewSessionTest : public OverviewSessionTest {
@@ -3391,6 +3450,50 @@ TEST_F(TabletModeOverviewSessionTest, CheckOverviewItemScrollingBounds) {
   const gfx::RectF right_bounds = rightmost_window->target_bounds();
   GenerateScrollSequence(gfx::Point(5000, 50), gfx::Point(0, 50));
   EXPECT_EQ(right_bounds, rightmost_window->target_bounds());
+}
+
+// Tests that destroying a window does not cause a crash while scrolling the
+// overview grid. Regression test for https://crbug.com/1200605.
+TEST_F(TabletModeOverviewSessionTest, WindowDestroyWhileScrolling) {
+  auto windows = CreateTestWindows(8);
+  ToggleOverview();
+  ASSERT_TRUE(InOverviewSession());
+
+  // Start a scroll sequence.
+  int x = 500;
+  const int y = 200;
+  base::TimeTicks timestamp = ui::EventTimeForNow();
+  auto* event_generator = GetEventGenerator();
+  ui::TouchEvent press(ui::ET_TOUCH_PRESSED, gfx::Point(x, y), timestamp,
+                       ui::PointerDetails());
+  event_generator->Dispatch(&press);
+
+  // Scroll a bit to the left, so the overview items that are offscreen on the
+  // right start to become visible.
+  const base::TimeDelta step_delay = base::TimeDelta::FromMilliseconds(5);
+  for (int i = 0; i < 10; ++i) {
+    timestamp += step_delay;
+    ui::TouchEvent move(ui::ET_TOUCH_MOVED, gfx::Point(x, y), timestamp,
+                        ui::PointerDetails());
+    event_generator->Dispatch(&move);
+    x -= 5;
+  }
+
+  // Delete one of the windows.
+  base::Erase(windows, windows[2]);
+
+  // Continue scrolling and then end the scroll. There should be no crash.
+  for (int i = 0; i < 10; ++i) {
+    timestamp += step_delay;
+    ui::TouchEvent move(ui::ET_TOUCH_MOVED, gfx::Point(x, y), timestamp,
+                        ui::PointerDetails());
+    event_generator->Dispatch(&move);
+    x -= 5;
+  }
+
+  ui::TouchEvent release(ui::ET_TOUCH_RELEASED, gfx::Point(x, y), timestamp,
+                         ui::PointerDetails());
+  event_generator->Dispatch(&release);
 }
 
 // Tests the windows are stacked correctly when entering or exiting splitview
@@ -4406,9 +4509,9 @@ TEST_F(SplitViewOverviewSessionTest, Clipping) {
     DCHECK_GT(rect2.height(), 0);
     constexpr float kEpsilon = 0.05f;
     const float rect1_aspect_ratio =
-        float{rect1.width()} / float{rect1.height()};
+        static_cast<float>(rect1.width()) / rect1.height();
     const float rect2_aspect_ratio =
-        float{rect2.width()} / float{rect2.height()};
+        static_cast<float>(rect2.width()) / rect2.height();
     return std::abs(rect2_aspect_ratio - rect1_aspect_ratio) < kEpsilon;
   };
 
@@ -4668,10 +4771,10 @@ TEST_F(SplitViewOverviewSessionTest, AltLeftSquareBracketOnMaximizedWindow) {
   EXPECT_EQ(SplitViewController::State::kNoSnap,
             split_view_controller()->state());
   EXPECT_FALSE(InOverviewSession());
-  const WMEvent alt_left_square_bracket(WM_EVENT_CYCLE_SNAP_LEFT);
+  const WMEvent alt_left_square_bracket(WM_EVENT_CYCLE_SNAP_PRIMARY);
   snapped_window_state->OnWMEvent(&alt_left_square_bracket);
   EXPECT_TRUE(wm::IsActiveWindow(snapped_window.get()));
-  EXPECT_EQ(WindowStateType::kLeftSnapped,
+  EXPECT_EQ(WindowStateType::kPrimarySnapped,
             snapped_window_state->GetStateType());
   EXPECT_EQ(SplitViewController::State::kLeftSnapped,
             split_view_controller()->state());
@@ -4689,10 +4792,10 @@ TEST_F(SplitViewOverviewSessionTest, AltRightSquareBracketOnMaximizedWindow) {
   EXPECT_EQ(SplitViewController::State::kNoSnap,
             split_view_controller()->state());
   EXPECT_FALSE(InOverviewSession());
-  const WMEvent alt_right_square_bracket(WM_EVENT_CYCLE_SNAP_RIGHT);
+  const WMEvent alt_right_square_bracket(WM_EVENT_CYCLE_SNAP_SECONDARY);
   snapped_window_state->OnWMEvent(&alt_right_square_bracket);
   EXPECT_TRUE(wm::IsActiveWindow(snapped_window.get()));
-  EXPECT_EQ(WindowStateType::kRightSnapped,
+  EXPECT_EQ(WindowStateType::kSecondarySnapped,
             snapped_window_state->GetStateType());
   EXPECT_EQ(SplitViewController::State::kRightSnapped,
             split_view_controller()->state());
@@ -4716,10 +4819,10 @@ TEST_F(SplitViewOverviewSessionTest, AltSquareBracketOnUnsnappableWindow) {
         EXPECT_FALSE(InOverviewSession());
       };
   expect_unsnappable_window_is_active_and_maximized();
-  const WMEvent alt_left_square_bracket(WM_EVENT_CYCLE_SNAP_LEFT);
+  const WMEvent alt_left_square_bracket(WM_EVENT_CYCLE_SNAP_PRIMARY);
   unsnappable_window_state->OnWMEvent(&alt_left_square_bracket);
   expect_unsnappable_window_is_active_and_maximized();
-  const WMEvent alt_right_square_bracket(WM_EVENT_CYCLE_SNAP_RIGHT);
+  const WMEvent alt_right_square_bracket(WM_EVENT_CYCLE_SNAP_SECONDARY);
   unsnappable_window_state->OnWMEvent(&alt_right_square_bracket);
   expect_unsnappable_window_is_active_and_maximized();
 }
@@ -4743,36 +4846,36 @@ TEST_F(SplitViewOverviewSessionTest, AltSquareBracketOnSameSideSnappedWindow) {
   // Test Alt+[ with active window snapped on left and overview on right.
   ToggleOverview();
   split_view_controller()->SnapWindow(window1.get(), SplitViewController::LEFT);
-  test_unsnapping_window1(WM_EVENT_CYCLE_SNAP_LEFT);
+  test_unsnapping_window1(WM_EVENT_CYCLE_SNAP_PRIMARY);
   // Test Alt+] with active window snapped on right and overview on left.
   ToggleOverview();
   split_view_controller()->SnapWindow(window1.get(),
                                       SplitViewController::RIGHT);
-  test_unsnapping_window1(WM_EVENT_CYCLE_SNAP_RIGHT);
+  test_unsnapping_window1(WM_EVENT_CYCLE_SNAP_SECONDARY);
   // Test Alt+[ with active window snapped on left and other window snapped on
   // right, if the left window is the default snapped window.
   split_view_controller()->SnapWindow(window1.get(), SplitViewController::LEFT);
   split_view_controller()->SnapWindow(window2.get(),
                                       SplitViewController::RIGHT);
-  test_unsnapping_window1(WM_EVENT_CYCLE_SNAP_LEFT);
+  test_unsnapping_window1(WM_EVENT_CYCLE_SNAP_PRIMARY);
   // Test Alt+[ with active window snapped on left and other window snapped on
   // right, if the right window is the default snapped window.
   split_view_controller()->SnapWindow(window2.get(),
                                       SplitViewController::RIGHT);
   split_view_controller()->SnapWindow(window1.get(), SplitViewController::LEFT);
-  test_unsnapping_window1(WM_EVENT_CYCLE_SNAP_LEFT);
+  test_unsnapping_window1(WM_EVENT_CYCLE_SNAP_PRIMARY);
   // Test Alt+] with active window snapped on right and other window snapped on
   // left, if the left window is the default snapped window.
   split_view_controller()->SnapWindow(window2.get(), SplitViewController::LEFT);
   split_view_controller()->SnapWindow(window1.get(),
                                       SplitViewController::RIGHT);
-  test_unsnapping_window1(WM_EVENT_CYCLE_SNAP_RIGHT);
+  test_unsnapping_window1(WM_EVENT_CYCLE_SNAP_SECONDARY);
   // Test Alt+] with active window snapped on right and other window snapped on
   // left, if the right window is the default snapped window.
   split_view_controller()->SnapWindow(window1.get(),
                                       SplitViewController::RIGHT);
   split_view_controller()->SnapWindow(window2.get(), SplitViewController::LEFT);
-  test_unsnapping_window1(WM_EVENT_CYCLE_SNAP_RIGHT);
+  test_unsnapping_window1(WM_EVENT_CYCLE_SNAP_SECONDARY);
 }
 
 // Tests using Alt+[ on a right snapped window, and Alt+] on a left snapped
@@ -4784,10 +4887,10 @@ TEST_F(SplitViewOverviewSessionTest,
   const auto test_left_snapping_window1 = [this, &window1, &window2]() {
     wm::ActivateWindow(window1.get());
     WindowState* window1_state = WindowState::Get(window1.get());
-    const WMEvent alt_left_square_bracket(WM_EVENT_CYCLE_SNAP_LEFT);
+    const WMEvent alt_left_square_bracket(WM_EVENT_CYCLE_SNAP_PRIMARY);
     window1_state->OnWMEvent(&alt_left_square_bracket);
     EXPECT_TRUE(wm::IsActiveWindow(window1.get()));
-    EXPECT_EQ(WindowStateType::kLeftSnapped, window1_state->GetStateType());
+    EXPECT_EQ(WindowStateType::kPrimarySnapped, window1_state->GetStateType());
     EXPECT_EQ(SplitViewController::State::kLeftSnapped,
               split_view_controller()->state());
     EXPECT_EQ(window1.get(), split_view_controller()->left_window());
@@ -4797,10 +4900,11 @@ TEST_F(SplitViewOverviewSessionTest,
   const auto test_right_snapping_window1 = [this, &window1, &window2]() {
     wm::ActivateWindow(window1.get());
     WindowState* window1_state = WindowState::Get(window1.get());
-    const WMEvent alt_right_square_bracket(WM_EVENT_CYCLE_SNAP_RIGHT);
+    const WMEvent alt_right_square_bracket(WM_EVENT_CYCLE_SNAP_SECONDARY);
     window1_state->OnWMEvent(&alt_right_square_bracket);
     EXPECT_TRUE(wm::IsActiveWindow(window1.get()));
-    EXPECT_EQ(WindowStateType::kRightSnapped, window1_state->GetStateType());
+    EXPECT_EQ(WindowStateType::kSecondarySnapped,
+              window1_state->GetStateType());
     EXPECT_EQ(SplitViewController::State::kRightSnapped,
               split_view_controller()->state());
     EXPECT_EQ(window1.get(), split_view_controller()->right_window());
@@ -6041,8 +6145,8 @@ TEST_F(SplitViewOverviewSessionTest,
   std::unique_ptr<aura::Window> window = CreateTestWindow();
   ToggleOverview();
   split_view_controller()->SnapWindow(window.get(), SplitViewController::LEFT);
-  display_manager()->SetMirrorMode(display::MirrorMode::kOff, base::nullopt);
-  display_manager()->SetMirrorMode(display::MirrorMode::kNormal, base::nullopt);
+  display_manager()->SetMirrorMode(display::MirrorMode::kOff, absl::nullopt);
+  display_manager()->SetMirrorMode(display::MirrorMode::kNormal, absl::nullopt);
 }
 
 // Test the split view and overview functionalities in clamshell mode. Split
@@ -6102,7 +6206,7 @@ TEST_F(SplitViewOverviewSessionInClamshellTest, BasicFunctionalitiesTest) {
   DragWindowTo(overview_item1, gfx::PointF(0, 0));
   // Since the only window is snapped, overview and splitview should be both
   // ended.
-  EXPECT_EQ(window_state1->GetStateType(), WindowStateType::kLeftSnapped);
+  EXPECT_EQ(window_state1->GetStateType(), WindowStateType::kPrimarySnapped);
   EXPECT_FALSE(overview_controller()->InOverviewSession());
   EXPECT_FALSE(split_view_controller()->InSplitViewMode());
 
@@ -6121,7 +6225,7 @@ TEST_F(SplitViewOverviewSessionInClamshellTest, BasicFunctionalitiesTest) {
   EXPECT_TRUE(split_view_controller()->IsWindowInSplitView(window1.get()));
   EXPECT_TRUE(overview_controller()->overview_session()->IsWindowInOverview(
       window2.get()));
-  EXPECT_EQ(window_state1->GetStateType(), WindowStateType::kRightSnapped);
+  EXPECT_EQ(window_state1->GetStateType(), WindowStateType::kSecondarySnapped);
   // Close |window2| will end overview and splitview.
   window2.reset();
   EXPECT_FALSE(overview_controller()->InOverviewSession());
@@ -6134,9 +6238,9 @@ TEST_F(SplitViewOverviewSessionInClamshellTest, BasicFunctionalitiesTest) {
   DragWindowTo(overview_item1, gfx::PointF(0, 0));
   OverviewItem* overview_item3 = GetOverviewItemForWindow(window3.get());
   DragWindowTo(overview_item3, gfx::PointF(600, 300));
-  EXPECT_EQ(window_state1->GetStateType(), WindowStateType::kLeftSnapped);
+  EXPECT_EQ(window_state1->GetStateType(), WindowStateType::kPrimarySnapped);
   EXPECT_EQ(WindowState::Get(window3.get())->GetStateType(),
-            WindowStateType::kRightSnapped);
+            WindowStateType::kSecondarySnapped);
   EXPECT_FALSE(overview_controller()->InOverviewSession());
   EXPECT_FALSE(split_view_controller()->InSplitViewMode());
 
@@ -6155,9 +6259,9 @@ TEST_F(SplitViewOverviewSessionInClamshellTest, BasicFunctionalitiesTest) {
       window3.get()));
   EXPECT_TRUE(overview_controller()->overview_session()->IsWindowInOverview(
       window1.get()));
-  EXPECT_EQ(window_state1->GetStateType(), WindowStateType::kLeftSnapped);
+  EXPECT_EQ(window_state1->GetStateType(), WindowStateType::kPrimarySnapped);
   EXPECT_EQ(WindowState::Get(window3.get())->GetStateType(),
-            WindowStateType::kLeftSnapped);
+            WindowStateType::kPrimarySnapped);
   EXPECT_TRUE(overview_controller()->InOverviewSession());
   EXPECT_TRUE(split_view_controller()->InSplitViewMode());
   // End overview, test that we'll not auto-snap a window to the right side of
@@ -6788,16 +6892,16 @@ TEST_F(SplitViewOverviewSessionInClamshellTest,
   EXPECT_FALSE(split_view_controller()->InSplitViewMode());
   EXPECT_FALSE(InOverviewSession());
   // Alt+[
-  const WMEvent alt_left_square_bracket(WM_EVENT_CYCLE_SNAP_LEFT);
+  const WMEvent alt_left_square_bracket(WM_EVENT_CYCLE_SNAP_PRIMARY);
   WindowState* window1_state = WindowState::Get(window1.get());
   window1_state->OnWMEvent(&alt_left_square_bracket);
-  EXPECT_EQ(WindowStateType::kLeftSnapped, window1_state->GetStateType());
+  EXPECT_EQ(WindowStateType::kPrimarySnapped, window1_state->GetStateType());
   EXPECT_FALSE(split_view_controller()->InSplitViewMode());
   EXPECT_FALSE(InOverviewSession());
   // Alt+]
-  const WMEvent alt_right_square_bracket(WM_EVENT_CYCLE_SNAP_RIGHT);
+  const WMEvent alt_right_square_bracket(WM_EVENT_CYCLE_SNAP_SECONDARY);
   window1_state->OnWMEvent(&alt_right_square_bracket);
-  EXPECT_EQ(WindowStateType::kRightSnapped, window1_state->GetStateType());
+  EXPECT_EQ(WindowStateType::kSecondarySnapped, window1_state->GetStateType());
   EXPECT_FALSE(split_view_controller()->InSplitViewMode());
   EXPECT_FALSE(InOverviewSession());
 }
@@ -6811,11 +6915,11 @@ TEST_F(SplitViewOverviewSessionInClamshellTest,
   split_view_controller()->SnapWindow(snapped_window.get(),
                                       SplitViewController::LEFT);
   WindowState* snapped_window_state = WindowState::Get(snapped_window.get());
-  EXPECT_EQ(WindowStateType::kLeftSnapped,
+  EXPECT_EQ(WindowStateType::kPrimarySnapped,
             snapped_window_state->GetStateType());
   EXPECT_TRUE(split_view_controller()->InSplitViewMode());
   EXPECT_TRUE(InOverviewSession());
-  const WMEvent alt_left_square_bracket(WM_EVENT_CYCLE_SNAP_LEFT);
+  const WMEvent alt_left_square_bracket(WM_EVENT_CYCLE_SNAP_PRIMARY);
   snapped_window_state->OnWMEvent(&alt_left_square_bracket);
   EXPECT_EQ(WindowStateType::kNormal, snapped_window_state->GetStateType());
   EXPECT_FALSE(split_view_controller()->InSplitViewMode());
@@ -6831,11 +6935,11 @@ TEST_F(SplitViewOverviewSessionInClamshellTest,
   split_view_controller()->SnapWindow(snapped_window.get(),
                                       SplitViewController::RIGHT);
   WindowState* snapped_window_state = WindowState::Get(snapped_window.get());
-  EXPECT_EQ(WindowStateType::kRightSnapped,
+  EXPECT_EQ(WindowStateType::kSecondarySnapped,
             snapped_window_state->GetStateType());
   EXPECT_TRUE(split_view_controller()->InSplitViewMode());
   EXPECT_TRUE(InOverviewSession());
-  const WMEvent alt_right_square_bracket(WM_EVENT_CYCLE_SNAP_RIGHT);
+  const WMEvent alt_right_square_bracket(WM_EVENT_CYCLE_SNAP_SECONDARY);
   snapped_window_state->OnWMEvent(&alt_right_square_bracket);
   EXPECT_EQ(WindowStateType::kNormal, snapped_window_state->GetStateType());
   EXPECT_FALSE(split_view_controller()->InSplitViewMode());
@@ -6854,27 +6958,27 @@ TEST_F(SplitViewOverviewSessionInClamshellTest,
                                       SplitViewController::RIGHT);
   wm::ActivateWindow(snapped_window.get());
   WindowState* snapped_window_state = WindowState::Get(snapped_window.get());
-  EXPECT_EQ(WindowStateType::kRightSnapped,
+  EXPECT_EQ(WindowStateType::kSecondarySnapped,
             snapped_window_state->GetStateType());
   EXPECT_EQ(SplitViewController::State::kRightSnapped,
             split_view_controller()->state());
   EXPECT_EQ(snapped_window.get(), split_view_controller()->right_window());
   EXPECT_TRUE(InOverviewSession());
   // Test using Alt+[ to put |snapped_window| on the left.
-  const WMEvent alt_left_square_bracket(WM_EVENT_CYCLE_SNAP_LEFT);
+  const WMEvent alt_left_square_bracket(WM_EVENT_CYCLE_SNAP_PRIMARY);
   snapped_window_state->OnWMEvent(&alt_left_square_bracket);
   EXPECT_TRUE(wm::IsActiveWindow(snapped_window.get()));
-  EXPECT_EQ(WindowStateType::kLeftSnapped,
+  EXPECT_EQ(WindowStateType::kPrimarySnapped,
             snapped_window_state->GetStateType());
   EXPECT_EQ(SplitViewController::State::kLeftSnapped,
             split_view_controller()->state());
   EXPECT_EQ(snapped_window.get(), split_view_controller()->left_window());
   EXPECT_TRUE(InOverviewSession());
   // Test using Alt+] to put |snapped_window| on the right.
-  const WMEvent alt_right_square_bracket(WM_EVENT_CYCLE_SNAP_RIGHT);
+  const WMEvent alt_right_square_bracket(WM_EVENT_CYCLE_SNAP_SECONDARY);
   snapped_window_state->OnWMEvent(&alt_right_square_bracket);
   EXPECT_TRUE(wm::IsActiveWindow(snapped_window.get()));
-  EXPECT_EQ(WindowStateType::kRightSnapped,
+  EXPECT_EQ(WindowStateType::kSecondarySnapped,
             snapped_window_state->GetStateType());
   EXPECT_EQ(SplitViewController::State::kRightSnapped,
             split_view_controller()->state());

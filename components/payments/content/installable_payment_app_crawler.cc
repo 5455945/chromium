@@ -47,7 +47,7 @@ InstallablePaymentAppCrawler::InstallablePaymentAppCrawler(
     : log_(content::WebContents::FromRenderFrameHost(
           initiator_render_frame_host)),
       merchant_origin_(merchant_origin),
-      initiator_frame_routing_id_(content::GlobalFrameRoutingId(
+      initiator_frame_routing_id_(content::GlobalRenderFrameHostId(
           initiator_render_frame_host->GetProcess()->GetID(),
           initiator_render_frame_host->GetRoutingID())),
       downloader_(downloader),
@@ -166,8 +166,7 @@ void InstallablePaymentAppCrawler::OnPaymentMethodManifestParsed(
     return;
 
   content::PermissionController* permission_controller =
-      content::BrowserContext::GetPermissionController(
-          rfh->GetBrowserContext());
+      rfh->GetBrowserContext()->GetPermissionController();
   DCHECK(permission_controller);
 
   for (const auto& web_app_manifest_url : default_applications) {
@@ -428,7 +427,7 @@ bool InstallablePaymentAppCrawler::DownloadAndDecodeWebAppIcon(
   // TODO(crbug.com/1058840): Move this sanity check to ManifestIconDownloader
   // after DownloadImage refactor is done.
   auto* rfh = content::RenderFrameHost::FromID(initiator_frame_routing_id_);
-  auto* web_contents = rfh && rfh->IsCurrent()
+  auto* web_contents = rfh && rfh->IsActive()
                            ? content::WebContents::FromRenderFrameHost(rfh)
                            : nullptr;
   if (!web_contents) {

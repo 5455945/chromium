@@ -27,6 +27,7 @@ GPU_CRASH_SIGNATURES = [
 FORCED_RENDERER_CRASH_SIGNATURES = [
     'base::debug::BreakDebugger',
     'blink::DevToolsSession::IOSession::DispatchProtocolCommand',
+    'chrome!DispatchProtocolCommand',
     'logging::LogMessage::~LogMessage',
 ]
 

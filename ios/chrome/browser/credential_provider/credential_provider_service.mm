@@ -9,7 +9,6 @@
 #include "base/check.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
-#include "base/scoped_observer.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/threading/sequenced_task_runner_handle.h"
 #include "build/build_config.h"
@@ -282,6 +281,7 @@ void CredentialProviderService::OnPrimaryAccountChanged(
 }
 
 void CredentialProviderService::OnLoginsChanged(
+    password_manager::PasswordStoreInterface* /*store*/,
     const PasswordStoreChangeList& changes) {
   std::vector<std::unique_ptr<PasswordForm>> forms_to_add;
   std::vector<std::unique_ptr<PasswordForm>> forms_to_remove;
@@ -323,6 +323,11 @@ void CredentialProviderService::OnLoginsChanged(
   } else {
     std::move(callback).Run(std::move(forms_to_add));
   }
+}
+
+void CredentialProviderService::OnLoginsRetained(
+    password_manager::PasswordStoreInterface* /*store*/,
+    const std::vector<password_manager::PasswordForm>& /*retained_passwords*/) {
 }
 
 void CredentialProviderService::OnInjectedAffiliationAfterLoginsChanged(

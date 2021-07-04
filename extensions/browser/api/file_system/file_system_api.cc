@@ -8,17 +8,18 @@
 
 #include <memory>
 #include <set>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "base/bind.h"
+#include "base/containers/contains.h"
+#include "base/cxx17_backports.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/path_service.h"
-#include "base/stl_util.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -101,10 +102,19 @@ namespace {
 
 bool g_skip_picker_for_test = false;
 bool g_use_suggested_path_for_test = false;
-base::FilePath* g_path_to_be_picked_for_test;
-std::vector<base::FilePath>* g_paths_to_be_picked_for_test;
+const base::FilePath* g_path_to_be_picked_for_test = nullptr;
+const std::vector<base::FilePath>* g_paths_to_be_picked_for_test = nullptr;
 bool g_skip_directory_confirmation_for_test = false;
 bool g_allow_directory_access_for_test = false;
+
+void ResetTestValuesToDefaults() {
+  g_skip_picker_for_test = false;
+  g_use_suggested_path_for_test = false;
+  g_path_to_be_picked_for_test = nullptr;
+  g_paths_to_be_picked_for_test = nullptr;
+  g_skip_directory_confirmation_for_test = false;
+  g_allow_directory_access_for_test = false;
+}
 
 // Expand the mime-types and extensions provided in an AcceptOption, returning
 // them within the passed extension vector. Returns false if no valid types
@@ -112,7 +122,7 @@ bool g_allow_directory_access_for_test = false;
 bool GetFileTypesFromAcceptOption(
     const file_system::AcceptOption& accept_option,
     std::vector<base::FilePath::StringType>* extensions,
-    base::string16* description) {
+    std::u16string* description) {
   std::set<base::FilePath::StringType> extension_set;
   int description_id = 0;
 
@@ -347,7 +357,7 @@ ExtensionFunction::ResponseAction FileSystemGetWritableEntryFunction::Run() {
 void FileSystemGetWritableEntryFunction::CheckPermissionAndSendResponse() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (is_directory_ && !extension_->permissions_data()->HasAPIPermission(
-                           APIPermission::kFileSystemDirectory)) {
+                           mojom::APIPermissionID::kFileSystemDirectory)) {
     Respond(Error(kRequiresFileSystemDirectoryError));
     return;
   }
@@ -421,59 +431,54 @@ void FileSystemChooseEntryFunction::ShowPicker(
   }
 }
 
-// static
-void FileSystemChooseEntryFunction::SkipPickerAndAlwaysSelectPathForTest(
-    base::FilePath* path) {
-  g_skip_picker_for_test = true;
-  g_use_suggested_path_for_test = false;
-  g_path_to_be_picked_for_test = path;
-  g_paths_to_be_picked_for_test = NULL;
+FileSystemChooseEntryFunction::SkipPickerBaseForTest*
+    FileSystemChooseEntryFunction::SkipPickerBaseForTest::g_picker = nullptr;
+
+FileSystemChooseEntryFunction::SkipPickerBaseForTest::SkipPickerBaseForTest() {
+  CHECK(!g_picker);
+  g_picker = this;
 }
 
-// static
-void FileSystemChooseEntryFunction::SkipPickerAndAlwaysSelectPathsForTest(
-    std::vector<base::FilePath>* paths) {
-  g_skip_picker_for_test = true;
-  g_use_suggested_path_for_test = false;
-  g_paths_to_be_picked_for_test = paths;
+FileSystemChooseEntryFunction::SkipPickerBaseForTest::~SkipPickerBaseForTest() {
+  DCHECK_EQ(this, g_picker);
+  ResetTestValuesToDefaults();
+  g_picker = nullptr;
 }
 
-// static
-void FileSystemChooseEntryFunction::SkipPickerAndSelectSuggestedPathForTest() {
+FileSystemChooseEntryFunction::SkipPickerAndAlwaysSelectPathForTest::
+    SkipPickerAndAlwaysSelectPathForTest(const base::FilePath& path,
+                                         bool skip_dir_confirmation,
+                                         bool allow_directory_access)
+    : path_(path) {
+  g_skip_picker_for_test = true;
+  g_path_to_be_picked_for_test = &path_;
+  g_skip_directory_confirmation_for_test = skip_dir_confirmation;
+  g_allow_directory_access_for_test = allow_directory_access;
+}
+
+FileSystemChooseEntryFunction::SkipPickerAndAlwaysSelectPathForTest::
+    ~SkipPickerAndAlwaysSelectPathForTest() = default;
+
+FileSystemChooseEntryFunction::SkipPickerAndAlwaysSelectPathsForTest::
+    SkipPickerAndAlwaysSelectPathsForTest(
+        const std::vector<base::FilePath>& paths)
+    : paths_(paths) {
+  g_skip_picker_for_test = true;
+  g_paths_to_be_picked_for_test = &paths_;
+}
+
+FileSystemChooseEntryFunction::SkipPickerAndAlwaysSelectPathsForTest::
+    ~SkipPickerAndAlwaysSelectPathsForTest() = default;
+
+FileSystemChooseEntryFunction::SkipPickerAndSelectSuggestedPathForTest::
+    SkipPickerAndSelectSuggestedPathForTest() {
   g_skip_picker_for_test = true;
   g_use_suggested_path_for_test = true;
-  g_path_to_be_picked_for_test = NULL;
-  g_paths_to_be_picked_for_test = NULL;
 }
 
-// static
-void FileSystemChooseEntryFunction::SkipPickerAndAlwaysCancelForTest() {
+FileSystemChooseEntryFunction::SkipPickerAndAlwaysCancelForTest::
+    SkipPickerAndAlwaysCancelForTest() {
   g_skip_picker_for_test = true;
-  g_use_suggested_path_for_test = false;
-  g_path_to_be_picked_for_test = NULL;
-  g_paths_to_be_picked_for_test = NULL;
-}
-
-// static
-void FileSystemChooseEntryFunction::StopSkippingPickerForTest() {
-  g_skip_picker_for_test = false;
-}
-
-// static
-void FileSystemChooseEntryFunction::SkipDirectoryConfirmationForTest() {
-  g_skip_directory_confirmation_for_test = true;
-  g_allow_directory_access_for_test = true;
-}
-
-// static
-void FileSystemChooseEntryFunction::AutoCancelDirectoryConfirmationForTest() {
-  g_skip_directory_confirmation_for_test = true;
-  g_allow_directory_access_for_test = false;
-}
-
-// static
-void FileSystemChooseEntryFunction::StopSkippingDirectoryConfirmationForTest() {
-  g_skip_directory_confirmation_for_test = false;
 }
 
 // static
@@ -635,7 +640,7 @@ void FileSystemChooseEntryFunction::BuildFileTypeInfo(
 
   if (accepts) {
     for (const file_system::AcceptOption& option : *accepts) {
-      base::string16 description;
+      std::u16string description;
       std::vector<base::FilePath::StringType> extensions;
 
       if (!GetFileTypesFromAcceptOption(option, &extensions, &description))
@@ -732,7 +737,7 @@ ExtensionFunction::ResponseAction FileSystemChooseEntryFunction::Run() {
     } else if (options->type == file_system::CHOOSE_ENTRY_TYPE_OPENDIRECTORY) {
       is_directory_ = true;
       if (!extension_->permissions_data()->HasAPIPermission(
-              APIPermission::kFileSystemDirectory)) {
+              mojom::APIPermissionID::kFileSystemDirectory)) {
         return RespondNow(Error(kRequiresFileSystemDirectoryError));
       }
       if (multiple_) {

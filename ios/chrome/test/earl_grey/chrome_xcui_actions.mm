@@ -21,16 +21,16 @@ const CGFloat kSplitterWidth = 10.0;
 CGVector GetNormalizedEdgeVector(GREYContentEdge edge) {
   switch (edge) {
     case kGREYContentEdgeLeft:
-      return CGVectorMake(0.0, 0.5);
+      return CGVectorMake(0.02, 0.5);
       break;
     case kGREYContentEdgeRight:
-      return CGVectorMake(1.0, 0.5);
+      return CGVectorMake(.98, 0.5);
       break;
     case kGREYContentEdgeTop:
-      return CGVectorMake(0.5, 0.0);
+      return CGVectorMake(0.5, 0.02);
       break;
     case kGREYContentEdgeBottom:
-      return CGVectorMake(0.5, 1.0);
+      return CGVectorMake(0.5, 0.98);
       break;
     default:
       return CGVectorMake(0.5, 0.5);
@@ -219,6 +219,35 @@ BOOL TapAtOffsetOf(NSString* accessibility_identifier,
   XCUICoordinate* tap_point =
       [element coordinateWithNormalizedOffset:normalized_offset];
   [tap_point tap];
+
+  return YES;
+}
+
+BOOL TypeText(NSString* accessibility_identifier,
+              int window_number,
+              NSString* text) {
+  XCUIApplication* app = [[XCUIApplication alloc] init];
+
+  XCUIElement* element = nil;
+  if (@available(iOS 13, *)) {
+    XCUIElementQuery* query = GetQueryMatchingIdentifierInWindow(
+        app, accessibility_identifier, window_number, XCUIElementTypeTextField);
+    if (query.count > 0)
+      element = [query elementBoundByIndex:0];
+  } else {
+    // [XCUIElementQuery matchingIdentifier:] doesn't work in iOS 12.
+    XCUIElementQuery* query = app.textFields;
+    for (unsigned int i = 0; i < query.count; i++, element = nil) {
+      element = [query elementBoundByIndex:i];
+      if ([element.identifier isEqualToString:accessibility_identifier])
+        break;
+    }
+  }
+
+  if (!element)
+    return NO;
+
+  [element typeText:text];
 
   return YES;
 }

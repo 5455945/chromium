@@ -19,22 +19,27 @@ import android.view.animation.TranslateAnimation;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 
+import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.share.long_screenshots.bitmap_generation.EntryManager;
 import org.chromium.chrome.browser.share.long_screenshots.bitmap_generation.LongScreenshotsEntry;
 import org.chromium.chrome.browser.share.long_screenshots.bitmap_generation.LongScreenshotsEntry.EntryStatus;
+import org.chromium.chrome.browser.share.screenshot.EditorScreenshotSource;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
+import org.chromium.ui.widget.Toast;
 
 /**
- * LongScreenshotsMediator is responsible for retrieving the long screenshot Bitmaps
- * via {@link LongScreenshotsEntryManager} and displaying them in the area selection
- * dialog.
+ * LongScreenshotsMediator is responsible for retrieving the long screenshot Bitmaps via
+ * {@link LongScreenshotsEntryManager} and displaying them in the area selection dialog.
  */
-public class LongScreenshotsMediator implements LongScreenshotsEntry.EntryListener {
+public class LongScreenshotsMediator
+        implements LongScreenshotsEntry.EntryListener, EditorScreenshotSource {
     private Dialog mDialog;
+    private boolean mDone;
+    private Runnable mDoneCallback;
     private PropertyModel mModel;
     private View mDialogView;
     private final Activity mActivity;
@@ -49,6 +54,23 @@ public class LongScreenshotsMediator implements LongScreenshotsEntry.EntryListen
         mEntryManager = entryManager;
         mCurrentEntry = mEntryManager.generateInitialEntry();
         mAnimationsComplete = 0;
+    }
+
+    private void displayInitialScreenshot() {
+        LongScreenshotsEntry entry = mEntryManager.generateInitialEntry();
+        entry.setListener(new LongScreenshotsEntry.EntryListener() {
+            @Override
+            public void onResult(@EntryStatus int status) {
+                if (status == EntryStatus.BITMAP_GENERATED) {
+                    showAreaSelectionDialog(entry.getBitmap());
+                } else {
+                    // TODO(crbug/1024586): Handle the error case properly: dismiss dialog?
+                    Toast.makeText(mActivity, R.string.sharing_long_screenshot_unknown_error,
+                                 Toast.LENGTH_LONG)
+                            .show();
+                }
+            }
+        });
     }
 
     public void showAreaSelectionDialog(Bitmap bitmap) {
@@ -73,16 +95,27 @@ public class LongScreenshotsMediator implements LongScreenshotsEntry.EntryListen
         ImageView imageView = mDialogView.findViewById(R.id.screenshot_image);
         imageView.setImageBitmap(mInitialBitmap);
 
+        LongScreenshotsMetrics.logLongScreenshotsEvent(
+                LongScreenshotsMetrics.LongScreenshotsEvent.DIALOG_OPEN);
         mDialog.show();
     }
 
     public void areaSelectionDone(View view) {
         // TODO(1163193): Delete all bitmaps.
+        LongScreenshotsMetrics.logLongScreenshotsEvent(
+                LongScreenshotsMetrics.LongScreenshotsEvent.DIALOG_OK);
         mDialog.cancel();
+        mDone = true;
+        if (mDoneCallback != null) {
+            mDoneCallback.run();
+        }
+        mDoneCallback = null;
     }
 
     public void areaSelectionClose(View view) {
         // TODO(1163193): Delete all bitmaps.
+        LongScreenshotsMetrics.logLongScreenshotsEvent(
+                LongScreenshotsMetrics.LongScreenshotsEvent.DIALOG_CANCEL);
         mDialog.cancel();
     }
 
@@ -93,14 +126,8 @@ public class LongScreenshotsMediator implements LongScreenshotsEntry.EntryListen
             return;
         }
 
-        mPendingEntry = mEntryManager.getNextEntry(mCurrentEntry.getId());
-        mPendingEntry.setListener(this);
-
-        // Next entry is already generated/available.
-        if (mPendingEntry.getStatus() == EntryStatus.BITMAP_GENERATED) {
-            mPendingEntry.setListener(null);
-            onResult(EntryStatus.BITMAP_GENERATED);
-        }
+        LongScreenshotsEntry newEntry = mEntryManager.getNextEntry(mCurrentEntry.getId());
+        processNewEntry(newEntry);
     }
 
     public void areaSelectionUp(View view) {
@@ -110,13 +137,44 @@ public class LongScreenshotsMediator implements LongScreenshotsEntry.EntryListen
             return;
         }
 
-        mPendingEntry = mEntryManager.getPreviousEntry(mCurrentEntry.getId());
-        mPendingEntry.setListener(this);
+        LongScreenshotsEntry newEntry = mEntryManager.getPreviousEntry(mCurrentEntry.getId());
+        processNewEntry(newEntry);
+    }
 
+    // Performs postprocessing or error handling on new entry availability.
+    private void processNewEntry(LongScreenshotsEntry newEntry) {
+        if (newEntry == null) {
+            return;
+        }
+        if (newEntry.getStatus() == EntryStatus.BOUNDS_ABOVE_CAPTURE) {
+            // TODO(crbug/1153969): Disable the up button.
+            Toast.makeText(
+                         mActivity, R.string.sharing_long_screenshot_reached_top, Toast.LENGTH_LONG)
+                    .show();
+            return;
+        }
+
+        if (newEntry.getStatus() == EntryStatus.BOUNDS_BELOW_CAPTURE) {
+            // TODO(crbug/1153969): Disable the down button.
+            Toast.makeText(mActivity, R.string.sharing_long_screenshot_reached_bottom,
+                         Toast.LENGTH_LONG)
+                    .show();
+            return;
+        }
+
+        if (newEntry.getStatus() == EntryStatus.INSUFFICIENT_MEMORY) {
+            Toast.makeText(mActivity, R.string.sharing_long_screenshot_memory_pressure,
+                         Toast.LENGTH_LONG)
+                    .show();
+            return;
+        }
+
+        mPendingEntry = newEntry;
         // Next entry is already generated/available.
         if (mPendingEntry.getStatus() == EntryStatus.BITMAP_GENERATED) {
-            mPendingEntry.setListener(null);
             onResult(EntryStatus.BITMAP_GENERATED);
+        } else {
+            mPendingEntry.setListener(this);
         }
     }
 
@@ -157,8 +215,10 @@ public class LongScreenshotsMediator implements LongScreenshotsEntry.EntryListen
                     ++mAnimationsComplete;
                     finishAnimation();
                 }
+
                 @Override
                 public void onAnimationStart(Animation animation) {}
+
                 @Override
                 public void onAnimationRepeat(Animation animation) {}
             });
@@ -168,8 +228,10 @@ public class LongScreenshotsMediator implements LongScreenshotsEntry.EntryListen
                     ++mAnimationsComplete;
                     finishAnimation();
                 }
+
                 @Override
                 public void onAnimationStart(Animation animation) {}
+
                 @Override
                 public void onAnimationRepeat(Animation animation) {}
             });
@@ -197,5 +259,25 @@ public class LongScreenshotsMediator implements LongScreenshotsEntry.EntryListen
     @VisibleForTesting
     public Dialog getDialog() {
         return mDialog;
+    }
+
+    // EditorScreenshotSource implementation.
+    @Override
+    public void capture(@Nullable Runnable callback) {
+        mDoneCallback = callback;
+        displayInitialScreenshot();
+    }
+
+    @Override
+    public boolean isReady() {
+        return mDone;
+    }
+
+    @Override
+    public Bitmap getScreenshot() {
+        // TODO(skare): Populate with actual selected region.
+        // TODO(skare): At that time, log the height in a new histogram such as
+        //     Sharing.LongScreenshots.ScreenshotHeight.
+        return mInitialBitmap;
     }
 }

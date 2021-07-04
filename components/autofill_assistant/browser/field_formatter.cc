@@ -4,13 +4,16 @@
 
 #include "components/autofill_assistant/browser/field_formatter.h"
 
+#include "base/i18n/case_conversion.h"
 #include "base/logging.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/autofill/core/browser/autofill_data_util.h"
 #include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/geo/state_names.h"
+#include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill_assistant/browser/generic_ui.pb.h"
 #include "third_party/re2/src/re2/re2.h"
 #include "third_party/re2/src/re2/stringpiece.h"
@@ -19,14 +22,14 @@ namespace {
 // Regex to find placeholders of the form ${key}, where key is an arbitrary
 // string that does not contain curly braces. The first capture group is for
 // the prefix before the key, the second for the key itself.
-const char kPlaceholderExtractor[] = R"re(([^$]*)\$\{([^{}]+)\})re";
+const char kPlaceholderExtractor[] = R"re((.*?)\$\{([^{}]+)\})re";
 
-base::Optional<std::string> GetFieldValue(
+absl::optional<std::string> GetFieldValue(
     const std::map<std::string, std::string>& mappings,
     const std::string& key) {
   auto it = mappings.find(key);
   if (it == mappings.end()) {
-    return base::nullopt;
+    return absl::nullopt;
   }
   return it->second;
 }
@@ -45,12 +48,45 @@ std::map<std::string, std::string> CreateFormGroupMappings(
   return mappings;
 }
 
+void GetNameAndAbbreviationViaAlternativeStateNameMap(
+    const std::string& country_code,
+    const std::u16string& state_from_profile,
+    std::u16string* name,
+    std::u16string* abbreviation) {
+  absl::optional<autofill::StateEntry> state_entry =
+      autofill::AlternativeStateNameMap::GetInstance()->GetEntry(
+          autofill::AlternativeStateNameMap::CountryCode(country_code),
+          autofill::AlternativeStateNameMap::StateName(state_from_profile));
+  if (!state_entry) {
+    // Name and abbreviation are already prefilled.
+    return;
+  }
+  if (state_entry->has_canonical_name() &&
+      !state_entry->canonical_name().empty()) {
+    std::u16string full = base::ASCIIToUTF16(state_entry->canonical_name());
+    std::u16string abbr;
+    size_t curr_min_abbr_size = INT_MAX;
+    for (const auto& it_abbr : state_entry->abbreviations()) {
+      if (!it_abbr.empty() && it_abbr.size() < curr_min_abbr_size) {
+        abbr = base::ASCIIToUTF16(it_abbr);
+        curr_min_abbr_size = it_abbr.size();
+      }
+    }
+    if (name) {
+      name->swap(full);
+    }
+    if (abbreviation) {
+      abbreviation->swap(abbr);
+    }
+  }
+}
+
 }  // namespace
 
 namespace autofill_assistant {
 namespace field_formatter {
 
-base::Optional<std::string> FormatString(
+absl::optional<std::string> FormatString(
     const std::string& pattern,
     const std::map<std::string, std::string>& mappings,
     bool strict) {
@@ -68,7 +104,7 @@ base::Optional<std::string> FormatString(
     if (!rewrite_value.has_value()) {
       if (strict) {
         VLOG(2) << "No value for " << key << " in " << pattern;
-        return base::nullopt;
+        return absl::nullopt;
       }
       // Leave placeholder unchanged.
       rewrite_value = "${" + key + "}";
@@ -82,6 +118,57 @@ base::Optional<std::string> FormatString(
   return out;
 }
 
+ClientStatus FormatExpression(
+    const ValueExpression& value_expression,
+    const std::map<std::string, std::string>& mappings,
+    bool quote_meta,
+    std::string* out_value) {
+  out_value->clear();
+  for (const auto& chunk : value_expression.chunk()) {
+    switch (chunk.chunk_case()) {
+      case ValueExpression::Chunk::kText:
+        out_value->append(chunk.text());
+        break;
+      case ValueExpression::Chunk::kKey: {
+        auto rewrite_value =
+            GetFieldValue(mappings, base::NumberToString(chunk.key()));
+        if (!rewrite_value.has_value()) {
+          return ClientStatus(AUTOFILL_INFO_NOT_AVAILABLE);
+        }
+        if (quote_meta) {
+          out_value->append(re2::RE2::QuoteMeta(*rewrite_value));
+        } else {
+          out_value->append(*rewrite_value);
+        }
+        break;
+      }
+      case ValueExpression::Chunk::CHUNK_NOT_SET:
+        return ClientStatus(INVALID_ACTION);
+    }
+  }
+
+  return OkClientStatus();
+}
+
+std::string GetHumanReadableValueExpression(
+    const ValueExpression& value_expression) {
+  std::string out;
+  for (const auto& chunk : value_expression.chunk()) {
+    switch (chunk.chunk_case()) {
+      case ValueExpression::Chunk::kText:
+        out += chunk.text();
+        break;
+      case ValueExpression::Chunk::kKey:
+        out += "${" + base::NumberToString(chunk.key()) + "}";
+        break;
+      case ValueExpression::Chunk::CHUNK_NOT_SET:
+        out += "<CHUNK_NOT_SET>";
+        break;
+    }
+  }
+  return out;
+}
+
 template <>
 std::map<std::string, std::string>
 CreateAutofillMappings<autofill::AutofillProfile>(
@@ -89,22 +176,42 @@ CreateAutofillMappings<autofill::AutofillProfile>(
     const std::string& locale) {
   auto mappings = CreateFormGroupMappings(profile, locale);
 
+  std::string country_code =
+      base::UTF16ToUTF8(profile.GetRawInfo(autofill::ADDRESS_HOME_COUNTRY));
+  if (!country_code.empty()) {
+    mappings[base::NumberToString(static_cast<int>(
+        AutofillFormatProto::ADDRESS_HOME_COUNTRY_CODE))] = country_code;
+  }
   auto state = profile.GetInfo(
       autofill::AutofillType(autofill::ADDRESS_HOME_STATE), locale);
   if (!state.empty()) {
-    // TODO(b/159309560): Capitalize first letter of the state name.
-    auto state_name =
-        base::UTF16ToUTF8(autofill::state_names::GetNameForAbbreviation(state));
-    if (state_name.empty()) {
-      mappings[base::NumberToString(
-          static_cast<int>(AutofillFormatProto::ADDRESS_HOME_STATE_NAME))] =
-          base::UTF16ToUTF8(state);
+    std::u16string full_name;
+    std::u16string abbreviation;
+    autofill::state_names::GetNameAndAbbreviation(state, &full_name,
+                                                  &abbreviation);
+    DCHECK(!full_name.empty());
+    full_name = full_name.length() > 1
+                    ? base::StrCat({base::i18n::ToUpper(full_name.substr(0, 1)),
+                                    full_name.substr(1)})
+                    : base::i18n::ToUpper(full_name);
+    if (abbreviation.empty() && !country_code.empty() &&
+        base::FeatureList::IsEnabled(
+            autofill::features::kAutofillUseAlternativeStateNameMap)) {
+      GetNameAndAbbreviationViaAlternativeStateNameMap(
+          country_code, state, &full_name, &abbreviation);
+    }
+    mappings[base::NumberToString(
+        static_cast<int>(AutofillFormatProto::ADDRESS_HOME_STATE_NAME))] =
+        base::UTF16ToUTF8(full_name);
+    if (abbreviation.empty()) {
+      mappings.erase(
+          base::NumberToString(static_cast<int>(autofill::ADDRESS_HOME_STATE)));
     } else {
-      mappings[base::NumberToString(static_cast<int>(
-          AutofillFormatProto::ADDRESS_HOME_STATE_NAME))] = state_name;
+      mappings[base::NumberToString(
+          static_cast<int>(autofill::ADDRESS_HOME_STATE))] =
+          base::UTF16ToUTF8(base::i18n::ToUpper(abbreviation));
     }
   }
-
   return mappings;
 }
 
@@ -146,4 +253,11 @@ std::map<std::string, std::string> CreateAutofillMappings<autofill::CreditCard>(
 }
 
 }  // namespace field_formatter
+
+std::ostream& operator<<(std::ostream& out,
+                         const ValueExpression& value_expression) {
+  return out << field_formatter::GetHumanReadableValueExpression(
+             value_expression);
+}
+
 }  // namespace autofill_assistant

@@ -7,9 +7,91 @@
 #include <algorithm>
 
 #include "ash/public/cpp/holding_space/holding_space_model_observer.h"
+#include "base/bind.h"
 #include "base/check.h"
+#include "base/containers/contains.h"
+#include "base/memory/ptr_util.h"
 
 namespace ash {
+
+// HoldingSpaceModel::ScopedItemUpdate -----------------------------------------
+
+HoldingSpaceModel::ScopedItemUpdate::~ScopedItemUpdate() {
+  bool did_update = false;
+
+  // Update backing file.
+  if (file_path_ && file_system_url_) {
+    did_update |=
+        item_->SetBackingFile(file_path_.value(), file_system_url_.value());
+  }
+
+  // Update pause.
+  if (paused_)
+    did_update |= item_->SetPaused(paused_.value());
+
+  // Update progress.
+  if (progress_)
+    did_update |= item_->SetProgress(progress_.value());
+
+  // Update secondary text.
+  if (secondary_text_)
+    did_update |= item_->SetSecondaryText(secondary_text_.value());
+
+  // Update text.
+  if (text_)
+    did_update |= item_->SetText(text_.value());
+
+  // Notify observers if and only if an update occurred.
+  if (did_update) {
+    for (auto& observer : model_->observers_)
+      observer.OnHoldingSpaceItemUpdated(item_);
+  }
+}
+
+HoldingSpaceModel::ScopedItemUpdate&
+HoldingSpaceModel::ScopedItemUpdate::SetBackingFile(
+    const base::FilePath& file_path,
+    const GURL& file_system_url) {
+  file_path_ = file_path;
+  file_system_url_ = file_system_url;
+  return *this;
+}
+
+HoldingSpaceModel::ScopedItemUpdate&
+HoldingSpaceModel::ScopedItemUpdate::SetPaused(bool paused) {
+  paused_ = paused;
+  return *this;
+}
+
+HoldingSpaceModel::ScopedItemUpdate&
+HoldingSpaceModel::ScopedItemUpdate::SetProgress(
+    const HoldingSpaceProgress& progress) {
+  progress_ = progress;
+  return *this;
+}
+
+HoldingSpaceModel::ScopedItemUpdate&
+HoldingSpaceModel::ScopedItemUpdate::SetSecondaryText(
+    const absl::optional<std::u16string>& secondary_text) {
+  secondary_text_ = secondary_text;
+  return *this;
+}
+
+HoldingSpaceModel::ScopedItemUpdate&
+HoldingSpaceModel::ScopedItemUpdate::SetText(
+    const absl::optional<std::u16string>& text) {
+  text_ = text;
+  return *this;
+}
+
+HoldingSpaceModel::ScopedItemUpdate::ScopedItemUpdate(HoldingSpaceModel* model,
+                                                      HoldingSpaceItem* item)
+    : model_(model), item_(item) {
+  DCHECK(model_);
+  DCHECK(item_);
+}
+
+// HoldingSpaceModel -----------------------------------------------------------
 
 HoldingSpaceModel::HoldingSpaceModel() = default;
 
@@ -28,8 +110,8 @@ void HoldingSpaceModel::AddItems(
   for (std::unique_ptr<HoldingSpaceItem>& item : items) {
     DCHECK(!GetItem(item->id()));
 
-    if (item->IsFinalized())
-      ++finalized_item_counts_by_type_[item->type()];
+    if (item->IsInitialized())
+      ++initialized_item_counts_by_type_[item->type()];
 
     item_ptrs.push_back(item.get());
     items_.push_back(std::move(item));
@@ -50,8 +132,8 @@ void HoldingSpaceModel::RemoveItems(const std::set<std::string>& item_ids) {
       std::cref(item_ids)));
 }
 
-void HoldingSpaceModel::FinalizeOrRemoveItem(const std::string& id,
-                                             const GURL& file_system_url) {
+void HoldingSpaceModel::InitializeOrRemoveItem(const std::string& id,
+                                               const GURL& file_system_url) {
   if (file_system_url.is_empty()) {
     RemoveItem(id);
     return;
@@ -65,33 +147,24 @@ void HoldingSpaceModel::FinalizeOrRemoveItem(const std::string& id,
   DCHECK(item_it != items_.end());
 
   HoldingSpaceItem* item = item_it->get();
-  DCHECK(!item->IsFinalized());
+  DCHECK(!item->IsInitialized());
 
-  item->Finalize(file_system_url);
-  ++finalized_item_counts_by_type_[item->type()];
+  item->Initialize(file_system_url);
+  ++initialized_item_counts_by_type_[item->type()];
 
   for (auto& observer : observers_)
-    observer.OnHoldingSpaceItemFinalized(item);
+    observer.OnHoldingSpaceItemInitialized(item);
 }
 
-void HoldingSpaceModel::UpdateBackingFileForItem(
-    const std::string& id,
-    const base::FilePath& file_path,
-    const GURL& file_system_url) {
-  auto item_it = std::find_if(
-      items_.begin(), items_.end(),
-      [&id](const std::unique_ptr<HoldingSpaceItem>& item) -> bool {
-        return item->id() == id;
-      });
+std::unique_ptr<HoldingSpaceModel::ScopedItemUpdate>
+HoldingSpaceModel::UpdateItem(const std::string& id) {
+  auto item_it =
+      std::find_if(items_.begin(), items_.end(),
+                   [&id](const std::unique_ptr<HoldingSpaceItem>& item) {
+                     return item->id() == id;
+                   });
   DCHECK(item_it != items_.end());
-
-  HoldingSpaceItem* item = item_it->get();
-  DCHECK(item->IsFinalized());
-
-  item->UpdateBackingFile(file_path, file_system_url);
-
-  for (auto& observer : observers_)
-    observer.OnHoldingSpaceItemUpdated(item);
+  return base::WrapUnique(new ScopedItemUpdate(this, item_it->get()));
 }
 
 void HoldingSpaceModel::RemoveIf(Predicate predicate) {
@@ -106,8 +179,8 @@ void HoldingSpaceModel::RemoveIf(Predicate predicate) {
       items.push_back(std::move(item));
       items_.erase(items_.begin() + i);
 
-      if (item_ptrs.back()->IsFinalized())
-        --finalized_item_counts_by_type_[item_ptrs.back()->type()];
+      if (item_ptrs.back()->IsInitialized())
+        --initialized_item_counts_by_type_[item_ptrs.back()->type()];
     }
   }
 
@@ -132,7 +205,7 @@ void HoldingSpaceModel::RemoveAll() {
   ItemList items;
   items.swap(items_);
 
-  finalized_item_counts_by_type_.clear();
+  initialized_item_counts_by_type_.clear();
 
   std::vector<const HoldingSpaceItem*> item_ptrs;
   for (auto& item : items)
@@ -174,10 +247,10 @@ bool HoldingSpaceModel::ContainsItem(HoldingSpaceItem::Type type,
   return GetItem(type, file_path) != nullptr;
 }
 
-bool HoldingSpaceModel::ContainsFinalizedItemOfType(
+bool HoldingSpaceModel::ContainsInitializedItemOfType(
     HoldingSpaceItem::Type type) const {
-  auto it = finalized_item_counts_by_type_.find(type);
-  return it != finalized_item_counts_by_type_.end() && it->second > 0u;
+  auto it = initialized_item_counts_by_type_.find(type);
+  return it != initialized_item_counts_by_type_.end() && it->second > 0u;
 }
 
 void HoldingSpaceModel::AddObserver(HoldingSpaceModelObserver* observer) {

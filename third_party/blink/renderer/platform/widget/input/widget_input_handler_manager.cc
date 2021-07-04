@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "base/callback_helpers.h"
 #include "base/check_op.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_macros.h"
@@ -42,6 +43,12 @@ using ::perfetto::protos::pbzero::ChromeLatencyInfo;
 using ::perfetto::protos::pbzero::TrackEvent;
 
 namespace {
+// We will count dropped pointerdown by posting a task in the main thread.
+// To avoid blocking the main thread, we need a timer to send the data
+// intermittently. The time delay of the timer is 10X of the threshold of
+// long tasks which block the main thread 50 ms or longer.
+const base::TimeDelta kEventCountsTimerDelay =
+    base::TimeDelta::FromMilliseconds(500);
 
 mojom::blink::DidOverscrollParamsPtr ToDidOverscrollParams(
     const InputHandlerProxy::DidOverscrollParams* overscroll_params) {
@@ -60,7 +67,7 @@ void CallCallback(
     mojom::blink::InputEventResultState result_state,
     const ui::LatencyInfo& latency_info,
     mojom::blink::DidOverscrollParamsPtr overscroll_params,
-    base::Optional<cc::TouchAction> touch_action) {
+    absl::optional<cc::TouchAction> touch_action) {
   ui::LatencyInfo::TraceIntermediateFlowEvents(
       {latency_info}, ChromeLatencyInfo::STEP_HANDLED_INPUT_EVENT_IMPL);
   std::move(callback).Run(
@@ -269,7 +276,7 @@ bool WidgetInputHandlerManager::HandleInputEvent(
          const ui::LatencyInfo& latency_info,
          std::unique_ptr<InputHandlerProxy::DidOverscrollParams>
              overscroll_params,
-         base::Optional<cc::TouchAction> touch_action) {
+         absl::optional<cc::TouchAction> touch_action) {
         if (!callback)
           return;
         std::move(callback).Run(ack_state, latency_info,
@@ -341,7 +348,7 @@ void WidgetInputHandlerManager::GenerateScrollBeginAndSendToMainThread(
       ScrollBeginFromScrollUpdate(update_event), ui::LatencyInfo());
   std::unique_ptr<cc::EventMetrics> metrics =
       cc::EventMetrics::CreateFromExisting(
-          event->Event().GetTypeAsUiEventType(), base::nullopt,
+          event->Event().GetTypeAsUiEventType(), absl::nullopt,
           event->Event().GetScrollInputType(),
           cc::EventMetrics::DispatchStage::kRendererCompositorFinished,
           update_metrics);
@@ -477,7 +484,7 @@ void WidgetInputHandlerManager::DispatchEvent(
     event->EventPointer()->SetTimeStamp(base::TimeTicks::Now());
   }
 
-  base::Optional<cc::EventMetrics::ScrollUpdateType> scroll_update_type;
+  absl::optional<cc::EventMetrics::ScrollUpdateType> scroll_update_type;
   if (event->Event().GetType() == WebInputEvent::Type::kGestureScrollBegin) {
     has_seen_first_gesture_scroll_update_after_begin_ = false;
   } else if (event->Event().GetType() ==
@@ -716,6 +723,14 @@ void WidgetInputHandlerManager::FindScrollTargetReply(
       hit_test_result);
 }
 
+void WidgetInputHandlerManager::SendDroppedPointerDownCounts() {
+  main_thread_task_runner_->PostTask(
+      FROM_HERE,
+      base::BindOnce(&WidgetBase::CountDroppedPointerDownForEventTiming,
+                     widget_, dropped_pointer_down_));
+  dropped_pointer_down_ = 0;
+}
+
 void WidgetInputHandlerManager::DidHandleInputEventSentToCompositor(
     mojom::blink::WidgetInputHandler::DispatchEventCallback callback,
     InputHandlerProxy::EventDisposition event_disposition,
@@ -727,6 +742,31 @@ void WidgetInputHandlerManager::DidHandleInputEventSentToCompositor(
                "WidgetInputHandlerManager::DidHandleInputEventSentToCompositor",
                "Disposition", event_disposition);
   DCHECK(InputThreadTaskRunner()->BelongsToCurrentThread());
+
+  if (event_disposition == InputHandlerProxy::DROP_EVENT &&
+      event->Event().GetType() == blink::WebInputEvent::Type::kTouchStart) {
+    const WebTouchEvent touch_event =
+        static_cast<const WebTouchEvent&>(event->Event());
+    for (unsigned i = 0; i < touch_event.touches_length; ++i) {
+      const WebTouchPoint& touch_point = touch_event.touches[i];
+      if (touch_point.state == WebTouchPoint::State::kStatePressed) {
+        dropped_pointer_down_++;
+      }
+    }
+    if (dropped_pointer_down_ > 0) {
+      if (!dropped_event_counts_timer_) {
+        dropped_event_counts_timer_ = std::make_unique<base::OneShotTimer>();
+      }
+
+      if (!dropped_event_counts_timer_->IsRunning()) {
+        dropped_event_counts_timer_->Start(
+            FROM_HERE, kEventCountsTimerDelay,
+            base::BindOnce(
+                &WidgetInputHandlerManager::SendDroppedPointerDownCounts,
+                this));
+      }
+    }
+  }
 
   ui::LatencyInfo::TraceIntermediateFlowEvents(
       {event->latency_info()},
@@ -748,7 +788,7 @@ void WidgetInputHandlerManager::DidHandleInputEventSentToCompositor(
         static_cast<const WebGestureEvent&>(event->Event()).PositionInWidget();
 
     ElementAtPointCallback result_callback = base::BindOnce(
-        &WidgetInputHandlerManager::FindScrollTargetReply, this->AsWeakPtr(),
+        &WidgetInputHandlerManager::FindScrollTargetReply, this,
         std::move(event), std::move(metrics), std::move(callback));
 
     main_thread_task_runner_->PostTask(
@@ -805,7 +845,7 @@ void WidgetInputHandlerManager::DidHandleInputEventSentToMainFromWidgetBase(
     const ui::LatencyInfo& latency_info,
     std::unique_ptr<blink::InputHandlerProxy::DidOverscrollParams>
         overscroll_params,
-    base::Optional<cc::TouchAction> touch_action) {
+    absl::optional<cc::TouchAction> touch_action) {
   DidHandleInputEventSentToMain(std::move(callback), ack_state, latency_info,
                                 ToDidOverscrollParams(overscroll_params.get()),
                                 touch_action);
@@ -816,7 +856,7 @@ void WidgetInputHandlerManager::DidHandleInputEventSentToMain(
     mojom::blink::InputEventResultState ack_state,
     const ui::LatencyInfo& latency_info,
     mojom::blink::DidOverscrollParamsPtr overscroll_params,
-    base::Optional<cc::TouchAction> touch_action) {
+    absl::optional<cc::TouchAction> touch_action) {
   if (!callback)
     return;
 

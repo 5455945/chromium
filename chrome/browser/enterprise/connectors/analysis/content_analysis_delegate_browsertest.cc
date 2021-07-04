@@ -6,7 +6,7 @@
 #include <set>
 
 #include "base/path_service.h"
-#include "base/stl_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
@@ -40,7 +40,10 @@ namespace {
 
 constexpr char kUserName[] = "test@chromium.org";
 
-base::string16 text() {
+constexpr char kScanId1[] = "scan id 1";
+constexpr char kScanId2[] = "scan id 2";
+
+std::u16string text() {
   return base::UTF8ToUTF16(std::string(100, 'a'));
 }
 
@@ -124,7 +127,7 @@ FakeBinaryUploadService* FakeBinaryUploadServiceStorage() {
 
 const std::set<std::string>* DocMimeTypes() {
   static std::set<std::string> set = {
-      "application/msword",
+      "application/msword", "text/plain",
       // The 50 MB file can result in no mimetype being found.
       ""};
   return &set;
@@ -262,7 +265,8 @@ class ContentAnalysisDelegateBrowserTestBase
     }
     identity_test_environment_ =
         std::make_unique<signin::IdentityTestEnvironment>();
-    identity_test_environment_->MakePrimaryAccountAvailable(kUserName);
+    identity_test_environment_->MakePrimaryAccountAvailable(
+        kUserName, signin::ConsentLevel::kSync);
     extensions::SafeBrowsingPrivateEventRouterFactory::GetForProfile(
         browser()->profile())
         ->SetIdentityManagerForTesting(
@@ -380,14 +384,16 @@ IN_PROC_BROWSER_TEST_P(ContentAnalysisDelegateBrowserTest, Files) {
       /*size*/ std::string("bad file content").size(),
       /*result*/
       safe_browsing::EventResultToString(safe_browsing::EventResult::BLOCKED),
-      /*username*/ kUserName);
+      /*username*/ kUserName, /*scan_id*/ kScanId2);
 
   ContentAnalysisResponse ok_response;
+  ok_response.set_request_token(kScanId1);
   auto* ok_result = ok_response.add_results();
   ok_result->set_status(ContentAnalysisResponse::Result::SUCCESS);
   ok_result->set_tag("malware");
 
   ContentAnalysisResponse bad_response;
+  bad_response.set_request_token(kScanId2);
   auto* bad_result = bad_response.add_results();
   bad_result->set_status(ContentAnalysisResponse::Result::SUCCESS);
   bad_result->set_tag("malware");
@@ -444,6 +450,7 @@ IN_PROC_BROWSER_TEST_P(ContentAnalysisDelegateBrowserTest, Texts) {
   // Prepare a complex DLP response to test that the verdict is reported
   // correctly in the sensitive data event.
   ContentAnalysisResponse response;
+  response.set_request_token(kScanId1);
   auto* result = response.add_results();
   result->set_status(ContentAnalysisResponse::Result::SUCCESS);
   result->set_tag("dlp");
@@ -475,7 +482,8 @@ IN_PROC_BROWSER_TEST_P(ContentAnalysisDelegateBrowserTest, Texts) {
       /*size*/ 400,
       /*result*/
       safe_browsing::EventResultToString(safe_browsing::EventResult::BLOCKED),
-      /*username*/ kUserName);
+      /*username*/ kUserName,
+      /*scan_id*/ kScanId1);
 
   bool called = false;
   base::RunLoop run_loop;
@@ -508,6 +516,87 @@ IN_PROC_BROWSER_TEST_P(ContentAnalysisDelegateBrowserTest, Texts) {
 
   // There should have been 1 request for all texts,
   // 1 for authentication of the scanning request.
+  ASSERT_EQ(FakeBinaryUploadServiceStorage()->requests_count(), 2);
+}
+
+IN_PROC_BROWSER_TEST_P(ContentAnalysisDelegateBrowserTest, Throttled) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+
+  // Set up delegate and upload service.
+  EnableUploadsScanningAndReporting();
+
+  ContentAnalysisDelegate::SetFactoryForTesting(
+      base::BindRepeating(&MinimalFakeContentAnalysisDelegate::Create));
+
+  FakeBinaryUploadServiceStorage()->SetAuthorized(true);
+  FakeBinaryUploadServiceStorage()->SetShouldAutomaticallyAuthorize(true);
+
+  // Create the files to be opened and scanned.
+  ContentAnalysisDelegate::Data data;
+  CreateFilesForTest({"a.exe", "b.exe", "c.exe"},
+                     {"a content", "b content", "c content"}, &data);
+  ASSERT_TRUE(ContentAnalysisDelegate::IsEnabled(
+      browser()->profile(), GURL(kTestUrl), &data, FILE_ATTACHED));
+
+  // The malware verdict means an event should be reported.
+  safe_browsing::EventReportValidator validator(client());
+  validator.ExpectUnscannedFileEvents(
+      /*url*/ "about:blank",
+      {
+          created_file_paths()[0].AsUTF8Unsafe(),
+          created_file_paths()[1].AsUTF8Unsafe(),
+          created_file_paths()[2].AsUTF8Unsafe(),
+      },
+      {
+          // printf "a content" | sha256sum | tr '[:lower:]' '[:upper:]'
+          "D2D2ACF640179223BF9E1EB43C5FBF854C4E50FFB6733BC3A9279D3FF7DE9BE1",
+          // printf "b content" | sha256sum | tr '[:lower:]' '[:upper:]'
+          "93CB3641ADD6A9A6619D7E2F304EBCF5160B2DB016B27C6E3D641C5306897224",
+          // printf "c content" | sha256sum | tr '[:lower:]' '[:upper:]'
+          "2E6D1C4A1F39A02562BF1505AD775C0323D7A04C0C37C9B29D25F532B9972080",
+      },
+      /*trigger*/ SafeBrowsingPrivateEventRouter::kTriggerFileUpload,
+      /*reason*/ "TOO_MANY_REQUESTS",
+      /*mimetypes*/ ExeMimeTypes(),
+      /*size*/ 9,
+      /*result*/
+      safe_browsing::EventResultToString(safe_browsing::EventResult::ALLOWED),
+      /*username*/ kUserName);
+
+  // While only one file should reach the upload part and get a
+  // TOO_MANY_REQUEST result, it can be any of them depending on how quickly
+  // they are opened asynchronously. This means responses must be set up for
+  // each of them.
+  for (const std::string& file_name : {"a.exe", "b.exe", "c.exe"}) {
+    FakeBinaryUploadServiceStorage()->SetResponseForFile(
+        file_name, BinaryUploadService::Result::TOO_MANY_REQUESTS,
+        ContentAnalysisResponse());
+  }
+
+  bool called = false;
+  base::RunLoop run_loop;
+  SetQuitClosure(run_loop.QuitClosure());
+
+  // Start test.
+  ContentAnalysisDelegate::CreateForWebContents(
+      browser()->tab_strip_model()->GetActiveWebContents(), std::move(data),
+      base::BindLambdaForTesting(
+          [&called](const ContentAnalysisDelegate::Data& data,
+                    const ContentAnalysisDelegate::Result& result) {
+            ASSERT_TRUE(result.text_results.empty());
+            ASSERT_EQ(result.paths_results.size(), 3u);
+            for (bool result : result.paths_results)
+              ASSERT_TRUE(result);
+            called = true;
+          }),
+      safe_browsing::DeepScanAccessPoint::UPLOAD);
+
+  run_loop.Run();
+
+  EXPECT_TRUE(called);
+
+  // There should have been 1 request for the first file and 1 for
+  // authentication.
   ASSERT_EQ(FakeBinaryUploadServiceStorage()->requests_count(), 2);
 }
 
@@ -813,6 +902,7 @@ IN_PROC_BROWSER_TEST_P(ContentAnalysisDelegateBlockingSettingBrowserTest,
   // The file should be reported as malware and sensitive content.
   safe_browsing::EventReportValidator validator(client());
   ContentAnalysisResponse response;
+  response.set_request_token(kScanId1);
 
   auto* malware_result = response.add_results();
   malware_result->set_status(ContentAnalysisResponse::Result::SUCCESS);
@@ -849,7 +939,8 @@ IN_PROC_BROWSER_TEST_P(ContentAnalysisDelegateBlockingSettingBrowserTest,
       safe_browsing::EventResultToString(
           expected_result() ? safe_browsing::EventResult::ALLOWED
                             : safe_browsing::EventResult::BLOCKED),
-      /*username*/ kUserName);
+      /*username*/ kUserName,
+      /*scan_id*/ kScanId1);
 
   bool called = false;
   base::RunLoop run_loop;
@@ -950,7 +1041,7 @@ class ContentAnalysisDelegateUnauthorizedBrowserTest
   }
 
   void DialogUpdated(ContentAnalysisDialog* dialog,
-                     ContentAnalysisDelegate::FinalResult result) override {
+                     ContentAnalysisDelegateBase::FinalResult result) override {
     ASSERT_TRUE(file_scan_ && blocking_scan());
   }
 
@@ -1021,7 +1112,7 @@ IN_PROC_BROWSER_TEST_P(ContentAnalysisDelegateUnauthorizedBrowserTest, Files) {
 
   bool called = false;
   base::RunLoop run_loop;
-  base::Optional<base::RepeatingClosure> quit_closure = base::nullopt;
+  absl::optional<base::RepeatingClosure> quit_closure = absl::nullopt;
 
   // If the scan is blocking, we can call the quit closure when the dialog
   // closes. If it's not, call it at the end of the result callback.

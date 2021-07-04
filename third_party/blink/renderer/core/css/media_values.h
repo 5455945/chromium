@@ -24,7 +24,7 @@ enum class ColorSpaceGamut;
 enum class ForcedColors;
 enum class NavigationControls;
 enum class ScreenSpanning { kNone, kSingleFoldHorizontal, kSingleFoldVertical };
-enum class ScreenFoldPosture { kNoFold, kLaptop, kFlat, kTent, kTablet, kBook };
+enum class DevicePosture { kNoFold, kLaptop, kFlat, kTent, kTablet, kBook };
 
 mojom::blink::PreferredColorScheme CSSValueIDToPreferredColorScheme(
     CSSValueID id);
@@ -93,7 +93,7 @@ class CORE_EXPORT MediaValues : public GarbageCollected<MediaValues> {
   virtual ForcedColors GetForcedColors() const = 0;
   virtual NavigationControls GetNavigationControls() const = 0;
   virtual ScreenSpanning GetScreenSpanning() const = 0;
-  virtual ScreenFoldPosture GetScreenFoldPosture() const = 0;
+  virtual DevicePosture GetDevicePosture() const = 0;
 
  protected:
   static double CalculateViewportWidth(LocalFrame*);
@@ -120,10 +120,10 @@ class CORE_EXPORT MediaValues : public GarbageCollected<MediaValues> {
       LocalFrame*);
   static bool CalculatePrefersReducedMotion(LocalFrame*);
   static bool CalculatePrefersReducedData(LocalFrame*);
-  static ForcedColors CalculateForcedColors();
+  static ForcedColors CalculateForcedColors(LocalFrame*);
   static NavigationControls CalculateNavigationControls(LocalFrame*);
   static ScreenSpanning CalculateScreenSpanning(LocalFrame*);
-  static ScreenFoldPosture CalculateScreenFoldPosture(LocalFrame*);
+  static DevicePosture CalculateDevicePosture(LocalFrame*);
 };
 
 }  // namespace blink

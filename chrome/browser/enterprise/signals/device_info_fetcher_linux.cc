@@ -17,6 +17,7 @@
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/nix/xdg_util.h"
+#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -29,8 +30,17 @@ namespace enterprise_signals {
 
 namespace {
 
+std::string ReadFile(std::string path_str) {
+  base::FilePath path(path_str);
+  std::string output;
+  if (base::PathExists(path) && base::ReadFileToString(path, &output))
+    base::TrimWhitespaceASCII(output, base::TrimPositions::TRIM_ALL, &output);
+
+  return output;
+}
+
 std::string GetDeviceModel() {
-  return base::SysInfo::HardwareModelName();
+  return ReadFile("/sys/class/dmi/id/product_name");
 }
 
 std::string GetOsVersion() {
@@ -44,8 +54,8 @@ std::string GetOsVersion() {
       return v.first == "VERSION_ID";
     });
     if (version_id != values.end()) {
-      return base::TrimString(version_id->second, "\"", base::TRIM_ALL)
-          .as_string();
+      return std::string(
+          base::TrimString(version_id->second, "\"", base::TRIM_ALL));
     }
   }
   return base::SysInfo::OperatingSystemVersion();
@@ -56,7 +66,7 @@ std::string GetDeviceHostName() {
 }
 
 std::string GetSerialNumber() {
-  return std::string();
+  return ReadFile("/sys/class/dmi/id/product_serial");
 }
 
 // Implements the logic from the native client setup script. It reads the

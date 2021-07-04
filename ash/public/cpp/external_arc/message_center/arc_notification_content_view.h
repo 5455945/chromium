@@ -12,10 +12,10 @@
 #include "ash/public/cpp/external_arc/message_center/arc_notification_surface_manager.h"
 #include "base/macros.h"
 #include "ui/aura/window_observer.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/message_center/views/notification_background_painter.h"
 #include "ui/message_center/views/notification_control_buttons_view.h"
 #include "ui/views/controls/native/native_view_host.h"
-#include "ui/views/metadata/metadata_header_macros.h"
 #include "ui/views/widget/widget_observer.h"
 
 namespace message_center {
@@ -55,11 +55,10 @@ class ArcNotificationContentView
   ArcNotificationContentView& operator=(const ArcNotificationContentView&) = delete;
   ~ArcNotificationContentView() override;
 
-
   void Update(const message_center::Notification& notification);
   message_center::NotificationControlButtonsView* GetControlButtonsView();
   void UpdateControlButtonsVisibility();
-  void UpdateCornerRadius(int top_radius, int bottom_radius);
+  void UpdateCornerRadius(float top_radius, float bottom_radius);
   void OnSlideChanged(bool in_progress);
   void OnContainerAnimationStarted();
   void OnContainerAnimationEnded();
@@ -105,6 +104,7 @@ class ArcNotificationContentView
   void OnMouseExited(const ui::MouseEvent& event) override;
   void OnFocus() override;
   void OnBlur() override;
+  void OnThemeChanged() override;
   views::FocusTraversable* GetFocusTraversable() override;
   void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
   void OnAccessibilityEvent(ax::mojom::Event event) override;
@@ -192,17 +192,17 @@ class ArcNotificationContentView
   // Widget which this view tree is currently attached to.
   views::Widget* attached_widget_ = nullptr;
 
-  base::string16 accessible_name_;
+  std::u16string accessible_name_;
 
   // If it's true, the surface gets active when attached to this view.
   bool activate_on_attach_ = false;
 
   // Radiuses of rounded corners. These values are used in UpdateMask().
-  int top_radius_ = 0;
-  int bottom_radius_ = 0;
+  float top_radius_ = 0;
+  float bottom_radius_ = 0;
 
   // Current insets of mask layer.
-  base::Optional<gfx::Insets> mask_insets_;
+  absl::optional<gfx::Insets> mask_insets_;
 
   std::unique_ptr<ui::LayerTreeOwner> surface_copy_;
 

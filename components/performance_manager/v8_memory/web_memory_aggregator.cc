@@ -10,7 +10,6 @@
 #include "base/bind.h"
 #include "base/check.h"
 #include "base/containers/stack.h"
-#include "base/stl_util.h"
 #include "components/performance_manager/public/graph/frame_node.h"
 #include "components/performance_manager/public/graph/page_node.h"
 #include "components/performance_manager/public/graph/worker_node.h"
@@ -191,6 +190,16 @@ void AddMemoryBytes(mojom::WebMemoryBreakdownEntry* aggregation_point,
   // (https://github.com/WICG/performance-measure-memory/issues/20).
   uint64_t bytes_used = is_same_process ? data->v8_bytes_used() : 0;
   aggregation_point->memory->bytes += bytes_used;
+
+  // Add canvas memory similar to V8 memory above.
+  if (data->canvas_bytes_used()) {
+    uint64_t canvas_bytes_used =
+        is_same_process ? *data->canvas_bytes_used() : 0;
+    if (!aggregation_point->canvas_memory) {
+      aggregation_point->canvas_memory = mojom::WebMemoryUsage::New();
+    }
+    aggregation_point->canvas_memory->bytes += canvas_bytes_used;
+  }
 }
 
 const FrameNode* GetTopFrame(const FrameNode* frame) {
@@ -290,7 +299,7 @@ void AggregationPointVisitor::OnFrameEntered(const FrameNode* frame_node) {
       // Since this node is NOT same-origin to the start node, the start node
       // CANNOT view its current url.
       aggregation_point = WebMemoryAggregator::CreateBreakdownEntry(
-          AttributionScope::kCrossOriginAggregated, base::nullopt,
+          AttributionScope::kCrossOriginAggregated, absl::nullopt,
           aggregation_result_.get());
       // This is cross-origin but not being aggregated into another
       // aggregation point, so its parent or opener must be same-origin to the
@@ -365,7 +374,7 @@ void AggregationPointVisitor::OnWorkerEntered(const WorkerNode* worker_node) {
         // together with the measurement result.
         const auto* data =
             V8DetailedMemoryExecutionContextData::ForWorkerNode(worker_node);
-        if (data->url()) {
+        if (data && data->url()) {
           url = *data->url();
         }
       }
@@ -425,7 +434,7 @@ double GetBrowsingInstanceV8BytesFraction(const ProcessNode* process_node,
   uint64_t bytes_used = 0;
   uint64_t total_bytes_used = 0;
   process_node->VisitFrameNodes(base::BindRepeating(
-      [](base::Optional<int32_t> browsing_instance_id, uint64_t* bytes_used,
+      [](absl::optional<int32_t> browsing_instance_id, uint64_t* bytes_used,
          uint64_t* total_bytes_used, const FrameNode* frame_node) {
         const auto* data =
             V8DetailedMemoryExecutionContextData::ForFrameNode(frame_node);
@@ -438,7 +447,10 @@ double GetBrowsingInstanceV8BytesFraction(const ProcessNode* process_node,
         return true;
       },
       browsing_instance_id, &bytes_used, &total_bytes_used));
-  return static_cast<double>(bytes_used) / total_bytes_used;
+  DCHECK_LE(bytes_used, total_bytes_used);
+  return total_bytes_used == 0
+             ? 1
+             : static_cast<double>(bytes_used) / total_bytes_used;
 }
 
 }  // anonymous namespace
@@ -537,7 +549,7 @@ bool WebMemoryAggregator::VisitWorker(AggregationPointVisitor* ap_visitor,
 // static
 mojom::WebMemoryBreakdownEntry* WebMemoryAggregator::CreateBreakdownEntry(
     AttributionScope scope,
-    base::Optional<std::string> url,
+    absl::optional<std::string> url,
     mojom::WebMemoryMeasurement* measurement) {
   auto breakdown = mojom::WebMemoryBreakdownEntry::New();
   auto attribution = mojom::WebMemoryAttribution::New();

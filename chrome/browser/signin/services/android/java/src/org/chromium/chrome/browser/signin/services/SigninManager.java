@@ -154,28 +154,6 @@ public interface SigninManager {
     void signin(CoreAccountInfo accountInfo, @Nullable SignInCallback callback);
 
     /**
-     * Starts the sign-in flow, enables sync and executes the callback when finished.
-     *
-     * The sign-in flow goes through the following steps:
-     *
-     *   - Wait for AccountTrackerService to be seeded.
-     *   - Wait for policy to be checked for the account.
-     *   - If managed, wait for the policy to be fetched.
-     *   - Complete sign-in with the native IdentityManager.
-     *   - Enable sync.
-     *   - Call the callback if provided.
-     *
-     * @param accessPoint {@link SigninAccessPoint} that initiated the sign-in flow.
-     * @param accountInfo The account to sign in to.
-     * @param callback Optional callback for when the sign-in process is finished.
-     */
-    void signinAndEnableSync(@SigninAccessPoint int accessPoint, CoreAccountInfo accountInfo,
-            @Nullable SignInCallback callback);
-
-    /**
-     * @deprecated use {@link #signinAndEnableSync(int, CoreAccountInfo, SignInCallback)} instead.
-     * TODO(crbug.com/1002056): Remove this version after migrating all callers to CoreAccountInfo.
-     *
      * Starts the sign-in flow, and executes the callback when finished.
      *
      * The sign-in flow goes through the following steps:
@@ -190,21 +168,13 @@ public interface SigninManager {
      * @param account The account to sign in to.
      * @param callback Optional callback for when the sign-in process is finished.
      */
-    @Deprecated
     void signinAndEnableSync(
             @SigninAccessPoint int accessPoint, Account account, @Nullable SignInCallback callback);
 
     /**
-     * Returns true if a sign-in or sign-out operation is in progress. See also
-     * {@link SigninManager#runAfterOperationInProgress}.
-     */
-    @MainThread
-    boolean isOperationInProgress();
-
-    /**
      * Schedules the runnable to be invoked after currently ongoing a sign-in or sign-out operation
      * is finished. If there's no operation is progress, posts the callback to the UI thread right
-     * away. See also {@link SigninManager#isOperationInProgress}.
+     * away.
      */
     @MainThread
     void runAfterOperationInProgress(Runnable runnable);
@@ -232,13 +202,6 @@ public interface SigninManager {
      * Returns the management domain if the signed in account is managed, otherwise returns null.
      */
     String getManagementDomain();
-
-    /**
-     * Reloads accounts from system within IdentityManager.
-     * TODO(crbug.com/1152460): Move the caller of this method to SigninManager and remove this
-     * method.
-     */
-    void reloadAllAccountsFromSystem();
 
     /**
      * Verifies if the account is managed. Callback may be called either

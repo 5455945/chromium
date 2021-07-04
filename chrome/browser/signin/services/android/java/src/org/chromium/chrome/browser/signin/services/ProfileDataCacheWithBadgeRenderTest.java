@@ -4,10 +4,6 @@
 
 package org.chromium.chrome.browser.signin.services;
 
-import static org.mockito.Mockito.mockingDetails;
-import static org.mockito.Mockito.when;
-import static org.mockito.MockitoAnnotations.initMocks;
-
 import android.app.Activity;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
@@ -17,24 +13,31 @@ import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 
-import androidx.annotation.DrawableRes;
 import androidx.test.filters.MediumTest;
 
+import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
+import org.mockito.quality.Strictness;
 
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.util.ChromeRenderTestRule;
+import org.chromium.chrome.test.util.browser.Features;
+import org.chromium.chrome.test.util.browser.Features.DisableFeatures;
 import org.chromium.chrome.test.util.browser.signin.AccountManagerTestRule;
 import org.chromium.components.signin.ProfileDataSource;
+import org.chromium.components.signin.identitymanager.AccountInfoServiceProvider;
+import org.chromium.components.signin.identitymanager.AccountTrackerService;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.signin.test.util.FakeProfileDataSource;
 import org.chromium.content_public.browser.test.util.TestThreadUtils;
@@ -49,20 +52,26 @@ import java.io.IOException;
  */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @Batch(ProfileDataCacheRenderTest.PROFILE_DATA_BATCH_NAME)
+@DisableFeatures({ChromeFeatureList.DEPRECATE_MENAGERIE_API})
 public class ProfileDataCacheWithBadgeRenderTest extends DummyUiActivityTestCase {
+    private static final long NATIVE_IDENTITY_MANAGER = 10002L;
+
     @Rule
     public final ChromeRenderTestRule mRenderTestRule =
             ChromeRenderTestRule.Builder.withPublicCorpus().build();
 
     @Rule
+    public final Features.JUnitProcessor mProcessor = new Features.JUnitProcessor();
+
+    @Rule
     public final AccountManagerTestRule mAccountManagerTestRule =
             new AccountManagerTestRule(new FakeProfileDataSource());
 
-    @Mock
-    private Profile mProfileMock;
+    @Rule
+    public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
     @Mock
-    private IdentityServicesProvider mIdentityServicesProviderMock;
+    private AccountTrackerService mAccountTrackerServiceMock;
 
     @Mock
     private ProfileDataCache.Observer mObserver;
@@ -70,7 +79,7 @@ public class ProfileDataCacheWithBadgeRenderTest extends DummyUiActivityTestCase
     private static final String TEST_ACCOUNT_NAME = "test@example.com";
 
     private final IdentityManager mIdentityManager =
-            new IdentityManager(0 /* nativeIdentityManager */, null /* OAuth2TokenService */);
+            IdentityManager.create(NATIVE_IDENTITY_MANAGER, null /* OAuth2TokenService */);
 
     private FrameLayout mContentView;
     private ImageView mImageView;
@@ -78,11 +87,11 @@ public class ProfileDataCacheWithBadgeRenderTest extends DummyUiActivityTestCase
 
     @Before
     public void setUp() {
-        initMocks(this);
-        Profile.setLastUsedProfileForTesting(mProfileMock);
-        when(mIdentityServicesProviderMock.getIdentityManager(mProfileMock))
-                .thenReturn(mIdentityManager);
-        IdentityServicesProvider.setInstanceForTests(mIdentityServicesProviderMock);
+        AccountInfoServiceProvider.init(mIdentityManager, mAccountTrackerServiceMock);
+        final ProfileDataSource.ProfileData profileData = new ProfileDataSource.ProfileData(
+                TEST_ACCOUNT_NAME, createAvatar(), "Full Name", "Given Name");
+        mAccountManagerTestRule.addAccount(profileData);
+
         TestThreadUtils.runOnUiThreadBlocking(() -> {
             Activity activity = getActivity();
             mContentView = new FrameLayout(activity);
@@ -93,58 +102,37 @@ public class ProfileDataCacheWithBadgeRenderTest extends DummyUiActivityTestCase
         });
     }
 
+    @After
+    public void tearDown() {
+        AccountInfoServiceProvider.resetForTests();
+    }
+
     @Test
     @MediumTest
     @Feature("RenderTest")
-    public void testProfileDataCacheWithChildBadge() throws IOException {
-        setUpProfileDataCache(R.drawable.ic_account_child_20dp);
-
+    public void testProfileDataWithChildBadge() throws IOException {
+        setUpProfileDataCache(true);
         mRenderTestRule.render(mImageView, "profile_data_cache_with_child_badge");
     }
 
     @Test
     @MediumTest
     @Feature("RenderTest")
-    public void testAddBadgeInProfileDataCache() throws IOException {
-        setUpProfileDataCache(0);
-
-        mRenderTestRule.render(mImageView, "profile_data_cache_without_badge");
-        setBadgeInProfileDataCache(R.drawable.ic_account_child_20dp);
-        mRenderTestRule.render(mImageView, "profile_data_cache_with_child_badge");
-    }
-
-    @Test
-    @MediumTest
-    @Feature("RenderTest")
-    public void testRemoveBadgeInProfileDataCache() throws IOException {
-        setUpProfileDataCache(R.drawable.ic_account_child_20dp);
-
-        mRenderTestRule.render(mImageView, "profile_data_cache_with_child_badge");
-        setBadgeInProfileDataCache(0);
+    public void testProfileDataWithoutBadge() throws IOException {
+        setUpProfileDataCache(false);
         mRenderTestRule.render(mImageView, "profile_data_cache_without_badge");
     }
 
-    private void setUpProfileDataCache(@DrawableRes int badgeResId) {
+    private void setUpProfileDataCache(boolean withBadge) {
         TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mProfileDataCache =
-                    ProfileDataCache.createWithDefaultImageSize(getActivity(), badgeResId);
+            mProfileDataCache = withBadge
+                    ? ProfileDataCache.createWithDefaultImageSize(
+                            getActivity(), R.drawable.ic_account_child_20dp)
+                    : ProfileDataCache.createWithoutBadge(getActivity(), R.dimen.user_picture_size);
             // ProfileDataCache only populates the cache when an observer is added.
             mProfileDataCache.addObserver(mObserver);
-
-            ProfileDataSource.ProfileData profileData = new ProfileDataSource.ProfileData(
-                    TEST_ACCOUNT_NAME, createAvatar(), "Full Name", "Given Name");
-            mAccountManagerTestRule.addAccount(profileData);
-            mImageView.setImageDrawable(
-                    mProfileDataCache.getProfileDataOrDefault(TEST_ACCOUNT_NAME).getImage());
         });
-    }
-
-    private void setBadgeInProfileDataCache(@DrawableRes int badgeResId) {
         TestThreadUtils.runOnUiThreadBlocking(() -> {
-            int count = mockingDetails(mObserver).getInvocations().size();
-            mProfileDataCache.updateBadgeConfig(badgeResId);
-            Assert.assertEquals("Observers should be notified after updating badge config",
-                    count + 1, mockingDetails(mObserver).getInvocations().size());
             mImageView.setImageDrawable(
                     mProfileDataCache.getProfileDataOrDefault(TEST_ACCOUNT_NAME).getImage());
         });

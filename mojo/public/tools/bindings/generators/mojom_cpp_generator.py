@@ -294,6 +294,15 @@ class Generator(generator.Generator):
     return any(map(mojom.ContainsHandlesOrInterfaces,
                    self.module.structs + self.module.unions))
 
+  def _ContainsOnlyEnums(self):
+    """Returns whether this module contains only enums.
+
+    When true, the generated headers can skip many includes.
+    """
+    m = self.module
+    return (len(m.enums) > 0 and len(m.structs) == 0 and len(m.interfaces) == 0
+            and len(m.unions) == 0 and len(m.constants) == 0)
+
   def _ReferencesAnyNativeType(self):
     """Returns whether this module uses native types directly or indirectly.
 
@@ -323,28 +332,29 @@ class Generator(generator.Generator):
       all_enums.extend(interface.enums)
 
     return {
-      "all_enums": all_enums,
-      "disallow_interfaces": self.disallow_interfaces,
-      "disallow_native_types": self.disallow_native_types,
-      "enable_kythe_annotations": self.enable_kythe_annotations,
-      "enums": self.module.enums,
-      "export_attribute": self.export_attribute,
-      "export_header": self.export_header,
-      "extra_public_headers": self._GetExtraPublicHeaders(),
-      "extra_traits_headers": self._GetExtraTraitsHeaders(),
-      "for_blink": self.for_blink,
-      "imports": self.module.imports,
-      "interfaces": self.module.interfaces,
-      "kinds": self.module.kinds,
-      "module": self.module,
-      "module_namespace": self.module.namespace,
-      "namespaces_as_array": NamespaceToArray(self.module.namespace),
-      "structs": self.module.structs,
-      "support_lazy_serialization": self.support_lazy_serialization,
-      "unions": self.module.unions,
-      "uses_interfaces": self._ReferencesAnyHandleOrInterfaceType(),
-      "uses_native_types": self._ReferencesAnyNativeType(),
-      "variant": self.variant,
+        "all_enums": all_enums,
+        "contains_only_enums": self._ContainsOnlyEnums(),
+        "disallow_interfaces": self.disallow_interfaces,
+        "disallow_native_types": self.disallow_native_types,
+        "enable_kythe_annotations": self.enable_kythe_annotations,
+        "enums": self.module.enums,
+        "export_attribute": self.export_attribute,
+        "export_header": self.export_header,
+        "extra_public_headers": self._GetExtraPublicHeaders(),
+        "extra_traits_headers": self._GetExtraTraitsHeaders(),
+        "for_blink": self.for_blink,
+        "imports": self.module.imports,
+        "interfaces": self.module.interfaces,
+        "kinds": self.module.kinds,
+        "module": self.module,
+        "module_namespace": self.module.namespace,
+        "namespaces_as_array": NamespaceToArray(self.module.namespace),
+        "structs": self.module.structs,
+        "support_lazy_serialization": self.support_lazy_serialization,
+        "unions": self.module.unions,
+        "uses_interfaces": self._ReferencesAnyHandleOrInterfaceType(),
+        "uses_native_types": self._ReferencesAnyNativeType(),
+        "variant": self.variant,
     }
 
   @staticmethod
@@ -381,6 +391,7 @@ class Generator(generator.Generator):
         "has_callbacks": mojom.HasCallbacks,
         "has_packed_method_ordinals": HasPackedMethodOrdinals,
         "has_sync_methods": mojom.HasSyncMethods,
+        "has_uninterruptable_methods": mojom.HasUninterruptableMethods,
         "method_supports_lazy_serialization":
         self._MethodSupportsLazySerialization,
         "requires_context_for_data_view": RequiresContextForDataView,
@@ -619,7 +630,7 @@ class Generator(generator.Generator):
     def _AddOptional(type_name):
       if ignore_nullable:
         return type_name
-      return "base::Optional<%s>" % type_name
+      return "absl::optional<%s>" % type_name
 
     if self._IsTypemappedKind(kind):
       type_name = self._GetNativeTypeName(kind)
@@ -716,27 +727,40 @@ class Generator(generator.Generator):
 
   def _IsFullHeaderRequiredForImport(self, imported_module):
     """Determines whether a given import module requires a full header include,
-    or if the forward header is sufficient. The full header is required if any
-    imported structs, unions, interfaces, or typemapped types are referenced by
-    the module we're generating bindings for; or if an imported enum is used as
-    a map key."""
+    or if the forward header is sufficient."""
 
-    def requires_full_header(kind):
-      if (mojom.IsUnionKind(kind) or mojom.IsStructKind(kind)
-          or mojom.IsInterfaceKind(kind) or self._IsTypemappedKind(kind)):
-        return True
-      if mojom.IsEnumKind(kind):
-        # Blink bindings need the full header for an enum used as a map key.
-        # This is uncommon enough that we set the requirement generically for
-        # Blink and non-Blink bindings.
-        return any(
-            mojom.IsMapKind(k) and k.key_kind == kind
-            for k in self.module.kinds.values())
-      return False
+    # Type-mapped kinds don't have forward declarations, and nested kinds cannot
+    # be forward declared.
+    # TODO(hans): Use forward declarations for type-mapped kinds.
+    if any(kind.module == imported_module and (
+        self._IsTypemappedKind(kind) or kind.parent_kind != None)
+           for kind in self.module.imported_kinds.values()):
+      return True
 
-    for spec, kind in imported_module.kinds.items():
-      if spec in self.module.imported_kinds and requires_full_header(kind):
-        return True
+    # For most kinds, whether or not a full definition is needed depends on how
+    # the kind is used.
+    for kind in self.module.structs + self.module.unions:
+      for field in kind.fields:
+
+        # Peel array kinds.
+        kind = field.kind
+        while mojom.IsArrayKind(kind):
+          kind = kind.kind
+
+        if kind.module == imported_module:
+          # Need full def for struct/union fields, even when not inlined.
+          if mojom.IsStructKind(kind) or mojom.IsUnionKind(kind):
+            return True
+
+    for kind in self.module.kinds.values():
+      if mojom.IsMapKind(kind):
+        if kind.key_kind.module == imported_module:
+          # Map keys need the full definition.
+          return True
+        if self.for_blink and kind.value_kind.module == imported_module:
+          # For Blink, map values need the full definition for tracing.
+          return True
+
     return False
 
   def _IsReceiverKind(self, kind):

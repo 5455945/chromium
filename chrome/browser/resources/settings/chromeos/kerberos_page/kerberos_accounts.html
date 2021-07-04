@@ -96,8 +96,7 @@
       </template>
       <cr-button id="add-account-button" on-click="onAddAccountClick_"
           disabled="[[!addAccountsAllowed_]]"
-          deep-link-focus-id$="[[Setting.kAddKerberosTicket]]
-              [[Setting.kAddKerberosTicketV2]]">
+          deep-link-focus-id$="[[Setting.kAddKerberosTicketV2]]">
         <div id="add-account-icon"></div>
         $i18n{kerberosAccountsAddAccountLabel}
       </cr-button>
@@ -110,7 +109,7 @@
           <div class="account-icon"
               style="background-image: [[getIconImageSet_(item.pic)]]">
             <img class="error-badge" hidden$="[[item.isSignedIn]]"
-                src="chrome://resources/images/error_badge.svg">
+                src="chrome://os-settings/images/error_badge.svg">
           </div>
 
           <div class="middle two-line no-min-width">
@@ -148,9 +147,7 @@
           <cr-icon-button class="icon-more-vert more-actions"
               title="$i18n{moreActions}"
               on-click="onAccountActionsMenuButtonClick_"
-              deep-link-focus-id$="[[Setting.kRemoveKerberosTicket]]
-                  [[Setting.kRemoveKerberosTicketV2]]
-                  [[Setting.kSetActiveKerberosTicket]]
+              deep-link-focus-id$="[[Setting.kRemoveKerberosTicketV2]]
                   [[Setting.kSetActiveKerberosTicketV2]]">
           </cr-icon-button>
         </div>

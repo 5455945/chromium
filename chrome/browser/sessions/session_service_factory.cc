@@ -6,7 +6,8 @@
 
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/sessions/session_data_deleter.h"
+#include "chrome/browser/sessions/session_data_service.h"
+#include "chrome/browser/sessions/session_data_service_factory.h"
 #include "chrome/browser/sessions/session_service.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 
@@ -16,8 +17,7 @@ SessionService* SessionServiceFactory::GetForProfile(Profile* profile) {
   // For Android we do not store sessions in the SessionService.
   return nullptr;
 #else
-  if (profile->IsOffTheRecord() || profile->IsGuestSession() ||
-      profile->IsEphemeralGuestProfile())
+  if (profile->IsOffTheRecord() || profile->IsGuestSession())
     return nullptr;
 
   return static_cast<SessionService*>(
@@ -52,7 +52,8 @@ SessionService* SessionServiceFactory::GetForProfileForSessionRestore(
 
 // static
 void SessionServiceFactory::ShutdownForProfile(Profile* profile) {
-  DeleteSessionOnlyData(profile);
+  if (SessionDataServiceFactory::GetForProfile(profile))
+    SessionDataServiceFactory::GetForProfile(profile)->StartCleanup();
 
   // We're about to exit, force creation of the session service if it hasn't
   // been created yet. We do this to ensure session state matches the point in
@@ -75,6 +76,8 @@ SessionServiceFactory::SessionServiceFactory()
     : BrowserContextKeyedServiceFactory(
         "SessionService",
         BrowserContextDependencyManager::GetInstance()) {
+  // Ensure that session data is cleared before session restore can happen.
+  DependsOn(SessionDataServiceFactory::GetInstance());
 }
 
 SessionServiceFactory::~SessionServiceFactory() = default;

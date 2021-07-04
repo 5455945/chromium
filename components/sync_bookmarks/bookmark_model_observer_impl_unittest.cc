@@ -138,8 +138,7 @@ class BookmarkModelObserverImplTest : public testing::Test {
         /*sync_id=*/kBookmarkBarId,
         /*server_version=*/0, /*creation_time=*/base::Time::Now(),
         syncer::UniquePosition::InitialPosition(
-            syncer::UniquePosition::RandomSuffix())
-            .ToProto(),
+            syncer::UniquePosition::RandomSuffix()),
         specifics);
     specifics.mutable_bookmark()->set_legacy_canonicalized_title(
         kOtherBookmarksTag);
@@ -148,8 +147,7 @@ class BookmarkModelObserverImplTest : public testing::Test {
         /*sync_id=*/kOtherBookmarksId,
         /*server_version=*/0, /*creation_time=*/base::Time::Now(),
         syncer::UniquePosition::InitialPosition(
-            syncer::UniquePosition::RandomSuffix())
-            .ToProto(),
+            syncer::UniquePosition::RandomSuffix()),
         specifics);
     specifics.mutable_bookmark()->set_legacy_canonicalized_title(
         kMobileBookmarksTag);
@@ -158,8 +156,7 @@ class BookmarkModelObserverImplTest : public testing::Test {
         /*sync_id=*/kMobileBookmarksId,
         /*server_version=*/0, /*creation_time=*/base::Time::Now(),
         syncer::UniquePosition::InitialPosition(
-            syncer::UniquePosition::RandomSuffix())
-            .ToProto(),
+            syncer::UniquePosition::RandomSuffix()),
         specifics);
   }
 
@@ -289,10 +286,9 @@ TEST_F(BookmarkModelObserverImplTest,
   const bookmarks::BookmarkNode* bookmark_bar_node =
       bookmark_model()->bookmark_bar_node();
   const bookmarks::BookmarkNode* folder1_node = bookmark_model()->AddFolder(
-      /*parent=*/bookmark_bar_node, /*index=*/0, base::UTF8ToUTF16("folder1"));
+      /*parent=*/bookmark_bar_node, /*index=*/0, u"folder1");
   const bookmarks::BookmarkNode* bookmark1_node = bookmark_model()->AddURL(
-      /*parent=*/folder1_node, /*index=*/0, base::UTF8ToUTF16("bookmark1"),
-      kUrl);
+      /*parent=*/folder1_node, /*index=*/0, u"bookmark1", kUrl);
 
   // Verify number of entities local changes. Should be the same as number of
   // new nodes.
@@ -384,18 +380,15 @@ TEST_F(BookmarkModelObserverImplTest,
   const bookmarks::BookmarkNode* bookmark_bar_node =
       bookmark_model()->bookmark_bar_node();
   const bookmarks::BookmarkNode* folder1_node = bookmark_model()->AddFolder(
-      /*parent=*/bookmark_bar_node, /*index=*/0, base::UTF8ToUTF16("folder1"));
+      /*parent=*/bookmark_bar_node, /*index=*/0, u"folder1");
   const bookmarks::BookmarkNode* bookmark1_node = bookmark_model()->AddURL(
-      /*parent=*/folder1_node, /*index=*/0, base::UTF8ToUTF16("bookmark1"),
-      kUrl);
+      /*parent=*/folder1_node, /*index=*/0, u"bookmark1", kUrl);
   const bookmarks::BookmarkNode* folder2_node = bookmark_model()->AddFolder(
-      /*parent=*/folder1_node, /*index=*/1, base::UTF8ToUTF16("folder2"));
+      /*parent=*/folder1_node, /*index=*/1, u"folder2");
   const bookmarks::BookmarkNode* bookmark2_node = bookmark_model()->AddURL(
-      /*parent=*/folder2_node, /*index=*/0, base::UTF8ToUTF16("bookmark2"),
-      kUrl);
+      /*parent=*/folder2_node, /*index=*/0, u"bookmark2", kUrl);
   const bookmarks::BookmarkNode* bookmark3_node = bookmark_model()->AddURL(
-      /*parent=*/folder2_node, /*index=*/1, base::UTF8ToUTF16("bookmark3"),
-      kUrl);
+      /*parent=*/folder2_node, /*index=*/1, u"bookmark3", kUrl);
 
   // All bookmarks should be tracked now.
   ASSERT_THAT(bookmark_tracker()->TrackedEntitiesCountForTest(), 8U);
@@ -460,7 +453,7 @@ TEST_F(BookmarkModelObserverImplTest,
   const bookmarks::BookmarkNode* bookmark_bar_node =
       bookmark_model()->bookmark_bar_node();
   const bookmarks::BookmarkNode* folder_node = bookmark_model()->AddFolder(
-      /*parent=*/bookmark_bar_node, /*index=*/0, base::UTF8ToUTF16("folder"));
+      /*parent=*/bookmark_bar_node, /*index=*/0, u"folder");
 
   // Node should be tracked now.
   ASSERT_THAT(bookmark_tracker()->TrackedEntitiesCountForTest(), 4U);
@@ -501,7 +494,7 @@ TEST_F(BookmarkModelObserverImplTest,
   const bookmarks::BookmarkNode* bookmark_bar_node =
       bookmark_model()->bookmark_bar_node();
   const bookmarks::BookmarkNode* folder_node = bookmark_model()->AddFolder(
-      /*parent=*/bookmark_bar_node, /*index=*/0, base::UTF8ToUTF16("folder"));
+      /*parent=*/bookmark_bar_node, /*index=*/0, u"folder");
 
   // Node should be tracked now.
   ASSERT_THAT(bookmark_tracker()->TrackedEntitiesCountForTest(), 4U);
@@ -578,8 +571,7 @@ TEST_F(BookmarkModelObserverImplTest, ShouldNotSyncUnsyncableBookmarks) {
       /*sync_id=*/kBookmarkBarId,
       /*server_version=*/0, /*creation_time=*/base::Time::Now(),
       syncer::UniquePosition::InitialPosition(
-          syncer::UniquePosition::RandomSuffix())
-          .ToProto(),
+          syncer::UniquePosition::RandomSuffix()),
       specifics);
   specifics.mutable_bookmark()->set_legacy_canonicalized_title(
       kOtherBookmarksTag);
@@ -588,8 +580,7 @@ TEST_F(BookmarkModelObserverImplTest, ShouldNotSyncUnsyncableBookmarks) {
       /*sync_id=*/kOtherBookmarksId,
       /*server_version=*/0, /*creation_time=*/base::Time::Now(),
       syncer::UniquePosition::InitialPosition(
-          syncer::UniquePosition::RandomSuffix())
-          .ToProto(),
+          syncer::UniquePosition::RandomSuffix()),
       specifics);
   specifics.mutable_bookmark()->set_legacy_canonicalized_title(
       kMobileBookmarksTag);
@@ -598,8 +589,7 @@ TEST_F(BookmarkModelObserverImplTest, ShouldNotSyncUnsyncableBookmarks) {
       /*sync_id=*/kMobileBookmarksId,
       /*server_version=*/0, /*creation_time=*/base::Time::Now(),
       syncer::UniquePosition::InitialPosition(
-          syncer::UniquePosition::RandomSuffix())
-          .ToProto(),
+          syncer::UniquePosition::RandomSuffix()),
       specifics);
   BookmarkModelObserverImpl observer(
       nudge_for_commit_closure()->Get(),
@@ -612,15 +602,15 @@ TEST_F(BookmarkModelObserverImplTest, ShouldNotSyncUnsyncableBookmarks) {
   // In the TestBookmarkClient, descendants of managed nodes shouldn't be
   // synced.
   const bookmarks::BookmarkNode* unsyncable_node =
-      model->AddURL(/*parent=*/managed_node, /*index=*/0,
-                    base::ASCIIToUTF16("Title"), GURL("http://www.url.com"));
+      model->AddURL(/*parent=*/managed_node, /*index=*/0, u"Title",
+                    GURL("http://www.url.com"));
   // Only permanent folders should be tracked.
   EXPECT_THAT(bookmark_tracker->TrackedEntitiesCountForTest(), 3U);
 
   EXPECT_CALL(*nudge_for_commit_closure(), Run()).Times(0);
   // In the TestBookmarkClient, descendants of managed nodes shouldn't be
   // synced.
-  model->SetTitle(unsyncable_node, base::ASCIIToUTF16("NewTitle"));
+  model->SetTitle(unsyncable_node, u"NewTitle");
   // Only permanent folders should be tracked.
   EXPECT_THAT(bookmark_tracker->TrackedEntitiesCountForTest(), 3U);
 
@@ -651,8 +641,7 @@ TEST_F(BookmarkModelObserverImplTest, ShouldAddChildrenInArbitraryOrder) {
       /*sync_id=*/kBookmarkBarId,
       /*server_version=*/0, /*creation_time=*/base::Time::Now(),
       syncer::UniquePosition::InitialPosition(
-          syncer::UniquePosition::RandomSuffix())
-          .ToProto(),
+          syncer::UniquePosition::RandomSuffix()),
       specifics);
 
   // Build this structure:
@@ -712,8 +701,7 @@ TEST_F(BookmarkModelObserverImplTest, ShouldNotIssueCommitUponFaviconLoad) {
   const bookmarks::BookmarkNode* bookmark_bar_node =
       bookmark_model()->bookmark_bar_node();
   const bookmarks::BookmarkNode* bookmark_node = bookmark_model()->AddURL(
-      /*parent=*/bookmark_bar_node, /*index=*/0, base::UTF8ToUTF16("title"),
-      kBookmarkUrl);
+      /*parent=*/bookmark_bar_node, /*index=*/0, u"title", kBookmarkUrl);
 
   ASSERT_TRUE(
       bookmark_client()->SimulateFaviconLoaded(kBookmarkUrl, kIconUrl, kColor));
@@ -758,8 +746,7 @@ TEST_F(BookmarkModelObserverImplTest, ShouldCommitLocalFaviconChange) {
   const bookmarks::BookmarkNode* bookmark_bar_node =
       bookmark_model()->bookmark_bar_node();
   const bookmarks::BookmarkNode* bookmark_node = bookmark_model()->AddURL(
-      /*parent=*/bookmark_bar_node, /*index=*/0, base::UTF8ToUTF16("title"),
-      kBookmarkUrl);
+      /*parent=*/bookmark_bar_node, /*index=*/0, u"title", kBookmarkUrl);
 
   ASSERT_TRUE(bookmark_node->is_favicon_loading());
   ASSERT_TRUE(bookmark_client()->SimulateFaviconLoaded(
@@ -808,8 +795,7 @@ TEST_F(BookmarkModelObserverImplTest,
   const bookmarks::BookmarkNode* bookmark_bar_node =
       bookmark_model()->bookmark_bar_node();
   const bookmarks::BookmarkNode* bookmark_node = bookmark_model()->AddURL(
-      /*parent=*/bookmark_bar_node, /*index=*/0, base::UTF8ToUTF16("title"),
-      kBookmarkUrl);
+      /*parent=*/bookmark_bar_node, /*index=*/0, u"title", kBookmarkUrl);
 
   sync_pb::EntitySpecifics specifics =
       CreateSpecificsFromBookmarkNode(bookmark_node, bookmark_model(),
@@ -824,8 +810,7 @@ TEST_F(BookmarkModelObserverImplTest,
   const SyncedBookmarkTracker::Entity* entity = bookmark_tracker()->Add(
       bookmark_node, "id", /*server_version=*/1, base::Time::Now(),
       syncer::UniquePosition::InitialPosition(
-          syncer::UniquePosition::RandomSuffix())
-          .ToProto(),
+          syncer::UniquePosition::RandomSuffix()),
       specifics);
   bookmark_tracker()->IncrementSequenceNumber(entity);
 
@@ -846,8 +831,8 @@ TEST_F(BookmarkModelObserverImplTest,
        ShouldAddRestoredBookmarkWhenTombstoneCommitMayHaveStarted) {
   const bookmarks::BookmarkNode* bookmark_bar_node =
       bookmark_model()->bookmark_bar_node();
-  const bookmarks::BookmarkNode* folder = bookmark_model()->AddFolder(
-      bookmark_bar_node, 0, base::UTF8ToUTF16("Title"));
+  const bookmarks::BookmarkNode* folder =
+      bookmark_model()->AddFolder(bookmark_bar_node, 0, u"Title");
   const syncer::ClientTagHash folder_client_tag_hash =
       SyncedBookmarkTracker::GetClientTagHashFromGUID(folder->guid());
   // Check that the bookmark was added by observer.
@@ -899,8 +884,7 @@ TEST_F(BookmarkModelObserverImplTest, ShouldCommitOnDeleteFavicon) {
   const bookmarks::BookmarkNode* bookmark_bar_node =
       bookmark_model()->bookmark_bar_node();
   const bookmarks::BookmarkNode* bookmark_node = bookmark_model()->AddURL(
-      /*parent=*/bookmark_bar_node, /*index=*/0, base::UTF8ToUTF16("title"),
-      kBookmarkUrl);
+      /*parent=*/bookmark_bar_node, /*index=*/0, u"title", kBookmarkUrl);
 
   ASSERT_TRUE(bookmark_node->is_favicon_loading());
   ASSERT_TRUE(bookmark_client()->SimulateFaviconLoaded(kBookmarkUrl, kIconUrl,

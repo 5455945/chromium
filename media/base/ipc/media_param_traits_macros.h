@@ -99,7 +99,7 @@ IPC_ENUM_TRAITS_MAX_VALUE(media::EncryptionScheme,
                           media::EncryptionScheme::kMaxValue)
 
 IPC_ENUM_TRAITS_MAX_VALUE(media::HdcpVersion,
-                          media::HdcpVersion::kHdcpVersionMax)
+                          media::HdcpVersion::kMaxValue)
 
 IPC_ENUM_TRAITS_MAX_VALUE(media::MediaContentType, media::MediaContentType::Max)
 
@@ -127,9 +127,6 @@ IPC_ENUM_TRAITS_MAX_VALUE(media::WatchTimeKey,
 IPC_ENUM_TRAITS_MIN_MAX_VALUE(media::VideoCodecProfile,
                               media::VIDEO_CODEC_PROFILE_MIN,
                               media::VIDEO_CODEC_PROFILE_MAX)
-
-IPC_ENUM_TRAITS_MAX_VALUE(media::VideoDecoderImplementation,
-                          media::VideoDecoderImplementation::kMaxValue)
 
 IPC_ENUM_TRAITS_MAX_VALUE(media::VideoDecoderType,
                           media::VideoDecoderType::kMaxValue)

@@ -35,11 +35,9 @@
 #include "services/network/public/mojom/referrer_policy.mojom-blink.h"
 #include "third_party/blink/public/common/loader/referrer_utils.h"
 #include "third_party/blink/public/platform/web_string.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/weborigin/scheme_registry.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
-#include "third_party/blink/renderer/platform/wtf/assertions.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/parsing_utilities.h"
@@ -92,9 +90,6 @@ Referrer SecurityPolicy::GenerateReferrer(
   KURL referrer_url = KURL(NullURL(), referrer).UrlStrippedForUseAsReferrer();
 
   if (!referrer_url.IsValid())
-    return Referrer(Referrer::NoReferrer(), referrer_policy_no_default);
-
-  if (SecurityOrigin::ShouldUseInnerURL(url))
     return Referrer(Referrer::NoReferrer(), referrer_policy_no_default);
 
   // 5. Let referrerOrigin be the result of stripping referrerSource for use as

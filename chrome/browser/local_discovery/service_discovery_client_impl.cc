@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <memory>
 #include <utility>
 
 #include "base/bind.h"
@@ -9,7 +10,6 @@
 #include "base/location.h"
 #include "base/notreached.h"
 #include "base/single_thread_task_runner.h"
-#include "base/stl_util.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/local_discovery/service_discovery_client_impl.h"
 #include "net/dns/public/dns_protocol.h"
@@ -240,7 +240,7 @@ void ServiceWatcherImpl::AddService(const std::string& service) {
 
   std::unique_ptr<ServiceListeners>& listener = services_[service];
   if (!listener) {
-    listener.reset(new ServiceListeners(service, this, mdns_client_));
+    listener = std::make_unique<ServiceListeners>(service, this, mdns_client_);
     bool success = listener->Start();
     DCHECK(success);
     listener->SetActiveRefresh(actively_refresh_services_);

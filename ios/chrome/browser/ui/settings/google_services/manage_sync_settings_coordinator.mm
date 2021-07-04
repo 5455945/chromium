@@ -17,11 +17,14 @@
 #import "ios/chrome/browser/main/browser.h"
 #import "ios/chrome/browser/signin/authentication_service.h"
 #import "ios/chrome/browser/signin/authentication_service_factory.h"
-#include "ios/chrome/browser/sync/profile_sync_service_factory.h"
 #include "ios/chrome/browser/sync/sync_observer_bridge.h"
+#include "ios/chrome/browser/sync/sync_service_factory.h"
 #include "ios/chrome/browser/sync/sync_setup_service.h"
 #include "ios/chrome/browser/sync/sync_setup_service_factory.h"
+#import "ios/chrome/browser/ui/alert_coordinator/action_sheet_coordinator.h"
 #import "ios/chrome/browser/ui/authentication/authentication_flow.h"
+#import "ios/chrome/browser/ui/authentication/authentication_ui_util.h"
+#import "ios/chrome/browser/ui/authentication/signout_action_sheet_coordinator.h"
 #import "ios/chrome/browser/ui/commands/application_commands.h"
 #import "ios/chrome/browser/ui/commands/browsing_data_commands.h"
 #import "ios/chrome/browser/ui/commands/command_dispatcher.h"
@@ -75,6 +78,8 @@ using signin_metrics::PromoAction;
 // be dismissed and the sync setup flag should not be marked as done. The sync
 // should be kept undecided, not marked as disabled.
 @property(nonatomic, assign) BOOL signinInterrupted;
+// Displays the sign-out options for a syncing user.
+@property(nonatomic, strong) SignoutActionSheetCoordinator* signOutCoordinator;
 
 @end
 
@@ -99,11 +104,11 @@ using signin_metrics::PromoAction;
           userPrefService:self.browser->GetBrowserState()->GetPrefs()];
   self.mediator.syncSetupService = SyncSetupServiceFactory::GetForBrowserState(
       self.browser->GetBrowserState());
-  self.mediator.authService = self.authService;
   self.mediator.commandHandler = self;
   self.mediator.syncErrorHandler = self;
   self.viewController = [[ManageSyncSettingsTableViewController alloc]
       initWithStyle:ChromeTableViewStyle()];
+  self.viewController.title = self.delegate.manageSyncSettingsCoordinatorTitle;
   self.viewController.serviceDelegate = self.mediator;
   self.viewController.presentationDelegate = self;
   self.viewController.modelDelegate = self.mediator;
@@ -140,7 +145,7 @@ using signin_metrics::PromoAction;
 #pragma mark - Properties
 
 - (syncer::SyncService*)syncService {
-  return ProfileSyncServiceFactory::GetForBrowserState(
+  return SyncServiceFactory::GetForBrowserState(
       self.browser->GetBrowserState());
 }
 
@@ -235,6 +240,21 @@ using signin_metrics::PromoAction;
   [handler closeSettingsUIAndOpenURL:command];
 }
 
+- (void)showTurnOffSyncOptionsFromTargetRect:(CGRect)targetRect {
+  self.signOutCoordinator = [[SignoutActionSheetCoordinator alloc]
+      initWithBaseViewController:self.viewController
+                         browser:self.browser
+                            rect:targetRect
+                            view:self.viewController.view];
+  __weak ManageSyncSettingsCoordinator* weakSelf = self;
+  self.signOutCoordinator.completion = ^(BOOL success) {
+    if (success) {
+      [weakSelf closeManageSyncSettings];
+    }
+  };
+  [self.signOutCoordinator start];
+}
+
 #pragma mark - SyncErrorSettingsCommandHandler
 
 - (void)openPassphraseDialog {
@@ -258,15 +278,28 @@ using signin_metrics::PromoAction;
                                            animated:YES];
 }
 
-- (void)openTrustedVaultReauth {
+- (void)openTrustedVaultReauthForFetchKeys {
   id<ApplicationCommands> applicationCommands =
       static_cast<id<ApplicationCommands>>(
           self.browser->GetCommandDispatcher());
   [applicationCommands
-      showTrustedVaultReauthenticationFromViewController:self.viewController
-                                        retrievalTrigger:
-                                            syncer::KeyRetrievalTriggerForUMA::
-                                                kSettings];
+      showTrustedVaultReauthForFetchKeysFromViewController:self.viewController
+                                                   trigger:
+                                                       syncer::
+                                                           KeyRetrievalTriggerForUMA::
+                                                               kSettings];
+}
+
+- (void)openTrustedVaultReauthForDegradedRecoverability {
+  id<ApplicationCommands> applicationCommands =
+      static_cast<id<ApplicationCommands>>(
+          self.browser->GetCommandDispatcher());
+  [applicationCommands
+      showTrustedVaultReauthForDegradedRecoverabilityFromViewController:
+          self.viewController
+                                                                trigger:
+                                                                    syncer::KeyRetrievalTriggerForUMA::
+                                                                        kSettings];
 }
 
 - (void)restartAuthenticationFlow {
@@ -309,7 +342,24 @@ using signin_metrics::PromoAction;
 #pragma mark - SyncObserverModelBridge
 
 - (void)onSyncStateChanged {
-  if (!self.syncService->GetDisableReasons().Empty()) {
+  syncer::SyncService::DisableReasonSet disableReasons =
+      self.syncService->GetDisableReasons();
+  bool isMICeEnabled =
+      base::FeatureList::IsEnabled(signin::kMobileIdentityConsistency);
+  syncer::SyncService::DisableReasonSet userChoiceDisableReason =
+      syncer::SyncService::DisableReasonSet(
+          syncer::SyncService::DISABLE_REASON_USER_CHOICE);
+  // MICe: manage sync settings needs to stay opened if sync is disabled with
+  // DISABLE_REASON_USER_CHOICE. Manage sync settings is the only way for a
+  // user to turn on the sync engine (and remove DISABLE_REASON_USER_CHOICE).
+  // The sync engine turned back on automatically by enabling any datatype.
+  // A pre-MICe signed in user who migrated to MICe, might have sync disabled.
+  bool closeSyncSettingsWithMice =
+      isMICeEnabled &&
+      (!disableReasons.Empty() && disableReasons != userChoiceDisableReason);
+  // Pre-MICe: manage sync settings needs to be closed if the sync is disabled.
+  bool closeSyncSettingsPreMICE = !isMICeEnabled && !disableReasons.Empty();
+  if (closeSyncSettingsWithMice || closeSyncSettingsPreMICE) {
     [self closeManageSyncSettings];
   }
 }

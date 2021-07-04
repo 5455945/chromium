@@ -277,8 +277,8 @@ PipelineStatus PipelineIntegrationTestBase::StartInternal(
   EXPECT_CALL(*this, OnVideoNaturalSizeChange(_)).Times(AnyNumber());
   EXPECT_CALL(*this, OnVideoOpacityChange(_)).WillRepeatedly(Return());
   EXPECT_CALL(*this, OnVideoFrameRateChange(_)).Times(AnyNumber());
-  EXPECT_CALL(*this, OnAudioDecoderChange(_)).Times(AnyNumber());
-  EXPECT_CALL(*this, OnVideoDecoderChange(_)).Times(AnyNumber());
+  EXPECT_CALL(*this, OnAudioPipelineInfoChange(_)).Times(AnyNumber());
+  EXPECT_CALL(*this, OnVideoPipelineInfoChange(_)).Times(AnyNumber());
   CreateDemuxer(std::move(data_source));
 
   if (cdm_context) {
@@ -463,26 +463,26 @@ void PipelineIntegrationTestBase::CreateDemuxer(
 }
 
 std::unique_ptr<Renderer> PipelineIntegrationTestBase::CreateRenderer(
-    base::Optional<RendererFactoryType> factory_type) {
+    absl::optional<RendererType> renderer_type) {
   if (create_renderer_cb_)
-    return create_renderer_cb_.Run(factory_type);
+    return create_renderer_cb_.Run(renderer_type);
 
-  return CreateDefaultRenderer(factory_type);
+  return CreateDefaultRenderer(renderer_type);
 }
 
 std::unique_ptr<Renderer> PipelineIntegrationTestBase::CreateDefaultRenderer(
-    base::Optional<RendererFactoryType> factory_type) {
-  if (factory_type && *factory_type != RendererFactoryType::kDefault) {
-    DVLOG(1) << __func__ << ": factory_type not supported";
+    absl::optional<RendererType> renderer_type) {
+  if (renderer_type && *renderer_type != RendererType::kDefault) {
+    DVLOG(1) << __func__ << ": renderer_type not supported";
     return nullptr;
   }
 
   // Simulate a 60Hz rendering sink.
-  video_sink_.reset(new NullVideoSink(
+  video_sink_ = std::make_unique<NullVideoSink>(
       clockless_playback_, base::TimeDelta::FromSecondsD(1.0 / 60),
       base::BindRepeating(&PipelineIntegrationTestBase::OnVideoFramePaint,
                           base::Unretained(this)),
-      task_environment_.GetMainThreadTaskRunner()));
+      task_environment_.GetMainThreadTaskRunner());
 
   // Disable frame dropping if hashing is enabled.
   std::unique_ptr<VideoRenderer> video_renderer(new VideoRendererImpl(
@@ -627,8 +627,8 @@ PipelineStatus PipelineIntegrationTestBase::StartPipelineWithMediaSource(
   EXPECT_CALL(*this, OnVideoNaturalSizeChange(_)).Times(AnyNumber());
   EXPECT_CALL(*this, OnVideoOpacityChange(_)).Times(AtMost(1));
   EXPECT_CALL(*this, OnVideoFrameRateChange(_)).Times(AnyNumber());
-  EXPECT_CALL(*this, OnAudioDecoderChange(_)).Times(AnyNumber());
-  EXPECT_CALL(*this, OnVideoDecoderChange(_)).Times(AnyNumber());
+  EXPECT_CALL(*this, OnAudioPipelineInfoChange(_)).Times(AnyNumber());
+  EXPECT_CALL(*this, OnVideoPipelineInfoChange(_)).Times(AnyNumber());
 
   base::RunLoop run_loop;
 

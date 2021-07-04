@@ -33,7 +33,6 @@
 
 #include <memory>
 
-#include "base/time/time.h"
 #include "services/network/public/mojom/ip_address_space.mojom-shared.h"
 #include "services/network/public/mojom/referrer_policy.mojom-shared.h"
 #include "third_party/blink/public/common/loader/previews_state.h"
@@ -48,8 +47,6 @@ class WebDocumentSubresourceFilter;
 class WebServiceWorkerNetworkProvider;
 class WebURL;
 class WebURLResponse;
-template <typename T>
-class WebVector;
 
 namespace mojom {
 enum class FetchCacheMode : int32_t;
@@ -93,14 +90,6 @@ class BLINK_EXPORT WebDocumentLoader {
   // there may be an associated unreachableURL.
   virtual bool HasUnreachableURL() const = 0;
   virtual WebURL UnreachableURL() const = 0;
-
-  // Returns all redirects that occurred (both client and server) before
-  // at last committing the current page.  This will contain one entry
-  // for each intermediate URL, and one entry for the last URL (so if
-  // there are no redirects, it will contain exactly the current URL, and
-  // if there is one redirect, it will contain the source and destination
-  // URL).
-  virtual void RedirectChain(WebVector<WebURL>&) const = 0;
 
   // Returns whether the navigation associated with this datasource is a
   // client redirect.
@@ -150,8 +139,9 @@ class BLINK_EXPORT WebDocumentLoader {
   // Returns archive info for the archive.
   virtual WebArchiveInfo GetArchiveInfo() const = 0;
 
-  // Whether this load was started with a user gesture.
-  virtual bool HadUserGesture() const = 0;
+  // Whether the last navigation (cross-document or same-document) that
+  // committed in this WebDocumentLoader had transient activation.
+  virtual bool LastNavigationHadTransientUserActivation() const = 0;
 
   // Returns true when the document is a FTP directory.
   virtual bool IsListingFtpDirectory() const = 0;
@@ -162,4 +152,4 @@ class BLINK_EXPORT WebDocumentLoader {
 
 }  // namespace blink
 
-#endif
+#endif  // THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_DOCUMENT_LOADER_H_

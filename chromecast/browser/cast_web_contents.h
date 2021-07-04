@@ -11,14 +11,14 @@
 #include "base/callback.h"
 #include "base/containers/flat_set.h"
 #include "base/observer_list.h"
-#include "base/optional.h"
 #include "base/process/process.h"
-#include "base/strings/string16.h"
+#include "chromecast/bindings/public/mojom/api_bindings.mojom.h"
 #include "chromecast/common/mojom/feature_manager.mojom.h"
 #include "content/public/common/media_playback_renderer_type.mojom.h"
 #include "mojo/public/cpp/bindings/generic_pending_receiver.h"
 #include "services/service_manager/public/cpp/binder_registry.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/messaging/web_message_port.h"
 #include "ui/gfx/geometry/rect.h"
 #include "url/gurl.h"
@@ -28,13 +28,9 @@ class AssociatedInterfaceProvider;
 }  // namespace blink
 
 namespace content {
+class NavigationHandle;
 class WebContents;
 }  // namespace content
-
-namespace on_load_script_injector {
-template <typename>
-class OnLoadScriptInjectorHost;
-}  // namespace on_load_script_injector
 
 namespace chromecast {
 
@@ -62,10 +58,10 @@ struct RendererFeature {
 // sub-frame errors.
 //
 // We consider the CastWebContents to be in a LOADED state when the content of
-// the main frame is fully loaded and running (all resources fetched, JS is
-// running). Iframes might still be loading in this case, but in general we
-// consider the page to be in a presentable state at this stage, so it is
-// appropriate to display the WebContents to the user.
+// the main frame is fully loaded and running (all resources fetched,
+// redirection finished, JS is running). Iframes might still be loading in this
+// case, but in general we consider the page to be in a presentable state at
+// this stage, so it is appropriate to display the WebContents to the user.
 //
 // During or after the page is loaded, there are multiple error conditions that
 // can occur. The following events will cause the page to enter an ERROR state:
@@ -156,14 +152,18 @@ class CastWebContents {
         service_manager::InterfaceProvider* frame_interfaces,
         blink::AssociatedInterfaceProvider* frame_associated_interfaces) {}
 
+    // Called when the navigation is ready to be committed in the WebContents'
+    // main frame.
+    virtual void MainFrameReadyToCommitNavigation(
+        content::NavigationHandle* navigation_handle) {}
+
     // A navigation has finished in the WebContents' main frame.
     virtual void MainFrameFinishedNavigation() {}
 
     // These methods are calls forwarded from WebContentsObserver.
     virtual void MainFrameResized(const gfx::Rect& bounds) {}
-    virtual void UpdateTitle(const base::string16& title) {}
+    virtual void UpdateTitle(const std::u16string& title) {}
     virtual void UpdateFaviconURL(GURL icon_url) {}
-    virtual void DidFinishBlockedNavigation(GURL url) {}
     virtual void DidFirstVisuallyNonEmptyPaint() {}
 
     // Notifies that a resource for the main frame failed to load.
@@ -232,10 +232,12 @@ class CastWebContents {
     // Whether to provide a URL filter applied to network requests for the
     // activity hosted by this CastWebContents.
     // No filters implies no restrictions.
-    base::Optional<std::vector<std::string>> url_filters = base::nullopt;
+    absl::optional<std::vector<std::string>> url_filters = absl::nullopt;
     // Whether WebRTC peer connections are allowed to use legacy versions of the
     // TLS/DTLS protocols.
     bool webrtc_allow_legacy_tls_protocols = false;
+    // Enable NamedMessagePortConnectorCast JS APIs. This is only meant to be
+    // modified by testing targets.
 
     InitParams();
     InitParams(const InitParams& other);
@@ -275,7 +277,7 @@ class CastWebContents {
   virtual PageState page_state() const = 0;
 
   // Returns the PID of the main frame process if valid.
-  virtual base::Optional<pid_t> GetMainFrameRenderProcessPid() const = 0;
+  virtual absl::optional<pid_t> GetMainFrameRenderProcessPid() const = 0;
 
   // ===========================================================================
   // Initialization and Setup
@@ -287,6 +289,12 @@ class CastWebContents {
 
   virtual void AllowWebAndMojoWebUiBindings() = 0;
   virtual void ClearRenderWidgetHostView() = 0;
+
+  // Associates transparent app properties to a given session ID. This data is
+  // used elsewhere in the browser to gate output stream selection. We expose
+  // this API on CastWebContents for the sake of convenience.
+  virtual void SetAppProperties(const std::string& session_id,
+                                bool is_audio_app) = 0;
 
   // ===========================================================================
   // Page Lifetime
@@ -334,13 +342,20 @@ class CastWebContents {
   // Page Communication
   // ===========================================================================
 
-  // Returns the script injector instance, which injects scripts at page load
-  // time.
-  virtual on_load_script_injector::OnLoadScriptInjectorHost<std::string>*
-  script_injector() = 0;
-
-  // Injects on-load scripts into the WebContents' main frame.
-  virtual void InjectScriptsIntoMainFrame() = 0;
+  // Executes a UTF-8 encoded |script| for every subsequent page load where
+  // the frame's URL has an origin reflected in |origins|. The script is
+  // executed early, prior to the execution of the document's scripts.
+  //
+  // Scripts are identified by a client-managed |id|. Any
+  // script previously injected using the same |id| will be replaced.
+  //
+  // The order in which multiple bindings are executed is the same as the
+  // order in which the bindings were added. If a script is added which
+  // clobbers an existing script of the same |id|, the previous script's
+  // precedence in the injection order will be preserved.
+  // |script| and |id| must be non-empty string.
+  virtual void AddBeforeLoadJavaScript(uint64_t id,
+                                       base::StringPiece script) = 0;
 
   // Posts a message to the frame's onMessage handler.
   //
@@ -362,8 +377,15 @@ class CastWebContents {
   // default-constructed callback. If provided, the callback
   // will be invoked on the UI thread.
   virtual void ExecuteJavaScript(
-      const base::string16& javascript,
+      const std::u16string& javascript,
       base::OnceCallback<void(base::Value)> callback) = 0;
+
+  // Connects and fetches JS API bindings from |api_bindings_remote|.
+  // This method will fetch bindings scripts from |api_bindings_remote|
+  // immediately after the invocation, all of the bindings should be
+  // initialized before this point.
+  virtual void ConnectToBindingsService(
+      mojo::PendingRemote<mojom::ApiBindings> api_bindings_remote) = 0;
 
   // ===========================================================================
   // Utility Methods

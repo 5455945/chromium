@@ -77,36 +77,27 @@ Polymer({
 
   /** @override */
   ready() {
-    var url = new URL(document.URL);
-    var dialogHeight = url.searchParams.get('dialog-height');
-    var dialogWidth = url.searchParams.get('dialog-width');
-    if (dialogHeight && dialogWidth) {
-      // Below code is also used to set the dialog size for display manager and
-      // in-session assistant onboarding flow. Please make sure code changes are
-      // applied to all places.
-      document.documentElement.style.setProperty(
-          '--oobe-oobe-dialog-height-base', dialogHeight + 'px');
-      document.documentElement.style.setProperty(
-          '--oobe-oobe-dialog-width-base', dialogWidth + 'px');
-      if (parseInt(dialogWidth, 10) > parseInt(dialogHeight, 10)) {
-        document.documentElement.setAttribute('orientation', 'horizontal');
-      } else {
-        document.documentElement.setAttribute('orientation', 'vertical');
-      }
-    }
-
     if (loadTimeData.valueExists('newLayoutEnabled') &&
         loadTimeData.getBoolean('newLayoutEnabled')) {
       document.documentElement.setAttribute('new-layout', '');
     } else {
       document.documentElement.removeAttribute('new-layout');
     }
+    this.onWindowSizeUpdated_();
   },
 
   /** @override */
   attached() {
     this.delegate_ = new PostOobeDelegate();
     this.$$('multidevice-setup').initializeSetupFlow();
+    window.addEventListener('orientationchange', this.onWindowSizeUpdated_);
+    window.addEventListener('resize', this.onWindowSizeUpdated_);
+  },
+
+  /** @override */
+  detached() {
+    window.removeEventListener('orientationchange', this.onWindowSizeUpdated_);
+    window.removeEventListener('resize', this.onWindowSizeUpdated_);
   },
 
   /** @private */
@@ -145,5 +136,47 @@ Polymer({
       'MultiDevice.PostOOBESetupFlow.PageShown', pageNameValue,
       PageNameValue.MAX_VALUE
     ]);
+  },
+
+  /**
+   * Called during initialization, when the window is resized, or the window's
+   * orientation is updated.
+   */
+  onWindowSizeUpdated_() {
+    // Below code is also used to set the dialog size for display manager and
+    // in-session assistant onboarding flow. Please make sure code changes are
+    // applied to all places.
+    document.documentElement.style.setProperty(
+        '--oobe-oobe-dialog-height-base', window.innerHeight + 'px');
+    document.documentElement.style.setProperty(
+        '--oobe-oobe-dialog-width-base', window.innerWidth + 'px');
+    if (loadTimeData.valueExists('newLayoutEnabled') &&
+        loadTimeData.getBoolean('newLayoutEnabled')) {
+      if (window.innerWidth > window.innerHeight) {
+        document.documentElement.setAttribute('orientation', 'horizontal');
+      } else {
+        document.documentElement.setAttribute('orientation', 'vertical');
+      }
+    }
+  },
+
+  /**
+   * Wraps i18n to return early if text is not yet defined. This prevents
+   * console errors since some of the strings are initially undefined. Variables
+   * like |cancelButtonTextId_| are initially undefined because they get piped
+   * by a 2-way data binding from the embedded multidevice-setup component. This
+   * does not affect the ui since these variables get defined shortly after the
+   * page is initialized. We purposely don't set some of these properties if the
+   * button is not expected to be shown in which case they will remain
+   * undefined.
+   * @param {string|undefined} text
+   * @return {string}
+   */
+  getButtonText_(text) {
+    if (!text) {
+      return '';
+    }
+
+    return this.i18n(text);
   }
 });

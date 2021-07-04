@@ -16,7 +16,6 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/view_ids.h"
-#include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/blocked_content/popup_blocker_tab_helper.h"
 #include "components/embedder_support/switches.h"
@@ -305,7 +304,8 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, MAYBE_BookmarkAppGetsNormalProcess) {
     base::ScopedAllowBlockingForTesting allow_blocking;
     extension = extensions::file_util::LoadExtension(
         test_data_dir_.AppendASCII("app_process"),
-        extensions::Manifest::UNPACKED, Extension::FROM_BOOKMARK, &error);
+        extensions::mojom::ManifestLocation::kUnpacked,
+        Extension::FROM_BOOKMARK, &error);
   }
   service->OnExtensionInstalled(extension.get(),
                                 syncer::StringOrdinal::CreateInitialOrdinal(),

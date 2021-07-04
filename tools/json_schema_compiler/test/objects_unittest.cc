@@ -19,11 +19,11 @@ namespace objects_movable = test::api::objects_movable;
 
 TEST(JsonSchemaCompilerObjectsTest, ObjectParamParamsCreate) {
   {
-    auto strings = std::make_unique<base::ListValue>();
-    strings->AppendString("one");
-    strings->AppendString("two");
+    base::ListValue strings;
+    strings.AppendString("one");
+    strings.AppendString("two");
     auto info_value = std::make_unique<base::DictionaryValue>();
-    info_value->Set("strings", std::move(strings));
+    info_value->SetKey("strings", std::move(strings));
     info_value->SetInteger("integer", 5);
     info_value->SetBoolean("boolean", true);
 
@@ -39,11 +39,11 @@ TEST(JsonSchemaCompilerObjectsTest, ObjectParamParamsCreate) {
     EXPECT_TRUE(params->info.boolean);
   }
   {
-    auto strings = std::make_unique<base::ListValue>();
-    strings->AppendString("one");
-    strings->AppendString("two");
+    base::ListValue strings;
+    strings.AppendString("one");
+    strings.AppendString("two");
     auto info_value = std::make_unique<base::DictionaryValue>();
-    info_value->Set("strings", std::move(strings));
+    info_value->SetKey("strings", std::move(strings));
     info_value->SetInteger("integer", 5);
 
     auto params_value = std::make_unique<base::ListValue>();
@@ -57,8 +57,7 @@ TEST(JsonSchemaCompilerObjectsTest, ObjectParamParamsCreate) {
 TEST(JsonSchemaCompilerObjectsTest, ReturnsObjectResultCreate) {
   test::api::objects::ReturnsObject::Results::Info info;
   info.state = test::api::objects::FIRST_STATE_FOO;
-  base::Value results = base::Value::FromUniquePtrValue(
-      test::api::objects::ReturnsObject::Results::Create(info));
+  base::Value results(test::api::objects::ReturnsObject::Results::Create(info));
   ASSERT_TRUE(results.is_list());
   ASSERT_EQ(1u, results.GetList().size());
 
@@ -70,8 +69,7 @@ TEST(JsonSchemaCompilerObjectsTest, ReturnsObjectResultCreate) {
 TEST(JsonSchemaCompilerObjectsTest, OnObjectFiredCreate) {
   test::api::objects::OnObjectFired::SomeObject object;
   object.state = test::api::objects::FIRST_STATE_BAR;
-  base::Value results = base::Value::FromUniquePtrValue(
-      test::api::objects::OnObjectFired::Create(object));
+  base::Value results(test::api::objects::OnObjectFired::Create(object));
   ASSERT_TRUE(results.is_list());
   ASSERT_EQ(1u, results.GetList().size());
 
@@ -137,7 +135,7 @@ TEST(JsonSchemaCompilerMovableObjectsTest, MovableObjectsTest) {
   }
   EXPECT_TRUE(parent2.pods.empty());
   EXPECT_TRUE(parent2.strs.empty());
-  EXPECT_TRUE(parent2.blob.additional_properties.empty());
+  EXPECT_TRUE(parent2.blob.additional_properties.DictEmpty());
   EXPECT_FALSE(parent2.choice.as_string.get());
   ASSERT_TRUE(parent2.choice.as_movable_pod.get());
   EXPECT_EQ(objects_movable::FOO_BAZ, parent2.choice.as_movable_pod->foo);

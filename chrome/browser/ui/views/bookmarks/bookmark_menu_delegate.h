@@ -12,6 +12,7 @@
 #include "base/compiler_specific.h"
 #include "base/macros.h"
 #include "chrome/browser/ui/bookmarks/bookmark_stats.h"
+#include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_context_menu.h"
 #include "components/bookmarks/browser/base_bookmark_model_observer.h"
 #include "components/bookmarks/browser/bookmark_node_data.h"
@@ -89,7 +90,7 @@ class BookmarkMenuDelegate : public bookmarks::BaseBookmarkModelObserver,
 
   // Returns the context menu, or NULL if the context menu isn't showing.
   views::MenuItemView* context_menu() {
-    return context_menu_.get() ? context_menu_->menu() : NULL;
+    return context_menu_ ? context_menu_->menu() : nullptr;
   }
 
   views::Widget* parent() { return parent_; }
@@ -100,7 +101,7 @@ class BookmarkMenuDelegate : public bookmarks::BaseBookmarkModelObserver,
   bool is_mutating_model() const { return is_mutating_model_; }
 
   // MenuDelegate like methods (see class description for details).
-  base::string16 GetTooltipText(int id, const gfx::Point& p) const;
+  std::u16string GetTooltipText(int id, const gfx::Point& p) const;
   bool IsTriggerableEvent(views::MenuItemView* menu,
                           const ui::Event& e);
   void ExecuteCommand(int id, int mouse_event_flags);
@@ -181,7 +182,12 @@ class BookmarkMenuDelegate : public bookmarks::BaseBookmarkModelObserver,
 
   // Escapes ampersands within |title| if necessary, depending on
   // |menu_uses_mnemonics_|.
-  base::string16 MaybeEscapeLabel(const base::string16& title);
+  std::u16string MaybeEscapeLabel(const std::u16string& title);
+
+  // Returns |next_menu_id_| and increments it by 2. This allows for 'sharing'
+  // command ids with the recent tabs menu, which also uses every other int as
+  // an id.
+  int GetAndIncrementNextMenuID();
 
   Browser* const browser_;
   Profile* profile_;

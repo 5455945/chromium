@@ -4,11 +4,14 @@
 
 #include "chrome/credential_provider/extension/app_inventory_manager.h"
 
+#include <memory>
+
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/credential_provider/common/gcp_strings.h"
 #include "chrome/credential_provider/gaiacp/gcp_utils.h"
 #include "chrome/credential_provider/gaiacp/gcpw_strings.h"
 #include "chrome/credential_provider/gaiacp/logging.h"
+#include "chrome/credential_provider/gaiacp/mdm_utils.h"
 #include "chrome/credential_provider/gaiacp/os_user_manager.h"
 #include "chrome/credential_provider/gaiacp/reg_utils.h"
 #include "chrome/credential_provider/gaiacp/win_http_url_fetcher.h"
@@ -32,6 +35,7 @@ const char kObfuscatedGaiaId[] = "obfuscated_gaia_id";
 const char kAppDisplayName[] = "name";
 const char kAppDisplayVersion[] = "version";
 const char kAppPublisher[] = "publisher";
+const char kAppType[] = "app_type";
 
 const wchar_t kInstalledWin32AppsRegistryPath[] =
     L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
@@ -121,7 +125,7 @@ AppInventoryManager::AppInventoryManager(
     : upload_app_inventory_request_timeout_(
           upload_app_inventory_request_timeout) {
   g_upload_app_inventory_from_esa_enabled =
-      GetGlobalFlagOrDefault(kUploadAppInventoryFromEsaEnabledRegKey, 0) == 1;
+      GetGlobalFlagOrDefault(kUploadAppInventoryFromEsaEnabledRegKey, 1) == 1;
 }
 
 AppInventoryManager::~AppInventoryManager() = default;
@@ -140,6 +144,12 @@ bool AppInventoryManager::UploadAppInventoryFromEsaFeatureEnabled() const {
 // |resource_id| for identifying the device entry in GEM database.
 HRESULT AppInventoryManager::UploadAppInventory(
     const extension::UserDeviceContext& context) {
+  if (!credential_provider::IsEnrolledWithGoogleMdm()) {
+    LOGFN(INFO)
+        << "Not uploading app data as device is not enrolled with Google MDM";
+    return S_OK;
+  }
+
   std::wstring obfuscated_user_id;
   HRESULT status = GetIdFromSid(context.user_sid.c_str(), &obfuscated_user_id);
   if (FAILED(status)) {
@@ -162,7 +172,7 @@ HRESULT AppInventoryManager::UploadAppInventory(
     }
   }
 
-  request_dict_.reset(new base::Value(base::Value::Type::DICTIONARY));
+  request_dict_ = std::make_unique<base::Value>(base::Value::Type::DICTIONARY);
   request_dict_->SetStringKey(kUploadAppInventoryRequestUserSidParameterName,
                               base::WideToUTF8(context.user_sid));
   request_dict_->SetStringKey(kDmToken, base::WideToUTF8(dm_token_value));
@@ -186,7 +196,7 @@ HRESULT AppInventoryManager::UploadAppInventory(
   request_dict_->SetKey(kUploadAppInventoryRequestWin32AppsParameterName,
                         GetInstalledWin32Apps());
 
-  base::Optional<base::Value> request_result;
+  absl::optional<base::Value> request_result;
   hr = WinHttpUrlFetcher::BuildRequestAndFetchResultFromHttpService(
       AppInventoryManager::Get()->GetGemServiceUploadAppInventoryUrl(),
       /* access_token= */ std::string(), {}, *request_dict_,
@@ -222,7 +232,8 @@ base::Value AppInventoryManager::GetInstalledWin32Apps() {
   base::Value app_info_value_list(base::Value::Type::LIST);
   for (std::wstring regPath : app_path_list) {
     std::unique_ptr<base::Value> request_dict_;
-    request_dict_.reset(new base::Value(base::Value::Type::DICTIONARY));
+    request_dict_ =
+        std::make_unique<base::Value>(base::Value::Type::DICTIONARY);
 
     wchar_t display_name[256];
     ULONG display_length = base::size(display_name);
@@ -250,6 +261,9 @@ base::Value AppInventoryManager::GetInstalledWin32Apps() {
       if (hr == S_OK) {
         request_dict_->SetStringKey(kAppPublisher, base::WideToUTF8(publisher));
       }
+
+      // App_type value 1 refers to WIN_32 applications.
+      request_dict_->SetIntKey(kAppType, 1);
 
       app_info_value_list.Append(
           base::Value::FromUniquePtrValue(std::move(request_dict_)));

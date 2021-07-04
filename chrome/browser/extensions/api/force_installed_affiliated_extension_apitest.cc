@@ -6,11 +6,10 @@
 
 #include "base/files/file_path.h"
 #include "base/json/json_writer.h"
-#include "base/optional.h"
 #include "base/path_service.h"
+#include "chrome/browser/ash/policy/affiliation/affiliation_test_helper.h"
+#include "chrome/browser/ash/policy/core/browser_policy_connector_chromeos.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chromeos/policy/affiliation_test_helper.h"
-#include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
@@ -19,6 +18,7 @@
 #include "components/prefs/pref_service.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/test/result_catcher.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace {
 

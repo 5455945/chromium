@@ -24,6 +24,7 @@
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "net/http/http_util.h"
+#include "services/network/public/mojom/network_context.mojom.h"
 #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
 #include "third_party/blink/public/mojom/webpreferences/web_preferences.mojom.h"
 
@@ -42,8 +43,6 @@ void PopulateFixedWebPreferences(WebPreferences* web_prefs) {
   web_prefs->should_clear_document_background = false;
   web_prefs->viewport_meta_enabled = true;
   web_prefs->picture_in_picture_enabled = false;
-  web_prefs->disable_features_depending_on_viz =
-      !::features::IsUsingVizForWebView();
   web_prefs->disable_accelerated_small_canvases = true;
   // WebView has historically not adjusted font scale for text autosizing.
   web_prefs->device_scale_adjustment = 1.0;
@@ -261,7 +260,7 @@ void AwSettings::UpdateRendererPreferencesLocked(
         AwBrowserContext::FromWebContents(web_contents());
     // AndroidWebview does not use per-site storage partitions.
     content::StoragePartition* storage_partition =
-        content::BrowserContext::GetDefaultStoragePartition(aw_browser_context);
+        aw_browser_context->GetDefaultStoragePartition();
     std::string expanded_language_list =
         net::HttpUtil::ExpandLanguageList(prefs->accept_languages);
     storage_partition->GetNetworkContext()->SetAcceptLanguage(

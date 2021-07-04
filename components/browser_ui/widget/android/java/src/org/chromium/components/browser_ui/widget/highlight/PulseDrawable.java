@@ -19,6 +19,7 @@ import android.view.animation.Interpolator;
 
 import androidx.annotation.ColorInt;
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.annotation.Px;
 import androidx.core.view.animation.PathInterpolatorCompat;
 
@@ -135,11 +136,13 @@ public class PulseDrawable extends Drawable implements Animatable {
      * @param context The {@link Context} under which the drawable is created.
      * @param cornerRadius The corner radius in pixels of the highlight rectangle, 0 may be passed
      *         if the rectangle should not be rounded.
+     * @param highlightExtension How far in pixels the highlight should be extended past the bounds
+     *         of the view. 0 should be passed if there should be no extension.
      * @param pulseEndAuthority The {@link PulseEndAuthority} associated with this drawable.
      * @return A new {@link PulseDrawable} instance.
      */
-    public static PulseDrawable createRoundedRectangle(
-            Context context, @Px int cornerRadius, PulseEndAuthority pulseEndAuthority) {
+    public static PulseDrawable createRoundedRectangle(Context context, @Px int cornerRadius,
+            @Px int highlightExtension, PulseEndAuthority pulseEndAuthority) {
         Painter painter = new Painter() {
             @Override
             public void modifyDrawable(PulseDrawable drawable, float interpolation) {
@@ -149,8 +152,13 @@ public class PulseDrawable extends Drawable implements Animatable {
             @Override
             public void draw(
                     PulseDrawable drawable, Paint paint, Canvas canvas, float interpolation) {
-                canvas.drawRoundRect(
-                        new RectF(drawable.getBounds()), cornerRadius, cornerRadius, paint);
+                Rect bounds = drawable.getBounds();
+                if (highlightExtension != 0) {
+                    bounds = new Rect(bounds.left - highlightExtension,
+                            bounds.top - highlightExtension, bounds.right + highlightExtension,
+                            bounds.bottom + highlightExtension);
+                }
+                canvas.drawRoundRect(new RectF(bounds), cornerRadius, cornerRadius, paint);
             }
         };
 
@@ -164,10 +172,14 @@ public class PulseDrawable extends Drawable implements Animatable {
      * {@link PulseEndAuthority}).
      * @param context The {@link Context} under which the drawable is created.
      * @param cornerRadius The corner radius in pixels of the highlight rectangle.
+     * @param highlightExtension How far in pixels the highlight should be extended past the bounds
+     *         of the view. 0 should be passed if there should be no extension.
      * @return A new {@link PulseDrawable} instance.
      */
-    public static PulseDrawable createRoundedRectangle(Context context, @Px int cornerRadius) {
-        return createRoundedRectangle(context, cornerRadius, new EndlessPulser());
+    public static PulseDrawable createRoundedRectangle(
+            Context context, @Px int cornerRadius, @Px int highlightExtension) {
+        return createRoundedRectangle(
+                context, cornerRadius, highlightExtension, new EndlessPulser());
     }
 
     /**
@@ -178,16 +190,18 @@ public class PulseDrawable extends Drawable implements Animatable {
      * @return A new {@link PulseDrawable} instance.
      */
     public static PulseDrawable createRectangle(Context context) {
-        return createRoundedRectangle(context, 0);
+        return createRoundedRectangle(context, 0, /*highlightExtension=*/0);
     }
 
     /**
      * Creates a {@link PulseDrawable} that will draw a pulsing circle inside the bounds.
      * @param context The {@link Context} under which the drawable is created.
-     * @param pulseEndAuthority The {@link PulseEndAuthority} associated with this drawable.
+     * @param pulseEndAuthority The {@link PulseEndAuthority} associated with this drawable. If
+     *         null, the default implementation is used.
      * @return A new {@link PulseDrawable} instance.
      */
-    public static PulseDrawable createCircle(Context context, PulseEndAuthority pulseEndAuthority) {
+    public static PulseDrawable createCircle(
+            Context context, @Nullable PulseEndAuthority pulseEndAuthority) {
         final int startingPulseRadiusPx =
                 context.getResources().getDimensionPixelSize(R.dimen.iph_pulse_baseline_radius);
 
@@ -202,7 +216,7 @@ public class PulseDrawable extends Drawable implements Animatable {
                 return Math.min(
                         startingPulseRadiusPx, Math.min(bounds.width(), bounds.height()) / 2.f);
             }
-        }, pulseEndAuthority);
+        }, pulseEndAuthority != null ? pulseEndAuthority : new EndlessPulser());
     }
 
     /**
@@ -220,14 +234,18 @@ public class PulseDrawable extends Drawable implements Animatable {
      * Creates a {@link PulseDrawable} that will draw a pulsing circle as large as possible inside
      * the bounds.
      * @param context The {@link Context} under which the drawable is created.
+     * @param boundsfn Defines size of the pulsing circle.
+     * @param pulseEndAuthority The {@link PulseEndAuthority} associated with this drawable. If
+     *         null, the default implementation is used.
      * @return A new {@link PulseDrawable} instance.
      */
     public static PulseDrawable createCustomCircle(
-            Context context, Bounds boundsfn, PulseEndAuthority pulseEndAuthority) {
+            Context context, Bounds boundsfn, @Nullable PulseEndAuthority pulseEndAuthority) {
         Painter painter = createCirclePainter(boundsfn);
 
         PulseDrawable drawable = new PulseDrawable(context,
-                PathInterpolatorCompat.create(.8f, 0.f, .6f, 1.f), painter, pulseEndAuthority);
+                PathInterpolatorCompat.create(.8f, 0.f, .6f, 1.f), painter,
+                pulseEndAuthority != null ? pulseEndAuthority : new EndlessPulser());
         drawable.setAlpha(76);
         return drawable;
     }

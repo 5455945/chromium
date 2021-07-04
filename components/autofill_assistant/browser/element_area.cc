@@ -12,8 +12,8 @@
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
-#include "components/autofill_assistant/browser/actions/action_delegate_util.h"
 #include "components/autofill_assistant/browser/script_executor_delegate.h"
+#include "components/autofill_assistant/browser/web/element_action_util.h"
 #include "components/autofill_assistant/browser/web/web_controller.h"
 
 namespace autofill_assistant {
@@ -132,7 +132,7 @@ void ElementArea::Update() {
       delegate_->GetWebController()->FindElement(
           position.selector, /* strict= */ true,
           base::BindOnce(
-              &action_delegate_util::TakeElementAndGetProperty<RectF>,
+              &element_action_util::TakeElementAndGetProperty<RectF>,
               base::BindOnce(&WebController::GetElementRect,
                              delegate_->GetWebController()->GetWeakPtr()),
               base::BindOnce(&ElementArea::OnGetElementRect,
@@ -253,7 +253,7 @@ void ElementArea::ReportUpdate() {
   if (rectangles_.empty()) {
     // Reporting of visual viewport is best effort when reporting empty
     // rectangles. It might also be empty.
-    on_update_.Run(visual_viewport_, {}, {});
+    on_update_.Run({}, {});
     return;
   }
 
@@ -296,7 +296,7 @@ void ElementArea::ReportUpdate() {
 
   last_visual_viewport_ = visual_viewport_;
   last_rectangles_ = rectangles_;
-  on_update_.Run(visual_viewport_, touchable_area, restricted_area);
+  on_update_.Run(touchable_area, restricted_area);
 }
 
 }  // namespace autofill_assistant

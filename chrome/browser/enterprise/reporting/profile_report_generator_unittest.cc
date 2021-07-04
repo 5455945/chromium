@@ -4,13 +4,15 @@
 
 #include "components/enterprise/browser/reporting/profile_report_generator.h"
 
+#include <string>
+
 #include "base/json/json_reader.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/util/values/values_util.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/enterprise/reporting/reporting_delegate_factory_desktop.h"
+#include "chrome/browser/profiles/profile_attributes_init_params.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/common/extensions/extension_constants.h"
@@ -25,6 +27,8 @@
 #include "extensions/browser/pref_names.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+using ::testing::NiceMock;
+
 namespace em = enterprise_management;
 
 namespace enterprise_reporting {
@@ -33,7 +37,9 @@ namespace {
 const int kMaxNumberOfExtensionRequest = 1000;
 
 constexpr char kProfile[] = "Profile";
+constexpr char16_t kProfile16[] = u"Profile";
 constexpr char kIdleProfile[] = "IdleProfile";
+constexpr char16_t kIdleProfile16[] = u"IdleProfile";
 constexpr char kExtensionId[] = "abcdefghijklmnopabcdefghijklmnop";
 constexpr char kExtensionId2[] = "abcdefghijklmnopabcdefghijklmnpo";
 constexpr int kFakeTime = 123456;
@@ -57,6 +63,9 @@ class ProfileReportGeneratorTest : public ::testing::Test {
   ProfileReportGeneratorTest()
       : generator_(&reporting_delegate_factory_),
         profile_manager_(TestingBrowserProcess::GetGlobal()) {}
+  ProfileReportGeneratorTest(const ProfileReportGeneratorTest&) = delete;
+  ProfileReportGeneratorTest& operator=(const ProfileReportGeneratorTest&) =
+      delete;
   ~ProfileReportGeneratorTest() override = default;
 
   void SetUp() override {
@@ -65,14 +74,14 @@ class ProfileReportGeneratorTest : public ::testing::Test {
     InitPolicyMap();
 
     profile_ = profile_manager_.CreateTestingProfile(
-        kProfile, {}, base::UTF8ToUTF16(kProfile), 0, {},
+        kProfile, {}, kProfile16, 0, {},
         IdentityTestEnvironmentProfileAdaptor::
             GetIdentityTestEnvironmentFactories(),
-        base::nullopt, std::move(policy_service_));
+        absl::nullopt, std::move(policy_service_));
   }
 
   void InitMockPolicyService() {
-    policy_service_ = std::make_unique<policy::MockPolicyService>();
+    policy_service_ = std::make_unique<NiceMock<policy::MockPolicyService>>();
 
     ON_CALL(*policy_service_.get(),
             GetPolicies(::testing::Eq(policy::PolicyNamespace(
@@ -123,7 +132,7 @@ class ProfileReportGeneratorTest : public ::testing::Test {
   }
 
   void SetExtensionSettings(const std::string& settings_string) {
-    base::Optional<base::Value> settings =
+    absl::optional<base::Value> settings =
         base::JSONReader::Read(settings_string);
     ASSERT_TRUE(settings.has_value());
     profile()->GetTestingPrefService()->SetManagedPref(
@@ -142,18 +151,18 @@ class ProfileReportGeneratorTest : public ::testing::Test {
   TestingProfileManager profile_manager_;
   TestingProfile* profile_;
 
-  std::unique_ptr<policy::MockPolicyService> policy_service_;
+  std::unique_ptr<NiceMock<policy::MockPolicyService>> policy_service_;
   policy::PolicyMap policy_map_;
-
-  DISALLOW_COPY_AND_ASSIGN(ProfileReportGeneratorTest);
 };
 
 TEST_F(ProfileReportGeneratorTest, ProfileNotActivated) {
   const base::FilePath profile_path =
       profile_manager()->profiles_dir().AppendASCII(kIdleProfile);
+  ProfileAttributesInitParams params;
+  params.profile_path = profile_path;
+  params.profile_name = kIdleProfile16;
   profile_manager()->profile_attributes_storage()->AddProfile(
-      profile_path, base::ASCIIToUTF16(kIdleProfile), std::string(),
-      base::string16(), false, 0, std::string(), EmptyAccountId());
+      std::move(params));
   std::unique_ptr<em::ChromeUserProfileInfo> response =
       generator_.MaybeGenerate(profile_path, kIdleProfile, ReportType::kFull);
   ASSERT_FALSE(response.get());
@@ -168,7 +177,7 @@ TEST_F(ProfileReportGeneratorTest, SignedInProfile) {
   IdentityTestEnvironmentProfileAdaptor identity_test_env_adaptor(profile());
   auto expected_info =
       identity_test_env_adaptor.identity_test_env()->SetPrimaryAccount(
-          "test@mail.com");
+          "test@mail.com", signin::ConsentLevel::kSync);
   auto report = GenerateReport();
   EXPECT_TRUE(report->has_chrome_signed_in_user());
   EXPECT_EQ(expected_info.email, report->chrome_signed_in_user().email());
@@ -276,7 +285,7 @@ TEST_F(ProfileReportGeneratorTest, ExtensionRequestOnlyReport) {
   IdentityTestEnvironmentProfileAdaptor identity_test_env_adaptor(profile());
   auto expected_info =
       identity_test_env_adaptor.identity_test_env()->SetPrimaryAccount(
-          "test@mail.com");
+          "test@mail.com", signin::ConsentLevel::kSync);
 
   auto report = generator_.MaybeGenerate(profile()->GetPath(),
                                          profile()->GetProfileUserName(),
@@ -311,7 +320,7 @@ TEST_F(ProfileReportGeneratorTest, ExtensionRequestOnlyReportWithoutPolicy) {
   IdentityTestEnvironmentProfileAdaptor identity_test_env_adaptor(profile());
   auto expected_info =
       identity_test_env_adaptor.identity_test_env()->SetPrimaryAccount(
-          "test@mail.com");
+          "test@mail.com", signin::ConsentLevel::kSync);
 
   auto report = generator_.MaybeGenerate(profile()->GetPath(),
                                          profile()->GetProfileUserName(),
@@ -331,7 +340,7 @@ TEST_F(ProfileReportGeneratorTest,
   IdentityTestEnvironmentProfileAdaptor identity_test_env_adaptor(profile());
   auto expected_info =
       identity_test_env_adaptor.identity_test_env()->SetPrimaryAccount(
-          "test@mail.com");
+          "test@mail.com", signin::ConsentLevel::kSync);
 
   auto report = generator_.MaybeGenerate(profile()->GetPath(),
                                          profile()->GetProfileUserName(),

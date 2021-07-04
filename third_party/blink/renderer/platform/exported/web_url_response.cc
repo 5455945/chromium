@@ -46,7 +46,6 @@
 #include "third_party/blink/renderer/platform/loader/fetch/resource_load_timing.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_response.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
-#include "third_party/blink/renderer/platform/wtf/assertions.h"
 
 namespace blink {
 
@@ -306,12 +305,12 @@ void WebURLResponse::SetSecurityDetails(
       sct_list);
 }
 
-base::Optional<WebURLResponse::WebSecurityDetails>
+absl::optional<WebURLResponse::WebSecurityDetails>
 WebURLResponse::SecurityDetailsForTesting() {
-  const base::Optional<ResourceResponse::SecurityDetails>& security_details =
+  const absl::optional<ResourceResponse::SecurityDetails>& security_details =
       resource_response_->GetSecurityDetails();
   if (!security_details.has_value())
-    return base::nullopt;
+    return absl::nullopt;
   SignedCertificateTimestampList sct_list;
   for (const auto& iter : security_details->sct_list) {
     sct_list.emplace_back(SignedCertificateTimestamp(
@@ -360,10 +359,6 @@ WebURLResponse::GetServiceWorkerResponseSource() const {
 void WebURLResponse::SetServiceWorkerResponseSource(
     network::mojom::FetchResponseSource value) {
   resource_response_->SetServiceWorkerResponseSource(value);
-}
-
-void WebURLResponse::SetWasFallbackRequiredByServiceWorker(bool value) {
-  resource_response_->SetWasFallbackRequiredByServiceWorker(value);
 }
 
 void WebURLResponse::SetType(network::mojom::FetchResponseType value) {
@@ -439,6 +434,10 @@ void WebURLResponse::SetAddressSpace(
   resource_response_->SetAddressSpace(remote_ip_address_space);
 }
 
+void WebURLResponse::SetIsValidated(bool is_validated) {
+  resource_response_->SetIsValidated(is_validated);
+}
+
 void WebURLResponse::SetEncodedDataLength(int64_t length) {
   resource_response_->SetEncodedDataLength(length);
 }
@@ -466,7 +465,7 @@ void WebURLResponse::SetWasCookieInRequest(bool was_cookie_in_request) {
 }
 
 void WebURLResponse::SetRecursivePrefetchToken(
-    const base::Optional<base::UnguessableToken>& token) {
+    const absl::optional<base::UnguessableToken>& token) {
   resource_response_->SetRecursivePrefetchToken(token);
 }
 
@@ -485,6 +484,14 @@ WebString WebURLResponse::AlpnNegotiatedProtocol() const {
 void WebURLResponse::SetAlpnNegotiatedProtocol(
     const WebString& alpn_negotiated_protocol) {
   resource_response_->SetAlpnNegotiatedProtocol(alpn_negotiated_protocol);
+}
+
+bool WebURLResponse::HasAuthorizationCoveredByWildcardOnPreflight() const {
+  return resource_response_->HasAuthorizationCoveredByWildcardOnPreflight();
+}
+
+void WebURLResponse::SetHasAuthorizationCoveredByWildcardOnPreflight(bool b) {
+  resource_response_->SetHasAuthorizationCoveredByWildcardOnPreflight(b);
 }
 
 bool WebURLResponse::WasAlternateProtocolAvailable() const {
@@ -534,13 +541,22 @@ void WebURLResponse::SetWebBundleURL(const WebURL& url) {
 }
 
 void WebURLResponse::SetAuthChallengeInfo(
-    const base::Optional<net::AuthChallengeInfo>& auth_challenge_info) {
+    const absl::optional<net::AuthChallengeInfo>& auth_challenge_info) {
   resource_response_->SetAuthChallengeInfo(auth_challenge_info);
 }
 
-const base::Optional<net::AuthChallengeInfo>&
+const absl::optional<net::AuthChallengeInfo>&
 WebURLResponse::AuthChallengeInfo() const {
   return resource_response_->AuthChallengeInfo();
+}
+
+void WebURLResponse::SetRequestIncludeCredentials(
+    bool request_include_credentials) {
+  resource_response_->SetRequestIncludeCredentials(request_include_credentials);
+}
+
+bool WebURLResponse::RequestIncludeCredentials() const {
+  return resource_response_->RequestIncludeCredentials();
 }
 
 WebURLResponse::WebURLResponse(ResourceResponse& r) : resource_response_(&r) {}

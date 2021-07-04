@@ -4,10 +4,10 @@
 
 // So that mojo is defined.
 import 'chrome://resources/mojo/mojo/public/js/mojo_bindings_lite.js';
-
 import 'chrome://nearby/nearby_confirmation_page.js';
 
-import {assertEquals, assertTrue} from '../chai_assert.js';
+import {assertEquals, assertFalse, assertTrue} from '../chai_assert.js';
+
 import {FakeConfirmationManagerRemote, FakeTransferUpdateListenerPendingReceiver} from './fake_mojo_interfaces.js';
 
 suite('ConfirmatonPageTest', function() {
@@ -93,6 +93,9 @@ suite('ConfirmatonPageTest', function() {
           id: {high: BigInt(0), low: BigInt(0)},
           name,
           type: nearbyShare.mojom.ShareTargetType.kPhone,
+          imageUrl: {
+            url: 'testImageURL',
+          },
           payloadPreview: null,
         });
     const renderedName = confirmationPageElement.$$('nearby-progress')
@@ -121,6 +124,44 @@ suite('ConfirmatonPageTest', function() {
 
     const errorTitle = confirmationPageElement.$$('#errorTitle').textContent;
     assertTrue(!!errorTitle);
+  });
+
+  test('Ensure all final transfer states explicitly handled', async function() {
+    // Transfer states that do not result in an error message.
+    const nonErrorStates = {
+      kUnknown: true,
+      kConnecting: true,
+      kAwaitingLocalConfirmation: true,
+      kAwaitingRemoteAcceptance: true,
+      kInProgress: true,
+      kMediaDownloading: true,
+      kComplete: true,
+      kRejected: true,
+      kCancelled: true,
+      MIN_VALUE: true,
+      MAX_VALUE: true
+    };
+
+    let key;
+    for (key of Object.keys(nearbyShare.mojom.TransferStatus)) {
+      const isErrorState = !(key in nonErrorStates);
+      const token = 'TestToken1234';
+      if (isErrorState) {
+        transferUpdateListener.remote_.onTransferUpdate(
+            nearbyShare.mojom.TransferStatus[key], token);
+        await transferUpdateListener.remote_.$.flushForTesting();
+
+        assertTrue(!!confirmationPageElement.$$('#errorTitle').textContent);
+
+        // Set back to a good state
+        confirmationPageElement.set('errorTitle_', null);
+        confirmationPageElement.set('errorDescription_', null);
+        transferUpdateListener.remote_.onTransferUpdate(
+            nearbyShare.mojom.TransferStatus.kConnecting, token);
+        await transferUpdateListener.remote_.$.flushForTesting();
+        assertFalse(!!confirmationPageElement.$$('#errorTitle'));
+      }
+    }
   });
 
   test('gets transfer info for testing', async function() {

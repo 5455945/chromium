@@ -10,11 +10,8 @@
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
-#include "third_party/blink/public/common/widget/screen_info.h"
 #include "third_party/blink/public/mojom/input/focus_type.mojom-blink.h"
-#include "third_party/blink/public/mojom/widget/screen_orientation.mojom-blink.h"
 #include "third_party/blink/public/platform/modules/remoteplayback/web_remote_playback_client.h"
-#include "third_party/blink/public/platform/web_size.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_gc_controller.h"
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
 #include "third_party/blink/renderer/core/css/document_style_environment_variables.h"
@@ -56,6 +53,8 @@
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 #include "third_party/blink/renderer/platform/web_test_support.h"
+#include "ui/display/mojom/screen_orientation.mojom-blink.h"
+#include "ui/display/screen_info.h"
 
 // The MediaTimelineWidths histogram suffix expected to be encountered in these
 // tests.
@@ -67,18 +66,18 @@ namespace {
 
 class FakeChromeClient : public EmptyChromeClient {
  public:
-  FakeChromeClient()
-      : screen_info_({.orientation_type =
-                          mojom::blink::ScreenOrientation::kLandscapePrimary}) {
+  FakeChromeClient() {
+    screen_info_.orientation_type =
+        display::mojom::blink::ScreenOrientation::kLandscapePrimary;
   }
 
   // ChromeClient overrides.
-  const ScreenInfo& GetScreenInfo(LocalFrame&) const override {
+  const display::ScreenInfo& GetScreenInfo(LocalFrame&) const override {
     return screen_info_;
   }
 
  private:
-  const ScreenInfo screen_info_;
+  display::ScreenInfo screen_info_;
 };
 
 class MockWebMediaPlayerForImpl : public EmptyWebMediaPlayer {
@@ -178,10 +177,7 @@ class MediaControlsImplTest : public PageTestBase,
   }
 
   void InitializePage() {
-    Page::PageClients clients;
-    FillWithEmptyClients(clients);
-    clients.chrome_client = MakeGarbageCollected<FakeChromeClient>();
-    SetupPageWithClients(&clients,
+    SetupPageWithClients(MakeGarbageCollected<FakeChromeClient>(),
                          MakeGarbageCollected<StubLocalFrameClientForImpl>());
 
     GetDocument().write("<video controls>");
@@ -212,6 +208,22 @@ class MediaControlsImplTest : public PageTestBase,
 
   void SimulateOnSeeking() { media_controls_->OnSeeking(); }
   void SimulateOnSeeked() { media_controls_->OnSeeked(); }
+  void SimulateOnWaiting() { media_controls_->OnWaiting(); }
+  void SimulateOnPlaying() { media_controls_->OnPlaying(); }
+
+  void SimulateMediaControlPlaying() {
+    MediaControls().MediaElement().SetReadyState(
+        HTMLMediaElement::kHaveEnoughData);
+    MediaControls().MediaElement().SetNetworkState(
+        WebMediaPlayer::NetworkState::kNetworkStateLoading);
+  }
+
+  void SimulateMediaControlBuffering() {
+    MediaControls().MediaElement().SetReadyState(
+        HTMLMediaElement::kHaveCurrentData);
+    MediaControls().MediaElement().SetNetworkState(
+        WebMediaPlayer::NetworkState::kNetworkStateLoading);
+  }
 
   MediaControlsImpl& MediaControls() { return *media_controls_; }
   MediaControlVolumeSliderElement* VolumeSliderElement() const {
@@ -407,7 +419,7 @@ TEST_F(MediaControlsImplTest, HideAndReset) {
 }
 
 TEST_F(MediaControlsImplTest, ResetDoesNotTriggerInitialLayout) {
-  Document& document = this->GetDocument();
+  Document& document = GetDocument();
   int old_element_count = document.GetStyleEngine().StyleForElementCount();
   // Also assert that there are no layouts yet.
   ASSERT_EQ(0, old_element_count);
@@ -951,6 +963,7 @@ TEST_F(MediaControlsImplTest,
     EXPECT_FALSE(HasAvailabilityCallbacks(remote_playback));
   }
 
+  page_holder->GetDocument().View()->UpdateAllLifecyclePhasesForTest();
   test::RunPendingTasks();
 
   ThreadState::Current()->CollectAllGarbageForTesting();
@@ -975,8 +988,9 @@ TEST_F(MediaControlsImplTest,
   auto& video =
       To<HTMLVideoElement>(*page_holder->GetDocument().QuerySelector("video"));
   WeakPersistent<HTMLMediaElement> weak_persistent_video = &video;
-  video.remove();
 
+  video.remove();
+  page_holder->GetDocument().View()->UpdateAllLifecyclePhasesForTest();
   test::RunPendingTasks();
 
   ThreadState::Current()->CollectAllGarbageForTesting();
@@ -1047,7 +1061,7 @@ TEST_F(MediaControlsImplTestWithMockScheduler,
   SetHasAudio(true);
   SimulateLoadedMetadata();
 
-  WebTestSupport::SetIsRunningWebTest(false);
+  ScopedWebTestMode web_test_mode(false);
 
   Element* volume_slider = VolumeSliderElement();
   Element* mute_btn = MuteButtonElement();
@@ -1090,7 +1104,7 @@ TEST_F(MediaControlsImplTestWithMockScheduler,
   platform()->RunForPeriodSeconds(1);
   SetHasAudio(true);
 
-  WebTestSupport::SetIsRunningWebTest(false);
+  ScopedWebTestMode web_test_mode(false);
 
   Element* volume_slider = VolumeSliderElement();
 
@@ -1294,6 +1308,86 @@ TEST_F(MediaControlsImplTest, DoubleTouchChangesTimeWhenZoomed) {
   GestureDoubleTapAt(rightOfCenter);
   test::RunPendingTasks();
   EXPECT_EQ(30, MediaControls().MediaElement().currentTime());
+}
+
+TEST_F(MediaControlsImplTest, HideControlsDefersStyleCalculationOnPlaying) {
+  MediaControls().MediaElement().SetBooleanAttribute(html_names::kControlsAttr,
+                                                     false);
+  MediaControls().MediaElement().SetSrc("https://example.com/foo.mp4");
+  MediaControls().MediaElement().Play();
+  test::RunPendingTasks();
+
+  Element* panel = GetElementByShadowPseudoId(MediaControls(),
+                                              "-webkit-media-controls-panel");
+  ASSERT_NE(nullptr, panel);
+  EXPECT_FALSE(IsElementVisible(*panel));
+  UpdateAllLifecyclePhasesForTest();
+  Document& document = this->GetDocument();
+  EXPECT_FALSE(document.NeedsLayoutTreeUpdate());
+
+  int old_element_count = document.GetStyleEngine().StyleForElementCount();
+
+  SimulateMediaControlPlaying();
+  SimulateOnPlaying();
+  EXPECT_EQ(MediaControls().State(),
+            MediaControlsImpl::ControlsState::kPlaying);
+
+  // With the controls hidden, playback state change should not trigger style
+  // calculation.
+  EXPECT_FALSE(document.NeedsLayoutTreeUpdate());
+  UpdateAllLifecyclePhasesForTest();
+  int new_element_count = document.GetStyleEngine().StyleForElementCount();
+  EXPECT_EQ(old_element_count, new_element_count);
+
+  MediaControls().MediaElement().SetBooleanAttribute(html_names::kControlsAttr,
+                                                     true);
+  EXPECT_TRUE(IsElementVisible(*panel));
+
+  // Showing the controls should trigger the deferred style calculation.
+  EXPECT_TRUE(document.NeedsLayoutTreeUpdate());
+  UpdateAllLifecyclePhasesForTest();
+  new_element_count = document.GetStyleEngine().StyleForElementCount();
+  EXPECT_LT(old_element_count, new_element_count);
+}
+
+TEST_F(MediaControlsImplTest, HideControlsDefersStyleCalculationOnWaiting) {
+  MediaControls().MediaElement().SetBooleanAttribute(html_names::kControlsAttr,
+                                                     false);
+  MediaControls().MediaElement().SetSrc("https://example.com/foo.mp4");
+  MediaControls().MediaElement().Play();
+  test::RunPendingTasks();
+
+  Element* panel = GetElementByShadowPseudoId(MediaControls(),
+                                              "-webkit-media-controls-panel");
+  ASSERT_NE(nullptr, panel);
+  EXPECT_FALSE(IsElementVisible(*panel));
+  UpdateAllLifecyclePhasesForTest();
+  Document& document = this->GetDocument();
+  EXPECT_FALSE(document.NeedsLayoutTreeUpdate());
+
+  int old_element_count = document.GetStyleEngine().StyleForElementCount();
+
+  SimulateMediaControlBuffering();
+  SimulateOnWaiting();
+  EXPECT_EQ(MediaControls().State(),
+            MediaControlsImpl::ControlsState::kBuffering);
+
+  // With the controls hidden, playback state change should not trigger style
+  // calculation.
+  EXPECT_FALSE(document.NeedsLayoutTreeUpdate());
+  UpdateAllLifecyclePhasesForTest();
+  int new_element_count = document.GetStyleEngine().StyleForElementCount();
+  EXPECT_EQ(old_element_count, new_element_count);
+
+  MediaControls().MediaElement().SetBooleanAttribute(html_names::kControlsAttr,
+                                                     true);
+  EXPECT_TRUE(IsElementVisible(*panel));
+
+  // Showing the controls should trigger the deferred style calculation.
+  EXPECT_TRUE(document.NeedsLayoutTreeUpdate());
+  UpdateAllLifecyclePhasesForTest();
+  new_element_count = document.GetStyleEngine().StyleForElementCount();
+  EXPECT_LT(old_element_count, new_element_count);
 }
 
 }  // namespace blink

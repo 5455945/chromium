@@ -5,7 +5,6 @@
 <translation id="104962181688258143">Ouvrir l'application Fichiers</translation>
 <translation id="1122869341872663659">Affichage de <ph name="N" /> résultat(s) de recherche pour <ph name="QUERY" /></translation>
 <translation id="1195667586424773550">Faites glisser le lien vers la barre d'adresse de l'onglet</translation>
-<translation id="1204450209689312104">Ouvrir une nouvelle fenêtre en mode de navigation privée</translation>
 <translation id="1251638888133819822">Activer ou désactiver la loupe en mode plein écran</translation>
 <translation id="1290373024480130896"><ph name="MODIFIER1" /> <ph name="SEPARATOR1" /><ph name="MODIFIER2" /> <ph name="SEPARATOR2" /><ph name="MODIFIER3" /> <ph name="SEPARATOR3" /> <ph name="KEY" /></translation>
 <translation id="1293699935367580298">Échapp.</translation>
@@ -15,8 +14,10 @@
 <translation id="1477442857810932985">Aller à la fin de la ligne</translation>
 <translation id="1499072997694708844">Fermer toute fenêtre de recherche ouverte ou arrêter le chargement de la page actuelle</translation>
 <translation id="1510238584712386396">Lanceur</translation>
+<translation id="1516966594427080024">Ouvrir une nouvelle fenêtre en mode de navigation privée</translation>
 <translation id="152892567002884378">Augmenter le volume</translation>
 <translation id="1560480564179555003"><ph name="SHIFT" /><ph name="SEPARATOR1" /><ph name="ALT" /><ph name="SEPARATOR2" /><ph name="L" />, puis <ph name="ESC" /></translation>
+<translation id="1633761758045565086">Mettez en évidence une boîte de dialogue d'aide</translation>
 <translation id="1652741121070700329">Aller au début du mot précédent</translation>
 <translation id="1679841710523778799">Augmenter la luminosité</translation>
 <translation id="168356808214100546">Maintenez le doigt sur <ph name="ALT" />, touchez <ph name="TAB" /> jusqu'à ce que vous arriviez à la fenêtre que vous souhaitez ouvrir, puis relâchez.</translation>
@@ -29,6 +30,7 @@
 <translation id="1996162290124031907">Accéder à l'onglet suivant</translation>
 <translation id="2010818616644390445">Aller au dernier onglet de la fenêtre</translation>
 <translation id="2040706009561734834">Ouvrir/fermer le lanceur d'applications</translation>
+<translation id="2086334242442703436">Ouvrir le sélecteur d'émoji</translation>
 <translation id="2088054208777350526">Rechercher des raccourcis-clavier</translation>
 <translation id="2125211348069077981"><ph name="ALT" /> <ph name="SEPARATOR" /> <ph name="E" /> ou <ph name="F" /></translation>
 <translation id="2145908266289632567">Édition de texte</translation>
@@ -72,6 +74,7 @@
 <translation id="3256109297135787951">Supprimer la mise en évidence d'un élément sur votre étagère</translation>
 <translation id="3288816184963444640">Fermer la fenêtre actuelle</translation>
 <translation id="3407560819924487926">Activer le gestionnaire de tâches</translation>
+<translation id="3417835166382867856">Rechercher dans les onglets</translation>
 <translation id="3422679037938588196">Aller au résultat précédent de la recherche</translation>
 <translation id="353037708190149633">Enregistrer toutes les pages ouvertes dans votre fenêtre actuelle comme favoris dans un nouveau dossier</translation>
 <translation id="355103131818127604">Ouvrir le lien dans un nouvel onglet en arrière-plan</translation>
@@ -146,6 +149,7 @@
 <translation id="6276708887952587684">Afficher la source de la page</translation>
 <translation id="6321940490215594447">Ouvrir la page Historique</translation>
 <translation id="6340769215862220182">Zoom avant de l'affichage</translation>
+<translation id="634687982629734605">Basculer la sélection entre les éléments suivants : zone de notifications (où s'affiche l'image de votre compte), lanceur d'applications, barre d'adresse et barre de favoris (si visible), la page Web ouverte et la barre des téléchargements (si visible) Si une boîte de dialogue pouvant être mise en évidence est affichée, déplacez-y le curseur.</translation>
 <translation id="6359811074279051077"><ph name="MODIFIER" /><ph name="SEPARATOR" /><ph name="KEY" /></translation>
 <translation id="6395172954772765143">Sélectionner le texte jusqu'à la fin de la ligne</translation>
 <translation id="6425378783626925378">Cliquer sur les icônes 1 à 8 de votre étagère</translation>
@@ -189,7 +193,6 @@
 <translation id="8026334261755873520">Effacer les données de navigation</translation>
 <translation id="8130528849632411619">Aller au début du document</translation>
 <translation id="8147954207400281792"><ph name="CTRL" /><ph name="SEPARATOR" /><ph name="K" /> ou <ph name="E" /></translation>
-<translation id="8232835244134740473">Basculer la sélection entre les éléments suivants : zone de notifications (où s'affiche l'image de votre compte), lanceur d'applications, barre d'adresse et barre de favoris (si visible), la page Web ouverte et la barre des téléchargements (si visible)</translation>
 <translation id="8234414138295101081">Faire pivoter l'écran de 90 degrés</translation>
 <translation id="8241665785394195545">crochet droit</translation>
 <translation id="8264941229485248811">Afficher ou masquer l'inspecteur d'outils de conception</translation>

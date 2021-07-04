@@ -19,6 +19,7 @@ import("//build/config/sanitizers/sanitizers.gni")
 import("//build/config/ui.gni")
 import("//build/toolchain/cc_wrapper.gni")
 import("//build/toolchain/goma.gni")
+import("//build/toolchain/rbe.gni")
 import("//build/toolchain/toolchain.gni")
 import("//build_overrides/build.gni")
 
@@ -33,7 +34,7 @@ if (current_cpu == "x64") {
   import("//build/config/x64.gni")
 }
 if (is_mac) {
-  import("//build/config/mac/symbols.gni")
+  import("//build/config/apple/symbols.gni")
 }
 if (is_ios) {
   import("//build/config/ios/ios_sdk.gni")
@@ -43,6 +44,17 @@ if (is_nacl) {
   # variables defined in nacl/config.gni referenced here should be protected by
   # is_nacl conditions.
   import("//build/config/nacl/config.gni")
+}
+
+lld_path = ""
+if (!is_clang) {
+  declare_args() {
+    # This allows overriding the location of lld.
+    lld_path = rebase_path("$clang_base_path/bin", root_build_dir)
+  }
+} else {
+  # clang looks for lld next to it, no need for -B.
+  lld_path = ""
 }
 
 declare_args() {
@@ -63,9 +75,7 @@ declare_args() {
 
   # Enable fatal linker warnings. Building Chromium with certain versions
   # of binutils can cause linker warning.
-  # TODO(thakis): Set this to true unconditionally once lld/MachO bring-up
-  # is along far enough that it no longer emits linker warnings.
-  fatal_linker_warnings = !(is_apple && use_lld)
+  fatal_linker_warnings = true
 
   # Build with C++ RTTI enabled. Chromium builds without RTTI by default,
   # but some sanitizers are known to require it, like CFI diagnostics
@@ -129,10 +139,7 @@ declare_args() {
   #
   # TODO(crbug.com/1131993): Enabling this when 'is_android' is true breaks
   # content_shell_test_apk on both ARM and x86.
-  #
-  # TODO(crbug.com/977230): Enabling this when 'use_xcode_clang' is true may
-  # call an old clang that doesn't support auto-init.
-  init_stack_vars = !is_android && !use_xcode_clang
+  init_stack_vars = !is_android
 
   # This argument is to control whether enabling text section splitting in the
   # final binary. When enabled, the separated text sections with prefix
@@ -146,9 +153,9 @@ declare_args() {
   # Token limits may not be accurate for build configs not covered by the CQ,
   # so only enable them by default for mainstream build configs.
   enable_wmax_tokens =
-      !is_official_build &&
+      !is_official_build && !(is_component_build && !is_debug) &&
       ((is_mac && target_cpu == "x64" && !use_system_xcode) ||
-       ((is_linux || is_chromeos_lacros) && target_cpu == "x64") ||
+       (is_linux && !is_chromeos && target_cpu == "x64") ||
        (is_win && target_cpu == "x86") || (is_win && target_cpu == "x64") ||
        (is_android && target_cpu == "arm") ||
        (is_android && target_cpu == "arm64"))
@@ -167,6 +174,10 @@ declare_args() {
   # Bugs have been reported to the windbg/WPA teams and this workaround will be
   # removed when they are fixed.
   use_full_pdb_paths = false
+
+  # Enable -H, which prints the include tree during compilation.
+  # For use by tools/clang/scripts/analyze_includes.py
+  show_includes = false
 }
 
 declare_args() {
@@ -210,6 +221,7 @@ if (is_android || (is_chromeos_ash && is_chromeos_device)) {
 
 assert(!(llvm_force_head_revision && use_goma),
        "can't use goma with trunk clang")
+assert(!(llvm_force_head_revision && use_rbe), "can't use rbe with trunk clang")
 
 # default_include_dirs ---------------------------------------------------------
 #
@@ -221,6 +233,18 @@ config("default_include_dirs") {
     "//",
     root_gen_dir,
   ]
+}
+
+# Compiler instrumentation can introduce dependencies in DSOs to symbols in
+# the executable they are loaded into, so they are unresolved at link-time.
+config("no_unresolved_symbols") {
+  if (!using_sanitizer &&
+      (is_linux || is_chromeos || is_android || is_fuchsia)) {
+    ldflags = [
+      "-Wl,-z,defs",
+      "-Wl,--as-needed",
+    ]
+  }
 }
 
 # compiler ---------------------------------------------------------------------
@@ -285,6 +309,13 @@ config("compiler") {
     cflags += [ "-fno-delete-null-pointer-checks" ]
   }
 
+  # Don't emit the GCC version ident directives, they just end up in the
+  # .comment section or debug info taking up binary size, and makes comparing
+  # .o files built with different compiler versions harder.
+  if (!is_win || is_clang) {
+    cflags += [ "-fno-ident" ]
+  }
+
   # In general, Windows is totally different, but all the other builds share
   # some common compiler and linker configuration.
   if (!is_win) {
@@ -316,10 +347,9 @@ config("compiler") {
     }
 
     if (use_lld) {
-      if (is_apple) {
-        ldflags += [ "-fuse-ld=lld.darwinnew" ]
-      } else {
-        ldflags += [ "-fuse-ld=lld" ]
+      ldflags += [ "-fuse-ld=lld" ]
+      if (lld_path != "") {
+        ldflags += [ "-B$lld_path" ]
       }
     }
 
@@ -416,20 +446,11 @@ config("compiler") {
     if (!is_component_build) {
       ldflags += [ "-Wl,-z,now" ]
     }
-
-    # Compiler instrumentation can introduce dependencies in DSOs to symbols in
-    # the executable they are loaded into, so they are unresolved at link-time.
-    if (!using_sanitizer) {
-      ldflags += [
-        "-Wl,-z,defs",
-        "-Wl,--as-needed",
-      ]
-    }
   }
 
   # Linux-specific compiler flags setup.
   # ------------------------------------
-  if ((is_posix || is_fuchsia) && use_lld) {
+  if ((is_posix || is_fuchsia) && !is_apple && use_lld) {
     if (current_cpu == "arm64") {
       # Reduce the page size from 65536 in order to reduce binary size slightly
       # by shrinking the alignment gap between segments. This also causes all
@@ -512,12 +533,19 @@ config("compiler") {
   if (is_clang && !is_nacl && !use_xcode_clang) {
     cflags += [ "-fcrash-diagnostics-dir=" + clang_diagnostic_dir ]
 
+    # TODO(hans): Remove this once Clang generates better optimized debug info
+    # by default. https://crbug.com/765793
     cflags += [
-      # TODO(hans): Remove this once Clang generates better optimized debug info
-      # by default. https://crbug.com/765793
       "-mllvm",
       "-instcombine-lower-dbg-declare=0",
     ]
+    if (!is_debug && use_thin_lto && is_a_target_toolchain) {
+      if (is_win) {
+        ldflags += [ "-mllvm:-instcombine-lower-dbg-declare=0" ]
+      } else {
+        ldflags += [ "-Wl,-mllvm,-instcombine-lower-dbg-declare=0" ]
+      }
+    }
   }
 
   # C11/C++11 compiler flags setup.
@@ -668,9 +696,7 @@ config("compiler") {
       ldflags += [ "-Wl,-mllvm,-import-instr-limit=$import_instr_limit" ]
     }
 
-    # Whole-program devirtualization increases android libchrome.so size
-    # by ~100kb on arm32 and reduces it by ~108kb on arm64 instead.
-    # Tracked by llvm bug: https://bugs.llvm.org/show_bug.cgi?id=48245
+    # TODO(https://crbug.com/1211155): investigate why this isn't effective on arm32.
     if (!is_android || current_cpu == "arm64") {
       cflags += [ "-fwhole-program-vtables" ]
       if (!is_win) {
@@ -720,19 +746,19 @@ config("compiler") {
     }
   }
 
-  # Pin to LLVM's legacy pass manager so we can switch independently of a Clang roll.
-  # TODO(https://crbug.com/1173188): remove once we've rolled a Clang with the new PM as the default PM.
-  if ((is_android || is_win) && is_clang && !is_nacl) {
-    cflags += [
-      "-Xclang",
-      "-fno-experimental-new-pass-manager",
-    ]
-    if (use_thin_lto) {
-      if (is_win) {
-        ldflags += [ "-opt:noltonewpassmanager" ]
-      } else {
-        ldflags += [ "-Wl,--lto-legacy-pass-manager" ]
-      }
+  if (is_clang && !is_nacl && show_includes) {
+    if (is_win) {
+      # TODO(crbug.com/1223741): Goma mixes the -H and /showIncludes output.
+      assert(!use_goma, "show_includes on Windows is not reliable with goma")
+      cflags += [
+        "/clang:-H",
+        "/clang:-fshow-skipped-includes",
+      ]
+    } else {
+      cflags += [
+        "-H",
+        "-fshow-skipped-includes",
+      ]
     }
   }
 
@@ -1257,7 +1283,7 @@ config("compiler_arm_thumb") {
 }
 
 config("compiler_arm") {
-  if (current_cpu == "arm" && is_chromeos_ash) {
+  if (current_cpu == "arm" && (is_chromeos_ash || is_chromeos_lacros)) {
     # arm is normally the default mode for clang, but on chromeos a wrapper
     # is used to pass -mthumb, and therefor change the default.
     cflags = [ "-marm" ]
@@ -1548,12 +1574,6 @@ config("default_warnings") {
       # TODO(thakis): Consider -Wloop-analysis (turns on
       # -Wrange-loop-analysis too).
 
-      # This warns on using ints as initializers for floats in
-      # initializer lists (e.g. |int a = f(); CGSize s = { a, a };|),
-      # which happens in several places in chrome code. Not sure if
-      # this is worth fixing.
-      "-Wno-c++11-narrowing",
-
       # TODO(thakis): This used to be implied by -Wno-unused-function,
       # which we no longer use. Check if it makes sense to remove
       # this as well. http://crbug.com/316352
@@ -1601,6 +1621,10 @@ config("default_warnings") {
 
           # TODO(https://crbug.com/1050281): Clean up, enable.
           "-Wno-non-c-typedef-for-linkage",
+
+          # TODO(https://crbug.com/1203071): Clean up and enable.
+          "-Wno-unused-but-set-parameter",
+          "-Wno-unused-but-set-variable",
         ]
 
         cflags_c += [
@@ -1610,9 +1634,6 @@ config("default_warnings") {
 
         if (enable_wmax_tokens) {
           cflags += [ "-Wmax-tokens" ]
-        } else {
-          # TODO(https://crbug.com/1049569): Remove after Clang 87b235db.
-          cflags += [ "-Wno-max-tokens" ]
         }
       }
     }
@@ -1666,6 +1687,11 @@ config("chromium_code") {
     if (is_mac) {
       cflags_objc = [ "-Wobjc-missing-property-synthesis" ]
       cflags_objcc = [ "-Wobjc-missing-property-synthesis" ]
+    }
+
+    if (is_ios) {
+      cflags_objc = [ "-Wimplicit-retain-self" ]
+      cflags_objcc = cflags_objc
     }
   }
 
@@ -1743,10 +1769,14 @@ config("no_chromium_code") {
       # Lots of third-party libraries have unused variables. Instead of
       # suppressing them individually, we just blanket suppress them here.
       "-Wno-unused-variable",
+
+      # Similarly, we're not going to fix all the C++11 narrowing issues in
+      # third-party libraries.
+      "-Wno-c++11-narrowing",
     ]
     if (!is_nacl && (current_toolchain == host_toolchain || !use_xcode_clang)) {
       cflags += [
-        # TODO(https://crbug.com/1031169): Clean up and enable.
+        # TODO(https://crbug.com/1202159): Clean up and enable.
         "-Wno-misleading-indentation",
       ]
     }
@@ -1822,7 +1852,9 @@ config("export_dynamic") {
 config("thin_archive") {
   # The macOS and iOS default linker ld64 does not support reading thin
   # archives.
-  if ((is_posix && !is_nacl && (!is_apple || use_lld)) || is_fuchsia) {
+  # TODO(crbug.com/1221615): Enable on is_apple if use_lld once that no longer
+  # confuses lldb.
+  if ((is_posix && !is_nacl && !is_apple) || is_fuchsia) {
     arflags = [ "-T" ]
   } else if (is_win && use_lld) {
     arflags = [ "/llvmlibthin" ]
@@ -2015,10 +2047,6 @@ if (is_win) {
     # Aix does not support these.
 
     common_optimize_on_cflags += [
-      # Don't emit the GCC version ident directives, they just end up in the
-      # .comment section taking up binary size.
-      "-fno-ident",
-
       # Put data and code in their own sections, so that unused symbols
       # can be removed at link time with --gc-sections.
       "-fdata-sections",
@@ -2331,15 +2359,8 @@ config("symbols") {
     # All configs using /DEBUG should include this:
     configs = [ ":win_pdbaltpath" ]
 
-    if (is_clang) {
-      # Use constructor debug mode. This option reduces debug info more than
-      # -fno-standalone-debug by emitting class type information only when
-      # constructors are emitted.
-      cflags += [
-        "-Xclang",
-        "-debug-info-kind=constructor",
-      ]
-    }
+    # TODO(crbug.com/1138553): Re-enable constructor homing on windows after
+    # libc++ fix is in.
   } else {
     cflags = []
     if (is_mac && enable_dsyms) {
@@ -2420,7 +2441,13 @@ config("minimal_symbols") {
   if (is_win) {
     # Functions, files, and line tables only.
     cflags = []
-    ldflags = [ "/DEBUG" ]
+
+    if (is_clang && use_lld && use_ghash) {
+      cflags += [ "-gcodeview-ghash" ]
+      ldflags = [ "/DEBUG:GHASH" ]
+    } else {
+      ldflags = [ "/DEBUG" ]
+    }
 
     # All configs using /DEBUG should include this:
     configs = [ ":win_pdbaltpath" ]
@@ -2563,7 +2590,10 @@ config("default_init_stack_vars") {
 buildflag_header("compiler_buildflags") {
   header = "compiler_buildflags.h"
 
-  flags = [ "CLANG_PGO=$chrome_pgo_phase" ]
+  flags = [
+    "CLANG_PGO=$chrome_pgo_phase",
+    "SYMBOL_LEVEL=$symbol_level",
+  ]
 }
 
 config("cet_shadow_stack") {

@@ -9,9 +9,11 @@
 
 #include <map>
 #include <memory>
+#include <unordered_map>
 #include <utility>
 
 #include "base/bind.h"
+#include "base/command_line.h"
 #include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -26,11 +28,14 @@
 #include "base/task_runner_util.h"
 #include "base/time/time.h"
 #include "base/values.h"
+#include "chromeos/dbus/constants/dbus_switches.h"
+#include "chromeos/dbus/fake_cros_disks_client.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
 #include "dbus/object_path.h"
 #include "dbus/object_proxy.h"
 #include "dbus/values_util.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
 namespace chromeos {
@@ -704,22 +709,23 @@ void DiskInfo::InitializeFromResponse(dbus::Response* response) {
   if (!value || !value->GetAsDictionary(&properties))
     return;
 
-  properties->GetBooleanWithoutPathExpansion(
-      cros_disks::kDeviceIsDrive, &is_drive_);
-  properties->GetBooleanWithoutPathExpansion(
-      cros_disks::kDeviceIsReadOnly, &is_read_only_);
-  properties->GetBooleanWithoutPathExpansion(
-      cros_disks::kDevicePresentationHide, &is_hidden_);
-  properties->GetBooleanWithoutPathExpansion(
-      cros_disks::kDeviceIsMediaAvailable, &has_media_);
-  properties->GetBooleanWithoutPathExpansion(
-      cros_disks::kDeviceIsOnBootDevice, &on_boot_device_);
-  properties->GetBooleanWithoutPathExpansion(
-      cros_disks::kDeviceIsOnRemovableDevice, &on_removable_device_);
-  properties->GetBooleanWithoutPathExpansion(cros_disks::kDeviceIsVirtual,
-                                             &is_virtual_);
-  properties->GetBooleanWithoutPathExpansion(cros_disks::kIsAutoMountable,
-                                             &is_auto_mountable_);
+  is_drive_ =
+      properties->FindBoolKey(cros_disks::kDeviceIsDrive).value_or(is_drive_);
+  is_read_only_ = properties->FindBoolKey(cros_disks::kDeviceIsReadOnly)
+                      .value_or(is_read_only_);
+  is_hidden_ = properties->FindBoolKey(cros_disks::kDevicePresentationHide)
+                   .value_or(is_hidden_);
+  has_media_ = properties->FindBoolKey(cros_disks::kDeviceIsMediaAvailable)
+                   .value_or(has_media_);
+  on_boot_device_ = properties->FindBoolKey(cros_disks::kDeviceIsOnBootDevice)
+                        .value_or(on_boot_device_);
+  on_removable_device_ =
+      properties->FindBoolKey(cros_disks::kDeviceIsOnRemovableDevice)
+          .value_or(on_removable_device_);
+  is_virtual_ = properties->FindBoolKey(cros_disks::kDeviceIsVirtual)
+                    .value_or(is_virtual_);
+  is_auto_mountable_ = properties->FindBoolKey(cros_disks::kIsAutoMountable)
+                           .value_or(is_auto_mountable_);
   properties->GetStringWithoutPathExpansion(cros_disks::kStorageDevicePath,
                                             &storage_device_path_);
   properties->GetStringWithoutPathExpansion(
@@ -738,25 +744,25 @@ void DiskInfo::InitializeFromResponse(dbus::Response* response) {
   properties->GetStringWithoutPathExpansion(cros_disks::kFileSystemType,
                                             &file_system_type_);
 
-  properties->GetIntegerWithoutPathExpansion(cros_disks::kBusNumber,
-                                             &bus_number_);
-  properties->GetIntegerWithoutPathExpansion(cros_disks::kDeviceNumber,
-                                             &device_number_);
+  bus_number_ =
+      properties->FindIntKey(cros_disks::kBusNumber).value_or(bus_number_);
+  device_number_ = properties->FindIntKey(cros_disks::kDeviceNumber)
+                       .value_or(device_number_);
 
   // dbus::PopDataAsValue() pops uint64_t as double.
   // The top 11 bits of uint64_t are dropped by the use of double. But, this
   // works
   // unless the size exceeds 8 PB.
-  double device_size_double = 0;
-  if (properties->GetDoubleWithoutPathExpansion(cros_disks::kDeviceSize,
-                                                &device_size_double))
-    total_size_in_bytes_ = device_size_double;
+  absl::optional<double> device_size_double =
+      properties->FindDoubleKey(cros_disks::kDeviceSize);
+  if (device_size_double.has_value())
+    total_size_in_bytes_ = device_size_double.value();
 
   // dbus::PopDataAsValue() pops uint32_t as double.
-  double media_type_double = 0;
-  if (properties->GetDoubleWithoutPathExpansion(cros_disks::kDeviceMediaType,
-                                                &media_type_double))
-    device_type_ = DeviceMediaTypeToDeviceType(media_type_double);
+  absl::optional<double> media_type_double =
+      properties->FindDoubleKey(cros_disks::kDeviceMediaType);
+  if (media_type_double.has_value())
+    device_type_ = DeviceMediaTypeToDeviceType(media_type_double.value());
 
   base::ListValue* mount_paths = NULL;
   if (properties->GetListWithoutPathExpansion(cros_disks::kDeviceMountPaths,
@@ -773,7 +779,12 @@ CrosDisksClient::~CrosDisksClient() = default;
 
 // static
 std::unique_ptr<CrosDisksClient> CrosDisksClient::Create() {
-  return std::make_unique<CrosDisksClientImpl>();
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kCrosDisksFake)) {
+    return std::make_unique<FakeCrosDisksClient>();
+  } else {
+    return std::make_unique<CrosDisksClientImpl>();
+  }
 }
 
 // static

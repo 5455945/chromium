@@ -4,7 +4,7 @@
 
 #include "ash/system/unified/notification_counter_view.h"
 
-#include "ash/public/cpp/ash_features.h"
+#include "ash/constants/ash_features.h"
 #include "ash/system/unified/notification_icons_controller.h"
 #include "ash/system/unified/unified_system_tray.h"
 #include "ash/test/ash_test_base.h"
@@ -29,8 +29,8 @@ void AddNotification(const std::string& notification_id,
   message_center::MessageCenter::Get()->AddNotification(
       std::make_unique<message_center::Notification>(
           message_center::NOTIFICATION_TYPE_BASE_FORMAT, notification_id,
-          base::UTF8ToUTF16("test_title"), base::UTF8ToUTF16("test message"),
-          gfx::Image(), /*display_source=*/base::string16(), GURL(),
+          u"test_title", u"test message", gfx::Image(),
+          /*display_source=*/std::u16string(), GURL(),
           message_center::NotifierId(message_center::NotifierType::APPLICATION,
                                      "app"),
           rich_notification_data, new message_center::NotificationDelegate()));

@@ -80,9 +80,14 @@ TEST_F(GaiaUrlsTest, InitializeDefault_AllUrls) {
             "https://accounts.google.com/embedded/setup/windows");
   EXPECT_EQ(gaia_urls()->signin_chrome_sync_dice().spec(),
             "https://accounts.google.com/signin/chrome/sync?ssp=1");
-  EXPECT_EQ(gaia_urls()->signin_chrome_sync_keys_url().spec(),
+  EXPECT_EQ(gaia_urls()->signin_chrome_sync_keys_retrieval_url().spec(),
             std::string("https://accounts.google.com/encryption/unlock/") +
                 kSigninChromeSyncKeysPlatformSuffix);
+  EXPECT_EQ(
+      gaia_urls()->signin_chrome_sync_keys_recoverability_degraded_url().spec(),
+      std::string("https://accounts.google.com/encryption/unlock/") +
+          kSigninChromeSyncKeysPlatformSuffix +
+          std::string("?kdi=CAIaDgoKY2hyb21lc3luYxAB"));
   EXPECT_EQ(gaia_urls()->service_login_auth_url().spec(),
             "https://accounts.google.com/ServiceLoginAuth");
   EXPECT_EQ(gaia_urls()->service_logout_url().spec(),
@@ -118,6 +123,9 @@ TEST_F(GaiaUrlsTest, InitializeDefault_AllUrls) {
             "https://accounts.google.com/AddSession");
   EXPECT_EQ(gaia_urls()->reauth_url().spec(),
             "https://accounts.google.com/embedded/xreauth/chrome");
+  EXPECT_EQ(gaia_urls()->account_capabilities_url().spec(),
+            "https://accountcapabilities-pa.googleapis.com/v1/"
+            "accountcapabilities:batchGet");
   EXPECT_EQ(gaia_urls()->GetCheckConnectionInfoURLWithSource("").spec(),
             "https://accounts.google.com/GetCheckConnectionInfo");
   EXPECT_EQ(gaia_urls()->oauth2_auth_url().spec(),
@@ -168,9 +176,14 @@ TEST_F(GaiaUrlsTest, InitializeDefault_URLSwitches) {
             "https://test-gaia.com/embedded/setup/windows");
   EXPECT_EQ(gaia_urls()->signin_chrome_sync_dice().spec(),
             "https://test-gaia.com/signin/chrome/sync?ssp=1");
-  EXPECT_EQ(gaia_urls()->signin_chrome_sync_keys_url().spec(),
+  EXPECT_EQ(gaia_urls()->signin_chrome_sync_keys_retrieval_url().spec(),
             std::string("https://test-gaia.com/encryption/unlock/") +
                 kSigninChromeSyncKeysPlatformSuffix);
+  EXPECT_EQ(
+      gaia_urls()->signin_chrome_sync_keys_recoverability_degraded_url().spec(),
+      std::string("https://test-gaia.com/encryption/unlock/") +
+          kSigninChromeSyncKeysPlatformSuffix +
+          std::string("?kdi=CAIaDgoKY2hyb21lc3luYxAB"));
   EXPECT_EQ(gaia_urls()->service_login_auth_url().spec(),
             "https://test-gaia.com/ServiceLoginAuth");
   EXPECT_EQ(gaia_urls()->service_logout_url().spec(),
@@ -294,8 +307,12 @@ TEST_F(GaiaUrlsTest, InitializeFromConfig_AllUrls) {
             "https://accounts.example.com/embedded/setup/windows");
   EXPECT_EQ(gaia_urls()->signin_chrome_sync_dice().spec(),
             "https://accounts.example.com/signin/chrome/sync?ssp=1");
-  EXPECT_EQ(gaia_urls()->signin_chrome_sync_keys_url().spec(),
+  EXPECT_EQ(gaia_urls()->signin_chrome_sync_keys_retrieval_url().spec(),
             "https://accounts.example.com/encryption/unlock/example-platform");
+  EXPECT_EQ(
+      gaia_urls()->signin_chrome_sync_keys_recoverability_degraded_url().spec(),
+      "https://accounts.example.com/encryption/unlock/example-platform?"
+      "kdi=CAIaDgoKY2hyb21lc3luYxAB");
   EXPECT_EQ(gaia_urls()->service_login_auth_url().spec(),
             "https://accounts.example.com/ServiceLoginAuth");
   EXPECT_EQ(gaia_urls()->service_logout_url().spec(),
@@ -331,6 +348,8 @@ TEST_F(GaiaUrlsTest, InitializeFromConfig_AllUrls) {
             "https://accounts.example.com/AddSession");
   EXPECT_EQ(gaia_urls()->reauth_url().spec(),
             "https://accounts.example.com/embedded/xreauth/chrome");
+  EXPECT_EQ(gaia_urls()->account_capabilities_url().spec(),
+            "https://accountcapabilities.exampleapis.com/v1/capabilities");
   EXPECT_EQ(gaia_urls()->GetCheckConnectionInfoURLWithSource("").spec(),
             "https://accounts.example.com/GetCheckConnectionInfo");
   EXPECT_EQ(gaia_urls()->oauth2_auth_url().spec(),
@@ -369,9 +388,14 @@ TEST_F(GaiaUrlsTest, InitializeFromConfig_AllBaseUrls) {
             "https://accounts.example.com/embedded/setup/windows");
   EXPECT_EQ(gaia_urls()->signin_chrome_sync_dice().spec(),
             "https://accounts.example.com/signin/chrome/sync?ssp=1");
-  EXPECT_EQ(gaia_urls()->signin_chrome_sync_keys_url().spec(),
+  EXPECT_EQ(gaia_urls()->signin_chrome_sync_keys_retrieval_url().spec(),
             std::string("https://accounts.example.com/encryption/unlock/") +
                 kSigninChromeSyncKeysPlatformSuffix);
+  EXPECT_EQ(
+      gaia_urls()->signin_chrome_sync_keys_recoverability_degraded_url().spec(),
+      std::string("https://accounts.example.com/encryption/unlock/") +
+          kSigninChromeSyncKeysPlatformSuffix +
+          std::string("?kdi=CAIaDgoKY2hyb21lc3luYxAB"));
   EXPECT_EQ(gaia_urls()->service_login_auth_url().spec(),
             "https://accounts.example.com/ServiceLoginAuth");
   EXPECT_EQ(gaia_urls()->service_logout_url().spec(),
@@ -407,6 +431,9 @@ TEST_F(GaiaUrlsTest, InitializeFromConfig_AllBaseUrls) {
             "https://accounts.example.com/AddSession");
   EXPECT_EQ(gaia_urls()->reauth_url().spec(),
             "https://accounts.example.com/embedded/xreauth/chrome");
+  EXPECT_EQ(gaia_urls()->account_capabilities_url().spec(),
+            "https://accountcapabilities.exampleapis.com/v1/"
+            "accountcapabilities:batchGet");
   EXPECT_EQ(gaia_urls()->GetCheckConnectionInfoURLWithSource("").spec(),
             "https://accounts.example.com/GetCheckConnectionInfo");
   EXPECT_EQ(gaia_urls()->oauth2_auth_url().spec(),

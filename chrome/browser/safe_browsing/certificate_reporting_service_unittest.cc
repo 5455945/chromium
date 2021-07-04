@@ -31,6 +31,8 @@
 #include "net/cert/x509_util.h"
 #include "net/ssl/ssl_info.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+#include "services/network/public/mojom/network_context.mojom.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -64,8 +66,8 @@ scoped_refptr<net::X509Certificate> CreateFakeCert() {
           &cert_der)) {
     return nullptr;
   }
-  return net::X509Certificate::CreateFromBytes(cert_der.data(),
-                                               cert_der.size());
+  return net::X509Certificate::CreateFromBytes(
+      base::as_bytes(base::make_span(cert_der)));
 }
 
 std::string MakeReport(const std::string& hostname) {
@@ -166,7 +168,7 @@ class CertificateReportingServiceReporterOnIOThreadTest
         base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
             &test_url_loader_factory_);
 
-    event_histogram_tester_.reset(new EventHistogramTester());
+    event_histogram_tester_ = std::make_unique<EventHistogramTester>();
   }
 
   void TearDown() override {
@@ -377,18 +379,18 @@ class CertificateReportingServiceTest : public ::testing::Test {
     test_helper_ =
         base::MakeRefCounted<CertificateReportingServiceTestHelper>();
 
-    clock_.reset(new base::SimpleTestClock());
-    service_.reset(new CertificateReportingService(
+    clock_ = std::make_unique<base::SimpleTestClock>();
+    service_ = std::make_unique<CertificateReportingService>(
         sb_service_.get(), test_helper_, &profile_,
         test_helper_->server_public_key(),
         test_helper_->server_public_key_version(), kMaxReportCountInQueue,
         base::TimeDelta::FromHours(24), clock_.get(),
         base::BindRepeating(
             &CertificateReportingServiceObserver::OnServiceReset,
-            base::Unretained(&service_observer_))));
+            base::Unretained(&service_observer_)));
     service_observer_.WaitForReset();
 
-    event_histogram_tester_.reset(new EventHistogramTester());
+    event_histogram_tester_ = std::make_unique<EventHistogramTester>();
   }
 
   void TearDown() override {

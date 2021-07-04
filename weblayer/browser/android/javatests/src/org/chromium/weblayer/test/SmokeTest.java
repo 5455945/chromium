@@ -10,6 +10,7 @@ import android.content.pm.ActivityInfo;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.PixelCopy;
@@ -28,7 +29,7 @@ import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.CriteriaNotSatisfiedException;
 import org.chromium.base.test.util.MinAndroidSdkLevel;
 import org.chromium.content_public.browser.test.util.TestThreadUtils;
-import org.chromium.weblayer.BrowserEmbeddingMode;
+import org.chromium.weblayer.BrowserEmbeddabilityMode;
 import org.chromium.weblayer.shell.InstrumentationActivity;
 
 import java.lang.ref.PhantomReference;
@@ -74,11 +75,12 @@ public class SmokeTest {
     @SmallTest
     @MinAndroidSdkLevel(Build.VERSION_CODES.O)
     @MinWebLayerVersion(90)
-    public void testSetEmbeddingMode() {
+    public void testSetEmbeddabilityMode() {
         InstrumentationActivity activity = mActivityTestRule.launchShellWithUrl("about:blank");
 
         TestThreadUtils.runOnUiThreadBlocking(() -> {
-            activity.getBrowser().setEmbeddingMode(BrowserEmbeddingMode.SUPPORTED, (result) -> {});
+            activity.getBrowser().setEmbeddabilityMode(
+                    BrowserEmbeddabilityMode.SUPPORTED, (result) -> {});
         });
 
         // Set css background color to blue with 50% transparency. CSS format is #RRGGBBAA.
@@ -92,8 +94,8 @@ public class SmokeTest {
 
         BoundedCountDownLatch latch = new BoundedCountDownLatch(1);
         TestThreadUtils.runOnUiThreadBlocking(() -> {
-            activity.getBrowser().setEmbeddingMode(
-                    BrowserEmbeddingMode.SUPPORTED_WITH_TRANSPARENT_BACKGROUND, (result) -> {
+            activity.getBrowser().setEmbeddabilityMode(
+                    BrowserEmbeddabilityMode.SUPPORTED_WITH_TRANSPARENT_BACKGROUND, (result) -> {
                         Assert.assertTrue(result);
                         latch.countDown();
                     });
@@ -142,7 +144,7 @@ public class SmokeTest {
                 Runtime.getRuntime().gc();
                 throw new CriteriaNotSatisfiedException("No enqueued reference");
             }
-            Criteria.checkThat(reference, Matchers.is(enqueuedReference));
+            Assert.assertEquals(reference, enqueuedReference);
         });
     }
 
@@ -198,7 +200,28 @@ public class SmokeTest {
                 Runtime.getRuntime().gc();
                 throw new CriteriaNotSatisfiedException("No enqueued reference");
             }
-            Criteria.checkThat(reference, Matchers.is(enqueuedReference));
+            Assert.assertEquals(reference, enqueuedReference);
+        });
+    }
+
+    // Verifies recreating the Activity destroys the original Fragment when using ViewModel.
+    @Test
+    @SmallTest
+    public void testRecreateActivityDestroysFragmentUseViewModel() throws Throwable {
+        Bundle extras = new Bundle();
+        extras.putBoolean(InstrumentationActivity.EXTRA_USE_VIEW_MODEL, true);
+        mActivityTestRule.launchShellWithUrl("about:blank", extras);
+        ReferenceQueue<Fragment> referenceQueue = new ReferenceQueue<>();
+        PhantomReference<Fragment> reference =
+                new PhantomReference<>(mActivityTestRule.getFragment(), referenceQueue);
+        mActivityTestRule.recreateActivity();
+        CriteriaHelper.pollInstrumentationThread(() -> {
+            Reference enqueuedReference = referenceQueue.poll();
+            if (enqueuedReference == null) {
+                Runtime.getRuntime().gc();
+                throw new CriteriaNotSatisfiedException("No enqueued reference");
+            }
+            Assert.assertEquals(reference, enqueuedReference);
         });
     }
 }

@@ -4,7 +4,6 @@
 
 #include "chrome/browser/lacros/cert_db_initializer_impl.h"
 
-#include "base/callback_forward.h"
 #include "base/check.h"
 #include "base/files/file_path.h"
 #include "base/memory/weak_ptr.h"
@@ -97,7 +96,8 @@ class IdentityManagerObserver : public signin::IdentityManager::Observer {
 
 CertDbInitializerImpl::CertDbInitializerImpl(Profile* profile)
     : profile_(profile) {
-  DCHECK(chromeos::LacrosChromeServiceImpl::Get()->IsCertDbAvailable());
+  DCHECK(chromeos::LacrosChromeServiceImpl::Get()
+             ->IsAvailable<crosapi::mojom::CertDatabase>());
 }
 
 CertDbInitializerImpl::~CertDbInitializerImpl() {
@@ -153,7 +153,7 @@ void CertDbInitializerImpl::WaitForCertDbReady() {
   }
 
   chromeos::LacrosChromeServiceImpl::Get()
-      ->cert_database_remote()
+      ->GetRemote<crosapi::mojom::CertDatabase>()
       ->GetCertDatabaseInfo(
           base::BindOnce(&CertDbInitializerImpl::OnCertDbInfoReceived,
                          weak_factory_.GetWeakPtr()));

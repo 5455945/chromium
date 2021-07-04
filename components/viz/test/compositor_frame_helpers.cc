@@ -5,6 +5,7 @@
 #include "components/viz/test/compositor_frame_helpers.h"
 
 #include <memory>
+#include <set>
 #include <utility>
 
 namespace viz {
@@ -70,6 +71,11 @@ CompositorFrameBuilder& CompositorFrameBuilder::SetTransferableResources(
   return *this;
 }
 
+CompositorFrameBuilder& CompositorFrameBuilder::PopulateResources() {
+  PopulateTransferableResources(frame_.value());
+  return *this;
+}
+
 CompositorFrameBuilder& CompositorFrameBuilder::SetBeginFrameAck(
     const BeginFrameAck& ack) {
   frame_->metadata.begin_frame_ack = ack;
@@ -125,6 +131,13 @@ CompositorFrameBuilder& CompositorFrameBuilder::SetSendFrameTokenToEmbedder(
   return *this;
 }
 
+CompositorFrameBuilder& CompositorFrameBuilder::AddDelegatedInkMetadata(
+    const gfx::DelegatedInkMetadata& metadata) {
+  frame_->metadata.delegated_ink_metadata =
+      std::make_unique<gfx::DelegatedInkMetadata>(metadata);
+  return *this;
+}
+
 CompositorFrame CompositorFrameBuilder::MakeInitCompositorFrame() const {
   static FrameTokenGenerator next_token;
   CompositorFrame frame;
@@ -152,6 +165,27 @@ AggregatedFrame MakeDefaultAggregatedFrame(size_t num_render_passes) {
 
 CompositorFrame MakeEmptyCompositorFrame() {
   return CompositorFrameBuilder().Build();
+}
+
+void PopulateTransferableResources(CompositorFrame& frame) {
+  DCHECK(frame.resource_list.empty());
+
+  std::set<ResourceId> resources_added;
+  for (auto& render_pass : frame.render_pass_list) {
+    for (auto* quad : render_pass->quad_list) {
+      for (ResourceId resource_id : quad->resources) {
+        if (resource_id == kInvalidResourceId)
+          continue;
+
+        // Adds a TransferableResource the first time seeing a ResourceId.
+        if (resources_added.insert(resource_id).second) {
+          frame.resource_list.push_back(TransferableResource::MakeSoftware(
+              SharedBitmap::GenerateId(), quad->rect.size(), RGBA_8888));
+          frame.resource_list.back().id = resource_id;
+        }
+      }
+    }
+  }
 }
 
 }  // namespace viz

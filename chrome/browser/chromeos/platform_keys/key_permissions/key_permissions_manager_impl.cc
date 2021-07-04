@@ -14,18 +14,17 @@
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/observer_list_types.h"
-#include "base/optional.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chromeos/platform_keys/key_permissions/extension_key_permissions_service.h"
 #include "chrome/browser/chromeos/platform_keys/key_permissions/key_permissions.pb.h"
 #include "chrome/browser/chromeos/platform_keys/key_permissions/key_permissions_manager.h"
 #include "chrome/browser/chromeos/platform_keys/key_permissions/key_permissions_pref_util.h"
 #include "chrome/browser/chromeos/platform_keys/key_permissions/user_private_token_kpm_service_factory.h"
-#include "chrome/browser/chromeos/platform_keys/platform_keys.h"
 #include "chrome/browser/chromeos/platform_keys/platform_keys_service.h"
 #include "chrome/browser/chromeos/platform_keys/platform_keys_service_factory.h"
+#include "chrome/browser/platform_keys/extension_key_permissions_service.h"
+#include "chrome/browser/platform_keys/platform_keys.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
@@ -34,6 +33,7 @@
 #include "components/policy/policy_constants.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace {
 
@@ -154,11 +154,11 @@ void KeyPermissionsManagerImpl::KeyPermissionsInChapsUpdater::
     case Mode::kMigratePermissionsFromPrefs: {
       // For more information about choosing |min| and |max| for the histogram,
       // please refer to:
-      // https://chromium.googlesource.com/chromium/src/tools/+/refs/heads/master/metrics/histograms/README.md#count-histograms_choosing-min-and-max
+      // https://chromium.googlesource.com/chromium/src/tools/+/refs/heads/main/metrics/histograms/README.md#count-histograms_choosing-min-and-max
       //
       // For more information about choosing the number of |buckets| for the
       // histogram, please refer to:
-      // https://chromium.googlesource.com/chromium/src/tools/+/refs/heads/master/metrics/histograms/README.md#count-histograms_choosing-number-of-buckets
+      // https://chromium.googlesource.com/chromium/src/tools/+/refs/heads/main/metrics/histograms/README.md#count-histograms_choosing-number-of-buckets
       base::UmaHistogramCustomTimes(
           kMigrationTimeHistogramName,
           /*sample=*/base::TimeTicks::Now() - update_start_time_,
@@ -210,7 +210,7 @@ void KeyPermissionsManagerImpl::KeyPermissionsInChapsUpdater::
 void KeyPermissionsManagerImpl::KeyPermissionsInChapsUpdater::
     UpdatePermissionsForKeyWithCorporateFlag(
         const std::string& public_key_spki_der,
-        base::Optional<bool> corporate_usage_allowed,
+        absl::optional<bool> corporate_usage_allowed,
         Status corporate_usage_retrieval_status) {
   if (corporate_usage_retrieval_status != Status::kSuccess) {
     LOG(ERROR) << "Couldn't retrieve corporate usage flag for a key.";
@@ -236,7 +236,14 @@ void KeyPermissionsManagerImpl::KeyPermissionsInChapsUpdater::
 
 void KeyPermissionsManagerImpl::KeyPermissionsInChapsUpdater::
     OnKeyPermissionsUpdated(Status permissions_update_status) {
-  if (permissions_update_status != Status::kSuccess) {
+  if (permissions_update_status == Status::kErrorKeyNotFound) {
+    // Some public keys are not removed from chaps although their corresponding
+    // private keys are removed. We continue the migration process if we
+    // received kKeyNotFound as a workaround until the keys-clean-up problem is
+    // solved (crbug.com/1096051).
+    LOG(WARNING) << "Corresponding private key not found. Continuing the "
+                    "migration process...";
+  } else if (permissions_update_status != Status::kSuccess) {
     LOG(ERROR) << "Couldn't update permissions for a key: "
                << StatusToString(permissions_update_status);
     std::move(callback_).Run(permissions_update_status);
@@ -318,7 +325,8 @@ KeyPermissionsManagerImpl::KeyPermissionsManagerImpl(
   DCHECK(platform_keys_service_);
   DCHECK(pref_service_);
 
-  arc_usage_manager_delegate_observer_.Add(arc_usage_manager_delegate_.get());
+  arc_usage_manager_delegate_observation_.Observe(
+      arc_usage_manager_delegate_.get());
 
   // This waits until the token this KPM is responsible for is available.
   platform_keys_service_->GetTokens(base::BindOnce(
@@ -391,6 +399,12 @@ void KeyPermissionsManagerImpl::IsKeyAllowedForUsage(
     return;
   }
 
+  // All system token keys are allowed for corporate usage by default.
+  if (usage == KeyUsage::kCorporate && token_id_ == TokenId::kSystem) {
+    std::move(callback).Run(/*allowed=*/true, Status::kSuccess);
+    return;
+  }
+
   platform_keys_service_->GetAttributeForKey(
       token_id_, public_key_spki_der, KeyAttributeType::kKeyPermissions,
       base::BindOnce(
@@ -412,7 +426,7 @@ void KeyPermissionsManagerImpl::AllowKeyForCorporateUsage(
 void KeyPermissionsManagerImpl::IsKeyAllowedForUsageWithPermissions(
     IsKeyAllowedForUsageCallback callback,
     KeyUsage usage,
-    const base::Optional<std::string>& serialized_key_permissions,
+    const absl::optional<std::string>& serialized_key_permissions,
     Status key_attribute_retrieval_status) {
   if (key_attribute_retrieval_status != Status::kSuccess) {
     LOG(ERROR) << "Error while retrieving key permissions: "

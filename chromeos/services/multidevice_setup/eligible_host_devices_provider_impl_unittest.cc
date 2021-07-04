@@ -9,7 +9,6 @@
 #include "ash/constants/ash_features.h"
 #include "base/containers/flat_set.h"
 #include "base/macros.h"
-#include "base/stl_util.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time_override.h"
 #include "chromeos/components/multidevice/remote_device_test_util.h"
@@ -361,7 +360,7 @@ TEST_P(MultiDeviceSetupEligibleHostDevicesProviderImplTest,
   fake_device_sync_client()->NotifyNewDevicesSynced();
   fake_device_sync_client()->InvokePendingGetDevicesActivityStatusCallback(
       device_sync::mojom::NetworkRequestResult::kInternalServerError,
-      base::nullopt);
+      absl::nullopt);
 
   multidevice::DeviceWithConnectivityStatusList eligible_active_devices =
       provider()->GetEligibleActiveHostDevices();

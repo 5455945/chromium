@@ -59,6 +59,7 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/containers/unique_ptr_adapters.h"
+#include "base/cxx17_backports.h"
 #include "base/files/file_descriptor_watcher_posix.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -73,7 +74,6 @@
 #include "base/rand_util.h"
 #include "base/sequenced_task_runner_helpers.h"
 #include "base/single_thread_task_runner.h"
-#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -289,7 +289,7 @@ bool SymlinkPath(const base::FilePath& target, const base::FilePath& path) {
 bool DisplayProfileInUseError(const base::FilePath& lock_path,
                               const std::string& hostname,
                               int pid) {
-  base::string16 error = l10n_util::GetStringFUTF16(
+  std::u16string error = l10n_util::GetStringFUTF16(
       IDS_PROFILE_IN_USE_POSIX, base::NumberToString16(pid),
       base::ASCIIToUTF16(hostname));
   LOG(ERROR) << error;
@@ -298,8 +298,8 @@ bool DisplayProfileInUseError(const base::FilePath& lock_path,
     return g_user_opted_unlock_in_use_profile;
 
 #if defined(OS_LINUX) || defined(OS_CHROMEOS)
-  base::string16 relaunch_button_text = l10n_util::GetStringUTF16(
-      IDS_PROFILE_IN_USE_LINUX_RELAUNCH);
+  std::u16string relaunch_button_text =
+      l10n_util::GetStringUTF16(IDS_PROFILE_IN_USE_LINUX_RELAUNCH);
   return ShowProcessSingletonDialog(error, relaunch_button_text);
 #elif defined(OS_MAC)
   // On Mac, always usurp the lock.

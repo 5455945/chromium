@@ -15,10 +15,12 @@ namespace autofill {
 class AutofillBubbleBase;
 class LocalCardMigrationBubbleController;
 class OfferNotificationBubbleController;
-class SaveAddressProfileBubbleController;
+class SaveUpdateAddressProfileBubbleController;
+class EditAddressProfileDialogController;
 class SaveCardBubbleController;
 class SaveUPIBubble;
 class SaveUPIBubbleController;
+class VirtualCardManualFallbackBubbleController;
 
 // Responsible for receiving calls from controllers and showing autofill
 // bubbles.
@@ -48,7 +50,21 @@ class AutofillBubbleHandler {
 
   virtual AutofillBubbleBase* ShowSaveAddressProfileBubble(
       content::WebContents* web_contents,
-      SaveAddressProfileBubbleController* controller,
+      SaveUpdateAddressProfileBubbleController* controller,
+      bool is_user_gesture) = 0;
+
+  virtual AutofillBubbleBase* ShowUpdateAddressProfileBubble(
+      content::WebContents* web_contents,
+      SaveUpdateAddressProfileBubbleController* controller,
+      bool is_user_gesture) = 0;
+
+  virtual AutofillBubbleBase* ShowEditAddressProfileDialog(
+      content::WebContents* web_contents,
+      EditAddressProfileDialogController* controller) = 0;
+
+  virtual AutofillBubbleBase* ShowVirtualCardManualFallbackBubble(
+      content::WebContents* web_contents,
+      VirtualCardManualFallbackBubbleController* controller,
       bool is_user_gesture) = 0;
 
   // TODO(crbug.com/964127): Wait for the integration with sign in after local

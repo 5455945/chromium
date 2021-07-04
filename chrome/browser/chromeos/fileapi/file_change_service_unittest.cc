@@ -4,15 +4,17 @@
 
 #include "chrome/browser/chromeos/fileapi/file_change_service.h"
 
+#include "base/callback_helpers.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/scoped_observation.h"
 #include "base/test/bind.h"
 #include "base/unguessable_token.h"
+#include "chrome/browser/ash/file_manager/fileapi_util.h"
+#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/chromeos/file_manager/app_id.h"
-#include "chrome/browser/chromeos/file_manager/fileapi_util.h"
+#include "chrome/browser/chromeos/file_manager/path_util.h"
 #include "chrome/browser/chromeos/fileapi/file_change_service_factory.h"
 #include "chrome/browser/chromeos/fileapi/file_change_service_observer.h"
-#include "chrome/browser/chromeos/login/users/fake_chrome_user_manager.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "components/user_manager/scoped_user_manager.h"
@@ -25,6 +27,7 @@
 #include "storage/browser/test/async_file_test_helper.h"
 #include "storage/browser/test/mock_blob_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "url/origin.h"
 
 namespace chromeos {
 
@@ -34,8 +37,7 @@ namespace {
 
 // Returns the file system context associated with the specified `profile`.
 storage::FileSystemContext* GetFileSystemContext(Profile* profile) {
-  return file_manager::util::GetFileSystemContextForExtensionId(
-      profile, file_manager::kFileManagerAppId);
+  return file_manager::util::GetFileManagerFileSystemContext(profile);
 }
 
 // Returns the file system operation runner associated with the specified
@@ -116,10 +118,8 @@ class TempFileSystem {
             name_, storage::kFileSystemTypeLocal,
             storage::FileSystemMountOption(), temp_dir_.GetPath()));
 
-    GetFileSystemContext(profile_)
-        ->external_backend()
-        ->GrantFileAccessToExtension(file_manager::kFileManagerAppId,
-                                     base::FilePath(name_));
+    GetFileSystemContext(profile_)->external_backend()->GrantFileAccessToOrigin(
+        file_manager::util::GetFilesAppOrigin(), base::FilePath(name_));
   }
 
   // Synchronously creates the file specified by `url`.
@@ -228,7 +228,7 @@ class TempFileSystem {
 class FileChangeServiceTest : public BrowserWithTestWindowTest {
  public:
   FileChangeServiceTest()
-      : fake_user_manager_(new chromeos::FakeChromeUserManager),
+      : fake_user_manager_(new FakeChromeUserManager),
         user_manager_enabler_(base::WrapUnique(fake_user_manager_)) {}
 
   FileChangeServiceTest(const FileChangeServiceTest& other) = delete;
@@ -250,7 +250,7 @@ class FileChangeServiceTest : public BrowserWithTestWindowTest {
     return CreateProfileWithName(kPrimaryProfileName);
   }
 
-  chromeos::FakeChromeUserManager* fake_user_manager_;
+  FakeChromeUserManager* fake_user_manager_;
   user_manager::ScopedUserManager user_manager_enabler_;
 };
 

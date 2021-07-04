@@ -21,6 +21,19 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histograms>
 
+<variants name="ProcessLifetimeResolution">
+  <variant name="HighResolution" summary="Tops out at 5 minutes."/>
+  <variant name="LowResolution" summary="Tops out at 24 hours"/>
+</variants>
+
+<variants name="RendererLifetime">
+  <variant name="" summary="Applies to all lifetimes."/>
+  <variant name=".LongLived"
+      summary="Renderer process was alive for more than a minute."/>
+  <variant name=".ShortLived"
+      summary="Renderer process was alive for up to one minute."/>
+</variants>
+
 <histogram name="Renderer.CompositedScrolling" enum="CompositedScrolling"
     expires_after="M85">
   <obsolete>
@@ -38,7 +51,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram
     name="Renderer.DelegatedInkTrail.LatencyImprovement.{Renderer}.{Prediction}"
-    units="ms" expires_after="2021-04-01">
+    units="ms" expires_after="M95">
   <owner>jonross@chromium.org</owner>
   <owner>mabian@microsoft.com</owner>
   <summary>
@@ -58,8 +71,30 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
   </token>
 </histogram>
 
+<histogram
+    name="Renderer.DelegatedInkTrail.LatencyImprovementWithPrediction.Experiment{Number}"
+    units="ms" expires_after="M95">
+  <owner>jonross@chromium.org</owner>
+  <owner>mabian@microsoft.com</owner>
+  <summary>
+    The latency improvement provided by predicting extra delegated ink points
+    when using the delegated ink trail API with SkiaRenderer in milliseconds.
+    The improvement is the difference between the timestamp of the final real
+    point and the final predicted point.
+
+    Part of a series of predicted point experimentation histograms. This
+    experiment predicts {Number} in the future.
+  </summary>
+  <token key="Number">
+    <variant name="0" summary="1 predicted point, 12ms"/>
+    <variant name="1" summary="2 predicted points, 6ms and 12ms"/>
+    <variant name="2" summary="1 predicted point, 6ms"/>
+    <variant name="3" summary="2 predicted points, 3ms and 6ms"/>
+  </token>
+</histogram>
+
 <histogram name="Renderer.DelegatedInkTrail.Prediction.WrongDirection"
-    enum="BooleanDirection" expires_after="2021-04-01">
+    enum="BooleanDirection" expires_after="M95">
   <owner>jonross@chromium.org</owner>
   <owner>mabian@microsoft.com</owner>
   <summary>
@@ -70,7 +105,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Renderer.DelegatedInkTrail.Prediction.{Direction}Prediction"
-    units="pixels" expires_after="2021-04-01">
+    units="pixels" expires_after="M95">
   <owner>jonross@chromium.org</owner>
   <owner>mabian@microsoft.com</owner>
   <summary>
@@ -84,7 +119,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Renderer.DelegatedInkTrail.Prediction.{Type}Jitter"
-    units="pixels" expires_after="2021-04-01">
+    units="pixels" expires_after="M95">
   <owner>jonross@chromium.org</owner>
   <owner>mabian@microsoft.com</owner>
   <summary>
@@ -97,6 +132,100 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
     <variant name="Prediction" summary="prediction"/>
     <variant name="Visual" summary="frame"/>
   </token>
+</histogram>
+
+<histogram
+    name="Renderer.DelegatedInkTrail.PredictionExperiment{Number}.WrongDirection"
+    enum="BooleanDirection" expires_after="M95">
+  <owner>jonross@chromium.org</owner>
+  <owner>mabian@microsoft.com</owner>
+  <summary>
+    Whether the prediction is in the same direction as the real trajectory at
+    the same prediction time.
+
+    Part of a series of predicted point experimentation histograms. This
+    experiment predicts {Number} in the future.
+  </summary>
+  <token key="Number">
+    <variant name="0" summary="1 predicted point, 12ms"/>
+    <variant name="1" summary="2 predicted points, 6ms and 12ms"/>
+    <variant name="2" summary="1 predicted point, 6ms"/>
+    <variant name="3" summary="2 predicted points, 3ms and 6ms"/>
+  </token>
+</histogram>
+
+<histogram
+    name="Renderer.DelegatedInkTrail.PredictionExperiment{Number}.{Direction}Prediction"
+    units="pixels" expires_after="M95">
+  <owner>jonross@chromium.org</owner>
+  <owner>mabian@microsoft.com</owner>
+  <summary>
+    {Direction}-shoot distance in pixels between a predicted point and the
+    corresponding interpolated real point that occurred at the prediction time.
+
+    Part of a series of predicted point experimentation histograms. This
+    experiment predicts {Number} in the future.
+  </summary>
+  <token key="Number">
+    <variant name="0" summary="1 predicted point, 12ms"/>
+    <variant name="1" summary="2 predicted points, 6ms and 12ms"/>
+    <variant name="2" summary="1 predicted point, 6ms"/>
+    <variant name="3" summary="2 predicted points, 3ms and 6ms"/>
+  </token>
+  <token key="Direction">
+    <variant name="Over"/>
+    <variant name="Under"/>
+  </token>
+</histogram>
+
+<histogram
+    name="Renderer.DelegatedInkTrail.PredictionExperiment{Number}.{Type}Jitter"
+    units="pixels" expires_after="M95">
+  <owner>jonross@chromium.org</owner>
+  <owner>mabian@microsoft.com</owner>
+  <summary>
+    Euclidean distance in pixels between two successive variations of delegated
+    ink trail deltas which are the difference beween a predicted delegated ink
+    point and its corresponding interpolated real position that occurred at
+    {Type} time.
+
+    Part of a series of predicted point experimentation histograms. This
+    experiment predicts {Number} in the future.
+  </summary>
+  <token key="Number">
+    <variant name="0" summary="1 predicted point, 12ms"/>
+    <variant name="1" summary="2 predicted points, 6ms and 12ms"/>
+    <variant name="2" summary="1 predicted point, 6ms"/>
+    <variant name="3" summary="2 predicted points, 3ms and 6ms"/>
+  </token>
+  <token key="Type">
+    <variant name="Prediction" summary="prediction"/>
+    <variant name="Visual" summary="frame"/>
+  </token>
+</histogram>
+
+<histogram name="Renderer.Font.PrimaryFont.FCP" units="ms"
+    expires_after="2021-10-31">
+  <owner>yosin@chromium.org</owner>
+  <owner>kojii@chromium.org</owner>
+  <owner>layout-dev@chromium.org</owner>
+  <summary>
+    The time spent acquiring the primary font consumed in the main tread before
+    FCP. On Windows, this includes IPC roundtrip to browser process and
+    DirectWriteFontProxy and DirectWrite calls.
+  </summary>
+</histogram>
+
+<histogram name="Renderer.Font.PrimaryFont.FCP.Style" units="ms"
+    expires_after="2021-10-31">
+  <owner>yosin@chromium.org</owner>
+  <owner>kojii@chromium.org</owner>
+  <owner>layout-dev@chromium.org</owner>
+  <summary>
+    The time spent acquiring the primary font consumed in style recalc, in the
+    main tread before FCP. On Windows, this includes IPC roundtrip to browser
+    process and DirectWriteFontProxy and DirectWrite calls.
+  </summary>
 </histogram>
 
 <histogram name="Renderer.Hung.Duration" units="ms" expires_after="M85">
@@ -138,7 +267,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Renderer.PaintPreview.Capture.MainFrameBlinkCaptureDuration"
-    units="ms" expires_after="2021-06-27">
+    units="ms" expires_after="2021-10-31">
   <owner>ckitagawa@chromium.org</owner>
   <owner>mahmoudi@chromium.org</owner>
   <owner>fredmello@chromium.org</owner>
@@ -149,7 +278,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Renderer.PaintPreview.Capture.MainFrameSuccess"
-    enum="BooleanSuccess" expires_after="2021-06-27">
+    enum="BooleanSuccess" expires_after="2021-08-29">
   <owner>ckitagawa@chromium.org</owner>
   <owner>mahmoudi@chromium.org</owner>
   <owner>fredmello@chromium.org</owner>
@@ -159,7 +288,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Renderer.PaintPreview.Capture.SubframeBlinkCaptureDuration"
-    units="ms" expires_after="2021-06-27">
+    units="ms" expires_after="2021-10-31">
   <owner>ckitagawa@chromium.org</owner>
   <owner>mahmoudi@chromium.org</owner>
   <owner>fredmello@chromium.org</owner>
@@ -170,13 +299,71 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="Renderer.PaintPreview.Capture.SubframeSuccess"
-    enum="BooleanSuccess" expires_after="2021-06-27">
+    enum="BooleanSuccess" expires_after="2021-10-31">
   <owner>ckitagawa@chromium.org</owner>
   <owner>mahmoudi@chromium.org</owner>
   <owner>fredmello@chromium.org</owner>
   <summary>
     Records a boolean indicating whether a capture for a subframe succeeded.
   </summary>
+</histogram>
+
+<histogram name="Renderer.ProcessLifetime.{Resolution}" units="ms"
+    expires_after="2021-08-29">
+  <obsolete>
+    Replaced by Renderer.ProcessLifetime2* in 06/2021 because the metric was not
+    specific to renderer processes.
+  </obsolete>
+  <owner>olivierli@chromium.org</owner>
+  <owner>catan-team@chromium.org</owner>
+  <summary>
+    The total time for which a renderer process was live. Recorded when the
+    browser identifies the process as having gone away.
+  </summary>
+  <token key="Resolution" variants="ProcessLifetimeResolution"/>
+</histogram>
+
+<histogram name="Renderer.ProcessLifetime2.{Resolution}" units="ms"
+    expires_after="2021-08-29">
+  <owner>olivierli@chromium.org</owner>
+  <owner>catan-team@chromium.org</owner>
+  <summary>
+    The total time for which a renderer process was live. Recorded when the
+    browser identifies the process as having gone away.
+  </summary>
+  <token key="Resolution" variants="ProcessLifetimeResolution"/>
+</histogram>
+
+<histogram name="Renderer.TotalCPUUse2{Lifetime}" units="ms"
+    expires_after="2022-05-06">
+  <owner>olivierli@chromium.org</owner>
+  <owner>catan-team@chromium.org</owner>
+  <summary>
+    Total CPU utilization of a renderer, read just before the process is about
+    to go away. Total CPU time can exceed the total process lifetime. This is
+    because CPU use of N seconds can be spread out over M threads. Example: A
+    Renderer having 4 threads active for a period of 1 minute in parallel will
+    use 4 minutes of CPU time. Not recorded on Android.
+  </summary>
+  <token key="Lifetime" variants="RendererLifetime"/>
+</histogram>
+
+<histogram name="Renderer.TotalCPUUse{Lifetime}" units="ms"
+    expires_after="2022-05-06">
+  <obsolete>
+    Replaced by Renderer.TotalCPUUse2* in 06/2021 because the metric was not
+    specific to renderer processes.
+  </obsolete>
+  <owner>olivierli@chromium.org</owner>
+  <owner>catan-team@chromium.org</owner>
+  <summary>
+    Total CPU utilization of a renderer, read just before the process is about
+    to go away. Total CPU time can exceed the total process lifetime. This is
+    because CPU use of N seconds can be spread out over M threads. Example: A
+    Renderer having 4 threads active for a period of 1 minute in parallel will
+    use 4 minutes of CPU time. Not recorded on Android.
+  </summary>
+  <token key="Lifetime" variants="RendererLifetime"/>
 </histogram>
 
 <histogram name="Renderer.ViewportZoomBugCount" enum="BooleanHit"
@@ -200,7 +387,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram base="true" name="RendererScheduler.QueueingDurationPerQueueType"
-    units="ms" expires_after="2021-08-09">
+    units="ms" expires_after="2021-10-10">
 <!-- Name completed by histogram_suffixes name="RendererScheduler.QueueType" -->
 
   <owner>kdillon@chromium.org</owner>
@@ -214,7 +401,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="RendererScheduler.RendererMainThreadLoad5" units="%"
-    expires_after="M95">
+    expires_after="2021-12-12">
   <owner>altimin@chromium.org</owner>
   <summary>
     Renderer main thread load (percentage of time spent in tasks), reported in
@@ -250,6 +437,9 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram name="RendererScheduler.TaskCountPerFrameType"
     enum="RendererSchedulerFrameType2" expires_after="M85">
+  <obsolete>
+    Removed in M92.
+  </obsolete>
   <owner>altimin@chromium.org</owner>
   <summary>
     The number of completed renderer tasks split per frame type. Used to monitor
@@ -276,6 +466,9 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram name="RendererScheduler.TaskCountPerQueueType"
     enum="RendererSchedulerTaskQueueType" expires_after="M77">
+  <obsolete>
+    Removed in M92.
+  </obsolete>
   <owner>altimin@chromium.org</owner>
   <summary>
     The number of completed renderer tasks split per task queue type. Used to
@@ -305,6 +498,9 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram name="RendererScheduler.TaskCPUDurationPerThreadType2"
     enum="RendererSchedulerThreadType" expires_after="M85">
+  <obsolete>
+    Removed in M92.
+  </obsolete>
   <owner>altimin@chromium.org</owner>
   <summary>
     Total cpu time (reported in full seconds) of renderer tasks split by per
@@ -341,6 +537,9 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram name="RendererScheduler.TaskDurationPerFrameType3"
     enum="RendererSchedulerFrameType2" expires_after="M85">
+  <obsolete>
+    Removed in M92.
+  </obsolete>
   <owner>altimin@chromium.org</owner>
   <summary>
     Total duration (reported in full seconds) of renderer per-frame tasks split
@@ -358,6 +557,9 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram name="RendererScheduler.TaskDurationPerQueueType3"
     enum="RendererSchedulerTaskQueueType" expires_after="M85">
+  <obsolete>
+    Removed in M92.
+  </obsolete>
   <owner>altimin@chromium.org</owner>
   <owner>scheduler-dev@chromium.org</owner>
   <summary>
@@ -375,7 +577,7 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 </histogram>
 
 <histogram name="RendererScheduler.TaskDurationPerTaskType2"
-    enum="RendererSchedulerTaskType" expires_after="M95">
+    enum="RendererSchedulerTaskType" expires_after="2021-12-12">
   <owner>altimin@chromium.org</owner>
   <owner>hajimehoshi@chromium.org</owner>
   <summary>
@@ -428,6 +630,9 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram name="RendererScheduler.TaskDurationPerUseCase2"
     enum="RendererSchedulerTaskUseCase" expires_after="M77">
+  <obsolete>
+    Removed in M92.
+  </obsolete>
   <owner>altimin@chromium.org</owner>
   <owner>farahcharab@chromium.org</owner>
   <summary>
@@ -505,7 +710,8 @@ reviews. Googlers can read more about this at go/gwsq-gerrit.
 
 <histogram name="RendererScheduler.UpdateForSameDocumentNavigationCount"
     enum="SinglePageAppNavigationType" expires_after="M85">
-  <owner>maxlg@chromium.org</owner>
+  <owner>npm@chromium.org</owner>
+  <owner>speed-metrics-dev@chromium.org</owner>
   <summary>
     The count of same-document-navigations split by whether it is the
     same-document backward/forward navigation, history API navigation, or other

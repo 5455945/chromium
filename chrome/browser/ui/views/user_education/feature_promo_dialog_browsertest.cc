@@ -8,11 +8,13 @@
 #include "base/bind.h"
 #include "base/feature_list.h"
 #include "base/test/scoped_feature_list.h"
+#include "build/chromeos_buildflags.h"
 #include "chrome/browser/banners/test_app_banner_manager_desktop.h"
 #include "chrome/browser/feature_engagement/tracker_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/ui_features.h"
+#include "chrome/browser/ui/views/bookmarks/bookmark_bar_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/global_media_controls/media_toolbar_button_view.h"
 #include "chrome/browser/ui/views/page_action/page_action_icon_controller.h"
@@ -21,9 +23,12 @@
 #include "chrome/browser/ui/views/user_education/feature_promo_controller_views.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/bookmarks/common/bookmark_pref_names.h"
+#include "components/feature_engagement/public/feature_constants.h"
 #include "components/feature_engagement/public/feature_list.h"
 #include "components/feature_engagement/test/mock_tracker.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "components/reading_list/features/reading_list_switches.h"
 #include "content/public/test/browser_test.h"
 #include "media/base/media_switches.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -41,6 +46,12 @@ using ::testing::Return;
 class FeaturePromoDialogTest : public DialogBrowserTest {
  public:
   FeaturePromoDialogTest() {
+    // TODO(crbug.com/1182859): Update this test to enable the
+    // kUseSodaForLiveCaption feature.
+    scoped_feature_list_.InitWithFeatures(
+        {}, {media::kLiveCaption, media::kUseSodaForLiveCaption,
+             feature_engagement::kIPHLiveCaptionFeature});
+
     // TODO(crbug.com/1141984): fix cause of bubbles overflowing the
     // screen and remove this.
     set_should_verify_dialog_bounds(false);
@@ -81,6 +92,8 @@ class FeaturePromoDialogTest : public DialogBrowserTest {
   }
 
  private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+
   static void RegisterMockTracker(content::BrowserContext* context) {
     feature_engagement::TrackerFactory::GetInstance()->SetTestingFactory(
         context, base::BindRepeating(CreateMockTracker));
@@ -126,7 +139,7 @@ class FeaturePromoDialogTest : public DialogBrowserTest {
 // //chrome/browser/ui/test/test_browser_dialog.h
 
 IN_PROC_BROWSER_TEST_F(FeaturePromoDialogTest, InvokeUi_IPH_DesktopPwaInstall) {
-  set_baseline("2573384");
+  set_baseline("2936082");
   // Navigate to an installable site so PWA install icon shows up.
   ASSERT_TRUE(embedded_test_server()->Start());
   ui_test_utils::NavigateToURL(
@@ -149,12 +162,12 @@ IN_PROC_BROWSER_TEST_F(FeaturePromoDialogTest, InvokeUi_IPH_DesktopPwaInstall) {
 
 IN_PROC_BROWSER_TEST_F(FeaturePromoDialogTest,
                        InvokeUi_IPH_DesktopTabGroupsNewGroup) {
-  set_baseline("2473537");
+  set_baseline("2936082");
   ShowAndVerifyUi();
 }
 
 IN_PROC_BROWSER_TEST_F(FeaturePromoDialogTest, InvokeUi_IPH_LiveCaption) {
-  if (!base::FeatureList::IsEnabled(media::kLiveCaption))
+  if (!media::IsLiveCaptionFeatureEnabled())
     return;
 
   BrowserView::GetBrowserViewForBrowser(browser())
@@ -163,12 +176,56 @@ IN_PROC_BROWSER_TEST_F(FeaturePromoDialogTest, InvokeUi_IPH_LiveCaption) {
       ->Show();
   RunScheduledLayouts();
 
-  set_baseline("2473537");
+  set_baseline("2936082");
   ShowAndVerifyUi();
 }
 
+#if !BUILDFLAG(IS_CHROMEOS_ASH)
+IN_PROC_BROWSER_TEST_F(FeaturePromoDialogTest, InvokeUi_IPH_ProfileSwitch) {
+  set_baseline("2936082");
+  ShowAndVerifyUi();
+}
+#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+
 IN_PROC_BROWSER_TEST_F(FeaturePromoDialogTest, InvokeUi_IPH_ReopenTab) {
-  set_baseline("2473537");
+  set_baseline("2936082");
+  ShowAndVerifyUi();
+}
+
+// Need a separate fixture to override the feature flag.
+class FeaturePromoDialogReadLaterTest : public FeaturePromoDialogTest {
+ public:
+  FeaturePromoDialogReadLaterTest() {
+    feature_list_.InitAndEnableFeature(reading_list::switches::kReadLater);
+  }
+
+  void SetUpOnMainThread() override {
+    FeaturePromoDialogTest::SetUpOnMainThread();
+    BookmarkBarView::DisableAnimationsForTesting(true);
+    browser()->profile()->GetPrefs()->SetBoolean(
+        bookmarks::prefs::kShowBookmarkBar, true);
+  }
+
+  ~FeaturePromoDialogReadLaterTest() override = default;
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(FeaturePromoDialogReadLaterTest,
+                       InvokeUi_IPH_ReadingListDiscovery) {
+  set_baseline("2723691");
+  ShowAndVerifyUi();
+}
+
+IN_PROC_BROWSER_TEST_F(FeaturePromoDialogReadLaterTest,
+                       InvokeUi_IPH_ReadingListEntryPoint) {
+  set_baseline("2749474");
+  ShowAndVerifyUi();
+}
+
+IN_PROC_BROWSER_TEST_F(FeaturePromoDialogTest, InvokeUi_IPH_TabSearch) {
+  set_baseline("2991858");
   ShowAndVerifyUi();
 }
 

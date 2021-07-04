@@ -8,27 +8,26 @@
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/command_line.h"
-#include "base/optional.h"
 #include "base/test/scoped_mock_time_message_loop_task_runner.h"
 #include "base/test/task_environment.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/ash/login/enrollment/enterprise_enrollment_helper.h"
 #include "chrome/browser/ash/login/enrollment/enterprise_enrollment_helper_mock.h"
 #include "chrome/browser/ash/login/enrollment/mock_enrollment_screen.h"
-#include "chrome/browser/chromeos/login/wizard_context.h"
-#include "chrome/browser/chromeos/policy/device_cloud_policy_manager_chromeos.h"
-#include "chrome/browser/chromeos/policy/enrollment_config.h"
+#include "chrome/browser/ash/login/wizard_context.h"
+#include "chrome/browser/chromeos/policy/enrollment/enrollment_config.h"
 #include "chrome/browser/policy/enrollment_status.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
 #include "chromeos/tpm/stub_install_attributes.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
-using testing::_;
-using testing::AnyNumber;
-using testing::Invoke;
+namespace ash {
 
-namespace chromeos {
+using ::testing::_;
+using ::testing::AnyNumber;
+using ::testing::Invoke;
 
 class EnrollmentScreenUnitTest : public testing::Test {
  public:
@@ -69,7 +68,7 @@ class EnrollmentScreenUnitTest : public testing::Test {
   std::unique_ptr<WizardContext> wizard_context_;
 
   // The last result reported by `enrollment_screen_`.
-  base::Optional<EnrollmentScreen::Result> last_screen_result_;
+  absl::optional<EnrollmentScreen::Result> last_screen_result_;
 
   policy::EnrollmentConfig enrollment_config_;
 
@@ -323,4 +322,4 @@ INSTANTIATE_TEST_SUITE_P(
         policy::EnrollmentConfig::MODE_ATTESTATION_INITIAL_SERVER_FORCED,
         policy::EnrollmentConfig::MODE_ATTESTATION_SERVER_FORCED));
 
-}  // namespace chromeos
+}  // namespace ash

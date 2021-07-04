@@ -38,9 +38,12 @@
 #include "storage/browser/blob/blob_impl.h"
 #include "storage/browser/blob/blob_storage_context.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_event_status.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_registration_options.mojom.h"
+#include "url/origin.h"
 
 namespace content {
 namespace service_worker_main_resource_loader_unittest {
@@ -152,9 +155,9 @@ class FetchEventServiceWorker : public FakeServiceWorker {
   }
 
   // Tells this worker to respond to fetch events with the redirect response.
-  void RespondWithRedirectResponse(const std::string& location_header) {
+  void RespondWithRedirectResponse(const GURL& new_url) {
     response_mode_ = ResponseMode::kRedirect;
-    location_header_ = location_header;
+    redirected_url_ = new_url;
   }
 
   // Tells this worker to simulate failure to dispatch the fetch event to the
@@ -314,7 +317,7 @@ class FetchEventServiceWorker : public FakeServiceWorker {
         // Now the caller must call FinishWaitUntil() to finish the event.
         break;
       case ResponseMode::kRedirect:
-        response_callback->OnResponse(RedirectResponse(location_header_),
+        response_callback->OnResponse(RedirectResponse(redirected_url_.spec()),
                                       std::move(timing));
         std::move(finish_callback)
             .Run(blink::mojom::ServiceWorkerEventStatus::COMPLETED);
@@ -364,7 +367,7 @@ class FetchEventServiceWorker : public FakeServiceWorker {
       response_callback_;
 
   // For ResponseMode::kRedirect.
-  std::string location_header_;
+  GURL redirected_url_;
 
   // For ResponseMode::kHeaders
   base::flat_map<std::string, std::string> headers_;
@@ -388,7 +391,6 @@ class FetchEventServiceWorker : public FakeServiceWorker {
 network::mojom::URLResponseHeadPtr CreateResponseInfoFromServiceWorker() {
   auto head = network::mojom::URLResponseHead::New();
   head->was_fetched_via_service_worker = true;
-  head->was_fallback_required_by_service_worker = false;
   head->url_list_via_service_worker = std::vector<GURL>();
   head->response_type = network::mojom::FetchResponseType::kDefault;
   head->cache_storage_cache_name = std::string();
@@ -419,7 +421,8 @@ class ServiceWorkerMainResourceLoaderTest : public testing::Test {
     blink::mojom::ServiceWorkerRegistrationOptions options;
     options.scope = GURL("https://example.com/");
     registration_ = CreateNewServiceWorkerRegistration(
-        helper_->context()->registry(), options);
+        helper_->context()->registry(), options,
+        blink::StorageKey(url::Origin::Create(options.scope)));
     version_ = CreateNewServiceWorkerVersion(
         helper_->context()->registry(), registration_.get(),
         GURL("https://example.com/service_worker.js"),
@@ -436,7 +439,7 @@ class ServiceWorkerMainResourceLoaderTest : public testing::Test {
 
     // Make the registration findable via storage functions.
     registration_->set_last_update_check(base::Time::Now());
-    base::Optional<blink::ServiceWorkerStatusCode> status;
+    absl::optional<blink::ServiceWorkerStatusCode> status;
     base::RunLoop run_loop;
     registry()->StoreRegistration(
         registration_.get(), version_.get(),
@@ -458,7 +461,7 @@ class ServiceWorkerMainResourceLoaderTest : public testing::Test {
     // create a response. The main script response is set when the first
     // TransferInstalledScript().
     {
-      base::Optional<blink::ServiceWorkerStatusCode> status;
+      absl::optional<blink::ServiceWorkerStatusCode> status;
       base::RunLoop loop;
       version_->StartWorker(
           ServiceWorkerMetrics::EventType::UNKNOWN,
@@ -498,9 +501,7 @@ class ServiceWorkerMainResourceLoaderTest : public testing::Test {
     loader_ = std::make_unique<ServiceWorkerMainResourceLoader>(
         base::BindOnce(&ServiceWorkerMainResourceLoaderTest::Fallback,
                        base::Unretained(this)),
-        container_host_,
-        base::WrapRefCounted<URLLoaderFactoryGetter>(
-            helper_->context()->loader_factory_getter()));
+        container_host_);
 
     // Load |request.url|.
     loader_->StartRequest(*request, loader_remote_.BindNewPipeAndPassReceiver(),
@@ -532,8 +533,6 @@ class ServiceWorkerMainResourceLoaderTest : public testing::Test {
       const network::mojom::URLResponseHead& expected_info) {
     EXPECT_EQ(expected_info.was_fetched_via_service_worker,
               info.was_fetched_via_service_worker);
-    EXPECT_EQ(expected_info.was_fallback_required_by_service_worker,
-              info.was_fallback_required_by_service_worker);
     EXPECT_EQ(expected_info.url_list_via_service_worker,
               info.url_list_via_service_worker);
     EXPECT_EQ(expected_info.response_type, info.response_type);
@@ -1005,7 +1004,7 @@ TEST_F(ServiceWorkerMainResourceLoaderTest, EarlyResponse) {
 TEST_F(ServiceWorkerMainResourceLoaderTest, Redirect) {
   base::HistogramTester histogram_tester;
   GURL new_url("https://example.com/redirected");
-  service_worker_->RespondWithRedirectResponse(new_url.spec());
+  service_worker_->RespondWithRedirectResponse(new_url);
 
   // Perform the request.
   StartRequest(CreateRequest());
@@ -1019,29 +1018,6 @@ TEST_F(ServiceWorkerMainResourceLoaderTest, Redirect) {
   EXPECT_EQ(301, redirect_info.status_code);
   EXPECT_EQ("GET", redirect_info.new_method);
   EXPECT_EQ(new_url, redirect_info.new_url);
-
-  histogram_tester.ExpectUniqueSample(kHistogramMainResourceFetchEvent,
-                                      blink::ServiceWorkerStatusCode::kOk, 1);
-}
-
-// Synthetic response lack a base URL, so relative redirects turn into a
-// redirect to an invalid URL. See https://crbug.com/1170379.
-TEST_F(ServiceWorkerMainResourceLoaderTest, RedirectRelativeNoBaseURL) {
-  base::HistogramTester histogram_tester;
-  service_worker_->RespondWithRedirectResponse("/foo.html");
-
-  // Perform the request.
-  StartRequest(CreateRequest());
-  client_.RunUntilRedirectReceived();
-
-  auto& info = client_.response_head();
-  EXPECT_EQ(301, info->headers->response_code());
-  ExpectResponseInfo(*info, *CreateResponseInfoFromServiceWorker());
-
-  const net::RedirectInfo& redirect_info = client_.redirect_info();
-  EXPECT_EQ(301, redirect_info.status_code);
-  EXPECT_EQ("GET", redirect_info.new_method);
-  EXPECT_FALSE(redirect_info.new_url.is_valid());
 
   histogram_tester.ExpectUniqueSample(kHistogramMainResourceFetchEvent,
                                       blink::ServiceWorkerStatusCode::kOk, 1);

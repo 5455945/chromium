@@ -56,12 +56,14 @@
 #include "ash/constants/ash_switches.h"
 #include "ash/keyboard/ui/grit/keyboard_resources.h"
 #include "base/system/sys_info.h"
+#include "chrome/browser/chromeos/file_manager/app_id.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/storage_partition.h"
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/common/switches.h"
 #include "storage/browser/file_system/file_system_context.h"
+#include "ui/accessibility/accessibility_features.h"
 #include "ui/chromeos/devicetype_utils.h"
 #include "ui/file_manager/grit/file_manager_resources.h"
 #endif
@@ -183,7 +185,7 @@ std::unique_ptr<base::DictionaryValue> ComponentLoader::ParseManifest(
 
   if (!manifest.get() || !manifest->is_dict()) {
     LOG(ERROR) << "Failed to parse extension manifest.";
-    return std::unique_ptr<base::DictionaryValue>();
+    return nullptr;
   }
   return base::DictionaryValue::From(std::move(manifest));
 }
@@ -376,17 +378,19 @@ void ComponentLoader::AddFileManagerExtension() {
 }
 
 void ComponentLoader::AddVideoPlayerExtension() {
-  Add(IDR_VIDEO_PLAYER_MANIFEST,
-      base::FilePath(FILE_PATH_LITERAL("video_player")));
+  // TODO(b/186168810): Delete this entirely around M96 when it has has a
+  // chance to be cleaned up.
+  if (extensions::ExtensionPrefs::Get(profile_)
+          ->ShouldInstallObsoleteComponentExtension(
+              file_manager::kVideoPlayerAppId)) {
+    Add(IDR_VIDEO_PLAYER_MANIFEST,
+        base::FilePath(FILE_PATH_LITERAL("video_player")));
+  }
 }
 
 void ComponentLoader::AddAudioPlayerExtension() {
   Add(IDR_AUDIO_PLAYER_MANIFEST,
       base::FilePath(FILE_PATH_LITERAL("audio_player")));
-}
-
-void ComponentLoader::AddGalleryExtension() {
-  Add(IDR_GALLERY_MANIFEST, base::FilePath(FILE_PATH_LITERAL("gallery")));
 }
 
 void ComponentLoader::AddImageLoaderExtension() {
@@ -439,8 +443,9 @@ scoped_refptr<const Extension> ComponentLoader::CreateExtension(
   // TODO(abarth): We should REQUIRE_MODERN_MANIFEST_VERSION once we've updated
   //               our component extensions to the new manifest version.
   int flags = Extension::REQUIRE_KEY;
-  return Extension::Create(info.root_directory, Manifest::COMPONENT,
-                           *info.manifest, flags, utf8_error);
+  return Extension::Create(info.root_directory,
+                           mojom::ManifestLocation::kComponent, *info.manifest,
+                           flags, utf8_error);
 }
 
 // static
@@ -548,7 +553,6 @@ void ComponentLoader::AddDefaultComponentExtensionsWithBackgroundPages(
     AddVideoPlayerExtension();
     AddAudioPlayerExtension();
     AddFileManagerExtension();
-    AddGalleryExtension();
     AddImageLoaderExtension();
 
 #if BUILDFLAG(ENABLE_NACL)
@@ -576,11 +580,6 @@ void ComponentLoader::AddDefaultComponentExtensionsWithBackgroundPages(
       Add(IDR_WALLPAPERMANAGER_MANIFEST,
           base::FilePath(FILE_PATH_LITERAL("chromeos/wallpaper_manager")));
     }
-
-    Add(IDR_CONNECTIVITY_DIAGNOSTICS_MANIFEST,
-        base::FilePath(extension_misc::kConnectivityDiagnosticsPath));
-    Add(IDR_CONNECTIVITY_DIAGNOSTICS_LAUNCHER_MANIFEST,
-        base::FilePath(extension_misc::kConnectivityDiagnosticsLauncherPath));
 
     Add(IDR_ARC_SUPPORT_MANIFEST,
         base::FilePath(FILE_PATH_LITERAL("chromeos/arc_support")));
@@ -648,7 +647,7 @@ void ComponentLoader::AddComponentFromDirWithManifestFilename(
                      manifest_filename, true),
       base::BindOnce(&ComponentLoader::FinishAddComponentFromDir,
                      weak_factory_.GetWeakPtr(), root_directory, extension_id,
-                     base::nullopt, base::nullopt, std::move(done_cb)));
+                     absl::nullopt, absl::nullopt, std::move(done_cb)));
 }
 
 void ComponentLoader::AddWithNameAndDescriptionFromDir(
@@ -686,13 +685,27 @@ void ComponentLoader::AddChromeOsSpeechSynthesisExtensions() {
             weak_factory_.GetWeakPtr(),
             extension_misc::kEspeakSpeechSynthesisExtensionId));
   }
+
+  if (features::IsEnhancedNetworkVoicesEnabled() &&
+      !Exists(extension_misc::kEnhancedNetworkTtsExtensionId)) {
+    base::FilePath resources_path =
+        base::PathService::CheckedGet(chrome::DIR_RESOURCES);
+    AddComponentFromDirWithManifestFilename(
+        resources_path.Append(extension_misc::kEnhancedNetworkTtsExtensionPath),
+        extension_misc::kEnhancedNetworkTtsExtensionId,
+        extension_misc::kEnhancedNetworkTtsManifestFilename,
+        extension_misc::kEnhancedNetworkTtsGuestManifestFilename,
+        base::BindOnce(&ComponentLoader::FinishLoadSpeechSynthesisExtension,
+                       weak_factory_.GetWeakPtr(),
+                       extension_misc::kEnhancedNetworkTtsExtensionId));
+  }
 }
 
 void ComponentLoader::FinishAddComponentFromDir(
     const base::FilePath& root_directory,
     const char* extension_id,
-    const base::Optional<std::string>& name_string,
-    const base::Optional<std::string>& description_string,
+    const absl::optional<std::string>& name_string,
+    const absl::optional<std::string>& description_string,
     base::OnceClosure done_cb,
     std::unique_ptr<base::DictionaryValue> manifest) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);

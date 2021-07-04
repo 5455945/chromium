@@ -9,20 +9,41 @@
 
 #include "base/macros.h"
 #include "base/task/cancelable_task_tracker.h"
-// TODO(https://crbug.com/1164001): forward declare when moved to
-// chrome/browser/ash/.
+// TODO(https://crbug.com/1164001): remove and use forward declaration.
 #include "chrome/browser/ash/app_mode/arc/arc_kiosk_app_manager.h"
-// TODO(https://crbug.com/1164001): forward declare when moved to
-// chrome/browser/ash/.
+// TODO(https://crbug.com/1164001): remove and use forward declaration.
 #include "chrome/browser/ash/app_mode/web_app/web_kiosk_app_manager.h"
-// TODO(https://crbug.com/1164001): forward declare when moved to
-// chrome/browser/ash/.
+// TODO(https://crbug.com/1164001): remove and use forward declaration.
+#include "chrome/browser/ash/login/demo_mode/demo_mode_resources_remover.h"
+// TODO(https://crbug.com/1164001): remove and use forward declaration.
+#include "chrome/browser/ash/notifications/gnubby_notification.h"
+// TODO(https://crbug.com/1164001): remove and use forward declaration.
+#include "chrome/browser/ash/notifications/low_disk_notification.h"
+// TODO(https://crbug.com/1164001): remove and use forward declaration.
+#include "chrome/browser/ash/power/auto_screen_brightness/controller.h"
+// TODO(https://crbug.com/1164001): remove and use forward declaration.
+#include "chrome/browser/ash/power/idle_action_warning_observer.h"
+// TODO(https://crbug.com/1164001): remove and use forward declaration.
+#include "chrome/browser/ash/power/ml/adaptive_screen_brightness_manager.h"
+// TODO(https://crbug.com/1164001): remove and use forward declaration.
+#include "chrome/browser/ash/power/power_metrics_reporter.h"
+// TODO(https://crbug.com/1164001): remove and use forward declaration.
+#include "chrome/browser/ash/power/renderer_freezer.h"
+// TODO(https://crbug.com/1164001): remove and use forward declaration.
+#include "chrome/browser/ash/power/smart_charging/smart_charging_manager.h"
+// TODO(https://crbug.com/1164001): remove and use forward declaration.
+#include "chrome/browser/ash/settings/shutdown_policy_forwarder.h"
+// TODO(https://crbug.com/1164001): remove and use forward declaration.
 #include "chrome/browser/ash/system/breakpad_consent_watcher.h"
+// TODO(https://crbug.com/1164001): remove and use forward declaration.
+#include "chrome/browser/ash/usb/cros_usb_detector.h"
+// TODO(https://crbug.com/1164001): remove and use forward declaration.
+#include "chrome/browser/ash/wilco_dtc_supportd/wilco_dtc_supportd_manager.h"
 #include "chrome/browser/chrome_browser_main_linux.h"
 #include "chrome/browser/chromeos/external_metrics.h"
 #include "chrome/browser/memory/memory_kills_monitor.h"
 
-class AssistantClientImpl;
+class AssistantBrowserDelegateImpl;
 class AssistantStateClient;
 class ChromeKeyboardControllerClient;
 class ImageDownloaderImpl;
@@ -60,25 +81,17 @@ class LockToSingleUserManager;
 namespace chromeos {
 
 class BulkPrintersCalculatorFactory;
-class CrosUsbDetector;
-class DemoModeResourcesRemover;
+class DebugdNotificationHandler;
 class EventRewriterDelegateImpl;
 class FastTransitionObserver;
-class GnubbyNotification;
-class IdleActionWarningObserver;
 class LoginScreenExtensionsLifetimeManager;
 class LoginScreenExtensionsStorageCleaner;
-class LowDiskNotification;
 class MemoryAblationStudy;
 class NetworkChangeManagerClient;
 class NetworkPrefStateObserver;
 class NetworkThrottlingObserver;
-class PowerMetricsReporter;
-class RendererFreezer;
 class SessionTerminationManager;
-class ShutdownPolicyForwarder;
 class SystemTokenCertDBInitializer;
-class WilcoDtcSupportdManager;
 
 namespace default_app_order {
 class ExternalLoader;
@@ -91,17 +104,6 @@ class DBusServices;
 namespace platform_keys {
 class KeyPermissionsManager;
 }
-
-namespace power {
-class SmartChargingManager;
-namespace ml {
-class AdaptiveScreenBrightnessManager;
-}  // namespace ml
-
-namespace auto_screen_brightness {
-class Controller;
-}  // namespace auto_screen_brightness
-}  // namespace power
 
 namespace system {
 class DarkResumeController;
@@ -119,9 +121,9 @@ class ChromeBrowserMainPartsChromeos : public ChromeBrowserMainPartsLinux {
 
   // ChromeBrowserMainParts overrides.
   int PreEarlyInitialization() override;
-  void PreMainMessageLoopStart() override;
-  void PostMainMessageLoopStart() override;
-  void PreMainMessageLoopRun() override;
+  void PreCreateMainMessageLoop() override;
+  void PostCreateMainMessageLoop() override;
+  int PreMainMessageLoopRun() override;
 
   // Stages called from PreMainMessageLoopRun.
   void PreProfileInit() override;
@@ -141,6 +143,7 @@ class ChromeBrowserMainPartsChromeos : public ChromeBrowserMainPartsLinux {
   std::unique_ptr<FastTransitionObserver> fast_transition_observer_;
   std::unique_ptr<NetworkThrottlingObserver> network_throttling_observer_;
   std::unique_ptr<NetworkChangeManagerClient> network_change_manager_client_;
+  std::unique_ptr<DebugdNotificationHandler> debugd_notification_handler_;
 
   std::unique_ptr<internal::DBusServices> dbus_services_;
 
@@ -163,7 +166,7 @@ class ChromeBrowserMainPartsChromeos : public ChromeBrowserMainPartsLinux {
 
   std::unique_ptr<AssistantStateClient> assistant_state_client_;
 
-  std::unique_ptr<AssistantClientImpl> assistant_client_;
+  std::unique_ptr<AssistantBrowserDelegateImpl> assistant_delegate_;
 
   std::unique_ptr<LowDiskNotification> low_disk_notification_;
   std::unique_ptr<ArcKioskAppManager> arc_kiosk_app_manager_;

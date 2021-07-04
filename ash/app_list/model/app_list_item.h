@@ -40,6 +40,12 @@ class APP_LIST_MODEL_EXPORT AppListItem {
   void SetIcon(AppListConfigType config_type, const gfx::ImageSkia& icon);
   const gfx::ImageSkia& GetIcon(AppListConfigType config_type) const;
 
+  // Setter and getter for the default app list item icon. Used as a base to
+  // generate appropriate app list item icon for an app list config if an icon
+  // for the config has not been set using `SetIcon()`.
+  void SetDefaultIcon(const gfx::ImageSkia& icon);
+  const gfx::ImageSkia& GetDefaultIcon() const;
+
   void SetNotificationBadgeColor(const SkColor color);
 
   const std::string& GetDisplayName() const {
@@ -89,7 +95,7 @@ class APP_LIST_MODEL_EXPORT AppListItem {
 
   bool has_notification_badge() const { return has_notification_badge_; }
 
-  SkColor notification_badge_color() const { return notification_badge_color_; }
+  SkColor notification_badge_color() const { return metadata_->badge_color; }
 
   void UpdateNotificationBadgeForTesting(bool has_badge) {
     UpdateNotificationBadge(has_badge);
@@ -152,10 +158,7 @@ class APP_LIST_MODEL_EXPORT AppListItem {
   // Whether this item currently has a notification badge that should be shown.
   bool has_notification_badge_ = false;
 
-  // The color for the notification badge displayed over the app icon.
-  SkColor notification_badge_color_ = SK_ColorWHITE;
-
-  base::ObserverList<AppListItemObserver>::Unchecked observers_;
+  base::ObserverList<AppListItemObserver> observers_;
 
   DISALLOW_COPY_AND_ASSIGN(AppListItem);
 };

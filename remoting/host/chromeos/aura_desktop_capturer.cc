@@ -13,6 +13,7 @@
 #include "remoting/host/chromeos/skia_bitmap_desktop_frame.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host.h"
+#include "ui/compositor/layer.h"
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #include "ash/shell.h"
@@ -61,8 +62,9 @@ void AuraDesktopCapturer::OnFrameCaptured(
     return;
   }
 
+  auto scoped_bitmap = result->ScopedAccessSkBitmap();
   std::unique_ptr<webrtc::DesktopFrame> frame(SkiaBitmapDesktopFrame::Create(
-      std::make_unique<SkBitmap>(result->AsSkBitmap())));
+      std::make_unique<SkBitmap>(scoped_bitmap.GetOutScopedBitmap())));
 
   // |VideoFramePump| will not encode the frame if |updated_region| is empty.
   const webrtc::DesktopRect& rect = webrtc::DesktopRect::MakeWH(

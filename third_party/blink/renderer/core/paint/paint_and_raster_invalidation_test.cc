@@ -454,7 +454,7 @@ TEST_P(PaintAndRasterInvalidationTest, FullInvalidationWithHTMLTransform) {
   UpdateAllLifecyclePhasesForTest();
 
   GetDocument().View()->SetTracksRasterInvalidations(true);
-  GetDocument().View()->Resize(WebSize(500, 500));
+  GetDocument().View()->Resize(IntSize(500, 500));
   UpdateAllLifecyclePhasesForTest();
 
   EXPECT_THAT(GetRasterInvalidationTracking()->Invalidations(),
@@ -997,9 +997,7 @@ TEST_P(PaintAndRasterInvalidationTest, ResizeElementWhichHasNonCustomResizer) {
 
 class PaintInvalidatorTestClient : public RenderingTestChromeClient {
  public:
-  void InvalidateRect(const IntRect&) override {
-    invalidation_recorded_ = true;
-  }
+  void InvalidateContainer() override { invalidation_recorded_ = true; }
 
   bool InvalidationRecorded() { return invalidation_recorded_; }
 

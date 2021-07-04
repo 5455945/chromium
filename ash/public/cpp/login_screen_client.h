@@ -17,6 +17,8 @@ class AccountId;
 
 namespace ash {
 
+enum class ParentCodeValidationResult;
+
 // An interface allows Ash to trigger certain login steps that Chrome is
 // responsible for.
 class ASH_PUBLIC_EXPORT LoginScreenClient {
@@ -63,9 +65,10 @@ class ASH_PUBLIC_EXPORT LoginScreenClient {
   // if the code was valid this given time. Note: This should only be used for
   // child user, it will always return false when a non-child id is used.
   // TODO(crbug.com/965479): move this to a more appropriate place.
-  virtual bool ValidateParentAccessCode(const AccountId& account_id,
-                                        const std::string& access_code,
-                                        base::Time validation_time) = 0;
+  virtual ParentCodeValidationResult ValidateParentAccessCode(
+      const AccountId& account_id,
+      const std::string& access_code,
+      base::Time validation_time) = 0;
 
   // Request to hard lock the user pod.
   // |account_id|:    The account id of the user in the user pod.
@@ -108,6 +111,9 @@ class ASH_PUBLIC_EXPORT LoginScreenClient {
   // so the user does not need to type the account email.
   virtual void ShowGaiaSignin(const AccountId& prefilled_account) = 0;
 
+  // Show OS-Install screen.
+  virtual void ShowOsInstallScreen() = 0;
+
   // Notification that the remove user warning was shown.
   virtual void OnRemoveUserWarningShown() = 0;
 
@@ -140,7 +146,7 @@ class ASH_PUBLIC_EXPORT LoginScreenClient {
   virtual void ShowAccountAccessHelpApp(gfx::NativeWindow parent_window) = 0;
 
   // Shows help app for users that have trouble using parent access code.
-  virtual void ShowParentAccessHelpApp(gfx::NativeWindow parent_window) = 0;
+  virtual void ShowParentAccessHelpApp() = 0;
 
   // Show the lockscreen notification settings page.
   virtual void ShowLockScreenNotificationSettings() = 0;
@@ -149,6 +155,9 @@ class ASH_PUBLIC_EXPORT LoginScreenClient {
   // the login screen / OOBE. |reverse| is true when the focus moves in the
   // reversed direction.
   virtual void OnFocusLeavingSystemTray(bool reverse) = 0;
+
+  // Called when the system tray bubble is shown.
+  virtual void OnSystemTrayBubbleShown() = 0;
 
   // Called when the lock screen is shown.
   virtual void OnLoginScreenShown() = 0;

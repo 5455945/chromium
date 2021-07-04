@@ -6,16 +6,14 @@
  * @fileoverview Utility methods for accessing chrome.metricsPrivate API.
  *
  * To be included as a first script in main.html
- * @suppress {uselessCode} Temporary suppress because of the line exporting.
  */
 
-// #import {metricsBase} from '../../file_manager/common/js/metrics_base.m.js';
+import {metricsBase} from 'chrome-extension://hhaomjibdihmijegdhdafkllkbggdgoj/common/js/metrics_base.js';
 
 /**
  * @extends {metricsBase}
  */
-// eslint-disable-next-line no-var
-var metrics = metricsBase;
+const metrics = metricsBase;
 
 /**
  * Values for "VideoPlayer.PlayType" metrics.
@@ -105,5 +103,4 @@ metrics.convertName_ = function(name) {
   return 'VideoPlayer.' + name;
 };
 
-// eslint-disable-next-line semi,no-extra-semi
-/* #export */ {metrics};
+export {metrics};

@@ -20,14 +20,16 @@
 #include "chrome/browser/safe_browsing/chrome_controller_client.h"
 #include "chrome/browser/safe_browsing/safe_browsing_metrics_collector.h"
 #include "chrome/browser/safe_browsing/safe_browsing_metrics_collector_factory.h"
+#include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager.h"
+#include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager_factory.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/safe_browsing/content/browser/threat_details.h"
+#include "components/safe_browsing/content/browser/triggers/trigger_manager.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/safe_browsing/core/common/utils.h"
-#include "components/safe_browsing/core/features.h"
-#include "components/safe_browsing/core/triggers/trigger_manager.h"
 #include "components/security_interstitials/content/content_metrics_helper.h"
 #include "components/security_interstitials/content/security_interstitial_controller_client.h"
 #include "components/security_interstitials/content/settings_page_helper.h"
@@ -56,14 +58,11 @@ SafeBrowsingMetricsCollector::EventType GetEventTypeFromThreatSource(
     case ThreatSource::REMOTE:
       return SafeBrowsingMetricsCollector::EventType::
           DATABASE_INTERSTITIAL_BYPASS;
-      break;
     case ThreatSource::CLIENT_SIDE_DETECTION:
-      return SafeBrowsingMetricsCollector::EventType::CSD_INTERSITITAL_BYPASS;
-      break;
+      return SafeBrowsingMetricsCollector::EventType::CSD_INTERSTITIAL_BYPASS;
     case ThreatSource::REAL_TIME_CHECK:
       return SafeBrowsingMetricsCollector::EventType::
           REAL_TIME_INTERSTITIAL_BYPASS;
-      break;
     default:
       NOTREACHED() << "Unexpected threat source.";
       return SafeBrowsingMetricsCollector::EventType::
@@ -110,7 +109,7 @@ class SafeBrowsingBlockingPageFactoryImpl
         IsEnhancedProtectionEnabled(*prefs), is_proceed_anyway_disabled,
         true,  // should_open_links_in_new_tab
         true,  // always_show_back_to_safety
-        IsEnhancedProtectionMessageInInterstitialsEnabled(),
+        true,  // is_enhanced_protection_message_enabled
         IsSafeBrowsingPolicyManaged(*prefs), kHelpCenterLink);
 
     return new SafeBrowsingBlockingPage(
@@ -167,10 +166,9 @@ SafeBrowsingBlockingPage::SafeBrowsingBlockingPage(
     Profile* profile =
         Profile::FromBrowserContext(web_contents->GetBrowserContext());
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory =
-        url_loader_for_testing
-            ? url_loader_for_testing
-            : content::BrowserContext::GetDefaultStoragePartition(profile)
-                  ->GetURLLoaderFactoryForBrowserProcess();
+        url_loader_for_testing ? url_loader_for_testing
+                               : profile->GetDefaultStoragePartition()
+                                     ->GetURLLoaderFactoryForBrowserProcess();
     if (should_trigger_reporting) {
       threat_details_in_progress_ =
           g_browser_process->safe_browsing_service()
@@ -180,6 +178,8 @@ SafeBrowsingBlockingPage::SafeBrowsingBlockingPage(
                   unsafe_resources[0], url_loader_factory,
                   HistoryServiceFactory::GetForProfile(
                       profile, ServiceAccessType::EXPLICIT_ACCESS),
+                  SafeBrowsingNavigationObserverManagerFactory::
+                      GetForBrowserContext(web_contents->GetBrowserContext()),
                   sb_error_ui()->get_error_display_options());
     }
   }

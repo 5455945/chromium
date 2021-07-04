@@ -64,9 +64,11 @@ void LeakDetector::TryLeakDetection(RenderProcessHost* process,
                                     ReportCallback callback) {
   callback_ = std::move(callback);
 
-  process->BindReceiver(leak_detector_.BindNewPipeAndPassReceiver());
-  leak_detector_.set_disconnect_handler(base::BindOnce(
-      &LeakDetector::OnLeakDetectorIsGone, base::Unretained(this)));
+  if (!leak_detector_) {
+    process->BindReceiver(leak_detector_.BindNewPipeAndPassReceiver());
+    leak_detector_.set_disconnect_handler(base::BindOnce(
+        &LeakDetector::OnLeakDetectorIsGone, base::Unretained(this)));
+  }
   leak_detector_->PerformLeakDetection(base::BindOnce(
       &LeakDetector::OnLeakDetectionComplete, weak_factory_.GetWeakPtr()));
 }
@@ -77,7 +79,7 @@ void LeakDetector::OnLeakDetectionComplete(
   report.leaked = false;
   base::DictionaryValue detail;
 
-  if (previous_result_) {
+  if (previous_result_ && !result.is_null()) {
     if (previous_result_->number_of_live_audio_nodes <
         result->number_of_live_audio_nodes) {
       auto list = std::make_unique<base::ListValue>();
@@ -154,19 +156,23 @@ void LeakDetector::OnLeakDetectionComplete(
     }
   }
 
-  if (!detail.empty()) {
+  if (!detail.DictEmpty()) {
     std::string detail_str;
     base::JSONWriter::Write(detail, &detail_str);
     report.detail = detail_str;
     report.leaked = true;
   }
 
-  previous_result_ = std::move(result);
-  leak_detector_.reset();
+  if (!result.is_null()) {
+    previous_result_ = std::move(result);
+  }
   std::move(callback_).Run(report);
 }
 
 void LeakDetector::OnLeakDetectorIsGone() {
+  leak_detector_.reset();
+  if (!callback_)
+    return;
   LeakDetectionReport report;
   report.leaked = false;
   std::move(callback_).Run(report);

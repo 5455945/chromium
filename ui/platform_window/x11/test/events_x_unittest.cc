@@ -10,7 +10,6 @@
 #include <set>
 #include <utility>
 
-#include "base/stl_util.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "build/build_config.h"
@@ -48,8 +47,8 @@ void InitButtonEvent(x11::Event* event,
   *event = x11::Event(x11::ButtonEvent{
       .opcode = is_press ? x11::ButtonEvent::Press : x11::ButtonEvent::Release,
       .detail = static_cast<x11::Button>(button),
-      .event_x = location.x(),
-      .event_y = location.y(),
+      .event_x = static_cast<int16_t>(location.x()),
+      .event_y = static_cast<int16_t>(location.y()),
       .state = state,
   });
 }
@@ -763,7 +762,7 @@ TEST_F(EventsXTest, AutoRepeat) {
   }
 }
 
-// Checks that Event.Latency.OS.TOUCH_PRESSED, TOUCH_MOVED,
+// Checks that Event.Latency.OS2.TOUCH_PRESSED, TOUCH_MOVED,
 // and TOUCH_RELEASED histograms are computed properly.
 TEST_F(EventsXTest, EventLatencyOSTouchHistograms) {
   base::HistogramTester histogram_tester;
@@ -780,14 +779,17 @@ TEST_F(EventsXTest, EventLatencyOSTouchHistograms) {
                                gfx::Point(10, 10), {});
   auto touch_begin = ui::BuildTouchEventFromXEvent(*scoped_xevent);
   histogram_tester.ExpectTotalCount("Event.Latency.OS.TOUCH_PRESSED", 1);
+  histogram_tester.ExpectTotalCount("Event.Latency.OS2.TOUCH_PRESSED", 1);
   scoped_xevent.InitTouchEvent(0, x11::Input::DeviceEvent::TouchUpdate, 5,
                                gfx::Point(20, 20), {});
   auto touch_update = ui::BuildTouchEventFromXEvent(*scoped_xevent);
   histogram_tester.ExpectTotalCount("Event.Latency.OS.TOUCH_MOVED", 1);
+  histogram_tester.ExpectTotalCount("Event.Latency.OS2.TOUCH_MOVED", 1);
   scoped_xevent.InitTouchEvent(0, x11::Input::DeviceEvent::TouchEnd, 5,
                                gfx::Point(30, 30), {});
   auto touch_end = ui::BuildTouchEventFromXEvent(*scoped_xevent);
   histogram_tester.ExpectTotalCount("Event.Latency.OS.TOUCH_RELEASED", 1);
+  histogram_tester.ExpectTotalCount("Event.Latency.OS2.TOUCH_RELEASED", 1);
 }
 
 TEST_F(EventsXTest, EventLatencyOSMouseWheelHistogram) {
@@ -802,6 +804,7 @@ TEST_F(EventsXTest, EventLatencyOSMouseWheelHistogram) {
   });
   auto mouse_ev = ui::BuildMouseWheelEventFromXEvent(native_event);
   histogram_tester.ExpectTotalCount("Event.Latency.OS.MOUSE_WHEEL", 1);
+  histogram_tester.ExpectTotalCount("Event.Latency.OS2.MOUSE_WHEEL", 1);
 }
 
 }  // namespace ui

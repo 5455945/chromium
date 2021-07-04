@@ -60,7 +60,7 @@ namespace media_router {
 #if !BUILDFLAG(IS_CHROMEOS_ASH)
 void PostSendNetworkList(
     base::WeakPtr<DialServiceImpl> impl,
-    const base::Optional<net::NetworkInterfaceList>& networks) {
+    const absl::optional<net::NetworkInterfaceList>& networks) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   content::GetIOThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(&DialServiceImpl::SendNetworkList,
@@ -431,23 +431,22 @@ void DialServiceImpl::StartDiscovery() {
     return;
   }
 
-  auto task_runner = content::GetUIThreadTaskRunner({});
+  auto ui_task_runner = content::GetUIThreadTaskRunner({});
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-  task_tracker_.PostTaskAndReplyWithResult(
-      task_runner.get(), FROM_HERE,
-      base::BindOnce(&GetBestBindAddressOnUIThread),
+  ui_task_runner->PostTaskAndReplyWithResult(
+      FROM_HERE, base::BindOnce(&GetBestBindAddressOnUIThread),
       base::BindOnce(&DialServiceImpl::DiscoverOnAddresses,
-                     base::Unretained(this)));
+                     weak_ptr_factory_.GetWeakPtr()));
 #else
-  task_tracker_.PostTask(task_runner.get(), FROM_HERE,
-                         base::BindOnce(&GetNetworkListOnUIThread,
-                                        weak_ptr_factory_.GetWeakPtr()));
+  ui_task_runner->PostTask(FROM_HERE,
+                           base::BindOnce(&GetNetworkListOnUIThread,
+                                          weak_ptr_factory_.GetWeakPtr()));
 #endif
 }
 
 void DialServiceImpl::SendNetworkList(
-    const base::Optional<NetworkInterfaceList>& networks) {
+    const absl::optional<NetworkInterfaceList>& networks) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   using InterfaceIndexAddressFamily = std::pair<uint32_t, net::AddressFamily>;

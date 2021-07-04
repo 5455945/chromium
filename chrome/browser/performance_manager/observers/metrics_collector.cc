@@ -8,8 +8,10 @@
 
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/time/time.h"
 #include "components/performance_manager/public/graph/graph_operations.h"
 #include "components/performance_manager/public/graph/node_attached_data.h"
+#include "content/public/common/process_type.h"
 
 namespace performance_manager {
 
@@ -93,6 +95,23 @@ void MetricsCollector::OnFaviconUpdated(const PageNode* page_node) {
   record->first_favicon_updated.OnSignalReceived(
       true, page_node->GetTimeSinceLastVisibilityChange(),
       graph_->GetUkmRecorder());
+}
+
+void MetricsCollector::OnBeforeProcessNodeRemoved(
+    const ProcessNode* process_node) {
+  const base::TimeDelta lifetime =
+      base::Time::Now() - process_node->GetLaunchTime();
+  if (process_node->GetProcessType() == content::PROCESS_TYPE_RENDERER &&
+      lifetime > base::TimeDelta()) {
+    // Do not record in the rare case system time was adjusted and now < launch
+    // time. This could also happen if the process was never launched.
+    UMA_HISTOGRAM_CUSTOM_TIMES("Renderer.ProcessLifetime2.HighResolution",
+                               lifetime, base::TimeDelta::FromSeconds(1),
+                               base::TimeDelta::FromMinutes(5), 100);
+    UMA_HISTOGRAM_CUSTOM_TIMES("Renderer.ProcessLifetime2.LowResolution",
+                               lifetime, base::TimeDelta::FromSeconds(1),
+                               base::TimeDelta::FromDays(1), 100);
+  }
 }
 
 void MetricsCollector::OnTitleUpdated(const PageNode* page_node) {

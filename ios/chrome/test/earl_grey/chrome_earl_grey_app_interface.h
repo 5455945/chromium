@@ -20,6 +20,9 @@
 // the app binary and can be called from either app or test code.
 @interface ChromeEarlGreyAppInterface : NSObject
 
+// YES if the current interface language uses RTL layout.
++ (BOOL)isRTL;
+
 // Clears browsing history and waits for history to finish clearing before
 // returning. Returns nil on success, or else an NSError indicating why the
 // operation failed.
@@ -42,8 +45,8 @@
 // the operation failed.
 + (NSError*)removeBrowsingCache;
 
-// Opens |URL| using the application delegate.
-+ (void)applicationOpenURL:(NSString*)spec;
+// Opens |URL| using some connected scene.
++ (void)sceneOpenURL:(NSString*)spec;
 
 // Loads the URL |spec| in the current WebState with transition type
 // ui::PAGE_TRANSITION_TYPED and returns without waiting for the page to load.
@@ -276,6 +279,11 @@
 // indicating why the operation failed.
 + (NSError*)waitForWebStateContainingBlockedImage:(NSString*)imageID;
 
+// Waits for the web state's scroll view zoom scale to be suitably close (within
+// 0.05) of the expected scale. Returns nil if the condition is met within a
+// timeout, or else an NSError indicating why the operation failed.
++ (NSError*)waitForWebStateZoomScale:(CGFloat)scale;
+
 // Sets value for content setting.
 + (void)setContentSettings:(ContentSetting)setting;
 
@@ -337,6 +345,12 @@
 // Clears fake sync server data if the server is running.
 + (void)clearSyncServerData;
 
+// Removes Sync consent for the primary account.
++ (void)revokeSyncConsent;
+
+// Clears the first sync setup preference.
++ (void)clearSyncFirstSetupComplete;
+
 // Starts the sync server. The server should not be running when calling this.
 + (void)startSync;
 
@@ -360,11 +374,11 @@
 // Whether or not the fake sync server has been setup.
 + (BOOL)isFakeSyncServerSetUp;
 
-// Sets up a fake sync server to be used by the ProfileSyncService.
+// Sets up a fake sync server to be used by the SyncServiceImpl.
 + (void)setUpFakeSyncServer;
 
-// Tears down the fake sync server used by the ProfileSyncService and restores
-// the real one.
+// Tears down the fake sync server used by the SyncServiceImpl and restores the
+// real one.
 + (void)tearDownFakeSyncServer;
 
 // Gets the number of entities of the given |type|.
@@ -499,9 +513,6 @@
 // Returns whether the mobile version of the websites are requested by default.
 + (BOOL)isMobileModeByDefault WARN_UNUSED_RESULT;
 
-// Returns whether the illustrated empty states feature is enabled.
-+ (BOOL)isIllustratedEmptyStatesEnabled;
-
 // Returns whether the native context menus feature is enabled or not.
 + (BOOL)isNativeContextMenusEnabled;
 
@@ -588,6 +599,19 @@
 
 // Clear the watcher list, stopping monitoring.
 + (void)stopWatcher;
+
+#pragma mark - Default Browser Promo Utilities
+
+// Clears default browser promo data to restart capping for the promos.
++ (void)clearDefaultBrowserPromoData;
+
+// Copies a chrome:// URL that doesn't require internet connection.
++ (void)copyURLToPasteBoard;
+
+// Disables default browser promo. If a test needs to check a message drop down
+// in a second window, this needs to be disabled or the popup will kill the
+// message.
++ (void)disableDefaultBrowserPromo;
 
 @end
 

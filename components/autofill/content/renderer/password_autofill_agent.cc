@@ -96,7 +96,7 @@ const char kDebugAttributeForFieldSignature[] = "field_signature";
 const char kDebugAttributeForParserAnnotations[] = "pm_parser_annotation";
 
 // Maps element names to the actual elements to simplify form filling.
-typedef std::map<base::string16, WebInputElement> FormInputElementMap;
+typedef std::map<std::u16string, WebInputElement> FormInputElementMap;
 
 // Use the shorter name when referencing SavePasswordProgressLogger::StringID
 // values to spare line breaks. The code provides enough context for that
@@ -109,8 +109,8 @@ bool IsElementEditable(const WebInputElement& element) {
   return element.IsEnabled() && !element.IsReadOnly();
 }
 
-bool DoUsernamesMatch(const base::string16& potential_suggestion,
-                      const base::string16& current_username,
+bool DoUsernamesMatch(const std::u16string& potential_suggestion,
+                      const std::u16string& current_username,
                       bool exact_match) {
   if (potential_suggestion == current_username)
     return true;
@@ -156,8 +156,8 @@ void LogHTMLForm(Logger* logger,
 // Returns true if there are any suggestions to be derived from |fill_data|.
 // Only considers suggestions with usernames having |typed_username| as prefix.
 bool CanShowUsernameSuggestion(const PasswordFormFillData& fill_data,
-                               const base::string16& typed_username) {
-  base::string16 typed_username_lower = base::i18n::ToLower(typed_username);
+                               const std::u16string& typed_username) {
+  std::u16string typed_username_lower = base::i18n::ToLower(typed_username);
   if (base::StartsWith(base::i18n::ToLower(fill_data.username_field.value),
                        typed_username_lower, base::CompareCase::SENSITIVE)) {
     return true;
@@ -177,11 +177,11 @@ bool CanShowUsernameSuggestion(const PasswordFormFillData& fill_data,
 // |current_username| by scanning |fill_data|. The result is written in
 // |username| and |password| parameters.
 void FindMatchesByUsername(const PasswordFormFillData& fill_data,
-                           const base::string16& current_username,
+                           const std::u16string& current_username,
                            bool exact_username_match,
                            RendererSavePasswordProgressLogger* logger,
-                           base::string16* username,
-                           base::string16* password) {
+                           std::u16string* username,
+                           std::u16string* password) {
   // Look for any suitable matches to current field text.
   if (DoUsernamesMatch(fill_data.username_field.value, current_username,
                        exact_username_match)) {
@@ -247,28 +247,49 @@ bool IsPublicSuffixDomainMatch(const std::string& url1,
          gurl1.port() == gurl2.port();
 }
 
-// Helper function that calculates form signature for |password_form| and
-// returns it as WebString.
-WebString GetFormSignatureAsWebString(const FormData& form_data) {
-  return WebString::FromUTF8(
-      base::NumberToString(CalculateFormSignature(form_data).value()));
+// Helper function that calculates form signature for |form_data| and returns it
+// as a string.
+std::string GetFormSignatureAsString(const FormData& form_data) {
+  return base::NumberToString(CalculateFormSignature(form_data).value());
+}
+
+// Sets the specified attribute of |target| to the given value. This must not
+// happen while ScriptForbiddenScope is active (e.g. during
+// blink::FrameLoader::FinishedParsing(), see crbug.com/1219852). Therefore,
+// this function should be called asynchronously via SetAttributeAsync.
+void SetAttributeInternal(blink::WebElement target,
+                          const std::string& attribute_utf8,
+                          const std::string& value_utf8) {
+  target.SetAttribute(WebString::FromUTF8(attribute_utf8),
+                      WebString::FromUTF8(value_utf8));
+}
+
+// Posts an async task to call SetAttributeInternal.
+void SetAttributeAsync(blink::WebElement target,
+                       const std::string& attribute_utf8,
+                       const std::string& value_utf8) {
+  if (target.IsNull())
+    return;
+  target.GetDocument()
+      .GetFrame()
+      ->GetTaskRunner(blink::TaskType::kInternalDefault)
+      ->PostTask(FROM_HERE, base::BindOnce(&SetAttributeInternal, target,
+                                           attribute_utf8, value_utf8));
 }
 
 // Annotate |fields| with field signatures and form signature as HTML
 // attributes.
 void AnnotateFieldsWithSignatures(
     std::vector<blink::WebFormControlElement>& fields,
-    const blink::WebString& form_signature) {
+    const std::string& form_signature) {
   for (blink::WebFormControlElement& control_element : fields) {
     FieldSignature field_signature = CalculateFieldSignatureByNameAndType(
         control_element.NameForAutofill().Utf16(),
         control_element.FormControlTypeForAutofill().Utf8());
-    control_element.SetAttribute(
-        WebString::FromASCII(kDebugAttributeForFieldSignature),
-        WebString::FromUTF8(base::NumberToString(field_signature.value())));
-    control_element.SetAttribute(
-        blink::WebString::FromASCII(kDebugAttributeForFormSignature),
-        form_signature);
+    SetAttributeAsync(control_element, kDebugAttributeForFieldSignature,
+                      base::NumberToString(field_signature.value()));
+    SetAttributeAsync(control_element, kDebugAttributeForFormSignature,
+                      form_signature);
   }
 }
 
@@ -364,6 +385,9 @@ void AnnotateFieldWithParsingResult(WebDocument doc,
   auto element = FindFormControlElementByUniqueRendererId(doc, renderer_id);
   if (element.IsNull())
     return;
+  // Calling SetAttribute synchronously here is safe because
+  // AnnotateFieldWithParsingResult is triggered via a call from the the
+  // browser. This means that we should not be in a ScriptForbiddenScope.
   element.SetAttribute(
       WebString::FromASCII(kDebugAttributeForParserAnnotations),
       WebString::FromASCII(text));
@@ -473,13 +497,17 @@ PasswordAutofillAgent::FocusStateNotifier::FocusStateNotifier(
 PasswordAutofillAgent::FocusStateNotifier::~FocusStateNotifier() = default;
 
 void PasswordAutofillAgent::FocusStateNotifier::FocusedInputChanged(
+    autofill::FieldRendererId focused_field_id,
     FocusedFieldType focused_field_type) {
   // Forward the request if the type changed or the field is fillable.
-  if (focused_field_type != focused_field_type_ ||
+  if (focused_field_id_ != focused_field_id ||
+      focused_field_type != focused_field_type_ ||
       IsFillable(focused_field_type)) {
-    agent_->GetPasswordManagerDriver()->FocusedInputChanged(focused_field_type);
+    agent_->GetPasswordManagerDriver()->FocusedInputChanged(focused_field_id,
+                                                            focused_field_type);
   }
 
+  focused_field_id_ = focused_field_id;
   focused_field_type_ = focused_field_type;
 }
 
@@ -538,7 +566,13 @@ bool PasswordAutofillAgent::TextDidChangeInTextField(
 }
 
 void PasswordAutofillAgent::DidEndTextFieldEditing() {
-  focus_state_notifier_.FocusedInputChanged(FocusedFieldType::kUnknown);
+  FieldRendererId field_id;
+  if (!focused_input_element_.IsNull()) {
+    field_id =
+        FieldRendererId(focused_input_element_.UniqueRendererFormControlId());
+  }
+  focus_state_notifier_.FocusedInputChanged(field_id,
+                                            FocusedFieldType::kUnknown);
 }
 
 void PasswordAutofillAgent::UpdateStateForTextChange(
@@ -548,7 +582,7 @@ void PasswordAutofillAgent::UpdateStateForTextChange(
   // TODO(crbug.com/415449): Do this through const WebInputElement.
   WebInputElement mutable_element = element;  // We need a non-const.
 
-  const base::string16 element_value = element.Value().Utf16();
+  const std::u16string element_value = element.Value().Utf16();
   const FieldRendererId element_id(element.UniqueRendererFormControlId());
   field_data_manager_->UpdateFieldDataMap(element_id, element_value,
                                           FieldPropertiesFlags::kUserTyped);
@@ -566,7 +600,8 @@ void PasswordAutofillAgent::UpdateStateForTextChange(
     GetPasswordManagerDriver()->UserModifiedPasswordField();
   } else {
     GetPasswordManagerDriver()->UserModifiedNonPasswordField(
-        FieldRendererId(element.UniqueRendererFormControlId()), element_value);
+        FieldRendererId(element.UniqueRendererFormControlId()),
+        element.NameForAutofill().Utf16(), element_value);
   }
 }
 
@@ -577,8 +612,8 @@ void PasswordAutofillAgent::TrackAutofilledElement(
 
 bool PasswordAutofillAgent::FillSuggestion(
     const WebFormControlElement& control_element,
-    const base::string16& username,
-    const base::string16& password) {
+    const std::u16string& username,
+    const std::u16string& password) {
   // The element in context of the suggestion popup.
   const WebInputElement* element = ToWebInputElement(&control_element);
   if (!element)
@@ -625,7 +660,7 @@ bool PasswordAutofillAgent::FillSuggestion(
 
 void PasswordAutofillAgent::FillIntoFocusedField(
     bool is_password,
-    const base::string16& credential) {
+    const std::u16string& credential) {
   if (focused_input_element_.IsNull())
     return;
   if (!is_password) {
@@ -637,7 +672,7 @@ void PasswordAutofillAgent::FillIntoFocusedField(
 }
 
 void PasswordAutofillAgent::FillField(WebInputElement* input,
-                                      const base::string16& credential) {
+                                      const std::u16string& credential) {
   DCHECK(input);
   DCHECK(!input->IsNull());
   input->SetAutofillValue(WebString::FromUTF16(credential));
@@ -650,7 +685,7 @@ void PasswordAutofillAgent::FillField(WebInputElement* input,
 
 void PasswordAutofillAgent::FillPasswordFieldAndSave(
     WebInputElement* password_input,
-    const base::string16& credential) {
+    const std::u16string& credential) {
   DCHECK(password_input);
   DCHECK(password_input->IsPasswordFieldForAutofill());
   FillField(password_input, credential);
@@ -904,7 +939,7 @@ bool PasswordAutofillAgent::ShowSuggestions(
     return false;
   }
 
-  ShowSuggestionPopup(base::string16(), element, show_all,
+  ShowSuggestionPopup(std::u16string(), element, show_all,
                       OnPasswordField(true));
   return true;
 }
@@ -950,7 +985,7 @@ void PasswordAutofillAgent::FireSubmissionIfFormDisappear(
         return;
     }
   }
-  GetPasswordManagerDriver()->SameDocumentNavigation(event);
+  GetPasswordManagerDriver()->DynamicFormSubmission(event);
   browser_has_form_to_process_ = false;
 }
 
@@ -964,11 +999,10 @@ void PasswordAutofillAgent::AnnotateFormsAndFieldsWithSignatures(
     WebVector<WebFormElement>& forms) {
   for (WebFormElement& form : forms) {
     std::unique_ptr<FormData> form_data = GetFormDataFromWebForm(form);
-    WebString form_signature;
+    std::string form_signature;
     if (form_data) {
-      form_signature = GetFormSignatureAsWebString(*form_data);
-      form.SetAttribute(WebString::FromASCII(kDebugAttributeForFormSignature),
-                        form_signature);
+      form_signature = GetFormSignatureAsString(*form_data);
+      SetAttributeAsync(form, kDebugAttributeForFormSignature, form_signature);
     }
     std::vector<WebFormControlElement> form_fields =
         form_util::ExtractAutofillableElementsInForm(form);
@@ -979,17 +1013,17 @@ void PasswordAutofillAgent::AnnotateFormsAndFieldsWithSignatures(
       form_util::GetUnownedAutofillableFormFieldElements(
           render_frame()->GetWebFrame()->GetDocument().All(), nullptr);
   std::unique_ptr<FormData> form_data = GetFormDataFromUnownedInputElements();
-  WebString form_signature;
+  std::string form_signature;
   if (form_data)
-    form_signature = GetFormSignatureAsWebString(*form_data);
+    form_signature = GetFormSignatureAsString(*form_data);
   AnnotateFieldsWithSignatures(unowned_elements, form_signature);
 }
 
 void PasswordAutofillAgent::SendPasswordForms(bool only_visible) {
   std::unique_ptr<RendererSavePasswordProgressLogger> logger;
   if (logging_state_active_) {
-    logger.reset(new RendererSavePasswordProgressLogger(
-        GetPasswordManagerDriver().get()));
+    logger = std::make_unique<RendererSavePasswordProgressLogger>(
+        GetPasswordManagerDriver().get());
     logger->LogMessage(Logger::STRING_SEND_PASSWORD_FORMS_METHOD);
     logger->LogBoolean(Logger::STRING_ONLY_VISIBLE, only_visible);
   }
@@ -1074,7 +1108,7 @@ void PasswordAutofillAgent::SendPasswordForms(bool only_visible) {
 
   if (add_unowned_inputs) {
     std::unique_ptr<FormData> form_data(GetFormDataFromUnownedInputElements());
-    if (form_data) {
+    if (form_data && FormHasPasswordField(*form_data)) {
       if (logger) {
         logger->LogFormData(Logger::STRING_FORM_IS_PASSWORD, *form_data);
       }
@@ -1098,10 +1132,13 @@ void PasswordAutofillAgent::SendPasswordForms(bool only_visible) {
         HasPasswordField(*frame)) {
       // Set everything that |FormDigest| needs.
       password_forms_data.push_back(FormData());
-      password_forms_data.back().url =
-          form_util::GetCanonicalOriginForDocument(frame->GetDocument());
-      password_forms_data.back().full_url =
-          form_util::GetDocumentUrlWithoutAuth(frame->GetDocument());
+      if (base::FeatureList::IsEnabled(
+              features::kAutofillAugmentFormsInRenderer)) {
+        password_forms_data.back().url =
+            form_util::GetCanonicalOriginForDocument(frame->GetDocument());
+        password_forms_data.back().full_url =
+            form_util::GetDocumentUrlWithoutAuth(frame->GetDocument());
+      }
     }
     if (!password_forms_data.empty()) {
       sent_request_to_store_ = true;
@@ -1142,7 +1179,7 @@ void PasswordAutofillAgent::OnFrameDetached() {
   // for examples of sites that perform login using this technique.
   if (render_frame()->GetWebFrame()->Parent() && browser_has_form_to_process_) {
     DCHECK(FrameCanAccessPasswordManager());
-    GetPasswordManagerDriver()->SameDocumentNavigation(
+    GetPasswordManagerDriver()->DynamicFormSubmission(
         SubmissionIndicatorEvent::FRAME_DETACHED);
   }
   CleanupOnDocumentShutdown();
@@ -1157,8 +1194,8 @@ void PasswordAutofillAgent::ReadyToCommitNavigation(
     blink::WebDocumentLoader* document_loader) {
   std::unique_ptr<RendererSavePasswordProgressLogger> logger;
   if (logging_state_active_) {
-    logger.reset(new RendererSavePasswordProgressLogger(
-        GetPasswordManagerDriver().get()));
+    logger = std::make_unique<RendererSavePasswordProgressLogger>(
+        GetPasswordManagerDriver().get());
     logger->LogMessage(Logger::STRING_DID_START_PROVISIONAL_LOAD_METHOD);
   }
 
@@ -1181,8 +1218,8 @@ void PasswordAutofillAgent::FillPasswordForm(
     const PasswordFormFillData& form_data) {
   std::unique_ptr<RendererSavePasswordProgressLogger> logger;
   if (logging_state_active_) {
-    logger.reset(new RendererSavePasswordProgressLogger(
-        GetPasswordManagerDriver().get()));
+    logger = std::make_unique<RendererSavePasswordProgressLogger>(
+        GetPasswordManagerDriver().get());
     logger->LogMessage(Logger::STRING_ON_FILL_PASSWORD_FORM_METHOD);
   }
 
@@ -1308,23 +1345,27 @@ void PasswordAutofillAgent::InformNoSavedCredentials(
 void PasswordAutofillAgent::FocusedNodeHasChanged(const blink::WebNode& node) {
   DCHECK(!node.IsNull());
   focused_input_element_.Reset();
+
   if (!node.IsElementNode()) {
-    focus_state_notifier_.FocusedInputChanged(FocusedFieldType::kUnknown);
+    focus_state_notifier_.FocusedInputChanged(FieldRendererId(),
+                                              FocusedFieldType::kUnknown);
     return;
   }
 
   auto element = node.ToConst<WebElement>();
   if (element.IsFormControlElement() &&
       form_util::IsTextAreaElement(element.ToConst<WebFormControlElement>())) {
+    FieldRendererId textarea_id(
+        element.ToConst<WebFormControlElement>().UniqueRendererFormControlId());
     focus_state_notifier_.FocusedInputChanged(
-        FocusedFieldType::kFillableTextArea);
+        textarea_id, FocusedFieldType::kFillableTextArea);
     return;
   }
 
   auto* input_element = ToWebInputElement(&element);
   if (!input_element) {
     focus_state_notifier_.FocusedInputChanged(
-        FocusedFieldType::kUnfillableElement);
+        FieldRendererId(), FocusedFieldType::kUnfillableElement);
     return;
   }
 
@@ -1343,8 +1384,8 @@ void PasswordAutofillAgent::FocusedNodeHasChanged(const blink::WebNode& node) {
       focused_field_type = FocusedFieldType::kFillableNonSearchField;
   }
 
-  focus_state_notifier_.FocusedInputChanged(focused_field_type);
   const FieldRendererId input_id(input_element->UniqueRendererFormControlId());
+  focus_state_notifier_.FocusedInputChanged(input_id, focused_field_type);
   field_data_manager_->UpdateFieldDataMapWithNullValue(
       input_id, FieldPropertiesFlags::kHadFocus);
 }
@@ -1424,7 +1465,7 @@ void PasswordAutofillAgent::InformAboutFieldClearing(
 // PasswordAutofillAgent, private:
 
 void PasswordAutofillAgent::ShowSuggestionPopup(
-    const base::string16& typed_username,
+    const std::u16string& typed_username,
     const WebInputElement& user_input,
     ShowAll show_all,
     OnPasswordField show_on_password_field) {
@@ -1538,7 +1579,7 @@ bool PasswordAutofillAgent::FillUserNameAndPassword(
   // autocompletable.
   // 3. Empty if username field doesn't exist or if username field is empty and
   // not autocompletable (no username case).
-  base::string16 current_username;
+  std::u16string current_username;
 
   // Whether the username element was prefilled with content that was on a
   // list of known placeholder texts that should be overridden (e.g. "username
@@ -1573,8 +1614,8 @@ bool PasswordAutofillAgent::FillUserNameAndPassword(
   }
 
   // |username| and |password| will contain the match found if any.
-  base::string16 username;
-  base::string16 password;
+  std::u16string username;
+  std::u16string password;
 
   bool exact_username_match =
       username_element.IsNull() || IsElementEditable(username_element);
@@ -1667,8 +1708,8 @@ void PasswordAutofillAgent::OnProvisionallySaveForm(
 void PasswordAutofillAgent::OnFormSubmitted(const WebFormElement& form) {
   std::unique_ptr<RendererSavePasswordProgressLogger> logger;
   if (logging_state_active_) {
-    logger.reset(new RendererSavePasswordProgressLogger(
-        GetPasswordManagerDriver().get()));
+    logger = std::make_unique<RendererSavePasswordProgressLogger>(
+        GetPasswordManagerDriver().get());
     LogHTMLForm(logger.get(), Logger::STRING_HTML_FORM_FOR_SUBMIT, form);
   }
 
@@ -1869,7 +1910,7 @@ void PasswordAutofillAgent::TryFixAutofilledForm(
   }
 }
 
-void PasswordAutofillAgent::AutofillField(const base::string16& value,
+void PasswordAutofillAgent::AutofillField(const std::u16string& value,
                                           WebInputElement field) {
   // Do not autofill on load fields that have any user typed input.
   const FieldRendererId field_id(field.UniqueRendererFormControlId());

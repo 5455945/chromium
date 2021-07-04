@@ -30,7 +30,7 @@
 
 #include "base/callback_forward.h"
 #include "base/containers/span.h"
-#include "base/macros.h"
+#include "base/dcheck_is_on.h"
 #include "base/memory/ref_counted.h"
 #include "base/numerics/checked_math.h"
 #include "build/build_config.h"
@@ -135,6 +135,8 @@ class WTF_EXPORT StringImpl {
   static StringImpl* empty_;
   static StringImpl* empty16_bit_;
 
+  StringImpl(const StringImpl&) = delete;
+  StringImpl& operator=(const StringImpl&) = delete;
   ~StringImpl();
 
   static void InitStatics();
@@ -570,8 +572,6 @@ class WTF_EXPORT StringImpl {
   mutable unsigned ref_count_{1};
   const unsigned length_;
   mutable std::atomic<uint32_t> hash_and_flags_;
-
-  DISALLOW_COPY_AND_ASSIGN(StringImpl);
 };
 
 template <>
@@ -948,4 +948,4 @@ using WTF::EqualNonNull;
 using WTF::LengthOfNullTerminatedString;
 using WTF::ReverseFind;
 
-#endif
+#endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_TEXT_STRING_IMPL_H_

@@ -4,13 +4,13 @@
 
 #include "chrome/services/sharing/nearby/platform/webrtc.h"
 
-#include "base/i18n/timezone.h"
 #include "base/test/task_environment.h"
 #include "chrome/services/sharing/nearby/test_support/mock_webrtc_dependencies.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/shared_remote.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "unicode/locid.h"
 
 namespace location {
 namespace nearby {
@@ -53,13 +53,14 @@ class WebRtcMediumTest : public ::testing::Test {
   WebRtcMediumTest()
       : socket_manager_(mojo_impl_.socket_manager_.BindNewPipeAndPassRemote(),
                         task_environment_.GetMainThreadTaskRunner()),
-        mdns_responder_(mojo_impl_.mdns_responder_.BindNewPipeAndPassRemote(),
-                        task_environment_.GetMainThreadTaskRunner()),
+        mdns_responder_factory_(
+            mojo_impl_.mdns_responder_factory_.BindNewPipeAndPassRemote(),
+            task_environment_.GetMainThreadTaskRunner()),
         ice_config_fetcher_(
             mojo_impl_.ice_config_fetcher_.BindNewPipeAndPassRemote()),
         messenger_(mojo_impl_.messenger_.BindNewPipeAndPassRemote()),
         webrtc_medium_(socket_manager_,
-                       mdns_responder_,
+                       mdns_responder_factory_,
                        ice_config_fetcher_,
                        messenger_,
                        base::ThreadTaskRunnerHandle::Get()) {}
@@ -105,7 +106,8 @@ class WebRtcMediumTest : public ::testing::Test {
   testing::NiceMock<sharing::MockWebRtcDependencies> mojo_impl_;
 
   mojo::SharedRemote<network::mojom::P2PSocketManager> socket_manager_;
-  mojo::SharedRemote<network::mojom::MdnsResponder> mdns_responder_;
+  mojo::SharedRemote<location::nearby::connections::mojom::MdnsResponderFactory>
+      mdns_responder_factory_;
   mojo::SharedRemote<sharing::mojom::IceConfigFetcher> ice_config_fetcher_;
   mojo::SharedRemote<sharing::mojom::WebRtcSignalingMessenger> messenger_;
 
@@ -184,7 +186,7 @@ TEST_F(WebRtcMediumTest, GetMessengerAndSendMessageWithUnknownLocationHint) {
               sharing::MockWebRtcDependencies::SendMessageCallback callback) {
             // Validate we get the default country code if we pass an UNKNOWN
             // location hint.
-            EXPECT_EQ(base::CountryCodeForCurrentTimezone(),
+            EXPECT_EQ(icu::Locale::getDefault().getCountry(),
                       location_hint->location);
             EXPECT_EQ(
                 sharing::mojom::LocationStandardFormat::ISO_3166_1_ALPHA_2,
@@ -224,6 +226,7 @@ TEST_F(WebRtcMediumTest, GetMessengerAndStartReceivingMessages) {
             mojo::Remote<sharing::mojom::IncomingMessagesListener> remote(
                 std::move(listener));
             remote->OnMessage(std::string(message));
+            remote->OnComplete(true);
           }));
 
   std::unique_ptr<api::WebRtcSignalingMessenger> messenger =
@@ -231,10 +234,12 @@ TEST_F(WebRtcMediumTest, GetMessengerAndStartReceivingMessages) {
   EXPECT_TRUE(messenger);
 
   base::RunLoop loop;
-  EXPECT_TRUE(messenger->StartReceivingMessages([&](const ByteArray& msg) {
-    EXPECT_EQ(message, msg);
-    loop.Quit();
-  }));
+  EXPECT_TRUE(messenger->StartReceivingMessages(
+      [&](const ByteArray& msg) { EXPECT_EQ(message, msg); },
+      [&](bool success) {
+        EXPECT_TRUE(success);
+        loop.Quit();
+      }));
   loop.Run();
 }
 
@@ -256,7 +261,7 @@ TEST_F(WebRtcMediumTest, DISABLED_GetMessenger_StartAndStopReceivingMessages) {
                   callback) {
             // Expect the unknown location hint to get defaulted by the time we
             // get here.
-            EXPECT_EQ(base::CountryCodeForCurrentTimezone(),
+            EXPECT_EQ(icu::Locale::getDefault().getCountry(),
                       location_hint->location);
             EXPECT_EQ(
                 sharing::mojom::LocationStandardFormat::ISO_3166_1_ALPHA_2,
@@ -274,10 +279,12 @@ TEST_F(WebRtcMediumTest, DISABLED_GetMessenger_StartAndStopReceivingMessages) {
   EXPECT_TRUE(messenger);
 
   base::RunLoop loop;
-  EXPECT_TRUE(messenger->StartReceivingMessages([&](const ByteArray& msg) {
-    EXPECT_EQ(message, msg);
-    loop.Quit();
-  }));
+  EXPECT_TRUE(messenger->StartReceivingMessages(
+      [&](const ByteArray& msg) {
+        EXPECT_EQ(message, msg);
+        loop.Quit();
+      },
+      [](bool success) {}));
   loop.Run();
 
   EXPECT_TRUE(remote.is_connected());
@@ -320,10 +327,12 @@ TEST_F(WebRtcMediumTest, GetMessengerAndStartReceivingMessagesTwice) {
   EXPECT_TRUE(messenger);
 
   base::RunLoop loop;
-  EXPECT_TRUE(messenger->StartReceivingMessages([&](const ByteArray& msg) {
-    EXPECT_EQ(message, msg);
-    loop.Quit();
-  }));
+  EXPECT_TRUE(messenger->StartReceivingMessages(
+      [&](const ByteArray& msg) {
+        EXPECT_EQ(message, msg);
+        loop.Quit();
+      },
+      [](bool success) {}));
   loop.Run();
 
   // Create a second receiver sessions to return
@@ -358,10 +367,12 @@ TEST_F(WebRtcMediumTest, GetMessengerAndStartReceivingMessagesTwice) {
           }));
 
   base::RunLoop loop_2;
-  EXPECT_TRUE(messenger->StartReceivingMessages([&](const ByteArray& msg) {
-    EXPECT_EQ(message, msg);
-    loop_2.Quit();
-  }));
+  EXPECT_TRUE(messenger->StartReceivingMessages(
+      [&](const ByteArray& msg) {
+        EXPECT_EQ(message, msg);
+        loop_2.Quit();
+      },
+      [](bool success) {}));
   loop_2.Run();
 }
 

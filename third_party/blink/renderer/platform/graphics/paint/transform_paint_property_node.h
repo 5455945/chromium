@@ -6,6 +6,8 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_PAINT_TRANSFORM_PAINT_PROPERTY_NODE_H_
 
 #include <algorithm>
+
+#include "base/dcheck_is_on.h"
 #include "cc/trees/sticky_position_constraint.h"
 #include "third_party/blink/renderer/platform/geometry/float_point_3d.h"
 #include "third_party/blink/renderer/platform/graphics/compositing_reasons.h"
@@ -158,6 +160,8 @@ class PLATFORM_EXPORT TransformPaintPropertyNode
   struct State {
     TransformAndOrigin transform_and_origin;
     scoped_refptr<const ScrollPaintPropertyNode> scroll;
+    scoped_refptr<const TransformPaintPropertyNode>
+        scroll_translation_for_fixed;
     // Use bitfield packing instead of separate bools to save space.
     struct Flags {
       bool flattens_inherited_transform : 1;
@@ -166,7 +170,8 @@ class PLATFORM_EXPORT TransformPaintPropertyNode
       bool delegates_to_parent_for_backface : 1;
       // Set if a frame is rooted at this node.
       bool is_frame_paint_offset_translation : 1;
-    } flags = {false, true, false, false, false};
+      bool is_for_svg_child : 1;
+    } flags = {false, true, false, false, false, false};
     BackfaceVisibility backface_visibility = BackfaceVisibility::kInherited;
     unsigned rendering_context_id = 0;
     CompositingReasons direct_compositing_reasons = CompositingReason::kNone;
@@ -191,10 +196,15 @@ class PLATFORM_EXPORT TransformPaintPropertyNode
               other.flags.animation_is_axis_aligned ||
           flags.delegates_to_parent_for_backface !=
               other.flags.delegates_to_parent_for_backface ||
+          flags.is_frame_paint_offset_translation !=
+              other.flags.is_frame_paint_offset_translation ||
+          flags.is_for_svg_child != other.flags.is_for_svg_child ||
           backface_visibility != other.backface_visibility ||
           rendering_context_id != other.rendering_context_id ||
           compositor_element_id != other.compositor_element_id ||
-          scroll != other.scroll || !StickyConstraintEquals(other) ||
+          scroll != other.scroll ||
+          scroll_translation_for_fixed != other.scroll_translation_for_fixed ||
+          !StickyConstraintEquals(other) ||
           visible_frame_element_id != other.visible_frame_element_id) {
         return PaintPropertyChangeType::kChangedOnlyValues;
       }
@@ -316,6 +326,10 @@ class PLATFORM_EXPORT TransformPaintPropertyNode
     return state_.scroll.get();
   }
 
+  const TransformPaintPropertyNode* ScrollTranslationForFixed() const {
+    return state_.scroll_translation_for_fixed.get();
+  }
+
   // If true, this node is translated by the viewport bounds delta, which is
   // used to keep bottom-fixed elements appear fixed to the bottom of the
   // screen in the presence of URL bar movement.
@@ -408,9 +422,13 @@ class PLATFORM_EXPORT TransformPaintPropertyNode
            CompositingReason::kActiveTransformAnimation;
   }
 
+  bool RequiresCompositingForFixedPosition() const {
+    return DirectCompositingReasons() & CompositingReason::kFixedPosition;
+  }
+
   bool RequiresCompositingForScrollDependentPosition() const {
     return DirectCompositingReasons() &
-           CompositingReason::kScrollDependentPosition;
+           CompositingReason::kComboScrollDependentPosition;
   }
 
   CompositingReasons DirectCompositingReasonsForDebugging() const {
@@ -428,6 +446,14 @@ class PLATFORM_EXPORT TransformPaintPropertyNode
   bool RequiresCompositingForWillChangeTransform() const {
     return state_.direct_compositing_reasons &
            CompositingReason::kWillChangeTransform;
+  }
+
+  // Cull rect expansion is required if the compositing reasons hint requirement
+  // of high-performance movement, to avoid frequent change of cull rect.
+  bool RequiresCullRectExpansion() const {
+    return state_.direct_compositing_reasons &
+           (CompositingReason::kDirectReasonsForTransformProperty |
+            CompositingReason::kDirectReasonsForScrollTranslationProperty);
   }
 
   const CompositorElementId& GetCompositorElementId() const {
@@ -450,6 +476,8 @@ class PLATFORM_EXPORT TransformPaintPropertyNode
   // sorted. If this is 0, content will not be 3D sorted.
   unsigned RenderingContextId() const { return state_.rendering_context_id; }
   bool HasRenderingContext() const { return state_.rendering_context_id; }
+
+  bool IsForSVGChild() const { return state_.flags.is_for_svg_child; }
 
   std::unique_ptr<JSONObject> ToJSON() const;
 

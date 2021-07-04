@@ -92,14 +92,19 @@ void ImeModeView::Update() {
 
   ImeControllerImpl* ime_controller = Shell::Get()->ime_controller();
 
-  size_t ime_count = ime_controller->available_imes().size();
+  if (!ime_controller->IsCurrentImeVisible()) {
+    SetVisible(false);
+    return;
+  }
+
+  size_t ime_count = ime_controller->GetVisibleImes().size();
   SetVisible(!ime_menu_on_shelf_activated_ &&
              (ime_count > 1 || ime_controller->managed_by_policy()));
 
   label()->SetText(ime_controller->current_ime().short_name);
   label()->SetEnabledColor(
       TrayIconColor(Shell::Get()->session_controller()->GetSessionState()));
-  base::string16 description =
+  std::u16string description =
       l10n_util::GetStringFUTF16(IDS_ASH_STATUS_TRAY_INDICATOR_IME_TOOLTIP,
                                  ime_controller->current_ime().name);
   label()->SetTooltipText(description);

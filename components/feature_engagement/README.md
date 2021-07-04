@@ -350,10 +350,27 @@ Format:
   "x_???": "..."
  }
 ```
+Alternate format:
+
+```
+{
+  "IPH_MyFunFeature_availability": "{Comparator}",
+  "IPH_MyFunFeature_session_rate": "{Comparator}",
+  "IPH_MyFunFeature_session_rate_impact": "{SessionRateImpact}",
+  "IPH_MyFunFeature_event_used": "{EventConfig}",
+  "IPH_MyFunFeature_event_trigger": "{EventConfig}",
+  "IPH_MyFunFeature_event_???": "{EventConfig}",
+  "IPH_MyFunFeature_tracking_only": "{Boolean}"
+  "IPH_MyFunFeature_x_???": "..."
+ }
+```
 
 The `FeatureConfig` fields `availability`, `session_rate`, `event_used` and
 `event_trigger` are required, and there can be an arbitrary amount of other
-`event_???` entries.
+`event_???` entries. The fields can optionally have a feature name prefix 
+(e.g. `IPH_MyFunFeature_`) as well, which is sometimes required to 
+disambiguate between param names between different IPHs if they are combined 
+into the same finch study.
 
 *   `availability` __REQUIRED__
     *   For how long must an in-product help experiment have been available to
@@ -625,4 +642,8 @@ ninja -C out/Debug components_unittests ;
 When adding new test suites, also remember to add the suite to the filter file:
 `//components/feature_engagement/components_unittests.filter`.
 
-[field-trial-testing-configuration]: https://chromium.googlesource.com/chromium/src/+/master/testing/variations/README.md
+[field-trial-testing-configuration]: https://chromium.googlesource.com/chromium/src/+/main/testing/variations/README.md
+
+## IPH Analysis Guideline
+
+See [this doc](https://docs.google.com/document/d/1EhQe3G9juBiw-otuRnGf5gzTsfHZVZiSKrgF6r7Sz4E/edit#heading=h.la5fs7q2klme)

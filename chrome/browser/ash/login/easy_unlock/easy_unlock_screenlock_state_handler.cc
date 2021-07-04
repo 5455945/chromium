@@ -6,8 +6,9 @@
 
 #include <stddef.h>
 
+#include <string>
+
 #include "base/bind.h"
-#include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/ash/login/easy_unlock/easy_unlock_metrics.h"
@@ -16,11 +17,10 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/chromeos/devicetype_utils.h"
 
-using proximity_auth::ScreenlockState;
-
-namespace chromeos {
-
+namespace ash {
 namespace {
+
+using ::proximity_auth::ScreenlockState;
 
 proximity_auth::ScreenlockBridge::UserPodCustomIcon GetIconForState(
     ScreenlockState state) {
@@ -173,29 +173,29 @@ void EasyUnlockScreenlockStateHandler::ChangeState(ScreenlockState new_state) {
     return;
   }
 
-  proximity_auth::ScreenlockBridge::UserPodCustomIconOptions icon_options;
-  icon_options.SetIcon(icon);
+  proximity_auth::ScreenlockBridge::UserPodCustomIconInfo icon_info;
+  icon_info.SetIcon(icon);
 
   if (HardlockOnClick(state_))
-    icon_options.SetHardlockOnClick();
+    icon_info.SetHardlockOnClick();
 
-  UpdateTooltipOptions(&icon_options);
+  UpdateTooltipOptions(&icon_info);
 
   // For states without tooltips, we still need to set an accessibility label.
   if (state_ == ScreenlockState::BLUETOOTH_CONNECTING) {
-    icon_options.SetAriaLabel(
+    icon_info.SetAriaLabel(
         l10n_util::GetStringUTF16(IDS_SMART_LOCK_SPINNER_ACCESSIBILITY_LABEL));
   }
 
   // Accessibility users may not be able to see the green icon which indicates
   // the phone is authenticated. Provide message to that effect.
   if (state_ == ScreenlockState::AUTHENTICATED) {
-    icon_options.SetAriaLabel(l10n_util::GetStringUTF16(
+    icon_info.SetAriaLabel(l10n_util::GetStringUTF16(
         IDS_SMART_LOCK_SCREENLOCK_AUTHENTICATED_LABEL));
   }
 
   screenlock_bridge_->lock_handler()->ShowUserPodCustomIcon(account_id_,
-                                                            icon_options);
+                                                            icon_info);
 }
 
 void EasyUnlockScreenlockStateHandler::SetHardlockState(
@@ -266,7 +266,7 @@ void EasyUnlockScreenlockStateHandler::ShowHardlockUI() {
   if (existing_auth_type != proximity_auth::mojom::AuthType::OFFLINE_PASSWORD) {
     screenlock_bridge_->lock_handler()->SetAuthType(
         account_id_, proximity_auth::mojom::AuthType::OFFLINE_PASSWORD,
-        base::string16());
+        std::u16string());
   }
 
   if (hardlock_state_ == NO_PAIRING) {
@@ -278,21 +278,21 @@ void EasyUnlockScreenlockStateHandler::ShowHardlockUI() {
   if (hardlock_ui_shown_)
     return;
 
-  proximity_auth::ScreenlockBridge::UserPodCustomIconOptions icon_options;
+  proximity_auth::ScreenlockBridge::UserPodCustomIconInfo icon_info;
   if (hardlock_state_ == LOGIN_FAILED) {
-    icon_options.SetIcon(
+    icon_info.SetIcon(
         proximity_auth::ScreenlockBridge::USER_POD_CUSTOM_ICON_LOCKED);
   } else if (hardlock_state_ == PAIRING_CHANGED ||
              hardlock_state_ == PAIRING_ADDED) {
-    icon_options.SetIcon(proximity_auth::ScreenlockBridge::
-                             USER_POD_CUSTOM_ICON_LOCKED_TO_BE_ACTIVATED);
+    icon_info.SetIcon(proximity_auth::ScreenlockBridge::
+                          USER_POD_CUSTOM_ICON_LOCKED_TO_BE_ACTIVATED);
   } else {
-    icon_options.SetIcon(
+    icon_info.SetIcon(
         proximity_auth::ScreenlockBridge::USER_POD_CUSTOM_ICON_HARDLOCKED);
   }
 
-  base::string16 device_name = GetDeviceName();
-  base::string16 tooltip;
+  std::u16string device_name = GetDeviceName();
+  std::u16string tooltip;
   switch (hardlock_state_) {
     case USER_HARDLOCK:
       tooltip = l10n_util::GetStringFUTF16(
@@ -332,17 +332,17 @@ void EasyUnlockScreenlockStateHandler::ShowHardlockUI() {
     pref_manager_->SetHasShownLoginDisabledMessage(true);
   }
 
-  icon_options.SetTooltip(tooltip, autoshow);
+  icon_info.SetTooltip(tooltip, autoshow);
 
   screenlock_bridge_->lock_handler()->ShowUserPodCustomIcon(account_id_,
-                                                            icon_options);
+                                                            icon_info);
   hardlock_ui_shown_ = true;
 }
 
 void EasyUnlockScreenlockStateHandler::UpdateTooltipOptions(
-    proximity_auth::ScreenlockBridge::UserPodCustomIconOptions* icon_options) {
+    proximity_auth::ScreenlockBridge::UserPodCustomIconInfo* icon_info) {
   size_t resource_id = 0;
-  base::string16 device_name;
+  std::u16string device_name;
   resource_id = GetTooltipResourceId(state_);
   if (TooltipContainsDeviceType(state_))
     device_name = GetDeviceName();
@@ -350,7 +350,7 @@ void EasyUnlockScreenlockStateHandler::UpdateTooltipOptions(
   if (!resource_id)
     return;
 
-  base::string16 tooltip;
+  std::u16string tooltip;
   if (device_name.empty()) {
     tooltip = l10n_util::GetStringUTF16(resource_id);
   } else {
@@ -361,10 +361,10 @@ void EasyUnlockScreenlockStateHandler::UpdateTooltipOptions(
     return;
 
   bool autoshow_tooltip = state_ != ScreenlockState::AUTHENTICATED;
-  icon_options->SetTooltip(tooltip, autoshow_tooltip);
+  icon_info->SetTooltip(tooltip, autoshow_tooltip);
 }
 
-base::string16 EasyUnlockScreenlockStateHandler::GetDeviceName() {
+std::u16string EasyUnlockScreenlockStateHandler::GetDeviceName() {
   return ui::GetChromeOSDeviceName();
 }
 
@@ -389,8 +389,8 @@ void EasyUnlockScreenlockStateHandler::UpdateScreenlockAuthType() {
              proximity_auth::mojom::AuthType::OFFLINE_PASSWORD) {
     screenlock_bridge_->lock_handler()->SetAuthType(
         account_id_, proximity_auth::mojom::AuthType::OFFLINE_PASSWORD,
-        base::string16());
+        std::u16string());
   }
 }
 
-}  // namespace chromeos
+}  // namespace ash

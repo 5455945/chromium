@@ -29,15 +29,16 @@
 #include <memory>
 #include <utility>
 
+#include "base/containers/contains.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/trace_event/typed_macros.h"
+#include "build/build_config.h"
 #include "cc/input/snap_selection_strategy.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "third_party/blink/public/common/action_after_pagehide.h"
 #include "third_party/blink/public/common/browser_interface_broker_proxy.h"
-#include "third_party/blink/public/common/features.h"
-#include "third_party/blink/public/common/widget/screen_info.h"
-#include "third_party/blink/public/mojom/feature_policy/policy_disposition.mojom-blink.h"
+#include "third_party/blink/public/mojom/permissions_policy/policy_disposition.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/binding_security.h"
@@ -46,7 +47,6 @@
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/source_location.h"
-#include "third_party/blink/renderer/bindings/core/v8/v8_impression_params.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_scroll_to_options.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_void_function.h"
 #include "third_party/blink/renderer/bindings/core/v8/window_proxy.h"
@@ -82,13 +82,13 @@
 #include "third_party/blink/renderer/core/frame/dom_visual_viewport.h"
 #include "third_party/blink/renderer/core/frame/event_handler_registry.h"
 #include "third_party/blink/renderer/core/frame/external.h"
-#include "third_party/blink/renderer/core/frame/feature_policy_violation_report_body.h"
 #include "third_party/blink/renderer/core/frame/frame_console.h"
 #include "third_party/blink/renderer/core/frame/history.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_client.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/navigator.h"
+#include "third_party/blink/renderer/core/frame/permissions_policy_violation_report_body.h"
 #include "third_party/blink/renderer/core/frame/report.h"
 #include "third_party/blink/renderer/core/frame/reporting_context.h"
 #include "third_party/blink/renderer/core/frame/screen.h"
@@ -102,6 +102,8 @@
 #include "third_party/blink/renderer/core/html/plugin_document.h"
 #include "third_party/blink/renderer/core/input/event_handler.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
+#include "third_party/blink/renderer/core/inspector/inspector_audits_issue.h"
+#include "third_party/blink/renderer/core/inspector/inspector_issue_storage.h"
 #include "third_party/blink/renderer/core/inspector/inspector_trace_events.h"
 #include "third_party/blink/renderer/core/inspector/main_thread_debugger.h"
 #include "third_party/blink/renderer/core/layout/adjust_for_absolute_zoom.h"
@@ -133,6 +135,7 @@
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/widget/frame_widget.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
+#include "ui/display/screen_info.h"
 #include "v8/include/v8.h"
 
 namespace blink {
@@ -327,7 +330,7 @@ HttpsState LocalDOMWindow::GetHttpsState() const {
   return CalculateHttpsState(GetSecurityOrigin());
 }
 
-ResourceFetcher* LocalDOMWindow::Fetcher() const {
+ResourceFetcher* LocalDOMWindow::Fetcher() {
   return document()->Fetcher();
 }
 
@@ -397,25 +400,6 @@ String LocalDOMWindow::OutgoingReferrer() const {
   return referrer_document->Url().StrippedForUseAsReferrer();
 }
 
-network::mojom::ReferrerPolicy LocalDOMWindow::GetReferrerPolicy() const {
-  network::mojom::ReferrerPolicy policy = ExecutionContext::GetReferrerPolicy();
-
-  // PolicyContainer took care already of policy inheritance.
-  if (base::FeatureList::IsEnabled(blink::features::kPolicyContainer)) {
-    return policy;
-  }
-  // For srcdoc documents without their own policy, walk up the frame
-  // tree to find the document that is either not a srcdoc or doesn't
-  // have its own policy. This algorithm is defined in
-  // https://html.spec.whatwg.org/C/#set-up-a-window-environment-settings-object.
-  if (!GetFrame() || policy != network::mojom::ReferrerPolicy::kDefault ||
-      !document()->IsSrcdocDocument()) {
-    return policy;
-  }
-  LocalFrame* frame = To<LocalFrame>(GetFrame()->Tree().Parent());
-  return frame->DomWindow()->GetReferrerPolicy();
-}
-
 CoreProbeSink* LocalDOMWindow::GetProbeSink() {
   return probe::ToCoreProbeSink(GetFrame());
 }
@@ -440,6 +424,8 @@ scoped_refptr<base::SingleThreadTaskRunner> LocalDOMWindow::GetTaskRunner(
     TaskType type) {
   if (GetFrame())
     return GetFrame()->GetTaskRunner(type);
+  TRACE_EVENT_INSTANT("blink",
+                      "LocalDOMWindow::GetTaskRunner_ThreadTaskRunner");
   // In most cases, the ExecutionContext will get us to a relevant Frame. In
   // some cases, though, there isn't a good candidate (most commonly when either
   // the passed-in document or the ExecutionContext used to be attached to a
@@ -447,44 +433,32 @@ scoped_refptr<base::SingleThreadTaskRunner> LocalDOMWindow::GetTaskRunner(
   return Thread::Current()->GetTaskRunner();
 }
 
-void LocalDOMWindow::CountPotentialFeaturePolicyViolation(
-    mojom::blink::FeaturePolicyFeature feature) const {
-  wtf_size_t index = static_cast<wtf_size_t>(feature);
-  if (potentially_violated_features_.size() == 0) {
-    potentially_violated_features_.resize(
-        static_cast<wtf_size_t>(mojom::blink::FeaturePolicyFeature::kMaxValue) +
-        1);
-  } else if (potentially_violated_features_[index]) {
-    return;
-  }
-  potentially_violated_features_[index] = true;
-  UMA_HISTOGRAM_ENUMERATION("Blink.UseCounter.FeaturePolicy.PotentialViolation",
-                            feature);
-}
-
-void LocalDOMWindow::ReportFeaturePolicyViolation(
-    mojom::blink::FeaturePolicyFeature feature,
+void LocalDOMWindow::ReportPermissionsPolicyViolation(
+    mojom::blink::PermissionsPolicyFeature feature,
     mojom::blink::PolicyDisposition disposition,
     const String& message) const {
+  if (disposition == mojom::blink::PolicyDisposition::kEnforce)
+    CountPermissionsPolicyViolation(feature);
+
   if (!RuntimeEnabledFeatures::FeaturePolicyReportingEnabled(this))
     return;
   if (!GetFrame())
     return;
 
-  // Construct the feature policy violation report.
+  // Construct the permissions policy violation report.
   const String& feature_name = GetNameForFeature(feature);
   const String& disp_str =
       (disposition == mojom::blink::PolicyDisposition::kReport ? "report"
                                                                : "enforce");
 
-  FeaturePolicyViolationReportBody* body =
-      MakeGarbageCollected<FeaturePolicyViolationReportBody>(feature_name,
-                                                             message, disp_str);
+  PermissionsPolicyViolationReportBody* body =
+      MakeGarbageCollected<PermissionsPolicyViolationReportBody>(
+          feature_name, message, disp_str);
 
   Report* report = MakeGarbageCollected<Report>(
-      ReportType::kFeaturePolicyViolation, Url().GetString(), body);
+      ReportType::kPermissionsPolicyViolation, Url().GetString(), body);
 
-  // Send the feature policy violation report to any ReportingObservers.
+  // Send the permissions policy violation report to any ReportingObservers.
   ReportingContext::From(this)->QueueReport(report);
 
   // TODO(iclelland): Report something different in report-only mode
@@ -534,7 +508,7 @@ void LocalDOMWindow::ReportDocumentPolicyViolation(
   document_policy_violation_reports_sent_.insert(report_id);
 
   // Send the document policy violation report to any ReportingObservers.
-  const base::Optional<std::string> endpoint =
+  const absl::optional<std::string> endpoint =
       relevant_document_policy->GetFeatureEndpoint(feature);
 
   if (is_report_only) {
@@ -606,7 +580,15 @@ void LocalDOMWindow::AddConsoleMessageImpl(ConsoleMessage* console_message,
 void LocalDOMWindow::AddInspectorIssue(
     mojom::blink::InspectorIssueInfoPtr info) {
   if (GetFrame()) {
-    GetFrame()->AddInspectorIssue(std::move(info));
+    GetFrame()->GetPage()->GetInspectorIssueStorage().AddInspectorIssue(
+        this, std::move(info));
+  }
+}
+
+void LocalDOMWindow::AddInspectorIssue(AuditsIssue issue) {
+  if (GetFrame()) {
+    GetFrame()->GetPage()->GetInspectorIssueStorage().AddInspectorIssue(
+        this, std::move(issue));
   }
 }
 
@@ -617,10 +599,35 @@ void LocalDOMWindow::CountUse(mojom::WebFeature feature) {
     loader->CountUse(feature);
 }
 
+void LocalDOMWindow::CountPermissionsPolicyViolation(
+    mojom::blink::PermissionsPolicyFeature feature) const {
+  if (!GetFrame())
+    return;
+  if (auto* loader = GetFrame()->Loader().GetDocumentLoader()) {
+    loader->GetUseCounter().CountPermissionsPolicyViolation(feature,
+                                                            *GetFrame());
+  }
+}
+
 void LocalDOMWindow::CountUseOnlyInCrossOriginIframe(
     mojom::blink::WebFeature feature) {
   if (GetFrame() && GetFrame()->IsCrossOriginToMainFrame())
     CountUse(feature);
+}
+
+void LocalDOMWindow::CountUseOnlyInCrossSiteIframe(
+    mojom::blink::WebFeature feature) {
+  if (!GetFrame())
+    return;
+
+  if (top()->GetFrame() &&
+      !top()
+           ->GetFrame()
+           ->GetSecurityContext()
+           ->GetSecurityOrigin()
+           ->IsSameSiteWith(GetSecurityContext().GetSecurityOrigin())) {
+    CountUse(feature);
+  }
 }
 
 bool LocalDOMWindow::HasInsecureContextInAncestors() {
@@ -1859,9 +1866,8 @@ void LocalDOMWindow::DispatchLoadEvent() {
   if (owner)
     owner->DispatchLoad();
 
-  TRACE_EVENT_INSTANT1("devtools.timeline", "MarkLoad",
-                       TRACE_EVENT_SCOPE_THREAD, "data",
-                       inspector_mark_load_event::Data(GetFrame()));
+  DEVTOOLS_TIMELINE_TRACE_EVENT_INSTANT(
+      "MarkLoad", inspector_mark_load_event::Data, GetFrame());
   probe::LoadEventFired(GetFrame());
 }
 
@@ -1876,8 +1882,8 @@ DispatchEventResult LocalDOMWindow::DispatchEvent(Event& event,
   event.SetCurrentTarget(this);
   event.SetEventPhase(Event::kAtTarget);
 
-  TRACE_EVENT1("devtools.timeline", "EventDispatch", "data",
-               inspector_event_dispatch_event::Data(event));
+  DEVTOOLS_TIMELINE_TRACE_EVENT("EventDispatch",
+                                inspector_event_dispatch_event::Data, event);
   return FireEventListeners(event);
 }
 
@@ -1947,42 +1953,6 @@ DOMWindow* LocalDOMWindow::open(v8::Isolate* isolate,
                                 const AtomicString& target,
                                 const String& features,
                                 ExceptionState& exception_state) {
-  return open(isolate, url_string, target, features,
-              nullptr /* impression_params */, exception_state);
-}
-
-DOMWindow* LocalDOMWindow::open(v8::Isolate* isolate,
-                                const String& url_string,
-                                const AtomicString& target,
-                                const String& features,
-                                bool unused,
-                                ExceptionState& exception_state) {
-  UseCounter::Count(this, WebFeature::kWindowOpenWithAdditionalBoolParameter);
-
-  PrintErrorMessage(
-      "A boolean is being passed as a fourth parameter to "
-      "window.open. This is not used and may cause an "
-      "exception in a future release.");
-
-  // Ignore the unused bool argument.
-  return open(isolate, url_string, target, features,
-              nullptr /* impression_params */, exception_state);
-}
-
-DOMWindow* LocalDOMWindow::open(v8::Isolate* isolate,
-                                const String& url_string,
-                                const AtomicString& target,
-                                const String& features,
-                                const ImpressionParams* impression_params,
-                                ExceptionState& exception_state) {
-  if (!RuntimeEnabledFeatures::ConversionMeasurementEnabled(this)) {
-    // The usage of `impression_params` is gated on a runtime enabled feature
-    // in the implementation rather than in the IDL definition, because the
-    // RuntimeEnabled extended attribute cannot be used with an operation
-    // overload.
-    impression_params = nullptr;
-  }
-
   LocalDOMWindow* incumbent_window = IncumbentDOMWindow(isolate);
   LocalDOMWindow* entered_window = EnteredDOMWindow(isolate);
 
@@ -2018,7 +1988,8 @@ DOMWindow* LocalDOMWindow::open(v8::Isolate* isolate,
     return nullptr;
   }
 
-  WebWindowFeatures window_features = GetWindowFeaturesFromString(features);
+  WebWindowFeatures window_features =
+      GetWindowFeaturesFromString(features, incumbent_window);
 
   FrameLoadRequest frame_request(incumbent_window,
                                  ResourceRequest(completed_url));
@@ -2042,11 +2013,8 @@ DOMWindow* LocalDOMWindow::open(v8::Isolate* isolate,
   frame_request.GetResourceRequest().SetHasUserGesture(has_user_gesture);
   GetFrame()->MaybeLogAdClickNavigation();
 
-  if (has_user_gesture && impression_params) {
-    base::Optional<WebImpression> impression =
-        GetImpressionForParams(incumbent_window, impression_params);
-    if (impression)
-      frame_request.SetImpression(*impression);
+  if (has_user_gesture && window_features.impression) {
+    frame_request.SetImpression(*window_features.impression);
   }
 
   FrameTree::FindResult result =
@@ -2127,7 +2095,13 @@ void LocalDOMWindow::Trace(Visitor* visitor) const {
 bool LocalDOMWindow::CrossOriginIsolatedCapability() const {
   return Agent::IsCrossOriginIsolated() &&
          IsFeatureEnabled(
-             mojom::blink::FeaturePolicyFeature::kCrossOriginIsolated);
+             mojom::blink::PermissionsPolicyFeature::kCrossOriginIsolated);
+}
+
+bool LocalDOMWindow::DirectSocketCapability() const {
+  return Agent::IsDirectSocketEnabled() &&
+         IsFeatureEnabled(
+             mojom::blink::PermissionsPolicyFeature::kDirectSockets);
 }
 
 ukm::UkmRecorder* LocalDOMWindow::UkmRecorder() {

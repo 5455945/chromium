@@ -101,6 +101,9 @@ CORE_EXPORT UChar32 CharacterBefore(const VisiblePosition&);
 CORE_EXPORT UChar32 CharacterBefore(const VisiblePositionInFlatTree&);
 
 CORE_EXPORT VisiblePosition
+NextPositionOf(const Position&,
+               EditingBoundaryCrossingRule = kCanCrossEditingBoundary);
+CORE_EXPORT VisiblePosition
 NextPositionOf(const VisiblePosition&,
                EditingBoundaryCrossingRule = kCanCrossEditingBoundary);
 CORE_EXPORT VisiblePositionInFlatTree
@@ -202,7 +205,7 @@ EndOfParagraph(const VisiblePosition&,
 CORE_EXPORT VisiblePositionInFlatTree
 EndOfParagraph(const VisiblePositionInFlatTree&,
                EditingBoundaryCrossingRule = kCannotCrossEditingBoundary);
-VisiblePosition StartOfNextParagraph(const VisiblePosition&);
+CORE_EXPORT VisiblePosition StartOfNextParagraph(const VisiblePosition&);
 CORE_EXPORT bool IsStartOfParagraph(
     const VisiblePosition&,
     EditingBoundaryCrossingRule = kCannotCrossEditingBoundary);

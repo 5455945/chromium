@@ -2,32 +2,30 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import './strings.m.js';
 import './iframe.js';
 import './realbox/realbox.js';
 import './logo.js';
-import './modules/module_wrapper.js';
-import './modules/modules.js'; // Registers module descriptors.
+import './modules/modules.js';
 import 'chrome://resources/cr_elements/cr_button/cr_button.m.js';
-import 'chrome://resources/cr_elements/cr_toast/cr_toast.m.js';
 import 'chrome://resources/cr_elements/shared_style_css.m.js';
 
 import {assert} from 'chrome://resources/js/assert.m.js';
 import {hexColorToSkColor, skColorToRgba} from 'chrome://resources/js/color_utils.js';
 import {FocusOutlineManager} from 'chrome://resources/js/cr/ui/focus_outline_manager.m.js';
 import {EventTracker} from 'chrome://resources/js/event_tracker.m.js';
-import {loadTimeData} from 'chrome://resources/js/load_time_data.m.js';
 import {SkColor} from 'chrome://resources/mojo/skia/public/mojom/skcolor.mojom-webui.js';
-import {html, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {html, mixinBehaviors, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {BackgroundManager} from './background_manager.js';
-import {BrowserProxy} from './browser_proxy.js';
-import {BackgroundSelection, BackgroundSelectionType} from './customize_dialog_types.js';
-import {ModuleDescriptor} from './modules/module_descriptor.js';
+import {BackgroundSelection, BackgroundSelectionType, CustomizeDialogPage} from './customize_dialog_types.js';
+import {I18nBehavior, loadTimeData} from './i18n_setup.js';
+import {recordLoadDuration} from './metrics_utils.js';
 import {ModuleRegistry} from './modules/module_registry.js';
-import {oneGoogleBarApi} from './one_google_bar_api.js';
+import {NewTabPageProxy} from './new_tab_page_proxy.js';
 import {PromoBrowserCommandProxy} from './promo_browser_command_proxy.js';
 import {$$} from './utils.js';
+import {Action as VoiceAction, recordVoiceAction} from './voice_search_overlay.js';
+import {WindowProxy} from './window_proxy.js';
 
 /**
  * @typedef {{
@@ -37,6 +35,30 @@ import {$$} from './utils.js';
  */
 let CommandData;
 
+/**
+ * Elements on the NTP. This enum must match the numbering for NTPElement in
+ * enums.xml. These values are persisted to logs. Entries should not be
+ * renumbered, removed or reused.
+ * @enum {number}
+ */
+export const NtpElement = {
+  kOther: 0,
+  kBackground: 1,
+  kOneGoogleBar: 2,
+  kLogo: 3,
+  kRealbox: 4,
+  kMostVisited: 5,
+  kMiddleSlotPromo: 6,
+  kModule: 7,
+  kCustomize: 8,
+};
+
+/** @param {NtpElement} element */
+function recordClick(element) {
+  chrome.metricsPrivate.recordEnumerationValue(
+      'NewTabPage.Click', element, Object.keys(NtpElement).length);
+}
+
 // Adds a <script> tag that holds the lazy loaded code.
 function ensureLazyLoaded() {
   const script = document.createElement('script');
@@ -45,7 +67,12 @@ function ensureLazyLoaded() {
   document.body.appendChild(script);
 }
 
-class AppElement extends PolymerElement {
+/**
+ * @polymer
+ * @extends {PolymerElement}
+ */
+class AppElement extends mixinBehaviors
+([I18nBehavior], PolymerElement) {
   static get is() {
     return 'ntp-app';
   }
@@ -56,27 +83,6 @@ class AppElement extends PolymerElement {
 
   static get properties() {
     return {
-      /** @private */
-      iframeOneGoogleBarEnabled_: {
-        type: Boolean,
-        value: () => {
-          const params = new URLSearchParams(window.location.search);
-          if (params.has('ogbinline')) {
-            return false;
-          }
-          return loadTimeData.getBoolean('iframeOneGoogleBarEnabled') ||
-              params.has('ogbiframe');
-        },
-        reflectToAttribute: true,
-      },
-
-      /** @private */
-      oneGoogleBarModalOverlaysEnabled_: {
-        type: Boolean,
-        value: () =>
-            loadTimeData.getBoolean('oneGoogleBarModalOverlaysEnabled'),
-      },
-
       /** @private */
       oneGoogleBarIframePath_: {
         type: String,
@@ -91,9 +97,8 @@ class AppElement extends PolymerElement {
 
       /** @private */
       oneGoogleBarLoaded_: {
-        observer: 'oneGoogleBarLoadedChange_',
         type: Boolean,
-        value: false,
+        observer: 'notifyOneGoogleBarDarkThemeEnabledChange_',
       },
 
       /** @private */
@@ -101,15 +106,7 @@ class AppElement extends PolymerElement {
         type: Boolean,
         computed: `computeOneGoogleBarDarkThemeEnabled_(oneGoogleBarLoaded_,
             theme_, backgroundSelection_)`,
-        observer: 'onOneGoogleBarDarkThemeEnabledChange_',
-      },
-
-      /** @private */
-      showIframedOneGoogleBar_: {
-        type: Boolean,
-        value: false,
-        computed: `computeShowIframedOneGoogleBar_(iframeOneGoogleBarEnabled_,
-            lazyRender_)`,
+        observer: 'notifyOneGoogleBarDarkThemeEnabledChange_',
       },
 
       /** @private {!newTabPage.mojom.Theme} */
@@ -120,6 +117,9 @@ class AppElement extends PolymerElement {
 
       /** @private */
       showCustomizeDialog_: Boolean,
+
+      /** @private {?string} */
+      selectedCustomizeDialogPage_: String,
 
       /** @private */
       showVoiceSearchOverlay_: Boolean,
@@ -206,20 +206,26 @@ class AppElement extends PolymerElement {
       modulesEnabled_: {
         type: Boolean,
         value: () => loadTimeData.getBoolean('modulesEnabled'),
-        reflectToAttribute: true,
       },
 
       /** @private */
-      modulesVisible_: {
+      modulesRedesignedEnabled_: {
         type: Boolean,
+        value: () => loadTimeData.getBoolean('modulesRedesignedEnabled'),
         reflectToAttribute: true,
       },
 
       /** @private */
-      middleSlotPromoLoaded_: Boolean,
+      middleSlotPromoLoaded_: {
+        type: Boolean,
+        value: false,
+      },
 
       /** @private */
-      modulesLoaded_: Boolean,
+      modulesLoaded_: {
+        type: Boolean,
+        value: false,
+      },
 
       /**
        * In order to avoid flicker, the promo and modules are hidden until both
@@ -231,15 +237,7 @@ class AppElement extends PolymerElement {
         type: Boolean,
         computed: `computePromoAndModulesLoaded_(middleSlotPromoLoaded_,
             modulesLoaded_)`,
-        reflectToAttribute: true,
-      },
-
-      /** @private */
-      modulesLoadedAndVisible_: {
-        type: Boolean,
-        computed: `computeModulesLoadedAndVisible_(promoAndModulesLoaded_,
-            modulesVisible_)`,
-        observer: 'onModulesLoadedAndVisibleChange_',
+        observer: 'onPromoAndModulesLoadedChange_',
       },
 
       /**
@@ -248,19 +246,6 @@ class AppElement extends PolymerElement {
        * @private
        */
       lazyRender_: Boolean,
-
-      /** @private {!Array<!ModuleDescriptor>} */
-      moduleDescriptors_: Object,
-
-      /**
-       * Data about the most recently removed module.
-       * @type {?{element: !Element, message: string, undo: function()}}
-       * @private
-       */
-      removedModuleData_: {
-        type: Object,
-        value: null,
-      },
     };
   }
 
@@ -268,18 +253,15 @@ class AppElement extends PolymerElement {
     performance.mark('app-creation-start');
     super();
     /** @private {!newTabPage.mojom.PageCallbackRouter} */
-    this.callbackRouter_ = BrowserProxy.getInstance().callbackRouter;
+    this.callbackRouter_ = NewTabPageProxy.getInstance().callbackRouter;
     /** @private {newTabPage.mojom.PageHandlerRemote} */
-    this.pageHandler_ = BrowserProxy.getInstance().handler;
+    this.pageHandler_ = NewTabPageProxy.getInstance().handler;
     /** @private {!BackgroundManager} */
     this.backgroundManager_ = BackgroundManager.getInstance();
     /** @private {?number} */
     this.setThemeListenerId_ = null;
-    /** @private {?number} */
-    this.setModulesVisibleListenerId_ = null;
     /** @private {!EventTracker} */
     this.eventTracker_ = new EventTracker();
-    this.loadOneGoogleBar_();
     /** @private {boolean} */
     this.shouldPrintPerformance_ =
         new URLSearchParams(location.search).has('print_perf');
@@ -301,11 +283,6 @@ class AppElement extends PolymerElement {
           performance.measure('theme-set');
           this.theme_ = theme;
         });
-    this.setModulesVisibleListenerId_ =
-        this.callbackRouter_.setModulesVisible.addListener(visible => {
-          this.modulesVisible_ = visible;
-        });
-    this.pageHandler_.updateModulesVisible();
     this.eventTracker_.add(window, 'message', (event) => {
       /** @type {!Object} */
       const data = event.data;
@@ -319,6 +296,8 @@ class AppElement extends PolymerElement {
       }
     });
     this.eventTracker_.add(window, 'keydown', e => this.onWindowKeydown_(e));
+    this.eventTracker_.add(
+        window, 'click', e => this.onWindowClick_(e), /*capture=*/ true);
     if (this.shouldPrintPerformance_) {
       // It is possible that the background image has already loaded by now.
       // If it has, we request it to re-send the load time so that we can
@@ -350,9 +329,9 @@ class AppElement extends PolymerElement {
   /** @override */
   ready() {
     super.ready();
-    this.pageHandler_.onAppRendered(BrowserProxy.getInstance().now());
+    this.pageHandler_.onAppRendered(WindowProxy.getInstance().now());
     // Let the browser breath and then render remaining elements.
-    BrowserProxy.getInstance().waitForLazyRender().then(() => {
+    WindowProxy.getInstance().waitForLazyRender().then(() => {
       ensureLazyLoaded();
       this.lazyRender_ = true;
     });
@@ -365,9 +344,6 @@ class AppElement extends PolymerElement {
    * @private
    */
   computeOneGoogleBarDarkThemeEnabled_() {
-    if (!this.theme_ || !this.oneGoogleBarLoaded_) {
-      return false;
-    }
     switch (this.backgroundSelection_.type) {
       case BackgroundSelectionType.IMAGE:
         return true;
@@ -375,82 +351,18 @@ class AppElement extends PolymerElement {
       case BackgroundSelectionType.DAILY_REFRESH:
       case BackgroundSelectionType.NO_SELECTION:
       default:
-        return this.theme_.isDark;
+        return this.theme_ && this.theme_.isDark;
     }
-  }
-
-  /**
-   * @return {!Promise}
-   * @private
-   */
-  async loadOneGoogleBar_() {
-    if (this.iframeOneGoogleBarEnabled_) {
-      const oneGoogleBar = document.querySelector('#oneGoogleBar');
-      if (oneGoogleBar) {
-        oneGoogleBar.remove();
-      }
-      return;
-    }
-
-    const {parts} = await this.pageHandler_.getOneGoogleBarParts(
-        window.location.search.replace(/^[?]/, '&'));
-    if (!parts) {
-      return;
-    }
-
-    const inHeadStyle = document.createElement('style');
-    inHeadStyle.type = 'text/css';
-    inHeadStyle.appendChild(document.createTextNode(parts.inHeadStyle));
-    document.head.appendChild(inHeadStyle);
-
-    const inHeadScript = document.createElement('script');
-    inHeadScript.type = 'text/javascript';
-    inHeadScript.appendChild(document.createTextNode(parts.inHeadScript));
-    document.head.appendChild(inHeadScript);
-
-    this.oneGoogleBarLoaded_ = true;
-    const oneGoogleBar = document.querySelector('#oneGoogleBar');
-    oneGoogleBar.innerHTML = parts.barHtml;
-
-    const afterBarScript = document.createElement('script');
-    afterBarScript.type = 'text/javascript';
-    afterBarScript.appendChild(document.createTextNode(parts.afterBarScript));
-    oneGoogleBar.parentNode.insertBefore(
-        afterBarScript, oneGoogleBar.nextSibling);
-
-    document.querySelector('#oneGoogleBarEndOfBody').innerHTML =
-        parts.endOfBodyHtml;
-
-    const endOfBodyScript = document.createElement('script');
-    endOfBodyScript.type = 'text/javascript';
-    endOfBodyScript.appendChild(document.createTextNode(parts.endOfBodyScript));
-    document.body.appendChild(endOfBodyScript);
-
-    this.pageHandler_.onOneGoogleBarRendered(BrowserProxy.getInstance().now());
-    oneGoogleBarApi.trackDarkModeChanges();
   }
 
   /** @private */
-  onOneGoogleBarDarkThemeEnabledChange_() {
-    if (!this.oneGoogleBarLoaded_) {
-      return;
-    }
-    if (this.iframeOneGoogleBarEnabled_) {
+  notifyOneGoogleBarDarkThemeEnabledChange_() {
+    if (this.oneGoogleBarLoaded_) {
       $$(this, '#oneGoogleBar').postMessage({
         type: 'enableDarkTheme',
         enabled: this.oneGoogleBarDarkThemeEnabled_,
       });
-      return;
     }
-    oneGoogleBarApi.setForegroundLight(this.oneGoogleBarDarkThemeEnabled_);
-  }
-
-  /**
-   * @return {boolean}
-   * @private
-   */
-  computeShowIframedOneGoogleBar_() {
-    return this.iframeOneGoogleBarEnabled_ && this.lazyRender_;
   }
 
   /**
@@ -527,29 +439,25 @@ class AppElement extends PolymerElement {
         (!loadTimeData.getBoolean('modulesEnabled') || this.modulesLoaded_);
   }
 
-  /**
-   * @return {boolean}
-   * @private
-   */
-  computeModulesLoadedAndVisible_() {
-    return this.promoAndModulesLoaded_ && this.modulesVisible_;
-  }
-
   /** @private */
   async onLazyRendered_() {
-    if (!loadTimeData.getBoolean('modulesEnabled')) {
+    // Instantiate modules even if |modulesEnabled| is false to counterfactually
+    // trigger a HaTS survey in a potential control group.
+    if (!loadTimeData.getBoolean('modulesLoadEnabled') ||
+        loadTimeData.getBoolean('modulesEnabled')) {
       return;
     }
-    this.moduleDescriptors_ =
-        await ModuleRegistry.getInstance().initializeModules(
-            loadTimeData.getInteger('modulesLoadTimeout'));
+    const modules = await ModuleRegistry.getInstance().initializeModules(
+        loadTimeData.getInteger('modulesLoadTimeout'));
+    if (modules) {
+      this.pageHandler_.onModulesLoadedWithData();
+    }
   }
 
   /** @private */
   onOpenVoiceSearch_() {
     this.showVoiceSearchOverlay_ = true;
-    this.pageHandler_.onVoiceSearchAction(
-        newTabPage.mojom.VoiceSearchAction.kActivateSearchBox);
+    recordVoiceAction(VoiceAction.kActivateSearchBox);
   }
 
   /** @private */
@@ -560,6 +468,8 @@ class AppElement extends PolymerElement {
   /** @private */
   onCustomizeDialogClose_() {
     this.showCustomizeDialog_ = false;
+    // Let customize dialog decide what page to show on next open.
+    this.selectedCustomizeDialogPage_ = null;
   }
 
   /** @private */
@@ -580,11 +490,7 @@ class AppElement extends PolymerElement {
     // </if>
     if (ctrlKeyPressed && e.code === 'Period' && e.shiftKey) {
       this.showVoiceSearchOverlay_ = true;
-      this.pageHandler_.onVoiceSearchAction(
-          newTabPage.mojom.VoiceSearchAction.kActivateKeyboard);
-    }
-    if (ctrlKeyPressed && e.key === 'z') {
-      this.onUndoRemoveModuleButtonClick_();
+      recordVoiceAction(VoiceAction.kActivateKeyboard);
     }
   }
 
@@ -628,9 +534,10 @@ class AppElement extends PolymerElement {
   }
 
   /** @private */
-  onModulesLoadedAndVisibleChange_() {
-    if (this.modulesLoadedAndVisible_) {
-      this.pageHandler_.onModulesRendered(BrowserProxy.getInstance().now());
+  onPromoAndModulesLoadedChange_() {
+    if (this.promoAndModulesLoaded_) {
+      recordLoadDuration(
+          'NewTabPage.Modules.ShownTime', WindowProxy.getInstance().now());
     }
   }
 
@@ -795,10 +702,6 @@ class AppElement extends PolymerElement {
    *
    * 'overlaysUpdated' message includes the updated array of overlay rects that
    * are shown.
-   *
-   * When modal overlays are enabled, activate/deactivate controls if the
-   * OneGoogleBar is layered on top of #content with a backdrop. This would
-   * happen when OneGoogleBar has an overlay open.
    * @param {!MessageEvent} event
    * @private
    */
@@ -806,14 +709,11 @@ class AppElement extends PolymerElement {
     /** @type {!Object} */
     const data = event.data;
     if (data.messageType === 'loaded') {
-      if (!this.oneGoogleBarModalOverlaysEnabled_) {
-        const oneGoogleBar = $$(this, '#oneGoogleBar');
-        oneGoogleBar.style.clipPath = 'url(#oneGoogleBarClipPath)';
-        oneGoogleBar.style.zIndex = '1000';
-      }
+      const oneGoogleBar = $$(this, '#oneGoogleBar');
+      oneGoogleBar.style.clipPath = 'url(#oneGoogleBarClipPath)';
+      oneGoogleBar.style.zIndex = '1000';
       this.oneGoogleBarLoaded_ = true;
-      this.pageHandler_.onOneGoogleBarRendered(
-          BrowserProxy.getInstance().now());
+      this.pageHandler_.onOneGoogleBarRendered(WindowProxy.getInstance().now());
     } else if (data.messageType === 'overlaysUpdated') {
       this.$.oneGoogleBarClipPath.querySelectorAll('rect').forEach(el => {
         el.remove();
@@ -829,25 +729,13 @@ class AppElement extends PolymerElement {
         rectElement.setAttribute('height', height + 16);
         this.$.oneGoogleBarClipPath.appendChild(rectElement);
       });
-    } else if (data.messageType === 'activate') {
-      this.$.oneGoogleBarOverlayBackdrop.toggleAttribute('show', true);
-      $$(this, '#oneGoogleBar').style.zIndex = '1000';
-    } else if (data.messageType === 'deactivate') {
-      this.$.oneGoogleBarOverlayBackdrop.toggleAttribute('show', false);
-      $$(this, '#oneGoogleBar').style.zIndex = '0';
     } else if (data.messageType === 'can-show-promo-with-browser-command') {
       this.canShowPromoWithBrowserCommand_(data, event.source, event.origin);
     } else if (data.messageType === 'execute-browser-command') {
       this.executePromoBrowserCommand_(
           /** @type {!CommandData} */ (data.data), event.source, event.origin);
-    }
-  }
-
-  /** @private */
-  oneGoogleBarLoadedChange_() {
-    if (this.oneGoogleBarLoaded_ && this.iframeOneGoogleBarEnabled_ &&
-        this.oneGoogleBarModalOverlaysEnabled_) {
-      this.setupShortcutDragDropOneGoogleBarWorkaround_();
+    } else if (data.messageType === 'click') {
+      recordClick(NtpElement.kOneGoogleBar);
     }
   }
 
@@ -861,116 +749,10 @@ class AppElement extends PolymerElement {
     this.modulesLoaded_ = true;
   }
 
-  /**
-   * @param {!CustomEvent<{message: string, restoreCallback: function()}>} e
-   *     Event notifying a module was dismissed. Contains the message to show in
-   *     the toast.
-   * @private
-   */
-  onDismissModule_(e) {
-    const id = $$(this, '#modules').itemForElement(e.target).id;
-    const restoreCallback = e.detail.restoreCallback;
-    this.removedModuleData_ = {
-      element: /** @type {!Element} */ (e.target),
-      message: e.detail.message,
-      undo: () => {
-        restoreCallback();
-        this.pageHandler_.onRestoreModule(id);
-      },
-    };
-    this.removedModuleData_.element.hidden = true;
-
-    // Notify the user.
-    $$(this, '#removeModuleToast').show();
-    // Notify the backend.
-    this.pageHandler_.onDismissModule(id);
-  }
-
-  /**
-   * @param {!Event} e
-   * @private
-   */
-  onDisableModule_(e) {
-    const descriptor = /** @type {!ModuleDescriptor} */ (
-        $$(this, '#modules').itemForElement(e.target));
-    this.removedModuleData_ = {
-      element: /** @type {!Element} */ (e.target),
-      message:
-          loadTimeData.getStringF('disableModuleToastMessage', descriptor.name),
-      undo: () => {
-        this.pageHandler_.setModuleDisabled(descriptor.id, false);
-        chrome.metricsPrivate.recordSparseHashable(
-            'NewTabPage.Modules.Enabled', descriptor.id);
-        chrome.metricsPrivate.recordSparseHashable(
-            'NewTabPage.Modules.Enabled.Toast', descriptor.id);
-      },
-    };
-
-    this.removedModuleData_.element.hidden = true;
-    this.pageHandler_.setModuleDisabled(descriptor.id, true);
-    $$(this, '#removeModuleToast').show();
-    chrome.metricsPrivate.recordSparseHashable(
-        'NewTabPage.Modules.Disabled', descriptor.id);
-    chrome.metricsPrivate.recordSparseHashable(
-        'NewTabPage.Modules.Disabled.ModuleRequest', descriptor.id);
-  }
-
-  /**
-   * @private
-   */
-  onUndoRemoveModuleButtonClick_() {
-    // Restore the module.
-    this.removedModuleData_.undo();
-    this.removedModuleData_.element.hidden = false;
-
-    // Notify the user.
-    $$(this, '#removeModuleToast').hide();
-
-    this.removedModuleData_ = null;
-  }
-
-  /**
-   * During a shortcut drag, an iframe behind ntp-most-visited will prevent
-   * 'dragover' events from firing. To workaround this, 'pointer-events: none'
-   * can be set on the iframe. When doing this after the 'dragstart' event is
-   * fired is too late. We can instead set 'pointer-events: none' when the
-   * pointer enters ntp-most-visited.
-   *
-   * 'pointerenter' and pointerleave' events fire during drag. The iframe
-   * 'pointer-events' needs to be reset to the original value when 'dragend'
-   * fires if the pointer has left ntp-most-visited.
-   * @private
-   */
-  setupShortcutDragDropOneGoogleBarWorkaround_() {
-    const iframe = $$(this, '#oneGoogleBar');
-    let resetAtDragEnd = false;
-    let dragging = false;
-    let originalPointerEvents;
-    this.eventTracker_.add(this.$.mostVisited, 'pointerenter', () => {
-      if (dragging) {
-        resetAtDragEnd = false;
-        return;
-      }
-      originalPointerEvents = getComputedStyle(iframe).pointerEvents;
-      iframe.style.pointerEvents = 'none';
-    });
-    this.eventTracker_.add(this.$.mostVisited, 'pointerleave', () => {
-      if (dragging) {
-        resetAtDragEnd = true;
-        return;
-      }
-      iframe.style.pointerEvents = originalPointerEvents;
-    });
-    this.eventTracker_.add(this.$.mostVisited, 'dragstart', () => {
-      dragging = true;
-    });
-    this.eventTracker_.add(this.$.mostVisited, 'dragend', () => {
-      dragging = false;
-      if (resetAtDragEnd) {
-        resetAtDragEnd = false;
-        iframe.style.pointerEvents = originalPointerEvents;
-      }
-    });
+  /** @private */
+  onCustomizeModule_() {
+    this.showCustomizeDialog_ = true;
+    this.selectedCustomizeDialogPage_ = CustomizeDialogPage.MODULES;
   }
 
   /** @private */
@@ -1012,6 +794,41 @@ class AppElement extends PolymerElement {
       }
       log(entry);
     });
+  }
+
+  /**
+   * @param {Event} e
+   * @private
+   */
+  onWindowClick_(e) {
+    if (e.composedPath() && e.composedPath()[0] === $$(this, '#content')) {
+      recordClick(NtpElement.kBackground);
+      return;
+    }
+    for (const target of e.composedPath()) {
+      switch (target) {
+        case $$(this, 'ntp-logo'):
+          recordClick(NtpElement.kLogo);
+          return;
+        case $$(this, 'ntp-realbox'):
+          recordClick(NtpElement.kRealbox);
+          return;
+        case $$(this, 'cr-most-visited'):
+          recordClick(NtpElement.kMostVisited);
+          return;
+        case $$(this, 'ntp-middle-slot-promo'):
+          recordClick(NtpElement.kMiddleSlotPromo);
+          return;
+        case $$(this, 'ntp-modules'):
+          recordClick(NtpElement.kModule);
+          return;
+        case $$(this, '#customizeButton'):
+        case $$(this, 'ntp-customize-dialog'):
+          recordClick(NtpElement.kCustomize);
+          return;
+      }
+    }
+    recordClick(NtpElement.kOther);
   }
 }
 

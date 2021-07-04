@@ -11,6 +11,7 @@ import("//components/offline_pages/buildflags/features.gni")
 import("//components/spellcheck/spellcheck_build_features.gni")
 import("//extensions/buildflags/buildflags.gni")
 import("//media/media_options.gni")
+import("//pdf/features.gni")
 import("//ppapi/buildflags/buildflags.gni")
 import("//testing/libfuzzer/fuzzer_test.gni")
 import("//third_party/widevine/cdm/widevine.gni")
@@ -40,6 +41,7 @@ grit("resources") {
   ]
   if (is_chromeos_ash) {
     deps += [
+      "//ash/components/enhanced_network_tts/mojom:mojom_js",
       "//chromeos/components/remote_apps/mojom:mojom_js",
       "//chromeos/services/ime/public/mojom:mojom_js",
       "//chromeos/services/tts/public/mojom:mojom_js",
@@ -106,11 +108,12 @@ static_library("renderer") {
     "subresource_redirect/public_resource_decider.h",
     "subresource_redirect/public_resource_decider_agent.cc",
     "subresource_redirect/public_resource_decider_agent.h",
-    "subresource_redirect/redirect_result.h",
     "subresource_redirect/robots_rules_parser.cc",
     "subresource_redirect/robots_rules_parser.h",
     "subresource_redirect/robots_rules_parser_cache.cc",
     "subresource_redirect/robots_rules_parser_cache.h",
+    "subresource_redirect/src_video_redirect_url_loader_throttle.cc",
+    "subresource_redirect/src_video_redirect_url_loader_throttle.h",
     "subresource_redirect/subresource_redirect_params.cc",
     "subresource_redirect/subresource_redirect_params.h",
     "subresource_redirect/subresource_redirect_url_loader_throttle.cc",
@@ -163,6 +166,9 @@ static_library("renderer") {
     "//components/contextual_search/content:renderer",
     "//components/data_reduction_proxy/core/common",
     "//components/dom_distiller/content/renderer",
+    "//components/feed:buildflags",
+    "//components/feed:feature_list",
+    "//components/feed/content/renderer:feed_renderer",
     "//components/network_hints/renderer",
     "//components/no_state_prefetch/common",
     "//components/no_state_prefetch/renderer",
@@ -178,7 +184,7 @@ static_library("renderer") {
     "//components/safe_browsing/content/common:interfaces",
     "//components/safe_browsing/content/renderer",
     "//components/safe_browsing/content/renderer:throttles",
-    "//components/safe_browsing/core:features",
+    "//components/safe_browsing/core/common",
     "//components/safe_browsing/core/common:interfaces",
     "//components/security_interstitials/content/renderer:security_interstitial_page_controller",
     "//components/security_interstitials/core:",
@@ -193,6 +199,7 @@ static_library("renderer") {
     "//components/translate/core/common",
     "//components/translate/core/language_detection",
     "//components/visitedlink/renderer",
+    "//components/web_cache/public:features",
     "//components/web_cache/renderer",
     "//components/webapps/renderer",
     "//content/app/resources",
@@ -204,8 +211,11 @@ static_library("renderer") {
     "//media",
     "//media:media_buildflags",
     "//media/capture",
+    "//media/mojo/common",
     "//mojo/public/cpp/bindings",
     "//net",
+    "//pdf:buildflags",
+    "//pdf:pdf_view_web_plugin",
     "//ppapi/buildflags",
     "//printing/buildflags",
     "//services/metrics/public/cpp:metrics_cpp",
@@ -253,7 +263,6 @@ static_library("renderer") {
       "plugins/chrome_plugin_placeholder.h",
     ]
     deps += [
-      "//components/pdf/renderer",
       "//components/strings",
       "//media:media_buildflags",
       "//ppapi/host",
@@ -264,6 +273,18 @@ static_library("renderer") {
 
     if (is_linux || is_chromeos) {
       deps += [ "//components/services/font/public/cpp" ]
+    }
+  }
+
+  if (enable_pdf) {
+    deps += [
+      "//components/pdf/common",
+      "//components/pdf/renderer",
+      "//pdf/mojom",
+    ]
+
+    if (is_linux || is_chromeos) {
+      deps += [ "//pdf:font_table_linux" ]
     }
   }
 
@@ -280,6 +301,10 @@ static_library("renderer") {
         [ "//components/safe_browsing/content/renderer/phishing_classifier" ]
   }
 
+  if (enable_feed_v2) {
+    deps += [ "//components/feed/content/renderer:feed_renderer" ]
+  }
+
   if (enable_extensions) {
     sources += [
       "extensions/accessibility_private_hooks_delegate.cc",
@@ -290,8 +315,6 @@ static_library("renderer") {
       "extensions/chrome_extensions_dispatcher_delegate.h",
       "extensions/chrome_extensions_renderer_client.cc",
       "extensions/chrome_extensions_renderer_client.h",
-      "extensions/chrome_v8_extension_handler.cc",
-      "extensions/chrome_v8_extension_handler.h",
       "extensions/extension_hooks_delegate.cc",
       "extensions/extension_hooks_delegate.h",
       "extensions/extension_localization_peer.cc",
@@ -314,15 +337,11 @@ static_library("renderer") {
       "extensions/tabs_hooks_delegate.h",
     ]
     deps += [
-      # TODO(hclam): See crbug.com/298380 for details.
-      # We should isolate the APIs needed by the renderer.
       "//chrome/common/extensions/api",
       "//components/guest_view/renderer",
       "//extensions:extensions_resources",
+      "//extensions/common:mojom",
       "//extensions/renderer",
-      "//media/cast:net",
-      "//media/cast:receiver",
-      "//media/cast:sender",
       "//services/network/public/cpp",
     ]
     public_deps += [ "//ipc" ]
@@ -344,6 +363,12 @@ static_library("renderer") {
       sources += [
         "pepper/chrome_pdf_print_client.cc",
         "pepper/chrome_pdf_print_client.h",
+      ]
+    }
+    if (enable_pdf) {
+      sources += [
+        "chrome_pdf_view_web_plugin_print_client.cc",
+        "chrome_pdf_view_web_plugin_print_client.h",
       ]
     }
   }
@@ -409,10 +434,7 @@ static_library("renderer") {
       "sandbox_status_extension_android.cc",
       "sandbox_status_extension_android.h",
     ]
-    deps += [
-      "//components/continuous_search/renderer",
-      "//components/embedder_support/android/common:url_constants",
-    ]
+    deps += [ "//components/continuous_search/renderer" ]
   }
 
   if (is_chromeos_ash) {

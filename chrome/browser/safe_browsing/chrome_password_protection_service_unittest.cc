@@ -34,12 +34,12 @@
 #include "components/password_manager/core/common/password_manager_features.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
-#include "components/safe_browsing/content/password_protection/password_protection_navigation_throttle.h"
-#include "components/safe_browsing/content/password_protection/password_protection_request_content.h"
+#include "components/safe_browsing/content/browser/password_protection/password_protection_navigation_throttle.h"
+#include "components/safe_browsing/content/browser/password_protection/password_protection_request_content.h"
+#include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
+#include "components/safe_browsing/core/browser/verdict_cache_manager.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/utils.h"
-#include "components/safe_browsing/core/db/v4_protocol_manager_util.h"
-#include "components/safe_browsing/core/features.h"
-#include "components/safe_browsing/core/verdict_cache_manager.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/sync/model/model_type_controller_delegate.h"
@@ -363,7 +363,8 @@ class ChromePasswordProtectionServiceTest
 
   CoreAccountInfo SetPrimaryAccount(const std::string& email) {
     identity_test_env()->MakeAccountAvailable(email);
-    return identity_test_env()->SetPrimaryAccount(email);
+    return identity_test_env()->SetPrimaryAccount(email,
+                                                  signin::ConsentLevel::kSync);
   }
 
   void SetUpSyncAccount(const std::string& hosted_domain,
@@ -385,7 +386,7 @@ class ChromePasswordProtectionServiceTest
   int GetSizeofUnhandledSyncPasswordReuses() {
     DictionaryPrefUpdate unhandled_sync_password_reuses(
         profile()->GetPrefs(), prefs::kSafeBrowsingUnhandledGaiaPasswordReuses);
-    return unhandled_sync_password_reuses->size();
+    return unhandled_sync_password_reuses->DictSize();
   }
 
   size_t GetNumberOfNavigationThrottles() {
@@ -605,8 +606,8 @@ TEST_F(ChromePasswordProtectionServiceTest,
   service_->ConfigService(/*is_incognito=*/false,
                           /*is_extended_reporting=*/true);
   std::vector<password_manager::MatchingReusedCredential> credentials = {
-      {"http://example.test", base::ASCIIToUTF16("username1")},
-      {"http://2.example.test", base::ASCIIToUTF16("username2")}};
+      {"http://example.test", u"username1"},
+      {"http://2.example.test", u"username2"}};
 
   EXPECT_CALL(*password_store_,
               RemoveInsecureCredentialsImpl(
@@ -770,7 +771,8 @@ TEST_F(ChromePasswordProtectionServiceTest,
 
 TEST_F(ChromePasswordProtectionServiceTest,
        VerifyPasswordReuseDetectedSecurityEventRecorded) {
-  identity_test_env()->SetPrimaryAccount(kTestEmail);
+  identity_test_env()->SetPrimaryAccount(kTestEmail,
+                                         signin::ConsentLevel::kSync);
   service_->set_username_for_last_shown_warning(kTestEmail);
   EXPECT_CALL(*security_event_recorder_, RecordGaiaPasswordReuse(_))
       .WillOnce(WithArg<0>([&](const auto& message) {
@@ -1253,7 +1255,7 @@ TEST_F(ChromePasswordProtectionServiceTest,
 #endif
 
 TEST_F(ChromePasswordProtectionServiceTest, VerifyGetWarningDetailTextSaved) {
-  base::string16 warning_text =
+  std::u16string warning_text =
       l10n_util::GetStringUTF16(IDS_PAGE_INFO_CHANGE_PASSWORD_DETAILS_SAVED);
   ReusedPasswordAccountType reused_password_type;
   reused_password_type.set_account_type(
@@ -1270,7 +1272,7 @@ TEST_F(ChromePasswordProtectionServiceTest,
       ReusedPasswordAccountType::SAVED_PASSWORD);
   std::vector<std::string> domains{"www.example.com"};
   service_->set_saved_passwords_matching_domains(domains);
-  base::string16 warning_text = l10n_util::GetStringFUTF16(
+  std::u16string warning_text = l10n_util::GetStringFUTF16(
       IDS_PAGE_INFO_CHECK_PASSWORD_DETAILS_SAVED_1_DOMAIN,
       base::UTF8ToUTF16(domains[0]));
   std::vector<size_t> placeholder_offsets;
@@ -1300,9 +1302,8 @@ TEST_F(ChromePasswordProtectionServiceTest,
   domains.push_back("amazon.com");
   service_->set_saved_passwords_matching_domains(domains);
   warning_text = l10n_util::GetStringFUTF16(
-      IDS_PAGE_INFO_CHECK_PASSWORD_DETAILS_SAVED_3_DOMAIN,
-      base::UTF8ToUTF16("amazon.com"), base::UTF8ToUTF16(domains[0]),
-      base::UTF8ToUTF16(domains[1]));
+      IDS_PAGE_INFO_CHECK_PASSWORD_DETAILS_SAVED_3_DOMAIN, u"amazon.com",
+      base::UTF8ToUTF16(domains[0]), base::UTF8ToUTF16(domains[1]));
   EXPECT_EQ(warning_text, service_->GetWarningDetailText(reused_password_type,
                                                          &placeholder_offsets));
 }
@@ -1314,8 +1315,8 @@ TEST_F(ChromePasswordProtectionServiceTest,
   domains.push_back("amazon.com");
   service_->set_saved_passwords_matching_domains(domains);
   // Default domains should be prioritzed over other domains.
-  std::vector<base::string16> expected_placeholders{
-      base::UTF8ToUTF16("amazon.com"), base::UTF8ToUTF16(domains[0]),
+  std::vector<std::u16string> expected_placeholders{
+      u"amazon.com", base::UTF8ToUTF16(domains[0]),
       base::UTF8ToUTF16(domains[1])};
   EXPECT_EQ(expected_placeholders,
             service_->GetPlaceholdersForSavedPasswordWarningText());
@@ -1323,14 +1324,14 @@ TEST_F(ChromePasswordProtectionServiceTest,
 
 TEST_F(ChromePasswordProtectionServiceTest,
        VerifyGetWarningDetailTextEnterprise) {
-  base::string16 warning_text_non_sync = l10n_util::GetStringUTF16(
+  std::u16string warning_text_non_sync = l10n_util::GetStringUTF16(
       IDS_PAGE_INFO_CHANGE_PASSWORD_DETAILS_SIGNED_IN_NON_SYNC);
-  base::string16 generic_enterprise_warning_text = l10n_util::GetStringUTF16(
+  std::u16string generic_enterprise_warning_text = l10n_util::GetStringUTF16(
       IDS_PAGE_INFO_CHANGE_PASSWORD_DETAILS_ENTERPRISE);
-  base::string16 warning_text_with_org_name = l10n_util::GetStringFUTF16(
+  std::u16string warning_text_with_org_name = l10n_util::GetStringFUTF16(
       IDS_PAGE_INFO_CHANGE_PASSWORD_DETAILS_ENTERPRISE_WITH_ORG_NAME,
-      base::UTF8ToUTF16("example.com"));
-  base::string16 warning_text_sync =
+      u"example.com");
+  std::u16string warning_text_sync =
       l10n_util::GetStringUTF16(IDS_PAGE_INFO_CHANGE_PASSWORD_DETAILS_SYNC);
 
   ReusedPasswordAccountType reused_password_type;
@@ -1370,9 +1371,9 @@ TEST_F(ChromePasswordProtectionServiceTest,
 }
 
 TEST_F(ChromePasswordProtectionServiceTest, VerifyGetWarningDetailTextGmail) {
-  base::string16 warning_text_non_sync = l10n_util::GetStringUTF16(
+  std::u16string warning_text_non_sync = l10n_util::GetStringUTF16(
       IDS_PAGE_INFO_CHANGE_PASSWORD_DETAILS_SIGNED_IN_NON_SYNC);
-  base::string16 warning_text_sync =
+  std::u16string warning_text_sync =
       l10n_util::GetStringUTF16(IDS_PAGE_INFO_CHANGE_PASSWORD_DETAILS_SYNC);
 
   base::test::ScopedFeatureList feature_list;
@@ -1575,9 +1576,9 @@ TEST_F(ChromePasswordProtectionServiceWithAccountPasswordStoreTest,
   service_->ConfigService(/*is_incognito=*/false,
                           /*is_extended_reporting=*/true);
   std::vector<password_manager::MatchingReusedCredential> credentials = {
-      {"http://example.test", base::ASCIIToUTF16("username1"),
+      {"http://example.test", u"username1",
        password_manager::PasswordForm::Store::kAccountStore},
-      {"http://2.example.test", base::ASCIIToUTF16("username2"),
+      {"http://2.example.test", u"username2",
        password_manager::PasswordForm::Store::kAccountStore}};
 
   EXPECT_CALL(*account_password_store_,

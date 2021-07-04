@@ -65,6 +65,7 @@ content::WebUIDataSource* CreateHistoryUIHTMLSource(Profile* profile) {
       {"clearSearch", IDS_CLEAR_SEARCH},
       {"collapseSessionButton", IDS_HISTORY_OTHER_SESSIONS_COLLAPSE_SESSION},
       {"delete", IDS_HISTORY_DELETE},
+      {"deleteSuccess", IDS_HISTORY_REMOVE_PAGE_SUCCESS},
       {"deleteConfirm", IDS_HISTORY_DELETE_PRIOR_VISITS_CONFIRM_BUTTON},
       {"deleteSession", IDS_HISTORY_OTHER_SESSIONS_HIDE_FOR_NOW},
       {"deleteWarning", IDS_HISTORY_DELETE_PRIOR_VISITS_WARNING},
@@ -151,7 +152,7 @@ HistoryUI::~HistoryUI() {}
 
 // static
 base::RefCountedMemory* HistoryUI::GetFaviconResourceBytes(
-    ui::ScaleFactor scale_factor) {
+    ui::ResourceScaleFactor scale_factor) {
   return static_cast<base::RefCountedMemory*>(
       ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytesForScale(
           IDR_HISTORY_FAVICON, scale_factor));

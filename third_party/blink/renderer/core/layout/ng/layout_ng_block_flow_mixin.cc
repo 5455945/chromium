@@ -123,19 +123,15 @@ void LayoutNGBlockFlowMixin<Base>::AddOutlineRects(
 
 template <typename Base>
 LayoutUnit LayoutNGBlockFlowMixin<Base>::FirstLineBoxBaseline() const {
-  // Please see |Paint()| for these DCHECKs.
-  DCHECK(!Base::CanTraversePhysicalFragments() ||
-         !Base::Parent()->CanTraversePhysicalFragments());
-  DCHECK_LE(Base::PhysicalFragmentCount(), 1u);
-
-  if (const base::Optional<LayoutUnit> baseline =
+  if (const absl::optional<LayoutUnit> baseline =
           Base::FirstLineBoxBaselineOverride())
     return *baseline;
 
-  if (Base::PhysicalFragmentCount()) {
-    const NGPhysicalBoxFragment* fragment = Base::GetPhysicalFragment(0);
-    DCHECK(fragment);
-    if (base::Optional<LayoutUnit> offset = fragment->Baseline())
+  // Return the baseline of the first fragment that has a baseline.
+  // |OffsetFromOwnerLayoutBox| is not needed here, because the block offset of
+  // all fragments are 0 for multicol.
+  for (const NGPhysicalBoxFragment& fragment : Base::PhysicalFragments()) {
+    if (const absl::optional<LayoutUnit> offset = fragment.Baseline())
       return *offset;
   }
 
@@ -157,14 +153,14 @@ LayoutUnit LayoutNGBlockFlowMixin<Base>::InlineBlockBaseline(
          !Base::Parent()->CanTraversePhysicalFragments());
   DCHECK_LE(Base::PhysicalFragmentCount(), 1u);
 
-  if (const base::Optional<LayoutUnit> baseline =
+  if (const absl::optional<LayoutUnit> baseline =
           Base::InlineBlockBaselineOverride(line_direction))
     return *baseline;
 
   if (Base::PhysicalFragmentCount()) {
     const NGPhysicalBoxFragment* fragment = Base::GetPhysicalFragment(0);
     DCHECK(fragment);
-    if (base::Optional<LayoutUnit> offset = fragment->Baseline())
+    if (absl::optional<LayoutUnit> offset = fragment->Baseline())
       return *offset;
   }
 
@@ -261,29 +257,7 @@ void LayoutNGBlockFlowMixin<Base>::UpdateNGBlockLayout() {
   }
 
   LayoutNGMixin<Base>::UpdateInFlowBlockLayout();
-  UpdateMargins();
-}
-
-template <typename Base>
-void LayoutNGBlockFlowMixin<Base>::UpdateMargins() {
-  const LayoutBlock* containing_block = Base::ContainingBlock();
-  if (!containing_block || !containing_block->IsLayoutBlockFlow())
-    return;
-
-  // In the legacy engine, for regular block container layout, children
-  // calculate and store margins on themselves, while in NG that's done by the
-  // container. Since this object is a LayoutNG entry-point, we'll have to do it
-  // on ourselves, since that's what the legacy container expects.
-  const ComputedStyle& style = Base::StyleRef();
-  const ComputedStyle& cb_style = containing_block->StyleRef();
-  const auto writing_direction = cb_style.GetWritingDirection();
-  LayoutUnit available_logical_width =
-      LayoutBoxUtils::AvailableLogicalWidth(*this, containing_block);
-  NGBoxStrut margins = ComputePhysicalMargins(style, available_logical_width)
-                           .ConvertToLogical(writing_direction);
-  ResolveInlineMargins(style, cb_style, available_logical_width,
-                       Base::LogicalWidth(), &margins);
-  Base::SetMargin(margins.ConvertToPhysical(writing_direction));
+  LayoutNGMixin<Base>::UpdateMargins();
 }
 
 template class CORE_TEMPLATE_EXPORT LayoutNGBlockFlowMixin<LayoutBlockFlow>;
@@ -292,6 +266,7 @@ template class CORE_TEMPLATE_EXPORT LayoutNGBlockFlowMixin<LayoutRubyAsBlock>;
 template class CORE_TEMPLATE_EXPORT LayoutNGBlockFlowMixin<LayoutRubyBase>;
 template class CORE_TEMPLATE_EXPORT LayoutNGBlockFlowMixin<LayoutRubyRun>;
 template class CORE_TEMPLATE_EXPORT LayoutNGBlockFlowMixin<LayoutRubyText>;
+template class CORE_TEMPLATE_EXPORT LayoutNGBlockFlowMixin<LayoutSVGBlock>;
 template class CORE_TEMPLATE_EXPORT LayoutNGBlockFlowMixin<LayoutTableCaption>;
 template class CORE_TEMPLATE_EXPORT LayoutNGBlockFlowMixin<LayoutTableCell>;
 

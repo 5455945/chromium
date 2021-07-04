@@ -13,12 +13,12 @@
 #include "base/base_switches.h"
 #include "base/bind.h"
 #include "base/callback_helpers.h"
+#include "base/cxx17_backports.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
 #include "base/process/process.h"
 #include "base/single_thread_task_runner.h"
-#include "base/stl_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "base/win/registry.h"
@@ -243,7 +243,8 @@ void DaemonProcessWin::LaunchNetworkProcess() {
 
   std::unique_ptr<UnprivilegedProcessDelegate> delegate(
       new UnprivilegedProcessDelegate(io_task_runner(), std::move(target)));
-  network_launcher_.reset(new WorkerProcessLauncher(std::move(delegate), this));
+  network_launcher_ =
+      std::make_unique<WorkerProcessLauncher>(std::move(delegate), this);
 }
 
 std::unique_ptr<DaemonProcess> DaemonProcess::Create(

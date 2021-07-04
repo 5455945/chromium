@@ -75,6 +75,7 @@ char kTestQueryURL[] = "/search";
 char kTestQueryURLParams[] = "?q={searchTerms}";
 char kTestQueryResponse[] = "Query: testquery";
 char kTestQueryEditedResponse[] = "Query: testqueredited";
+char kTestURLForbiddenCharacters[] = "test\u2028\u2029\u0085url";
 
 char kTestDataURL[] = "data:dataURL";
 char kTestSanitizedDataURL[] = "\"data:dataURL\"";
@@ -568,7 +569,6 @@ std::unique_ptr<net::test_server::HttpResponse> StandardResponse(
 
 // Tests that a UIAlertController is presented by the QRScannerViewController if
 // the camera state changes after the QRScannerViewController is presented.
-// TODO(crbug.com/1019211): Re-enable test on iOS12.
 - (void)testDialogIsDisplayedIfCameraStateChanges {
   id cameraControllerMock =
       [QRScannerAppInterface cameraControllerMockWithAuthorizationStatus:
@@ -770,6 +770,16 @@ std::unique_ptr<net::test_server::HttpResponse> StandardResponse(
                          edit:nil];
 }
 
+// Test that the URL is sanitized and the correct page is loaded if the scanner
+// result is a URL with forbidden characters.
+- (void)testForbiddenCharactersRemoved {
+  [self doTestReceivingResult:self.testServer->base_url().GetContent() +
+                              kTestURLForbiddenCharacters
+              sanitizedResult:_testURL.GetContent()
+                     response:kTestURLResponse
+                         edit:nil];
+}
+
 // Test that the correct page is loaded if the scanner result is a URL which is
 // then manually edited.
 - (void)testReceivingQRScannerURLResultAndEditingTheURL {
@@ -792,12 +802,6 @@ std::unique_ptr<net::test_server::HttpResponse> StandardResponse(
 // Test that the correct page is loaded if the scanner result is a search query
 // which is then manually edited.
 - (void)testReceivingQRScannerSearchQueryResultAndEditingTheQuery {
-  // TODO(crbug.com/753098): Re-enable this test on iPad once grey_typeText
-  // works.
-  if ([ChromeEarlGrey isIPadIdiom]) {
-    EARL_GREY_TEST_DISABLED(@"Test disabled on iPad.");
-  }
-
   [self doTestReceivingResult:kTestQuery
                      response:kTestQueryEditedResponse
                          edit:@"\bedited"];

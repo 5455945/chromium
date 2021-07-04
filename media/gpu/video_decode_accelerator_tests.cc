@@ -93,17 +93,12 @@ class VideoDecoderTest : public ::testing::Test {
     LOG_ASSERT(video);
     std::vector<std::unique_ptr<VideoFrameProcessor>> frame_processors;
 
-    // Force allocate mode if import mode is not supported.
-    if (!g_env->ImportSupported())
-      config.allocation_mode = AllocationMode::kAllocate;
-
     base::FilePath output_folder = base::FilePath(g_env->OutputFolder())
                                        .Append(g_env->GetTestOutputFilePath());
 
     // Write all video frames to the '<testname>' folder if the frame output
-    // mode is 'all'. Only supported if import mode is supported and enabled.
-    if (g_env->GetFrameOutputMode() == FrameOutputMode::kAll &&
-        config.allocation_mode == AllocationMode::kImport) {
+    // mode is 'all'.
+    if (g_env->GetFrameOutputMode() == FrameOutputMode::kAll) {
       frame_processors.push_back(VideoFrameFileWriter::Create(
           output_folder, g_env->GetFrameOutputFormat(),
           g_env->GetFrameOutputLimit()));
@@ -112,10 +107,8 @@ class VideoDecoderTest : public ::testing::Test {
 
     // Use the video frame validator to validate decoded video frames if
     // enabled. If the frame output mode is 'corrupt', a frame writer will be
-    // attached to forward corrupted frames to. Only supported if import mode
-    // is supported and enabled.
-    if (g_env->IsValidatorEnabled() &&
-        config.allocation_mode == AllocationMode::kImport) {
+    // attached to forward corrupted frames to.
+    if (g_env->IsValidatorEnabled()) {
       std::unique_ptr<VideoFrameFileWriter> frame_writer;
       if (g_env->GetFrameOutputMode() == FrameOutputMode::kCorrupt) {
         frame_writer = VideoFrameFileWriter::Create(
@@ -353,11 +346,11 @@ TEST_F(VideoDecoderTest, ResetBeforeFlushDone) {
 }
 
 // Reset the decoder immediately when encountering the first config info in a
-// H.264 video stream. After resetting the video is played until the end.
+// H.264/HEVC video stream. After resetting the video is played until the end.
 TEST_F(VideoDecoderTest, ResetAfterFirstConfigInfo) {
-  // This test is only relevant for H.264 video streams.
-  if (g_env->Video()->Profile() < H264PROFILE_MIN ||
-      g_env->Video()->Profile() > H264PROFILE_MAX)
+  // This test is only relevant for H.264/HEVC video streams.
+  if (g_env->Video()->Codec() != media::kCodecH264 &&
+      g_env->Video()->Codec() != media::kCodecHEVC)
     GTEST_SKIP();
 
   auto tvp = CreateVideoPlayer(g_env->Video());
@@ -412,60 +405,6 @@ TEST_F(VideoDecoderTest, FlushAtEndOfStream_MultipleConcurrentDecodes) {
     EXPECT_EQ(tvps[i]->GetFrameDecodedCount(), g_env->Video()->NumFrames());
     EXPECT_TRUE(tvps[i]->WaitForFrameProcessors());
   }
-}
-
-// Play a video from start to finish. Thumbnails of the decoded frames will be
-// rendered into a image, whose checksum is compared to a golden value. This
-// test is only run on older platforms that don't support the video frame
-// validator, which requires import mode. If no thumbnail checksums are present
-// in the video metadata the test will be skipped. This test will be deprecated
-// once all devices support import mode.
-TEST_F(VideoDecoderTest, FlushAtEndOfStream_RenderThumbnails) {
-  if (!g_env->IsValidatorEnabled() || g_env->ImportSupported() ||
-      g_env->Video()->ThumbnailChecksums().empty()) {
-    GTEST_SKIP();
-  }
-
-  base::FilePath output_folder = base::FilePath(g_env->OutputFolder())
-                                     .Append(g_env->GetTestOutputFilePath());
-  VideoDecoderClientConfig config;
-  config.allocation_mode = AllocationMode::kAllocate;
-  auto tvp = CreateVideoPlayer(
-      g_env->Video(), config,
-      FrameRendererThumbnail::Create(g_env->Video()->ThumbnailChecksums(),
-                                     output_folder));
-
-  tvp->Play();
-  EXPECT_TRUE(tvp->WaitForFlushDone());
-
-  EXPECT_EQ(tvp->GetFlushDoneCount(), 1u);
-  EXPECT_EQ(tvp->GetFrameDecodedCount(), g_env->Video()->NumFrames());
-  EXPECT_TRUE(tvp->WaitForFrameProcessors());
-  EXPECT_TRUE(static_cast<FrameRendererThumbnail*>(tvp->GetFrameRenderer())
-                  ->ValidateThumbnail());
-}
-
-// Play a video from start to finish, using allocate mode. This test is only run
-// on platforms that support import mode, as on allocate-mode only platforms all
-// tests are run in allocate mode. The test will be skipped when --use_vd is
-// specified as the new video decoders only support import mode.
-// TODO(dstaessens): Deprecate after switching to new VD-based video decoders.
-TEST_F(VideoDecoderTest, FlushAtEndOfStream_Allocate) {
-  if (!g_env->ImportSupported() ||
-      g_env->GetDecoderImplementation() != DecoderImplementation::kVDA) {
-    GTEST_SKIP();
-  }
-
-  VideoDecoderClientConfig config;
-  config.allocation_mode = AllocationMode::kAllocate;
-  auto tvp = CreateVideoPlayer(g_env->Video(), config);
-
-  tvp->Play();
-  EXPECT_TRUE(tvp->WaitForFlushDone());
-
-  EXPECT_EQ(tvp->GetFlushDoneCount(), 1u);
-  EXPECT_EQ(tvp->GetFrameDecodedCount(), g_env->Video()->NumFrames());
-  EXPECT_TRUE(tvp->WaitForFrameProcessors());
 }
 
 // Test initializing the video decoder for the specified video. Initialization
@@ -526,7 +465,7 @@ int main(int argc, char** argv) {
   // Print the help message if requested. This needs to be done before
   // initializing gtest, to overwrite the default gtest help message.
   base::CommandLine::Init(argc, argv);
-  const base::CommandLine* cmd_line = base::CommandLine::ForCurrentProcess();
+  base::CommandLine* cmd_line = base::CommandLine::ForCurrentProcess();
   LOG_ASSERT(cmd_line);
   if (cmd_line->HasSwitch("help")) {
     std::cout << media::test::usage_msg << "\n" << media::test::help_msg;
@@ -623,6 +562,10 @@ int main(int argc, char** argv) {
   }
 
   testing::InitGoogleTest(&argc, argv);
+
+  // Add the command line flag for HEVC testing which will be checked by the
+  // video decoder to allow clear HEVC decoding.
+  cmd_line->AppendSwitch("enable-clear-hevc-for-testing");
 
   // Set up our test environment.
   media::test::VideoPlayerTestEnvironment* test_environment =

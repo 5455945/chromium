@@ -8,14 +8,13 @@
  */
 
 // <include src="test_util.js">
-// <include src="../../../../../ui/login/screen.js">
-// <include src="../../../../../ui/login/bubble.js">
-// <include src="../../../../../ui/login/display_manager.js">
+// <include src="display_manager.js">
+// <include src="components/display_manager_types.js">
 // <include src="demo_mode_test_helper.js">
 
-// <include src="../../../../../ui/login/login_ui_tools.js">
+// <include src="login_ui_tools.js">
 // <include src="cr_ui.js">
-// <include src="oobe_select.js">
+// <include src="components/oobe_select.js">
 
 // <include src="../../gaia_auth_host/authenticator.js">
 // <include src="multi_tap_detector.js">
@@ -33,12 +32,6 @@ HTMLImports.whenReady(() => {
       initialize() {
         cr.ui.login.DisplayManager.initialize();
 
-        cr.ui.Bubble.decorate($('bubble-persistent'));
-        $('bubble-persistent').persistent = true;
-        $('bubble-persistent').hideOnKeyPress = false;
-
-        cr.ui.Bubble.decorate($('bubble'));
-
         chrome.send('screenStateInitialize');
       },
 
@@ -53,7 +46,7 @@ HTMLImports.whenReady(() => {
         i18nTemplate.process(document, loadTimeData);
 
         // Update localized content of the screens.
-        Oobe.updateLocalizedContent();
+        Oobe.getInstance().updateLocalizedContent_();
       },
 
       /**
@@ -62,24 +55,6 @@ HTMLImports.whenReady(() => {
        */
       setTabletModeState(isInTabletMode) {
         Oobe.getInstance().setTabletModeState_(isInTabletMode);
-      },
-
-      /**
-       * Reloads localized strings for the eula page.
-       * @param {!Object} data New dictionary with changed eula i18n values.
-       */
-      reloadEulaContent(data) {
-        loadTimeData.overrideValues(data);
-        i18nTemplate.process(document, loadTimeData);
-      },
-
-      /**
-       * Updates localized content of the screens.
-       * Should be executed on language change.
-       */
-      updateLocalizedContent() {
-        // Buttons, headers and links.
-        Oobe.getInstance().updateLocalizedContent_();
       },
 
       /**

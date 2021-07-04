@@ -12,8 +12,8 @@
 #include "base/check.h"
 #include "base/debug/stack_trace.h"
 #include "base/macros.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
-#include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
 #include "components/services/storage/indexed_db/scopes/disjoint_range_lock_manager.h"
@@ -42,14 +42,14 @@ void SetToTrue(bool* value) {
 
 class AbortObserver {
  public:
-  AbortObserver() : abort_task_called_(false) {}
+  AbortObserver() = default;
 
   void AbortTask() { abort_task_called_ = true; }
 
   bool abort_task_called() const { return abort_task_called_; }
 
  private:
-  bool abort_task_called_;
+  bool abort_task_called_ = false;
   DISALLOW_COPY_AND_ASSIGN(AbortObserver);
 };
 
@@ -57,8 +57,8 @@ class IndexedDBTransactionTest : public testing::Test {
  public:
   IndexedDBTransactionTest()
       : task_environment_(std::make_unique<base::test::TaskEnvironment>()),
-        backing_store_(new IndexedDBFakeBackingStore()),
-        factory_(new MockIndexedDBFactory()),
+        backing_store_(std::make_unique<IndexedDBFakeBackingStore>()),
+        factory_(std::make_unique<MockIndexedDBFactory>()),
         lock_manager_(kIndexedDBLockLevelCount) {}
 
   void SetUp() override {
@@ -67,8 +67,7 @@ class IndexedDBTransactionTest : public testing::Test {
     // https://github.com/google/googletest/blob/master/googletest/docs/FAQ.md#my-compiler-complains-that-a-constructor-or-destructor-cannot-return-a-value-whats-going-on
     leveldb::Status s;
     std::tie(db_, s) = IndexedDBClassFactory::Get()->CreateIndexedDBDatabase(
-        base::ASCIIToUTF16("db"), backing_store_.get(), factory_.get(),
-        CreateRunTasksCallback(),
+        u"db", backing_store_.get(), factory_.get(), CreateRunTasksCallback(),
         std::make_unique<FakeIndexedDBMetadataCoding>(),
         IndexedDBDatabase::Identifier(), &lock_manager_);
     ASSERT_TRUE(s.ok());
@@ -118,11 +117,10 @@ class IndexedDBTransactionTest : public testing::Test {
   }
 
   std::unique_ptr<IndexedDBConnection> CreateConnection() {
-    auto connection = std::unique_ptr<
-        IndexedDBConnection>(std::make_unique<IndexedDBConnection>(
-        IndexedDBOriginStateHandle(), IndexedDBClassFactory::Get(),
+    auto connection = std::make_unique<IndexedDBConnection>(
+        IndexedDBStorageKeyStateHandle(), IndexedDBClassFactory::Get(),
         db_->AsWeakPtr(), base::DoNothing(), base::DoNothing(),
-        new MockIndexedDBDatabaseCallbacks()));
+        base::MakeRefCounted<MockIndexedDBDatabaseCallbacks>());
     db_->AddConnectionForTesting(connection.get());
     return connection;
   }
@@ -147,7 +145,7 @@ class IndexedDBTransactionTestMode
     : public IndexedDBTransactionTest,
       public testing::WithParamInterface<blink::mojom::IDBTransactionMode> {
  public:
-  IndexedDBTransactionTestMode() {}
+  IndexedDBTransactionTestMode() = default;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(IndexedDBTransactionTestMode);

@@ -8,6 +8,7 @@
 #include <cmath>
 #include <limits>
 
+#include "base/containers/contains.h"
 #include "build/build_config.h"
 #include "cc/base/math_util.h"
 #include "components/viz/common/quads/aggregated_render_pass_draw_quad.h"
@@ -17,10 +18,12 @@
 #include "components/viz/common/quads/tile_draw_quad.h"
 #include "components/viz/common/quads/video_hole_draw_quad.h"
 #include "components/viz/common/quads/yuv_video_draw_quad.h"
+#include "components/viz/service/debugger/viz_debugger.h"
 #include "components/viz/service/display/display_resource_provider.h"
 #include "components/viz/service/display/overlay_processor_interface.h"
 #include "ui/gfx/buffer_format_util.h"
 #include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/vector3d_f.h"
 #include "ui/gfx/video_types.h"
 
@@ -129,10 +132,11 @@ OverlayCandidate::~OverlayCandidate() = default;
 bool OverlayCandidate::FromDrawQuad(
     DisplayResourceProvider* resource_provider,
     SurfaceDamageRectList* surface_damage_rect_list,
-    const SkMatrix44& output_color_matrix,
+    const skia::Matrix44& output_color_matrix,
     const DrawQuad* quad,
     const gfx::RectF& primary_rect,
-    OverlayCandidate* candidate) {
+    OverlayCandidate* candidate,
+    bool allow_delegated_quads) {
   // It is currently not possible to set a color conversion matrix on an HW
   // overlay plane.
   // TODO(https://crbug.com/792757): Remove this check once the bug is resolved.
@@ -145,9 +149,6 @@ bool OverlayCandidate::FromDrawQuad(
   if (sqs->opacity != 1.f)
     return false;
 
-  // We can't support overlays with mask filter.
-  if (!sqs->mask_filter_info.IsEmpty())
-    return false;
   // We support only kSrc (no blending) and kSrcOver (blending with premul).
   if (!(sqs->blend_mode == SkBlendMode::kSrc ||
         sqs->blend_mode == SkBlendMode::kSrcOver)) {
@@ -157,7 +158,6 @@ bool OverlayCandidate::FromDrawQuad(
   candidate->requires_overlay = OverlayCandidate::RequiresOverlay(quad);
   candidate->overlay_damage_index =
       sqs->overlay_damage_index.value_or(kInvalidDamageIndex);
-  candidate->assume_damaged = !sqs->no_damage;
 
   switch (quad->material) {
     case DrawQuad::Material::kTextureContent:
@@ -172,6 +172,12 @@ bool OverlayCandidate::FromDrawQuad(
       return FromStreamVideoQuad(resource_provider, surface_damage_rect_list,
                                  StreamVideoDrawQuad::MaterialCast(quad),
                                  candidate);
+    case DrawQuad::Material::kTiledContent:
+      if (!allow_delegated_quads)
+        return false;
+      return candidate->FromTileQuad(
+          resource_provider, surface_damage_rect_list,
+          TileDrawQuad::MaterialCast(quad), primary_rect, candidate);
     default:
       break;
   }
@@ -314,8 +320,9 @@ bool OverlayCandidate::FromDrawQuadResource(
   transform.TransformRect(&candidate->display_rect);
 
   candidate->clip_rect = sqs->clip_rect;
-  candidate->is_clipped = sqs->is_clipped;
-  candidate->is_opaque = !quad->ShouldDrawWithBlending();
+  candidate->is_opaque =
+      !quad->ShouldDrawWithBlendingForReasonOtherThanMaskFilter();
+  candidate->has_mask_filter = !sqs->mask_filter_info.IsEmpty();
   // For underlays the function 'EstimateVisibleDamage()' is called to update
   // |damage_area_estimate| to more accurately reflect the actual visible
   // damage.
@@ -345,11 +352,45 @@ bool OverlayCandidate::FromVideoHoleQuad(
   candidate->display_rect = gfx::RectF(quad->rect);
   transform.TransformRect(&candidate->display_rect);
   candidate->transform = overlay_transform;
+  candidate->is_opaque =
+      !quad->ShouldDrawWithBlendingForReasonOtherThanMaskFilter();
+  candidate->has_mask_filter =
+      !quad->shared_quad_state->mask_filter_info.IsEmpty();
   // For underlays the function 'EstimateVisibleDamage()' is called to update
   // |damage_area_estimate| to more accurately reflect the actual visible
   // damage.
   candidate->damage_area_estimate =
       GetDamageRect(quad, surface_damage_rect_list).size().GetArea();
+  return true;
+}
+
+bool OverlayCandidate::FromTileQuad(
+    DisplayResourceProvider* resource_provider,
+    SurfaceDamageRectList* surface_damage_rect_list,
+    const TileDrawQuad* quad,
+    const gfx::RectF& primary_rect,
+    OverlayCandidate* candidate) {
+  if (quad->nearest_neighbor)
+    return false;
+
+  if (!FromDrawQuadResource(resource_provider, surface_damage_rect_list, quad,
+                            quad->resource_id(), false, candidate)) {
+    return false;
+  }
+
+  candidate->resource_size_in_pixels =
+      resource_provider->GetResourceBackedSize(quad->resource_id());
+
+  float x = quad->tex_coord_rect.origin().x() /
+            candidate->resource_size_in_pixels.width();
+  float xw = quad->tex_coord_rect.size().width() /
+             candidate->resource_size_in_pixels.width();
+  float y = quad->tex_coord_rect.origin().y() /
+            candidate->resource_size_in_pixels.height();
+  float yh = quad->tex_coord_rect.size().height() /
+             candidate->resource_size_in_pixels.height();
+  candidate->uv_rect = gfx::RectF(x, y, xw, yh);
+
   return true;
 }
 
@@ -412,7 +453,7 @@ void OverlayCandidate::HandleClipAndSubsampling(
   // the Intel DRM driver. This should not be used in cases where the surface
   // will not always be promoted to an overlay as it will lead to shifting of
   // the content when it switches between composition and overlay.
-  if (!candidate->is_clipped)
+  if (!candidate->clip_rect)
     return;
 
   // Make sure it's in a format we can deal with, we only support YUV and P010.
@@ -424,20 +465,20 @@ void OverlayCandidate::HandleClipAndSubsampling(
   // a single display, so we want to perform our calculations within the bounds
   // of that display.
   if (!primary_rect.IsEmpty())
-    candidate->clip_rect.Intersect(gfx::ToNearestRect(primary_rect));
+    candidate->clip_rect->Intersect(gfx::ToNearestRect(primary_rect));
 
   // Calculate |uv_rect| of |clip_rect| in |display_rect|
   gfx::RectF uv_rect = cc::MathUtil::ScaleRectProportional(
       candidate->uv_rect, candidate->display_rect,
-      gfx::RectF(candidate->clip_rect));
+      gfx::RectF(*candidate->clip_rect));
 
   // In case that |uv_rect| of candidate is not (0, 0, 1, 1)
   candidate->uv_rect.Intersect(uv_rect);
 
   // Update |display_rect| to avoid unexpected scaling and the candidate should
   // not be regarded as clippped after this.
-  candidate->display_rect.Intersect(gfx::RectF(candidate->clip_rect));
-  candidate->is_clipped = false;
+  candidate->display_rect.Intersect(gfx::RectF(*candidate->clip_rect));
+  candidate->clip_rect.reset();
 
   // Now correct |uv_rect| if required so that the source rect aligns on a pixel
   // boundary that is a multiple of the chroma subsampling.

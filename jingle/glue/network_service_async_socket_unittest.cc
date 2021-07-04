@@ -164,7 +164,7 @@ class MockProxyResolvingSocket : public network::mojom::ProxyResolvingSocket {
 
     observer_.Bind(std::move(observer));
 
-    std::move(callback).Run(net::OK, base::nullopt, base::nullopt,
+    std::move(callback).Run(net::OK, absl::nullopt, absl::nullopt,
                             std::move(receive_consumer_handle),
                             std::move(send_producer_handle));
   }
@@ -330,12 +330,12 @@ class NetworkServiceAsyncSocketTest : public testing::Test,
               test_url_request_context_.get());
     }
 
-    ns_async_socket_.reset(new NetworkServiceAsyncSocket(
+    ns_async_socket_ = std::make_unique<NetworkServiceAsyncSocket>(
         base::BindRepeating(
             &NetworkServiceAsyncSocketTest::BindToProxyResolvingSocketFactory,
             base::Unretained(this)),
         false, /* use_fake_tls_handshake */
-        14, 20, TRAFFIC_ANNOTATION_FOR_TESTS));
+        14, 20, TRAFFIC_ANNOTATION_FOR_TESTS);
 
     ns_async_socket_->SignalConnected.connect(
         this, &NetworkServiceAsyncSocketTest::OnConnect);

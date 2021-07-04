@@ -14,6 +14,7 @@
 #include "components/permissions/permission_result.h"
 #include "components/permissions/permission_util.h"
 #include "components/permissions/prediction_service/prediction_service_messages.pb.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace content {
 class BrowserContext;
@@ -66,6 +67,7 @@ enum class RequestTypeForUma {
   PERMISSION_WINDOW_PLACEMENT = 25,
   PERMISSION_FONT_ACCESS = 26,
   PERMISSION_IDLE_DETECTION = 27,
+  PERMISSION_FILE_HANDLING = 28,
   // NUM must be the last value in the enum.
   NUM
 };
@@ -211,6 +213,10 @@ class PermissionUmaUtil {
 
   static void PermissionRequested(ContentSettingsType permission,
                                   const GURL& requesting_origin);
+
+  // Records the revocation UMA and UKM metrics for ContentSettingsTypes that
+  // have user facing permission prompts. The passed in `permission` must be
+  // such that PermissionUtil::IsPermission(permission) returns true.
   static void PermissionRevoked(ContentSettingsType permission,
                                 PermissionSourceUI source_ui,
                                 const GURL& revoked_origin,
@@ -240,9 +246,10 @@ class PermissionUmaUtil {
       const std::vector<PermissionRequest*>& requests,
       content::WebContents* web_contents,
       PermissionAction permission_action,
+      base::TimeDelta time_to_decision,
       PermissionPromptDisposition ui_disposition,
-      base::Optional<PermissionPromptDispositionReason> ui_reason,
-      base::Optional<PredictionGrantLikelihood> predicted_grant_likelihood);
+      absl::optional<PermissionPromptDispositionReason> ui_reason,
+      absl::optional<PredictionGrantLikelihood> predicted_grant_likelihood);
 
   static void RecordWithBatteryBucket(const std::string& histogram);
 
@@ -251,7 +258,7 @@ class PermissionUmaUtil {
   static void RecordCrowdDenyDelayedPushNotification(base::TimeDelta delay);
 
   static void RecordCrowdDenyVersionAtAbuseCheckTime(
-      const base::Optional<base::Version>& version);
+      const absl::optional<base::Version>& version);
 
   // Record UMAs related to the Android "Missing permissions" infobar.
   static void RecordMissingPermissionInfobarShouldShow(
@@ -261,11 +268,19 @@ class PermissionUmaUtil {
       PermissionAction action,
       const std::vector<ContentSettingsType>& content_settings_types);
 
+  static void RecordPermissionUsage(ContentSettingsType permission_type,
+                                    content::BrowserContext* browser_context,
+                                    const content::WebContents* web_contents,
+                                    const GURL& requesting_origin);
+
   static void RecordTimeElapsedBetweenGrantAndUse(ContentSettingsType type,
                                                   base::TimeDelta delta);
 
   static void RecordTimeElapsedBetweenGrantAndRevoke(ContentSettingsType type,
                                                      base::TimeDelta delta);
+
+  static std::string GetPermissionActionString(
+      PermissionAction permission_action);
 
   // A scoped class that will check the current resolved content setting on
   // construction and report a revocation metric accordingly if the revocation
@@ -298,19 +313,22 @@ class PermissionUmaUtil {
 
  private:
   friend class PermissionUmaUtilTest;
-
+  // Records UMA and UKM metrics for ContentSettingsTypes that have user facing
+  // permission prompts. The passed in `permission` must be such that
+  // PermissionUtil::IsPermission(permission) returns true.
   // web_contents may be null when for recording non-prompt actions.
   static void RecordPermissionAction(
       ContentSettingsType permission,
       PermissionAction action,
       PermissionSourceUI source_ui,
       PermissionRequestGestureType gesture_type,
+      base::TimeDelta time_to_decision,
       PermissionPromptDisposition ui_disposition,
-      base::Optional<PermissionPromptDispositionReason> ui_reason,
+      absl::optional<PermissionPromptDispositionReason> ui_reason,
       const GURL& requesting_origin,
       const content::WebContents* web_contents,
       content::BrowserContext* browser_context,
-      base::Optional<PredictionGrantLikelihood> predicted_grant_likelihood);
+      absl::optional<PredictionGrantLikelihood> predicted_grant_likelihood);
 
   // Records |count| total prior actions for a prompt of type |permission|
   // for a single origin using |prefix| for the metric.

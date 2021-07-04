@@ -8,8 +8,8 @@
 #include <utility>
 
 #include "ash/accelerators/accelerator_commands.h"
+#include "ash/constants/ash_switches.h"
 #include "ash/hud_display/hud_display.h"
-#include "ash/public/cpp/ash_switches.h"
 #include "ash/public/cpp/debug_utils.h"
 #include "ash/public/cpp/toast_data.h"
 #include "ash/shell.h"
@@ -27,6 +27,7 @@
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_skia_rep.h"
+#include "ui/gfx/skia_util.h"
 #include "ui/views/widget/widget.h"
 
 namespace ash {
@@ -161,11 +162,7 @@ void PerformDebugActionIfEnabled(AcceleratorAction action) {
       break;
     case DEBUG_SHOW_TOAST:
       Shell::Get()->toast_manager()->Show(
-          ToastData("id", base::ASCIIToUTF16("Toast"), 5000 /* duration_ms */,
-                    base::ASCIIToUTF16("Dismiss")));
-      break;
-    case DEBUG_TOGGLE_DEVICE_SCALE_FACTOR:
-      Shell::Get()->display_manager()->ToggleDisplayScaleFactor();
+          ToastData("id", u"Toast", 5000 /* duration_ms */, u"Dismiss"));
       break;
     case DEBUG_TOGGLE_TOUCH_PAD:
       HandleToggleTouchpad();

@@ -4,14 +4,13 @@
 
 #include "components/password_manager/core/browser/possible_username_data.h"
 
+#include <string>
 #include <vector>
 
 #include "base/containers/contains.h"
-#include "base/strings/string16.h"
 #include "base/strings/string_piece.h"
 #include "components/password_manager/core/browser/leak_detection/encryption_utils.h"
 
-using base::char16;
 using base::TimeDelta;
 
 namespace password_manager {
@@ -19,12 +18,14 @@ namespace password_manager {
 PossibleUsernameData::PossibleUsernameData(
     std::string signon_realm,
     autofill::FieldRendererId renderer_id,
-    base::string16 value,
+    const std::u16string& field_name,
+    const std::u16string& value,
     base::Time last_change,
     int driver_id)
     : signon_realm(std::move(signon_realm)),
       renderer_id(renderer_id),
-      value(std::move(value)),
+      field_name(field_name),
+      value(value),
       last_change(last_change),
       driver_id(driver_id) {}
 PossibleUsernameData::PossibleUsernameData(const PossibleUsernameData&) =
@@ -34,7 +35,7 @@ PossibleUsernameData::~PossibleUsernameData() = default;
 bool IsPossibleUsernameValid(
     const PossibleUsernameData& possible_username,
     const std::string& submitted_signon_realm,
-    const std::vector<base::string16>& possible_usernames) {
+    const std::vector<std::u16string>& possible_usernames) {
   if (submitted_signon_realm != possible_username.signon_realm)
     return false;
 
@@ -42,8 +43,13 @@ bool IsPossibleUsernameValid(
   // username. In the initial version of the username first flow it is better to
   // be conservative in that. This check only allows usernames that match
   // existing usernames after canonicalization.
-  base::string16 (*Canonicalize)(base::StringPiece16) = &CanonicalizeUsername;
-  if (!base::Contains(possible_usernames, Canonicalize(possible_username.value),
+
+  // This line is a workaround to pass the method to overloaded base::Contains
+  // as a projection that will be moved and applied to all container methods.
+  std::u16string (*Canonicalize)(base::StringPiece16) = &CanonicalizeUsername;
+  std::u16string canonicalized_username = Canonicalize(possible_username.value);
+  if (canonicalized_username.empty() ||
+      !base::Contains(possible_usernames, canonicalized_username,
                       Canonicalize)) {
     return false;
   }

@@ -12,7 +12,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/chromeos_buildflags.h"
-#include "chrome/browser/web_applications/components/system_web_app_types.h"
+#include "chrome/browser/web_applications/system_web_apps/system_web_app_types.h"
 
 namespace web_app {
 
@@ -54,6 +54,7 @@ bool ExternalInstallOptions::operator==(
         options.is_disabled,
         options.override_previous_user_uninstall,
         options.only_for_new_users,
+        options.only_if_previously_preinstalled,
         options.user_type_allowlist,
         options.gate_on_feature,
 #if BUILDFLAG(IS_CHROMEOS_ASH)
@@ -73,7 +74,9 @@ bool ExternalInstallOptions::operator==(
         options.uninstall_and_replace,
         options.additional_search_terms,
         options.only_use_app_info_factory,
-        options.app_info_factory
+        options.system_app_type,
+        options.oem_installed,
+        options.disable_if_touchscreen_with_stylus_not_supported
         // clang-format on
     );
   };
@@ -83,7 +86,7 @@ bool ExternalInstallOptions::operator==(
 namespace {
 
 template <typename T>
-std::ostream& operator<<(std::ostream& out, const base::Optional<T>& optional) {
+std::ostream& operator<<(std::ostream& out, const absl::optional<T>& optional) {
   if (optional)
     out << *optional;
   else
@@ -126,6 +129,8 @@ std::ostream& operator<<(std::ostream& out,
          << "\n override_previous_user_uninstall: "
          << install_options.override_previous_user_uninstall
          << "\n only_for_new_users: " << install_options.only_for_new_users
+         << "\n only_if_previously_preinstalled: "
+         << install_options.only_if_previously_preinstalled
          << "\n user_type_allowlist: " << install_options.user_type_allowlist
          << "\n gate_on_feature: " << install_options.gate_on_feature
 #if BUILDFLAG(IS_CHROMEOS_ASH)
@@ -160,7 +165,10 @@ std::ostream& operator<<(std::ostream& out,
          << "\n system_app_type: "
          << (install_options.system_app_type.has_value()
                  ? static_cast<int32_t>(install_options.system_app_type.value())
-                 : -1);
+                 : -1)
+         << "\n oem_installed: " << install_options.oem_installed
+         << "\n disable_if_touchscreen_with_stylus_not_supported: "
+         << install_options.disable_if_touchscreen_with_stylus_not_supported;
 }
 
 InstallManager::InstallParams ConvertExternalInstallOptionsToParams(
@@ -193,6 +201,8 @@ InstallManager::InstallParams ConvertExternalInstallOptionsToParams(
   params.launch_query_params = install_options.launch_query_params;
 
   params.system_app_type = install_options.system_app_type;
+
+  params.oem_installed = install_options.oem_installed;
 
   return params;
 }

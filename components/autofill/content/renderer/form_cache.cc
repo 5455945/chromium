@@ -11,15 +11,14 @@
 
 #include "base/check_op.h"
 #include "base/containers/contains.h"
+#include "base/containers/cxx20_erase.h"
 #include "base/feature_list.h"
 #include "base/macros.h"
-#include "base/stl_util.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/autofill/content/renderer/form_autofill_util.h"
 #include "components/autofill/content/renderer/page_form_analyser_logger.h"
@@ -90,7 +89,7 @@ void LogDeprecationMessages(const WebFormControlElement& element) {
 // Determines whether the form is interesting enough to be sent to the browser
 // for further operations.
 bool IsFormInteresting(const FormData& form, size_t num_editable_elements) {
-  if (form.fields.empty())
+  if (form.fields.empty() && form.child_frames.empty())
     return false;
 
   // If the form has at least one field with an autocomplete attribute, it is a
@@ -111,7 +110,8 @@ bool IsFormInteresting(const FormData& form, size_t num_editable_elements) {
          num_editable_elements >= kMinRequiredFieldsForUpload ||
          (all_fields_are_passwords &&
           num_editable_elements >=
-              kRequiredFieldsForFormsWithOnlyPasswordFields);
+              kRequiredFieldsForFormsWithOnlyPasswordFields) ||
+         form.child_frames.size() > 0;
 }
 
 }  // namespace
@@ -140,14 +140,10 @@ std::vector<FormData> FormCache::ExtractNewForms(
                                           form_util::EXTRACT_OPTIONS);
 
   size_t num_fields_seen = 0;
+  size_t num_frames_seen = 0;
   for (const WebFormElement& form_element : document.Forms()) {
     std::vector<WebFormControlElement> control_elements =
         form_util::ExtractAutofillableElementsInForm(form_element);
-
-    size_t num_editable_elements =
-        ScanFormControlElements(control_elements, log_deprecation_messages);
-    if (num_editable_elements == 0)
-      continue;
 
     FormData form;
     if (!WebFormElementToFormData(form_element, WebFormControlElement(),
@@ -160,10 +156,15 @@ std::vector<FormData> FormCache::ExtractNewForms(
       observed_unique_renderer_ids.insert(field.unique_renderer_id);
 
     num_fields_seen += form.fields.size();
-    if (num_fields_seen > kMaxParseableFields) {
+    num_frames_seen += form.child_frames.size();
+    if (num_fields_seen > kMaxParseableFields ||
+        num_frames_seen > kMaxParseableFrames) {
       PruneInitialValueCaches(observed_unique_renderer_ids);
       return forms;
     }
+
+    size_t num_editable_elements =
+        ScanFormControlElements(control_elements, log_deprecation_messages);
 
     if (!base::Contains(parsed_forms_, form) &&
         IsFormInteresting(form, num_editable_elements)) {
@@ -185,18 +186,13 @@ std::vector<FormData> FormCache::ExtractNewForms(
   std::vector<WebFormControlElement> control_elements =
       form_util::GetUnownedAutofillableFormFieldElements(document.All(),
                                                          &fieldsets);
-
-  size_t num_editable_elements =
-      ScanFormControlElements(control_elements, log_deprecation_messages);
-  if (num_editable_elements == 0) {
-    PruneInitialValueCaches(observed_unique_renderer_ids);
-    return forms;
-  }
+  std::vector<WebElement> iframe_elements =
+      form_util::GetUnownedIframeElements(document);
 
   FormData synthetic_form;
-  if (!UnownedCheckoutFormElementsAndFieldSetsToFormData(
-          fieldsets, control_elements, nullptr, document, field_data_manager,
-          extract_mask, &synthetic_form, nullptr)) {
+  if (!UnownedFormElementsAndFieldSetsToFormData(
+          fieldsets, control_elements, iframe_elements, nullptr, document,
+          field_data_manager, extract_mask, &synthetic_form, nullptr)) {
     PruneInitialValueCaches(observed_unique_renderer_ids);
     return forms;
   }
@@ -205,10 +201,15 @@ std::vector<FormData> FormCache::ExtractNewForms(
     observed_unique_renderer_ids.insert(field.unique_renderer_id);
 
   num_fields_seen += synthetic_form.fields.size();
-  if (num_fields_seen > kMaxParseableFields) {
+  num_frames_seen += synthetic_form.child_frames.size();
+  if (num_fields_seen > kMaxParseableFields ||
+      num_frames_seen > kMaxParseableFrames) {
     PruneInitialValueCaches(observed_unique_renderer_ids);
     return forms;
   }
+
+  size_t num_editable_elements =
+      ScanFormControlElements(control_elements, log_deprecation_messages);
 
   if (!base::Contains(parsed_forms_, synthetic_form) &&
       IsFormInteresting(synthetic_form, num_editable_elements)) {
@@ -228,6 +229,7 @@ void FormCache::Reset() {
   parsed_forms_.clear();
   initial_select_values_.clear();
   initial_checked_state_.clear();
+  fields_eligible_for_manual_filling_.clear();
 }
 
 void FormCache::ClearElement(WebFormControlElement& control_element,
@@ -372,7 +374,7 @@ bool FormCache::ShowPredictions(const FormDataPredictions& form,
     // If the flag is enabled, attach the prediction to the field.
     if (attach_predictions_to_dom) {
       constexpr size_t kMaxLabelSize = 100;
-      const base::string16 truncated_label = field_data.label.substr(
+      const std::u16string truncated_label = field_data.label.substr(
           0, std::min(field_data.label.length(), kMaxLabelSize));
 
       std::string form_id =
@@ -380,17 +382,32 @@ bool FormCache::ShowPredictions(const FormDataPredictions& form,
       std::string field_id =
           base::NumberToString(field_data.unique_renderer_id.value());
 
-      std::string title =
-          base::StrCat({"overall type: ", field.overall_type,             //
-                        "\nserver type: ", field.server_type,             //
-                        "\nheuristic type: ", field.heuristic_type,       //
-                        "\nlabel: ", base::UTF16ToUTF8(truncated_label),  //
-                        "\nparseable name: ", field.parseable_name,       //
-                        "\nsection: ", field.section,                     //
-                        "\nfield signature: ", field.signature,           //
-                        "\nform signature: ", form.signature,             //
-                        "\nform renderer id: ", form_id,                  //
-                        "\nfield renderer id: ", field_id});
+      blink::LocalFrameToken frame_token;
+      if (auto* frame = element.GetDocument().GetFrame())
+        frame_token = frame->GetLocalFrameToken();
+
+      std::string title = base::StrCat({"overall type: ",
+                                        field.overall_type,
+                                        "\nserver type: ",
+                                        field.server_type,
+                                        "\nheuristic type: ",
+                                        field.heuristic_type,
+                                        "\nlabel: ",
+                                        base::UTF16ToUTF8(truncated_label),
+                                        "\nparseable name: ",
+                                        field.parseable_name,
+                                        "\nsection: ",
+                                        field.section,
+                                        "\nfield signature: ",
+                                        field.signature,
+                                        "\nform signature: ",
+                                        form.signature,
+                                        "\nfield frame token: ",
+                                        frame_token.ToString(),
+                                        "\nform renderer id: ",
+                                        form_id,
+                                        "\nfield renderer id: ",
+                                        field_id});
 
       // Set this debug string to the title so that a developer can easily debug
       // by hovering the mouse over the input field.
@@ -408,6 +425,19 @@ bool FormCache::ShowPredictions(const FormDataPredictions& form,
   logger.Flush();
 
   return true;
+}
+
+bool FormCache::IsFormElementEligibleForManualFilling(
+    const blink::WebFormControlElement& control_element) {
+  return fields_eligible_for_manual_filling_.find(
+             FieldRendererId(control_element.UniqueRendererFormControlId())) !=
+         fields_eligible_for_manual_filling_.end();
+}
+
+void FormCache::SetFieldsEligibleForManualFilling(
+    const std::vector<FieldRendererId>& fields_eligible_for_manual_filling) {
+  fields_eligible_for_manual_filling_ = base::flat_set<FieldRendererId>(
+      std::move(fields_eligible_for_manual_filling));
 }
 
 size_t FormCache::ScanFormControlElements(

@@ -10,7 +10,6 @@
 #include "base/macros.h"
 #include "chrome/browser/browsing_data/cookies_tree_model.h"
 #include "chrome/browser/content_settings/cookie_settings_factory.h"
-#include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/collected_cookies_infobar_delegate.h"
@@ -28,12 +27,16 @@
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/content_settings/browser/page_specific_content_settings.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
+#include "components/infobars/content/content_infobar_manager.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_user_data.h"
 #include "net/cookies/canonical_cookie.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/geometry/insets.h"
@@ -48,8 +51,7 @@
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/layout/grid_layout.h"
-#include "ui/views/metadata/metadata_header_macros.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
+#include "ui/views/view_tracker.h"
 #include "ui/views/widget/widget.h"
 
 namespace {
@@ -86,7 +88,7 @@ void StartNewButtonColumnSet(views::GridLayout* layout,
   layout->StartRow(views::GridLayout::kFixedSize, column_layout_id);
 }
 
-base::string16 GetAnnotationTextForSetting(ContentSetting setting) {
+std::u16string GetAnnotationTextForSetting(ContentSetting setting) {
   switch (setting) {
     case CONTENT_SETTING_BLOCK:
       return l10n_util::GetStringUTF16(IDS_COLLECTED_COOKIES_BLOCKED_AUX_TEXT);
@@ -97,7 +99,7 @@ base::string16 GetAnnotationTextForSetting(ContentSetting setting) {
           IDS_COLLECTED_COOKIES_CLEAR_ON_EXIT_AUX_TEXT);
     default:
       NOTREACHED() << "Unknown ContentSetting value: " << setting;
-      return base::string16();
+      return std::u16string();
   }
 }
 
@@ -118,6 +120,51 @@ std::unique_ptr<CookiesTreeModel> CreateCookiesTreeModel(
 
 }  // namespace
 
+class CollectedCookiesViews::WebContentsUserData
+    : public content::WebContentsUserData<
+          CollectedCookiesViews::WebContentsUserData> {
+ public:
+  ~WebContentsUserData() override {
+    if (!tracker_.view())
+      return;  // Dialog already destroyed.
+    // Destroyed while the Widget is still alive, close immediately.
+    tracker_.view()->GetWidget()->CloseNow();
+  }
+
+  static CollectedCookiesViews* GetDialog(content::WebContents* web_contents) {
+    WebContentsUserData* handle = static_cast<WebContentsUserData*>(
+        web_contents->GetUserData(UserDataKey()));
+    if (!handle)
+      return nullptr;
+    return handle->GetCollectedCookiesViews();
+  }
+
+  static void Create(content::WebContents* web_contents) {
+    CollectedCookiesViews::WebContentsUserData::CreateForWebContents(
+        web_contents);
+  }
+
+ private:
+  friend class content::WebContentsUserData<WebContentsUserData>;
+
+  explicit WebContentsUserData(content::WebContents* web_contents) {
+    // Owned by its Widget
+    CollectedCookiesViews* const dialog =
+        new CollectedCookiesViews(web_contents);
+    tracker_.SetView(dialog);
+  }
+
+  CollectedCookiesViews* GetCollectedCookiesViews() {
+    return static_cast<CollectedCookiesViews*>(tracker_.view());
+  }
+
+  views::ViewTracker tracker_;
+
+  WEB_CONTENTS_USER_DATA_KEY_DECL();
+};
+
+WEB_CONTENTS_USER_DATA_KEY_IMPL(CollectedCookiesViews::WebContentsUserData)
+
 // This DrawingProvider allows TreeModelNodes to be annotated with auxiliary
 // text. Annotated nodes will be drawn in a lighter color than normal to
 // indicate that their state has changed, and will have their auxiliary text
@@ -127,21 +174,21 @@ class CookiesTreeViewDrawingProvider : public views::TreeViewDrawingProvider {
   CookiesTreeViewDrawingProvider() {}
   ~CookiesTreeViewDrawingProvider() override {}
 
-  void AnnotateNode(ui::TreeModelNode* node, const base::string16& text);
+  void AnnotateNode(ui::TreeModelNode* node, const std::u16string& text);
 
   SkColor GetTextColorForNode(views::TreeView* tree_view,
                               ui::TreeModelNode* node) override;
-  base::string16 GetAuxiliaryTextForNode(views::TreeView* tree_view,
+  std::u16string GetAuxiliaryTextForNode(views::TreeView* tree_view,
                                          ui::TreeModelNode* node) override;
   bool ShouldDrawIconForNode(views::TreeView* tree_view,
                              ui::TreeModelNode* node) override;
 
  private:
-  std::map<ui::TreeModelNode*, base::string16> annotations_;
+  std::map<ui::TreeModelNode*, std::u16string> annotations_;
 };
 
 void CookiesTreeViewDrawingProvider::AnnotateNode(ui::TreeModelNode* node,
-                                                  const base::string16& text) {
+                                                  const std::u16string& text) {
   annotations_[node] = text;
 }
 
@@ -154,7 +201,7 @@ SkColor CookiesTreeViewDrawingProvider::GetTextColorForNode(
   return color;
 }
 
-base::string16 CookiesTreeViewDrawingProvider::GetAuxiliaryTextForNode(
+std::u16string CookiesTreeViewDrawingProvider::GetAuxiliaryTextForNode(
     views::TreeView* tree_view,
     ui::TreeModelNode* node) {
   if (annotations_.find(node) != annotations_.end())
@@ -205,8 +252,8 @@ class InfobarView : public views::View {
 
   // Set the InfobarView label text based on content |setting| and
   // |domain_name|. Ensure InfobarView is visible.
-  void SetLabelText(ContentSetting setting, const base::string16& domain_name) {
-    base::string16 label;
+  void SetLabelText(ContentSetting setting, const std::u16string& domain_name) {
+    std::u16string label;
     switch (setting) {
       case CONTENT_SETTING_BLOCK:
         label = l10n_util::GetStringFUTF16(
@@ -244,13 +291,8 @@ END_METADATA
 // CollectedCookiesViews, public:
 
 CollectedCookiesViews::~CollectedCookiesViews() {
-  if (!destroying_) {
-    // The owning WebContents is being destroyed before the Widget. Close the
-    // widget pronto.
-    destroying_ = true;
-    GetWidget()->CloseNow();
-  }
-
+  web_contents_->RemoveUserData(
+      CollectedCookiesViews::WebContentsUserData::UserDataKey());
   allowed_cookies_tree_->SetModel(nullptr);
   blocked_cookies_tree_->SetModel(nullptr);
 }
@@ -258,9 +300,10 @@ CollectedCookiesViews::~CollectedCookiesViews() {
 // static
 void CollectedCookiesViews::CreateAndShowForWebContents(
     content::WebContents* web_contents) {
-  CollectedCookiesViews* instance = FromWebContents(web_contents);
+  CollectedCookiesViews* instance =
+      CollectedCookiesViews::WebContentsUserData::GetDialog(web_contents);
   if (!instance) {
-    CreateForWebContents(web_contents);
+    CollectedCookiesViews::WebContentsUserData::Create(web_contents);
     return;
   }
 
@@ -276,6 +319,11 @@ void CollectedCookiesViews::CreateAndShowForWebContents(
       web_modal::WebContentsModalDialogManager::FromWebContents(web_contents);
   CHECK(dialog_manager->IsDialogActive());
   dialog_manager->FocusTopmostDialog();
+}
+
+CollectedCookiesViews* CollectedCookiesViews::GetDialogForTesting(
+    content::WebContents* web_contents) {
+  return CollectedCookiesViews::WebContentsUserData::GetDialog(web_contents);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -342,9 +390,9 @@ CollectedCookiesViews::CollectedCookiesViews(content::WebContents* web_contents)
       layout->AddView(std::make_unique<views::TabbedPane>());
 
   // NOTE: Panes must be added after |tabbed_pane| has been added to its parent.
-  base::string16 label_allowed = l10n_util::GetStringUTF16(
+  std::u16string label_allowed = l10n_util::GetStringUTF16(
       IDS_COLLECTED_COOKIES_ALLOWED_COOKIES_TAB_LABEL);
-  base::string16 label_blocked = l10n_util::GetStringUTF16(
+  std::u16string label_blocked = l10n_util::GetStringUTF16(
       IDS_COLLECTED_COOKIES_BLOCKED_COOKIES_TAB_LABEL);
   tabbed_pane->AddTab(label_allowed, CreateAllowedPane());
   tabbed_pane->AddTab(label_blocked, CreateBlockedPane());
@@ -375,22 +423,14 @@ CollectedCookiesViews::CollectedCookiesViews(content::WebContents* web_contents)
 void CollectedCookiesViews::OnDialogClosed() {
   // If the user closes our parent tab while we're still open, this method will
   // (eventually) be called in response to a WebContentsDestroyed() call from
-  // the WebContentsImpl to its observers.  But since the InfoBarService is also
-  // torn down in response to WebContentsDestroyed(), it may already be null.
-  // Since the tab is going away anyway, we can just omit showing an infobar,
-  // which prevents any attempt to access a null InfoBarService.
+  // the WebContentsImpl to its observers.  But since the
+  // infobars::ContentInfoBarManager is also torn down in response to
+  // WebContentsDestroyed(), it may already be null. Since the tab is going away
+  // anyway, we can just omit showing an infobar, which prevents any attempt to
+  // access a null infobars::ContentInfoBarManager.
   if (status_changed_ && !web_contents_->IsBeingDestroyed()) {
     CollectedCookiesInfoBarDelegate::Create(
-        InfoBarService::FromWebContents(web_contents_));
-  }
-}
-
-void CollectedCookiesViews::DeleteDelegate() {
-  if (!destroying_) {
-    // The associated Widget is being destroyed before the owning WebContents.
-    // Tell the owner to delete |this|.
-    destroying_ = true;
-    web_contents_->RemoveUserData(UserDataKey());
+        infobars::ContentInfoBarManager::FromWebContents(web_contents_));
   }
 }
 
@@ -653,8 +693,6 @@ void CollectedCookiesViews::AddContentException(views::TreeView* tree_view,
                          GetAnnotationTextForSetting(setting));
   tree_view->SchedulePaint();
 }
-
-WEB_CONTENTS_USER_DATA_KEY_IMPL(CollectedCookiesViews)
 
 BEGIN_METADATA(CollectedCookiesViews, views::DialogDelegateView)
 END_METADATA

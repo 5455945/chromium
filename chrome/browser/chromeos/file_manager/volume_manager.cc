@@ -25,22 +25,22 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/system/sys_info.h"
 #include "base/task/thread_pool.h"
+#include "chrome/browser/ash/arc/arc_util.h"
+#include "chrome/browser/ash/arc/fileapi/arc_documents_provider_root_map.h"
+#include "chrome/browser/ash/arc/fileapi/arc_documents_provider_util.h"
+#include "chrome/browser/ash/arc/fileapi/arc_file_system_operation_runner.h"
+#include "chrome/browser/ash/arc/fileapi/arc_media_view_util.h"
+#include "chrome/browser/ash/arc/session/arc_session_manager.h"
+#include "chrome/browser/ash/crostini/crostini_manager.h"
+#include "chrome/browser/ash/crostini/crostini_util.h"
+#include "chrome/browser/ash/drive/drive_integration_service.h"
+#include "chrome/browser/ash/drive/file_system_util.h"
+#include "chrome/browser/ash/file_system_provider/provided_file_system_info.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/chromeos/arc/arc_util.h"
-#include "chrome/browser/chromeos/arc/fileapi/arc_documents_provider_root_map.h"
-#include "chrome/browser/chromeos/arc/fileapi/arc_documents_provider_util.h"
-#include "chrome/browser/chromeos/arc/fileapi/arc_file_system_operation_runner.h"
-#include "chrome/browser/chromeos/arc/fileapi/arc_media_view_util.h"
-#include "chrome/browser/chromeos/arc/session/arc_session_manager.h"
-#include "chrome/browser/chromeos/crostini/crostini_manager.h"
-#include "chrome/browser/chromeos/crostini/crostini_util.h"
-#include "chrome/browser/chromeos/drive/drive_integration_service.h"
-#include "chrome/browser/chromeos/drive/file_system_util.h"
 #include "chrome/browser/chromeos/file_manager/path_util.h"
 #include "chrome/browser/chromeos/file_manager/snapshot_manager.h"
 #include "chrome/browser/chromeos/file_manager/volume_manager_factory.h"
 #include "chrome/browser/chromeos/file_manager/volume_manager_observer.h"
-#include "chrome/browser/chromeos/file_system_provider/provided_file_system_info.h"
 #include "chrome/browser/media_galleries/fileapi/mtp_device_map_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
@@ -54,8 +54,6 @@
 #include "services/device/public/mojom/mtp_manager.mojom.h"
 #include "services/device/public/mojom/mtp_storage_info.mojom.h"
 #include "storage/browser/file_system/external_mount_points.h"
-#include "ui/base/l10n/l10n_util.h"
-#include "ui/chromeos/strings/grit/ui_chromeos_strings.h"
 
 namespace file_manager {
 namespace {
@@ -295,8 +293,7 @@ std::unique_ptr<Volume> Volume::CreateForRemovable(
 
 // static
 std::unique_ptr<Volume> Volume::CreateForProvidedFileSystem(
-    const chromeos::file_system_provider::ProvidedFileSystemInfo&
-        file_system_info,
+    const ash::file_system_provider::ProvidedFileSystemInfo& file_system_info,
     MountContext mount_context) {
   std::unique_ptr<Volume> volume(new Volume());
   volume->file_system_id_ = file_system_info.file_system_id();
@@ -410,21 +407,14 @@ std::unique_ptr<Volume> Volume::CreateForDocumentsProvider(
   volume->mount_path_ =
       arc::GetDocumentsProviderMountPath(authority, document_id);
   volume->mount_condition_ = chromeos::disks::MOUNT_CONDITION_NONE;
-  if (summary.empty()) {
-    volume->volume_label_ = title;
-  } else {
-    volume->volume_label_ = l10n_util::GetStringFUTF8(
-        IDS_FILE_BROWSER_DOCPROVIDER_ROOT_LABEL_WITH_SUMMARY,
-        base::UTF8ToUTF16(title), base::UTF8ToUTF16(summary));
-  }
+  volume->volume_label_ = title;
   volume->is_read_only_ = read_only;
   volume->watchable_ = false;
   volume->volume_id_ = arc::GetDocumentsProviderVolumeId(authority, root_id);
   if (!icon_url.is_empty()) {
-    chromeos::file_system_provider::IconSet icon_set;
-    icon_set.SetIcon(
-        chromeos::file_system_provider::IconSet::IconSize::SIZE_32x32,
-        icon_url);
+    ash::file_system_provider::IconSet icon_set;
+    icon_set.SetIcon(ash::file_system_provider::IconSet::IconSize::SIZE_32x32,
+                     icon_url);
     volume->icon_set_ = icon_set;
   }
   return volume;
@@ -488,7 +478,7 @@ VolumeManager::VolumeManager(
     drive::DriveIntegrationService* drive_integration_service,
     chromeos::PowerManagerClient* power_manager_client,
     chromeos::disks::DiskMountManager* disk_mount_manager,
-    chromeos::file_system_provider::Service* file_system_provider_service,
+    ash::file_system_provider::Service* file_system_provider_service,
     GetMtpStorageInfoCallback get_mtp_storage_info_callback)
     : profile_(profile),
       drive_integration_service_(drive_integration_service),
@@ -552,7 +542,7 @@ void VolumeManager::Initialize() {
   // Subscribe to FileSystemProviderService and register currently mounted
   // volumes for the profile.
   if (file_system_provider_service_) {
-    using chromeos::file_system_provider::ProvidedFileSystemInfo;
+    using ash::file_system_provider::ProvidedFileSystemInfo;
     file_system_provider_service_->AddObserver(this);
 
     std::vector<ProvidedFileSystemInfo> file_system_info_list =
@@ -1039,16 +1029,15 @@ void VolumeManager::OnRenameEvent(
 }
 
 void VolumeManager::OnProvidedFileSystemMount(
-    const chromeos::file_system_provider::ProvidedFileSystemInfo&
-        file_system_info,
-    chromeos::file_system_provider::MountContext context,
+    const ash::file_system_provider::ProvidedFileSystemInfo& file_system_info,
+    ash::file_system_provider::MountContext context,
     base::File::Error error) {
   MountContext volume_context = MOUNT_CONTEXT_UNKNOWN;
   switch (context) {
-    case chromeos::file_system_provider::MOUNT_CONTEXT_USER:
+    case ash::file_system_provider::MOUNT_CONTEXT_USER:
       volume_context = MOUNT_CONTEXT_USER;
       break;
-    case chromeos::file_system_provider::MOUNT_CONTEXT_RESTORE:
+    case ash::file_system_provider::MOUNT_CONTEXT_RESTORE:
       volume_context = MOUNT_CONTEXT_AUTO;
       break;
   }
@@ -1075,8 +1064,7 @@ void VolumeManager::OnProvidedFileSystemMount(
 }
 
 void VolumeManager::OnProvidedFileSystemUnmount(
-    const chromeos::file_system_provider::ProvidedFileSystemInfo&
-        file_system_info,
+    const ash::file_system_provider::ProvidedFileSystemInfo& file_system_info,
     base::File::Error error) {
   // TODO(mtomasz): Introduce own type, and avoid using MountError internally,
   // since it is related to cros disks only.

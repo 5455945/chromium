@@ -46,7 +46,8 @@ class DNRManifestTest : public testing::Test {
   void LoadAndExpectError(const std::string& expected_error) {
     std::string error;
     scoped_refptr<Extension> extension = file_util::LoadExtension(
-        temp_dir_.GetPath(), Manifest::UNPACKED, Extension::NO_FLAGS, &error);
+        temp_dir_.GetPath(), mojom::ManifestLocation::kUnpacked,
+        Extension::NO_FLAGS, &error);
     EXPECT_FALSE(extension);
     EXPECT_EQ(expected_error, error);
   }
@@ -56,7 +57,8 @@ class DNRManifestTest : public testing::Test {
   void LoadAndExpectSuccess(const std::vector<TestRulesetInfo>& info) {
     std::string error;
     scoped_refptr<Extension> extension = file_util::LoadExtension(
-        temp_dir_.GetPath(), Manifest::UNPACKED, Extension::NO_FLAGS, &error);
+        temp_dir_.GetPath(), mojom::ManifestLocation::kUnpacked,
+        Extension::NO_FLAGS, &error);
     ASSERT_TRUE(extension) << error;
     EXPECT_TRUE(error.empty());
 
@@ -144,13 +146,15 @@ TEST_F(DNRManifestTest, InvalidRulesFileKey) {
 TEST_F(DNRManifestTest, InvalidRulesFileFormat) {
   const char* kRulesetFile = "file1.json";
   std::unique_ptr<base::DictionaryValue> manifest = CreateManifest({});
-  manifest->Set(dnr_api::ManifestKeys::kDeclarativeNetRequest,
-                DictionaryBuilder()
-                    .Set(dnr_api::DNRInfo::kRuleResources,
-                         (ListBuilder().Append(
-                              std::make_unique<base::Value>(kRulesetFile)))
-                             .Build())
-                    .Build());
+  manifest->SetKey(
+      dnr_api::ManifestKeys::kDeclarativeNetRequest,
+      base::Value::FromUniquePtrValue(
+          DictionaryBuilder()
+              .Set(dnr_api::DNRInfo::kRuleResources,
+                   (ListBuilder().Append(
+                        std::make_unique<base::Value>(kRulesetFile)))
+                       .Build())
+              .Build()));
 
   WriteManifestAndRuleset(*manifest, {});
 
@@ -287,8 +291,8 @@ TEST_F(DNRManifestTest, EmptyExtensionRootPath) {
 
   std::string error;
   scoped_refptr<Extension> extension = Extension::Create(
-      base::FilePath(), Manifest::INTERNAL, *CreateManifest({ruleset}),
-      Extension::FROM_WEBSTORE, &error);
+      base::FilePath(), mojom::ManifestLocation::kInternal,
+      *CreateManifest({ruleset}), Extension::FROM_WEBSTORE, &error);
 
   EXPECT_TRUE(extension);
   EXPECT_TRUE(error.empty()) << error;

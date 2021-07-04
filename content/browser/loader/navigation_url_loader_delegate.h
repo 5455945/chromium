@@ -9,11 +9,10 @@
 
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/optional.h"
 #include "content/common/content_export.h"
-#include "content/common/navigation_params.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/navigation/navigation_policy.h"
 
 namespace net {
@@ -27,12 +26,31 @@ struct URLLoaderCompletionStatus;
 
 namespace content {
 
+class NavigationEarlyHintsManager;
 struct GlobalRequestID;
 struct SubresourceLoaderParams;
 
 // The delegate interface to NavigationURLLoader.
 class CONTENT_EXPORT NavigationURLLoaderDelegate {
  public:
+  // Conveys information related to Early Hints responses.
+  struct CONTENT_EXPORT EarlyHints {
+    EarlyHints();
+    ~EarlyHints();
+
+    EarlyHints(EarlyHints&& other);
+    EarlyHints& operator=(EarlyHints&& other);
+
+    EarlyHints(const EarlyHints& other) = delete;
+    EarlyHints& operator=(const EarlyHints& other) = delete;
+
+    // True when at least one preload Link header was received during a
+    // main frame navigation.
+    bool was_preload_link_header_received = false;
+    // Non-null when at least one preload is actually requested.
+    std::unique_ptr<NavigationEarlyHintsManager> manager;
+  };
+
   // Called when the request is redirected. Call FollowRedirect to continue
   // processing the request.
   //
@@ -68,7 +86,8 @@ class CONTENT_EXPORT NavigationURLLoaderDelegate {
       bool is_download,
       blink::NavigationDownloadPolicy download_policy,
       net::NetworkIsolationKey network_isolation_key,
-      base::Optional<SubresourceLoaderParams> subresource_loader_params) = 0;
+      absl::optional<SubresourceLoaderParams> subresource_loader_params,
+      EarlyHints early_hints) = 0;
 
   // Called if the request fails before receving a response. Specific
   // fields which are used: |status.error_code| holds the error code

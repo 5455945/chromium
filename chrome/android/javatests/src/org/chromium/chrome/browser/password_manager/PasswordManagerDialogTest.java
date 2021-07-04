@@ -16,7 +16,7 @@ import static org.hamcrest.Matchers.not;
 import static org.mockito.Mockito.verify;
 
 import static org.chromium.chrome.browser.password_manager.PasswordManagerDialogProperties.ILLUSTRATION_VISIBLE;
-import static org.chromium.chrome.test.util.ViewUtils.onViewWaiting;
+import static org.chromium.ui.test.util.ViewUtils.onViewWaiting;
 
 import androidx.test.filters.SmallTest;
 
@@ -71,8 +71,7 @@ public class PasswordManagerDialogTest {
                 TestThreadUtils.runOnUiThreadBlockingNoException(activity::getModalDialogManager);
 
         mCoordinator = new PasswordManagerDialogCoordinator(dialogManager,
-                activity.findViewById(android.R.id.content), activity.getBrowserControlsManager(),
-                activity.getControlContainerHeightResource());
+                activity.findViewById(android.R.id.content), activity.getBrowserControlsManager());
         PasswordManagerDialogContents contents = new PasswordManagerDialogContents(TITLE, DETAILS,
                 R.drawable.data_reduction_illustration, OK_BUTTON, CANCEL_BUTTON, mOnClick);
         contents.setDialogType(ModalDialogManager.ModalDialogType.TAB);

@@ -69,6 +69,7 @@ void RecordWebRtcUpgradeDuration(base::TimeDelta duration) {
 std::unique_ptr<NearbyConnectionBroker>
 NearbyConnectionBrokerImpl::Factory::Create(
     const std::vector<uint8_t>& bluetooth_public_address,
+    const std::vector<uint8_t>& eid,
     NearbyEndpointFinder* endpoint_finder,
     mojo::PendingReceiver<mojom::NearbyMessageSender> message_sender_receiver,
     mojo::PendingRemote<mojom::NearbyMessageReceiver> message_receiver_remote,
@@ -85,7 +86,7 @@ NearbyConnectionBrokerImpl::Factory::Create(
   }
 
   return base::WrapUnique(new NearbyConnectionBrokerImpl(
-      bluetooth_public_address, endpoint_finder,
+      bluetooth_public_address, eid, endpoint_finder,
       std::move(message_sender_receiver), std::move(message_receiver_remote),
       nearby_connections, std::move(on_connected_callback),
       std::move(on_disconnected_callback), std::move(timer)));
@@ -99,6 +100,7 @@ void NearbyConnectionBrokerImpl::Factory::SetFactoryForTesting(
 
 NearbyConnectionBrokerImpl::NearbyConnectionBrokerImpl(
     const std::vector<uint8_t>& bluetooth_public_address,
+    const std::vector<uint8_t>& eid,
     NearbyEndpointFinder* endpoint_finder,
     mojo::PendingReceiver<mojom::NearbyMessageSender> message_sender_receiver,
     mojo::PendingRemote<mojom::NearbyMessageReceiver> message_receiver_remote,
@@ -116,7 +118,7 @@ NearbyConnectionBrokerImpl::NearbyConnectionBrokerImpl(
       timer_(std::move(timer)) {
   TransitionToStatus(ConnectionStatus::kDiscoveringEndpoint);
   endpoint_finder_->FindEndpoint(
-      bluetooth_public_address,
+      bluetooth_public_address, eid,
       base::BindOnce(&NearbyConnectionBrokerImpl::OnEndpointDiscovered,
                      base::Unretained(this)),
       base::BindOnce(&NearbyConnectionBrokerImpl::OnDiscoveryFailure,
@@ -206,7 +208,7 @@ void NearbyConnectionBrokerImpl::OnEndpointDiscovered(
                                                   /*ble=*/false,
                                                   /*webrtc=*/true,
                                                   /*wifi_lan=*/false),
-                             /*remote_bluetooth_mac_address=*/base::nullopt),
+                             /*remote_bluetooth_mac_address=*/absl::nullopt),
       connection_lifecycle_listener_receiver_.BindNewPipeAndPassRemote(),
       base::BindOnce(&NearbyConnectionBrokerImpl::OnRequestConnectionResult,
                      weak_ptr_factory_.GetWeakPtr()));
@@ -321,6 +323,14 @@ void NearbyConnectionBrokerImpl::OnConnectionStatusChangeTimeout() {
 }
 
 void NearbyConnectionBrokerImpl::OnMojoDisconnection() {
+  PA_LOG(INFO) << __func__;
+
+  // If there is a mojo disconnect while requesting a connection, we should
+  // still try to disconnect from the endpoint in case the endpoint was almost
+  // about to be connected.
+  if (connection_status_ == ConnectionStatus::kRequestingConnection)
+    need_to_disconnect_endpoint_ = true;
+
   Disconnect(util::NearbyDisconnectionReason::kDisconnectionRequestedByClient);
 }
 
@@ -361,6 +371,11 @@ void NearbyConnectionBrokerImpl::OnConnectionInitiated(
     return;
   }
 
+  // Ignore in the event we are currently disconnecting. Either
+  // OnConnectionRejected or OnDisconnected will be called eventually.
+  if (connection_status_ == ConnectionStatus::kDisconnecting)
+    return;
+
   DCHECK_EQ(ConnectionStatus::kRequestingConnection, connection_status_);
   TransitionToStatus(ConnectionStatus::kAcceptingConnection);
   need_to_disconnect_endpoint_ = true;
@@ -396,6 +411,15 @@ void NearbyConnectionBrokerImpl::OnConnectionRejected(
   if (remote_endpoint_id_ != endpoint_id) {
     PA_LOG(WARNING) << "OnConnectionRejected(): unexpected endpoint ID "
                     << endpoint_id;
+    return;
+  }
+
+  if (connection_status_ == ConnectionStatus::kDisconnecting) {
+    // If this callback is invoked while we are disconnecting, we can consider
+    // the disconnect successful.
+    need_to_disconnect_endpoint_ = false;
+    Disconnect(
+        util::NearbyDisconnectionReason::kDisconnectionRequestedByClient);
     return;
   }
 

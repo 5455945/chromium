@@ -7,7 +7,6 @@
 #include "ash/public/cpp/notifier_metadata.h"
 #include "ash/public/cpp/notifier_settings_observer.h"
 #include "base/i18n/string_compare.h"
-#include "base/stl_util.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/notifications/arc_application_notifier_controller.h"
 #include "chrome/browser/notifications/extension_notifier_controller.h"
@@ -73,8 +72,8 @@ class ForwardingNotificationDelegate
     delegate_->HandleNotificationClosed(notification_id_, by_user);
   }
 
-  void Click(const base::Optional<int>& button_index,
-             const base::Optional<base::string16>& reply) override {
+  void Click(const absl::optional<int>& button_index,
+             const absl::optional<std::u16string>& reply) override {
     if (button_index) {
       delegate_->HandleNotificationButtonClicked(notification_id_,
                                                  *button_index, reply);

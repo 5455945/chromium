@@ -43,7 +43,7 @@ class MouseEventsTest : public InProcessBrowserTest {
   void WaitForTitle(const std::string& title) {
     // Logging added temporarily to track down flakiness cited below.
     LOG(INFO) << "Waiting for title: " << title;
-    const base::string16 expected_title(base::ASCIIToUTF16(title));
+    const std::u16string expected_title(base::ASCIIToUTF16(title));
     content::TitleWatcher title_watcher(GetActiveWebContents(), expected_title);
     ASSERT_EQ(expected_title, title_watcher.WaitAndGetTitle());
   }
@@ -134,7 +134,7 @@ IN_PROC_BROWSER_TEST_F(MouseEventsTest, MouseDownOnBrowserCaption) {
 }
 #endif
 
-#if defined(OS_MAC) || defined(OS_WIN)
+#if defined(OS_MAC) || defined(OS_WIN) || defined(USE_OZONE)
 // Test that a mouseleave is not triggered when showing the context menu.
 // If the test is failed, it means that Blink gets the mouseleave event
 // when showing the context menu and it could make the unexpecting
@@ -143,6 +143,7 @@ IN_PROC_BROWSER_TEST_F(MouseEventsTest, MouseDownOnBrowserCaption) {
 // TODO: Make test pass on OS_WIN and OS_MAC
 // OS_WIN: Flaky. See http://crbug.com/656101.
 // OS_MAC: Missing automation provider support: http://crbug.com/45892.
+// USE_OZONE: Flaky. See http://crbug.com/656101.
 #define MAYBE_ContextMenu DISABLED_ContextMenu
 #else
 #define MAYBE_ContextMenu ContextMenu
@@ -157,10 +158,10 @@ IN_PROC_BROWSER_TEST_F(MouseEventsTest, MAYBE_ContextMenu) {
   menu_observer.WaitForMenuOpenAndClose();
 
   content::WebContents* tab = GetActiveWebContents();
-  tab->GetMainFrame()->ExecuteJavaScriptForTests(base::ASCIIToUTF16("done()"),
+  tab->GetMainFrame()->ExecuteJavaScriptForTests(u"done()",
                                                  base::NullCallback());
-  const base::string16 success_title = base::ASCIIToUTF16("without mouseleave");
-  const base::string16 failure_title = base::ASCIIToUTF16("with mouseleave");
+  const std::u16string success_title = u"without mouseleave";
+  const std::u16string failure_title = u"with mouseleave";
   content::TitleWatcher done_title_watcher(tab, success_title);
   done_title_watcher.AlsoWaitForTitle(failure_title);
   EXPECT_EQ(success_title, done_title_watcher.WaitAndGetTitle());
@@ -188,17 +189,17 @@ IN_PROC_BROWSER_TEST_F(MouseEventsTest, MAYBE_ModalDialog) {
   base::RunLoop dialog_wait;
   js_dialog_manager->SetDialogShownCallbackForTesting(
       dialog_wait.QuitClosure());
-  tab->GetMainFrame()->ExecuteJavaScriptForTests(base::UTF8ToUTF16("alert()"),
+  tab->GetMainFrame()->ExecuteJavaScriptForTests(u"alert()",
                                                  base::NullCallback());
   dialog_wait.Run();
 
   // Cancel the dialog.
   js_dialog_manager->HandleJavaScriptDialog(tab, false, nullptr);
 
-  tab->GetMainFrame()->ExecuteJavaScriptForTests(base::ASCIIToUTF16("done()"),
+  tab->GetMainFrame()->ExecuteJavaScriptForTests(u"done()",
                                                  base::NullCallback());
-  const base::string16 success_title = base::ASCIIToUTF16("without mouseleave");
-  const base::string16 failure_title = base::ASCIIToUTF16("with mouseleave");
+  const std::u16string success_title = u"without mouseleave";
+  const std::u16string failure_title = u"with mouseleave";
   content::TitleWatcher done_title_watcher(tab, success_title);
   done_title_watcher.AlsoWaitForTitle(failure_title);
   EXPECT_EQ(success_title, done_title_watcher.WaitAndGetTitle());

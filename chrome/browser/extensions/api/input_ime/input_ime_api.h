@@ -11,7 +11,7 @@
 
 #include "base/macros.h"
 #include "base/memory/singleton.h"
-#include "base/scoped_observer.h"
+#include "base/scoped_observation.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
@@ -49,8 +49,10 @@ class ImeObserver : public InputMethodEngineBase::Observer {
 
   // InputMethodEngineBase::Observer overrides.
   void OnActivate(const std::string& component_id) override;
-  void OnFocus(const IMEEngineHandlerInterface::InputContext& context) override;
-  void OnBlur(int context_id) override;
+  void OnFocus(const std::string& engine_id,
+               int context_id,
+               const IMEEngineHandlerInterface::InputContext& context) override;
+  void OnBlur(const std::string& engine_id, int context_id) override;
   void OnKeyEvent(
       const std::string& component_id,
       const ui::KeyEvent& event,
@@ -60,7 +62,7 @@ class ImeObserver : public InputMethodEngineBase::Observer {
   void OnCompositionBoundsChanged(
       const std::vector<gfx::Rect>& bounds) override;
   void OnSurroundingTextChanged(const std::string& component_id,
-                                const base::string16& text,
+                                const std::u16string& text,
                                 int cursor_pos,
                                 int anchor_pos,
                                 int offset_pos) override;
@@ -71,7 +73,7 @@ class ImeObserver : public InputMethodEngineBase::Observer {
   virtual void DispatchEventToExtension(
       extensions::events::HistogramValue histogram_value,
       const std::string& event_name,
-      std::unique_ptr<base::ListValue> args) = 0;
+      std::vector<base::Value> args) = 0;
 
   // Returns the type of the current screen.
   virtual std::string GetCurrentScreenType() = 0;
@@ -211,8 +213,8 @@ class InputImeAPI : public BrowserContextKeyedAPI,
   content::BrowserContext* const browser_context_;
 
   // Listen to extension load, unloaded notifications.
-  ScopedObserver<ExtensionRegistry, ExtensionRegistryObserver>
-      extension_registry_observer_{this};
+  base::ScopedObservation<ExtensionRegistry, ExtensionRegistryObserver>
+      extension_registry_observation_{this};
 
   std::unique_ptr<ui::IMEBridgeObserver> observer_;
 };

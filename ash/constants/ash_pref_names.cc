@@ -15,6 +15,10 @@ const char kAssistiveInputFeatureSettings[] =
 const char kAssistPersonalInfoEnabled[] =
     "assistive_input.personal_info_enabled";
 
+// A boolean pref of whether assist predictive writing is enabled.
+const char kAssistPredictiveWritingEnabled[] =
+    "assistive_input.predictive_writing_enabled";
+
 // A boolean pref of whether emoji suggestion is enabled.
 const char kEmojiSuggestionEnabled[] =
     "assistive_input.emoji_suggestion_enabled";
@@ -23,9 +27,14 @@ const char kEmojiSuggestionEnabled[] =
 const char kEmojiSuggestionEnterpriseAllowed[] =
     "assistive_input.emoji_suggestion.enterprise_allowed";
 
+// Pref which stores a list of Embedded Universal Integrated Circuit Card
+// (EUICC) D-Bus paths which have had their installed profiles refreshed from
+// Hermes. Each path is stored as a string.
+const char kESimRefreshedEuiccs[] = "cros_esim.refreshed_euiccs";
+
 // Pref which stores a list of eSIM profiles. Each entry in the list is created
 // by serializing a CellularESimProfile.
-const char kESimProfilesPrefName[] = "cros.network.esim_profiles";
+const char kESimProfiles[] = "cros_esim.esim_profiles";
 
 // A dictionary pref to hold the mute setting for all the currently known
 // audio devices.
@@ -97,11 +106,9 @@ const char kQuirksClientLastServerCheck[] = "quirks_client.last_server_check";
 const char kDeviceWiFiFastTransitionEnabled[] =
     "net.device_wifi_fast_transition_enabled";
 
-// A boolean pref to store if Secondary Google Account additions are allowed on
-// Chrome OS Account Manager. The default value is |true|, i.e. Secondary Google
-// Account additions are allowed by default.
-const char kSecondaryGoogleAccountSigninAllowed[] =
-    "account_manager.secondary_google_account_signin_allowed";
+// A boolean pref that controls whether input noise cancellation is enabled.
+const char kInputNoiseCancellationEnabled[] =
+    "ash.input_noise_cancellation_enabled";
 
 // The following SAML-related prefs are not settings that the domain admin can
 // set, but information that the SAML Identity Provider can send us:

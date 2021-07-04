@@ -24,12 +24,9 @@
 #include "base/memory/ref_counted.h"
 #include "base/metrics/user_metrics_action.h"
 #include "base/observer_list.h"
-#include "base/optional.h"
-#include "base/strings/string16.h"
 #include "base/time/time.h"
 #include "base/types/pass_key.h"
 #include "build/build_config.h"
-#include "cc/mojom/render_frame_metadata.mojom.h"
 #include "content/child/child_thread_impl.h"
 #include "content/common/agent_scheduling_group.mojom.h"
 #include "content/common/content_export.h"
@@ -38,8 +35,6 @@
 #include "content/common/renderer.mojom.h"
 #include "content/common/renderer_host.mojom.h"
 #include "content/public/renderer/render_thread.h"
-#include "content/public/renderer/url_loader_throttle_provider.h"
-#include "content/renderer/compositor/compositor_dependencies.h"
 #include "content/renderer/discardable_memory_utils.h"
 #include "gpu/ipc/client/gpu_channel_host.h"
 #include "ipc/ipc_sync_channel.h"
@@ -53,12 +48,13 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/network_change_notifier.h"
 #include "net/nqe/effective_connection_type.h"
-#include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "services/viz/public/mojom/compositing/compositing_mode_watcher.mojom.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 #include "third_party/blink/public/platform/scheduler/web_rail_mode_observer.h"
 #include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
+#include "third_party/blink/public/platform/url_loader_throttle_provider.h"
 #include "third_party/blink/public/platform/web_connection_type.h"
 #include "third_party/blink/public/web/web_memory_statistics.h"
 #include "ui/gfx/native_widget_types.h"
@@ -79,6 +75,10 @@ namespace cc {
 class TaskGraphRunner;
 }
 
+namespace gfx {
+class RenderingPipeline;
+}
+
 namespace gpu {
 class GpuChannelHost;
 }
@@ -96,7 +96,6 @@ namespace viz {
 class ContextProviderCommandBuffer;
 class Gpu;
 class RasterContextProvider;
-class SyntheticBeginFrameSource;
 }  // namespace viz
 
 namespace content {
@@ -126,8 +125,7 @@ class CONTENT_EXPORT RenderThreadImpl
     : public RenderThread,
       public ChildThreadImpl,
       public mojom::Renderer,
-      public viz::mojom::CompositingModeWatcher,
-      public CompositorDependencies {
+      public viz::mojom::CompositingModeWatcher {
  public:
   static RenderThreadImpl* current();
   static mojom::RenderMessageFilter* current_render_message_filter();
@@ -195,15 +193,10 @@ class CONTENT_EXPORT RenderThreadImpl
       const std::string& name,
       mojo::ScopedInterfaceEndpointHandle handle) override;
 
-  // ChildThread implementation via ChildThreadImpl:
-  scoped_refptr<base::SingleThreadTaskRunner> GetIOTaskRunner() override;
-
-  // CompositorDependencies implementation.
-  bool IsUseZoomForDSFEnabled() override;
-  blink::scheduler::WebThreadScheduler* GetWebMainThreadScheduler() override;
-  cc::TaskGraphRunner* GetTaskGraphRunner() override;
-  std::unique_ptr<cc::UkmRecorderFactory> CreateUkmRecorderFactory() override;
-
+  blink::scheduler::WebThreadScheduler* GetWebMainThreadScheduler();
+  cc::TaskGraphRunner* GetTaskGraphRunner();
+  gfx::RenderingPipeline* GetMainThreadPipeline();
+  gfx::RenderingPipeline* GetCompositorThreadPipeline();
   bool IsLcdTextEnabled();
   bool IsElasticOverscrollEnabled();
   bool IsScrollAnimatorEnabled();
@@ -223,7 +216,7 @@ class CONTENT_EXPORT RenderThreadImpl
   // Whether gpu compositing is being used or is disabled for software
   // compositing. Clients of the compositor should give resources that match
   // the appropriate mode.
-  bool IsGpuCompositingDisabled() { return is_gpu_compositing_disabled_; }
+  bool IsGpuCompositingDisabled() const { return is_gpu_compositing_disabled_; }
 
   // Synchronously establish a channel to the GPU plugin if not previously
   // established or if it has been lost (for example if the GPU plugin crashed).
@@ -256,7 +249,7 @@ class CONTENT_EXPORT RenderThreadImpl
     return cors_exempt_header_list_;
   }
 
-  URLLoaderThrottleProvider* url_loader_throttle_provider() const {
+  blink::URLLoaderThrottleProvider* url_loader_throttle_provider() const {
     return url_loader_throttle_provider_.get();
   }
 
@@ -379,6 +372,8 @@ class CONTENT_EXPORT RenderThreadImpl
   // Sets the current pipeline rendering color space.
   void SetRenderingColorSpace(const gfx::ColorSpace& color_space);
 
+  gfx::ColorSpace GetRenderingColorSpace();
+
   scoped_refptr<base::SingleThreadTaskRunner>
   CreateVideoFrameCompositorTaskRunner();
 
@@ -450,6 +445,7 @@ class CONTENT_EXPORT RenderThreadImpl
       WriteClangProfilingProfileCallback callback) override;
 #endif
   void SetIsCrossOriginIsolated(bool value) override;
+  void SetIsDirectSocketEnabled(bool value) override;
   void OnMemoryPressure(
       base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level);
 
@@ -472,9 +468,6 @@ class CONTENT_EXPORT RenderThreadImpl
   void OnSyncMemoryPressure(
       base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level);
 
-  std::unique_ptr<viz::SyntheticBeginFrameSource>
-  CreateSyntheticBeginFrameSource();
-
   void OnRendererInterfaceReceiver(
       mojo::PendingAssociatedReceiver<mojom::Renderer> receiver);
 
@@ -484,7 +477,8 @@ class CONTENT_EXPORT RenderThreadImpl
   // These objects live solely on the render thread.
   std::unique_ptr<blink::scheduler::WebThreadScheduler> main_thread_scheduler_;
   std::unique_ptr<RendererBlinkPlatformImpl> blink_platform_impl_;
-  std::unique_ptr<URLLoaderThrottleProvider> url_loader_throttle_provider_;
+  std::unique_ptr<blink::URLLoaderThrottleProvider>
+      url_loader_throttle_provider_;
 
   std::vector<std::string> cors_exempt_header_list_;
 
@@ -494,8 +488,8 @@ class CONTENT_EXPORT RenderThreadImpl
   // Used to keep track of the renderer's backgrounded and visibility state.
   // Updated via an IPC from the browser process. If nullopt, the browser
   // process has yet to send an update and the state is unknown.
-  base::Optional<mojom::RenderProcessBackgroundState> background_state_;
-  base::Optional<mojom::RenderProcessVisibleState> visible_state_;
+  absl::optional<mojom::RenderProcessBackgroundState> background_state_;
+  absl::optional<mojom::RenderProcessVisibleState> visible_state_;
 
   blink::WebString user_agent_;
   blink::UserAgentMetadata user_agent_metadata_;
@@ -517,6 +511,9 @@ class CONTENT_EXPORT RenderThreadImpl
 
   // Thread for running multimedia operations (e.g., video decoding).
   std::unique_ptr<base::Thread> media_thread_;
+
+  std::unique_ptr<gfx::RenderingPipeline> main_thread_pipeline_;
+  std::unique_ptr<gfx::RenderingPipeline> compositor_thread_pipeline_;
 
   // Will point to appropriate task runner after initialization,
   // regardless of whether |compositor_thread_| is overriden.

@@ -68,7 +68,7 @@ class CloudSpeechRecognitionClientUnitTest : public testing::Test {
   void SetUp() override;
 
  protected:
-  void OnRecognitionEvent(const std::string& result, const bool is_final);
+  void OnRecognitionEvent(media::SpeechRecognitionResult result);
 
   void InjectDummyAudio();
 
@@ -164,10 +164,9 @@ void CloudSpeechRecognitionClientUnitTest::SetUp() {
 }
 
 void CloudSpeechRecognitionClientUnitTest::OnRecognitionEvent(
-    const std::string& result,
-    const bool is_final) {
-  results_.push(result);
-  is_final_ = is_final;
+    media::SpeechRecognitionResult result) {
+  results_.push(result.transcription);
+  is_final_ = result.is_final;
 }
 
 void CloudSpeechRecognitionClientUnitTest::InjectDummyAudio() {
@@ -321,7 +320,6 @@ void CloudSpeechRecognitionClientUnitTest::ProvideMockStringResponseDownstream(
     }
 
     FAIL() << "Mojo write failed unexpectedly with result:" << result;
-    return;
   }
 
   // Flush the mojo pipe.

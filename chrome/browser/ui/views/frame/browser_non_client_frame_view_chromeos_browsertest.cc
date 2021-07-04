@@ -4,7 +4,7 @@
 
 #include <string>
 
-#include "ash/public/cpp/ash_switches.h"
+#include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/shelf_test_api.h"
 #include "ash/public/cpp/split_view_test_api.h"
 #include "ash/public/cpp/test/shell_test_api.h"
@@ -36,12 +36,12 @@
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_test.h"
 #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
 #include "chrome/browser/ui/passwords/passwords_client_ui_delegate.h"
 #include "chrome/browser/ui/settings_window_manager_chromeos.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/toolbar/browser_actions_bar_browsertest.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_bar_view.h"
 #include "chrome/browser/ui/views/frame/browser_non_client_frame_view_chromeos.h"
@@ -49,6 +49,7 @@
 #include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
 #include "chrome/browser/ui/views/frame/immersive_mode_controller_chromeos.h"
 #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
+#include "chrome/browser/ui/views/frame/webui_tab_strip_container_view.h"
 #include "chrome/browser/ui/views/fullscreen_control/fullscreen_control_host.h"
 #include "chrome/browser/ui/views/location_bar/content_setting_image_view.h"
 #include "chrome/browser/ui/views/location_bar/custom_tab_bar_view.h"
@@ -58,7 +59,6 @@
 #include "chrome/browser/ui/views/tabs/tab.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "chrome/browser/ui/views/toolbar/app_menu.h"
-#include "chrome/browser/ui/views/toolbar/extension_toolbar_menu_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_frame_toolbar_view.h"
 #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_menu_button.h"
@@ -66,7 +66,8 @@
 #include "chrome/browser/ui/web_applications/system_web_app_ui_utils.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/web_applications/components/web_application_info.h"
-#include "chrome/browser/web_applications/system_web_app_manager.h"
+#include "chrome/browser/web_applications/system_web_apps/system_web_app_manager.h"
+#include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -88,6 +89,7 @@
 #include "content/public/test/test_navigation_observer.h"
 #include "net/dns/mock_host_resolver.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
+#include "third_party/blink/public/mojom/frame/fullscreen.mojom.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/test/env_test_helper.h"
 #include "ui/base/class_property.h"
@@ -135,11 +137,13 @@ void ExitFullscreenModeForTabAndWait(Browser* browser,
 }
 
 void StartOverview() {
-  ash::Shell::Get()->overview_controller()->StartOverview();
+  ash::Shell::Get()->overview_controller()->StartOverview(
+      ash::OverviewStartAction::kTests);
 }
 
 void EndOverview() {
-  ash::Shell::Get()->overview_controller()->EndOverview();
+  ash::Shell::Get()->overview_controller()->EndOverview(
+      ash::OverviewEndAction::kTests);
 }
 
 bool IsShelfVisible() {
@@ -162,6 +166,17 @@ class TopChromeMdParamTest : public BaseTest,
  public:
   TopChromeMdParamTest() : touch_ui_scoper_(GetParam()) {}
   ~TopChromeMdParamTest() override = default;
+
+ private:
+  ui::TouchUiController::TouchUiScoperForTesting touch_ui_scoper_;
+};
+
+// Template used as a base class for touch-optimized UI test fixtures.
+template <class BaseTest>
+class TopChromeTouchTest : public BaseTest {
+ public:
+  TopChromeTouchTest() : touch_ui_scoper_(true) {}
+  ~TopChromeTouchTest() override = default;
 
  private:
   ui::TouchUiController::TouchUiScoperForTesting touch_ui_scoper_;
@@ -270,10 +285,14 @@ using views::Widget;
 
 using BrowserNonClientFrameViewChromeOSTest =
     TopChromeMdParamTest<InProcessBrowserTest>;
+using BrowserNonClientFrameViewChromeOSTouchTest =
+    TopChromeTouchTest<InProcessBrowserTest>;
 using BrowserNonClientFrameViewChromeOSTestNoWebUiTabStrip =
     WebUiTabStripOverrideTest<false, BrowserNonClientFrameViewChromeOSTest>;
 using BrowserNonClientFrameViewChromeOSTestWithWebUiTabStrip =
     WebUiTabStripOverrideTest<true, BrowserNonClientFrameViewChromeOSTest>;
+using BrowserNonClientFrameViewChromeOSTouchTestWithWebUiTabStrip =
+    WebUiTabStripOverrideTest<true, BrowserNonClientFrameViewChromeOSTouchTest>;
 
 // This test does not make sense for the webUI tabstrip, since the window layout
 // is different in that case.
@@ -299,6 +318,50 @@ IN_PROC_BROWSER_TEST_P(BrowserNonClientFrameViewChromeOSTestNoWebUiTabStrip,
   widget->Maximize();
   int expected_value = HTCLIENT;
   EXPECT_EQ(expected_value, frame_view->NonClientHitTest(top_edge));
+}
+
+IN_PROC_BROWSER_TEST_F(
+    BrowserNonClientFrameViewChromeOSTouchTestWithWebUiTabStrip,
+    TabletSplitViewNonClientHitTest) {
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+  BrowserNonClientFrameViewChromeOS* frame_view = GetFrameViewAsh(browser_view);
+  EXPECT_EQ(0, frame_view->GetBoundsForClientView().y());
+
+  Widget* widget = browser_view->GetWidget();
+  ASSERT_NO_FATAL_FAILURE(
+      ash::ShellTestApi().SetTabletModeEnabledForTest(true));
+  ash::SplitViewTestApi().SnapWindow(widget->GetNativeWindow(),
+                                     ash::SplitViewTestApi::SnapPosition::LEFT);
+
+  // Touch on the top of the window is interpreted as client hit.
+  gfx::Point top_point(widget->GetWindowBoundsInScreen().width() / 2, 0);
+  EXPECT_EQ(HTCLIENT, frame_view->NonClientHitTest(top_point));
+}
+
+IN_PROC_BROWSER_TEST_F(
+    BrowserNonClientFrameViewChromeOSTouchTestWithWebUiTabStrip,
+    TabletSplitViewSwipeDownFromEdgeOpensWebUiTabStrip) {
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+  BrowserNonClientFrameViewChromeOS* frame_view = GetFrameViewAsh(browser_view);
+  EXPECT_EQ(0, frame_view->GetBoundsForClientView().y());
+
+  Widget* widget = browser_view->GetWidget();
+  ASSERT_NO_FATAL_FAILURE(
+      ash::ShellTestApi().SetTabletModeEnabledForTest(true));
+  ash::SplitViewTestApi().SnapWindow(widget->GetNativeWindow(),
+                                     ash::SplitViewTestApi::SnapPosition::LEFT);
+
+  // A point above the window.
+  gfx::Point edge_point(widget->GetWindowBoundsInScreen().width() / 2, -1);
+
+  ASSERT_FALSE(browser_view->webui_tab_strip()->GetVisible());
+  aura::Window* window = widget->GetNativeWindow();
+  ui::test::EventGenerator event_generator(window->GetRootWindow());
+  event_generator.SetTouchRadius(10, 5);
+  event_generator.PressTouch(edge_point);
+  event_generator.MoveTouchBy(0, 100);
+  event_generator.ReleaseTouch();
+  ASSERT_TRUE(browser_view->webui_tab_strip()->GetVisible());
 }
 
 // Test that the frame view does not do any painting in non-immersive
@@ -823,7 +886,7 @@ IN_PROC_BROWSER_TEST_P(ImmersiveModeBrowserViewTest, TabAndBrowserFullscreen) {
 namespace {
 
 class WebAppNonClientFrameViewAshTest
-    : public TopChromeMdParamTest<BrowserActionsBarBrowserTest> {
+    : public TopChromeMdParamTest<InProcessBrowserTest> {
  public:
   WebAppNonClientFrameViewAshTest() = default;
 
@@ -840,29 +903,27 @@ class WebAppNonClientFrameViewAshTest
   chromeos::DefaultFrameHeader* frame_header_ = nullptr;
   WebAppFrameToolbarView* web_app_frame_toolbar_ = nullptr;
   const std::vector<ContentSettingImageView*>* content_setting_views_ = nullptr;
-  BrowserActionsContainer* browser_actions_container_ = nullptr;
   AppMenuButton* web_app_menu_button_ = nullptr;
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    TopChromeMdParamTest<BrowserActionsBarBrowserTest>::SetUpCommandLine(
-        command_line);
+    TopChromeMdParamTest<InProcessBrowserTest>::SetUpCommandLine(command_line);
     cert_verifier_.SetUpCommandLine(command_line);
   }
 
   void SetUpInProcessBrowserTestFixture() override {
     TopChromeMdParamTest<
-        BrowserActionsBarBrowserTest>::SetUpInProcessBrowserTestFixture();
+        InProcessBrowserTest>::SetUpInProcessBrowserTestFixture();
     cert_verifier_.SetUpInProcessBrowserTestFixture();
   }
 
   void TearDownInProcessBrowserTestFixture() override {
     cert_verifier_.TearDownInProcessBrowserTestFixture();
     TopChromeMdParamTest<
-        BrowserActionsBarBrowserTest>::TearDownInProcessBrowserTestFixture();
+        InProcessBrowserTest>::TearDownInProcessBrowserTestFixture();
   }
 
   void SetUpOnMainThread() override {
-    TopChromeMdParamTest<BrowserActionsBarBrowserTest>::SetUpOnMainThread();
+    TopChromeMdParamTest<InProcessBrowserTest>::SetUpOnMainThread();
 
     WebAppToolbarButtonContainer::DisableAnimationForTesting();
 
@@ -883,8 +944,8 @@ class WebAppNonClientFrameViewAshTest
     web_app_info->display_mode = blink::mojom::DisplayMode::kStandalone;
     web_app_info->theme_color = GetThemeColor();
 
-    web_app::AppId app_id =
-        web_app::InstallWebApp(browser()->profile(), std::move(web_app_info));
+    web_app::AppId app_id = web_app::test::InstallWebApp(
+        browser()->profile(), std::move(web_app_info));
     content::TestNavigationObserver navigation_observer(GetAppURL());
     navigation_observer.StartWatchingNewWebContents();
     app_browser_ = web_app::LaunchWebAppBrowser(browser()->profile(), app_id);
@@ -902,8 +963,6 @@ class WebAppNonClientFrameViewAshTest
 
     content_setting_views_ =
         &web_app_frame_toolbar_->GetContentSettingViewsForTesting();
-    browser_actions_container_ =
-        web_app_frame_toolbar_->GetBrowserActionsContainer();
     web_app_menu_button_ = web_app_frame_toolbar_->GetAppMenuButton();
   }
 
@@ -1048,7 +1107,7 @@ IN_PROC_BROWSER_TEST_P(WebAppNonClientFrameViewAshTest,
   EXPECT_FALSE(manage_passwords_icon->GetVisible());
 
   password_manager::PasswordForm password_form;
-  password_form.username_value = base::ASCIIToUTF16("test");
+  password_form.username_value = u"test";
   password_form.url = GetAppURL().GetOrigin();
   PasswordsClientUIDelegateFromWebContents(web_contents)
       ->OnPasswordAutofilled({&password_form},
@@ -1223,42 +1282,17 @@ IN_PROC_BROWSER_TEST_P(WebAppNonClientFrameViewAshTest, ContentSettingIcons) {
       static_cast<int>(ContentSettingImageModel::ImageType::GEOLOCATION), 1);
 }
 
-// Tests that a web app's browser action icons can be interacted with.
-IN_PROC_BROWSER_TEST_P(WebAppNonClientFrameViewAshTest, BrowserActions) {
-  SetUpWebApp();
-  // Even though 2 are visible in the browser, no extension actions should show.
-  ToolbarActionsBar* toolbar_actions_bar =
-      browser_actions_container_->toolbar_actions_bar();
-  LoadExtensions();
-  toolbar_model()->SetVisibleIconCount(2);
-  EXPECT_EQ(0u, browser_actions_container_->GetVisibleBrowserActions());
-
-  // Show the menu.
-  SimulateClickOnView(web_app_menu_button_);
-
-  // All extension actions should always be showing in the menu.
-  EXPECT_EQ(3u, GetAppMenu()
-                    ->extension_toolbar_for_testing()
-                    ->container_for_testing()
-                    ->GetVisibleBrowserActions());
-
-  // Popping out an extension makes its action show in the bar.
-  toolbar_actions_bar->PopOutAction(toolbar_actions_bar->GetActions()[2], false,
-                                    base::DoNothing());
-  EXPECT_EQ(1u, browser_actions_container_->GetVisibleBrowserActions());
-}
-
 // Regression test for https://crbug.com/839955
 IN_PROC_BROWSER_TEST_P(WebAppNonClientFrameViewAshTest,
                        ActiveStateOfButtonMatchesWidget) {
   SetUpWebApp();
   chromeos::FrameCaptionButtonContainerView::TestApi test(
       GetFrameViewAsh(browser_view_)->caption_button_container_);
-  EXPECT_TRUE(test.size_button()->paint_as_active());
+  EXPECT_TRUE(test.size_button()->GetPaintAsActive());
   EXPECT_TRUE(GetPaintingAsActive());
 
   browser_view_->GetWidget()->Deactivate();
-  EXPECT_FALSE(test.size_button()->paint_as_active());
+  EXPECT_FALSE(test.size_button()->GetPaintAsActive());
   EXPECT_FALSE(GetPaintingAsActive());
 }
 

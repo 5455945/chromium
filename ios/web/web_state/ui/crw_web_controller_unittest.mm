@@ -10,8 +10,7 @@
 #include <utility>
 
 #include "base/mac/foundation_util.h"
-#include "base/scoped_observer.h"
-#include "base/strings/stringprintf.h"
+#include "base/scoped_observation.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #import "base/test/ios/wait_util.h"
@@ -72,6 +71,7 @@
 
 using base::test::ios::WaitUntilConditionOrTimeout;
 using base::test::ios::kWaitForPageLoadTimeout;
+using base::test::ios::kWaitForJSCompletionTimeout;
 
 // Subclass of WKWebView to check that the observers are removed when the web
 // state is destroyed.
@@ -286,31 +286,6 @@ TEST_F(CRWWebControllerTest, SetAllowsBackForwardNavigationGestures) {
   EXPECT_TRUE(web_controller().allowsBackForwardNavigationGestures);
   web_controller().allowsBackForwardNavigationGestures = NO;
   EXPECT_FALSE(web_controller().allowsBackForwardNavigationGestures);
-}
-
-// Tests that the navigation state is reset to FINISHED when a back/forward
-// navigation occurs during a pending navigation.
-TEST_F(CRWWebControllerTest, BackForwardWithPendingNavigation) {
-  ASSERT_FALSE([web_controller() lastPendingItemForNewNavigation]);
-  ASSERT_FALSE(web_controller().webStateImpl->GetPendingItem());
-
-  // Commit a navigation so that there is a back NavigationItem.
-  SetWebViewURL(@"about:blank");
-  [navigation_delegate_ webView:mock_web_view_
-      didStartProvisionalNavigation:nil];
-  [navigation_delegate_ webView:mock_web_view_ didCommitNavigation:nil];
-  [navigation_delegate_ webView:mock_web_view_ didFinishNavigation:nil];
-
-  // Create pending item by simulating a renderer-initiated navigation.
-  [navigation_delegate_ webView:mock_web_view_
-      didStartProvisionalNavigation:nil];
-  ASSERT_EQ(web::WKNavigationState::REQUESTED,
-            web_controller().navigationState);
-
-  [web_controller() didFinishGoToIndexSameDocumentNavigationWithType:
-                        web::NavigationInitiationType::BROWSER_INITIATED
-                                                      hasUserGesture:YES];
-  EXPECT_EQ(web::WKNavigationState::FINISHED, web_controller().navigationState);
 }
 
 // Tests that a web view is created after calling -[ensureWebViewCreated] and
@@ -545,7 +520,13 @@ TEST_F(CRWWebControllerJSExecutionTest, WindowIdMissmatch) {
 // delegate method.
 class CRWWebControllerResponseTest : public CRWWebControllerTest {
  protected:
-  CRWWebControllerResponseTest() : download_delegate_(download_controller()) {}
+  CRWWebControllerResponseTest() {}
+
+  void SetUp() override {
+    CRWWebControllerTest::SetUp();
+    download_delegate_ =
+        std::make_unique<FakeDownloadControllerDelegate>(download_controller());
+  }
 
   // Calls webView:decidePolicyForNavigationResponse:decisionHandler: callback
   // and waits for decision handler call. Returns false if decision handler call
@@ -584,7 +565,7 @@ class CRWWebControllerResponseTest : public CRWWebControllerTest {
     return DownloadController::FromBrowserState(GetBrowserState());
   }
 
-  FakeDownloadControllerDelegate download_delegate_;
+  std::unique_ptr<FakeDownloadControllerDelegate> download_delegate_;
 };
 
 // Tests that webView:decidePolicyForNavigationResponse:decisionHandler: allows
@@ -602,7 +583,7 @@ TEST_F(CRWWebControllerResponseTest, AllowRendererInitiatedResponse) {
   EXPECT_EQ(WKNavigationResponsePolicyAllow, policy);
 
   // Verify that download task was not created for html response.
-  ASSERT_TRUE(download_delegate_.alive_download_tasks().empty());
+  ASSERT_TRUE(download_delegate_->alive_download_tasks().empty());
 }
 
 // Tests that webView:decidePolicyForNavigationResponse:decisionHandler: allows
@@ -622,7 +603,7 @@ TEST_F(CRWWebControllerResponseTest,
   EXPECT_EQ(WKNavigationResponsePolicyAllow, policy);
 
   // Verify that download task was not created for html response.
-  ASSERT_TRUE(download_delegate_.alive_download_tasks().empty());
+  ASSERT_TRUE(download_delegate_->alive_download_tasks().empty());
 }
 
 // Tests that webView:decidePolicyForNavigationResponse:decisionHandler: blocks
@@ -643,9 +624,9 @@ TEST_F(CRWWebControllerResponseTest,
   EXPECT_EQ(WKNavigationResponsePolicyCancel, policy);
 
   // Verify that download task was created (see crbug.com/949114).
-  ASSERT_EQ(1U, download_delegate_.alive_download_tasks().size());
+  ASSERT_EQ(1U, download_delegate_->alive_download_tasks().size());
   DownloadTask* task =
-      download_delegate_.alive_download_tasks()[0].second.get();
+      download_delegate_->alive_download_tasks()[0].second.get();
   ASSERT_TRUE(task);
   EXPECT_TRUE(task->GetIndentifier());
   EXPECT_EQ(kTestDataURL, task->GetOriginalUrl());
@@ -675,7 +656,7 @@ TEST_F(CRWWebControllerResponseTest,
   EXPECT_EQ(WKNavigationResponsePolicyAllow, policy);
 
   // Verify that download task was not created for html response.
-  ASSERT_TRUE(download_delegate_.alive_download_tasks().empty());
+  ASSERT_TRUE(download_delegate_->alive_download_tasks().empty());
 }
 
 // Tests that webView:decidePolicyForNavigationResponse:decisionHandler:
@@ -701,9 +682,9 @@ TEST_F(CRWWebControllerResponseTest, DownloadForPostRequest) {
   EXPECT_EQ(WKNavigationResponsePolicyCancel, policy);
 
   // Verify that download task was created with POST method (crbug.com/.
-  ASSERT_EQ(1U, download_delegate_.alive_download_tasks().size());
+  ASSERT_EQ(1U, download_delegate_->alive_download_tasks().size());
   DownloadTask* task =
-      download_delegate_.alive_download_tasks()[0].second.get();
+      download_delegate_->alive_download_tasks()[0].second.get();
   ASSERT_TRUE(task);
   EXPECT_TRUE(task->GetIndentifier());
   EXPECT_NSEQ(@"POST", task->GetHttpMethod());
@@ -725,9 +706,9 @@ TEST_F(CRWWebControllerResponseTest, DownloadWithNSURLResponse) {
   EXPECT_EQ(WKNavigationResponsePolicyCancel, policy);
 
   // Verify that download task was created.
-  ASSERT_EQ(1U, download_delegate_.alive_download_tasks().size());
+  ASSERT_EQ(1U, download_delegate_->alive_download_tasks().size());
   DownloadTask* task =
-      download_delegate_.alive_download_tasks()[0].second.get();
+      download_delegate_->alive_download_tasks()[0].second.get();
   ASSERT_TRUE(task);
   EXPECT_TRUE(task->GetIndentifier());
   EXPECT_EQ(kTestURLString, task->GetOriginalUrl());
@@ -754,9 +735,9 @@ TEST_F(CRWWebControllerResponseTest, DownloadWithNSHTTPURLResponse) {
   EXPECT_EQ(WKNavigationResponsePolicyCancel, policy);
 
   // Verify that download task was created.
-  ASSERT_EQ(1U, download_delegate_.alive_download_tasks().size());
+  ASSERT_EQ(1U, download_delegate_->alive_download_tasks().size());
   DownloadTask* task =
-      download_delegate_.alive_download_tasks()[0].second.get();
+      download_delegate_->alive_download_tasks()[0].second.get();
   ASSERT_TRUE(task);
   EXPECT_TRUE(task->GetIndentifier());
   EXPECT_EQ(kTestURLString, task->GetOriginalUrl());
@@ -783,7 +764,7 @@ TEST_F(CRWWebControllerResponseTest, DownloadDiscardsPendingUrl) {
   EXPECT_EQ(WKNavigationResponsePolicyCancel, policy);
 
   // Verify that download task was created and pending URL discarded.
-  ASSERT_EQ(1U, download_delegate_.alive_download_tasks().size());
+  ASSERT_EQ(1U, download_delegate_->alive_download_tasks().size());
   EXPECT_EQ("", web_state()->GetVisibleURL());
 }
 
@@ -805,9 +786,9 @@ TEST_F(CRWWebControllerResponseTest, IFrameDownloadWithNSHTTPURLResponse) {
   EXPECT_EQ(WKNavigationResponsePolicyCancel, policy);
 
   // Verify that download task was created.
-  ASSERT_EQ(1U, download_delegate_.alive_download_tasks().size());
+  ASSERT_EQ(1U, download_delegate_->alive_download_tasks().size());
   DownloadTask* task =
-      download_delegate_.alive_download_tasks()[0].second.get();
+      download_delegate_->alive_download_tasks()[0].second.get();
   ASSERT_TRUE(task);
   EXPECT_TRUE(task->GetIndentifier());
   EXPECT_EQ(kTestURLString, task->GetOriginalUrl());
@@ -877,10 +858,13 @@ class CRWWebControllerPolicyDeciderTest : public CRWWebControllerTest {
     return policy_match;
   }
 
-  // Return an owned BrowserState in order to set off the record state.
-  BrowserState* GetBrowserState() override { return &browser_state_; }
+  std::unique_ptr<BrowserState> CreateBrowserState() override {
+    return std::make_unique<FakeBrowserState>();
+  }
 
-  FakeBrowserState browser_state_;
+  FakeBrowserState* GetFakeBrowserState() {
+    return static_cast<FakeBrowserState*>(GetBrowserState());
+  }
 };
 
 // Tests that App specific URLs in iframes are allowed if the main frame is App
@@ -900,7 +884,7 @@ TEST_F(CRWWebControllerPolicyDeciderTest,
 // Tests that URL is allowed in OffTheRecord mode when the
 // |kBlockUniversalLinksInOffTheRecordMode| feature is disabled.
 TEST_F(CRWWebControllerPolicyDeciderTest, AllowOffTheRecordNavigation) {
-  browser_state_.SetOffTheRecord(true);
+  GetFakeBrowserState()->SetOffTheRecord(true);
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndDisableFeature(
       web::features::kBlockUniversalLinksInOffTheRecordMode);
@@ -917,7 +901,7 @@ TEST_F(CRWWebControllerPolicyDeciderTest, AllowOffTheRecordNavigation) {
 // and the BLOCK_UNIVERSAL_LINKS_IN_OFF_THE_RECORD_MODE buildflag is set.
 TEST_F(CRWWebControllerPolicyDeciderTest,
        AllowOffTheRecordNavigationBlockUniversalLinks) {
-  browser_state_.SetOffTheRecord(true);
+  GetFakeBrowserState()->SetOffTheRecord(true);
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(
       web::features::kBlockUniversalLinksInOffTheRecordMode);
@@ -997,16 +981,15 @@ TEST_F(CRWWebControllerPolicyDeciderTest, ClosedWebStateInShouldAllowRequest) {
     ~TestWebStatePolicyDecider() override = default;
 
     // WebStatePolicyDecider overrides
-    PolicyDecision ShouldAllowRequest(
-        NSURLRequest* request,
-        const RequestInfo& request_info) override {
+    void ShouldAllowRequest(NSURLRequest* request,
+                            const RequestInfo& request_info,
+                            PolicyDecisionCallback callback) override {
       test_fixture->DestroyWebState();
-      return PolicyDecision::Allow();
+      std::move(callback).Run(PolicyDecision::Allow());
     }
-    void ShouldAllowResponse(
-        NSURLResponse* response,
-        bool for_main_frame,
-        base::OnceCallback<void(PolicyDecision)> callback) override {
+    void ShouldAllowResponse(NSURLResponse* response,
+                             bool for_main_frame,
+                             PolicyDecisionCallback callback) override {
       std::move(callback).Run(PolicyDecision::Allow());
     }
     void WebStateDestroyed() override {}
@@ -1172,14 +1155,18 @@ TEST_F(CRWWebControllerTitleTest, TitleChange) {
   };
 
   TitleObserver observer;
-  ScopedObserver<WebState, WebStateObserver> scoped_observer(&observer);
-  scoped_observer.Add(web_state());
+  base::ScopedObservation<WebState, WebStateObserver> scoped_observer(
+      &observer);
+  scoped_observer.Observe(web_state());
   ASSERT_EQ(0, observer.title_change_count());
 
   // Expect TitleWasSet callback after the page is loaded and due to WKWebView
-  // title change KVO.
+  // title change KVO. Title updates happen asynchronously, so wait until the
+  // title is updated.
   LoadHtml(@"<title>Title1</title>");
-  EXPECT_EQ("Title1", base::UTF16ToUTF8(web_state()->GetTitle()));
+  EXPECT_TRUE(WaitUntilConditionOrTimeout(kWaitForJSCompletionTimeout, ^{
+    return web_state()->GetTitle() == u"Title1";
+  }));
   EXPECT_EQ(2, observer.title_change_count());
 
   // Expect at least one more TitleWasSet callback after changing title via
@@ -1188,16 +1175,20 @@ TEST_F(CRWWebControllerTitleTest, TitleChange) {
   // TODO(crbug.com/696104): There should be only 2 calls of TitleWasSet.
   // Fix expecteation when WKWebView stops sending extra KVO calls.
   ExecuteJavaScript(@"window.document.title = 'Title2';");
-  EXPECT_EQ("Title2", base::UTF16ToUTF8(web_state()->GetTitle()));
+  EXPECT_TRUE(WaitUntilConditionOrTimeout(kWaitForJSCompletionTimeout, ^{
+    return web_state()->GetTitle() == u"Title2";
+  }));
   EXPECT_GE(observer.title_change_count(), 3);
 }
 
 // Tests that fragment change navigations use title from the previous page.
 TEST_F(CRWWebControllerTitleTest, FragmentChangeNavigationsUsePreviousTitle) {
   LoadHtml(@"<title>Title1</title>");
-  ASSERT_EQ("Title1", base::UTF16ToUTF8(web_state()->GetTitle()));
+  ASSERT_TRUE(WaitUntilConditionOrTimeout(kWaitForJSCompletionTimeout, ^{
+    return web_state()->GetTitle() == u"Title1";
+  }));
   ExecuteJavaScript(@"window.location.hash = '#1'");
-  EXPECT_EQ("Title1", base::UTF16ToUTF8(web_state()->GetTitle()));
+  EXPECT_EQ(u"Title1", web_state()->GetTitle());
 }
 
 // Test fixture for JavaScript execution.
@@ -1249,7 +1240,9 @@ TEST_F(ScriptExecutionTest, UserScriptOnAppSpecificPage) {
       [web_controller() webStateImpl]->GetNavigationManagerImpl();
   nav_manager.AddPendingItem(GURL(kTestAppSpecificURL), Referrer(),
                              ui::PAGE_TRANSITION_TYPED,
-                             NavigationInitiationType::BROWSER_INITIATED);
+                             NavigationInitiationType::BROWSER_INITIATED,
+                             /*is_post_navigation=*/false,
+                             /*is_using_https_as_default_scheme=*/false);
   nav_manager.CommitPendingItem();
 
   NSError* error = nil;
@@ -1320,7 +1313,7 @@ class CRWWebControllerWebViewTest : public WebTestWithWebController {
  protected:
   void SetUp() override {
     WebTestWithWebController::SetUp();
-    FakeBrowserState browser_state;
+
     web_view_ = [[CRWFakeWKWebViewObserverCount alloc] init];
     CRWFakeWebViewContentView* webViewContentView =
         [[CRWFakeWebViewContentView alloc]

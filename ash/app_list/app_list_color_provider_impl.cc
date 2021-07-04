@@ -4,7 +4,7 @@
 
 #include "ash/app_list/app_list_color_provider_impl.h"
 
-#include "ash/public/cpp/ash_features.h"
+#include "ash/constants/ash_features.h"
 #include "ash/shell.h"
 #include "ash/style/ash_color_provider.h"
 #include "ash/style/default_colors.h"
@@ -172,12 +172,6 @@ SkColor AppListColorProviderImpl::GetFocusRingColor() const {
   return DeprecatedGetControlsLayerColor(
       AshColorProvider::ControlsLayerType::kFocusRingColor,
       gfx::kGoogleBlue600);
-}
-
-SkColor AppListColorProviderImpl::GetPrimaryIconColor(
-    SkColor default_color) const {
-  return DeprecatedGetContentLayerColor(
-      AshColorProvider::ContentLayerType::kIconColorPrimary, default_color);
 }
 
 float AppListColorProviderImpl::GetFolderBackgrounBlurSigma() const {

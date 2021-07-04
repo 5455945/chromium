@@ -5,11 +5,9 @@
 #ifndef ASH_APP_LIST_VIEWS_APP_LIST_MAIN_VIEW_H_
 #define ASH_APP_LIST_VIEWS_APP_LIST_MAIN_VIEW_H_
 
-#include <string>
-
-#include "ash/app_list/app_list_export.h"
 #include "ash/app_list/model/app_list_model_observer.h"
 #include "ash/app_list/model/search/search_model.h"
+#include "ash/ash_export.h"
 #include "ash/search_box/search_box_view_delegate.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
@@ -30,9 +28,9 @@ class SearchBoxViewBase;
 
 // AppListMainView contains the normal view of the app list, which is shown
 // when the user is signed in.
-class APP_LIST_EXPORT AppListMainView : public views::View,
-                                        public AppListModelObserver,
-                                        public SearchBoxViewDelegate {
+class ASH_EXPORT AppListMainView : public views::View,
+                                   public AppListModelObserver,
+                                   public SearchBoxViewDelegate {
  public:
   AppListMainView(AppListViewDelegate* delegate, AppListView* app_list_view);
   ~AppListMainView() override;
@@ -71,9 +69,6 @@ class APP_LIST_EXPORT AppListMainView : public views::View,
   // changes, necessitating a cancel of the drag operation.
   void CancelDragInActiveFolder();
 
-  // Called when the app represented by |result| is installed.
-  void OnResultInstalled(SearchResult* result);
-
   // AppListModelObserver overrides:
   void OnAppListStateChanged(AppListState new_state,
                              AppListState old_state) override;
@@ -89,8 +84,11 @@ class APP_LIST_EXPORT AppListMainView : public views::View,
   void QueryChanged(SearchBoxViewBase* sender) override;
   void AssistantButtonPressed() override;
   void BackButtonPressed() override;
+  void CloseButtonPressed() override;
   void ActiveChanged(SearchBoxViewBase* sender) override;
   void SearchBoxFocusChanged(SearchBoxViewBase* sender) override;
+  void OnSearchBoxKeyEvent(ui::KeyEvent* event) override;
+  bool CanSelectSearchResults() override;
 
   AppListViewDelegate* delegate_;  // Owned by parent view (AppListView).
   AppListModel* model_;        // Unowned; ownership is handled by |delegate_|.

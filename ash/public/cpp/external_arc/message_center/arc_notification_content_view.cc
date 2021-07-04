@@ -4,10 +4,10 @@
 
 #include "ash/public/cpp/external_arc/message_center/arc_notification_content_view.h"
 
-#include "ash/public/cpp/ash_features.h"
+#include <memory>
+
 #include "ash/public/cpp/external_arc/message_center/arc_notification_surface.h"
 #include "ash/public/cpp/external_arc/message_center/arc_notification_view.h"
-// TODO(https://crbug.com/768439): Remove nogncheck when moved to ash.
 #include "base/auto_reset.h"
 #include "base/metrics/histogram_macros.h"
 #include "components/arc/metrics/arc_metrics_constants.h"
@@ -16,6 +16,8 @@
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_observer.h"
 #include "ui/compositor/layer_tree_owner.h"
 #include "ui/events/event_handler.h"
@@ -26,8 +28,8 @@
 #include "ui/message_center/public/cpp/message_center_constants.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/strings/grit/ui_strings.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/focus/focus_manager.h"
-#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/widget/root_view.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
@@ -154,6 +156,7 @@ class ArcNotificationContentView::EventForwarder : public ui::EventHandler {
       // separately in ArcNotificationItemImpl.
       if (event->type() == ui::ET_MOUSE_RELEASED ||
           event->type() == ui::ET_GESTURE_TAP) {
+        // TODO(b/185943161): Record this in arc::ArcMetricsService.
         UMA_HISTOGRAM_ENUMERATION(
             "Arc.UserInteraction",
             arc::UserInteractionType::NOTIFICATION_INTERACTION);
@@ -351,8 +354,8 @@ void ArcNotificationContentView::UpdateControlButtonsVisibility() {
     floating_control_buttons_widget_->Hide();
 }
 
-void ArcNotificationContentView::UpdateCornerRadius(int top_radius,
-                                                    int bottom_radius) {
+void ArcNotificationContentView::UpdateCornerRadius(float top_radius,
+                                                    float bottom_radius) {
   bool force_update =
       top_radius_ != top_radius || bottom_radius_ != bottom_radius;
 
@@ -393,7 +396,7 @@ void ArcNotificationContentView::MaybeCreateFloatingControlButtons() {
   params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
   params.parent = surface_->GetWindow();
 
-  floating_control_buttons_widget_.reset(new views::Widget);
+  floating_control_buttons_widget_ = std::make_unique<views::Widget>();
   floating_control_buttons_widget_->Init(std::move(params));
   floating_control_buttons_widget_->SetContentsView(&control_buttons_view_);
   floating_control_buttons_widget_->GetNativeWindow()->AddPreTargetHandler(
@@ -496,7 +499,7 @@ void ArcNotificationContentView::AttachSurface() {
   surface_->Attach(this);
 
   // Creates slide helper after this view is added to its parent.
-  slide_helper_.reset(new SlideHelper(this));
+  slide_helper_ = std::make_unique<SlideHelper>(this);
 
   // Invokes Update() in case surface is attached during a slide.
   slide_helper_->Update(slide_in_progress_);
@@ -554,7 +557,8 @@ void ArcNotificationContentView::UpdateMask(bool force_update) {
   auto mask_painter =
       std::make_unique<message_center::NotificationBackgroundPainter>(
           top_radius_, bottom_radius_,
-          message_center::kNotificationBackgroundColor);
+          GetNativeTheme()->GetSystemColor(
+              ui::NativeTheme::kColorId_NotificationBackground));
   // Set insets to round visible notification corners. https://crbug.com/866777
   mask_painter->set_insets(new_insets);
 
@@ -722,6 +726,13 @@ void ArcNotificationContentView::OnBlur() {
   notification_view->OnContentBlurred();
 }
 
+void ArcNotificationContentView::OnThemeChanged() {
+  View::OnThemeChanged();
+  // OnThemeChanged may be called before container is set.
+  if (GetWidget() && GetNativeViewContainer())
+    UpdateMask(true);
+}
+
 void ArcNotificationContentView::OnRemoteInputActivationChanged(
     bool activated) {
   // Remove the focus from the currently focused view-control in the message
@@ -764,8 +775,7 @@ void ArcNotificationContentView::GetAccessibleNodeData(
     ui::AXNodeData* node_data) {
   if (surface_ && surface_->GetAXTreeId() != ui::AXTreeIDUnknown()) {
     node_data->role = ax::mojom::Role::kClient;
-    node_data->AddStringAttribute(ax::mojom::StringAttribute::kChildTreeId,
-                                  surface_->GetAXTreeId().ToString());
+    GetViewAccessibility().OverrideChildTreeID(surface_->GetAXTreeId());
   } else {
     node_data->role = ax::mojom::Role::kButton;
     node_data->AddStringAttribute(

@@ -32,7 +32,7 @@ namespace {
 std::vector<std::string> ConvertToVector(const base::ListValue* list) {
   std::vector<std::string> string_list;
   if (list) {
-    for (const base::Value& value : *list) {
+    for (const base::Value& value : list->GetList()) {
       if (value.is_string()) {
         string_list.push_back(value.GetString());
       }
@@ -52,7 +52,7 @@ void AddPrintersFromMap(
 class EnterprisePrintersProviderImpl : public EnterprisePrintersProvider,
                                        public BulkPrintersCalculator::Observer {
  public:
-  EnterprisePrintersProviderImpl(CrosSettings* settings, Profile* profile)
+  EnterprisePrintersProviderImpl(ash::CrosSettings* settings, Profile* profile)
       : profile_(profile) {
     // initialization of pref_change_registrar
     pref_change_registrar_.Init(profile->GetPrefs());
@@ -130,7 +130,7 @@ class EnterprisePrintersProviderImpl : public EnterprisePrintersProvider,
     recommended_printers_.clear();
     std::vector<std::string> data = FromPrefs(prefs::kRecommendedPrinters);
     for (const auto& printer_json : data) {
-      base::Optional<base::Value> printer_dictionary = base::JSONReader::Read(
+      absl::optional<base::Value> printer_dictionary = base::JSONReader::Read(
           printer_json, base::JSON_ALLOW_TRAILING_COMMAS);
       if (!printer_dictionary.has_value() ||
           !printer_dictionary.value().is_dict()) {
@@ -287,7 +287,7 @@ void EnterprisePrintersProvider::RegisterProfilePrefs(
 
 // static
 std::unique_ptr<EnterprisePrintersProvider> EnterprisePrintersProvider::Create(
-    CrosSettings* settings,
+    ash::CrosSettings* settings,
     Profile* profile) {
   return std::make_unique<EnterprisePrintersProviderImpl>(settings, profile);
 }

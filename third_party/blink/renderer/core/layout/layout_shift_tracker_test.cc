@@ -43,7 +43,7 @@ class LayoutShiftTrackerTest : public RenderingTest {
 TEST_F(LayoutShiftTrackerTest, IgnoreAfterInput) {
   SetBodyInnerHTML(R"HTML(
     <style>
-      #j { position: relative; width: 300px; height: 100px; }
+      #j { position: relative; width: 300px; height: 100px; background: blue; }
     </style>
     <div id='j'></div>
   )HTML");
@@ -62,7 +62,7 @@ TEST_F(LayoutShiftTrackerTest, IgnoreAfterInput) {
 TEST_F(LayoutShiftTrackerTest, CompositedShiftBeforeFirstPaint) {
   // Tests that we don't crash if a new layer shifts during a second compositing
   // update before prepaint sets up property tree state.  See crbug.com/881735
-  // (which invokes UpdateLifecycleToCompositingCleanPlusScrolling through
+  // (which invokes UpdateAllLifecyclePhasesExceptPaint through
   // accessibilityController.accessibleElementById).
 
   SetBodyInnerHTML(R"HTML(
@@ -70,7 +70,7 @@ TEST_F(LayoutShiftTrackerTest, CompositedShiftBeforeFirstPaint) {
       .hide { display: none; }
       .tr { will-change: transform; }
       body { margin: 0; }
-      div { height: 100px; }
+      div { height: 100px; background: blue; }
     </style>
     <div id="container">
       <div id="A">A</div>
@@ -80,7 +80,7 @@ TEST_F(LayoutShiftTrackerTest, CompositedShiftBeforeFirstPaint) {
 
   GetDocument().getElementById("B")->setAttribute(html_names::kClassAttr,
                                                   AtomicString("tr"));
-  GetFrameView().UpdateLifecycleToCompositingCleanPlusScrolling(
+  GetFrameView().UpdateAllLifecyclePhasesExceptPaint(
       DocumentUpdateReason::kTest);
   GetDocument().getElementById("A")->setAttribute(html_names::kClassAttr,
                                                   AtomicString("hide"));
@@ -103,7 +103,7 @@ TEST_F(LayoutShiftTrackerTest, IgnoreSVG) {
 TEST_F(LayoutShiftTrackerTest, IgnoreAfterChangeEvent) {
   SetBodyInnerHTML(R"HTML(
     <style>
-      #j { position: relative; width: 300px; height: 100px; }
+      #j { position: relative; width: 300px; height: 100px; background: blue; }
     </style>
     <div id='j'></div>
     <select id="sel" onchange="shift()">
@@ -146,7 +146,7 @@ TEST_F(LayoutShiftTrackerSimTest, SubframeWeighting) {
 
   child_resource.Complete(R"HTML(
     <style>
-      #j { position: relative; width: 300px; height: 100px; }
+      #j { position: relative; width: 300px; height: 100px; background: blue; }
     </style>
     <div id='j'></div>
   )HTML");
@@ -207,6 +207,37 @@ TEST_F(LayoutShiftTrackerSimTest, ViewportSizeChange) {
   // to change position during block layout flow. Since it was the result of a
   // viewport size change, this position change should not affect the score.
   WebView().MainFrameViewWidget()->Resize(gfx::Size(400, 600));
+
+  Compositor().BeginFrame();
+  test::RunPendingTasks();
+
+  LayoutShiftTracker& layout_shift_tracker =
+      MainFrame().GetFrameView()->GetLayoutShiftTracker();
+  EXPECT_FLOAT_EQ(0.0, layout_shift_tracker.Score());
+}
+
+TEST_F(LayoutShiftTrackerSimTest, ZoomLevelChange) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  LoadURL("https://example.com/");
+  main_resource.Complete(R"HTML(
+    <style>
+      body { margin: 0; }
+      .square {
+        display: inline-block;
+        position: relative;
+        width: 300px;
+        height: 300px;
+        background:yellow;
+      }
+    </style>
+    <div class='square'></div>
+    <div class='square'></div>
+  )HTML");
+
+  Compositor().BeginFrame();
+  test::RunPendingTasks();
+
+  WebView().MainFrameViewWidget()->SetZoomLevelForTesting(1.0);
 
   Compositor().BeginFrame();
   test::RunPendingTasks();
@@ -300,6 +331,270 @@ TEST_F(LayoutShiftTrackerPointerdownTest, PointerdownCancelled) {
 TEST_F(LayoutShiftTrackerPointerdownTest, PointerdownBecomesScroll) {
   RunTest(WebInputEvent::Type::kPointerCausedUaAction,
           false /* expect_exclusion */);
+}
+
+TEST_F(LayoutShiftTrackerSimTest, MouseMoveDraggingAction) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  LoadURL("https://example.com/");
+  main_resource.Complete(R"HTML(
+    <style>
+      body { margin: 0; height: 1500px; }
+      #box {
+        left: 0px;
+        top: 0px;
+        width: 400px;
+        height: 600px;
+        background: yellow;
+        position: absolute;
+      }
+    </style>
+    <div id="box"></div>
+    <script>
+      box.addEventListener("mousemove", (e) => {
+        box.style.top = "50px";
+        e.preventDefault();
+      });
+      box.addEventListener("mouseup", (e) => {
+        box.style.top = "100px";
+        e.preventDefault();
+      });
+    </script>
+  )HTML");
+
+  Compositor().BeginFrame();
+  test::RunPendingTasks();
+
+  WebMouseEvent event1(WebInputEvent::Type::kMouseDown, gfx::PointF(),
+                       gfx::PointF(), WebPointerProperties::Button::kLeft, 0,
+                       WebInputEvent::Modifiers::kLeftButtonDown,
+                       base::TimeTicks::Now());
+  WebMouseEvent event2(WebInputEvent::Type::kMouseMove, gfx::PointF(),
+                       gfx::PointF(), WebPointerProperties::Button::kLeft, 1,
+                       WebInputEvent::Modifiers::kLeftButtonDown,
+                       base::TimeTicks::Now());
+  WebMouseEvent event3(WebInputEvent::Type::kMouseUp, gfx::PointF(),
+                       gfx::PointF(), WebPointerProperties::Button::kLeft, 1,
+                       WebInputEvent::Modifiers::kLeftButtonDown,
+                       base::TimeTicks::Now());
+
+  // Coordinates inside #box.
+  event1.SetPositionInWidget(50, 150);
+  event2.SetPositionInWidget(50, 160);
+  event3.SetPositionInWidget(50, 160);
+
+  WebView().MainFrameWidget()->HandleInputEvent(
+      WebCoalescedInputEvent(event1, ui::LatencyInfo()));
+
+  WindowPerformance& perf = *DOMWindowPerformance::performance(Window());
+  auto& tracker = MainFrame().GetFrameView()->GetLayoutShiftTracker();
+  Compositor().BeginFrame();
+  test::RunPendingTasks();
+
+  EXPECT_EQ(0u, perf.getBufferedEntriesByType("layout-shift").size());
+  EXPECT_FLOAT_EQ(0.0, tracker.Score());
+
+  tracker.ResetTimerForTesting();
+
+  WebView().MainFrameWidget()->HandleInputEvent(
+      WebCoalescedInputEvent(event2, ui::LatencyInfo()));
+
+  Compositor().BeginFrame();
+  test::RunPendingTasks();
+
+  EXPECT_EQ(0u, perf.getBufferedEntriesByType("layout-shift").size());
+  EXPECT_FLOAT_EQ(0.0, tracker.Score());
+
+  tracker.ResetTimerForTesting();
+
+  WebView().MainFrameWidget()->HandleInputEvent(
+      WebCoalescedInputEvent(event3, ui::LatencyInfo()));
+
+  Compositor().BeginFrame();
+  test::RunPendingTasks();
+
+  auto entries = perf.getBufferedEntriesByType("layout-shift");
+  EXPECT_EQ(2u, entries.size());
+  LayoutShift* shift = static_cast<LayoutShift*>(entries.back().Get());
+
+  EXPECT_TRUE(shift->hadRecentInput());
+  EXPECT_GT(shift->value(), 0);
+  EXPECT_FLOAT_EQ(0.0, tracker.Score());
+}
+
+TEST_F(LayoutShiftTrackerSimTest, TouchDraggingAction) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  LoadURL("https://example.com/");
+  main_resource.Complete(R"HTML(
+    <style>
+      body { margin: 0; height: 1500px; }
+      #box {
+        left: 0px;
+        top: 0px;
+        width: 400px;
+        height: 600px;
+        background: yellow;
+        position: absolute;
+      }
+    </style>
+    <div id="box"></div>
+    <script>
+      box.addEventListener("pointermove", (e) => {
+        box.style.top = "100px";
+        e.preventDefault();
+      });
+    </script>
+  )HTML");
+
+  Compositor().BeginFrame();
+  test::RunPendingTasks();
+
+  WebPointerProperties pointer_properties = WebPointerProperties(
+      1 /* PointerId */, WebPointerProperties::PointerType::kTouch,
+      WebPointerProperties::Button::kLeft);
+
+  WebPointerEvent event1(WebInputEvent::Type::kPointerDown, pointer_properties,
+                         5, 5);
+  WebPointerEvent event2(WebInputEvent::Type::kPointerMove, pointer_properties,
+                         5, 5);
+  WebPointerEvent event3(WebInputEvent::Type::kPointerUp, pointer_properties, 5,
+                         5);
+
+  // Coordinates inside #box.
+  event1.SetPositionInWidget(100, 160);
+  event2.SetPositionInWidget(100, 180);
+  event3.SetPositionInWidget(100, 180);
+
+  WebView().MainFrameWidget()->HandleInputEvent(
+      WebCoalescedInputEvent(event1, ui::LatencyInfo()));
+
+  WindowPerformance& perf = *DOMWindowPerformance::performance(Window());
+  auto& tracker = MainFrame().GetFrameView()->GetLayoutShiftTracker();
+
+  EXPECT_EQ(0u, perf.getBufferedEntriesByType("layout-shift").size());
+  EXPECT_FLOAT_EQ(0.0, tracker.Score());
+
+  WebView().MainFrameWidget()->HandleInputEvent(
+      WebCoalescedInputEvent(event2, ui::LatencyInfo()));
+
+  // Executes the BeginMainFrame processing steps and calls ReportShift in
+  // LayoutShiftTracker to get the latest layout shift score.
+  Compositor().BeginFrame();
+  test::RunPendingTasks();
+
+  EXPECT_EQ(0u, perf.getBufferedEntriesByType("layout-shift").size());
+  EXPECT_FLOAT_EQ(0.0, tracker.Score());
+
+  WebView().MainFrameWidget()->HandleInputEvent(
+      WebCoalescedInputEvent(event3, ui::LatencyInfo()));
+
+  // region fraction 50%, distance fraction 1/8
+  const double expected_shift = 0.5 * 0.125;
+
+  auto entries = perf.getBufferedEntriesByType("layout-shift");
+  EXPECT_EQ(1u, entries.size());
+  LayoutShift* shift = static_cast<LayoutShift*>(entries.back().Get());
+
+  EXPECT_TRUE(shift->hadRecentInput());
+  EXPECT_FLOAT_EQ(expected_shift, shift->value());
+  EXPECT_FLOAT_EQ(0.0, tracker.Score());
+}
+
+TEST_F(LayoutShiftTrackerSimTest, TouchScrollingAction) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  LoadURL("https://example.com/");
+  main_resource.Complete(R"HTML(
+    <style>
+      body { margin: 0; height: 1500px; }
+      #box {
+        left: 0px;
+        top: 0px;
+        width: 400px;
+        height: 600px;
+        background: yellow;
+        position: absolute;
+      }
+    </style>
+    <div id="box"></div>
+    <script>
+      box.addEventListener("pointermove", (e) => {
+        box.style.top = e.clientY;
+        e.preventDefault();
+      });
+    </script>
+  )HTML");
+
+  Compositor().BeginFrame();
+  test::RunPendingTasks();
+
+  WebPointerProperties pointer_properties = WebPointerProperties(
+      1 /* PointerId */, WebPointerProperties::PointerType::kTouch,
+      WebPointerProperties::Button::kLeft);
+
+  WebPointerEvent event1(WebInputEvent::Type::kPointerDown, pointer_properties,
+                         5, 5);
+  WebPointerEvent event2(WebInputEvent::Type::kPointerMove, pointer_properties,
+                         5, 5);
+  WebPointerEvent event3(WebInputEvent::Type::kPointerCancel,
+                         pointer_properties, 5, 5);
+  WebPointerEvent event4(WebInputEvent::Type::kPointerMove, pointer_properties,
+                         5, 5);
+
+  // Coordinates inside #box.
+  event1.SetPositionInWidget(80, 90);
+  event2.SetPositionInWidget(80, 100);
+  event3.SetPositionInWidget(80, 100);
+  event4.SetPositionInWidget(80, 150);
+
+  WebView().MainFrameWidget()->HandleInputEvent(
+      WebCoalescedInputEvent(event1, ui::LatencyInfo()));
+
+  WindowPerformance& perf = *DOMWindowPerformance::performance(Window());
+  auto& tracker = MainFrame().GetFrameView()->GetLayoutShiftTracker();
+
+  EXPECT_EQ(0u, perf.getBufferedEntriesByType("layout-shift").size());
+  EXPECT_FLOAT_EQ(0.0, tracker.Score());
+
+  WebView().MainFrameWidget()->HandleInputEvent(
+      WebCoalescedInputEvent(event2, ui::LatencyInfo()));
+
+  // Executes the BeginMainFrame processing steps and calls ReportShift in
+  // LayoutShiftTracker to get the latest layout shift score.
+  Compositor().BeginFrame();
+  test::RunPendingTasks();
+
+  EXPECT_EQ(0u, perf.getBufferedEntriesByType("layout-shift").size());
+  EXPECT_FLOAT_EQ(0, tracker.Score());
+
+  WebView().MainFrameWidget()->HandleInputEvent(
+      WebCoalescedInputEvent(event3, ui::LatencyInfo()));
+
+  // region fraction 50%, distance fraction 1/8
+  const double expected_shift = 0.5 * 0.125;
+  auto entries = perf.getBufferedEntriesByType("layout-shift");
+  EXPECT_EQ(1u, entries.size());
+  LayoutShift* shift = static_cast<LayoutShift*>(entries.back().Get());
+
+  // For touch scroll, hasRecentInput is false, and the layout shift score is
+  // reported when a PointerCancel event is received.
+  EXPECT_FALSE(shift->hadRecentInput());
+  EXPECT_FLOAT_EQ(expected_shift, shift->value());
+  EXPECT_FLOAT_EQ(expected_shift, tracker.Score());
+
+  WebView().MainFrameWidget()->HandleInputEvent(
+      WebCoalescedInputEvent(event4, ui::LatencyInfo()));
+
+  // Executes the BeginMainFrame processing steps and calls ReportShift in
+  // LayoutShiftTracker to get the latest layout shift score.
+  Compositor().BeginFrame();
+  test::RunPendingTasks();
+
+  entries = perf.getBufferedEntriesByType("layout-shift");
+  EXPECT_EQ(2u, entries.size());
+  shift = static_cast<LayoutShift*>(entries.back().Get());
+
+  EXPECT_FALSE(shift->hadRecentInput());
+  EXPECT_GT(shift->value(), 0);
+  EXPECT_GT(tracker.Score(), expected_shift);
 }
 
 TEST_F(LayoutShiftTrackerTest, StableCompositingChanges) {
@@ -426,7 +721,7 @@ TEST_F(LayoutShiftTrackerTest, ContentVisibilityAutoFirstPaint) {
       }
     </style>
     <div id=target class=auto>
-      <div style="width: 100px; height: 100px"></div>
+      <div style="width: 100px; height: 100px; background: blue"></div>
     </div>
   )HTML");
   auto* target = To<LayoutBox>(GetLayoutObjectByElementId("target"));
@@ -449,7 +744,7 @@ TEST_F(LayoutShiftTrackerTest,
       }
     </style>
     <div id=target class=auto style="position: relative; top: 100000px">
-      <div style="width: 100px; height: 100px"></div>
+      <div style="width: 100px; height: 100px; background: blue"></div>
     </div>
   )HTML");
   auto* target = To<LayoutBox>(GetLayoutObjectByElementId("target"));
@@ -484,7 +779,7 @@ TEST_F(LayoutShiftTrackerTest, ContentVisibilityHiddenFirstPaint) {
       }
     </style>
     <div id=target class=auto>
-      <div style="width: 100px; height: 100px"></div>
+      <div style="width: 100px; height: 100px; background: blue"></div>
     </div>
   )HTML");
   auto* target = To<LayoutBox>(GetLayoutObjectByElementId("target"));
@@ -504,6 +799,7 @@ TEST_F(LayoutShiftTrackerTest, ContentVisibilityAutoResize) {
       }
       .contained {
         height: 100px;
+        background: blue;
       }
     </style>
     <div class=auto><div class=contained></div></div>
@@ -528,10 +824,10 @@ TEST_F(LayoutShiftTrackerTest,
       }
     </style>
     <div id=onscreen class=auto>
-      <div style="width: 100px; height: 100px"></div>
+      <div style="width: 100px; height: 100px; background: blue"></div>
     </div>
     <div id=offscreen class=auto style="position: relative; top: 100000px">
-      <div style="width: 100px; height: 100px"></div>
+      <div style="width: 100px; height: 100px; background: blue"></div>
     </div>
   )HTML");
   auto* offscreen = To<LayoutBox>(GetLayoutObjectByElementId("offscreen"));
@@ -594,7 +890,7 @@ TEST_F(LayoutShiftTrackerTest, NestedFixedPos) {
   SetBodyInnerHTML(R"HTML(
     <div id=parent style="position: fixed; top: 0; left: -100%; width: 100%">
       <div id=target style="position: fixed; top: 0; width: 100%; height: 100%;
-                            left: 0"></div>
+                            left: 0"; background: blue></div>
     </div>
     <div style="height: 5000px"></div>
   </div>
@@ -620,6 +916,7 @@ TEST_F(LayoutShiftTrackerTest, ClipByVisualViewport) {
         left: 150px;
         width: 200px;
         height: 200px;
+        background: blue;
       }
     </style>
     <div id=target></div>
@@ -687,6 +984,108 @@ TEST_F(LayoutShiftTrackerTest, ScrollThenCauseScrollAnchoring) {
   UpdateAllLifecyclePhasesForTest();
 
   EXPECT_FLOAT_EQ(0, GetLayoutShiftTracker().Score());
+}
+
+TEST_F(LayoutShiftTrackerTest, NeedsToTrack) {
+  SetBodyInnerHTML(R"HTML(
+    <style>* { width: 50px; height: 50px; }</style>
+    <div id="tiny" style="width: 0.3px; height: 0.3px; background: blue"></div>
+    <div id="sticky" style="background: blue; position: sticky"></div>
+
+    <!-- block with decoration -->
+    <div id="scroll" style="overflow: scroll"></div>
+    <div id="background" style="background: blue"></div>
+    <div id="border" style="border: 1px solid black"></div>
+    <div id="outline" style="outline: 1px solid black"></div>
+    <div id="shadow" style="box-shadow: 2px 2px black"></div>
+
+    <!-- block with block children, some invisible -->
+    <div id="hidden-parent">
+      <div id="hidden" style="background: blue; visibility: hidden">
+        <div id="visible-under-hidden"
+             style="background:blue; visibility: visible"></div>
+      </div>
+    </div>
+
+    <!-- block with inline children, some invisible -->
+    <div id="empty-parent">
+      <div id="empty"></div>
+    </div>
+    <div id="text-block">Text</div>
+    <br id="br">
+
+    <svg id="svg">
+      <rect id="svg-rect" width="10" height="10" fill="green">
+    </svg>
+
+    <!-- replaced, special blocks, etc. -->
+    <video id="video"></video>
+    <img id="img">
+    <textarea id="textarea">Text</textarea>
+    <input id="text-input" type="text">
+    <input id="file" type="file">
+    <input id="radio" type="radio">
+    <progress id="progress"></progress>
+    <ul>
+      <li id="li"></li>
+    </ul>
+    <hr id="hr">
+  )HTML");
+
+  const auto& tracker = GetLayoutShiftTracker();
+  EXPECT_FALSE(tracker.NeedsToTrack(GetLayoutView()));
+  EXPECT_FALSE(tracker.NeedsToTrack(*GetLayoutObjectByElementId("tiny")));
+  EXPECT_FALSE(tracker.NeedsToTrack(*GetLayoutObjectByElementId("sticky")));
+
+  // Blocks with decorations.
+  EXPECT_TRUE(tracker.NeedsToTrack(*GetLayoutObjectByElementId("scroll")));
+  EXPECT_TRUE(tracker.NeedsToTrack(*GetLayoutObjectByElementId("background")));
+  EXPECT_TRUE(tracker.NeedsToTrack(*GetLayoutObjectByElementId("border")));
+  EXPECT_TRUE(tracker.NeedsToTrack(*GetLayoutObjectByElementId("outline")));
+  EXPECT_TRUE(tracker.NeedsToTrack(*GetLayoutObjectByElementId("shadow")));
+
+  // Blocks with block children, some invisible. We don't check descendants for
+  // visibility. Just assume there are visible descendants.
+  EXPECT_TRUE(
+      tracker.NeedsToTrack(*GetLayoutObjectByElementId("empty-parent")));
+  EXPECT_FALSE(tracker.NeedsToTrack(*GetLayoutObjectByElementId("empty")));
+  EXPECT_TRUE(
+      tracker.NeedsToTrack(*GetLayoutObjectByElementId("hidden-parent")));
+  EXPECT_FALSE(tracker.NeedsToTrack(*GetLayoutObjectByElementId("hidden")));
+  EXPECT_TRUE(tracker.NeedsToTrack(
+      *GetLayoutObjectByElementId("visible-under-hidden")));
+
+  // Blocks with inline children, some invisible. We don't check descendants for
+  // visibility. Just assume there are visible descendants.
+  auto* text_block = To<LayoutBlock>(GetLayoutObjectByElementId("text-block"));
+  EXPECT_TRUE(tracker.NeedsToTrack(*text_block));
+  // No ContainingBlockScope.
+  EXPECT_FALSE(tracker.NeedsToTrack(*text_block->FirstChild()));
+  {
+    LayoutShiftTracker::ContainingBlockScope scope(
+        PhysicalSize(1, 2), PhysicalSize(2, 3), PhysicalRect(1, 2, 3, 4),
+        PhysicalRect(2, 3, 4, 5));
+    EXPECT_TRUE(tracker.NeedsToTrack(*text_block->FirstChild()));
+  }
+  auto* br = GetLayoutObjectByElementId("br");
+  EXPECT_FALSE(tracker.NeedsToTrack(*br));
+  EXPECT_TRUE(br->Parent()->IsAnonymous());
+  EXPECT_FALSE(tracker.NeedsToTrack(*br->Parent()));
+
+  EXPECT_TRUE(tracker.NeedsToTrack(*GetLayoutObjectByElementId("svg")));
+  // We don't track SVG children.
+  EXPECT_FALSE(tracker.NeedsToTrack(*GetLayoutObjectByElementId("svg-rect")));
+
+  // Replaced, special blocks, etc.
+  EXPECT_TRUE(tracker.NeedsToTrack(*GetLayoutObjectByElementId("video")));
+  EXPECT_TRUE(tracker.NeedsToTrack(*GetLayoutObjectByElementId("img")));
+  EXPECT_TRUE(tracker.NeedsToTrack(*GetLayoutObjectByElementId("textarea")));
+  EXPECT_TRUE(tracker.NeedsToTrack(*GetLayoutObjectByElementId("text-input")));
+  EXPECT_TRUE(tracker.NeedsToTrack(*GetLayoutObjectByElementId("file")));
+  EXPECT_TRUE(tracker.NeedsToTrack(*GetLayoutObjectByElementId("radio")));
+  EXPECT_TRUE(tracker.NeedsToTrack(*GetLayoutObjectByElementId("progress")));
+  EXPECT_TRUE(tracker.NeedsToTrack(*GetLayoutObjectByElementId("li")));
+  EXPECT_TRUE(tracker.NeedsToTrack(*GetLayoutObjectByElementId("hr")));
 }
 
 }  // namespace blink

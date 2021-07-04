@@ -10,12 +10,12 @@
 
 #include "base/bind.h"
 #include "base/check.h"
+#include "base/cxx17_backports.h"
 #include "base/lazy_instance.h"
 #include "base/metrics/histogram_base.h"
 #include "base/metrics/statistics_recorder.h"
 #include "base/metrics/user_metrics.h"
 #include "base/notreached.h"
-#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -23,9 +23,9 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "components/feedback/content/content_tracing_manager.h"
 #include "components/feedback/feedback_report.h"
 #include "components/feedback/system_logs/system_logs_fetcher.h"
-#include "components/feedback/tracing_manager.h"
 #include "extensions/browser/api/extensions_api_client.h"
 #include "extensions/browser/api/feedback_private/feedback_private_delegate.h"
 #include "extensions/browser/api/feedback_private/feedback_service.h"
@@ -62,11 +62,15 @@ constexpr base::FilePath::CharType kBluetoothLogsFilePath[] =
     FILE_PATH_LITERAL("/var/log/bluetooth/log.bz2");
 constexpr base::FilePath::CharType kBluetoothLogsFilePathOld[] =
     FILE_PATH_LITERAL("/var/log/bluetooth/log.bz2.old");
+constexpr base::FilePath::CharType kBluetoothQualityReportFilePath[] =
+    FILE_PATH_LITERAL("/var/log/bluetooth/bluetooth_quality_report");
 
 constexpr char kBluetoothLogsAttachmentName[] = "bluetooth_logs.bz2";
 constexpr char kBluetoothLogsAttachmentNameOld[] = "bluetooth_logs.old.bz2";
+constexpr char kBluetoothQualityReportAttachmentName[] =
+    "bluetooth_quality_report";
 
-constexpr int kKaleidoscopeProductId = 5192933;
+constexpr int kChromeLabsAndKaleidoscopeProductId = 5192933;
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 constexpr char kLacrosHistogramsFilename[] = "lacros_histograms.zip";
@@ -125,6 +129,60 @@ LogSourceAccessManager* FeedbackPrivateAPI::GetLogSourceAccessManager() const {
 }
 #endif
 
+std::unique_ptr<FeedbackInfo> FeedbackPrivateAPI::CreateFeedbackInfo(
+    const std::string& description_template,
+    const std::string& description_placeholder_text,
+    const std::string& category_tag,
+    const std::string& extra_diagnostics,
+    const GURL& page_url,
+    api::feedback_private::FeedbackFlow flow,
+    bool from_assistant,
+    bool include_bluetooth_logs,
+    bool from_chrome_labs_or_kaleidoscope) {
+  auto info = std::make_unique<FeedbackInfo>();
+
+  info->description = description_template;
+  info->description_placeholder =
+      std::make_unique<std::string>(description_placeholder_text);
+  info->category_tag = std::make_unique<std::string>(category_tag);
+  info->page_url = std::make_unique<std::string>(page_url.spec());
+  info->system_information = std::make_unique<SystemInformationList>();
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+  info->from_assistant = std::make_unique<bool>(from_assistant);
+  info->include_bluetooth_logs = std::make_unique<bool>(include_bluetooth_logs);
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+
+  // Any extra diagnostics information should be added to the sys info.
+  if (!extra_diagnostics.empty()) {
+    SystemInformation extra_info;
+    extra_info.key = "EXTRA_DIAGNOSTICS";
+    extra_info.value = extra_diagnostics;
+    info->system_information->emplace_back(std::move(extra_info));
+  }
+
+  // The manager is only available if tracing is enabled.
+  if (ContentTracingManager* manager = ContentTracingManager::Get()) {
+    info->trace_id = std::make_unique<int>(manager->RequestTrace());
+  }
+  info->flow = flow;
+#if defined(OS_MAC)
+  const bool use_system_window_frame = true;
+#else
+  const bool use_system_window_frame = false;
+#endif
+  info->use_system_window_frame =
+      std::make_unique<bool>(use_system_window_frame);
+
+  // If the feedback is from Chrome Labs or Kaleidoscope then this should use
+  // a custom product ID.
+  if (from_chrome_labs_or_kaleidoscope) {
+    info->product_id =
+        std::make_unique<int>(kChromeLabsAndKaleidoscopeProductId);
+  }
+
+  return info;
+}
+
 void FeedbackPrivateAPI::RequestFeedbackForFlow(
     const std::string& description_template,
     const std::string& description_placeholder_text,
@@ -134,50 +192,14 @@ void FeedbackPrivateAPI::RequestFeedbackForFlow(
     api::feedback_private::FeedbackFlow flow,
     bool from_assistant,
     bool include_bluetooth_logs,
-    bool from_kaleidoscope) {
+    bool from_chrome_labs_or_kaleidoscope) {
   if (browser_context_ && EventRouter::Get(browser_context_)) {
-    FeedbackInfo info;
-    info.description = description_template;
-    info.description_placeholder =
-        std::make_unique<std::string>(description_placeholder_text);
-    info.category_tag = std::make_unique<std::string>(category_tag);
-    info.page_url = std::make_unique<std::string>(page_url.spec());
-    info.system_information = std::make_unique<SystemInformationList>();
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    info.from_assistant = std::make_unique<bool>(from_assistant);
-    info.include_bluetooth_logs =
-        std::make_unique<bool>(include_bluetooth_logs);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+    auto info = CreateFeedbackInfo(
+        description_template, description_placeholder_text, category_tag,
+        extra_diagnostics, page_url, flow, from_assistant,
+        include_bluetooth_logs, from_chrome_labs_or_kaleidoscope);
 
-    // Any extra diagnostics information should be added to the sys info.
-    if (!extra_diagnostics.empty()) {
-      SystemInformation extra_info;
-      extra_info.key = "EXTRA_DIAGNOSTICS";
-      extra_info.value = extra_diagnostics;
-      info.system_information->emplace_back(std::move(extra_info));
-    }
-
-    // The manager is only available if tracing is enabled.
-    if (TracingManager* manager = TracingManager::Get()) {
-      info.trace_id = std::make_unique<int>(manager->RequestTrace());
-    }
-    info.flow = flow;
-#if defined(OS_MAC)
-    const bool use_system_window_frame = true;
-#else
-    const bool use_system_window_frame = false;
-#endif
-    info.use_system_window_frame =
-        std::make_unique<bool>(use_system_window_frame);
-
-    // If the feedback is from Kaleidoscope then this should use a custom
-    // product ID.
-    if (from_kaleidoscope) {
-      info.product_id = std::make_unique<int>(kKaleidoscopeProductId);
-    }
-
-    std::unique_ptr<base::ListValue> args =
-        feedback_private::OnFeedbackRequested::Create(info);
+    auto args = feedback_private::OnFeedbackRequested::Create(*info);
 
     auto event = std::make_unique<Event>(
         events::FEEDBACK_PRIVATE_ON_FEEDBACK_REQUESTED,
@@ -224,6 +246,11 @@ ExtensionFunction::ResponseAction FeedbackPrivateGetUserEmailFunction::Run() {
 
 ExtensionFunction::ResponseAction
 FeedbackPrivateGetSystemInformationFunction::Run() {
+  send_all_crash_report_ids_ = gaia::IsGoogleInternalAccountEmail(
+      ExtensionsAPIClient::Get()
+          ->GetFeedbackPrivateDelegate()
+          ->GetSignedInUserEmail(browser_context()));
+
   // Self-deleting object.
   system_logs::SystemLogsFetcher* fetcher =
       ExtensionsAPIClient::Get()
@@ -240,10 +267,6 @@ void FeedbackPrivateGetSystemInformationFunction::OnCompleted(
   SystemInformationList sys_info_list;
   if (sys_info) {
     sys_info_list.reserve(sys_info->size());
-    const bool google_email = gaia::IsGoogleInternalAccountEmail(
-        ExtensionsAPIClient::Get()
-            ->GetFeedbackPrivateDelegate()
-            ->GetSignedInUserEmail(browser_context()));
     for (auto& itr : *sys_info) {
       // We only send the list of all the crash report IDs if the user has a
       // @google.com email. We strip this here so that the system information
@@ -251,7 +274,7 @@ void FeedbackPrivateGetSystemInformationFunction::OnCompleted(
       // also stripped later on in the feedback processing for other code paths
       // that don't go through this.
       if (itr.first == feedback::FeedbackReport::kAllCrashReportIdsKey &&
-          !google_email) {
+          !send_all_crash_report_ids_) {
         continue;
       }
 
@@ -312,7 +335,8 @@ ExtensionFunction::ResponseAction FeedbackPrivateSendFeedbackFunction::Run() {
       ExtensionsAPIClient::Get()->GetFeedbackPrivateDelegate();
   scoped_refptr<FeedbackData> feedback_data =
       base::MakeRefCounted<FeedbackData>(
-          delegate->GetFeedbackUploaderForContext(browser_context()));
+          delegate->GetFeedbackUploaderForContext(browser_context()),
+          ContentTracingManager::Get());
   feedback_data->set_description(feedback_info.description);
 
   if (feedback_info.product_id)
@@ -400,6 +424,11 @@ void FeedbackPrivateSendFeedbackFunction::OnAllLogsFetched(
     if (base::ReadFileToString(base::FilePath(kBluetoothLogsFilePathOld),
                                &bluetooth_logs)) {
       feedback_data->AddFile(kBluetoothLogsAttachmentNameOld,
+                             std::move(bluetooth_logs));
+    }
+    if (base::ReadFileToString(base::FilePath(kBluetoothQualityReportFilePath),
+                               &bluetooth_logs)) {
+      feedback_data->AddFile(kBluetoothQualityReportAttachmentName,
                              std::move(bluetooth_logs));
     }
   }

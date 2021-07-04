@@ -9,6 +9,7 @@
 #include "base/command_line.h"
 #include "base/memory/ptr_util.h"
 #include "content/browser/handwriting/handwriting_recognizer_impl_cros.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "third_party/blink/public/mojom/handwriting/handwriting.mojom.h"
 
@@ -46,6 +47,13 @@ void CrOSHandwritingRecognitionServiceImpl::CreateHandwritingRecognizer(
     handwriting::mojom::HandwritingModelConstraintPtr model_constraint,
     handwriting::mojom::HandwritingRecognitionService::
         CreateHandwritingRecognizerCallback callback) {
+  if (!IsCrOSLibHandwritingRootfsEnabled()) {
+    std::move(callback).Run(
+        handwriting::mojom::CreateHandwritingRecognizerResult::kError,
+        mojo::NullRemote());
+    return;
+  }
+
   CrOSHandwritingRecognizerImpl::Create(std::move(model_constraint),
                                         std::move(callback));
 }
@@ -55,27 +63,12 @@ void CrOSHandwritingRecognitionServiceImpl::QueryHandwritingRecognizerSupport(
     QueryHandwritingRecognizerSupportCallback callback) {
   auto query_result = handwriting::mojom::HandwritingFeatureQueryResult::New();
   if (!query->languages.empty()) {
-    if (IsCrOSLibHandwritingRootfsEnabled()) {
-      query_result->languages =
-          handwriting::mojom::HandwritingFeatureStatus::kSupported;
-      for (const auto& lang : query->languages) {
-        // CrOS currently only supports two "languages".
-        // TODO(https://crbug.com/1166910): We may need a better language tag
-        // matching method (e.g. libicu's LocaleMatcher).
-        // TODO(https://crbug.com/1166910): Strictly speaking,
-        // "gesture_in_context" is not a kind of language. We may need a private
-        // tag for this, see the discussion:
-        // https://github.com/WICG/handwriting-recognition/issues/1#issuecomment-778917849.
-        if (lang != "en" && lang != "gesture_in_context") {
-          query_result->languages =
-              handwriting::mojom::HandwritingFeatureStatus::kNotSupported;
-          break;
-        }
-      }
-    } else {
-      query_result->languages =
-          handwriting::mojom::HandwritingFeatureStatus::kNotSupported;
-    }
+    query_result->languages =
+        (IsCrOSLibHandwritingRootfsEnabled() && query->languages.size() == 1 &&
+         CrOSHandwritingRecognizerImpl::SupportsLanguageTag(
+             query->languages[0]))
+            ? handwriting::mojom::HandwritingFeatureStatus::kSupported
+            : handwriting::mojom::HandwritingFeatureStatus::kNotSupported;
   }
   if (query->alternatives) {
     // CrOS's HWR model always supports alternatives.

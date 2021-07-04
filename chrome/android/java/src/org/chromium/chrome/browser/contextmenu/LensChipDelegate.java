@@ -16,6 +16,7 @@ import org.chromium.content_public.browser.WebContents;
  * The class to handle Lens chip data and actions.
  */
 public class LensChipDelegate implements ChipDelegate {
+    private boolean mIsChipSupported;
     private LensQueryParams mLensQueryParams;
     private LensController mLensController;
     private ContextMenuNativeDelegate mNativeDelegate;
@@ -23,14 +24,16 @@ public class LensChipDelegate implements ChipDelegate {
     private Callback<Integer> mOnChipShownCallback;
 
     public LensChipDelegate(String pageUrl, String titleOrAltText, String srcUrl, String pageTitle,
-            boolean isIncognito, WebContents webContents, ContextMenuNativeDelegate nativeDelegate,
-            Callback<Integer> onChipClickedCallback, Callback<Integer> onChipShownCallback) {
+            boolean isIncognito, boolean isTablet, WebContents webContents,
+            ContextMenuNativeDelegate nativeDelegate, Callback<Integer> onChipClickedCallback,
+            Callback<Integer> onChipShownCallback) {
         mLensController = LensController.getInstance();
-        if (!mLensController.isQueryEnabled()) {
+        mIsChipSupported = mLensController.isQueryEnabled();
+        if (!mIsChipSupported) {
             return;
         }
         mLensQueryParams =
-                new LensQueryParams.Builder(LensEntryPoint.CONTEXT_MENU_CHIP, isIncognito)
+                new LensQueryParams.Builder(LensEntryPoint.CONTEXT_MENU_CHIP, isIncognito, isTablet)
                         .withPageUrl(pageUrl)
                         .withImageTitleOrAltText(titleOrAltText)
                         .withSrcUrl(srcUrl)
@@ -40,6 +43,11 @@ public class LensChipDelegate implements ChipDelegate {
         mNativeDelegate = nativeDelegate;
         mOnChipClickedCallback = onChipClickedCallback;
         mOnChipShownCallback = onChipShownCallback;
+    }
+
+    @Override
+    public boolean isChipSupported() {
+        return mIsChipSupported;
     }
 
     @Override
@@ -75,9 +83,8 @@ public class LensChipDelegate implements ChipDelegate {
 
     @Override
     public void onMenuClosed() {
-        if (mLensController.isQueryEnabled()) {
-            mLensController.terminateClassification();
-        }
+        // Lens controller will not react if a classification was not in progress.
+        mLensController.terminateClassification();
     }
 
     @Override

@@ -2,23 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// clang-format off
 import {loadTimeData} from 'chrome://resources/js/load_time_data.m.js';
 import { assertArrayEquals, assertEquals, assertFalse,assertTrue} from 'chrome://test/chai_assert.js';
 
-import {installMockChrome} from '../../../base/js/mock_chrome.m.js';
-import {reportPromise, waitUntil} from '../../../base/js/test_error_reporting.m.js';
-import {FileOperationManager} from '../../../externs/background/file_operation_manager.m.js';
-import {EntryLocation} from '../../../externs/entry_location.m.js';
-import {FileOperationProgressEvent} from '../../common/js/file_operation_common.m.js';
-import { joinPath, MockDirectoryEntry, MockEntry, MockFileEntry,MockFileSystem} from '../../common/js/mock_entry.m.js';
-import {util} from '../../common/js/util.m.js';
+import {FileOperationProgressEvent} from '../../common/js/file_operation_common.js';
+import {installMockChrome} from '../../common/js/mock_chrome.js';
+import { joinPath, MockDirectoryEntry, MockEntry, MockFileEntry,MockFileSystem} from '../../common/js/mock_entry.js';
+import {reportPromise, waitUntil} from '../../common/js/test_error_reporting.js';
+import {util} from '../../common/js/util.js';
+import {FileOperationManager} from '../../externs/background/file_operation_manager.js';
+import {EntryLocation} from '../../externs/entry_location.js';
 
-import {FileOperationManagerImpl} from './file_operation_manager.m.js';
-import {fileOperationUtil} from './file_operation_util.m.js';
-import {volumeManagerFactory} from './volume_manager_factory.m.js';
-
-// clang-format on
+import {FileOperationManagerImpl} from './file_operation_manager.js';
+import {fileOperationUtil} from './file_operation_util.js';
+import {volumeManagerFactory} from './volume_manager_factory.js';
 
 /**
  * Mock chrome APIs.
@@ -133,7 +130,7 @@ class BlockableFakeStartCopy {
       const mockEntry = /** @type {!MockEntry} */ (this.sourceEntry_);
       fileSystem.entries[newPath] =
           /** @type {!MockEntry} */ (mockEntry.clone(newPath));
-      listener(copyId, makeStatus('end_copy_entry'));
+      listener(copyId, makeStatus('end_copy'));
       listener(copyId, makeStatus('success'));
     };
 
@@ -141,7 +138,7 @@ class BlockableFakeStartCopy {
 
     callback(this.startCopyId_);
     const listener = mockChrome.fileManagerPrivate.onCopyProgress.listener_;
-    listener(this.startCopyId_, makeStatus('begin_copy_entry'));
+    listener(this.startCopyId_, makeStatus('begin'));
     listener(this.startCopyId_, makeStatus('progress'));
 
     if (destination.toURL() === this.blockedDestination_) {
@@ -299,9 +296,9 @@ let fileOperationManager;
  */
 export function setUp() {
   // Mock LoadTimeData strings.
-  loadTimeData.data = {
+  loadTimeData.resetForTesting({
     'FILES_TRASH_ENABLED': true,
-  };
+  });
   loadTimeData.getBoolean = function(key) {
     return loadTimeData.data_[key];
   };
@@ -533,14 +530,14 @@ export function testCopy(callback) {
         };
         callback(1);
         const listener = mockChrome.fileManagerPrivate.onCopyProgress.listener_;
-        listener(1, makeStatus('begin_copy_entry'));
+        listener(1, makeStatus('begin'));
         listener(1, makeStatus('progress'));
         const newPath = joinPath('/', newName);
         const entry = /** @type {!MockEntry} */
             (fileSystem.entries['/test.txt']);
         fileSystem.entries[newPath] =
             /** @type {!MockEntry} */ (entry.clone(newPath));
-        listener(1, makeStatus('end_copy_entry'));
+        listener(1, makeStatus('end_copy'));
         listener(1, makeStatus('success'));
       };
 
@@ -994,8 +991,8 @@ export function testZip(callback) {
         const lastEvent = events[events.length - 1];
         assertEquals('copy-progress', lastEvent.type);
         assertEquals('SUCCESS', lastEvent.reason);
-        assertEquals(10, lastEvent.status.totalBytes);
-        assertEquals(10, lastEvent.status.processedBytes);
+        assertEquals(1, lastEvent.status.totalBytes);
+        assertEquals(1, lastEvent.status.processedBytes);
 
         assertFalse(events.some(event => {
           return event.type === 'delete';

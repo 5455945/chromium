@@ -1,4 +1,4 @@
-CONSOLE WARNING: line 148: 'window.webkitStorageInfo' is deprecated. Please use 'navigator.webkitTemporaryStorage' or 'navigator.webkitPersistentStorage' instead.
+CONSOLE WARNING: line 151: 'window.webkitStorageInfo' is deprecated. Please use 'navigator.webkitTemporaryStorage' or 'navigator.webkitPersistentStorage' instead.
 Tests property access on a cached DOMWindow after the associated frame is navigated. Test should not crash and properties read from the cached DOMWindow should be identical to properties through the 'current' DOMWindow.
 
 On success, you will see a series of "PASS" messages, followed by "TEST COMPLETE".
@@ -38,6 +38,7 @@ PASS oldChildWindow.navigator.hardwareConcurrency is newChildWindow.navigator.ha
 PASS oldChildWindow.navigator.hid.onconnect is newChildWindow.navigator.hid.onconnect
 PASS oldChildWindow.navigator.hid.ondisconnect is newChildWindow.navigator.hid.ondisconnect
 PASS oldChildWindow.navigator.language is newChildWindow.navigator.language
+PASS oldChildWindow.navigator.managed.onmanagedconfigurationchange is newChildWindow.navigator.managed.onmanagedconfigurationchange
 PASS oldChildWindow.navigator.maxTouchPoints is newChildWindow.navigator.maxTouchPoints
 PASS oldChildWindow.navigator.mediaDevices.ondevicechange is newChildWindow.navigator.mediaDevices.ondevicechange
 PASS oldChildWindow.navigator.mediaSession.metadata is newChildWindow.navigator.mediaSession.metadata
@@ -62,6 +63,7 @@ PASS oldChildWindow.navigator.userAgent is newChildWindow.navigator.userAgent
 PASS oldChildWindow.navigator.userAgentData.brands[0].brand is newChildWindow.navigator.userAgentData.brands[0].brand
 PASS oldChildWindow.navigator.userAgentData.brands[0].version is newChildWindow.navigator.userAgentData.brands[0].version
 PASS oldChildWindow.navigator.userAgentData.mobile is newChildWindow.navigator.userAgentData.mobile
+PASS oldChildWindow.navigator.userAgentData.platform is newChildWindow.navigator.userAgentData.platform
 PASS oldChildWindow.navigator.vendor is newChildWindow.navigator.vendor
 PASS oldChildWindow.navigator.vendorSub is newChildWindow.navigator.vendorSub
 PASS oldChildWindow.navigator.webdriver is newChildWindow.navigator.webdriver

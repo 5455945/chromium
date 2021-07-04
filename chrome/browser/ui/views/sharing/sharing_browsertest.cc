@@ -22,13 +22,11 @@
 #include "chrome/browser/sharing/sharing_service_factory.h"
 #include "chrome/browser/sharing/sharing_utils.h"
 #include "chrome/browser/sync/device_info_sync_service_factory.h"
-#include "chrome/browser/sync/profile_sync_service_factory.h"
 #include "chrome/browser/sync/test/integration/sessions_helper.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
 #include "components/gcm_driver/fake_gcm_profile_service.h"
-#include "components/sync/driver/profile_sync_service.h"
 #include "components/sync/model/client_tag_based_model_type_processor.h"
 #include "components/sync_device_info/device_info.h"
 #include "content/public/test/browser_test_utils.h"
@@ -149,10 +147,11 @@ void SharingBrowserTest::AddDeviceInfo(
           original_device.device_type(),
           original_device.signin_scoped_device_id(), "Google",
           base::StrCat({"model", base::NumberToString(fake_device_id)}),
+          original_device.full_hardware_class(),
           original_device.last_updated_timestamp(),
           original_device.pulse_interval(),
           original_device.send_tab_to_self_receiving_enabled(),
-          original_device.sharing_info(),
+          original_device.sharing_info(), original_device.paask_info(),
           original_device.fcm_registration_token(),
           original_device.interested_data_types());
   fake_device_info_tracker_.Add(fake_device.get());

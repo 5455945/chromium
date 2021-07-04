@@ -31,7 +31,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_BINDINGS_EXCEPTION_STATE_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_BINDINGS_EXCEPTION_STATE_H_
 
-#include "base/macros.h"
+#include "base/dcheck_is_on.h"
 #include "base/notreached.h"
 #include "third_party/blink/renderer/platform/bindings/exception_code.h"
 #include "third_party/blink/renderer/platform/bindings/exception_context.h"
@@ -98,6 +98,13 @@ class PLATFORM_EXPORT ExceptionState {
 
     ~ContextScope() { exception_state_.PopContextScope(); }
 
+    // This is used for a performance hack to reduce the number of construction
+    // and destruction times of ContextScope when iterating over properties.
+    // Only the generated bindings code is allowed to use this hack.
+    void ChangePropertyNameAsOptimizationHack(const char* property_name) {
+      context_.ChangePropertyNameAsOptimizationHack(property_name);
+    }
+
    private:
     void SetParent(const ContextScope* parent) { parent_ = parent; }
     const ContextScope* GetParent() const { return parent_; }
@@ -105,7 +112,7 @@ class PLATFORM_EXPORT ExceptionState {
 
     ExceptionState& exception_state_;
     const ContextScope* parent_ = nullptr;
-    const ExceptionContext context_;
+    ExceptionContext context_;
 
     friend class ExceptionState;
   };
@@ -140,9 +147,12 @@ class PLATFORM_EXPORT ExceptionState {
       : ExceptionState(isolate,
                        ExceptionContext(context_type, interface_name)) {}
 
+  ExceptionState(const ExceptionState&) = delete;
+  ExceptionState& operator=(const ExceptionState&) = delete;
+
   ~ExceptionState() {
-    if (!exception_.IsEmpty()) {
-      V8ThrowException::ThrowException(isolate_, exception_.NewLocal(isolate_));
+    if (UNLIKELY(!exception_.IsEmpty())) {
+      PropagateException();
     }
   }
 
@@ -185,7 +195,7 @@ class PLATFORM_EXPORT ExceptionState {
   // that V8ThrowDOMException::CreateOrEmpty may return an empty handle.
   bool HadException() const { return code_; }
 
-  void ClearException();
+  virtual void ClearException();
 
   ExceptionCode Code() const { return code_; }
 
@@ -207,6 +217,13 @@ class PLATFORM_EXPORT ExceptionState {
     return main_context_;
   }
 
+  // Returns the innermost context of the nested exception contexts.
+  const ExceptionContext& GetInnerMostContext() const {
+    if (context_stack_top_)
+      return context_stack_top_->GetContext();
+    return main_context_;
+  }
+
   // Deprecated APIs to get information about where this ExceptionState has
   // been created.
   ContextType Context() const { return GetContext().GetContext(); }
@@ -215,10 +232,13 @@ class PLATFORM_EXPORT ExceptionState {
 
  protected:
   void SetException(ExceptionCode, const String&, v8::Local<v8::Value>);
+  void SetExceptionCode(ExceptionCode);
+  v8::Isolate* GetIsolate() { return isolate_; }
 
  private:
   void PushContextScope(ContextScope* scope);
   void PopContextScope();
+  void PropagateException();
 
   String AddExceptionContext(const String&) const;
 
@@ -244,7 +264,6 @@ class PLATFORM_EXPORT ExceptionState {
   TraceWrapperV8Reference<v8::Value> exception_;
 
   friend class ContextScope;
-  DISALLOW_COPY_AND_ASSIGN(ExceptionState);
 };
 
 // NonThrowableExceptionState never allow call sites to throw an exception.

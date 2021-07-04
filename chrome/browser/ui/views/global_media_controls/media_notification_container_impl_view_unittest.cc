@@ -4,6 +4,9 @@
 
 #include "chrome/browser/ui/views/global_media_controls/media_notification_container_impl_view.h"
 
+#include <memory>
+#include <utility>
+
 #include "base/containers/flat_set.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
@@ -12,6 +15,7 @@
 #include "chrome/browser/ui/global_media_controls/cast_media_notification_item.h"
 #include "chrome/browser/ui/global_media_controls/cast_media_session_controller.h"
 #include "chrome/browser/ui/global_media_controls/media_notification_container_observer.h"
+#include "chrome/browser/ui/global_media_controls/test_helper.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "components/media_message_center/media_notification_controller.h"
@@ -31,6 +35,7 @@
 using media_session::mojom::MediaPlaybackState;
 using media_session::mojom::MediaSessionAction;
 using ::testing::_;
+using ::testing::NiceMock;
 
 namespace {
 
@@ -42,7 +47,11 @@ class MockMediaNotificationContainerObserver
     : public MediaNotificationContainerObserver {
  public:
   MockMediaNotificationContainerObserver() = default;
-  ~MockMediaNotificationContainerObserver() = default;
+  MockMediaNotificationContainerObserver(
+      const MockMediaNotificationContainerObserver&) = delete;
+  MockMediaNotificationContainerObserver& operator=(
+      const MockMediaNotificationContainerObserver&) = delete;
+  ~MockMediaNotificationContainerObserver() override = default;
 
   // MediaNotificationContainerObserver implementation.
   MOCK_METHOD0(OnContainerSizeChanged, void());
@@ -55,9 +64,6 @@ class MockMediaNotificationContainerObserver
                void(const std::string& id, gfx::Rect bounds));
   MOCK_METHOD2(OnAudioSinkChosen,
                void(const std::string& id, const std::string& sink_id));
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MockMediaNotificationContainerObserver);
 };
 
 media_router::MediaRoute CreateMediaRoute() {
@@ -102,13 +108,19 @@ class MockMediaNotificationController
 class MediaNotificationContainerImplViewTest : public ChromeViewsTestBase {
  public:
   MediaNotificationContainerImplViewTest() : screen_override_(&fake_screen_) {}
+  MediaNotificationContainerImplViewTest(
+      const MediaNotificationContainerImplViewTest&) = delete;
+  MediaNotificationContainerImplViewTest& operator=(
+      const MediaNotificationContainerImplViewTest&) = delete;
   ~MediaNotificationContainerImplViewTest() override = default;
 
   // ViewsTestBase:
   void SetUp() override {
     ViewsTestBase::SetUp();
+    item_ = std::make_unique<NiceMock<MockMediaNotificationItem>>();
     SetUpCommon(std::make_unique<MediaNotificationContainerImplView>(
-        kTestNotificationId, nullptr, nullptr));
+        kTestNotificationId, item_->GetWeakPtr(), nullptr,
+        GlobalMediaControlsEntryPoint::kToolbarIcon));
   }
 
   void SetUpCommon(std::unique_ptr<MediaNotificationContainerImplView>
@@ -118,7 +130,8 @@ class MediaNotificationContainerImplViewTest : public ChromeViewsTestBase {
     notification_container_ =
         widget_->SetContentsView(std::move(notification_container));
 
-    observer_ = std::make_unique<MockMediaNotificationContainerObserver>();
+    observer_ =
+        std::make_unique<NiceMock<MockMediaNotificationContainerObserver>>();
     notification_container_->AddObserver(observer_.get());
 
     SimulateMediaSessionData();
@@ -200,9 +213,9 @@ class MediaNotificationContainerImplViewTest : public ChromeViewsTestBase {
 
   void SimulateMetadataChanged() {
     media_session::MediaMetadata metadata;
-    metadata.source_title = base::ASCIIToUTF16("source_title2");
-    metadata.title = base::ASCIIToUTF16("title2");
-    metadata.artist = base::ASCIIToUTF16("artist2");
+    metadata.source_title = u"source_title2";
+    metadata.title = u"title2";
+    metadata.artist = u"artist2";
     GetView()->UpdateWithMediaMetadata(metadata);
   }
 
@@ -247,6 +260,10 @@ class MediaNotificationContainerImplViewTest : public ChromeViewsTestBase {
     return notification_container_;
   }
 
+  base::WeakPtr<MockMediaNotificationItem> notification_item() {
+    return item_->GetWeakPtr();
+  }
+
  private:
   void SimulateSessionInfo(bool playing) {
     media_session::mojom::MediaSessionInfoPtr session_info(
@@ -262,9 +279,9 @@ class MediaNotificationContainerImplViewTest : public ChromeViewsTestBase {
     SimulateSessionInfo(true);
 
     media_session::MediaMetadata metadata;
-    metadata.source_title = base::ASCIIToUTF16("source_title");
-    metadata.title = base::ASCIIToUTF16("title");
-    metadata.artist = base::ASCIIToUTF16("artist");
+    metadata.source_title = u"source_title";
+    metadata.title = u"title";
+    metadata.artist = u"artist";
     GetView()->UpdateWithMediaMetadata(metadata);
 
     SimulateOnlyPlayPauseEnabled();
@@ -283,14 +300,13 @@ class MediaNotificationContainerImplViewTest : public ChromeViewsTestBase {
   std::unique_ptr<views::Widget> widget_;
   MediaNotificationContainerImplView* notification_container_ = nullptr;
   std::unique_ptr<MockMediaNotificationContainerObserver> observer_;
+  std::unique_ptr<MockMediaNotificationItem> item_;
 
   // Set of actions currently enabled.
   base::flat_set<MediaSessionAction> actions_;
 
   display::test::TestScreen fake_screen_;
   display::test::ScopedScreenOverride screen_override_;
-
-  DISALLOW_COPY_AND_ASSIGN(MediaNotificationContainerImplViewTest);
 };
 
 // TODO(https://crbug.com/1022452): Remove this class once
@@ -340,7 +356,7 @@ class MediaNotificationContainerImplViewOverlayControlsTest
   base::test::ScopedFeatureList feature_list_;
 };
 
-// TODO(b/161612403): Remove this class once
+// TODO(b/185139027): Remove this class once
 // |media_router::kGlobalMediaControlsCastStartStop| is enabled by default.
 class MediaNotificationContainerImplViewCastTest
     : public MediaNotificationContainerImplViewTest {
@@ -364,7 +380,8 @@ class MediaNotificationContainerImplViewCastTest
         std::move(session_controller), &profile_);
 
     SetUpCommon(std::make_unique<MediaNotificationContainerImplView>(
-        kTestNotificationId, item_->GetWeakPtr(), nullptr));
+        kTestNotificationId, item_->GetWeakPtr(), nullptr,
+        GlobalMediaControlsEntryPoint::kToolbarIcon));
   }
 
   void TearDown() override {
@@ -391,7 +408,7 @@ class MediaNotificationContainerImplViewCastTest
   base::test::ScopedFeatureList feature_list_;
   TestingProfile profile_;
   std::unique_ptr<CastMediaNotificationItem> item_;
-  MockMediaNotificationController notification_controller_;
+  NiceMock<MockMediaNotificationController> notification_controller_;
   MockSessionController* session_controller_ = nullptr;
 };
 
@@ -490,7 +507,8 @@ TEST_F(MediaNotificationContainerImplViewTest, SendsMetadataUpdates) {
 
 TEST_F(MediaNotificationContainerImplViewTest, SendsDestroyedUpdates) {
   auto container = std::make_unique<MediaNotificationContainerImplView>(
-      kOtherTestNotificationId, nullptr, nullptr);
+      kOtherTestNotificationId, notification_item(), nullptr,
+      GlobalMediaControlsEntryPoint::kToolbarIcon);
   MockMediaNotificationContainerObserver observer;
   container->AddObserver(&observer);
 
@@ -520,7 +538,8 @@ TEST_F(MediaNotificationContainerImplViewTest, SendsSinkUpdates) {
 
 TEST_F(MediaNotificationContainerImplViewTest, MetadataTest) {
   auto container_view = std::make_unique<MediaNotificationContainerImplView>(
-      kOtherTestNotificationId, nullptr, nullptr);
+      kOtherTestNotificationId, notification_item(), nullptr,
+      GlobalMediaControlsEntryPoint::kToolbarIcon);
   views::test::TestViewMetadata(container_view.get());
 }
 

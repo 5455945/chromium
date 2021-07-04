@@ -5,6 +5,7 @@
 #ifndef ASH_SYSTEM_MESSAGE_CENTER_UNIFIED_MESSAGE_CENTER_BUBBLE_H_
 #define ASH_SYSTEM_MESSAGE_CENTER_UNIFIED_MESSAGE_CENTER_BUBBLE_H_
 
+#include "ash/system/screen_layout_observer.h"
 #include "ash/system/tray/time_to_click_recorder.h"
 #include "ash/system/tray/tray_bubble_base.h"
 #include "ash/system/tray/tray_bubble_view.h"
@@ -21,9 +22,10 @@ class UnifiedSystemTray;
 class UnifiedMessageCenterView;
 
 // Manages the bubble that contains UnifiedMessageCenterView.
-// Shows the bubble on the constructor, and closes the bubble on the destructor.
+// Shows the bubble on `ShowBubble()`, and closes the bubble on the destructor.
 class ASH_EXPORT UnifiedMessageCenterBubble
-    : public TrayBubbleBase,
+    : public ScreenLayoutObserver,
+      public TrayBubbleBase,
       public TrayBubbleView::Delegate,
       public TimeToClickRecorder::Delegate,
       public views::ViewObserver,
@@ -37,9 +39,6 @@ class ASH_EXPORT UnifiedMessageCenterBubble
   // the constructor. Doing so can cause a crash when the TrayEventFilter tries
   // to reference the message center bubble before it is fully instantiated.
   void ShowBubble();
-
-  // Calculate the height usable for the bubble.
-  int CalculateAvailableHeight();
 
   // Collapse the bubble to only have the notification bar visible.
   void CollapseMessageCenter();
@@ -76,7 +75,7 @@ class ASH_EXPORT UnifiedMessageCenterBubble
   views::Widget* GetBubbleWidget() const override;
 
   // TrayBubbleView::Delegate:
-  base::string16 GetAccessibleNameForBubble() override;
+  std::u16string GetAccessibleNameForBubble() override;
   bool ShouldEnableExtraKeyboardAccessibility() override;
 
   // views::ViewObserver:
@@ -86,12 +85,21 @@ class ASH_EXPORT UnifiedMessageCenterBubble
   void OnWidgetDestroying(views::Widget* widget) override;
   void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
 
+  // ScreenLayoutObserver:
+  void OnDisplayConfigurationChanged() override;
+
   UnifiedMessageCenterView* message_center_view() {
     return message_center_view_;
   }
 
  private:
   class Border;
+
+  // Check if the message center bubble should be collapsed or expanded.
+  void UpdateBubbleState();
+
+  // Calculate the height usable for the bubble.
+  int CalculateAvailableHeight();
 
   // TimeToClickRecorder::Delegate:
   void RecordTimeToClick() override;

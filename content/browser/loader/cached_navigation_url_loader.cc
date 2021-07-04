@@ -4,6 +4,7 @@
 
 #include "content/browser/loader/cached_navigation_url_loader.h"
 
+#include "content/browser/loader/navigation_early_hints_manager.h"
 #include "content/browser/loader/navigation_url_loader_delegate.h"
 #include "content/browser/loader/navigation_url_loader_impl.h"
 #include "content/browser/navigation_subresource_loader_params.h"
@@ -19,8 +20,11 @@ namespace content {
 
 CachedNavigationURLLoader::CachedNavigationURLLoader(
     std::unique_ptr<NavigationRequestInfo> request_info,
-    NavigationURLLoaderDelegate* delegate)
-    : request_info_(std::move(request_info)), delegate_(delegate) {
+    NavigationURLLoaderDelegate* delegate,
+    network::mojom::URLResponseHeadPtr cached_response_head)
+    : request_info_(std::move(request_info)),
+      delegate_(delegate),
+      cached_response_head_(std::move(cached_response_head)) {
   // Respond with a fake response. We use PostTask here to mimic the flow of
   // a normal navigation.
   //
@@ -35,22 +39,23 @@ CachedNavigationURLLoader::CachedNavigationURLLoader(
 void CachedNavigationURLLoader::OnResponseStarted() {
   GlobalRequestID global_id = GlobalRequestID::MakeBrowserInitiated();
 
-  auto response_head = network::mojom::URLResponseHead::New();
-  response_head->parsed_headers = network::mojom::ParsedHeaders::New();
+  DCHECK(cached_response_head_);
   delegate_->OnResponseStarted(
-      /*url_loader_client_endpoints=*/nullptr, std::move(response_head),
+      /*url_loader_client_endpoints=*/nullptr, std::move(cached_response_head_),
       /*response_body=*/mojo::ScopedDataPipeConsumerHandle(), global_id,
       /*is_download=*/false, blink::NavigationDownloadPolicy(),
-      request_info_->isolation_info.network_isolation_key(), base::nullopt);
+      request_info_->isolation_info.network_isolation_key(), absl::nullopt,
+      /*early_hints=*/{});
 }
 CachedNavigationURLLoader::~CachedNavigationURLLoader() {}
 
 // static
 std::unique_ptr<NavigationURLLoader> CachedNavigationURLLoader::Create(
     std::unique_ptr<NavigationRequestInfo> request_info,
-    NavigationURLLoaderDelegate* delegate) {
-  return std::make_unique<CachedNavigationURLLoader>(std::move(request_info),
-                                                     delegate);
+    NavigationURLLoaderDelegate* delegate,
+    network::mojom::URLResponseHeadPtr cached_response_head) {
+  return std::make_unique<CachedNavigationURLLoader>(
+      std::move(request_info), delegate, std::move(cached_response_head));
 }
 
 void CachedNavigationURLLoader::FollowRedirect(

@@ -18,14 +18,14 @@
 #include "base/system/sys_info.h"
 #include "base/values.h"
 #include "chrome/browser/app_mode/app_mode_utils.h"
+#include "chrome/browser/ash/arc/arc_util.h"
+#include "chrome/browser/ash/login/startup_utils.h"
+#include "chrome/browser/ash/policy/core/browser_policy_connector_chromeos.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/ash/system/timezone_util.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/chromeos/arc/arc_util.h"
-#include "chrome/browser/chromeos/login/startup_utils.h"
-#include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/network/device_state.h"
@@ -248,7 +248,7 @@ bool IsEnterpriseKiosk() {
 
   policy::BrowserPolicyConnectorChromeOS* connector =
       g_browser_process->platform_part()->browser_policy_connector_chromeos();
-  return connector->IsEnterpriseManaged();
+  return connector->IsDeviceEnterpriseManaged();
 }
 
 std::string GetClientId() {
@@ -266,18 +266,20 @@ ChromeosInfoPrivateGetFunction::~ChromeosInfoPrivateGetFunction() {
 }
 
 ExtensionFunction::ResponseAction ChromeosInfoPrivateGetFunction::Run() {
-  base::ListValue* list = nullptr;
-  EXTENSION_FUNCTION_VALIDATE(args_->GetList(0, &list));
-  auto result = std::make_unique<base::DictionaryValue>();
-  for (size_t i = 0; i < list->GetSize(); ++i) {
-    std::string property_name;
-    EXTENSION_FUNCTION_VALIDATE(list->GetString(i, &property_name));
+  base::Value::ConstListView args_list = args_->GetList();
+  EXTENSION_FUNCTION_VALIDATE(!args_list.empty() && args_list[0].is_list());
+  base::Value::ConstListView list = args_list[0].GetList();
+
+  base::Value result(base::Value::Type::DICTIONARY);
+  for (size_t i = 0; i < list.size(); ++i) {
+    EXTENSION_FUNCTION_VALIDATE(list[i].is_string());
+    std::string property_name = list[i].GetString();
     std::unique_ptr<base::Value> value = GetValue(property_name);
     if (value)
-      result->Set(property_name, std::move(value));
+      result.SetKey(property_name,
+                    base::Value::FromUniquePtrValue(std::move(value)));
   }
-  return RespondNow(
-      OneArgument(base::Value::FromUniquePtrValue(std::move(result))));
+  return RespondNow(OneArgument(std::move(result)));
 }
 
 std::unique_ptr<base::Value> ChromeosInfoPrivateGetFunction::GetValue(
@@ -359,7 +361,7 @@ std::unique_ptr<base::Value> ChromeosInfoPrivateGetFunction::GetValue(
   if (property_name == kPropertyManagedDeviceStatus) {
     policy::BrowserPolicyConnectorChromeOS* connector =
         g_browser_process->platform_part()->browser_policy_connector_chromeos();
-    if (connector->IsEnterpriseManaged()) {
+    if (connector->IsDeviceEnterpriseManaged()) {
       return std::make_unique<base::Value>(kManagedDeviceStatusManaged);
     }
     return std::make_unique<base::Value>(kManagedDeviceStatusNotManaged);
@@ -408,10 +410,8 @@ std::unique_ptr<base::Value> ChromeosInfoPrivateGetFunction::GetValue(
       return std::make_unique<base::Value>(timezone->GetValue()->Clone());
     }
     // TODO(crbug.com/697817): Convert CrosSettings::Get to take a unique_ptr.
-    return base::WrapUnique<base::Value>(
-        chromeos::CrosSettings::Get()
-            ->GetPref(chromeos::kSystemTimezone)
-            ->DeepCopy());
+    return base::Value::ToUniquePtrValue(
+        ash::CrosSettings::Get()->GetPref(chromeos::kSystemTimezone)->Clone());
   }
 
   if (property_name == kPropertySupportedTimezones) {

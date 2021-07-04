@@ -5,7 +5,6 @@
 #ifndef SERVICES_NETWORK_PUBLIC_CPP_COOKIE_MANAGER_MOJOM_TRAITS_H_
 #define SERVICES_NETWORK_PUBLIC_CPP_COOKIE_MANAGER_MOJOM_TRAITS_H_
 
-#include "ipc/ipc_message_utils.h"
 #include "mojo/public/cpp/bindings/enum_traits.h"
 #include "net/cookies/canonical_cookie.h"
 #include "net/cookies/cookie_access_result.h"
@@ -14,6 +13,7 @@
 #include "net/cookies/cookie_inclusion_status.h"
 #include "net/cookies/cookie_options.h"
 #include "services/network/public/mojom/cookie_manager.mojom.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace mojo {
 
@@ -78,16 +78,39 @@ struct EnumTraits<network::mojom::CookieChangeCause, net::CookieChangeCause> {
 };
 
 template <>
+struct StructTraits<
+    network::mojom::CookieSameSiteContextMetadataDataView,
+    net::CookieOptions::SameSiteCookieContext::ContextMetadata> {
+  static bool affected_by_bugfix_1166211(
+      const net::CookieOptions::SameSiteCookieContext::ContextMetadata& m) {
+    return m.affected_by_bugfix_1166211;
+  }
+
+  static bool Read(network::mojom::CookieSameSiteContextMetadataDataView,
+                   net::CookieOptions::SameSiteCookieContext::ContextMetadata*);
+};
+
+template <>
 struct StructTraits<network::mojom::CookieSameSiteContextDataView,
                     net::CookieOptions::SameSiteCookieContext> {
   static net::CookieOptions::SameSiteCookieContext::ContextType context(
-      net::CookieOptions::SameSiteCookieContext& s) {
+      const net::CookieOptions::SameSiteCookieContext& s) {
     return s.context();
   }
 
   static net::CookieOptions::SameSiteCookieContext::ContextType
-  schemeful_context(net::CookieOptions::SameSiteCookieContext& s) {
+  schemeful_context(const net::CookieOptions::SameSiteCookieContext& s) {
     return s.schemeful_context();
+  }
+
+  static const net::CookieOptions::SameSiteCookieContext::ContextMetadata&
+  metadata(const net::CookieOptions::SameSiteCookieContext& s) {
+    return s.metadata();
+  }
+
+  static const net::CookieOptions::SameSiteCookieContext::ContextMetadata&
+  schemeful_metadata(const net::CookieOptions::SameSiteCookieContext& s) {
+    return s.schemeful_metadata();
   }
 
   static bool Read(network::mojom::CookieSameSiteContextDataView mojo_options,
@@ -199,7 +222,7 @@ struct StructTraits<network::mojom::CookieInclusionStatusDataView,
 template <>
 struct StructTraits<network::mojom::CookieAndLineWithAccessResultDataView,
                     net::CookieAndLineWithAccessResult> {
-  static const base::Optional<net::CanonicalCookie>& cookie(
+  static const absl::optional<net::CanonicalCookie>& cookie(
       const net::CookieAndLineWithAccessResult& c) {
     return c.cookie;
   }

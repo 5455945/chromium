@@ -7,19 +7,19 @@
 #include <windows.h>
 
 #include <memory>
+#include <string>
 
 #include "base/bind.h"
 #include "base/check.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
+#include "base/cxx17_backports.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/notreached.h"
 #include "base/process/launch.h"
 #include "base/process/process.h"
 #include "base/process/process_handle.h"
-#include "base/stl_util.h"
-#include "base/strings/string16.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/multiprocess_test.h"
@@ -222,8 +222,8 @@ class ProcessSingletonTest : public base::MultiProcessTest {
 
     // The ready event has been signalled - the process singleton is held by
     // the hung sub process.
-    test_singleton_.reset(new ProcessSingleton(
-        user_data_dir(), base::BindRepeating(&NotificationCallback)));
+    test_singleton_ = std::make_unique<ProcessSingleton>(
+        user_data_dir(), base::BindRepeating(&NotificationCallback));
 
     test_singleton_->OverrideShouldKillRemoteProcessCallbackForTesting(
         base::BindRepeating(&ProcessSingletonTest::MockShouldKillRemoteProcess,

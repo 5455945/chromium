@@ -5,12 +5,18 @@
 #ifndef CONTENT_PUBLIC_TEST_NAVIGATION_HANDLE_OBSERVER_H_
 #define CONTENT_PUBLIC_TEST_NAVIGATION_HANDLE_OBSERVER_H_
 
+#include <cstdint>
 #include "base/macros.h"
 #include "content/public/browser/navigation_handle_timing.h"
 #include "content/public/browser/reload_type.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "net/base/auth.h"
+#include "net/base/net_errors.h"
+#include "net/dns/public/resolve_error_info.h"
+#include "net/http/http_response_headers.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+#include "url/gurl.h"
 
 namespace content {
 
@@ -28,7 +34,6 @@ class NavigationHandleObserver : public WebContentsObserver {
   bool has_committed() { return has_committed_; }
   bool is_error() { return is_error_; }
   bool is_main_frame() { return is_main_frame_; }
-  bool is_parent_main_frame() { return is_parent_main_frame_; }
   bool is_renderer_initiated() { return is_renderer_initiated_; }
   bool is_same_document() { return is_same_document_; }
   bool was_redirected() { return was_redirected_; }
@@ -39,7 +44,7 @@ class NavigationHandleObserver : public WebContentsObserver {
   int64_t navigation_id() { return navigation_id_; }
   bool is_download() { return is_download_; }
   ukm::SourceId next_page_ukm_source_id() { return next_page_ukm_source_id_; }
-  base::Optional<net::AuthChallengeInfo> auth_challenge_info() {
+  absl::optional<net::AuthChallengeInfo> auth_challenge_info() {
     return auth_challenge_info_;
   }
   const net::ResolveErrorInfo& resolve_error_info() {
@@ -60,7 +65,6 @@ class NavigationHandleObserver : public WebContentsObserver {
   bool has_committed_ = false;
   bool is_error_ = false;
   bool is_main_frame_ = false;
-  bool is_parent_main_frame_ = false;
   bool is_renderer_initiated_ = true;
   bool is_same_document_ = false;
   bool was_redirected_ = false;
@@ -72,7 +76,7 @@ class NavigationHandleObserver : public WebContentsObserver {
   int64_t navigation_id_ = -1;
   bool is_download_ = false;
   ukm::SourceId next_page_ukm_source_id_ = ukm::kInvalidSourceId;
-  base::Optional<net::AuthChallengeInfo> auth_challenge_info_;
+  absl::optional<net::AuthChallengeInfo> auth_challenge_info_;
   net::ResolveErrorInfo resolve_error_info_;
   base::TimeTicks navigation_start_;
   NavigationHandleTiming navigation_handle_timing_;

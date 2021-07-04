@@ -7,7 +7,12 @@
  * authenticator.js and SAML notice handling.
  */
 
-// TODO(https://crbug.com/1171232): Make it compiled by closure.
+'use strict';
+
+(function() {
+
+const CHROMEOS_GAIA_PASSWORD_METRIC = 'ChromeOS.Gaia.PasswordFlow';
+
 Polymer({
   is: 'gaia-dialog',
 
@@ -130,7 +135,6 @@ Polymer({
     },
   },
 
-
   /**
    * Emulate click on the primary action button when it is visible and enabled.
    * @type {boolean}
@@ -142,10 +146,7 @@ Polymer({
    * @type {!cr.login.Authenticator|undefined}
    * @private
    */
-  authenticator_: {
-    type: Object,
-    value: undefined,
-  },
+  authenticator_: undefined,
 
   getAuthenticator() {
     return this.authenticator_;
@@ -212,9 +213,35 @@ Polymer({
       },
       'dialogShown': (e) => {
         this.navigationEnabled = false;
+        chrome.send('enableShelfButtons', [false]);
       },
       'dialogHidden': (e) => {
         this.navigationEnabled = true;
+        chrome.send('enableShelfButtons', [true]);
+      },
+      'exit': (e) => {
+        this.fire('exit', e.detail);
+      },
+      'removeUserByEmail': (e) => {
+        this.fire('removeuserbyemail', e.detail);
+      },
+      'apiPasswordAdded': (e) => {
+        // Only record the metric for Gaia flow without 3rd-party SAML IdP.
+        if (this.authFlow !== cr.login.Authenticator.AuthFlow.DEFAULT)
+          return;
+        chrome.send(
+            'metricsHandler:recordBooleanHistogram',
+            [CHROMEOS_GAIA_PASSWORD_METRIC, false]);
+        chrome.send('passwordEntered');
+      },
+      'authCompleted': (e) => {
+        // Only record the metric for Gaia flow without 3rd-party SAML IdP.
+        if (this.authFlow === cr.login.Authenticator.AuthFlow.DEFAULT) {
+          chrome.send(
+              'metricsHandler:recordBooleanHistogram',
+              [CHROMEOS_GAIA_PASSWORD_METRIC, true]);
+        }
+        this.fire('authcompleted', e.detail);
       },
     };
 
@@ -222,6 +249,13 @@ Polymer({
       this.authenticator_.addEventListener(
           eventName, authenticatorEventListeners[eventName].bind(this));
     }
+
+    cr.sendWithPromise('getIsSshConfigured')
+        .then(this.updateSshWarningVisibility.bind(this));
+  },
+
+  updateSshWarningVisibility(show) {
+    this.$.sshWarning.hidden = !show;
   },
 
   show() {
@@ -312,3 +346,4 @@ Polymer({
   },
 
 });
+})();

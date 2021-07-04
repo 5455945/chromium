@@ -9,9 +9,10 @@
 
 #include "base/bind.h"
 #include "base/callback_helpers.h"
+#include "base/cxx17_backports.h"
 #include "base/feature_list.h"
-#include "base/stl_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/history/history_service_factory.h"
@@ -21,6 +22,7 @@
 #include "chrome/browser/notifications/notification_display_service_tester.h"
 #include "chrome/browser/notifications/platform_notification_service_factory.h"
 #include "chrome/browser/notifications/platform_notification_service_impl.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/test/test_history_database.h"
@@ -30,8 +32,12 @@
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/notifications/notification_resources.h"
 #include "third_party/blink/public/common/notifications/platform_notification_data.h"
+#include "third_party/blink/public/mojom/notifications/notification.mojom.h"
+#include "third_party/skia/include/core/SkBitmap.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
@@ -42,6 +48,16 @@
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/value_builder.h"
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+
+#if !defined(OS_ANDROID)
+#include "chrome/browser/web_applications/components/web_app_icon_generator.h"
+#include "chrome/browser/web_applications/test/test_web_app_provider.h"
+#include "chrome/browser/web_applications/test/web_app_icon_test_utils.h"
+#include "chrome/browser/web_applications/test/web_app_test_utils.h"
+#include "chrome/browser/web_applications/web_app.h"
+#include "chrome/browser/web_applications/web_app_icon_manager.h"
+#include "chrome/browser/web_applications/web_app_registrar.h"
+#endif
 
 using blink::NotificationResources;
 using blink::PlatformNotificationData;
@@ -67,11 +83,6 @@ const char kRequireInteraction[] = "RequireInteraction";
 const char kTimeUntilCloseMillis[] = "TimeUntilClose";
 const char kTimeUntilFirstClickMillis[] = "TimeUntilFirstClick";
 const char kTimeUntilLastClickMillis[] = "TimeUntilLastClick";
-// TODO(https://crbug.com/1042727): Fix test GURL scoping and remove this getter
-// function.
-GURL Origin() {
-  return GURL("https://example.com");
-}
 
 }  // namespace
 
@@ -127,12 +138,14 @@ class PlatformNotificationServiceTest : public testing::Test {
 };
 
 TEST_F(PlatformNotificationServiceTest, DisplayNonPersistentThenClose) {
+  ASSERT_TRUE(profile_.CreateHistoryService());
   PlatformNotificationData data;
-  data.title = base::ASCIIToUTF16("My Notification");
-  data.body = base::ASCIIToUTF16("Hello, world!");
+  data.title = u"My Notification";
+  data.body = u"Hello, world!";
 
   service()->DisplayNotification(kNotificationId, GURL("https://chrome.com/"),
-                                 data, NotificationResources());
+                                 /*document_url=*/GURL(), data,
+                                 NotificationResources());
 
   EXPECT_EQ(1u, GetNotificationCountForType(
                     NotificationHandler::Type::WEB_NON_PERSISTENT));
@@ -144,9 +157,10 @@ TEST_F(PlatformNotificationServiceTest, DisplayNonPersistentThenClose) {
 }
 
 TEST_F(PlatformNotificationServiceTest, DisplayPersistentThenClose) {
+  ASSERT_TRUE(profile_.CreateHistoryService());
   PlatformNotificationData data;
-  data.title = base::ASCIIToUTF16("My notification's title");
-  data.body = base::ASCIIToUTF16("Hello, world!");
+  data.title = u"My notification's title";
+  data.body = u"Hello, world!";
 
   EXPECT_CALL(*mock_logger_, LogPersistentNotificationShown());
   service()->DisplayPersistentNotification(
@@ -170,19 +184,21 @@ TEST_F(PlatformNotificationServiceTest, DisplayPersistentThenClose) {
 }
 
 TEST_F(PlatformNotificationServiceTest, DisplayNonPersistentPropertiesMatch) {
+  ASSERT_TRUE(profile_.CreateHistoryService());
   std::vector<int> vibration_pattern(
       kNotificationVibrationPattern,
       kNotificationVibrationPattern +
           base::size(kNotificationVibrationPattern));
 
   PlatformNotificationData data;
-  data.title = base::ASCIIToUTF16("My notification's title");
-  data.body = base::ASCIIToUTF16("Hello, world!");
+  data.title = u"My notification's title";
+  data.body = u"Hello, world!";
   data.vibration_pattern = vibration_pattern;
   data.silent = true;
 
   service()->DisplayNotification(kNotificationId, GURL("https://chrome.com/"),
-                                 data, NotificationResources());
+                                 /*document_url=*/GURL(), data,
+                                 NotificationResources());
 
   ASSERT_EQ(1u, GetNotificationCountForType(
                     NotificationHandler::Type::WEB_NON_PERSISTENT));
@@ -202,21 +218,23 @@ TEST_F(PlatformNotificationServiceTest, DisplayNonPersistentPropertiesMatch) {
 }
 
 TEST_F(PlatformNotificationServiceTest, DisplayPersistentPropertiesMatch) {
+  ASSERT_TRUE(profile_.CreateHistoryService());
   std::vector<int> vibration_pattern(
       kNotificationVibrationPattern,
       kNotificationVibrationPattern +
           base::size(kNotificationVibrationPattern));
-
   PlatformNotificationData data;
-  data.title = base::ASCIIToUTF16("My notification's title");
-  data.body = base::ASCIIToUTF16("Hello, world!");
+  data.title = u"My notification's title";
+  data.body = u"Hello, world!";
   data.vibration_pattern = vibration_pattern;
   data.silent = true;
   data.actions.resize(2);
-  data.actions[0].type = blink::mojom::NotificationActionType::BUTTON;
-  data.actions[0].title = base::ASCIIToUTF16("Button 1");
-  data.actions[1].type = blink::mojom::NotificationActionType::TEXT;
-  data.actions[1].title = base::ASCIIToUTF16("Button 2");
+  data.actions[0] = blink::mojom::NotificationAction::New();
+  data.actions[0]->type = blink::mojom::NotificationActionType::BUTTON;
+  data.actions[0]->title = u"Button 1";
+  data.actions[1] = blink::mojom::NotificationAction::New();
+  data.actions[1]->type = blink::mojom::NotificationActionType::TEXT;
+  data.actions[1]->title = u"Button 2";
 
   NotificationResources notification_resources;
   notification_resources.action_icons.resize(data.actions.size());
@@ -249,16 +267,9 @@ TEST_F(PlatformNotificationServiceTest, DisplayPersistentPropertiesMatch) {
 }
 
 TEST_F(PlatformNotificationServiceTest, RecordNotificationUkmEvent) {
-  // Set up UKM recording conditions.
-  ASSERT_TRUE(profile_.CreateHistoryService());
-  auto* history_service = HistoryServiceFactory::GetForProfile(
-      &profile_, ServiceAccessType::EXPLICIT_ACCESS);
-  history_service->AddPage(Origin(), base::Time::Now(),
-                           history::SOURCE_BROWSED);
-
   NotificationDatabaseData data;
   data.notification_id = "notification1";
-  data.origin = Origin();
+  data.origin = GURL("https://example.com");
   data.closed_reason = NotificationDatabaseData::ClosedReason::USER;
   data.replaced_existing_notification = true;
   data.notification_data.icon = GURL("https://icon.com");
@@ -266,16 +277,25 @@ TEST_F(PlatformNotificationServiceTest, RecordNotificationUkmEvent) {
   data.notification_data.renotify = false;
   data.notification_data.tag = "tag";
   data.notification_data.silent = true;
-  blink::PlatformNotificationAction action1, action2, action3;
-  data.notification_data.actions.push_back(action1);
-  data.notification_data.actions.push_back(action2);
-  data.notification_data.actions.push_back(action3);
+  auto action1 = blink::mojom::NotificationAction::New();
+  data.notification_data.actions.push_back(std::move(action1));
+  auto action2 = blink::mojom::NotificationAction::New();
+  data.notification_data.actions.push_back(std::move(action2));
+  auto action3 = blink::mojom::NotificationAction::New();
+  data.notification_data.actions.push_back(std::move(action3));
   data.notification_data.require_interaction = false;
   data.num_clicks = 3;
   data.num_action_button_clicks = 1;
   data.time_until_close_millis = base::TimeDelta::FromMilliseconds(10000);
   data.time_until_first_click_millis = base::TimeDelta::FromMilliseconds(2222);
   data.time_until_last_click_millis = base::TimeDelta::FromMilliseconds(3333);
+
+  // Set up UKM recording conditions.
+  ASSERT_TRUE(profile_.CreateHistoryService());
+  auto* history_service = HistoryServiceFactory::GetForProfile(
+      &profile_, ServiceAccessType::EXPLICIT_ACCESS);
+  history_service->AddPage(data.origin, base::Time::Now(),
+                           history::SOURCE_BROWSED);
 
   // Initially there are no UKM entries.
   std::vector<const ukm::mojom::UkmEntry*> entries =
@@ -323,7 +343,7 @@ TEST_F(PlatformNotificationServiceTest, NextPersistentNotificationId) {
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 
 TEST_F(PlatformNotificationServiceTest, DisplayNameForContextMessage) {
-  base::string16 display_name =
+  std::u16string display_name =
       service()->DisplayNameForContextMessage(GURL("https://chrome.com/"));
 
   EXPECT_TRUE(display_name.empty());
@@ -351,12 +371,13 @@ TEST_F(PlatformNotificationServiceTest, DisplayNameForContextMessage) {
 
 TEST_F(PlatformNotificationServiceTest, CreateNotificationFromData) {
   PlatformNotificationData notification_data;
-  notification_data.title = base::ASCIIToUTF16("My Notification");
-  notification_data.body = base::ASCIIToUTF16("Hello, world!");
+  notification_data.title = u"My Notification";
+  notification_data.body = u"Hello, world!";
   GURL origin("https://chrome.com/");
 
   Notification notification = service()->CreateNotificationFromData(
-      origin, "id", notification_data, NotificationResources());
+      origin, "id", notification_data, NotificationResources(),
+      /*web_app_hint_url=*/GURL());
   EXPECT_TRUE(notification.context_message().empty());
 
   // Create a mocked extension.
@@ -377,9 +398,67 @@ TEST_F(PlatformNotificationServiceTest, CreateNotificationFromData) {
 
   notification = service()->CreateNotificationFromData(
       GURL("chrome-extension://honijodknafkokifofgiaalefdiedpko/main.html"),
-      "id", notification_data, NotificationResources());
+      "id", notification_data, NotificationResources(),
+      /*web_app_hint_url=*/GURL());
   EXPECT_EQ("NotificationTest",
             base::UTF16ToUTF8(notification.context_message()));
 }
 
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+
+#if !defined(OS_ANDROID)
+
+class PlatformNotificationServiceTest_WebAppNotificationIconAndTitle
+    : public PlatformNotificationServiceTest {
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_{
+      features::kDesktopPWAsNotificationIconAndTitle};
+};
+
+TEST_F(PlatformNotificationServiceTest_WebAppNotificationIconAndTitle,
+       FindWebAppIconAndTitle_NoApp) {
+  web_app::TestWebAppProvider* provider =
+      web_app::TestWebAppProvider::Get(&profile_);
+  provider->Start();
+
+  const GURL web_app_url{"https://example.org/"};
+  EXPECT_FALSE(service()->FindWebAppIconAndTitle(web_app_url).has_value());
+}
+
+TEST_F(PlatformNotificationServiceTest_WebAppNotificationIconAndTitle,
+       FindWebAppIconAndTitle) {
+  web_app::TestWebAppProvider* provider =
+      web_app::TestWebAppProvider::Get(&profile_);
+  web_app::WebAppIconManager& icon_manager = provider->GetIconManager();
+
+  std::unique_ptr<web_app::WebApp> web_app =
+      web_app::test::CreateMinimalWebApp();
+  const GURL web_app_url = web_app->start_url();
+  const web_app::AppId app_id = web_app->app_id();
+  web_app->SetName("Web App Title");
+
+  IconManagerWriteGeneratedIcons(icon_manager, app_id,
+                                 {{IconPurpose::MONOCHROME,
+                                   {web_app::icon_size::k16},
+                                   {SK_ColorTRANSPARENT}}});
+  web_app->SetDownloadedIconSizes(IconPurpose::MONOCHROME,
+                                  {web_app::icon_size::k16});
+
+  provider->GetRegistrarMutable().registry().emplace(app_id,
+                                                     std::move(web_app));
+
+  IconManagerStartAndAwaitFaviconMonochrome(icon_manager, app_id);
+  provider->Start();
+
+  absl::optional<PlatformNotificationServiceImpl::WebAppIconAndTitle>
+      icon_and_title = service()->FindWebAppIconAndTitle(web_app_url);
+
+  ASSERT_TRUE(icon_and_title.has_value());
+  EXPECT_EQ(u"Web App Title", icon_and_title->title);
+  EXPECT_FALSE(icon_and_title->icon.isNull());
+  EXPECT_EQ(
+      SK_ColorTRANSPARENT,
+      icon_and_title->icon.GetRepresentation(1.0f).GetBitmap().getColor(0, 0));
+}
+
+#endif  // !defined(OS_ANDROID)

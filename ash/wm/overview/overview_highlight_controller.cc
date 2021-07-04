@@ -4,16 +4,14 @@
 
 #include "ash/wm/overview/overview_highlight_controller.h"
 
-#include "ash/magnifier/docked_magnifier_controller_impl.h"
-#include "ash/magnifier/magnification_controller.h"
-#include "ash/public/cpp/ash_features.h"
+#include "ash/accessibility/magnifier/docked_magnifier_controller.h"
+#include "ash/accessibility/magnifier/fullscreen_magnifier_controller.h"
 #include "ash/shell.h"
 #include "ash/wm/desks/desk_mini_view.h"
 #include "ash/wm/desks/desk_name_view.h"
 #include "ash/wm/desks/desks_bar_view.h"
 #include "ash/wm/desks/desks_util.h"
 #include "ash/wm/desks/expanded_state_new_desk_button.h"
-#include "ash/wm/desks/new_desk_button.h"
 #include "ash/wm/desks/zero_state_button.h"
 #include "ash/wm/overview/overview_grid.h"
 #include "ash/wm/overview/overview_item.h"
@@ -27,6 +25,12 @@ namespace ash {
 
 // -----------------------------------------------------------------------------
 // OverviewHighlightController::OverviewHighlightableView
+
+bool OverviewHighlightController::OverviewHighlightableView::
+    MaybeActivateHighlightedViewOnOverviewExit(
+        OverviewSession* overview_session) {
+  return false;
+}
 
 void OverviewHighlightController::OverviewHighlightableView::
     SetHighlightVisibility(bool visible) {
@@ -71,7 +75,7 @@ OverviewHighlightController::~OverviewHighlightController() = default;
 void OverviewHighlightController::MoveHighlight(bool reverse) {
   const std::vector<OverviewHighlightableView*> traversable_views =
       GetTraversableViews();
-  const int count = int{traversable_views.size()};
+  const int count = static_cast<int>(traversable_views.size());
 
   // |count| can be zero when there are no overview items and no desk views (eg.
   // "No recent items" or PIP windows are shown but they aren't traversable).
@@ -168,11 +172,17 @@ bool OverviewHighlightController::MaybeCloseHighlightedView() {
 }
 
 bool OverviewHighlightController::MaybeSwapHighlightedView(bool right) {
-  if (!features::IsBentoEnabled() || !highlighted_view_)
+  if (!highlighted_view_)
     return false;
 
   highlighted_view_->MaybeSwapHighlightedView(right);
   return true;
+}
+
+bool OverviewHighlightController::MaybeActivateHighlightedViewOnOverviewExit() {
+  return highlighted_view_ &&
+         highlighted_view_->MaybeActivateHighlightedViewOnOverviewExit(
+             overview_session_);
 }
 
 OverviewItem* OverviewHighlightController::GetHighlightedItem() const {
@@ -211,11 +221,13 @@ std::vector<OverviewHighlightController::OverviewHighlightableView*>
 OverviewHighlightController::GetTraversableViews() const {
   std::vector<OverviewHighlightableView*> traversable_views;
   traversable_views.reserve(overview_session_->num_items() +
-                            (desks_util::GetMaxNumberOfDesks() + 1) *
+                            (desks_util::kMaxNumberOfDesks + 1) *
                                 Shell::Get()->GetAllRootWindows().size());
   for (auto& grid : overview_session_->grid_list()) {
-    auto* bar_view = grid->desks_bar_view();
-    if (bar_view) {
+    for (auto& item : grid->window_list())
+      traversable_views.push_back(item->overview_item_view());
+
+    if (auto* bar_view = grid->desks_bar_view()) {
       const bool is_zero_state = bar_view->IsZeroState();
       // The desk items are always traversable from left to right, even in RTL
       // languages.
@@ -229,18 +241,11 @@ OverviewHighlightController::GetTraversableViews() const {
         }
       }
 
-      if (features::IsBentoEnabled()) {
-        auto* new_desk_button =
-            bar_view->expanded_state_new_desk_button()->new_desk_button();
-        if (!is_zero_state && new_desk_button->GetEnabled())
-          traversable_views.push_back(new_desk_button);
-      } else if (bar_view->new_desk_button()->GetEnabled()) {
-        traversable_views.push_back(bar_view->new_desk_button());
-      }
+      auto* new_desk_button =
+          bar_view->expanded_state_new_desk_button()->new_desk_button();
+      if (!is_zero_state && new_desk_button->GetEnabled())
+        traversable_views.push_back(new_desk_button);
     }
-
-    for (auto& item : grid->window_list())
-      traversable_views.push_back(item->overview_item_view());
   }
   return traversable_views;
 }
@@ -264,10 +269,10 @@ void OverviewHighlightController::UpdateHighlight(
   // Note that both magnifiers are mutually exclusive. The overview "focus"
   // works differently from regular focusing so we need to update the magnifier
   // manually here.
-  DockedMagnifierControllerImpl* docked_magnifier =
+  DockedMagnifierController* docked_magnifier =
       Shell::Get()->docked_magnifier_controller();
-  MagnificationController* fullscreen_magnifier =
-      Shell::Get()->magnification_controller();
+  FullscreenMagnifierController* fullscreen_magnifier =
+      Shell::Get()->fullscreen_magnifier_controller();
   const gfx::Point point_of_interest =
       highlighted_view_->GetMagnifierFocusPointInScreen();
   if (docked_magnifier->GetEnabled())

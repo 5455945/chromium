@@ -5,6 +5,7 @@
 #include "chrome/browser/ui/app_list/search/files/item_suggest_cache.h"
 
 #include "base/bind.h"
+#include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/strcat.h"
 #include "chrome/browser/profiles/profile.h"
@@ -17,6 +18,7 @@
 #include "components/signin/public/identity_manager/consent_level.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/scope_set.h"
+#include "google_apis/gaia/gaia_constants.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_request_headers.h"
@@ -61,19 +63,6 @@ constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
         }
       })");
 
-// The scope required for an access token in order to query ItemSuggest.
-constexpr char kDriveScope[] = "https://www.googleapis.com/auth/drive.readonly";
-
-constexpr char kRequestBody[] = R"({
-      'client_info': {
-        'platform_type': 'CHROME_OS',
-        'scenario_type': 'CHROME_OS_ZSS_FILES',
-        'request_type': 'BACKGROUND_REQUEST'
-      },
-      'max_suggestions': 10,
-      'type_detail_fields': 'drive_item.title,justification.display_text'
-    })";
-
 bool IsDisabledByPolicy(const Profile* profile) {
   return profile->GetPrefs()->GetBoolean(drive::prefs::kDisableDrive);
 }
@@ -82,31 +71,7 @@ bool IsDisabledByPolicy(const Profile* profile) {
 // Metrics utilities
 //------------------
 
-// TODO(crbug.com/1034842): Add unit tests for histograms
-
-// Possible outcomes of a call to the ItemSuggest API. These values persist to
-// logs. Entries should not be renumbered and numeric values should never be
-// reused.
-enum class Status {
-  kOk = 0,
-  kDisabledByExperiment = 1,
-  kDisabledByPolicy = 2,
-  kInvalidServerUrl = 3,
-  kNoIdentityManager = 4,
-  kGoogleAuthError = 5,
-  kNetError = 6,
-  kResponseTooLarge = 7,
-  k3xxStatus = 8,
-  k4xxStatus = 9,
-  k5xxStatus = 10,
-  kEmptyResponse = 11,
-  kNoResultsInResponse = 12,
-  kJsonParseFailure = 13,
-  kJsonConversionFailure = 14,
-  kMaxValue = kJsonConversionFailure,
-};
-
-void LogStatus(Status status) {
+void LogStatus(ItemSuggestCache::Status status) {
   UMA_HISTOGRAM_ENUMERATION("Apps.AppList.ItemSuggestCache.Status", status);
 }
 
@@ -119,23 +84,23 @@ void LogResponseSize(const int size) {
 // JSON utilities
 //---------------
 
-base::Optional<base::Value::ConstListView> GetList(const base::Value* value,
+absl::optional<base::Value::ConstListView> GetList(const base::Value* value,
                                                    const std::string& key) {
   if (!value->is_dict())
-    return base::nullopt;
+    return absl::nullopt;
   const base::Value* field = value->FindListKey(key);
   if (!field)
-    return base::nullopt;
+    return absl::nullopt;
   return field->GetList();
 }
 
-base::Optional<std::string> GetString(const base::Value* value,
+absl::optional<std::string> GetString(const base::Value* value,
                                       const std::string& key) {
   if (!value->is_dict())
-    return base::nullopt;
+    return absl::nullopt;
   const std::string* field = value->FindStringKey(key);
   if (!field)
-    return base::nullopt;
+    return absl::nullopt;
   return *field;
 }
 
@@ -143,36 +108,36 @@ base::Optional<std::string> GetString(const base::Value* value,
 // JSON response parsing
 //----------------------
 
-base::Optional<ItemSuggestCache::Result> ConvertResult(
+absl::optional<ItemSuggestCache::Result> ConvertResult(
     const base::Value* value) {
   const auto& item_id = GetString(value, "itemId");
   const auto& display_text = GetString(value, "displayText");
 
   if (!item_id || !display_text)
-    return base::nullopt;
+    return absl::nullopt;
 
   return ItemSuggestCache::Result(item_id.value(), display_text.value());
 }
 
-base::Optional<ItemSuggestCache::Results> ConvertResults(
+absl::optional<ItemSuggestCache::Results> ConvertResults(
     const base::Value* value) {
   const auto& suggestion_id = GetString(value, "suggestionSessionId");
   if (!suggestion_id)
-    return base::nullopt;
+    return absl::nullopt;
 
   ItemSuggestCache::Results results(suggestion_id.value());
 
   const auto items = GetList(value, "item");
   if (!items)
-    return base::nullopt;
+    return absl::nullopt;
 
   for (const auto& result_value : items.value()) {
     auto result = ConvertResult(&result_value);
-    // If any result fails conversion, fail completely and return base::nullopt,
+    // If any result fails conversion, fail completely and return absl::nullopt,
     // rather than just skipping this result. This makes clear the distinction
     // between a response format issue and the response containing no results.
     if (!result)
-      return base::nullopt;
+      return absl::nullopt;
     results.results.push_back(std::move(result.value()));
   }
 
@@ -186,6 +151,7 @@ const base::Feature ItemSuggestCache::kExperiment{
     "LauncherItemSuggest", base::FEATURE_DISABLED_BY_DEFAULT};
 constexpr base::FeatureParam<bool> ItemSuggestCache::kEnabled;
 constexpr base::FeatureParam<std::string> ItemSuggestCache::kServerUrl;
+constexpr base::FeatureParam<std::string> ItemSuggestCache::kModelName;
 constexpr base::FeatureParam<int> ItemSuggestCache::kMinMinutesBetweenUpdates;
 
 ItemSuggestCache::Result::Result(const std::string& id,
@@ -219,10 +185,33 @@ ItemSuggestCache::ItemSuggestCache(
 
 ItemSuggestCache::~ItemSuggestCache() = default;
 
-base::Optional<ItemSuggestCache::Results> ItemSuggestCache::GetResults() {
+absl::optional<ItemSuggestCache::Results> ItemSuggestCache::GetResults() {
   // Return a copy because a pointer to |results_| will become invalid whenever
   // the cache is updated.
   return results_;
+}
+
+std::string ItemSuggestCache::GetRequestBody() {
+  // We request that ItemSuggest serve our request via particular model by
+  // specifying the model name in client_tags. This is a non-standard part of
+  // the API, implemented so we can experiment with model backends. The valid
+  // values for the tag are DCHECKed below.
+  static constexpr char kRequestBody[] = R"({
+        'client_info': {
+          'platform_type': 'CHROME_OS',
+          'scenario_type': 'CHROME_OS_ZSS_FILES',
+          'request_type': 'BACKGROUND_REQUEST',
+          'client_tags': {
+            'name': '$1'
+          }
+        },
+        'max_suggestions': 10,
+        'type_detail_fields': 'drive_item.title,justification.display_text'
+      })";
+
+  const std::string& model = kModelName.Get();
+  DCHECK(model == "quick_access" || model == "future_access");
+  return base::ReplaceStringPlaceholders(kRequestBody, {model}, nullptr);
 }
 
 void ItemSuggestCache::UpdateCache() {
@@ -259,11 +248,10 @@ void ItemSuggestCache::UpdateCache() {
     return;
   }
 
-  signin::ScopeSet scopes({kDriveScope});
-
   // Fetch an OAuth2 access token.
   token_fetcher_ = std::make_unique<signin::PrimaryAccountAccessTokenFetcher>(
-      "launcher_item_suggest", identity_manager, scopes,
+      "launcher_item_suggest", identity_manager,
+      signin::ScopeSet({GaiaConstants::kDriveReadOnlyOAuth2Scope}),
       base::BindOnce(&ItemSuggestCache::OnTokenReceived,
                      weak_factory_.GetWeakPtr()),
       signin::PrimaryAccountAccessTokenFetcher::Mode::kImmediate,
@@ -283,7 +271,7 @@ void ItemSuggestCache::OnTokenReceived(GoogleServiceAuthError error,
   // Make a new request.
   url_loader_ = MakeRequestLoader(token_info.token);
   url_loader_->SetRetryOptions(0, network::SimpleURLLoader::RETRY_NEVER);
-  url_loader_->AttachStringForUpload(kRequestBody, "application/json");
+  url_loader_->AttachStringForUpload(GetRequestBody(), "application/json");
 
   // Perform the request.
   url_loader_->DownloadToString(
@@ -377,7 +365,7 @@ std::unique_ptr<network::SimpleURLLoader> ItemSuggestCache::MakeRequestLoader(
 }
 
 // static
-base::Optional<ItemSuggestCache::Results> ItemSuggestCache::ConvertJsonForTest(
+absl::optional<ItemSuggestCache::Results> ItemSuggestCache::ConvertJsonForTest(
     const base::Value* value) {
   return ConvertResults(value);
 }
